@@ -165,6 +165,7 @@ fn game_loop() {
 
     let mut pre_pass_dispatcher = DispatcherBuilder::new()
         .with(creep::WaitForSpawnSystem, "wait_for_spawn", &[])
+        .with(creep::CleanupCreepsSystem, "cleanup_creeps", &[])
         .build();
 
     pre_pass_dispatcher.setup(&mut world);

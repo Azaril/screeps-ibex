@@ -2,9 +2,17 @@ use serde::*;
 use screeps::*;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub enum DeliveryTarget {
+    None,
+    Spawn(ObjectId<StructureSpawn>),
+    Controller(ObjectId<StructureController>),
+    Container(ObjectId<StructureContainer>)
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct HarvestJob {
     pub harvest_target: ObjectId<Source>,
-    pub controller_target: Option<ObjectId<StructureController>>
+    pub delivery_target: DeliveryTarget
 }
 
 impl HarvestJob
@@ -12,8 +20,22 @@ impl HarvestJob
     pub fn new(source: &Source) -> HarvestJob {
         HarvestJob {
             harvest_target: source.id(),
-            controller_target: None
+            delivery_target: DeliveryTarget::None
         }
+    }
+
+    pub fn select_delivery_target(&mut self, creep: &Creep, resource_type: ResourceType) -> Option<Structure> {
+        for spawn in creep.room().find(find::MY_SPAWNS) {
+            if spawn.store_free_capacity(Some(resource_type)) > 0 {
+                return Some(spawn.as_structure());
+            }
+        }
+        
+        if let Some(controller) = creep.room().controller() {
+            return Some(controller.as_structure());
+        }
+
+        return None;
     }
 
     pub fn run_creep(&mut self, creep: &Creep) {
@@ -23,24 +45,86 @@ impl HarvestJob
         let used_capacity = creep.store_used_capacity(Some(resource));
         let available_capacity = capacity - used_capacity;
 
-        //TODO: Clear deliery target if full and re-pick.
-
         //
-        // Pick initial delivery target
+        // Compute delivery target
         //
 
-        if capacity > 0 && available_capacity == 0 && self.controller_target.is_none() {
-            if let Some(controller) = creep.room().controller() {
-                self.controller_target = Some(controller.id());
+        if used_capacity > 0 {
+            let repick_delivery = match self.delivery_target {
+                DeliveryTarget::Spawn(target) => {
+                    if let Some(spawn) = target.resolve() {
+                        spawn.store_free_capacity(Some(resource)) == 0
+                    } else {
+                        true
+                    }
+                },
+                DeliveryTarget::Controller(target) => {
+                    if let Some(_controller) = target.resolve() {
+                        false
+                    } else {
+                        true
+                    }
+                },
+                DeliveryTarget::Container(target) => {
+                    if let Some(container) = target.resolve() {
+                        container.store_free_capacity(Some(resource)) == 0
+                    } else {
+                        true
+                    }
+                },
+                DeliveryTarget::None => {
+                    capacity > 0 && available_capacity == 0
+                }
+            };
+
+            //
+            // Pick delivery target
+            //
+
+            if repick_delivery {
+                self.delivery_target = match self.select_delivery_target(&creep, resource) {
+                    Some(Structure::Spawn(spawn)) => {
+                        DeliveryTarget::Spawn(spawn.id())
+                    }
+                    Some(Structure::Container(container)) => {
+                        DeliveryTarget::Container(container.id())
+                    },
+                    Some(Structure::Controller(controller)) => {
+                        DeliveryTarget::Controller(controller.id())
+                    },
+                    None => {
+                        error!("Unable to find appropriate delivery target.");
+
+                        DeliveryTarget::None
+                    }
+                    _ => {
+                        error!("Selected incompatible structure type for delivery.");
+
+                        DeliveryTarget::None
+                    }
+                };
             }
+        } else {
+            self.delivery_target = DeliveryTarget::None;
         }
 
         //
         // Move to and use energy
         //
             
-        if used_capacity > 0 {
-            if let Some(target) = self.controller_target {
+        match self.delivery_target {
+            DeliveryTarget::Spawn(target) => {
+                if let Some(spawn) = target.resolve() {
+                    if creep.pos().is_near_to(&spawn.pos()) {
+                        creep.transfer_all(&spawn, resource);
+                    } else {
+                        creep.move_to(&spawn);
+                    }
+
+                    return;
+                }
+            },            
+            DeliveryTarget::Controller(target) => {
                 if let Some(controller) = target.resolve() {
                     if creep.pos().is_near_to(&controller.pos()) {
                         creep.upgrade_controller(&controller);
@@ -50,15 +134,20 @@ impl HarvestJob
 
                     return;
                 }
+            },
+            DeliveryTarget::Container(target) => {
+                if let Some(container) = target.resolve() {
+                    if creep.pos().is_near_to(&container.pos()) {
+                        creep.transfer_all(&container, resource);
+                    } else {
+                        creep.move_to(&container);
+                    }
+
+                    return;
+                }
+            },
+            DeliveryTarget::None => {
             }
-        }
-        
-        //
-        // Clear target if delivery is complete.
-        //
-        
-        if self.controller_target.is_some() {
-            self.controller_target = None
         }
 
         //

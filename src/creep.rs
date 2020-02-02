@@ -41,7 +41,11 @@ impl Component for CreepSpawning {
 pub struct WaitForSpawnSystem;
 
 impl<'a> System<'a> for WaitForSpawnSystem {
-    type SystemData = (Entities<'a>, ReadStorage<'a, CreepSpawning>, Read<'a, LazyUpdate>);
+    type SystemData = (
+        Entities<'a>, 
+        ReadStorage<'a, CreepSpawning>, 
+        Read<'a, LazyUpdate>
+    );
 
     fn run(&mut self, (entities, spawnings, updater): Self::SystemData) {
         for (entity, spawning) in (&entities, &spawnings).join() {
@@ -50,9 +54,37 @@ impl<'a> System<'a> for WaitForSpawnSystem {
                     updater.remove::<CreepSpawning>(entity);
                     updater.insert(entity, CreepOwner::new(&creep));
                 }
-            }
+            } else {
+                warn!("Deleting entity for spawning creep as it no longer exists. Name: {}", spawning.name);
 
-            //TODO: Delete entity if matching creep cannot be found?
+                updater.exec_mut(move |world| {
+                    if let Err(error) = world.delete_entity(entity) {
+                        warn!("Failed to delete creep entity that was stale. Error: {}", error);
+                    }
+                });
+            }
+        }
+    }
+}
+
+pub struct CleanupCreepsSystem;
+
+impl<'a> System<'a> for CleanupCreepsSystem {
+    type SystemData = (
+        Entities<'a>, 
+        ReadStorage<'a, CreepOwner>, 
+        Read<'a, LazyUpdate>
+    );
+
+    fn run(&mut self, (entities, creeps, updater): Self::SystemData) {
+        for (entity, creep) in (&entities, &creeps).join() {
+            if let None = creep.owner.resolve() {
+                updater.exec_mut(move |world| {
+                    if let Err(error) = world.delete_entity(entity) {
+                        warn!("Failed to delete creep entity that had been deleted by the simulation. Error: {}", error);
+                    }
+                });
+            }
         }
     }
 }
