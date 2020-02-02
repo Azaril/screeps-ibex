@@ -1,5 +1,4 @@
 use specs::*;
-use screeps::*;
 
 use ::creep::CreepOwner;
 use super::data::JobData;
@@ -13,14 +12,8 @@ impl<'a> System<'a> for JobSystem {
         for (creep, job) in (&creeps, &mut jobs).join() {
             if let Some(owner) = creep.owner.resolve() {
                 match job {
-                    JobData::Idle => {
-                        //TODO: wiarchbe: Remove hacky code to assign job.
-                        if let Some(source) = owner.room().find(find::SOURCES).first() {
-                            info!("Assigning harvest job");
-                            *job = JobData::Harvest(super::harvest::HarvestJob::new(&source))
-                        }
-                    },
-                    JobData::Harvest(mut data) => {
+                    JobData::Idle => {},
+                    JobData::Harvest(ref mut data) => {
                         data.run_creep(&owner);
                     }
                 }

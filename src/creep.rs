@@ -1,6 +1,5 @@
 use serde::*;
 use specs::*;
-use specs::saveload::*;
 use screeps::*;
 
 pub struct CreepMarker;
@@ -39,15 +38,6 @@ impl Component for CreepSpawning {
     type Storage = HashMapStorage<Self>;
 }
 
-pub fn create_spawning_creep_entity(world: &mut World, name: &str) -> Entity {
-    world.create_entity()
-        .marked::<SimpleMarker<CreepMarker>>()
-        .with(CreepSpawning::new(name))
-        .with(::jobs::data::JobData::Idle)
-        .build()
-}
-
-
 pub struct WaitForSpawnSystem;
 
 impl<'a> System<'a> for WaitForSpawnSystem {
@@ -57,8 +47,6 @@ impl<'a> System<'a> for WaitForSpawnSystem {
         for (entity, spawning) in (&entities, &spawnings).join() {
             if let Some(creep) = game::creeps::get(&spawning.name) {
                 if !creep.spawning() {
-                    info!("Creep finished spawning: {}", creep.name());
-
                     updater.remove::<CreepSpawning>(entity);
                     updater.insert(entity, CreepOwner::new(&creep));
                 }

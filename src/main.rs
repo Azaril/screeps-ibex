@@ -159,10 +159,25 @@ fn game_loop() {
     world.register::<SimpleMarker<creep::CreepMarker>>();
     world.insert(SimpleMarkerAllocator::<creep::CreepMarker>::new());
 
-    //TODO: wiarchbe: Is there a better way to not have to pre-register these? (Maybe create dispatcher systems earlier?)
-    world.register::<creep::CreepSpawning>();
-    world.register::<creep::CreepOwner>();
-    world.register::<jobs::data::JobData>();
+    //
+    // Pre-pass update
+    //
+
+    let mut pre_pass_dispatcher = DispatcherBuilder::new()
+        .with(creep::WaitForSpawnSystem, "wait_for_spawn", &[])
+        .build();
+
+    pre_pass_dispatcher.setup(&mut world);
+
+    //
+    // Main update
+    //
+
+    let mut main_dispatcher = DispatcherBuilder::new()
+        .with(jobs::system::JobSystem, "jobs", &[])
+        .build();
+
+    main_dispatcher.setup(&mut world);   
 
     //
     // Deserialize world state.
@@ -177,38 +192,16 @@ fn game_loop() {
     }
 
     //
-    // Pre-pass
+    // Execution
     //
 
-    {
-        let mut dispatcher = DispatcherBuilder::new()
-            .with(creep::WaitForSpawnSystem, "wait_for_spawn", &[])
-            .build();
+    pre_pass_dispatcher.dispatch(&world);
+    world.maintain();
 
-        dispatcher.setup(&mut world);
+    main_dispatcher.dispatch(&world);
+    world.maintain();
 
-        dispatcher.dispatch(&world);
-
-        world.maintain();
-    }
-
-    //
-    // Main update
-    //
-
-    {
-        let mut dispatcher = DispatcherBuilder::new()
-            .with(jobs::system::JobSystem, "jobs", &[])
-            .build();
-
-        dispatcher.setup(&mut world);
-
-        dispatcher.dispatch(&world);
-
-        world.maintain();
-    } 
-
-    debug!("running spawns");
+    //TODO: Remove test code for spawning.
 
     for spawn in screeps::game::spawns::values() {
         debug!("running spawn {}", spawn.name());
@@ -231,26 +224,24 @@ fn game_loop() {
             if res != ReturnCode::Ok {
                 warn!("couldn't spawn: {:?}", res);
             } else {
-                creep::create_spawning_creep_entity(&mut world, &name);
+                let job = if let Some(source) = spawn.room().find(find::SOURCES).first() {                   
+                    jobs::data::JobData::Harvest(jobs::harvest::HarvestJob::new(&source))
+                } else {
+                    jobs::data::JobData::Idle
+                };
+
+                world.create_entity()
+                    .marked::<SimpleMarker<creep::CreepMarker>>()
+                    .with(job)
+                    .with(creep::CreepSpawning::new(&name))
+                    .build();         
             }
         }
     }
 
-    /*
-    for creep in screeps::game::creeps::values() {
-        let name = creep.name();
-
-        debug!("running creep {}", name);
-        
-        if creep.spawning() {
-            continue;
-        }
-
-        let source = &creep.room().find(find::SOURCES)[0];
-
-        let entity = ::creep::create_creep_entity(&mut world, &creep);
-    }
-    */
+    //
+    // Cleanup memory.
+    //
 
     let time = screeps::game::time();
 
