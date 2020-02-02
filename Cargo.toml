@@ -1,0 +1,22 @@
+[package]
+name = "screeps-ibex"
+version = "0.0.1"
+authors = []
+
+[dependencies]
+stdweb = "0.4"
+log = "0.4"
+fern = "0.5"
+screeps-game-api = "0.7"
+serde = "1.0"
+serde_json = "1.0"
+
+[dependencies.specs]
+version = "0.15"
+default-features = false
+features = ["serde", "specs-derive", "storage-event-control"]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
