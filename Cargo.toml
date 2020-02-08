@@ -10,11 +10,12 @@ fern = "0.5"
 screeps-game-api = "0.7"
 serde = "1.0"
 serde_json = "1.0"
+scopeguard = "1.0"
 
 [dependencies.specs]
 version = "0.15"
 default-features = false
-features = ["serde", "specs-derive", "storage-event-control"]
+features = ["serde", "specs-derive", "storage-event-control", "shred-derive"]
 
 [profile.release]
 panic = "abort"

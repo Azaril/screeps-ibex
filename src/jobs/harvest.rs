@@ -1,6 +1,8 @@
 use serde::*;
 use screeps::*;
 
+use super::jobsystem::*;
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum DeliveryTarget {
     None,
@@ -37,8 +39,13 @@ impl HarvestJob
 
         return None;
     }
+}
 
-    pub fn run_creep(&mut self, creep: &Creep) {
+impl Job for HarvestJob
+{
+    fn run_job(&mut self, _data: &JobRuntimeData, creep: &Creep) {
+        scope_timing!("Harvest Job - {}", creep.name());
+
         let resource = screeps::ResourceType::Energy;
 
         let capacity = creep.store_capacity(Some(resource));        

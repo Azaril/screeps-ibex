@@ -1,8 +1,8 @@
 use serde::*;
 use specs::*;
+use specs::saveload::*;
 use screeps::*;
-
-pub struct CreepMarker;
+use ::jobs::data::*;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct CreepOwner {
@@ -48,6 +48,8 @@ impl<'a> System<'a> for WaitForSpawnSystem {
     );
 
     fn run(&mut self, (entities, spawnings, updater): Self::SystemData) {
+        scope_timing!("WaitForSpawnSystem");
+
         for (entity, spawning) in (&entities, &spawnings).join() {
             if let Some(creep) = game::creeps::get(&spawning.name) {
                 if !creep.spawning() {
@@ -77,6 +79,8 @@ impl<'a> System<'a> for CleanupCreepsSystem {
     );
 
     fn run(&mut self, (entities, creeps, updater): Self::SystemData) {
+        scope_timing!("CleanupCreepsSystem");
+
         for (entity, creep) in (&entities, &creeps).join() {
             if let None = creep.owner.resolve() {
                 updater.exec_mut(move |world| {
@@ -86,5 +90,24 @@ impl<'a> System<'a> for CleanupCreepsSystem {
                 });
             }
         }
+    }
+}
+
+pub struct CreepMarkerTag;
+
+pub type CreepMarker = SimpleMarker<CreepMarkerTag>;
+
+pub type CreepMarkerAllocator = SimpleMarkerAllocator<CreepMarkerTag>;
+
+pub struct Spawning;
+
+impl Spawning
+{
+    pub fn build<B>(builder: B, name: &str, job: &JobData) -> B where B: Builder + MarkedBuilder {
+        builder
+            .marked::<::serialize::SerializeMarker>()
+            .marked::<CreepMarker>()
+            .with(CreepSpawning::new(&name))
+            .with(*job)
     }
 }
