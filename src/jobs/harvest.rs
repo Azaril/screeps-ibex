@@ -27,13 +27,15 @@ impl HarvestJob
     }
 
     pub fn select_delivery_target(&mut self, creep: &Creep, resource_type: ResourceType) -> Option<Structure> {
-        for spawn in creep.room().find(find::MY_SPAWNS) {
+        let room = creep.room().unwrap();
+
+        for spawn in room.find(find::MY_SPAWNS) {
             if spawn.store_free_capacity(Some(resource_type)) > 0 {
                 return Some(spawn.as_structure());
             }
         }
         
-        if let Some(controller) = creep.room().controller() {
+        if let Some(controller) = room.controller() {
             return Some(controller.as_structure());
         }
 

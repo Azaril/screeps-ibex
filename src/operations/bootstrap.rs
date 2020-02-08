@@ -18,6 +18,7 @@ impl BootstrapOperation
 
         builder.with(OperationData::Bootstrap(operation))
             .marked::<::serialize::SerializeMarker>()
+            .marked::<OperationMarker>()
     }
 
     pub fn new() -> BootstrapOperation {

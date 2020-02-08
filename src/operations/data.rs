@@ -1,4 +1,5 @@
 use specs::*;
+use specs::saveload::*;
 use serde::*;
 
 use super::operationsystem::*;
@@ -21,3 +22,9 @@ impl OperationData
         }
     }
 }
+
+pub struct OperationMarkerTag;
+
+pub type OperationMarker = SimpleMarker<OperationMarkerTag>;
+
+pub type OperationMarkerAllocator = SimpleMarkerAllocator<OperationMarkerTag>;

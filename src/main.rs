@@ -65,10 +65,12 @@ fn main() {
 }
 
 fn serialize_world(world: &World, cb: fn(&str)) {
+    scope_timing!("serialize_world");
+
     struct Serialize {
         writer: Vec<u8>
     }
-
+    
     impl<'a> System<'a> for Serialize {
         type SystemData = (
             Entities<'a>,
@@ -80,15 +82,16 @@ fn serialize_world(world: &World, cb: fn(&str)) {
             ReadStorage<'a, room::data::RoomData>,            
             ReadStorage<'a, jobs::data::JobData>,
             ReadStorage<'a, operations::data::OperationData>,
+            ReadStorage<'a, operations::data::OperationMarker>,
             ReadStorage<'a, missions::data::MissionData>,
             ReadStorage<'a, missions::data::MissionMarker>,
         );
 
-        fn run(&mut self, (entities, markers, creep_spawnings, creep_owners, creep_markers, room_owners, room_data, jobs, operations, mission_data, mission_markers): Self::SystemData) {
+        fn run(&mut self, (entities, markers, creep_spawnings, creep_owners, creep_markers, room_owners, room_data, jobs, operation_data, operation_markers, mission_data, mission_markers): Self::SystemData) {
             let mut ser = serde_json::ser::Serializer::new(&mut self.writer);
 
             SerializeComponents::<NoError, serialize::SerializeMarker>::serialize(
-                &(&creep_spawnings, &creep_owners, &creep_markers, &room_owners, &room_data, &jobs, &operations, &mission_data, &mission_markers),
+                &(&creep_spawnings, &creep_owners, &creep_markers, &room_owners, &room_data, &jobs, &operation_data, &operation_markers, &mission_data, &mission_markers),
                 &entities,
                 &markers,
                 &mut ser,
@@ -96,7 +99,7 @@ fn serialize_world(world: &World, cb: fn(&str)) {
         }
     }
 
-    let mut sys = Serialize{ writer: Vec::<u8>::with_capacity(2048) };
+    let mut sys = Serialize{ writer: Vec::<u8>::with_capacity(1024 * 16) };
 
     sys.run_now(&world);
 
@@ -131,6 +134,8 @@ impl From<NoError> for CombinedSerialiationError {
 }
 
 fn deserialize_world(world: &World, data: &str) {
+    scope_timing!("deserialize_world");
+
     struct Deserialize<'a> {
         data: &'a str
     }
@@ -147,15 +152,16 @@ fn deserialize_world(world: &World, data: &str) {
             WriteStorage<'a, room::data::RoomData>,
             WriteStorage<'a, jobs::data::JobData>,
             WriteStorage<'a, operations::data::OperationData>,
+            WriteStorage<'a, operations::data::OperationMarker>,
             WriteStorage<'a, missions::data::MissionData>,
             WriteStorage<'a, missions::data::MissionMarker>,
         );
 
-        fn run(&mut self, (entities, mut alloc, mut markers, creep_spawnings, creep_owners, creep_markers, room_owners, room_data, jobs, operations, mission_data, mission_markers): Self::SystemData) {
+        fn run(&mut self, (entities, mut alloc, mut markers, creep_spawnings, creep_owners, creep_markers, room_owners, room_data, jobs, operation_data, operation_markers, mission_data, mission_markers): Self::SystemData) {
             let mut de = serde_json::de::Deserializer::from_str(self.data);
 
             DeserializeComponents::<CombinedSerialiationError, serialize::SerializeMarker>::deserialize(
-                &mut (creep_spawnings, creep_owners, creep_markers, room_owners, room_data, jobs, operations, mission_data, mission_markers),
+                &mut (creep_spawnings, creep_owners, creep_markers, room_owners, room_data, jobs, operation_data, operation_markers, mission_data, mission_markers),
                 &entities,
                 &mut markers,
                 &mut alloc,
@@ -179,6 +185,9 @@ fn game_loop() {
 
     world.register::<serialize::SerializeMarker>();
     world.insert(serialize::SerializeMarkerAllocator::new());
+
+    world.register::<operations::data::OperationMarker>();
+    world.insert(operations::data::OperationMarkerAllocator::new());     
 
     world.register::<missions::data::MissionMarker>();
     world.insert(missions::data::MissionMarkerAllocator::new());   
