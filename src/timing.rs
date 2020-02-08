@@ -1,3 +1,4 @@
+#[cfg(timing)]
 extern crate scopeguard;
 
 #[allow(unused_macros)]
