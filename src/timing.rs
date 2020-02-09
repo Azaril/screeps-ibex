@@ -2,7 +2,7 @@
 extern crate scopeguard;
 
 #[allow(unused_macros)]
-#[cfg(timing)]
+#[cfg(feature = "timing")]
 macro_rules! scope_timing {
     ($($x:expr),*) => {
         let __data = format!($($x),+);
@@ -14,7 +14,7 @@ macro_rules! scope_timing {
     };    
 }
 
-#[cfg(not(timing))]
+#[cfg(not(feature = "timing"))]
 macro_rules! scope_timing {
     ($($x:expr),*) => {
     }
