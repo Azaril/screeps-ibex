@@ -1,16 +1,14 @@
 use specs::*;
+use specs::error::NoError;
 use specs::saveload::*;
+use specs_derive::*;
 use serde::*;
 
 use super::missionsystem::*;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Component, ConvertSaveload)]
 pub enum MissionData {
     Bootstrap(super::bootstrap::BootstrapMission)
-}
-
-impl Component for MissionData {
-    type Storage = HashMapStorage<Self>;
 }
 
 impl MissionData

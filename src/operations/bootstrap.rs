@@ -32,7 +32,7 @@ impl Operation for BootstrapOperation
     fn run_operation<'a>(&mut self, data: &OperationRuntimeData) {
         scope_timing!("BootstrapOperation");
 
-        for (entity, room_owner, room_data) in (&data.entities, &data.room_owner, &data.room_data).join() {
+        for (entity, room_owner, room_data) in (data.entities, data.room_owner, data.room_data).join() {
             if room_data.missions.is_empty() {
                 if let Some(room) = game::rooms::get(room_owner.owner) {
                     if !room.find(find::MY_SPAWNS).is_empty() {

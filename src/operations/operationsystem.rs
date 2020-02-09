@@ -13,10 +13,10 @@ pub struct OperationSystemData<'a> {
 }
 
 pub struct OperationRuntimeData<'a> {
-    pub updater: Read<'a, LazyUpdate>,
-    pub entities: Entities<'a>,
-    pub room_owner: WriteStorage<'a, ::room::data::RoomOwnerData>,
-    pub room_data: WriteStorage<'a, ::room::data::RoomData>
+    pub updater: &'a Read<'a, LazyUpdate>,
+    pub entities: &'a Entities<'a>,
+    pub room_owner: &'a WriteStorage<'a, ::room::data::RoomOwnerData>,
+    pub room_data: &'a WriteStorage<'a, ::room::data::RoomData>
 }
 
 pub trait Operation {
@@ -32,10 +32,10 @@ impl<'a> System<'a> for OperationSystem {
         scope_timing!("OperationSystem");
 
         let runtime_data = OperationRuntimeData{
-            updater: data.updater,
-            entities: data.entities,
-            room_owner: data.room_owner,
-            room_data: data.room_data
+            updater: &data.updater,
+            entities: &data.entities,
+            room_owner: &data.room_owner,
+            room_data: &data.room_data
         };
 
         for operation in (&mut data.operations).join() {

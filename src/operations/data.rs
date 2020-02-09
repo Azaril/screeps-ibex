@@ -1,16 +1,13 @@
 use specs::*;
 use specs::saveload::*;
 use serde::*;
+use specs_derive::*;
 
 use super::operationsystem::*;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Component)]
 pub enum OperationData {
     Bootstrap(super::bootstrap::BootstrapOperation)
-}
-
-impl Component for OperationData {
-    type Storage = HashMapStorage<Self>;
 }
 
 impl OperationData

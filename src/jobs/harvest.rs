@@ -19,9 +19,9 @@ pub struct HarvestJob {
 
 impl HarvestJob
 {
-    pub fn new(source: &Source) -> HarvestJob {
+    pub fn new(source_id: ObjectId<Source>) -> HarvestJob {
         HarvestJob {
-            harvest_target: source.id(),
+            harvest_target: source_id,
             delivery_target: DeliveryTarget::None
         }
     }
@@ -45,7 +45,9 @@ impl HarvestJob
 
 impl Job for HarvestJob
 {
-    fn run_job(&mut self, _data: &JobRuntimeData, creep: &Creep) {
+    fn run_job(&mut self, data: &JobRuntimeData) {
+        let creep = data.owner;
+
         scope_timing!("Harvest Job - {}", creep.name());
 
         let resource = screeps::ResourceType::Energy;

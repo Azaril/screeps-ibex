@@ -9,7 +9,13 @@ extern crate screeps;
 extern crate stdweb;
 
 extern crate serde;
+
 extern crate specs;
+extern crate specs_derive;
+
+extern crate itertools;
+
+extern crate crossbeam_queue;
 
 #[macro_use]
 mod timing;
@@ -20,6 +26,7 @@ mod operations;
 mod missions;
 mod serialize;
 mod room;
+mod spawnsystem;
 
 use std::fmt;
 
@@ -74,7 +81,8 @@ fn serialize_world(world: &World, cb: fn(&str)) {
     impl<'a> System<'a> for Serialize {
         type SystemData = (
             Entities<'a>,
-            ReadStorage<'a, serialize::SerializeMarker>,
+            Write<'a, serialize::SerializeMarkerAllocator>,
+            WriteStorage<'a, serialize::SerializeMarker>,
             ReadStorage<'a, creep::CreepSpawning>,
             ReadStorage<'a, creep::CreepOwner>,
             ReadStorage<'a, creep::CreepMarker>,
@@ -87,13 +95,14 @@ fn serialize_world(world: &World, cb: fn(&str)) {
             ReadStorage<'a, missions::data::MissionMarker>,
         );
 
-        fn run(&mut self, (entities, markers, creep_spawnings, creep_owners, creep_markers, room_owners, room_data, jobs, operation_data, operation_markers, mission_data, mission_markers): Self::SystemData) {
+        fn run(&mut self, (entities, mut marker_allocator, mut markers, creep_spawnings, creep_owners, creep_markers, room_owners, room_data, jobs, operation_data, operation_markers, mission_data, mission_markers): Self::SystemData) {
             let mut ser = serde_json::ser::Serializer::new(&mut self.writer);
 
-            SerializeComponents::<NoError, serialize::SerializeMarker>::serialize(
+            SerializeComponents::<NoError, serialize::SerializeMarker>::serialize_recursive(
                 &(&creep_spawnings, &creep_owners, &creep_markers, &room_owners, &room_data, &jobs, &operation_data, &operation_markers, &mission_data, &mission_markers),
                 &entities,
-                &markers,
+                &mut markers,
+                &mut marker_allocator,
                 &mut ser,
             ).unwrap_or_else(|e| error!("Error: {}", e));
         }
@@ -183,18 +192,18 @@ fn game_loop() {
 
     let mut world = World::new();
 
-    world.register::<serialize::SerializeMarker>();
     world.insert(serialize::SerializeMarkerAllocator::new());
-
-    world.register::<operations::data::OperationMarker>();
-    world.insert(operations::data::OperationMarkerAllocator::new());     
-
-    world.register::<missions::data::MissionMarker>();
-    world.insert(missions::data::MissionMarkerAllocator::new());   
+    world.register::<serialize::SerializeMarker>();
     
-    world.register::<creep::CreepMarker>();
+    world.insert(operations::data::OperationMarkerAllocator::new());     
+    world.register::<operations::data::OperationMarker>();
+    
+    world.insert(missions::data::MissionMarkerAllocator::new());
+    world.register::<missions::data::MissionMarker>();   
+    
     world.insert(creep::CreepMarkerAllocator::new());       
-
+    world.register::<creep::CreepMarker>();
+    
     //
     // Pre-pass update
     //
@@ -215,6 +224,7 @@ fn game_loop() {
         .with(operations::managersystem::OperationManagerSystem, "operations_manager", &[])
         .with(operations::operationsystem::OperationSystem, "operations", &[])
         .with(missions::missionsystem::MissionSystem, "missions", &[])
+        .with(spawnsystem::SpawnQueueSystem, "spawn_queue", &[])
         .with(jobs::jobsystem::JobSystem, "jobs", &[])
         .build();
 
@@ -228,6 +238,7 @@ fn game_loop() {
         if let Ok(entry) = memory::root().string("native") {
             if let Some(data) = entry {
                 deserialize_world(&world, &data);
+                world.maintain();
             }
         }
     }
@@ -255,8 +266,6 @@ fn game_loop() {
     serialize_world(&world, |data| {
         memory::root().set("native", data);
     });
-
-    //info!("done! cpu: {}", screeps::game::cpu::get_used())
 }
 
 fn cleanup_memory() -> Result<(), Box<dyn (::std::error::Error)>> {

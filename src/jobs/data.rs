@@ -1,15 +1,12 @@
 use serde::*;
 use specs::*;
+use specs_derive::*;
 
 use super::jobsystem::*;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Component)]
 pub enum JobData {
     Harvest(super::harvest::HarvestJob)
-}
-
-impl Component for JobData {
-    type Storage = VecStorage<Self>;
 }
 
 impl JobData

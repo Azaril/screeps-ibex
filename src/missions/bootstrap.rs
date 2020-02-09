@@ -1,16 +1,19 @@
-use serde::*;
 use specs::*;
+use specs::error::NoError;
 use specs::saveload::*;
 use screeps::*;
+use specs_derive::*;
+use serde::{Serialize, Deserialize};
 
 use super::data::*;
 use super::missionsystem::*;
-use ::room::data::*;
 use ::jobs::data::*;
-use ::creep::*;
+use ::spawnsystem::*;
+use crate::serialize::*;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, ConvertSaveload)]
 pub struct BootstrapMission {
+    harvesters: EntityVec
 }
 
 impl BootstrapMission
@@ -26,57 +29,51 @@ impl BootstrapMission
 
     pub fn new() -> BootstrapMission {
         BootstrapMission {
+            harvesters: EntityVec::new()
         }
     }
 }
 
 impl Mission for BootstrapMission
 {
-    fn run_mission<'a>(&mut self, data: &MissionRuntimeData, room_owner: &RoomOwnerData) {
-        scope_timing!("BootstrapMission - Room: {}", room_owner.owner);
-        
-        if let Some(room) = game::rooms::get(room_owner.owner) {
+    fn run_mission<'a>(&mut self, system_data: &MissionExecutionSystemData, runtime_data: &MissionExecutionRuntimeData) {
+        scope_timing!("BootstrapMission - Room: {}", runtime_data.room_owner.owner);
+
+        //
+        // Cleanup harvesters that no longer exist.
+        //
+
+        self.harvesters.0.retain(|entity| system_data.entities.is_alive(*entity));
+
+        if let Some(room) = game::rooms::get(runtime_data.room_owner.owner) {
             let sources = room.find(find::SOURCES);
-            if let Some(source) = sources.first() {
-                for spawn in room.find(find::MY_SPAWNS) {
-                    let body = [Part::Move, Part::Move, Part::Carry, Part::Work];
-    
-                    if spawn.energy() >= body.iter().map(|p| p.cost()).sum() {
-                        let time = screeps::game::time();
-                        let mut additional = 0;
-                        let (res, name) = loop {
-                            let name = format!("{}-{}", time, additional);
-                            let res = spawn.spawn_creep(&body, &name);
-        
-                            if res == ReturnCode::NameExists {
-                                additional += 1;
-                            } else {
-                                break (res, name);
-                            }
-                        };
-        
-                        if res != ReturnCode::Ok {
-                            warn!("Failed to spawn creep: {:?}", res);
-                        } else {
-                            let job = JobData::Harvest(::jobs::harvest::HarvestJob::new(&source));
-        
-                            data.updater.exec_mut(move |world| {
-                                let creep_entity = ::creep::Spawning::build(world.create_entity(), &name, &job).build();
-    
-                                let creep_marker_storage = world.read_storage::<CreepMarker>();
-                                let _creep_marker = creep_marker_storage.get(creep_entity);
-    
-                                /*
-                                let room_data_storage = &mut world.write_storage::<::room::data::RoomData>();
-    
-                                if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                                    room_data.missions.push(*mission_marker.unwrap());
-                                }
-                                */                               
-                            });      
-                        }
-                    }
-                }
+            let available_sources = sources.iter().filter(|_source| self.harvesters.0.len() <= 4);
+
+            for source in available_sources {
+                let body = [Part::Move, Part::Move, Part::Carry, Part::Work];
+
+                let mission_entity = runtime_data.entity.clone();
+                let source_id = source.id();
+
+                system_data.spawn_queue.request(SpawnRequest::new(&runtime_data.room_owner.owner, &body, Box::new(move |spawn_system_data, name| {
+                    let name = name.to_string();
+
+                    spawn_system_data.updater.exec_mut(move |world| {
+                        let creep_job = JobData::Harvest(::jobs::harvest::HarvestJob::new(source_id));
+
+                        let creep_entity = ::creep::Spawning::build(world.create_entity(), &name)
+                            .with(creep_job)
+                            .build();
+
+                        let mission_data_storage = &mut world.write_storage::<MissionData>();
+
+                        if let Some(mission_data) = mission_data_storage.get_mut(mission_entity) {
+                            let MissionData::Bootstrap(ref mut bootstrap_data) = mission_data;
+
+                            bootstrap_data.harvesters.0.push(creep_entity);
+                        }                            
+                    });
+                })));
             }
         }
     }

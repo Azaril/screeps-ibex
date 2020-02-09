@@ -2,9 +2,9 @@ use serde::*;
 use specs::*;
 use specs::saveload::*;
 use screeps::*;
-use ::jobs::data::*;
+use specs_derive::*;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Component)]
 pub struct CreepOwner {
     pub owner: ObjectId<Creep>
 }
@@ -17,11 +17,7 @@ impl CreepOwner {
     }
 }
 
-impl Component for CreepOwner {
-    type Storage = HashMapStorage<Self>;
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Component)]
 pub struct CreepSpawning {
     pub name: String
 }
@@ -32,10 +28,6 @@ impl CreepSpawning {
             name: pending_name.to_string()
         }
     }
-}
-
-impl Component for CreepSpawning {
-    type Storage = HashMapStorage<Self>;
 }
 
 pub struct WaitForSpawnSystem;
@@ -103,11 +95,10 @@ pub struct Spawning;
 
 impl Spawning
 {
-    pub fn build<B>(builder: B, name: &str, job: &JobData) -> B where B: Builder + MarkedBuilder {
+    pub fn build<B>(builder: B, name: &str) -> B where B: Builder + MarkedBuilder {
         builder
             .marked::<::serialize::SerializeMarker>()
             .marked::<CreepMarker>()
             .with(CreepSpawning::new(&name))
-            .with(*job)
     }
 }
