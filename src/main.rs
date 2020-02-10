@@ -27,6 +27,7 @@ mod missions;
 mod serialize;
 mod room;
 mod spawnsystem;
+mod structureidentifier;
 
 use std::fmt;
 
@@ -85,21 +86,18 @@ fn serialize_world(world: &World, cb: fn(&str)) {
             WriteStorage<'a, serialize::SerializeMarker>,
             ReadStorage<'a, creep::CreepSpawning>,
             ReadStorage<'a, creep::CreepOwner>,
-            ReadStorage<'a, creep::CreepMarker>,
             ReadStorage<'a, room::data::RoomOwnerData>,
             ReadStorage<'a, room::data::RoomData>,            
             ReadStorage<'a, jobs::data::JobData>,
             ReadStorage<'a, operations::data::OperationData>,
-            ReadStorage<'a, operations::data::OperationMarker>,
             ReadStorage<'a, missions::data::MissionData>,
-            ReadStorage<'a, missions::data::MissionMarker>,
         );
 
-        fn run(&mut self, (entities, mut marker_allocator, mut markers, creep_spawnings, creep_owners, creep_markers, room_owners, room_data, jobs, operation_data, operation_markers, mission_data, mission_markers): Self::SystemData) {
+        fn run(&mut self, (entities, mut marker_allocator, mut markers, creep_spawnings, creep_owners, room_owners, room_data, jobs, operation_data, mission_data): Self::SystemData) {
             let mut ser = serde_json::ser::Serializer::new(&mut self.writer);
 
             SerializeComponents::<NoError, serialize::SerializeMarker>::serialize_recursive(
-                &(&creep_spawnings, &creep_owners, &creep_markers, &room_owners, &room_data, &jobs, &operation_data, &operation_markers, &mission_data, &mission_markers),
+                &(&creep_spawnings, &creep_owners, &room_owners, &room_data, &jobs, &operation_data, &mission_data),
                 &entities,
                 &mut markers,
                 &mut marker_allocator,
@@ -156,21 +154,18 @@ fn deserialize_world(world: &World, data: &str) {
             WriteStorage<'a, serialize::SerializeMarker>,
             WriteStorage<'a, creep::CreepSpawning>,
             WriteStorage<'a, creep::CreepOwner>,
-            WriteStorage<'a, creep::CreepMarker>,
             WriteStorage<'a, room::data::RoomOwnerData>,
             WriteStorage<'a, room::data::RoomData>,
             WriteStorage<'a, jobs::data::JobData>,
             WriteStorage<'a, operations::data::OperationData>,
-            WriteStorage<'a, operations::data::OperationMarker>,
             WriteStorage<'a, missions::data::MissionData>,
-            WriteStorage<'a, missions::data::MissionMarker>,
         );
 
-        fn run(&mut self, (entities, mut alloc, mut markers, creep_spawnings, creep_owners, creep_markers, room_owners, room_data, jobs, operation_data, operation_markers, mission_data, mission_markers): Self::SystemData) {
+        fn run(&mut self, (entities, mut alloc, mut markers, creep_spawnings, creep_owners, room_owners, room_data, jobs, operation_data, mission_data): Self::SystemData) {
             let mut de = serde_json::de::Deserializer::from_str(self.data);
 
             DeserializeComponents::<CombinedSerialiationError, serialize::SerializeMarker>::deserialize(
-                &mut (creep_spawnings, creep_owners, creep_markers, room_owners, room_data, jobs, operation_data, operation_markers, mission_data, mission_markers),
+                &mut (creep_spawnings, creep_owners, room_owners, room_data, jobs, operation_data, mission_data),
                 &entities,
                 &mut markers,
                 &mut alloc,
@@ -194,16 +189,7 @@ fn game_loop() {
 
     world.insert(serialize::SerializeMarkerAllocator::new());
     world.register::<serialize::SerializeMarker>();
-    
-    world.insert(operations::data::OperationMarkerAllocator::new());     
-    world.register::<operations::data::OperationMarker>();
-    
-    world.insert(missions::data::MissionMarkerAllocator::new());
-    world.register::<missions::data::MissionMarker>();   
-    
-    world.insert(creep::CreepMarkerAllocator::new());       
-    world.register::<creep::CreepMarker>();
-    
+        
     //
     // Pre-pass update
     //

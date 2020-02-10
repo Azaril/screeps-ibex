@@ -1,7 +1,7 @@
 use specs::*;
 
 use super::data::*;
-use super::bootstrap::*;
+use super::localsupply::*;
 
 pub struct OperationManagerSystem;
 
@@ -15,12 +15,20 @@ impl<'a> System<'a> for OperationManagerSystem {
     fn run(&mut self, (entities, operations, updater): Self::SystemData) {
         scope_timing!("OperationManagerSystem");
 
-        let mut operation_entities = (&entities, &operations).join();
+        let mut has_local_supply = false;
 
-        if !operation_entities.any(|_| true) {
-            info!("No operations exist - creating bootstrap operation.");
+        for (_, operation) in (&entities, &operations).join() {
+            match operation {
+                OperationData::LocalSupply(_) => {
+                    has_local_supply = true;
+                }
+            }
+        }
 
-            let _entity = BootstrapOperation::build(updater.create_entity(&entities)).build();
+        if !has_local_supply {
+            info!("Local supply operation does not exist, creating.");
+
+            LocalSupplyOperation::build(updater.create_entity(&entities)).build();
         }
     }
 }

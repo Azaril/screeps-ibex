@@ -8,7 +8,8 @@ use super::missionsystem::*;
 
 #[derive(Clone, Debug, Component, ConvertSaveload)]
 pub enum MissionData {
-    Bootstrap(super::bootstrap::BootstrapMission)
+    BasicHarvest(super::basicharvest::BasicHarvestMission),
+    ComplexHarvest(super::complexharvest::ComplexHarvestMission)
 }
 
 impl MissionData
@@ -16,13 +17,8 @@ impl MissionData
     pub fn as_mission(&mut self) -> &mut dyn Mission
     {
         match self {
-            MissionData::Bootstrap(ref mut data) => data
+            MissionData::BasicHarvest(ref mut data) => data,
+            MissionData::ComplexHarvest(ref mut data) => data,
         }
     }
 }
-
-pub struct MissionMarkerTag;
-
-pub type MissionMarker = SimpleMarker<MissionMarkerTag>;
-
-pub type MissionMarkerAllocator = SimpleMarkerAllocator<MissionMarkerTag>;

@@ -37,7 +37,7 @@ impl<M: Marker + Serialize> ConvertSaveload<M> for EntityVec
         F: FnMut(Entity) -> Option<M>
     {
         let markers = self.0.iter()
-            .map(|entity| ids(*entity).unwrap())
+            .filter_map(|entity| ids(*entity))
             .collect();
 
         Ok(markers)
@@ -48,7 +48,7 @@ impl<M: Marker + Serialize> ConvertSaveload<M> for EntityVec
         F: FnMut(M) -> Option<Entity>
     {
         let entities = data.iter()
-            .map(|marker| ids(marker.clone()).unwrap())
+            .filter_map(|marker| ids(marker.clone()))
             .collect();
 
         Ok(EntityVec{0: entities})

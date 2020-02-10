@@ -1,13 +1,12 @@
 use specs::*;
-use specs::saveload::*;
-use serde::*;
 use specs_derive::*;
+use serde::{Serialize, Deserialize};
 
 use super::operationsystem::*;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Component)]
+#[derive(Clone, Copy, Debug, Component, Serialize, Deserialize)]
 pub enum OperationData {
-    Bootstrap(super::bootstrap::BootstrapOperation)
+    LocalSupply(super::localsupply::LocalSupplyOperation)
 }
 
 impl OperationData
@@ -15,13 +14,7 @@ impl OperationData
     pub fn as_operation(&mut self) -> &mut dyn Operation
     {
         match self {
-            OperationData::Bootstrap(ref mut data) => data
+            OperationData::LocalSupply(ref mut data) => data
         }
     }
 }
-
-pub struct OperationMarkerTag;
-
-pub type OperationMarker = SimpleMarker<OperationMarkerTag>;
-
-pub type OperationMarkerAllocator = SimpleMarkerAllocator<OperationMarkerTag>;

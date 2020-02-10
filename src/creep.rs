@@ -85,12 +85,6 @@ impl<'a> System<'a> for CleanupCreepsSystem {
     }
 }
 
-pub struct CreepMarkerTag;
-
-pub type CreepMarker = SimpleMarker<CreepMarkerTag>;
-
-pub type CreepMarkerAllocator = SimpleMarkerAllocator<CreepMarkerTag>;
-
 pub struct Spawning;
 
 impl Spawning
@@ -98,7 +92,6 @@ impl Spawning
     pub fn build<B>(builder: B, name: &str) -> B where B: Builder + MarkedBuilder {
         builder
             .marked::<::serialize::SerializeMarker>()
-            .marked::<CreepMarker>()
             .with(CreepSpawning::new(&name))
     }
 }

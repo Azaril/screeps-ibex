@@ -1,20 +1,14 @@
 use serde::*;
 use screeps::*;
+use itertools::*;
 
 use super::jobsystem::*;
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-pub enum DeliveryTarget {
-    None,
-    Spawn(ObjectId<StructureSpawn>),
-    Controller(ObjectId<StructureController>),
-    Container(ObjectId<StructureContainer>)
-}
+use crate::structureidentifier::*;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct HarvestJob {
     pub harvest_target: ObjectId<Source>,
-    pub delivery_target: DeliveryTarget
+    pub delivery_target: Option<StructureIdentifier>
 }
 
 impl HarvestJob
@@ -22,19 +16,75 @@ impl HarvestJob
     pub fn new(source_id: ObjectId<Source>) -> HarvestJob {
         HarvestJob {
             harvest_target: source_id,
-            delivery_target: DeliveryTarget::None
+            delivery_target: None
         }
     }
 
     pub fn select_delivery_target(&mut self, creep: &Creep, resource_type: ResourceType) -> Option<Structure> {
         let room = creep.room().unwrap();
 
-        for spawn in room.find(find::MY_SPAWNS) {
-            if spawn.store_free_capacity(Some(resource_type)) > 0 {
-                return Some(spawn.as_structure());
+        #[derive(PartialEq, Eq, Hash)]
+        enum DeliveryPriority {
+            High,
+            Medium,
+            Low
+        }
+
+        let targets = room.find(find::MY_STRUCTURES).iter()
+            .map(|owned_structure| owned_structure.clone().as_structure())
+            .filter_map(|structure| {
+                if let Some(storeable) = structure.as_has_store() {
+                    if storeable.store_free_capacity(Some(resource_type)) > 0 {
+                        return Some(structure);
+                    }
+                }
+                return None;
+            })
+            .map(|structure| {
+                let priority = match structure {
+                    Structure::Spawn(_) => DeliveryPriority::High,
+                    Structure::Extension(_) => DeliveryPriority::High,
+                    Structure::Container(_) => DeliveryPriority::Medium,
+                    _ => DeliveryPriority::Low
+                };
+
+                (priority, structure)
+            })
+            .into_group_map();        
+
+        //
+        // Find the delivery target with the highest priority and the shortest path.
+        // 
+        
+        for priority in [DeliveryPriority::High, DeliveryPriority::Medium, DeliveryPriority::Low].iter() {
+            if let Some(structures) = targets.get(priority) {
+                let nearest = structures.iter()
+                    .filter_map(|structure| {
+                        let find_options = FindOptions::new()
+                            .max_rooms(1)
+                            .ignore_creeps(true);
+
+                        if let Path::Vectorized(path) = creep.pos().find_path_to(&structure.pos(), find_options) {
+                            Some((path.len(), structure))
+                        } else {
+                            None
+                        }
+                    }).min_by_key(|(length, _structure)| {
+                        *length
+                    }).map(|(_, structure)| {
+                        structure
+                    });
+
+                if let Some(structure) = nearest {
+                    return Some(structure.clone());
+                }
             }
         }
-        
+
+        //
+        // If there are no delivery targets, use the controller as a fallback.
+        //
+
         if let Some(controller) = room.controller() {
             return Some(controller.as_structure());
         }
@@ -46,9 +96,9 @@ impl HarvestJob
 impl Job for HarvestJob
 {
     fn run_job(&mut self, data: &JobRuntimeData) {
-        let creep = data.owner;
-
         scope_timing!("Harvest Job - {}", creep.name());
+        
+        let creep = data.owner;
 
         let resource = screeps::ResourceType::Energy;
 
@@ -61,31 +111,18 @@ impl Job for HarvestJob
         //
 
         if used_capacity > 0 {
-            let repick_delivery = match self.delivery_target {
-                DeliveryTarget::Spawn(target) => {
-                    if let Some(spawn) = target.resolve() {
-                        spawn.store_free_capacity(Some(resource)) == 0
-                    } else {
-                        true
-                    }
-                },
-                DeliveryTarget::Controller(target) => {
-                    if let Some(_controller) = target.resolve() {
-                        false
-                    } else {
-                        true
-                    }
-                },
-                DeliveryTarget::Container(target) => {
-                    if let Some(container) = target.resolve() {
-                        container.store_free_capacity(Some(resource)) == 0
-                    } else {
-                        true
-                    }
-                },
-                DeliveryTarget::None => {
-                    capacity > 0 && available_capacity == 0
+            //
+            // If an existing delivery target exists but does not have room for delivery, choose a new target.
+            //
+
+            let repick_delivery = if let Some(delivery_structure) = self.delivery_target.and_then(|v| v.as_structure()) {
+                if let Some(storeable) = delivery_structure.as_has_store() {
+                    storeable.store_free_capacity(Some(resource)) == 0
+                } else {
+                    false
                 }
+            } else {
+                capacity > 0 && available_capacity == 0
             };
 
             //
@@ -93,76 +130,42 @@ impl Job for HarvestJob
             //
 
             if repick_delivery {
-                self.delivery_target = match self.select_delivery_target(&creep, resource) {
-                    Some(Structure::Spawn(spawn)) => {
-                        DeliveryTarget::Spawn(spawn.id())
-                    }
-                    Some(Structure::Container(container)) => {
-                        DeliveryTarget::Container(container.id())
-                    },
-                    Some(Structure::Controller(controller)) => {
-                        DeliveryTarget::Controller(controller.id())
-                    },
-                    None => {
-                        error!("Unable to find appropriate delivery target.");
+                let delivery_target = self.select_delivery_target(&creep, resource);
 
-                        DeliveryTarget::None
-                    }
-                    _ => {
-                        error!("Selected incompatible structure type for delivery.");
-
-                        DeliveryTarget::None
-                    }
-                };
+                self.delivery_target = delivery_target.map(|v| StructureIdentifier::new(&v));
             }
-        } else {
-            self.delivery_target = DeliveryTarget::None;
+        } else if self.delivery_target.is_some() {
+            //
+            // Clear the delivery target if not carrying any resources.
+            //
+            self.delivery_target = None;
         }
 
         //
-        // Move to and use energy
+        // Move to and transfer energy.
         //
             
-        match self.delivery_target {
-            DeliveryTarget::Spawn(target) => {
-                if let Some(spawn) = target.resolve() {
-                    if creep.pos().is_near_to(&spawn.pos()) {
-                        creep.transfer_all(&spawn, resource);
-                    } else {
-                        creep.move_to(&spawn);
-                    }
+        if let Some(delivery_target_structure) = self.delivery_target.and_then(|v| v.as_structure()) {
+            if creep.pos().is_near_to(&delivery_target_structure.pos()) {
+                if let Some(transferable) = delivery_target_structure.as_transferable() {
+                    creep.transfer_all(transferable, resource);
+                    //TODO: Log error if transfer fails?
+                } else if let Structure::Controller(ref controller) = delivery_target_structure {
+                    creep.upgrade_controller(controller);
+                } else {
+                    error!("Unsupported delivery target selected by harvester. Name: {}", creep.name());
 
-                    return;
-                }
-            },            
-            DeliveryTarget::Controller(target) => {
-                if let Some(controller) = target.resolve() {
-                    if creep.pos().is_near_to(&controller.pos()) {
-                        creep.upgrade_controller(&controller);
-                    } else {
-                        creep.move_to(&controller);
-                    }
-
-                    return;
-                }
-            },
-            DeliveryTarget::Container(target) => {
-                if let Some(container) = target.resolve() {
-                    if creep.pos().is_near_to(&container.pos()) {
-                        creep.transfer_all(&container, resource);
-                    } else {
-                        creep.move_to(&container);
-                    }
-
-                    return;
-                }
-            },
-            DeliveryTarget::None => {
+                    self.delivery_target = None;
+                }            
+            } else {
+                creep.move_to(&delivery_target_structure);
             }
+
+            return;
         }
 
         //
-        // Pickup
+        // Harvest energy from source.
         //
 
         if available_capacity > 0 {

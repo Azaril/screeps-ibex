@@ -1,9 +1,12 @@
-use serde::*;
+use specs::*;
+use specs::error::NoError;
+use specs::saveload::*;
 use screeps::*;
-use specs::*;        
-use specs_derive::*;                                                                                               
+use specs_derive::*;
+use serde::{Serialize, Deserialize};
+use crate::serialize::EntityVec;                                                                                       
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Component)]
+#[derive(Clone, Copy, Debug, Component, ConvertSaveload)]
 pub struct RoomOwnerData {
     pub owner: RoomName
 }
@@ -16,15 +19,15 @@ impl RoomOwnerData {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Component)]
+#[derive(Clone, Debug, Component, ConvertSaveload)]
 pub struct RoomData {
-    pub missions: Vec<::missions::data::MissionMarker>
+    pub missions: EntityVec
 }
 
 impl RoomData {
     pub fn new() -> RoomData {
         RoomData {
-            missions: vec!()
+            missions: EntityVec::new()
         }                           
     }
 }
