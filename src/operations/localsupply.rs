@@ -6,8 +6,7 @@ use serde::{Serialize, Deserialize};
 use super::data::*;
 use super::operationsystem::*;
 use crate::missions::data::*;
-use crate::missions::basicharvest::*;
-use crate::missions::complexharvest::*;
+use crate::missions::localsupply::*;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct LocalSupplyOperation {
@@ -44,8 +43,7 @@ impl Operation for LocalSupplyOperation
                     //TODO: wiarchbe: Use trait instead of match.
                     let has_local_supply_mission = room_data.missions.0.iter().any(|mission_entity| {
                         match system_data.mission_data.get(*mission_entity) {
-                            Some(MissionData::BasicHarvest(_)) => true,
-                            Some(MissionData::ComplexHarvest(_)) => true,
+                            Some(MissionData::LocalSupply(_)) => true,
                             _ => false
                         }
                     });
@@ -57,37 +55,17 @@ impl Operation for LocalSupplyOperation
                     if !has_local_supply_mission {
                         info!("Starting local supply for spawning room. Room: {}", room_owner.owner);
 
-                        let level = if let Some(controller) = room.controller() {
-                            controller.level()
-                        } else {
-                            0
-                        };
-
                         let room_entity = entity;
                         let mission_room = room_owner.owner;
 
                         system_data.updater.exec_mut(move |world| {
-                            //
-                            // Spawn the mission entity.
-                            //
+                            let mission_entity = LocalSupplyMission::build(world.create_entity(), &mission_room).build();
 
-                            let mission_entity = match level {
-                                val if val <= 0 => None,
-                                1 => Some(BasicHarvestMission::build(world.create_entity(), &mission_room).build()),
-                                _ => Some(ComplexHarvestMission::build(world.create_entity(), &mission_room).build()),
-                            };
+                            let room_data_storage = &mut world.write_storage::<::room::data::RoomData>();
 
-                            //
-                            // Attach the mission to the room.
-                            //
-
-                            if let Some(mission_entity) = mission_entity {
-                                let room_data_storage = &mut world.write_storage::<::room::data::RoomData>();
-
-                                if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                                    room_data.missions.0.push(mission_entity);
-                                }  
-                            }                              
+                            if let Some(room_data) = room_data_storage.get_mut(room_entity) {
+                                room_data.missions.0.push(mission_entity);
+                            }  
                         });
                     }
                 }

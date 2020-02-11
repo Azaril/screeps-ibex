@@ -13,31 +13,31 @@ use ::spawnsystem::*;
 use crate::serialize::*;
 
 #[derive(Clone, Debug, ConvertSaveload)]
-pub struct ComplexHarvestMission {
+pub struct LocalSupplyMission {
     harvesters: EntityVec
 }
 
-impl ComplexHarvestMission
+impl LocalSupplyMission
 {
     pub fn build<B>(builder: B, room_name: &RoomName) -> B where B: Builder + MarkedBuilder {
-        let mission = ComplexHarvestMission::new();
+        let mission = LocalSupplyMission::new();
 
-        builder.with(MissionData::ComplexHarvest(mission))
+        builder.with(MissionData::LocalSupply(mission))
             .marked::<::serialize::SerializeMarker>()
             .with(::room::data::RoomOwnerData::new(room_name))
     }
 
-    pub fn new() -> ComplexHarvestMission {
-        ComplexHarvestMission {
+    pub fn new() -> LocalSupplyMission {
+        LocalSupplyMission {
             harvesters: EntityVec::new()
         }
     }
 }
 
-impl Mission for ComplexHarvestMission
+impl Mission for LocalSupplyMission
 {
     fn run_mission<'a>(&mut self, system_data: &MissionExecutionSystemData, runtime_data: &MissionExecutionRuntimeData) -> MissionResult {
-        scope_timing!("ComplexHarvest - Room: {}", runtime_data.room_owner.owner);
+        scope_timing!("LocalSupply - Room: {}", runtime_data.room_owner.owner);
 
         //
         // Cleanup harvesters that no longer exist.
@@ -46,23 +46,6 @@ impl Mission for ComplexHarvestMission
         self.harvesters.0.retain(|entity| system_data.entities.is_alive(*entity));
 
         if let Some(room) = game::rooms::get(runtime_data.room_owner.owner) {
-
-            //
-            // Terminate the mission if not at least room level 2.
-            //
-
-            let level = if let Some(controller) = room.controller() {
-                controller.level()
-            } else {
-                0
-            };
-
-            if level < 2 {
-                return MissionResult::Failure;
-            }
-
-            //TODO: This should use miners and hauler roles instead of harvester.
-
             //
             // Spawn harvesters to fufill basic room needs.
             //
@@ -87,6 +70,7 @@ impl Mission for ComplexHarvestMission
                     }
                 })
                 .filter(|(harvester_count, _)| {
+                    //TODO: Compute correct number of harvesters need for source.
                     return *harvester_count < 4;
                 })
                 .map(|(harvester_count, source)| {
@@ -114,7 +98,7 @@ impl Mission for ComplexHarvestMission
 
                         let mission_data_storage = &mut world.write_storage::<MissionData>();
 
-                        if let Some(MissionData::ComplexHarvest(mission_data)) = mission_data_storage.get_mut(mission_entity) {
+                        if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
                             mission_data.harvesters.0.push(creep_entity);
                         }       
                     });
