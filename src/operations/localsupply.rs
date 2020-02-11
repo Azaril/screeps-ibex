@@ -46,7 +46,7 @@ impl Operation for LocalSupplyOperation
                         match system_data.mission_data.get(*mission_entity) {
                             Some(MissionData::BasicHarvest(_)) => true,
                             Some(MissionData::ComplexHarvest(_)) => true,
-                            None => false
+                            _ => false
                         }
                     });
 

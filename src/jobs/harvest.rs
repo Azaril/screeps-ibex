@@ -4,6 +4,7 @@ use itertools::*;
 
 use super::jobsystem::*;
 use crate::structureidentifier::*;
+use crate::findnearest::*;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct HarvestJob {
@@ -58,24 +59,7 @@ impl HarvestJob
         
         for priority in [DeliveryPriority::High, DeliveryPriority::Medium, DeliveryPriority::Low].iter() {
             if let Some(structures) = targets.get(priority) {
-                let nearest = structures.iter()
-                    .filter_map(|structure| {
-                        let find_options = FindOptions::new()
-                            .max_rooms(1)
-                            .ignore_creeps(true);
-
-                        if let Path::Vectorized(path) = creep.pos().find_path_to(&structure.pos(), find_options) {
-                            Some((path.len(), structure))
-                        } else {
-                            None
-                        }
-                    }).min_by_key(|(length, _structure)| {
-                        *length
-                    }).map(|(_, structure)| {
-                        structure
-                    });
-
-                if let Some(structure) = nearest {
+                if let Some(structure) = structures.iter().cloned().find_nearest(&creep.pos(), PathFinderHelpers::same_room) {
                     return Some(structure.clone());
                 }
             }
@@ -110,9 +94,12 @@ impl Job for HarvestJob
         // Compute delivery target
         //
 
-        if used_capacity > 0 {
+        if used_capacity == 0 {
+            self.delivery_target = None;
+        } else {
             //
             // If an existing delivery target exists but does not have room for delivery, choose a new target.
+            // If full of energy but no delivery target selected, choose one.
             //
 
             let repick_delivery = if let Some(delivery_structure) = self.delivery_target.and_then(|v| v.as_structure()) {
@@ -130,15 +117,8 @@ impl Job for HarvestJob
             //
 
             if repick_delivery {
-                let delivery_target = self.select_delivery_target(&creep, resource);
-
-                self.delivery_target = delivery_target.map(|v| StructureIdentifier::new(&v));
+                self.delivery_target = self.select_delivery_target(&creep, resource).map(|v| StructureIdentifier::new(&v));
             }
-        } else if self.delivery_target.is_some() {
-            //
-            // Clear the delivery target if not carrying any resources.
-            //
-            self.delivery_target = None;
         }
 
         //
@@ -146,7 +126,7 @@ impl Job for HarvestJob
         //
             
         if let Some(delivery_target_structure) = self.delivery_target.and_then(|v| v.as_structure()) {
-            if creep.pos().is_near_to(&delivery_target_structure.pos()) {
+            if creep.pos().is_near_to(&delivery_target_structure) {
                 if let Some(transferable) = delivery_target_structure.as_transferable() {
                     creep.transfer_all(transferable, resource);
                     //TODO: Log error if transfer fails?
@@ -170,7 +150,7 @@ impl Job for HarvestJob
 
         if available_capacity > 0 {
             if let Some(source) = self.harvest_target.resolve() {
-                if creep.pos().is_near_to(&source.pos()) {
+                if creep.pos().is_near_to(&source) {
                     creep.harvest(&source);
                 } else {
                     creep.move_to(&source);

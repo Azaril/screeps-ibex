@@ -28,6 +28,7 @@ mod serialize;
 mod room;
 mod spawnsystem;
 mod structureidentifier;
+mod findnearest;
 
 use std::fmt;
 
@@ -220,12 +221,10 @@ fn game_loop() {
     // Deserialize world state.
     //
 
-    {
-        if let Ok(entry) = memory::root().string("native") {
-            if let Some(data) = entry {
-                deserialize_world(&world, &data);
-                world.maintain();
-            }
+    //TODO: Use a memory segment and raw memory to avoid extra string serialize.
+    if let Ok(entry) = memory::root().string("native") {
+        if let Some(data) = entry {
+            deserialize_world(&world, &data);
         }
     }
 
@@ -250,6 +249,7 @@ fn game_loop() {
     //
 
     serialize_world(&world, |data| {
+        //TODO: Use a memory segment and raw memory to avoid extra string serialize.
         memory::root().set("native", data);
     });
 }

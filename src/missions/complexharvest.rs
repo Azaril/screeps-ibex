@@ -61,6 +61,8 @@ impl Mission for ComplexHarvestMission
                 return MissionResult::Failure;
             }
 
+            //TODO: This should use miners and hauler roles instead of harvester.
+
             //
             // Spawn harvesters to fufill basic room needs.
             //
@@ -91,8 +93,9 @@ impl Mission for ComplexHarvestMission
 
                 let mission_entity = runtime_data.entity.clone();
                 let source_id = source.id();
+                let priority = if self.harvesters.0.is_empty() { SPAWN_PRIORITY_CRITICAL } else { SPAWN_PRIORITY_HIGH };
 
-                system_data.spawn_queue.request(SpawnRequest::new(&runtime_data.room_owner.owner, &body, Box::new(move |spawn_system_data, name| {
+                system_data.spawn_queue.request(SpawnRequest::new(&runtime_data.room_owner.owner, &body, priority, Box::new(move |spawn_system_data, name| {
                     let name = name.to_string();
 
                     spawn_system_data.updater.exec_mut(move |world| {

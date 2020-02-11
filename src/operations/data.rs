@@ -6,7 +6,8 @@ use super::operationsystem::*;
 
 #[derive(Clone, Copy, Debug, Component, Serialize, Deserialize)]
 pub enum OperationData {
-    LocalSupply(super::localsupply::LocalSupplyOperation)
+    LocalSupply(super::localsupply::LocalSupplyOperation),
+    Upgrade(super::upgrade::UpgradeOperation)
 }
 
 impl OperationData
@@ -14,7 +15,8 @@ impl OperationData
     pub fn as_operation(&mut self) -> &mut dyn Operation
     {
         match self {
-            OperationData::LocalSupply(ref mut data) => data
+            OperationData::LocalSupply(ref mut data) => data,
+            OperationData::Upgrade(ref mut data) => data
         }
     }
 }

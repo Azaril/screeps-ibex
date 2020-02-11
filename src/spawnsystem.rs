@@ -4,17 +4,25 @@ use specs::prelude::*;
 use screeps::*;
 use itertools::*;
 
+pub const SPAWN_PRIORITY_CRITICAL: f32 = 100.0;
+pub const SPAWN_PRIORITY_HIGH: f32 = 75.0;
+pub const SPAWN_PRIORITY_MEDIUM: f32 = 50.0;
+pub const SPAWN_PRIORITY_LOW: f32 = 25.0;
+pub const SPAWN_PRIORITY_NONE: f32 = 0.0;
+
 pub struct SpawnRequest {
     room_name: RoomName,
     body: Vec<Part>,
+    priority: f32,
     callback: Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync>
 }
 
 impl SpawnRequest {
-    pub fn new(room_name: &RoomName, body: &[Part], callback: Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync>) -> SpawnRequest {
+    pub fn new(room_name: &RoomName, body: &[Part], priority: f32, callback: Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync>) -> SpawnRequest {
         SpawnRequest{
             room_name: *room_name,
             body: body.to_vec(),
+            priority: priority,
             callback: callback
         }
     }
@@ -105,9 +113,11 @@ impl<'a> System<'a> for SpawnQueueSystem {
             .map(|request| (request.room_name.clone(), request))
             .into_group_map();
 
-        for (room_name, requests) in room_requests {
+        for (room_name, mut requests) in room_requests {
             if let Some(room) = game::rooms::get(room_name) {
                 let mut spawns = room.find(find::MY_SPAWNS);
+
+                requests.sort_by(|a, b| b.priority.partial_cmp(&a.priority).unwrap());
 
                 for request in requests {
                     if let Some(pos) = spawns.iter().position(|spawn| { Self::can_spawn(spawn, &request.body) }) {
