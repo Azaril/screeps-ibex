@@ -78,22 +78,29 @@ impl Mission for ComplexHarvestMission
                 .into_group_map();
 
             let sources = room.find(find::SOURCES);
-            let available_sources = sources.iter().filter(|source| {
-                let current_count = if let Some(harvesters) = sources_to_harvesters.get(&source.id()) {
-                    harvesters.len()
-                } else {
-                    0
-                };
+            let available_sources = sources.iter()
+                .map(|source| {
+                    if let Some(harvesters) = sources_to_harvesters.get(&source.id()) {
+                        (harvesters.len(), source)
+                    } else {
+                        (0, source)
+                    }
+                })
+                .filter(|(harvester_count, _)| {
+                    return *harvester_count < 4;
+                })
+                .map(|(harvester_count, source)| {
+                    let priority = if harvester_count == 0 { SPAWN_PRIORITY_CRITICAL } else { SPAWN_PRIORITY_HIGH };
 
-                return current_count < 4;
-            });
+                    (priority, source)
+                });
 
-            for source in available_sources {
+            for available_source in available_sources {
+                let (priority, source) = available_source;
                 let body = [Part::Move, Part::Move, Part::Carry, Part::Work];
 
                 let mission_entity = runtime_data.entity.clone();
                 let source_id = source.id();
-                let priority = if self.harvesters.0.is_empty() { SPAWN_PRIORITY_CRITICAL } else { SPAWN_PRIORITY_HIGH };
 
                 system_data.spawn_queue.request(SpawnRequest::new(&runtime_data.room_owner.owner, &body, priority, Box::new(move |spawn_system_data, name| {
                     let name = name.to_string();
@@ -109,7 +116,7 @@ impl Mission for ComplexHarvestMission
 
                         if let Some(MissionData::ComplexHarvest(mission_data)) = mission_data_storage.get_mut(mission_entity) {
                             mission_data.harvesters.0.push(creep_entity);
-                        }                             
+                        }       
                     });
                 })));
             }

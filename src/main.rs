@@ -184,7 +184,7 @@ fn deserialize_world(world: &World, data: &str) {
 fn game_loop() {
     scope_timing!("Main tick");
 
-    info!("Tick starting - CPU: {}", screeps::game::cpu::get_used());
+    info!("Tick start - CPU: {}", screeps::game::cpu::get_used());
 
     let mut world = World::new();
 
@@ -252,6 +252,8 @@ fn game_loop() {
         //TODO: Use a memory segment and raw memory to avoid extra string serialize.
         memory::root().set("native", data);
     });
+
+    info!("Tick end - CPU: {}", screeps::game::cpu::get_used());
 }
 
 fn cleanup_memory() -> Result<(), Box<dyn (::std::error::Error)>> {
