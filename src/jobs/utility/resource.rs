@@ -14,12 +14,10 @@ pub enum EnergyPickupTarget {
 pub struct ResourceUtility;
 
 impl ResourceUtility {
-    pub fn select_energy_resource_pickup_or_harvest(creep: &Creep) -> Option<EnergyPickupTarget> {
-        if let Some(identifier) = Self::select_resource_pickup(creep, ResourceType::Energy) {
+    pub fn select_energy_resource_pickup_or_harvest(creep: &Creep, room: &Room) -> Option<EnergyPickupTarget> {
+        if let Some(identifier) = Self::select_resource_pickup(creep, room, ResourceType::Energy) {
             return Some(EnergyPickupTarget::Structure(identifier));
         }
-
-        let room = creep.room().unwrap();
 
         let nearest_source = room.find(find::SOURCES_ACTIVE).iter()
             .cloned()
@@ -32,9 +30,7 @@ impl ResourceUtility {
         return None;
     }    
 
-    pub fn select_resource_pickup(creep: &Creep, resource_type: ResourceType) -> Option<StructureIdentifier> {
-        let room = creep.room().unwrap();
-
+    pub fn select_resource_pickup(creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<StructureIdentifier> {
         #[derive(PartialEq, Eq, Hash)]
         enum PickupPriority {
             High,
@@ -81,9 +77,7 @@ impl ResourceUtility {
         return None;
     }   
 
-    pub fn select_delivery_target(creep: &Creep, resource_type: ResourceType) -> Option<Structure> {
-        let room = creep.room().unwrap();
-
+    pub fn select_resource_delivery(creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<Structure> {
         #[derive(PartialEq, Eq, Hash)]
         enum DeliveryPriority {
             High,

@@ -2,8 +2,9 @@ use serde::*;
 use screeps::*;
 
 use super::jobsystem::*;
-use crate::structureidentifier::*;
 use super::utility::resource::*;
+use super::utility::resourcebehavior::*;
+use crate::structureidentifier::*;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct HarvestJob {
@@ -20,14 +21,11 @@ impl HarvestJob
         }
     }
 
-    pub fn select_delivery_target(&mut self, creep: &Creep, resource_type: ResourceType) -> Option<Structure> {
-        if let Some(delivery_target) = ResourceUtility::select_delivery_target(creep, resource_type) {
+    pub fn select_delivery_target(&mut self, creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<Structure> {
+        if let Some(delivery_target) = ResourceUtility::select_resource_delivery(creep, room, resource_type) {
             return Some(delivery_target);
         }
 
-        let room = creep.room().unwrap();
-
-        //
         // If there are no delivery targets, use the controller as a fallback.
         //
 
@@ -45,6 +43,7 @@ impl Job for HarvestJob
         scope_timing!("Harvest Job - {}", creep.name());
         
         let creep = data.owner;
+        let room = creep.room().unwrap();
 
         let resource = screeps::ResourceType::Energy;
 
@@ -79,7 +78,7 @@ impl Job for HarvestJob
             //
 
             if repick_delivery {
-                self.delivery_target = self.select_delivery_target(&creep, resource).map(|v| StructureIdentifier::new(&v));
+                self.delivery_target = self.select_delivery_target(&creep, &room, resource).map(|v| StructureIdentifier::new(&v));
             }
         }
 
@@ -112,11 +111,7 @@ impl Job for HarvestJob
 
         if available_capacity > 0 {
             if let Some(source) = self.harvest_target.resolve() {
-                if creep.pos().is_near_to(&source) {
-                    creep.harvest(&source);
-                } else {
-                    creep.move_to(&source);
-                }
+                ResourceBehaviorUtility::get_energy_from_source(creep, &source);
 
                 return;
             } else {

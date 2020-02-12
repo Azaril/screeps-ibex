@@ -3,6 +3,7 @@ use screeps::*;
 
 use super::jobsystem::*;
 use super::utility::resource::*;
+use super::utility::resourcebehavior::*;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct UpgradeJob {
@@ -26,6 +27,7 @@ impl Job for UpgradeJob
         scope_timing!("Upgrade Job - {}", creep.name());
         
         let creep = data.owner;
+        let room = creep.room().unwrap();
 
         let resource = screeps::ResourceType::Energy;
 
@@ -63,47 +65,18 @@ impl Job for UpgradeJob
             };
 
             if repick_pickup {
-                self.pickup_target = ResourceUtility::select_energy_resource_pickup_or_harvest(&creep);
+                self.pickup_target = ResourceUtility::select_energy_resource_pickup_or_harvest(&creep, &room);
             }
         }
 
         //
         // Move to and transfer energy.
         //
-        
-        //TODO: Factor this in to common code.
-        match self.pickup_target {
-            Some(EnergyPickupTarget::Structure(ref pickup_structure_id)) => {
-                if let Some(pickup_structure) = pickup_structure_id.as_structure() {
-                    if creep.pos().is_near_to(&pickup_structure) {
-                        if let Some(withdrawable) = pickup_structure.as_withdrawable() {
-                            creep.withdraw_all(withdrawable, resource);
-                        } else {
-                            error!("Upgrader expected to be able to withdraw from structure but it was the wrong type.");
-                        }
-                    } else {
-                        creep.move_to(&pickup_structure);
-                    }
 
-                    return;
-                } else {
-                    error!("Failed to resolve pickup structure for upgrader.");
-                }
-            },
-            Some(EnergyPickupTarget::Source(ref source_id)) => {
-                if let Some(source) = source_id.resolve() {
-                    if creep.pos().is_near_to(&source) {
-                        creep.harvest(&source);
-                    } else {
-                        creep.move_to(&source);
-                    }
+        if let Some(pickup_target) = self.pickup_target {
+            ResourceBehaviorUtility::get_energy(creep, &pickup_target);
 
-                    return;
-                } else {
-                    error!("Failed to resolve pickup source for upgrader.");
-                }
-            },
-            None => {}
+            return;
         }
 
         //

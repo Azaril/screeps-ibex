@@ -3,6 +3,7 @@ use screeps::*;
 
 use super::jobsystem::*;
 use super::utility::resource::*;
+use super::utility::resourcebehavior::*;
 use crate::findnearest::*;
 use crate::structureidentifier::*;
 
@@ -32,6 +33,7 @@ impl Job for BuildJob
         scope_timing!("Build Job - {}", creep.name());
         
         let creep = data.owner;
+        let room = creep.room().unwrap();
 
         let resource = screeps::ResourceType::Energy;
 
@@ -52,8 +54,6 @@ impl Job for BuildJob
             };
 
             if repick_build_target {
-                let room = creep.room().unwrap();
-
                 let construction_sites = room.find(find::MY_CONSTRUCTION_SITES);
 
                 let in_progress_construction_site_id = construction_sites
@@ -77,23 +77,17 @@ impl Job for BuildJob
         // Build construction site.
         //
 
-        if used_capacity > 0 {
-            if let Some(construction_site) = self.build_target.and_then(|id| id.resolve()) {
-                let creep_pos = creep.pos();
-                let target_pos = construction_site.pos();
+        if let Some(construction_site) = self.build_target.and_then(|id| id.resolve()) {
+            let creep_pos = creep.pos();
+            let target_pos = construction_site.pos();
 
-                if creep_pos.in_range_to(&construction_site, 3) && creep_pos.room_name() == target_pos.room_name() {
-                    creep.build(&construction_site);
-                } else {
-                    creep.move_to(&construction_site);
-                }
-
-                return;
+            if creep_pos.in_range_to(&construction_site, 3) && creep_pos.room_name() == target_pos.room_name() {
+                creep.build(&construction_site);
             } else {
-                error!("Builder has no assigned build target! Name: {}", creep.name());
-            }           
-        } else {
-            error!("Builder with no energy would like to build target! Name: {}", creep.name());
+                creep.move_to(&construction_site);
+            }
+
+            return;
         }
 
         //
@@ -127,46 +121,18 @@ impl Job for BuildJob
             };
 
             if repick_pickup {
-                self.pickup_target = ResourceUtility::select_energy_resource_pickup_or_harvest(&creep);
+                self.pickup_target = ResourceUtility::select_energy_resource_pickup_or_harvest(&creep, &room);
             }
         }
 
         //
-        // Move to and transfer energy.
+        // Move to and get energy.
         //
-        
-        match self.pickup_target {
-            Some(EnergyPickupTarget::Structure(ref pickup_structure_id)) => {
-                if let Some(pickup_structure) = pickup_structure_id.as_structure() {
-                    if creep.pos().is_near_to(&pickup_structure) {
-                        if let Some(withdrawable) = pickup_structure.as_withdrawable() {
-                            creep.withdraw_all(withdrawable, resource);
-                        } else {
-                            error!("Builder expected to be able to withdraw from structure but it was the wrong type.");
-                        }
-                    } else {
-                        creep.move_to(&pickup_structure);
-                    }
 
-                    return;
-                } else {
-                    error!("Failed to resolve pickup structure for builder.");
-                }
-            },
-            Some(EnergyPickupTarget::Source(ref source_id)) => {
-                if let Some(source) = source_id.resolve() {
-                    if creep.pos().is_near_to(&source) {
-                        creep.harvest(&source);
-                    } else {
-                        creep.move_to(&source);
-                    }
+        if let Some(pickup_target) = self.pickup_target {
+            ResourceBehaviorUtility::get_energy(creep, &pickup_target);
 
-                    return;
-                } else {
-                    error!("Failed to resolve pickup source for build.");
-                }
-            },
-            None => {}
+            return;
         }
     }
 }
