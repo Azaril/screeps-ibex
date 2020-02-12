@@ -8,7 +8,9 @@ use super::jobsystem::*;
 pub enum JobData {
     Harvest(super::harvest::HarvestJob),
     Upgrade(super::upgrade::UpgradeJob),
-    Build(super::build::BuildJob)
+    Build(super::build::BuildJob),
+    StaticMine(super::staticmine::StaticMineJob),
+    Haul(super::haul::HaulJob)
 }
 
 impl JobData
@@ -18,7 +20,9 @@ impl JobData
         match self {
             JobData::Harvest(ref mut data) => data,
             JobData::Upgrade(ref mut data) => data,
-            JobData::Build(ref mut data) => data
+            JobData::Build(ref mut data) => data,
+            JobData::StaticMine(ref mut data) => data,
+            JobData::Haul(ref mut data) => data
         }
     }
 }

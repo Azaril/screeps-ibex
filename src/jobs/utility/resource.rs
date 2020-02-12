@@ -21,7 +21,7 @@ impl ResourceUtility {
 
         let nearest_source = room.find(find::SOURCES_ACTIVE).iter()
             .cloned()
-            .find_nearest(&creep.pos(), PathFinderHelpers::same_room);
+            .find_nearest(&creep.pos(), PathFinderHelpers::same_room_ignore_creeps);
 
         if let Some(source) = nearest_source {
             return Some(EnergyPickupTarget::Source(source.id()));
@@ -31,15 +31,15 @@ impl ResourceUtility {
     }    
 
     pub fn select_resource_pickup(creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<StructureIdentifier> {
-        #[derive(PartialEq, Eq, Hash)]
+        #[derive(PartialEq, Eq, Hash, Debug)]
         enum PickupPriority {
             High,
             Medium,
             Low
         }
 
-        let targets = room.find(find::MY_STRUCTURES).iter()
-            .map(|owned_structure| owned_structure.clone().as_structure())
+        let mut targets = room.find(find::STRUCTURES)
+            .into_iter()
             .filter_map(|structure| {
                 if structure.as_withdrawable().is_some() {
                     if let Some(storeable) = structure.as_has_store() {
@@ -64,11 +64,11 @@ impl ResourceUtility {
 
         //
         // Find the pickup target with the highest priority and the shortest path.
-        // 
+        //
         
         for priority in [PickupPriority::High, PickupPriority::Medium, PickupPriority::Low].iter() {
-            if let Some(structures) = targets.get(priority) {
-                if let Some(structure) = structures.iter().cloned().find_nearest(&creep.pos(), PathFinderHelpers::same_room) {
+            if let Some(structures) = targets.remove(priority) {
+                if let Some(structure) = structures.into_iter().find_nearest(&creep.pos(), PathFinderHelpers::same_room_ignore_creeps) {
                     return Some(StructureIdentifier::new(&structure));
                 }
             }
@@ -78,15 +78,22 @@ impl ResourceUtility {
     }   
 
     pub fn select_resource_delivery(creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<Structure> {
-        #[derive(PartialEq, Eq, Hash)]
+        #[derive(PartialEq, Eq, Hash, Debug)]
         enum DeliveryPriority {
+            Critical,
             High,
             Medium,
             Low
         }
 
-        let targets = room.find(find::MY_STRUCTURES).iter()
-            .map(|owned_structure| owned_structure.clone().as_structure())
+        let mut targets = room.find(find::STRUCTURES)
+            .into_iter()
+            .filter(|structure| {
+                if let Some(owned_structure) = structure.as_owned() {
+                    owned_structure.my()
+                } else {
+                    true
+                }})
             .filter_map(|structure| {
                 if let Some(storeable) = structure.as_has_store() {
                     if storeable.store_free_capacity(Some(resource_type)) > 0 {
@@ -97,9 +104,12 @@ impl ResourceUtility {
             })
             .map(|structure| {
                 let priority = match structure {
-                    Structure::Spawn(_) => DeliveryPriority::High,
+                    Structure::Spawn(_) => DeliveryPriority::Critical,
+                    Structure::Tower(_) => DeliveryPriority::Critical,
                     Structure::Extension(_) => DeliveryPriority::High,
-                    Structure::Container(_) => DeliveryPriority::Medium,
+                    Structure::Storage(_) => DeliveryPriority::Medium, 
+                    //TODO: Filter out containers for haulers?                   
+                    Structure::Container(_) => DeliveryPriority::Low,
                     _ => DeliveryPriority::Low
                 };
 
@@ -110,10 +120,10 @@ impl ResourceUtility {
         //
         // Find the delivery target with the highest priority and the shortest path.
         // 
-        
-        for priority in [DeliveryPriority::High, DeliveryPriority::Medium, DeliveryPriority::Low].iter() {
-            if let Some(structures) = targets.get(priority) {
-                if let Some(structure) = structures.iter().cloned().find_nearest(&creep.pos(), PathFinderHelpers::same_room) {
+
+        for priority in [DeliveryPriority::Critical, DeliveryPriority::High, DeliveryPriority::Medium, DeliveryPriority::Low].iter() {
+            if let Some(structures) = targets.remove(priority) {
+                if let Some(structure) = structures.into_iter().find_nearest(&creep.pos(), PathFinderHelpers::same_room_ignore_creeps) {
                     return Some(structure.clone());
                 }
             }

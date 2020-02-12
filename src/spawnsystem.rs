@@ -63,14 +63,17 @@ pub struct SpawnQueueSystem;
 
 impl SpawnQueueSystem
 {
-    fn can_spawn<'a>(spawn: &StructureSpawn, parts: &[Part]) -> bool {
+    fn can_spawn<'a>(spawn: &StructureSpawn, _parts: &[Part]) -> bool {
         if spawn.is_spawning() {
             return false;
         }
 
+        //TODO: Pre-compute?
+        /*
         if spawn.energy() < parts.iter().map(|p| p.cost()).sum() {
             return false;
         }
+        */
 
         return true;
     }
@@ -123,11 +126,31 @@ impl<'a> System<'a> for SpawnQueueSystem {
                     if let Some(pos) = spawns.iter().position(|spawn| { Self::can_spawn(spawn, &request.body) }) {
                         let spawn = &spawns[pos];
 
-                        if let Ok(name) = Self::spawn_creep(&spawn, &request.body) {
-                            (*request.callback)(&system_data, &name);
-                        }
+                        let spawn_complete = match Self::spawn_creep(&spawn, &request.body) {
+                            Ok(name) => {
+                                (*request.callback)(&system_data, &name);
+                            
+                                true
+                            },
+                            Err(ReturnCode::NotEnough) => {
+                                //
+                                // If there was not enough energy available for the highest priority request,
+                                // continue waiting for energy and don't allow any other spawns to occur.
+                                //
+                                true
+                            },
+                            _ => {
+                                //
+                                // Any other errors are assumed to be mis-configuration and should be ignored
+                                // rather than block further spawns.
+                                //
+                                false
+                            }
+                        };
 
-                        spawns.remove(pos);
+                        if spawn_complete {
+                            spawns.remove(pos);
+                        }
                     }
 
                     if spawns.is_empty() {

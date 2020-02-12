@@ -41,7 +41,7 @@ impl Operation for LocalBuildOperation
                     //
 
                     //TODO: wiarchbe: Use trait instead of match.
-                    let has_local_supply_mission = room_data.missions.0.iter().any(|mission_entity| {
+                    let has_local_build_mission = room_data.missions.0.iter().any(|mission_entity| {
                         match system_data.mission_data.get(*mission_entity) {
                             Some(MissionData::LocalBuild(_)) => true,
                             _ => false
@@ -52,7 +52,7 @@ impl Operation for LocalBuildOperation
                     // Spawn a new mission to fill the local build role if missing.
                     //
         
-                    if !has_local_supply_mission {
+                    if !has_local_build_mission {
                         info!("Starting local build for spawning room. Room: {}", room_owner.owner);
 
                         let room_entity = entity;

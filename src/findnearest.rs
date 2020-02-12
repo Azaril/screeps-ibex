@@ -9,7 +9,7 @@ pub trait FindNearest<T: Sized + HasPosition> {
 pub struct PathFinderHelpers;
 
 impl PathFinderHelpers {
-    pub fn same_room<T>(start_pos: &RoomPosition, pos_object: &T) -> Path where T: HasPosition {
+    pub fn same_room_ignore_creeps<T>(start_pos: &RoomPosition, pos_object: &T) -> Path where T: HasPosition {
         let find_options = FindOptions::new()
             .max_rooms(1)
             .ignore_creeps(true);

@@ -45,35 +45,50 @@ impl Mission for LocalBuildMission
         self.builders.0.retain(|entity| system_data.entities.is_alive(*entity));
 
         if let Some(room) = game::rooms::get(runtime_data.room_owner.owner) {
-            if self.builders.0.len() < 1 {
-                let construction_sites = room.find(find::MY_CONSTRUCTION_SITES);
+            let builder_priority = if self.builders.0.len() < 2 {
+                if room.find(find::MY_CONSTRUCTION_SITES).len() > 0 {
+                    if self.builders.0.len() == 0 { 
+                        Some(SPAWN_PRIORITY_HIGH)
+                    } else { 
+                        Some(SPAWN_PRIORITY_MEDIUM) 
+                    }
+                } else {
+                    let repair_targets = crate::jobs::utility::repair::RepairUtility::get_repair_targets(&room);
 
-                if construction_sites.len() > 0 {
-                    let body = [Part::Move, Part::Move, Part::Carry, Part::Work];
-
-                    let mission_entity = runtime_data.entity.clone();
-                    let room_name = room.name();
-
-                    let priority = SPAWN_PRIORITY_HIGH;
-
-                    system_data.spawn_queue.request(SpawnRequest::new(&runtime_data.room_owner.owner, &body, priority, Box::new(move |spawn_system_data, name| {
-                        let name = name.to_string();
-
-                        spawn_system_data.updater.exec_mut(move |world| {
-                            let creep_job = JobData::Build(::jobs::build::BuildJob::new(&room_name));
-
-                            let creep_entity = ::creep::Spawning::build(world.create_entity(), &name)
-                                .with(creep_job)
-                                .build();
-
-                            let mission_data_storage = &mut world.write_storage::<MissionData>();
-
-                            if let Some(MissionData::LocalBuild(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                                mission_data.builders.0.push(creep_entity);
-                            }       
-                        });
-                    })));
+                    //TODO: Look at prioritized targets.
+                    if repair_targets.len() > 0 {
+                        Some(SPAWN_PRIORITY_HIGH)
+                    } else {
+                        None
+                    }
                 }
+            } else {
+                None
+            };
+
+            if let Some(priority) = builder_priority {
+                let body = [Part::Move, Part::Move, Part::Carry, Part::Work];
+
+                let mission_entity = runtime_data.entity.clone();
+                let room_name = room.name();
+
+                system_data.spawn_queue.request(SpawnRequest::new(&runtime_data.room_owner.owner, &body, priority, Box::new(move |spawn_system_data, name| {
+                    let name = name.to_string();
+
+                    spawn_system_data.updater.exec_mut(move |world| {
+                        let creep_job = JobData::Build(::jobs::build::BuildJob::new(&room_name));
+
+                        let creep_entity = ::creep::Spawning::build(world.create_entity(), &name)
+                            .with(creep_job)
+                            .build();
+
+                        let mission_data_storage = &mut world.write_storage::<MissionData>();
+
+                        if let Some(MissionData::LocalBuild(mission_data)) = mission_data_storage.get_mut(mission_entity) {
+                            mission_data.builders.0.push(creep_entity);
+                        }       
+                    });
+                })));
             }
 
             return MissionResult::Running;
