@@ -3,27 +3,30 @@ use screeps::*;
 
 use super::jobsystem::*;
 use super::utility::resource::*;
+use crate::findnearest::*;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub struct UpgradeJob {
-    pub upgrade_target: ObjectId<StructureController>,
+pub struct BuildJob {
+    pub room_name: RoomName,
+    pub build_target: Option<ObjectId<ConstructionSite>>,
     pub pickup_target: Option<EnergyPickupTarget>
 }
 
-impl UpgradeJob
+impl BuildJob
 {
-    pub fn new(upgrade_target: &ObjectId<StructureController>) -> UpgradeJob {
-        UpgradeJob {
-            upgrade_target: upgrade_target.clone(),
+    pub fn new(room_name: &RoomName) -> BuildJob {
+        BuildJob {
+            room_name: room_name.clone(),
+            build_target: None,
             pickup_target: None
         }
-    }
+    }    
 }
 
-impl Job for UpgradeJob
+impl Job for BuildJob
 {
     fn run_job(&mut self, data: &JobRuntimeData) {
-        scope_timing!("Upgrade Job - {}", creep.name());
+        scope_timing!("Build Job - {}", creep.name());
         
         let creep = data.owner;
 
@@ -35,8 +38,55 @@ impl Job for UpgradeJob
 
         //
         // Compute pickup target
+        //        
+
+        if used_capacity == 0 {
+            self.build_target = None;
+        } else {
+            let repick_build_target = match self.build_target {
+                Some(target_id) => target_id.resolve().is_none(),
+                None => used_capacity > 0
+            };
+
+            if repick_build_target {
+                let room = creep.room().unwrap();
+
+                self.build_target = room.find(find::MY_CONSTRUCTION_SITES)
+                    .iter()
+                    .cloned()
+                    .find_nearest(&creep.pos(), PathFinderHelpers::same_room)
+                    .map(|site| site.id());
+            }
+        }
+
+        //
+        // Build construction site.
         //
 
+        if used_capacity > 0 {
+            if let Some(construction_site) = self.build_target.and_then(|id| id.resolve()) {
+                let creep_pos = creep.pos();
+                let target_pos = construction_site.pos();
+
+                if creep_pos.in_range_to(&construction_site, 3) && creep_pos.room_name() == target_pos.room_name() {
+                    creep.build(&construction_site);
+                } else {
+                    creep.move_to(&construction_site);
+                }
+
+                return;
+            } else {
+                error!("Builder has no assigned build target! Name: {}", creep.name());
+            }           
+        } else {
+            error!("Builder with no energy would like to build target! Name: {}", creep.name());
+        }
+
+        //
+        // Compute pickup target
+        //
+
+        //TODO: Factor this in to common code.
         if available_capacity == 0 {
             self.pickup_target = None;
         } else {
@@ -71,7 +121,6 @@ impl Job for UpgradeJob
         // Move to and transfer energy.
         //
         
-        //TODO: Factor this in to common code.
         match self.pickup_target {
             Some(EnergyPickupTarget::Structure(ref pickup_structure_id)) => {
                 if let Some(pickup_structure) = pickup_structure_id.as_structure() {
@@ -79,7 +128,7 @@ impl Job for UpgradeJob
                         if let Some(withdrawable) = pickup_structure.as_withdrawable() {
                             creep.withdraw_all(withdrawable, resource);
                         } else {
-                            error!("Upgrader expected to be able to withdraw from structure but it was the wrong type.");
+                            error!("Builder expected to be able to withdraw from structure but it was the wrong type.");
                         }
                     } else {
                         creep.move_to(&pickup_structure);
@@ -87,7 +136,7 @@ impl Job for UpgradeJob
 
                     return;
                 } else {
-                    error!("Failed to resolve pickup structure for upgrader.");
+                    error!("Failed to resolve pickup structure for builder.");
                 }
             },
             Some(EnergyPickupTarget::Source(ref source_id)) => {
@@ -100,28 +149,10 @@ impl Job for UpgradeJob
 
                     return;
                 } else {
-                    error!("Failed to resolve pickup source for upgrader.");
+                    error!("Failed to resolve pickup source for build.");
                 }
             },
             None => {}
-        }
-
-        //
-        // Upgrade energy from source.
-        //
-
-        if used_capacity > 0 {
-            if let Some(controller) = self.upgrade_target.resolve() {
-                if creep.pos().is_near_to(&controller) {
-                    creep.upgrade_controller(&controller);
-                } else {
-                    creep.move_to(&controller);
-                }
-            } else {
-                error!("Upgrader has no assigned upgrade target! Name: {}", creep.name());
-            }           
-        } else {
-            error!("Upgrader with no energy would like to upgrade target! Name: {}", creep.name());
         }
     }
 }

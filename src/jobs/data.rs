@@ -7,7 +7,8 @@ use super::jobsystem::*;
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Component)]
 pub enum JobData {
     Harvest(super::harvest::HarvestJob),
-    Upgrade(super::upgrade::UpgradeJob)
+    Upgrade(super::upgrade::UpgradeJob),
+    Build(super::build::BuildJob)
 }
 
 impl JobData
@@ -16,7 +17,8 @@ impl JobData
     {
         match self {
             JobData::Harvest(ref mut data) => data,
-            JobData::Upgrade(ref mut data) => data
+            JobData::Upgrade(ref mut data) => data,
+            JobData::Build(ref mut data) => data
         }
     }
 }

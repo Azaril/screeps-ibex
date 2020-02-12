@@ -1,10 +1,9 @@
 use serde::*;
 use screeps::*;
-use itertools::*;
 
 use super::jobsystem::*;
 use crate::structureidentifier::*;
-use crate::findnearest::*;
+use super::utility::resource::*;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct HarvestJob {
@@ -22,48 +21,11 @@ impl HarvestJob
     }
 
     pub fn select_delivery_target(&mut self, creep: &Creep, resource_type: ResourceType) -> Option<Structure> {
+        if let Some(delivery_target) = ResourceUtility::select_delivery_target(creep, resource_type) {
+            return Some(delivery_target);
+        }
+
         let room = creep.room().unwrap();
-
-        #[derive(PartialEq, Eq, Hash)]
-        enum DeliveryPriority {
-            High,
-            Medium,
-            Low
-        }
-
-        let targets = room.find(find::MY_STRUCTURES).iter()
-            .map(|owned_structure| owned_structure.clone().as_structure())
-            .filter_map(|structure| {
-                if let Some(storeable) = structure.as_has_store() {
-                    if storeable.store_free_capacity(Some(resource_type)) > 0 {
-                        return Some(structure);
-                    }
-                }
-                return None;
-            })
-            .map(|structure| {
-                let priority = match structure {
-                    Structure::Spawn(_) => DeliveryPriority::High,
-                    Structure::Extension(_) => DeliveryPriority::High,
-                    Structure::Container(_) => DeliveryPriority::Medium,
-                    _ => DeliveryPriority::Low
-                };
-
-                (priority, structure)
-            })
-            .into_group_map();        
-
-        //
-        // Find the delivery target with the highest priority and the shortest path.
-        // 
-        
-        for priority in [DeliveryPriority::High, DeliveryPriority::Medium, DeliveryPriority::Low].iter() {
-            if let Some(structures) = targets.get(priority) {
-                if let Some(structure) = structures.iter().cloned().find_nearest(&creep.pos(), PathFinderHelpers::same_room) {
-                    return Some(structure.clone());
-                }
-            }
-        }
 
         //
         // If there are no delivery targets, use the controller as a fallback.
@@ -155,6 +117,8 @@ impl Job for HarvestJob
                 } else {
                     creep.move_to(&source);
                 }
+
+                return;
             } else {
                 error!("Harvester has no assigned harvesting source! Name: {}", creep.name());
             }           

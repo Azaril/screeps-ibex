@@ -9,7 +9,8 @@ use super::missionsystem::*;
 #[derive(Clone, Debug, Component, ConvertSaveload)]
 pub enum MissionData {
     LocalSupply(super::localsupply::LocalSupplyMission),
-    Upgrade(super::upgrade::UpgradeMission)
+    Upgrade(super::upgrade::UpgradeMission),
+    LocalBuild(super::localbuild::LocalBuildMission)
 }
 
 impl MissionData
@@ -18,7 +19,8 @@ impl MissionData
     {
         match self {
             MissionData::LocalSupply(ref mut data) => data,
-            MissionData::Upgrade(ref mut data) => data
+            MissionData::Upgrade(ref mut data) => data,
+            MissionData::LocalBuild(ref mut data) => data
         }
     }
 }
