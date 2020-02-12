@@ -160,7 +160,7 @@ impl Mission for LocalSupplyMission
 
                     let spawn_work_parts = std::cmp::min(work_parts_per_tick.ceil() as usize, max_work_parts.floor() as usize);
 
-                    let repeat_body = [Part::Move];
+                    let repeat_body = [Part::Work];
                     let body = repeat_body
                         .iter()
                         .cycle()
