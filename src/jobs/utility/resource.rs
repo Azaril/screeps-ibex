@@ -102,18 +102,17 @@ impl ResourceUtility {
                 }
                 return None;
             })
-            .map(|structure| {
+            .filter_map(|structure| {
                 let priority = match structure {
-                    Structure::Spawn(_) => DeliveryPriority::Critical,
-                    Structure::Tower(_) => DeliveryPriority::Critical,
-                    Structure::Extension(_) => DeliveryPriority::High,
-                    Structure::Storage(_) => DeliveryPriority::Medium, 
-                    //TODO: Filter out containers for haulers?                   
-                    Structure::Container(_) => DeliveryPriority::Low,
-                    _ => DeliveryPriority::Low
+                    Structure::Spawn(_) => Some(DeliveryPriority::Critical),
+                    Structure::Tower(_) => Some(DeliveryPriority::Critical),
+                    Structure::Extension(_) => Some(DeliveryPriority::High),
+                    Structure::Storage(_) => Some(DeliveryPriority::Medium), 
+                    Structure::Container(_) => None,
+                    _ => Some(DeliveryPriority::Low)
                 };
 
-                (priority, structure)
+                priority.map(|p| (p, structure))
             })
             .into_group_map();        
 
