@@ -46,9 +46,10 @@ impl HarvestJob
 impl Job for HarvestJob
 {
     fn run_job(&mut self, data: &JobRuntimeData) {
+        let creep = data.owner;
+        
         scope_timing!("Harvest Job - {}", creep.name());
         
-        let creep = data.owner;
         let room = creep.room().unwrap();
 
         let resource = screeps::ResourceType::Energy;

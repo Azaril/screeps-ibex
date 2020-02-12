@@ -147,8 +147,26 @@ impl Mission for LocalSupplyMission
 
                 for container in available_containers_for_miners {
                     let priority = SPAWN_PRIORITY_HIGH;
-                    //TODO: Compute number of work parts needed.
-                    let body = [Part::Move, Part::Work, Part::Work];
+
+                    let base_body = [Part::Move];
+
+                    let energy_per_tick = (source.energy_capacity() as f32) / (ENERGY_REGEN_TIME as f32);
+                    let work_parts_per_tick = energy_per_tick / (HARVEST_POWER as f32);
+
+                    let room_max_energy = room.energy_capacity_available();
+                    let base_body_cost: u32 = base_body.iter().map(|p| p.cost()).sum();
+                    let work_available_energy: u32 = room_max_energy - base_body_cost;
+                    let max_work_parts = (work_available_energy as f32) / (Part::Work.cost() as f32);
+
+                    let spawn_work_parts = std::cmp::min(work_parts_per_tick.ceil() as usize, max_work_parts.floor() as usize);
+
+                    let repeat_body = [Part::Move];
+                    let body = repeat_body
+                        .iter()
+                        .cycle()
+                        .take(spawn_work_parts * repeat_body.len())
+                        .chain(base_body.iter()).cloned()
+                        .collect::<Vec<Part>>();
 
                     let mission_entity = runtime_data.entity.clone();
                     let source_id = source.id();

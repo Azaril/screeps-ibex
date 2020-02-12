@@ -24,9 +24,10 @@ impl UpgradeJob
 impl Job for UpgradeJob
 {
     fn run_job(&mut self, data: &JobRuntimeData) {
+        let creep = data.owner;
+
         scope_timing!("Upgrade Job - {}", creep.name());
         
-        let creep = data.owner;
         let room = creep.room().unwrap();
 
         let resource = screeps::ResourceType::Energy;

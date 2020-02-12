@@ -148,7 +148,7 @@ impl Job for BuildJob
                     true
                 }
             },
-            None => capacity > 0 && used_capacity == 0
+            None => capacity > 0
         };
 
         if repick_pickup {
