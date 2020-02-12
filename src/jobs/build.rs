@@ -4,11 +4,13 @@ use screeps::*;
 use super::jobsystem::*;
 use super::utility::resource::*;
 use crate::findnearest::*;
+use crate::structureidentifier::*;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct BuildJob {
     pub room_name: RoomName,
     pub build_target: Option<ObjectId<ConstructionSite>>,
+    pub repair_target: Option<StructureIdentifier>,
     pub pickup_target: Option<EnergyPickupTarget>
 }
 
@@ -18,6 +20,7 @@ impl BuildJob
         BuildJob {
             room_name: room_name.clone(),
             build_target: None,
+            repair_target: None,
             pickup_target: None
         }
     }    
@@ -37,7 +40,7 @@ impl Job for BuildJob
         let available_capacity = capacity - used_capacity;
 
         //
-        // Compute pickup target
+        // Compute build target
         //        
 
         if used_capacity == 0 {
@@ -51,11 +54,22 @@ impl Job for BuildJob
             if repick_build_target {
                 let room = creep.room().unwrap();
 
-                self.build_target = room.find(find::MY_CONSTRUCTION_SITES)
+                let construction_sites = room.find(find::MY_CONSTRUCTION_SITES);
+
+                let in_progress_construction_site_id = construction_sites
                     .iter()
                     .cloned()
-                    .find_nearest(&creep.pos(), PathFinderHelpers::same_room)
+                    .filter(|site| site.progress() > 0)
+                    .max_by_key(|site| site.progress())
                     .map(|site| site.id());
+
+                self.build_target = in_progress_construction_site_id.or_else(|| {
+                    construction_sites
+                        .iter()
+                        .cloned()
+                        .find_nearest(&creep.pos(), PathFinderHelpers::same_room)
+                        .map(|site| site.id())
+                });
             }
         }
 
