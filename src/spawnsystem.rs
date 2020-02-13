@@ -68,13 +68,6 @@ impl SpawnQueueSystem
             return false;
         }
 
-        //TODO: Pre-compute?
-        /*
-        if spawn.energy() < parts.iter().map(|p| p.cost()).sum() {
-            return false;
-        }
-        */
-
         return true;
     }
 
@@ -123,7 +116,7 @@ impl<'a> System<'a> for SpawnQueueSystem {
                 requests.sort_by(|a, b| b.priority.partial_cmp(&a.priority).unwrap());
 
                 for request in requests {
-                    if let Some(pos) = spawns.iter().position(|spawn| { Self::can_spawn(spawn, &request.body) }) {
+                    if let Some(pos) = spawns.iter().position(|spawn| !spawn.is_spawning()) {
                         let spawn = &spawns[pos];
 
                         let spawn_complete = match Self::spawn_creep(&spawn, &request.body) {

@@ -13,8 +13,11 @@ use crate::structureidentifier::*;
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct BuildJob {
     pub room_name: RoomName,
+    #[serde(default)]
     pub build_target: Option<ObjectId<ConstructionSite>>,
+    #[serde(default)]
     pub repair_target: Option<StructureIdentifier>,
+    #[serde(default)]
     pub pickup_target: Option<EnergyPickupTarget>
 }
 
@@ -64,6 +67,7 @@ impl Job for BuildJob
         };
 
         if repick_build_target {
+            scope_timing!("repick_build_target");
             self.build_target = BuildUtility::select_construction_site(&creep, &room).map(|site| site.id());
         }
 
@@ -97,11 +101,15 @@ impl Job for BuildJob
         };
 
         if repick_repair_target {
-            let repair_targets = RepairUtility::get_prioritized_repair_targets(&room);
+            scope_timing!("repick_repair_target");
+
+            let mut repair_targets = RepairUtility::get_prioritized_repair_targets(&room);
 
             for priority in ORDERED_REPAIR_PRIORITIES.iter() {
-                if let Some(structures) = repair_targets.get(priority) {
-                    if let Some(structure) = structures.iter().cloned().find_nearest(&creep.pos(), PathFinderHelpers::same_room_ignore_creeps) {
+                if let Some(structures) = repair_targets.remove(priority) {
+                    info!("Checking repair priority for builder: {:?}", priority);
+                    //TODO: Make find_nearest cheap - find_nearest linear is a bad approximation.
+                    if let Some(structure) = structures.into_iter().find_nearest_linear(&creep.pos()) {
                         self.repair_target = Some(StructureIdentifier::new(&structure));
 
                         break;
@@ -148,10 +156,19 @@ impl Job for BuildJob
                     true
                 }
             },
-            None => capacity > 0
+            Some(EnergyPickupTarget::DroppedResource(ref resource_id)) => {
+                if let Some(_) = resource_id.resolve() {
+                    false
+                } else {
+                    true
+                }
+            }
+            None => capacity > 0 && used_capacity == 0
         };
 
         if repick_pickup {
+            scope_timing!("repick_pickup");
+
             self.pickup_target = ResourceUtility::select_energy_resource_pickup_or_harvest(&creep, &room);
         }
 

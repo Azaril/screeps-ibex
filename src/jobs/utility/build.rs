@@ -5,6 +5,8 @@ pub struct BuildUtility;
 
 impl BuildUtility {
     pub fn select_construction_site(creep: &Creep, room: &Room) -> Option<ConstructionSite> {
+        scope_timing!("select_construction_site");
+
         let construction_sites = room.find(find::MY_CONSTRUCTION_SITES);
 
         let in_progress_construction_site_id = construction_sites

@@ -15,6 +15,8 @@ pub struct HarvestJob {
     pub delivery_target: Option<StructureIdentifier>,
     #[serde(default)]
     pub build_target: Option<ObjectId<ConstructionSite>>,
+    #[serde(default)]
+    pub pickup_target: Option<ObjectId<Resource>>
 }
 
 impl HarvestJob
@@ -23,7 +25,8 @@ impl HarvestJob
         HarvestJob {
             harvest_target: source_id,
             delivery_target: None,
-            build_target: None
+            build_target: None,
+            pickup_target: None
         }
     }
 
@@ -47,7 +50,7 @@ impl Job for HarvestJob
 {
     fn run_job(&mut self, data: &JobRuntimeData) {
         let creep = data.owner;
-        
+
         scope_timing!("Harvest Job - {}", creep.name());
         
         let room = creep.room().unwrap();
@@ -147,19 +150,37 @@ impl Job for HarvestJob
         }
 
         //
-        // Harvest energy from source.
+        // Compute pickup target
         //
 
-        if available_capacity > 0 {
-            if let Some(source) = self.harvest_target.resolve() {
-                ResourceBehaviorUtility::get_energy_from_source(creep, &source);
+        //TODO: Factor this in to common code.
+        let repick_pickup = match self.pickup_target {
+            Some(resource_id) => {
+                if let Some(_) = resource_id.resolve() {
+                    false
+                } else {
+                    true
+                }
+            },
+            None => capacity > 0 && used_capacity == 0
+        };
+
+        if repick_pickup {
+            scope_timing!("repick_pickup");
+
+            self.pickup_target = ResourceUtility::select_dropped_resource(creep, &room, resource).map(|resource| resource.id());
+        }
+
+        //
+        // Move to and get energy.
+        //
+
+        if let Some(resource_id) = self.pickup_target {
+            if let Some(resource) = resource_id.resolve() {
+                ResourceBehaviorUtility::get_energy_from_dropped_resource(creep, &resource);
 
                 return;
-            } else {
-                error!("Harvester has no assigned harvesting source! Name: {}", creep.name());
-            }           
-        } else {
-            error!("Harvester with no available capacity but would like to harvest engery! Name: {}", creep.name());
+            }
         }
     }
 }

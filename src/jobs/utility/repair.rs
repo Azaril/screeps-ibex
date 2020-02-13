@@ -2,7 +2,7 @@ use screeps::*;
 use itertools::*;
 use std::collections::HashMap;
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub enum RepairPriority {
     Critical,
     High,
@@ -53,6 +53,7 @@ impl RepairUtility {
     fn map_structure_repair_priority(structure: &Structure, hits: u32, hits_max: u32) -> RepairPriority {
         match structure {
             Structure::Spawn(_) => Self::map_high_value_priority(hits, hits_max),
+            Structure::Tower(_) => Self::map_high_value_priority(hits, hits_max),
             Structure::Container(_) => Self::map_high_value_priority(hits, hits_max),
             _ => Self::map_normal_priority(hits, hits_max)
         }
@@ -70,7 +71,13 @@ impl RepairUtility {
             .map(|owned_structure| owned_structure.as_structure())
             .filter_map(|structure| {
                 let hits = if let Some(attackable) = structure.as_attackable() {
-                    Some((attackable.hits(), attackable.hits_max()))
+                    let hits = attackable.hits();
+                    let hits_max = attackable.hits_max();
+                    if hits > 0 && hits_max > 0 {
+                        Some((hits, hits_max))
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };

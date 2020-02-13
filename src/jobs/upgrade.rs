@@ -62,6 +62,13 @@ impl Job for UpgradeJob
                         true
                     }
                 },
+                Some(EnergyPickupTarget::DroppedResource(ref resource_id)) => {
+                    if let Some(_) = resource_id.resolve() {
+                        false
+                    } else {
+                        true
+                    }
+                },
                 None => capacity > 0 && used_capacity == 0
             };
 

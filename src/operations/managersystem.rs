@@ -4,6 +4,7 @@ use super::data::*;
 use super::localsupply::*;
 use super::upgrade::*;
 use super::localbuild::*;
+use super::tower::*;
 
 pub struct OperationManagerSystem;
 
@@ -20,6 +21,7 @@ impl<'a> System<'a> for OperationManagerSystem {
         let mut has_local_supply = false;
         let mut has_upgrade = false;
         let mut has_local_build = false;
+        let mut has_tower = false;
 
         for (_, operation) in (&entities, &operations).join() {
             match operation {
@@ -31,6 +33,9 @@ impl<'a> System<'a> for OperationManagerSystem {
                 },
                 OperationData::LocalBuild(_) => {
                     has_local_build = true;
+                },
+                OperationData::Tower(_) => {
+                    has_tower = true;
                 }
             }
         }
@@ -51,6 +56,12 @@ impl<'a> System<'a> for OperationManagerSystem {
             info!("Local build operation does not exist, creating.");
 
             LocalBuildOperation::build(updater.create_entity(&entities)).build();
+        }
+
+        if !has_tower {
+            info!("Tower operation does not exist, creating.");
+
+            TowerOperation::build(updater.create_entity(&entities)).build();
         }
     }
 }

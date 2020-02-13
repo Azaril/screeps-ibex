@@ -114,6 +114,7 @@ impl Mission for LocalSupplyMission
 
             let total_harvesters = self.harvesters.0.len();
             let total_miners = self.miners.0.len();
+            let total_haulers = self.haulers.0.len();
             let total_harvesting_creeps = total_harvesters + total_miners;
 
             for source in sources.iter() {
@@ -122,6 +123,7 @@ impl Mission for LocalSupplyMission
                 let source_containers = sources_to_containers.remove(&source_id).unwrap_or_else(Vec::new);
                 let source_harvesters = sources_to_harvesters.remove(&source_id).unwrap_or_else(Vec::new);
                 let source_miners = sources_to_miners.remove(&source_id).unwrap_or_else(Vec::new);
+                let source_miners_count = source_miners.len();
                 let source_haulers: Vec<(&Entity, ObjectId<StructureContainer>)> = source_containers
                     .iter()
                     .flat_map(|container| {
@@ -129,16 +131,44 @@ impl Mission for LocalSupplyMission
                     })
                     .collect();
 
+                let alive_source_miners: Vec<(&Entity, RoomPosition)> = source_miners
+                    .into_iter()
+                    .filter(|(&miner_entity, _)| {
+                        if let Some(creep_owner) = system_data.creep_owner.get(miner_entity) {
+                            if let Some(creep) = creep_owner.owner.resolve() {
+                                creep.ticks_to_live().unwrap_or(0) > 100
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    })
+                    .collect();
+
+                let alive_source_haulers: Vec<(&Entity, ObjectId<StructureContainer>)> = source_haulers
+                    .into_iter()
+                    .filter(|(&hauler_entity, _)| {
+                        if let Some(creep_owner) = system_data.creep_owner.get(hauler_entity) {
+                            if let Some(creep) = creep_owner.owner.resolve() {
+                                creep.ticks_to_live().unwrap_or(0) > 100
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    })
+                    .collect();
+
                 let available_containers_for_miners = source_containers
                     .iter()
-                    //TODO: Take in to account miners who are about to expire and should be ignored.
-                    .filter(|container| !source_miners.iter().any(|(_, location)| *location == container.pos()))
+                    .filter(|container| !alive_source_miners.iter().any(|(_, location)| *location == container.pos()))
                     .cloned();
 
                 let available_containers_for_haulers = source_containers
                     .iter()
-                    //TODO: Take in to account haulers who are about to expire and should be ignored.
-                    .filter(|container| !source_haulers.iter().any(|(_, primary_container)| *primary_container == container.id()))
+                    .filter(|container| !alive_source_haulers.iter().any(|(_, primary_container)| *primary_container == container.id()))
                     .cloned();
 
                 //
@@ -146,31 +176,34 @@ impl Mission for LocalSupplyMission
                 //
 
                 for container in available_containers_for_miners {
-                    let priority = SPAWN_PRIORITY_HIGH;
+                    let base_body = &[Part::Move];
+                    let base_body_cost: u32 = base_body.iter().map(|p| p.cost()).sum();
 
-                    let base_body = [Part::Move];
+                    let repeat_body = &[Part::Work];
+                    let repeat_body_cost: u32 = repeat_body.iter().map(|p| p.cost()).sum();
 
                     let energy_per_tick = (source.energy_capacity() as f32) / (ENERGY_REGEN_TIME as f32);
                     let work_parts_per_tick = energy_per_tick / (HARVEST_POWER as f32);
 
-                    let room_max_energy = room.energy_capacity_available();
-                    let base_body_cost: u32 = base_body.iter().map(|p| p.cost()).sum();
-                    let work_available_energy: u32 = room_max_energy - base_body_cost;
-                    let max_work_parts = (work_available_energy as f32) / (Part::Work.cost() as f32);
+                    let room_max_energy = room.energy_capacity_available();                   
+                    let remaining_available_energy: u32 = room_max_energy - base_body_cost;
+                    let max_repeat_parts = (remaining_available_energy as f32) / (repeat_body_cost as f32);
 
-                    let spawn_work_parts = std::cmp::min(work_parts_per_tick.ceil() as usize, max_work_parts.floor() as usize);
-
-                    let repeat_body = [Part::Work];
+                    let spawn_work_parts = std::cmp::min(work_parts_per_tick.ceil() as usize, max_repeat_parts.floor() as usize);
+                    
                     let body = repeat_body
                         .iter()
                         .cycle()
                         .take(spawn_work_parts * repeat_body.len())
-                        .chain(base_body.iter()).cloned()
+                        .chain(base_body.iter())
+                        .cloned()
                         .collect::<Vec<Part>>();
 
                     let mission_entity = runtime_data.entity.clone();
                     let source_id = source.id();
                     let mine_location = container.pos();
+
+                    let priority = SPAWN_PRIORITY_HIGH;
 
                     system_data.spawn_queue.request(SpawnRequest::new(&runtime_data.room_owner.owner, &body, priority, Box::new(move |spawn_system_data, name| {
                         let name = name.to_string();
@@ -196,17 +229,45 @@ impl Mission for LocalSupplyMission
                 //
 
                 for container in available_containers_for_haulers {
-                    let priority = if container.store_used_capacity(Some(ResourceType::Energy)) > 0 {
+                    let base_body: &[Part] = &[];
+                    let base_body_cost: u32 = base_body.iter().map(|p| p.cost()).sum();
+
+                    let repeat_body = &[Part::Carry, Part::Move];
+                    let repeat_body_cost: u32 = repeat_body.iter().map(|p| p.cost()).sum();
+
+                    let use_energy_max = if total_haulers == 0 { room.energy_available() } else { room.energy_capacity_available() };
+                    if base_body_cost > use_energy_max {
+                        break;
+                    }
+
+                    let remaining_available_energy: u32 = use_energy_max - base_body_cost;
+                    let max_repeat_parts = (remaining_available_energy as f32) / (repeat_body_cost as f32);
+
+                    let spawn_work_parts = max_repeat_parts.floor() as usize;
+                    
+                    let body = repeat_body
+                        .iter()
+                        .cycle()
+                        .take(spawn_work_parts * repeat_body.len())
+                        .chain(base_body.iter())
+                        .cloned()
+                        .collect::<Vec<Part>>();
+
+                    let mission_entity = runtime_data.entity.clone();
+                    let container_id = container.id();
+
+                    let container_used_capacity = container.store_used_capacity(Some(ResourceType::Energy));
+                    let container_store_capacity = container.store_capacity(Some(ResourceType::Energy));
+
+                    let storage_fraction = (container_used_capacity as f32) / (container_store_capacity as f32);
+
+                    let priority = if storage_fraction > 0.75 {
+                        SPAWN_PRIORITY_CRITICAL
+                    } else if source_miners_count > 0 { 
                         SPAWN_PRIORITY_HIGH
                     } else {
                         SPAWN_PRIORITY_MEDIUM
                     };
-
-                    //TODO: Compute number of work parts needed.
-                    let body = [Part::Carry, Part::Carry, Part::Move, Part::Move];
-
-                    let mission_entity = runtime_data.entity.clone();
-                    let container_id = container.id();
 
                     system_data.spawn_queue.request(SpawnRequest::new(&runtime_data.room_owner.owner, &body, priority, Box::new(move |spawn_system_data, name| {
                         let name = name.to_string();

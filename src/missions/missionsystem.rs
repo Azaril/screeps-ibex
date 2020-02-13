@@ -2,9 +2,10 @@ use specs::*;
 use specs::prelude::*;
 
 use super::data::*;
-use ::room::data::*;
-use ::spawnsystem::*;
-use ::jobs::data::*;
+use crate::room::data::*;
+use crate::spawnsystem::*;
+use crate::jobs::data::*;
+use crate::creep::*;
 
 #[derive(SystemData)]
 pub struct MissionSystemData<'a> {
@@ -13,6 +14,7 @@ pub struct MissionSystemData<'a> {
     updater: Read<'a, LazyUpdate>,
     entities: Entities<'a>,
     spawn_queue: Write<'a, SpawnQueue>,
+    creep_owner: ReadStorage<'a, CreepOwner>,
     job_data: WriteStorage<'a, JobData>
 }
 
@@ -20,6 +22,7 @@ pub struct MissionExecutionSystemData<'a> {
     pub updater: &'a Read<'a, LazyUpdate>,
     pub entities: &'a Entities<'a>,
     pub spawn_queue: &'a Write<'a, SpawnQueue>,
+    pub creep_owner: &'a ReadStorage<'a, CreepOwner>,
     pub job_data: &'a WriteStorage<'a, JobData>
 }
 
@@ -50,6 +53,7 @@ impl<'a> System<'a> for MissionSystem {
             updater: &data.updater,
             entities: &data.entities,
             spawn_queue: &data.spawn_queue,
+            creep_owner: &data.creep_owner,
             job_data: &data.job_data
         };
 

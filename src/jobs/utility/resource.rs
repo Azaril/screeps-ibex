@@ -8,29 +8,43 @@ use crate::findnearest::*;
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum EnergyPickupTarget {
     Structure(StructureIdentifier),
-    Source(ObjectId<Source>)
+    Source(ObjectId<Source>),
+    DroppedResource(ObjectId<Resource>)
 }
 
 pub struct ResourceUtility;
 
 impl ResourceUtility {
     pub fn select_energy_resource_pickup_or_harvest(creep: &Creep, room: &Room) -> Option<EnergyPickupTarget> {
-        if let Some(identifier) = Self::select_resource_pickup(creep, room, ResourceType::Energy) {
-            return Some(EnergyPickupTarget::Structure(identifier));
+        if let Some(dropped_resource) = Self::select_dropped_resource(creep, room, ResourceType::Energy) {
+            return Some(EnergyPickupTarget::DroppedResource(dropped_resource.id()));
         }
 
-        let nearest_source = room.find(find::SOURCES_ACTIVE).iter()
-            .cloned()
-            .find_nearest(&creep.pos(), PathFinderHelpers::same_room_ignore_creeps);
+        if let Some(structure) = Self::select_structure_resource(creep, room, ResourceType::Energy) {
+            return Some(EnergyPickupTarget::Structure(StructureIdentifier::new(&structure)));
+        }
 
-        if let Some(source) = nearest_source {
+        if let Some(source) = Self::select_active_sources(creep, room) {
             return Some(EnergyPickupTarget::Source(source.id()));
         }
 
         return None;
-    }    
+    }
 
-    pub fn select_resource_pickup(creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<StructureIdentifier> {
+    pub fn select_active_sources(creep: &Creep, room: &Room) -> Option<Source> {
+        room.find(find::SOURCES_ACTIVE)
+            .into_iter()
+            .find_nearest(&creep.pos(), PathFinderHelpers::same_room_ignore_creeps)
+    }
+
+    pub fn select_dropped_resource(creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<Resource> {
+        room.find(find::DROPPED_RESOURCES)
+            .into_iter()
+            .filter(|resource| resource.resource_type() == resource_type)
+            .find_nearest(&creep.pos(), PathFinderHelpers::same_room_ignore_creeps)
+    }
+
+    pub fn select_structure_resource(creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<Structure> {
         #[derive(PartialEq, Eq, Hash, Debug)]
         enum PickupPriority {
             High,
@@ -69,7 +83,7 @@ impl ResourceUtility {
         for priority in [PickupPriority::High, PickupPriority::Medium, PickupPriority::Low].iter() {
             if let Some(structures) = targets.remove(priority) {
                 if let Some(structure) = structures.into_iter().find_nearest(&creep.pos(), PathFinderHelpers::same_room_ignore_creeps) {
-                    return Some(StructureIdentifier::new(&structure));
+                    return Some(structure);
                 }
             }
         }
