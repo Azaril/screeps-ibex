@@ -44,9 +44,11 @@ impl Mission for UpgradeMission
 
         self.upgraders.0.retain(|entity| system_data.entities.is_alive(*entity));
 
+        //TODO: Limit upgraders to 15 total work parts upgrading across all creeps.
+
         if let Some(room) = game::rooms::get(runtime_data.room_owner.owner) {
             if let Some(controller) = room.controller() {
-                let spawn_upgrader = self.upgraders.0.len() < 2 && controller.my();
+                let spawn_upgrader = self.upgraders.0.len() < 3 && controller.my();
 
                 if spawn_upgrader {
                     let base_body = &[Part::Work, Part::Carry, Part::Move, Part::Move];
