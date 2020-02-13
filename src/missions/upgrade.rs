@@ -46,7 +46,7 @@ impl Mission for UpgradeMission
 
         if let Some(room) = game::rooms::get(runtime_data.room_owner.owner) {
             if let Some(controller) = room.controller() {
-                let spawn_upgrader = self.upgraders.0.len() < 1 && controller.my();
+                let spawn_upgrader = self.upgraders.0.len() < 2 && controller.my();
 
                 if spawn_upgrader {
                     let base_body = &[Part::Work, Part::Carry, Part::Move, Part::Move];
@@ -75,7 +75,7 @@ impl Mission for UpgradeMission
                         let mission_entity = runtime_data.entity.clone();
                         let controller_id = controller.id();
 
-                        let priority = if self.upgraders.0.is_empty() { SPAWN_PRIORITY_CRITICAL } else { SPAWN_PRIORITY_HIGH };
+                        let priority = if self.upgraders.0.is_empty() { SPAWN_PRIORITY_CRITICAL } else { SPAWN_PRIORITY_LOW };
 
                         system_data.spawn_queue.request(SpawnRequest::new(&runtime_data.room_owner.owner, &body, priority, Box::new(move |spawn_system_data, name| {
                             let name = name.to_string();
