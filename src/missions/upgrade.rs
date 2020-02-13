@@ -49,7 +49,7 @@ impl Mission for UpgradeMission
                 let spawn_upgrader = self.upgraders.0.len() < 1 && controller.my();
 
                 if spawn_upgrader {
-                    let base_body: &[Part] = &[];
+                    let base_body = &[Part::Work, Part::Carry, Part::Move, Part::Move];
                     let base_body_cost: u32 = base_body.iter().map(|p| p.cost()).sum();
 
                     let repeat_body = &[Part::Work, Part::Carry, Part::Move, Part::Move];
@@ -57,42 +57,44 @@ impl Mission for UpgradeMission
 
                     let work_parts_per_tick = (CONTROLLER_MAX_UPGRADE_PER_TICK as f32) / (UPGRADE_CONTROLLER_POWER as f32);
 
-                    let room_max_energy = room.energy_capacity_available();                   
-                    let remaining_available_energy: u32 = room_max_energy - base_body_cost;
-                    let max_repeat_parts = (remaining_available_energy as f32) / (repeat_body_cost as f32);
+                    let room_max_energy = room.energy_capacity_available();     
+                    if base_body_cost <= room_max_energy {              
+                        let remaining_available_energy: u32 = room_max_energy - base_body_cost;
+                        let max_repeat_parts = (remaining_available_energy as f32) / (repeat_body_cost as f32);
 
-                    let spawn_work_parts = std::cmp::min(work_parts_per_tick.ceil() as usize, max_repeat_parts.floor() as usize);
+                        let spawn_work_parts = std::cmp::min(work_parts_per_tick.ceil() as usize, max_repeat_parts.floor() as usize);
 
-                    let body = repeat_body
-                        .iter()
-                        .cycle()
-                        .take(spawn_work_parts * repeat_body.len())
-                        .chain(base_body)
-                        .cloned()
-                        .collect::<Vec<Part>>();
+                        let body = repeat_body
+                            .iter()
+                            .cycle()
+                            .take(spawn_work_parts * repeat_body.len())
+                            .chain(base_body)
+                            .cloned()
+                            .collect::<Vec<Part>>();
 
-                    let mission_entity = runtime_data.entity.clone();
-                    let controller_id = controller.id();
+                        let mission_entity = runtime_data.entity.clone();
+                        let controller_id = controller.id();
 
-                    let priority = if self.upgraders.0.is_empty() { SPAWN_PRIORITY_CRITICAL } else { SPAWN_PRIORITY_HIGH };
+                        let priority = if self.upgraders.0.is_empty() { SPAWN_PRIORITY_CRITICAL } else { SPAWN_PRIORITY_HIGH };
 
-                    system_data.spawn_queue.request(SpawnRequest::new(&runtime_data.room_owner.owner, &body, priority, Box::new(move |spawn_system_data, name| {
-                        let name = name.to_string();
+                        system_data.spawn_queue.request(SpawnRequest::new(&runtime_data.room_owner.owner, &body, priority, Box::new(move |spawn_system_data, name| {
+                            let name = name.to_string();
 
-                        spawn_system_data.updater.exec_mut(move |world| {
-                            let creep_job = JobData::Upgrade(::jobs::upgrade::UpgradeJob::new(&controller_id));
+                            spawn_system_data.updater.exec_mut(move |world| {
+                                let creep_job = JobData::Upgrade(::jobs::upgrade::UpgradeJob::new(&controller_id));
 
-                            let creep_entity = ::creep::Spawning::build(world.create_entity(), &name)
-                                .with(creep_job)
-                                .build();
+                                let creep_entity = ::creep::Spawning::build(world.create_entity(), &name)
+                                    .with(creep_job)
+                                    .build();
 
-                            let mission_data_storage = &mut world.write_storage::<MissionData>();
+                                let mission_data_storage = &mut world.write_storage::<MissionData>();
 
-                            if let Some(MissionData::Upgrade(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                                mission_data.upgraders.0.push(creep_entity);
-                            }       
-                        });
-                    })));
+                                if let Some(MissionData::Upgrade(mission_data)) = mission_data_storage.get_mut(mission_entity) {
+                                    mission_data.upgraders.0.push(creep_entity);
+                                }       
+                            });
+                        })));
+                    }
                 }
 
                 return MissionResult::Running;
