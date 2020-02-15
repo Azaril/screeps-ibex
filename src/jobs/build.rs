@@ -88,7 +88,7 @@ impl Job for BuildJob {
             Some(target_id) => {
                 if let Some(structure) = target_id.as_structure() {
                     if let Some(attackable) = structure.as_attackable() {
-                        attackable.hits() < attackable.hits_max()
+                        attackable.hits() >= attackable.hits_max()
                     } else {
                         true
                     }
@@ -162,7 +162,7 @@ impl Job for BuildJob {
             Some(EnergyPickupTarget::Tombstone(ref tombstone_id)) => {
                 tombstone_id.resolve().is_none()
             },
-            None => capacity > 0 && used_capacity == 0,
+            None => capacity > 0 && available_capacity > 0,
         };
 
         if repick_pickup {
