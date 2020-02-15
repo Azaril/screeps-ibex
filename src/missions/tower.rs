@@ -49,8 +49,10 @@ impl Mission for TowerMission {
                     }
                 });
 
-            let weakest_hostile_creep = room
-                .find(find::HOSTILE_CREEPS)
+            let hostile_creeps = room.find(find::HOSTILE_CREEPS);
+            let are_hostile_creeps = !hostile_creeps.is_empty();
+
+            let weakest_hostile_creep = hostile_creeps
                 .into_iter()
                 .min_by_key(|creep| creep.hits());
 
@@ -61,12 +63,11 @@ impl Mission for TowerMission {
                 .min_by_key(|creep| creep.hits());
 
             let mut repair_targets = RepairUtility::get_prioritized_repair_targets(&room);
-            let mut repair_priorities = [
-                RepairPriority::Critical,
-                RepairPriority::High,
-                RepairPriority::Medium,
-            ]
-            .iter();
+            let mut repair_priorities = if are_hostile_creeps {
+                [RepairPriority::Critical, RepairPriority::High, RepairPriority::Medium].iter()
+            } else {
+                [RepairPriority::Critical, RepairPriority::High].iter()
+            };
 
             let repair_structure = loop {
                 if let Some(priority) = repair_priorities.next() {
