@@ -22,10 +22,10 @@ pub static ORDERED_REPAIR_PRIORITIES: &[RepairPriority] = &[
 pub struct RepairUtility;
 
 impl RepairUtility {
-    fn map_normal_priority(hits: u32, hits_max: u32) -> RepairPriority {
+    fn map_normal_priority(hits: u32, hits_max: u32) -> Option<RepairPriority> {
         let health_fraction = (hits as f32) / (hits_max as f32);
 
-        if health_fraction < 0.25 {
+        let priority = if health_fraction < 0.25 {
             RepairPriority::High
         } else if health_fraction < 0.5 {
             RepairPriority::Medium
@@ -33,13 +33,15 @@ impl RepairUtility {
             RepairPriority::Low
         } else {
             RepairPriority::VeryLow
-        }
+        };
+
+        Some(priority)
     }
 
-    fn map_high_value_priority(hits: u32, hits_max: u32) -> RepairPriority {
+    fn map_high_value_priority(hits: u32, hits_max: u32) -> Option<RepairPriority> {
         let health_fraction = (hits as f32) / (hits_max as f32);
 
-        if health_fraction < 0.5 {
+        let priority = if health_fraction < 0.5 {
             RepairPriority::Critical
         } else if health_fraction < 0.75 {
             RepairPriority::High
@@ -47,6 +49,34 @@ impl RepairUtility {
             RepairPriority::Low
         } else {
             RepairPriority::VeryLow
+        };
+
+        Some(priority)
+    }
+
+    fn map_defense_priority(hits: u32, hits_max: u32, available_energy: u32, under_attack: bool) -> Option<RepairPriority> {
+        let health_fraction = (hits as f32) / (hits_max as f32);
+
+        if under_attack {
+            if health_fraction < 0.01 {
+                Some(RepairPriority::Critical)
+            } else if health_fraction < 0.25 {
+                Some(RepairPriority::High)
+            } else if health_fraction < 0.5 {
+                Some(RepairPriority::Medium)
+            } else if health_fraction < 0.95 {
+                Some(RepairPriority::Low)
+            } else {
+                Some(RepairPriority::VeryLow)
+            }
+        } else if health_fraction < 0.001 {
+            Some(RepairPriority::Medium)
+        } else if health_fraction < 0.1 {
+            Some(RepairPriority::Low)
+        } else if available_energy > 100_000 {
+            Some(RepairPriority::VeryLow)
+        } else {
+            None
         }
     }
 
@@ -54,11 +84,15 @@ impl RepairUtility {
         structure: &Structure,
         hits: u32,
         hits_max: u32,
-    ) -> RepairPriority {
+        available_energy: u32,
+        under_attack: bool
+    ) -> Option<RepairPriority> {
         match structure {
             Structure::Spawn(_) => Self::map_high_value_priority(hits, hits_max),
             Structure::Tower(_) => Self::map_high_value_priority(hits, hits_max),
             Structure::Container(_) => Self::map_high_value_priority(hits, hits_max),
+            Structure::Wall(_) => Self::map_defense_priority(hits, hits_max, available_energy, under_attack),
+            Structure::Rampart(_) => Self::map_defense_priority(hits, hits_max, available_energy, under_attack),
             _ => Self::map_normal_priority(hits, hits_max),
         }
     }
@@ -94,12 +128,16 @@ impl RepairUtility {
     }
 
     pub fn get_prioritized_repair_targets(room: &Room) -> HashMap<RepairPriority, Vec<Structure>> {
+        let are_hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
+
+        let available_energy = room.storage().map(|s| s.store_used_capacity(Some(ResourceType::Energy))).unwrap_or(0);
+
         Self::get_repair_targets(room)
             .into_iter()
-            .map(|(structure, hits, hits_max)| {
-                let priority = Self::map_structure_repair_priority(&structure, hits, hits_max);
+            .filter_map(|(structure, hits, hits_max)| {
+                let priority = Self::map_structure_repair_priority(&structure, hits, hits_max, available_energy, are_hostile_creeps);
 
-                (priority, structure)
+                priority.map(|p| (p, structure))                
             })
             .into_group_map()
     }

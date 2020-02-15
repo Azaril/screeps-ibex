@@ -97,22 +97,19 @@ impl Mission for TowerMission {
             //TODO: Partition targets between towers. (Don't over damage, heal or repair.)
 
             for tower in towers {
-                if let Some(creep) = weakest_hostile_creep {
-                    tower.attack(&creep);
-
-                    break;
+                if let Some(creep) = weakest_hostile_creep.as_ref() {
+                    tower.attack(creep);
+                    continue;
                 }
 
-                if let Some(creep) = weakest_friendly_creep {
-                    tower.heal(&creep);
-
-                    break;
+                if let Some(creep) = weakest_friendly_creep.as_ref() {
+                    tower.heal(creep);
+                    continue;
                 }
 
-                if let Some(structure) = repair_structure {
-                    tower.repair(&structure);
-
-                    break;
+                if let Some(structure) = repair_structure.as_ref() {
+                    tower.repair(structure);
+                    continue;
                 }
             }
 
