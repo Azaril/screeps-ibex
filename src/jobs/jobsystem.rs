@@ -1,6 +1,5 @@
 use screeps::*;
 use specs::prelude::*;
-use specs::*;
 
 use super::data::JobData;
 use creep::CreepOwner;
