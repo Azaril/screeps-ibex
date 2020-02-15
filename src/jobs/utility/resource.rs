@@ -183,8 +183,8 @@ impl ResourceUtility {
             .filter_map(|structure| {
                 let priority = match structure {
                     Structure::Spawn(_) => Some(DeliveryPriority::Critical),
-                    Structure::Tower(_) => Some(DeliveryPriority::Critical),
-                    Structure::Extension(_) => Some(DeliveryPriority::High),
+                    Structure::Extension(_) => Some(DeliveryPriority::Critical),
+                    Structure::Tower(_) => Some(DeliveryPriority::High),
                     Structure::Storage(_) => Some(DeliveryPriority::Medium),
                     Structure::Container(_) => None,
                     _ => Some(DeliveryPriority::Low),
