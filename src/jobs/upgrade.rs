@@ -62,13 +62,24 @@ impl Job for UpgradeJob {
                 }
                 Some(EnergyPickupTarget::DroppedResource(ref resource_id)) => {
                     resource_id.resolve().is_none()
+                },
+                Some(EnergyPickupTarget::Tombstone(ref tombstone_id)) => {
+                    tombstone_id.resolve().is_none()
                 }
                 None => capacity > 0 && used_capacity == 0,
             };
 
             if repick_pickup {
-                self.pickup_target =
-                    ResourceUtility::select_energy_resource_pickup_or_harvest(&creep, &room);
+                let hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
+
+                let settings = ResourcePickupSettings{
+                    allow_dropped_resource: !hostile_creeps,
+                    allow_tombstone: !hostile_creeps,
+                    allow_structure: true,
+                    allow_harvest: true
+                };
+
+                self.pickup_target = ResourceUtility::select_energy_pickup(&creep, &room, &settings);
             }
         }
 

@@ -16,7 +16,7 @@ pub struct HarvestJob {
     #[serde(default)]
     pub build_target: Option<ObjectId<ConstructionSite>>,
     #[serde(default)]
-    pub pickup_target: Option<ObjectId<Resource>>,
+    pub pickup_target: Option<EnergyPickupTarget>,
 }
 
 impl HarvestJob {
@@ -69,6 +69,10 @@ impl Job for HarvestJob {
         if used_capacity == 0 {
             self.delivery_target = None;
             self.build_target = None;
+        }
+
+        if available_capacity == 0 {
+            self.pickup_target = None;
         }
 
         //
@@ -165,27 +169,60 @@ impl Job for HarvestJob {
 
         //TODO: Factor this in to common code.
         let repick_pickup = match self.pickup_target {
-            Some(resource_id) => resource_id.resolve().is_none(),
+            Some(EnergyPickupTarget::Structure(ref pickup_structure_id)) => {
+                if let Some(pickup_structure) = pickup_structure_id.as_structure() {
+                    if let Some(storeable) = pickup_structure.as_has_store() {
+                        storeable.store_used_capacity(Some(resource)) == 0
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                }
+            }
+            Some(EnergyPickupTarget::Source(ref source_id)) => {
+                if let Some(source) = source_id.resolve() {
+                    source.energy() == 0
+                } else {
+                    true
+                }
+            }
+            Some(EnergyPickupTarget::DroppedResource(ref resource_id)) => {
+                resource_id.resolve().is_none()
+            },
+            Some(EnergyPickupTarget::Tombstone(ref tombstone_id)) => {
+                tombstone_id.resolve().is_none()
+            },
             None => capacity > 0 && used_capacity == 0,
         };
 
         if repick_pickup {
             scope_timing!("repick_pickup");
 
-            self.pickup_target = ResourceUtility::select_dropped_resource(creep, &room, resource)
-                .map(|resource| resource.id());
+            let hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
+
+            let settings = ResourcePickupSettings{
+                allow_dropped_resource: !hostile_creeps,
+                allow_tombstone: !hostile_creeps,
+                allow_structure: false,
+                allow_harvest: false
+            };
+
+            self.pickup_target = if let Some(target) = ResourceUtility::select_energy_pickup(&creep, &room, &settings) {
+                Some(target)
+            } else {
+                Some(EnergyPickupTarget::Source(self.harvest_target))
+            }
         }
 
         //
         // Move to and get energy.
         //
 
-        if let Some(resource_id) = self.pickup_target {
-            if let Some(resource) = resource_id.resolve() {
-                ResourceBehaviorUtility::get_energy_from_dropped_resource(creep, &resource);
+        if let Some(pickup_target) = self.pickup_target {
+            ResourceBehaviorUtility::get_energy(creep, &pickup_target);
 
-                return;
-            }
+            return;
         }
     }
 }

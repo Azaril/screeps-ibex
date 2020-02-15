@@ -43,6 +43,16 @@ impl ResourceBehaviorUtility {
         }
     }
 
+    pub fn get_energy_from_tombstone(creep: &Creep, tombstone: &Tombstone, resource: ResourceType) {
+        scope_timing!("get_energy_from_tombstone");
+
+        if creep.pos().is_near_to(tombstone) {
+            creep.withdraw_all(tombstone, resource);
+        } else {
+            creep.move_to(tombstone);
+        }
+    }
+
     pub fn get_energy(creep: &Creep, target: &EnergyPickupTarget) {
         scope_timing!("get_energy");
 
@@ -77,6 +87,16 @@ impl ResourceBehaviorUtility {
                 } else {
                     error!(
                         "Failed to resolve pickup dropped resource for getting energy. Name: {}",
+                        creep.name()
+                    );
+                }
+            },
+            EnergyPickupTarget::Tombstone(ref tombstone_id) => {
+                if let Some(tombstone) = tombstone_id.resolve() {
+                    Self::get_energy_from_tombstone(creep, &tombstone, ResourceType::Energy);
+                } else {
+                    error!(
+                        "Failed to resolve pickup tombstone for getting energy. Name: {}",
                         creep.name()
                     );
                 }

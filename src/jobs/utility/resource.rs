@@ -10,30 +10,51 @@ pub enum EnergyPickupTarget {
     Structure(StructureIdentifier),
     Source(ObjectId<Source>),
     DroppedResource(ObjectId<Resource>),
+    Tombstone(ObjectId<Tombstone>),
+}
+
+pub struct ResourcePickupSettings {
+    pub allow_dropped_resource: bool,
+    pub allow_tombstone: bool,
+    pub allow_structure: bool,
+    pub allow_harvest: bool,
 }
 
 pub struct ResourceUtility;
 
 impl ResourceUtility {
-    pub fn select_energy_resource_pickup_or_harvest(
+    pub fn select_energy_pickup(
         creep: &Creep,
         room: &Room,
+        settings: &ResourcePickupSettings
     ) -> Option<EnergyPickupTarget> {
-        if let Some(dropped_resource) =
-            Self::select_dropped_resource(creep, room, ResourceType::Energy)
-        {
-            return Some(EnergyPickupTarget::DroppedResource(dropped_resource.id()));
+        if settings.allow_dropped_resource {
+            if let Some(dropped_resource) =
+                Self::select_dropped_resource(creep, room, ResourceType::Energy)
+            {
+                return Some(EnergyPickupTarget::DroppedResource(dropped_resource.id()));
+            }
         }
 
-        if let Some(structure) = Self::select_structure_resource(creep, room, ResourceType::Energy)
-        {
-            return Some(EnergyPickupTarget::Structure(StructureIdentifier::new(
-                &structure,
-            )));
+        if settings.allow_tombstone {
+            if let Some(tombstone) = Self::select_tombstone(creep, room, ResourceType::Energy) {
+                return Some(EnergyPickupTarget::Tombstone(tombstone.id()));
+            }
         }
 
-        if let Some(source) = Self::select_active_sources(creep, room) {
-            return Some(EnergyPickupTarget::Source(source.id()));
+        if settings.allow_structure {
+            if let Some(structure) = Self::select_structure_resource(creep, room, ResourceType::Energy)
+            {
+                return Some(EnergyPickupTarget::Structure(StructureIdentifier::new(
+                    &structure,
+                )));
+            }
+        }
+
+        if settings.allow_harvest {
+            if let Some(source) = Self::select_active_sources(creep, room) {
+                return Some(EnergyPickupTarget::Source(source.id()));
+            }
         }
 
         None
@@ -53,6 +74,17 @@ impl ResourceUtility {
         room.find(find::DROPPED_RESOURCES)
             .into_iter()
             .filter(|resource| resource.resource_type() == resource_type)
+            .find_nearest(creep.pos(), PathFinderHelpers::same_room_ignore_creeps)
+    }
+
+    pub fn select_tombstone(
+        creep: &Creep,
+        room: &Room,
+        resource_type: ResourceType,
+    ) -> Option<Tombstone> {
+        room.find(find::TOMBSTONES)
+            .into_iter()
+            .filter(|tombstone| tombstone.store_used_capacity(Some(resource_type)) > 0)
             .find_nearest(creep.pos(), PathFinderHelpers::same_room_ignore_creeps)
     }
 
