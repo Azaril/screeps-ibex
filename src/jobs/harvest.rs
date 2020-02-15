@@ -193,7 +193,7 @@ impl Job for HarvestJob {
             Some(EnergyPickupTarget::Tombstone(ref tombstone_id)) => {
                 tombstone_id.resolve().is_none()
             },
-            None => capacity > 0 && used_capacity == 0,
+            None => capacity > 0 && available_capacity > 0,
         };
 
         if repick_pickup {

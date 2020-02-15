@@ -34,53 +34,53 @@ impl Job for UpgradeJob {
         let used_capacity = creep.store_used_capacity(Some(resource));
         let available_capacity = capacity - used_capacity;
 
+        if available_capacity == 0 {
+            self.pickup_target = None;
+        }
+
         //
         // Compute pickup target
         //
+        
+        let repick_pickup = match self.pickup_target {
+            Some(EnergyPickupTarget::Structure(ref pickup_structure_id)) => {
+                if let Some(pickup_structure) = pickup_structure_id.as_structure() {
+                    if let Some(storeable) = pickup_structure.as_has_store() {
+                        storeable.store_used_capacity(Some(resource)) == 0
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                }
+            }
+            Some(EnergyPickupTarget::Source(ref source_id)) => {
+                if let Some(source) = source_id.resolve() {
+                    source.energy() == 0
+                } else {
+                    true
+                }
+            }
+            Some(EnergyPickupTarget::DroppedResource(ref resource_id)) => {
+                resource_id.resolve().is_none()
+            },
+            Some(EnergyPickupTarget::Tombstone(ref tombstone_id)) => {
+                tombstone_id.resolve().is_none()
+            }
+            None => capacity > 0 && used_capacity == 0,
+        };
 
-        if available_capacity == 0 {
-            self.pickup_target = None;
-        } else {
-            let repick_pickup = match self.pickup_target {
-                Some(EnergyPickupTarget::Structure(ref pickup_structure_id)) => {
-                    if let Some(pickup_structure) = pickup_structure_id.as_structure() {
-                        if let Some(storeable) = pickup_structure.as_has_store() {
-                            storeable.store_used_capacity(Some(resource)) == 0
-                        } else {
-                            true
-                        }
-                    } else {
-                        true
-                    }
-                }
-                Some(EnergyPickupTarget::Source(ref source_id)) => {
-                    if let Some(source) = source_id.resolve() {
-                        source.energy() == 0
-                    } else {
-                        true
-                    }
-                }
-                Some(EnergyPickupTarget::DroppedResource(ref resource_id)) => {
-                    resource_id.resolve().is_none()
-                },
-                Some(EnergyPickupTarget::Tombstone(ref tombstone_id)) => {
-                    tombstone_id.resolve().is_none()
-                }
-                None => capacity > 0 && used_capacity == 0,
+        if repick_pickup {
+            let hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
+
+            let settings = ResourcePickupSettings{
+                allow_dropped_resource: !hostile_creeps,
+                allow_tombstone: !hostile_creeps,
+                allow_structure: true,
+                allow_harvest: true
             };
 
-            if repick_pickup {
-                let hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
-
-                let settings = ResourcePickupSettings{
-                    allow_dropped_resource: !hostile_creeps,
-                    allow_tombstone: !hostile_creeps,
-                    allow_structure: true,
-                    allow_harvest: true
-                };
-
-                self.pickup_target = ResourceUtility::select_energy_pickup(&creep, &room, &settings);
-            }
+            self.pickup_target = ResourceUtility::select_energy_pickup(&creep, &room, &settings);
         }
 
         //
