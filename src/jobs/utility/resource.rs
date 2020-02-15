@@ -28,20 +28,20 @@ impl ResourceUtility {
             return Some(EnergyPickupTarget::Source(source.id()));
         }
 
-        return None;
+        None
     }
 
     pub fn select_active_sources(creep: &Creep, room: &Room) -> Option<Source> {
         room.find(find::SOURCES_ACTIVE)
             .into_iter()
-            .find_nearest(&creep.pos(), PathFinderHelpers::same_room_ignore_creeps)
+            .find_nearest(creep.pos(), PathFinderHelpers::same_room_ignore_creeps)
     }
 
     pub fn select_dropped_resource(creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<Resource> {
         room.find(find::DROPPED_RESOURCES)
             .into_iter()
             .filter(|resource| resource.resource_type() == resource_type)
-            .find_nearest(&creep.pos(), PathFinderHelpers::same_room_ignore_creeps)
+            .find_nearest(creep.pos(), PathFinderHelpers::same_room_ignore_creeps)
     }
 
     pub fn select_structure_resource(creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<Structure> {
@@ -54,16 +54,16 @@ impl ResourceUtility {
 
         let mut targets = room.find(find::STRUCTURES)
             .into_iter()
-            .filter_map(|structure| {
+            .filter(|structure| {
                 if structure.as_withdrawable().is_some() {
                     if let Some(storeable) = structure.as_has_store() {
                         if storeable.store_used_capacity(Some(resource_type)) > 0 {
-                            return Some(structure);
+                            return true;
                         }
                     }
                 }
                 
-                return None;
+                false
             })
             .filter_map(|structure| {
                 let priority = match structure {
@@ -82,13 +82,13 @@ impl ResourceUtility {
         
         for priority in [PickupPriority::High, PickupPriority::Medium, PickupPriority::Low].iter() {
             if let Some(structures) = targets.remove(priority) {
-                if let Some(structure) = structures.into_iter().find_nearest(&creep.pos(), PathFinderHelpers::same_room_ignore_creeps) {
+                if let Some(structure) = structures.into_iter().find_nearest(creep.pos(), PathFinderHelpers::same_room_ignore_creeps) {
                     return Some(structure);
                 }
             }
         }
 
-        return None;
+        None
     }   
 
     pub fn select_resource_delivery(creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<Structure> {
@@ -108,13 +108,13 @@ impl ResourceUtility {
                 } else {
                     true
                 }})
-            .filter_map(|structure| {
+            .filter(|structure| {
                 if let Some(storeable) = structure.as_has_store() {
                     if storeable.store_free_capacity(Some(resource_type)) > 0 {
-                        return Some(structure);
+                        return true;
                     }
                 }
-                return None;
+                false
             })
             .filter_map(|structure| {
                 let priority = match structure {
@@ -136,13 +136,13 @@ impl ResourceUtility {
 
         for priority in [DeliveryPriority::Critical, DeliveryPriority::High, DeliveryPriority::Medium, DeliveryPriority::Low].iter() {
             if let Some(structures) = targets.remove(priority) {
-                if let Some(structure) = structures.into_iter().find_nearest(&creep.pos(), PathFinderHelpers::same_room_ignore_creeps) {
-                    return Some(structure.clone());
+                if let Some(structure) = structures.into_iter().find_nearest(creep.pos(), PathFinderHelpers::same_room_ignore_creeps) {
+                    return Some(structure);
                 }
             }
         }
 
-        return None;
+        None
     }
 }
 

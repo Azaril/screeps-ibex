@@ -23,9 +23,9 @@ pub struct BuildJob {
 
 impl BuildJob
 {
-    pub fn new(room_name: &RoomName) -> BuildJob {
+    pub fn new(room: RoomName) -> BuildJob {
         BuildJob {
-            room_name: room_name.clone(),
+            room_name: room,
             build_target: None,
             repair_target: None,
             pickup_target: None
@@ -109,7 +109,7 @@ impl Job for BuildJob
                 if let Some(structures) = repair_targets.remove(priority) {
                     info!("Checking repair priority for builder: {:?}", priority);
                     //TODO: Make find_nearest cheap - find_nearest linear is a bad approximation.
-                    if let Some(structure) = structures.into_iter().find_nearest_linear(&creep.pos()) {
+                    if let Some(structure) = structures.into_iter().find_nearest_linear(creep.pos()) {
                         self.repair_target = Some(StructureIdentifier::new(&structure));
 
                         break;
@@ -157,11 +157,7 @@ impl Job for BuildJob
                 }
             },
             Some(EnergyPickupTarget::DroppedResource(ref resource_id)) => {
-                if let Some(_) = resource_id.resolve() {
-                    false
-                } else {
-                    true
-                }
+                resource_id.resolve().is_none()
             }
             None => capacity > 0 && used_capacity == 0
         };

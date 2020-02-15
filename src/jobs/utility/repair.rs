@@ -11,7 +11,7 @@ pub enum RepairPriority {
     VeryLow
 }
 
-pub static ORDERED_REPAIR_PRIORITIES: &'static [RepairPriority] = &[
+pub static ORDERED_REPAIR_PRIORITIES: &[RepairPriority] = &[
     RepairPriority::Critical, 
     RepairPriority::High, 
     RepairPriority::Medium, 

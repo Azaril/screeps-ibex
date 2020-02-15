@@ -1,6 +1,8 @@
 #![recursion_limit = "128"]
 #![allow(dead_code)]
 
+#![warn(clippy::all)]
+
 extern crate fern;
 #[macro_use]
 extern crate log;
@@ -79,29 +81,32 @@ fn serialize_world(world: &World, cb: fn(&str)) {
     struct Serialize {
         writer: Vec<u8>
     }
+
+    #[derive(SystemData)]
+    struct SerializeSystemData<'a> {
+        entities: Entities<'a>,
+        marker_allocator: Write<'a, serialize::SerializeMarkerAllocator>,
+        markers: WriteStorage<'a, serialize::SerializeMarker>,
+        creep_spawnings: ReadStorage<'a, creep::CreepSpawning>,
+        creep_owners: ReadStorage<'a, creep::CreepOwner>,
+        room_owners: ReadStorage<'a, room::data::RoomOwnerData>,
+        room_data: ReadStorage<'a, room::data::RoomData>,            
+        job_data: ReadStorage<'a, jobs::data::JobData>,
+        operation_data: ReadStorage<'a, operations::data::OperationData>,
+        mission_data: ReadStorage<'a, missions::data::MissionData>,
+    }
     
     impl<'a> System<'a> for Serialize {
-        type SystemData = (
-            Entities<'a>,
-            Write<'a, serialize::SerializeMarkerAllocator>,
-            WriteStorage<'a, serialize::SerializeMarker>,
-            ReadStorage<'a, creep::CreepSpawning>,
-            ReadStorage<'a, creep::CreepOwner>,
-            ReadStorage<'a, room::data::RoomOwnerData>,
-            ReadStorage<'a, room::data::RoomData>,            
-            ReadStorage<'a, jobs::data::JobData>,
-            ReadStorage<'a, operations::data::OperationData>,
-            ReadStorage<'a, missions::data::MissionData>,
-        );
+        type SystemData = SerializeSystemData<'a>;
 
-        fn run(&mut self, (entities, mut marker_allocator, mut markers, creep_spawnings, creep_owners, room_owners, room_data, jobs, operation_data, mission_data): Self::SystemData) {
+        fn run(&mut self, mut data: Self::SystemData) {
             let mut ser = serde_json::ser::Serializer::new(&mut self.writer);
 
             SerializeComponents::<NoError, serialize::SerializeMarker>::serialize_recursive(
-                &(&creep_spawnings, &creep_owners, &room_owners, &room_data, &jobs, &operation_data, &mission_data),
-                &entities,
-                &mut markers,
-                &mut marker_allocator,
+                &(&data.creep_spawnings, &data.creep_owners, &data.room_owners, &data.room_data, &data.job_data, &data.operation_data, &data.mission_data),
+                &data.entities,
+                &mut data.markers,
+                &mut data.marker_allocator,
                 &mut ser,
             ).unwrap_or_else(|e| error!("Error: {}", e));
         }
@@ -145,38 +150,41 @@ fn deserialize_world(world: &World, data: &str) {
     scope_timing!("deserialize_world");
 
     struct Deserialize<'a> {
-        data: &'a str
+        raw_data: &'a str
+    }
+
+    #[derive(SystemData)]
+    struct DeserializeSystemData<'a> {
+        entities: Entities<'a>,
+        marker_alloc: Write<'a, serialize::SerializeMarkerAllocator>,
+        markers: WriteStorage<'a, serialize::SerializeMarker>,
+        creep_spawnings: WriteStorage<'a, creep::CreepSpawning>,
+        creep_owners: WriteStorage<'a, creep::CreepOwner>,
+        room_owners: WriteStorage<'a, room::data::RoomOwnerData>,
+        room_data: WriteStorage<'a, room::data::RoomData>,
+        job_data: WriteStorage<'a, jobs::data::JobData>,
+        operation_data: WriteStorage<'a, operations::data::OperationData>,
+        mission_data: WriteStorage<'a, missions::data::MissionData>,
     }
 
     impl<'a> System<'a> for Deserialize<'a> {
-        type SystemData = (
-            Entities<'a>,
-            Write<'a, serialize::SerializeMarkerAllocator>,
-            WriteStorage<'a, serialize::SerializeMarker>,
-            WriteStorage<'a, creep::CreepSpawning>,
-            WriteStorage<'a, creep::CreepOwner>,
-            WriteStorage<'a, room::data::RoomOwnerData>,
-            WriteStorage<'a, room::data::RoomData>,
-            WriteStorage<'a, jobs::data::JobData>,
-            WriteStorage<'a, operations::data::OperationData>,
-            WriteStorage<'a, missions::data::MissionData>,
-        );
+        type SystemData = DeserializeSystemData<'a>;
 
-        fn run(&mut self, (entities, mut alloc, mut markers, creep_spawnings, creep_owners, room_owners, room_data, jobs, operation_data, mission_data): Self::SystemData) {
-            let mut de = serde_json::de::Deserializer::from_str(self.data);
+        fn run(&mut self, mut data: Self::SystemData) {
+            let mut de = serde_json::de::Deserializer::from_str(self.raw_data);
 
             DeserializeComponents::<CombinedSerialiationError, serialize::SerializeMarker>::deserialize(
-                &mut (creep_spawnings, creep_owners, room_owners, room_data, jobs, operation_data, mission_data),
-                &entities,
-                &mut markers,
-                &mut alloc,
+                &mut (data.creep_spawnings, data.creep_owners, data.room_owners, data.room_data, data.job_data, data.operation_data, data.mission_data),
+                &data.entities,
+                &mut data.markers,
+                &mut data.marker_alloc,
                 &mut de
             )
             .unwrap_or_else(|e| eprintln!("Error: {}", e));
         }
     }
 
-    let mut sys = Deserialize{ data: data };
+    let mut sys = Deserialize{ raw_data: data };
 
     sys.run_now(&world);
 }

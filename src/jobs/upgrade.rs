@@ -15,7 +15,7 @@ impl UpgradeJob
 {
     pub fn new(upgrade_target: &ObjectId<StructureController>) -> UpgradeJob {
         UpgradeJob {
-            upgrade_target: upgrade_target.clone(),
+            upgrade_target: *upgrade_target,
             pickup_target: None
         }
     }
@@ -63,11 +63,7 @@ impl Job for UpgradeJob
                     }
                 },
                 Some(EnergyPickupTarget::DroppedResource(ref resource_id)) => {
-                    if let Some(_) = resource_id.resolve() {
-                        false
-                    } else {
-                        true
-                    }
+                    resource_id.resolve().is_none()
                 },
                 None => capacity > 0 && used_capacity == 0
             };

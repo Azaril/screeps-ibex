@@ -11,10 +11,10 @@ pub struct StaticMineJob {
 
 impl StaticMineJob
 {
-    pub fn new(source_id: ObjectId<Source>, position: &RoomPosition) -> StaticMineJob {
+    pub fn new(source_id: ObjectId<Source>, position: RoomPosition) -> StaticMineJob {
         StaticMineJob {
             mine_target: source_id,
-            mine_location: position.clone()
+            mine_location: position
         }
     }
 }

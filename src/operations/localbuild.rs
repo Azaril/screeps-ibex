@@ -59,7 +59,7 @@ impl Operation for LocalBuildOperation
                         let mission_room = room_owner.owner;
 
                         system_data.updater.exec_mut(move |world| {
-                            let mission_entity = LocalBuildMission::build(world.create_entity(), &mission_room).build();
+                            let mission_entity = LocalBuildMission::build(world.create_entity(), mission_room).build();
 
                             let room_data_storage = &mut world.write_storage::<::room::data::RoomData>();
 
@@ -72,6 +72,6 @@ impl Operation for LocalBuildOperation
             }
         }
 
-        return OperationResult::Running;
+        OperationResult::Running
     }
 }

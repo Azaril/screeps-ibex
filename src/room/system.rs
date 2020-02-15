@@ -30,7 +30,7 @@ impl<'a> System<'a> for CreateRoomDataSystem {
             
             updater.create_entity(&entities)
                 .marked::<::serialize::SerializeMarker>()
-                .with(RoomOwnerData::new(&room))
+                .with(RoomOwnerData::new(room))
                 .with(RoomData::new())
                 .build();
         }

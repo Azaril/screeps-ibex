@@ -18,12 +18,12 @@ pub struct SpawnRequest {
 }
 
 impl SpawnRequest {
-    pub fn new(room_name: &RoomName, body: &[Part], priority: f32, callback: Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync>) -> SpawnRequest {
+    pub fn new(room: RoomName, body: &[Part], request_priority: f32, request_callback: Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync>) -> SpawnRequest {
         SpawnRequest{
-            room_name: *room_name,
+            room_name: room,
             body: body.to_vec(),
-            priority: priority,
-            callback: callback
+            priority: request_priority,
+            callback: request_callback
         }
     }
 }
@@ -63,15 +63,7 @@ pub struct SpawnQueueSystem;
 
 impl SpawnQueueSystem
 {
-    fn can_spawn<'a>(spawn: &StructureSpawn, _parts: &[Part]) -> bool {
-        if spawn.is_spawning() {
-            return false;
-        }
-
-        return true;
-    }
-
-    fn spawn_creep<'a>(spawn: &StructureSpawn, parts: &[Part]) -> Result<String, ReturnCode> {
+    fn spawn_creep(spawn: &StructureSpawn, parts: &[Part]) -> Result<String, ReturnCode> {
         let time = screeps::game::time();
         let mut additional = 0;
         loop {
@@ -106,7 +98,7 @@ impl<'a> System<'a> for SpawnQueueSystem {
         }
 
         let room_requests = requests.iter()
-            .map(|request| (request.room_name.clone(), request))
+            .map(|request| (request.room_name, request))
             .into_group_map();
 
         for (room_name, mut requests) in room_requests {
@@ -118,6 +110,8 @@ impl<'a> System<'a> for SpawnQueueSystem {
                 for request in requests {
                     if let Some(pos) = spawns.iter().position(|spawn| !spawn.is_spawning()) {
                         let spawn = &spawns[pos];
+
+                        //TODO: Subtract energy from amount available in the room. (Handle multiple spawns.)
 
                         let spawn_complete = match Self::spawn_creep(&spawn, &request.body) {
                             Ok(name) => {

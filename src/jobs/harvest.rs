@@ -42,7 +42,7 @@ impl HarvestJob
             return Some(controller.as_structure());
         }
 
-        return None;
+        None
     }
 }
 
@@ -155,13 +155,7 @@ impl Job for HarvestJob
 
         //TODO: Factor this in to common code.
         let repick_pickup = match self.pickup_target {
-            Some(resource_id) => {
-                if let Some(_) = resource_id.resolve() {
-                    false
-                } else {
-                    true
-                }
-            },
+            Some(resource_id) => resource_id.resolve().is_none(),
             None => capacity > 0 && used_capacity == 0
         };
 

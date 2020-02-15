@@ -59,7 +59,7 @@ impl Operation for UpgradeOperation
                             let mission_room = room_owner.owner;
 
                             system_data.updater.exec_mut(move |world| {
-                                let mission_entity = UpgradeMission::build(world.create_entity(), &mission_room).build();
+                                let mission_entity = UpgradeMission::build(world.create_entity(), mission_room).build();
 
                                 //
                                 // Attach the mission to the room.
@@ -77,6 +77,6 @@ impl Operation for UpgradeOperation
             }
         }
 
-        return OperationResult::Running;
+        OperationResult::Running
     }
 }

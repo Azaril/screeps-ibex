@@ -13,7 +13,7 @@ pub struct TowerMission {
 
 impl TowerMission
 {
-    pub fn build<B>(builder: B, room_name: &RoomName) -> B where B: Builder + MarkedBuilder {
+    pub fn build<B>(builder: B, room_name: RoomName) -> B where B: Builder + MarkedBuilder {
         let mission = TowerMission::new();
 
         builder.with(MissionData::Tower(mission))
@@ -107,6 +107,6 @@ impl Mission for TowerMission
             return MissionResult::Running;
         }
 
-        return MissionResult::Failure;
+        MissionResult::Failure
     }
 }

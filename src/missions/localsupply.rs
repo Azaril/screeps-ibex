@@ -21,7 +21,7 @@ pub struct LocalSupplyMission {
 
 impl LocalSupplyMission
 {
-    pub fn build<B>(builder: B, room_name: &RoomName) -> B where B: Builder + MarkedBuilder {
+    pub fn build<B>(builder: B, room_name: RoomName) -> B where B: Builder + MarkedBuilder {
         let mission = LocalSupplyMission::new();
 
         builder.with(MissionData::LocalSupply(mission))
@@ -176,41 +176,30 @@ impl Mission for LocalSupplyMission
                 //
 
                 for container in available_containers_for_miners {
-                    let base_body = &[Part::Move, Part::Work];
-                    let base_body_cost: u32 = base_body.iter().map(|p| p.cost()).sum();
-
-                    let repeat_body = &[Part::Work];
-                    let repeat_body_cost: u32 = repeat_body.iter().map(|p| p.cost()).sum();
-
                     let energy_per_tick = (source.energy_capacity() as f32) / (ENERGY_REGEN_TIME as f32);
-                    let work_parts_per_tick = energy_per_tick / (HARVEST_POWER as f32);
+                    let work_parts_per_tick = (energy_per_tick / (HARVEST_POWER as f32)).ceil() as usize;
 
-                    let room_max_energy = room.energy_capacity_available();        
-                    if base_body_cost <= room_max_energy {           
-                        let remaining_available_energy: u32 = room_max_energy - base_body_cost;
-                        let max_repeat_parts = (remaining_available_energy as f32) / (repeat_body_cost as f32);
-
-                        let spawn_work_parts = std::cmp::min(work_parts_per_tick.ceil() as usize, max_repeat_parts.floor() as usize);
-                        
-                        let body = repeat_body
-                            .iter()
-                            .cycle()
-                            .take(spawn_work_parts * repeat_body.len())
-                            .chain(base_body.iter())
-                            .cloned()
-                            .collect::<Vec<Part>>();
-
-                        let mission_entity = runtime_data.entity.clone();
+                    let body_definition = crate::creep::SpawnBodyDefinition{
+                        maximum_energy: room.energy_capacity_available(),
+                        minimum_repeat: Some(1),
+                        maximum_repeat: Some(work_parts_per_tick),
+                        pre_body: &[Part::Move],
+                        repeat_body: &[Part::Work],
+                        post_body: &[]
+                    };
+    
+                    if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+                        let mission_entity = *runtime_data.entity;
                         let source_id = source.id();
                         let mine_location = container.pos();
 
                         let priority = SPAWN_PRIORITY_HIGH;
 
-                        system_data.spawn_queue.request(SpawnRequest::new(&runtime_data.room_owner.owner, &body, priority, Box::new(move |spawn_system_data, name| {
+                        system_data.spawn_queue.request(SpawnRequest::new(runtime_data.room_owner.owner, &body, priority, Box::new(move |spawn_system_data, name| {
                             let name = name.to_string();
 
                             spawn_system_data.updater.exec_mut(move |world| {
-                                let creep_job = JobData::StaticMine(::jobs::staticmine::StaticMineJob::new(source_id, &mine_location));
+                                let creep_job = JobData::StaticMine(::jobs::staticmine::StaticMineJob::new(source_id, mine_location));
 
                                 let creep_entity = ::creep::Spawning::build(world.create_entity(), &name)
                                     .with(creep_job)
@@ -231,63 +220,50 @@ impl Mission for LocalSupplyMission
                 //
 
                 for container in available_containers_for_haulers {
-                    let base_body = &[Part::Carry, Part::Move];
-                    let base_body_cost: u32 = base_body.iter().map(|p| p.cost()).sum();
-
-                    let repeat_body = &[Part::Carry, Part::Move];
-                    let repeat_body_cost: u32 = repeat_body.iter().map(|p| p.cost()).sum();
-
-                    let use_energy_max = if total_haulers == 0 { room.energy_available() } else { room.energy_capacity_available() };
-                    if base_body_cost > use_energy_max {
-                        break;
-                    }
-
-                    let remaining_available_energy: u32 = use_energy_max - base_body_cost;
-                    let max_repeat_parts = (remaining_available_energy as f32) / (repeat_body_cost as f32);
-
-                    let spawn_work_parts = max_repeat_parts.floor() as usize;
-                    
-                    let body = repeat_body
-                        .iter()
-                        .cycle()
-                        .take(spawn_work_parts * repeat_body.len())
-                        .chain(base_body.iter())
-                        .cloned()
-                        .collect::<Vec<Part>>();
-
-                    let mission_entity = runtime_data.entity.clone();
-                    let container_id = container.id();
-
-                    let container_used_capacity = container.store_used_capacity(Some(ResourceType::Energy));
-                    let container_store_capacity = container.store_capacity(Some(ResourceType::Energy));
-
-                    let storage_fraction = (container_used_capacity as f32) / (container_store_capacity as f32);
-
-                    let priority = if storage_fraction > 0.75 {
-                        SPAWN_PRIORITY_CRITICAL
-                    } else if source_miners_count > 0 { 
-                        SPAWN_PRIORITY_HIGH
-                    } else {
-                        SPAWN_PRIORITY_MEDIUM
+                    let body_definition = crate::creep::SpawnBodyDefinition{
+                        maximum_energy: if total_haulers == 0 { room.energy_available() } else { room.energy_capacity_available() },
+                        minimum_repeat: Some(1),
+                        maximum_repeat: Some(5),
+                        pre_body: &[],
+                        repeat_body: &[Part::Carry, Part::Move],
+                        post_body: &[]
                     };
+    
+                    if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+                        let mission_entity = *runtime_data.entity;
+                        let container_id = container.id();
 
-                    system_data.spawn_queue.request(SpawnRequest::new(&runtime_data.room_owner.owner, &body, priority, Box::new(move |spawn_system_data, name| {
-                        let name = name.to_string();
+                        let container_used_capacity = container.store_used_capacity(Some(ResourceType::Energy));
+                        let container_store_capacity = container.store_capacity(Some(ResourceType::Energy));
 
-                        spawn_system_data.updater.exec_mut(move |world| {
-                            let creep_job = JobData::Haul(::jobs::haul::HaulJob::new(container_id));
+                        let storage_fraction = (container_used_capacity as f32) / (container_store_capacity as f32);
 
-                            let creep_entity = ::creep::Spawning::build(world.create_entity(), &name)
-                                .with(creep_job)
-                                .build();
+                        let priority = if storage_fraction > 0.75 {
+                            SPAWN_PRIORITY_CRITICAL
+                        } else if source_miners_count > 0 { 
+                            SPAWN_PRIORITY_HIGH
+                        } else {
+                            SPAWN_PRIORITY_MEDIUM
+                        };
 
-                            let mission_data_storage = &mut world.write_storage::<MissionData>();
+                        system_data.spawn_queue.request(SpawnRequest::new(runtime_data.room_owner.owner, &body, priority, Box::new(move |spawn_system_data, name| {
+                            let name = name.to_string();
 
-                            if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                                mission_data.haulers.0.push(creep_entity);
-                            }       
-                        });
-                    })));
+                            spawn_system_data.updater.exec_mut(move |world| {
+                                let creep_job = JobData::Haul(::jobs::haul::HaulJob::new(container_id));
+
+                                let creep_entity = ::creep::Spawning::build(world.create_entity(), &name)
+                                    .with(creep_job)
+                                    .build();
+
+                                let mission_data_storage = &mut world.write_storage::<MissionData>();
+
+                                if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
+                                    mission_data.haulers.0.push(creep_entity);
+                                }       
+                            });
+                        })));
+                    }
                 }
 
                 //
@@ -297,36 +273,46 @@ impl Mission for LocalSupplyMission
                 //TODO: Compute correct number of harvesters to use for source.
                 //TODO: Compute the correct time to spawn emergency harvesters.
                 if (source_containers.is_empty() && source_harvesters.len() < 4) || total_harvesting_creeps == 0 {
-                    let priority = if total_harvesting_creeps == 0 { SPAWN_PRIORITY_CRITICAL } else { SPAWN_PRIORITY_HIGH };
                     //TODO: Compute best body parts to use.
-                    let body = [Part::Move, Part::Move, Part::Carry, Part::Work];
+                    let body_definition = crate::creep::SpawnBodyDefinition{
+                        maximum_energy: if total_harvesting_creeps == 0 { room.energy_available() } else { room.energy_capacity_available() },
+                        minimum_repeat: Some(1),
+                        maximum_repeat: Some(5),
+                        pre_body: &[],
+                        repeat_body: &[Part::Move, Part::Move, Part::Carry, Part::Work],
+                        post_body: &[]
+                    };
+    
+                    if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+                        let priority = if total_harvesting_creeps == 0 { SPAWN_PRIORITY_CRITICAL } else { SPAWN_PRIORITY_HIGH };
 
-                    let mission_entity = runtime_data.entity.clone();
-                    let source_id = source.id();
+                        let mission_entity = *runtime_data.entity;
+                        let source_id = source.id();
 
-                    system_data.spawn_queue.request(SpawnRequest::new(&runtime_data.room_owner.owner, &body, priority, Box::new(move |spawn_system_data, name| {
-                        let name = name.to_string();
+                        system_data.spawn_queue.request(SpawnRequest::new(runtime_data.room_owner.owner, &body, priority, Box::new(move |spawn_system_data, name| {
+                            let name = name.to_string();
 
-                        spawn_system_data.updater.exec_mut(move |world| {
-                            let creep_job = JobData::Harvest(::jobs::harvest::HarvestJob::new(source_id));
+                            spawn_system_data.updater.exec_mut(move |world| {
+                                let creep_job = JobData::Harvest(::jobs::harvest::HarvestJob::new(source_id));
 
-                            let creep_entity = ::creep::Spawning::build(world.create_entity(), &name)
-                                .with(creep_job)
-                                .build();
+                                let creep_entity = ::creep::Spawning::build(world.create_entity(), &name)
+                                    .with(creep_job)
+                                    .build();
 
-                            let mission_data_storage = &mut world.write_storage::<MissionData>();
+                                let mission_data_storage = &mut world.write_storage::<MissionData>();
 
-                            if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                                mission_data.harvesters.0.push(creep_entity);
-                            }       
-                        });
-                    })));
+                                if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
+                                    mission_data.harvesters.0.push(creep_entity);
+                                }       
+                            });
+                        })));
+                    }
                 }
             }
 
-            return MissionResult::Running;
+            MissionResult::Running
         } else {
-            return MissionResult::Failure;
+            MissionResult::Failure
         }
     }
 }

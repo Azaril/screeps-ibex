@@ -12,9 +12,9 @@ pub struct RoomOwnerData {
 }
 
 impl RoomOwnerData {
-    pub fn new(name: &RoomName) -> RoomOwnerData {
+    pub fn new(name: RoomName) -> RoomOwnerData {
         RoomOwnerData {
-            owner: *name
+            owner: name
         }                           
     }
 }
