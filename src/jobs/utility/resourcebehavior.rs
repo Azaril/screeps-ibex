@@ -4,9 +4,12 @@ use super::resource::*;
 
 pub struct ResourceBehaviorUtility;
 
-impl ResourceBehaviorUtility
-{
-    pub fn get_resource_from_structure(creep: &Creep, structure: &Structure, resource: ResourceType) {
+impl ResourceBehaviorUtility {
+    pub fn get_resource_from_structure(
+        creep: &Creep,
+        structure: &Structure,
+        resource: ResourceType,
+    ) {
         scope_timing!("get_resource_from_structure");
 
         if let Some(withdrawable) = structure.as_withdrawable() {
@@ -46,23 +49,36 @@ impl ResourceBehaviorUtility
         match target {
             EnergyPickupTarget::Structure(ref pickup_structure_id) => {
                 if let Some(pickup_structure) = pickup_structure_id.as_structure() {
-                    Self::get_resource_from_structure(creep, &pickup_structure, ResourceType::Energy);
+                    Self::get_resource_from_structure(
+                        creep,
+                        &pickup_structure,
+                        ResourceType::Energy,
+                    );
                 } else {
-                    error!("Failed to resolve pickup structure for getting enery. Name: {}", creep.name());
+                    error!(
+                        "Failed to resolve pickup structure for getting enery. Name: {}",
+                        creep.name()
+                    );
                 }
-            },
+            }
             EnergyPickupTarget::Source(ref source_id) => {
                 if let Some(source) = source_id.resolve() {
                     Self::get_energy_from_source(creep, &source);
                 } else {
-                    error!("Failed to resolve pickup source for getting energy. Name: {}", creep.name());
+                    error!(
+                        "Failed to resolve pickup source for getting energy. Name: {}",
+                        creep.name()
+                    );
                 }
-            },
+            }
             EnergyPickupTarget::DroppedResource(ref resource_id) => {
                 if let Some(resource) = resource_id.resolve() {
                     Self::get_energy_from_dropped_resource(creep, &resource);
                 } else {
-                    error!("Failed to resolve pickup dropped resource for getting energy. Name: {}", creep.name());
+                    error!(
+                        "Failed to resolve pickup dropped resource for getting energy. Name: {}",
+                        creep.name()
+                    );
                 }
             }
         }

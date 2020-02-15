@@ -9,7 +9,8 @@ impl BuildBehaviorUtility {
         let creep_pos = creep.pos();
         let target_pos = construction_site.pos();
 
-        if creep_pos.in_range_to(&target_pos, 3) && creep_pos.room_name() == target_pos.room_name() {
+        if creep_pos.in_range_to(&target_pos, 3) && creep_pos.room_name() == target_pos.room_name()
+        {
             creep.build(&construction_site);
         } else {
             creep.move_to(&target_pos);

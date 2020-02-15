@@ -1,33 +1,31 @@
-use specs::*;
+use crate::serialize::EntityVec;
+use screeps::*;
+use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
-use screeps::*;
+use specs::*;
 use specs_derive::*;
-use serde::{Serialize, Deserialize};
-use crate::serialize::EntityVec;                                                                                       
 
 #[derive(Clone, Copy, Debug, Component, ConvertSaveload)]
 pub struct RoomOwnerData {
-    pub owner: RoomName
+    pub owner: RoomName,
 }
 
 impl RoomOwnerData {
     pub fn new(name: RoomName) -> RoomOwnerData {
-        RoomOwnerData {
-            owner: name
-        }                           
+        RoomOwnerData { owner: name }
     }
 }
 
 #[derive(Clone, Debug, Component, ConvertSaveload)]
 pub struct RoomData {
-    pub missions: EntityVec
+    pub missions: EntityVec,
 }
 
 impl RoomData {
     pub fn new() -> RoomData {
         RoomData {
-            missions: EntityVec::new()
-        }                           
+            missions: EntityVec::new(),
+        }
     }
 }

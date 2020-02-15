@@ -11,11 +11,10 @@ macro_rules! scope_timing {
 
             info!("[Timing] {} - {}", __data, delta);
         });
-    };    
+    };
 }
 
 #[cfg(not(feature = "timing"))]
 macro_rules! scope_timing {
-    ($($x:expr),*) => {
-    }
+    ($($x:expr),*) => {};
 }

@@ -1,10 +1,10 @@
 use specs::*;
 
 use super::data::*;
-use super::localsupply::*;
-use super::upgrade::*;
 use super::localbuild::*;
+use super::localsupply::*;
 use super::tower::*;
+use super::upgrade::*;
 
 pub struct OperationManagerSystem;
 
@@ -12,7 +12,7 @@ impl<'a> System<'a> for OperationManagerSystem {
     type SystemData = (
         Entities<'a>,
         ReadStorage<'a, OperationData>,
-        Read<'a, LazyUpdate>
+        Read<'a, LazyUpdate>,
     );
 
     fn run(&mut self, (entities, operations, updater): Self::SystemData) {
@@ -27,13 +27,13 @@ impl<'a> System<'a> for OperationManagerSystem {
             match operation {
                 OperationData::LocalSupply(_) => {
                     has_local_supply = true;
-                },
+                }
                 OperationData::Upgrade(_) => {
                     has_upgrade = true;
-                },
+                }
                 OperationData::LocalBuild(_) => {
                     has_local_build = true;
-                },
+                }
                 OperationData::Tower(_) => {
                     has_tower = true;
                 }

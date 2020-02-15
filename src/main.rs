@@ -1,6 +1,5 @@
 #![recursion_limit = "128"]
 #![allow(dead_code)]
-
 #![warn(clippy::all)]
 
 extern crate fern;
@@ -21,16 +20,16 @@ extern crate crossbeam_queue;
 
 #[macro_use]
 mod timing;
-mod logging;
 mod creep;
+mod findnearest;
 mod jobs;
-mod operations;
+mod logging;
 mod missions;
-mod serialize;
+mod operations;
 mod room;
+mod serialize;
 mod spawnsystem;
 mod structureidentifier;
-mod findnearest;
 
 use std::fmt;
 
@@ -50,7 +49,7 @@ use specs::{
 
 fn main() {
     stdweb::initialize();
-    
+
     logging::setup_logging(logging::Info);
 
     js! {
@@ -79,7 +78,7 @@ fn serialize_world(world: &World, cb: fn(&str)) {
     scope_timing!("serialize_world");
 
     struct Serialize {
-        writer: Vec<u8>
+        writer: Vec<u8>,
     }
 
     #[derive(SystemData)]
@@ -90,12 +89,12 @@ fn serialize_world(world: &World, cb: fn(&str)) {
         creep_spawnings: ReadStorage<'a, creep::CreepSpawning>,
         creep_owners: ReadStorage<'a, creep::CreepOwner>,
         room_owners: ReadStorage<'a, room::data::RoomOwnerData>,
-        room_data: ReadStorage<'a, room::data::RoomData>,            
+        room_data: ReadStorage<'a, room::data::RoomData>,
         job_data: ReadStorage<'a, jobs::data::JobData>,
         operation_data: ReadStorage<'a, operations::data::OperationData>,
         mission_data: ReadStorage<'a, missions::data::MissionData>,
     }
-    
+
     impl<'a> System<'a> for Serialize {
         type SystemData = SerializeSystemData<'a>;
 
@@ -103,21 +102,32 @@ fn serialize_world(world: &World, cb: fn(&str)) {
             let mut ser = serde_json::ser::Serializer::new(&mut self.writer);
 
             SerializeComponents::<NoError, serialize::SerializeMarker>::serialize_recursive(
-                &(&data.creep_spawnings, &data.creep_owners, &data.room_owners, &data.room_data, &data.job_data, &data.operation_data, &data.mission_data),
+                &(
+                    &data.creep_spawnings,
+                    &data.creep_owners,
+                    &data.room_owners,
+                    &data.room_data,
+                    &data.job_data,
+                    &data.operation_data,
+                    &data.mission_data,
+                ),
                 &data.entities,
                 &mut data.markers,
                 &mut data.marker_allocator,
                 &mut ser,
-            ).unwrap_or_else(|e| error!("Error: {}", e));
+            )
+            .unwrap_or_else(|e| error!("Error: {}", e));
         }
     }
 
-    let mut sys = Serialize{ writer: Vec::<u8>::with_capacity(1024 * 16) };
+    let mut sys = Serialize {
+        writer: Vec::<u8>::with_capacity(1024 * 16),
+    };
 
     sys.run_now(&world);
 
     let data = unsafe { std::str::from_utf8_unchecked(&sys.writer) };
-    
+
     cb(&data);
 }
 
@@ -150,7 +160,7 @@ fn deserialize_world(world: &World, data: &str) {
     scope_timing!("deserialize_world");
 
     struct Deserialize<'a> {
-        raw_data: &'a str
+        raw_data: &'a str,
     }
 
     #[derive(SystemData)]
@@ -184,7 +194,7 @@ fn deserialize_world(world: &World, data: &str) {
         }
     }
 
-    let mut sys = Deserialize{ raw_data: data };
+    let mut sys = Deserialize { raw_data: data };
 
     sys.run_now(&world);
 }
@@ -198,7 +208,7 @@ fn game_loop() {
 
     world.insert(serialize::SerializeMarkerAllocator::new());
     world.register::<serialize::SerializeMarker>();
-        
+
     //
     // Pre-pass update
     //
@@ -216,14 +226,22 @@ fn game_loop() {
     //
 
     let mut main_dispatcher = DispatcherBuilder::new()
-        .with(operations::managersystem::OperationManagerSystem, "operations_manager", &[])
-        .with(operations::operationsystem::OperationSystem, "operations", &[])
+        .with(
+            operations::managersystem::OperationManagerSystem,
+            "operations_manager",
+            &[],
+        )
+        .with(
+            operations::operationsystem::OperationSystem,
+            "operations",
+            &[],
+        )
         .with(missions::missionsystem::MissionSystem, "missions", &[])
         .with(spawnsystem::SpawnQueueSystem, "spawn_queue", &[])
         .with(jobs::jobsystem::JobSystem, "jobs", &[])
         .build();
 
-    main_dispatcher.setup(&mut world);   
+    main_dispatcher.setup(&mut world);
 
     //
     // Deserialize world state.

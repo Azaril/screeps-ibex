@@ -1,9 +1,9 @@
-use specs::*;
-use specs::prelude::*;
 use screeps::*;
+use specs::prelude::*;
+use specs::*;
 
-use ::creep::CreepOwner;
 use super::data::JobData;
+use creep::CreepOwner;
 
 #[derive(SystemData)]
 pub struct JobSystemData<'a> {
@@ -33,10 +33,10 @@ impl<'a> System<'a> for JobSystem {
 
         for (creep, job) in (&data.creep_owners, &mut data.jobs).join() {
             if let Some(owner) = creep.owner.resolve() {
-                let runtime_data = JobRuntimeData{
+                let runtime_data = JobRuntimeData {
                     owner: &owner,
                     updater: &data.updater,
-                    entities: &data.entities
+                    entities: &data.entities,
                 };
 
                 job.as_job().run_job(&runtime_data);

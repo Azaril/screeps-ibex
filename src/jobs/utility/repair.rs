@@ -1,5 +1,5 @@
-use screeps::*;
 use itertools::*;
+use screeps::*;
 use std::collections::HashMap;
 
 #[derive(PartialEq, Eq, Hash, Debug)]
@@ -8,15 +8,15 @@ pub enum RepairPriority {
     High,
     Medium,
     Low,
-    VeryLow
+    VeryLow,
 }
 
 pub static ORDERED_REPAIR_PRIORITIES: &[RepairPriority] = &[
-    RepairPriority::Critical, 
-    RepairPriority::High, 
-    RepairPriority::Medium, 
-    RepairPriority::Low, 
-    RepairPriority::VeryLow
+    RepairPriority::Critical,
+    RepairPriority::High,
+    RepairPriority::Medium,
+    RepairPriority::Low,
+    RepairPriority::VeryLow,
 ];
 
 pub struct RepairUtility;
@@ -50,12 +50,16 @@ impl RepairUtility {
         }
     }
 
-    fn map_structure_repair_priority(structure: &Structure, hits: u32, hits_max: u32) -> RepairPriority {
+    fn map_structure_repair_priority(
+        structure: &Structure,
+        hits: u32,
+        hits_max: u32,
+    ) -> RepairPriority {
         match structure {
             Structure::Spawn(_) => Self::map_high_value_priority(hits, hits_max),
             Structure::Tower(_) => Self::map_high_value_priority(hits, hits_max),
             Structure::Container(_) => Self::map_high_value_priority(hits, hits_max),
-            _ => Self::map_normal_priority(hits, hits_max)
+            _ => Self::map_normal_priority(hits, hits_max),
         }
     }
 
@@ -67,7 +71,8 @@ impl RepairUtility {
                     owned_structure.my()
                 } else {
                     true
-                }})
+                }
+            })
             .map(|owned_structure| owned_structure.as_structure())
             .filter_map(|structure| {
                 let hits = if let Some(attackable) = structure.as_attackable() {
@@ -83,7 +88,7 @@ impl RepairUtility {
                 };
 
                 hits.map(|(hits, hits_max)| (structure, hits, hits_max))
-                })
+            })
             .filter(|(_, hits, hits_max)| hits < hits_max)
             .collect()
     }
@@ -95,7 +100,7 @@ impl RepairUtility {
                 let priority = Self::map_structure_repair_priority(&structure, hits, hits_max);
 
                 (priority, structure)
-                })
+            })
             .into_group_map()
     }
 }

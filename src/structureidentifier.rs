@@ -1,5 +1,5 @@
-use serde::*;
 use screeps::*;
+use serde::*;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum StructureIdentifier {
@@ -26,8 +26,7 @@ pub enum StructureIdentifier {
     Wall(ObjectId<StructureWall>),
 }
 
-impl StructureIdentifier
-{
+impl StructureIdentifier {
     pub fn new(structure: &Structure) -> StructureIdentifier {
         match structure {
             Structure::Container(v) => StructureIdentifier::Container(v.id()),

@@ -1,8 +1,7 @@
 use crossbeam_queue::SegQueue;
-use specs::*;
-use specs::prelude::*;
-use screeps::*;
 use itertools::*;
+use screeps::*;
+use specs::prelude::*;
 
 pub const SPAWN_PRIORITY_CRITICAL: f32 = 100.0;
 pub const SPAWN_PRIORITY_HIGH: f32 = 75.0;
@@ -14,23 +13,28 @@ pub struct SpawnRequest {
     room_name: RoomName,
     body: Vec<Part>,
     priority: f32,
-    callback: Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync>
+    callback: Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync>,
 }
 
 impl SpawnRequest {
-    pub fn new(room: RoomName, body: &[Part], request_priority: f32, request_callback: Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync>) -> SpawnRequest {
-        SpawnRequest{
+    pub fn new(
+        room: RoomName,
+        body: &[Part],
+        request_priority: f32,
+        request_callback: Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync>,
+    ) -> SpawnRequest {
+        SpawnRequest {
             room_name: room,
             body: body.to_vec(),
             priority: request_priority,
-            callback: request_callback
+            callback: request_callback,
         }
     }
 }
 
 #[derive(Default)]
 pub struct SpawnQueue {
-    pub requests: SegQueue<SpawnRequest>
+    pub requests: SegQueue<SpawnRequest>,
 }
 
 impl SpawnQueue {
@@ -50,19 +54,18 @@ impl Drop for SpawnQueue {
 pub struct SpawnQueueSystemData<'a> {
     spawn_queue: Write<'a, SpawnQueue>,
     updater: Read<'a, LazyUpdate>,
-    entities: Entities<'a>, 
+    entities: Entities<'a>,
     room_owner: WriteStorage<'a, ::room::data::RoomOwnerData>,
-    room_data: WriteStorage<'a, ::room::data::RoomData>
+    room_data: WriteStorage<'a, ::room::data::RoomData>,
 }
 
-pub struct SpawnQueueExecutionSystemData<'a> {  
-    pub updater: Read<'a, LazyUpdate>
+pub struct SpawnQueueExecutionSystemData<'a> {
+    pub updater: Read<'a, LazyUpdate>,
 }
 
 pub struct SpawnQueueSystem;
 
-impl SpawnQueueSystem
-{
+impl SpawnQueueSystem {
     fn spawn_creep(spawn: &StructureSpawn, parts: &[Part]) -> Result<String, ReturnCode> {
         let time = screeps::game::time();
         let mut additional = 0;
@@ -77,7 +80,7 @@ impl SpawnQueueSystem
             } else {
                 return Err(res);
             }
-        };
+        }
     }
 }
 
@@ -87,17 +90,18 @@ impl<'a> System<'a> for SpawnQueueSystem {
     fn run(&mut self, data: Self::SystemData) {
         scope_timing!("SpawnQueueSystem");
 
-        let system_data = SpawnQueueExecutionSystemData{
-            updater: data.updater
+        let system_data = SpawnQueueExecutionSystemData {
+            updater: data.updater,
         };
 
-        let mut requests = vec!();
+        let mut requests = vec![];
 
         while let Ok(request) = data.spawn_queue.requests.pop() {
             requests.push(request);
         }
 
-        let room_requests = requests.iter()
+        let room_requests = requests
+            .iter()
             .map(|request| (request.room_name, request))
             .into_group_map();
 
@@ -116,16 +120,16 @@ impl<'a> System<'a> for SpawnQueueSystem {
                         let spawn_complete = match Self::spawn_creep(&spawn, &request.body) {
                             Ok(name) => {
                                 (*request.callback)(&system_data, &name);
-                            
+
                                 true
-                            },
+                            }
                             Err(ReturnCode::NotEnough) => {
                                 //
                                 // If there was not enough energy available for the highest priority request,
                                 // continue waiting for energy and don't allow any other spawns to occur.
                                 //
                                 true
-                            },
+                            }
                             _ => {
                                 //
                                 // Any other errors are assumed to be mis-configuration and should be ignored

@@ -1,5 +1,5 @@
-use specs::*;
 use specs::prelude::*;
+use specs::*;
 
 use super::data::*;
 
@@ -7,10 +7,10 @@ use super::data::*;
 pub struct OperationSystemData<'a> {
     operations: WriteStorage<'a, OperationData>,
     updater: Read<'a, LazyUpdate>,
-    entities: Entities<'a>, 
+    entities: Entities<'a>,
     room_owner: WriteStorage<'a, ::room::data::RoomOwnerData>,
     room_data: WriteStorage<'a, ::room::data::RoomData>,
-    mission_data: ReadStorage<'a, ::missions::data::MissionData>
+    mission_data: ReadStorage<'a, ::missions::data::MissionData>,
 }
 
 pub struct OperationExecutionSystemData<'a> {
@@ -18,13 +18,13 @@ pub struct OperationExecutionSystemData<'a> {
     pub entities: &'a Entities<'a>,
     pub room_owner: &'a WriteStorage<'a, ::room::data::RoomOwnerData>,
     pub room_data: &'a WriteStorage<'a, ::room::data::RoomData>,
-    pub mission_data: &'a ReadStorage<'a, ::missions::data::MissionData>
+    pub mission_data: &'a ReadStorage<'a, ::missions::data::MissionData>,
 }
 
 pub enum OperationResult {
     Running,
     Success,
-    Failure
+    Failure,
 }
 
 pub trait Operation {
@@ -39,12 +39,12 @@ impl<'a> System<'a> for OperationSystem {
     fn run(&mut self, mut data: Self::SystemData) {
         scope_timing!("OperationSystem");
 
-        let system_data = OperationExecutionSystemData{
+        let system_data = OperationExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
             room_owner: &data.room_owner,
             room_data: &data.room_data,
-            mission_data: &data.mission_data
+            mission_data: &data.mission_data,
         };
 
         for (entity, operation) in (&data.entities, &mut data.operations).join() {
@@ -54,7 +54,7 @@ impl<'a> System<'a> for OperationSystem {
                     info!("Operation complete, cleaning up.");
 
                     true
-                },
+                }
                 OperationResult::Failure => {
                     info!("Operation failed, cleaning up.");
 
@@ -65,7 +65,10 @@ impl<'a> System<'a> for OperationSystem {
             if cleanup_operation {
                 data.updater.exec_mut(move |world| {
                     if let Err(err) = world.delete_entity(entity) {
-                        warn!("Trying to clean up operation entity that no longer exists. Error: {}", err);
+                        warn!(
+                            "Trying to clean up operation entity that no longer exists. Error: {}",
+                            err
+                        );
                     }
                 });
             }

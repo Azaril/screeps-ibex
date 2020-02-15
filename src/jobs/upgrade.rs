@@ -1,5 +1,5 @@
-use serde::*;
 use screeps::*;
+use serde::*;
 
 use super::jobsystem::*;
 use super::utility::resource::*;
@@ -8,31 +8,29 @@ use super::utility::resourcebehavior::*;
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct UpgradeJob {
     pub upgrade_target: ObjectId<StructureController>,
-    pub pickup_target: Option<EnergyPickupTarget>
+    pub pickup_target: Option<EnergyPickupTarget>,
 }
 
-impl UpgradeJob
-{
+impl UpgradeJob {
     pub fn new(upgrade_target: &ObjectId<StructureController>) -> UpgradeJob {
         UpgradeJob {
             upgrade_target: *upgrade_target,
-            pickup_target: None
+            pickup_target: None,
         }
     }
 }
 
-impl Job for UpgradeJob
-{
+impl Job for UpgradeJob {
     fn run_job(&mut self, data: &JobRuntimeData) {
         let creep = data.owner;
 
         scope_timing!("Upgrade Job - {}", creep.name());
-        
+
         let room = creep.room().unwrap();
 
         let resource = screeps::ResourceType::Energy;
 
-        let capacity = creep.store_capacity(Some(resource));        
+        let capacity = creep.store_capacity(Some(resource));
         let used_capacity = creep.store_used_capacity(Some(resource));
         let available_capacity = capacity - used_capacity;
 
@@ -54,22 +52,23 @@ impl Job for UpgradeJob
                     } else {
                         true
                     }
-                },
+                }
                 Some(EnergyPickupTarget::Source(ref source_id)) => {
                     if let Some(source) = source_id.resolve() {
                         source.energy() == 0
                     } else {
                         true
                     }
-                },
+                }
                 Some(EnergyPickupTarget::DroppedResource(ref resource_id)) => {
                     resource_id.resolve().is_none()
-                },
-                None => capacity > 0 && used_capacity == 0
+                }
+                None => capacity > 0 && used_capacity == 0,
             };
 
             if repick_pickup {
-                self.pickup_target = ResourceUtility::select_energy_resource_pickup_or_harvest(&creep, &room);
+                self.pickup_target =
+                    ResourceUtility::select_energy_resource_pickup_or_harvest(&creep, &room);
             }
         }
 
@@ -95,10 +94,16 @@ impl Job for UpgradeJob
                     creep.move_to(&controller);
                 }
             } else {
-                error!("Upgrader has no assigned upgrade target! Name: {}", creep.name());
-            }           
+                error!(
+                    "Upgrader has no assigned upgrade target! Name: {}",
+                    creep.name()
+                );
+            }
         } else {
-            error!("Upgrader with no energy would like to upgrade target! Name: {}", creep.name());
+            error!(
+                "Upgrader with no energy would like to upgrade target! Name: {}",
+                creep.name()
+            );
         }
     }
 }

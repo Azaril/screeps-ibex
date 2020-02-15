@@ -1,5 +1,5 @@
-use serde::*;
 use screeps::*;
+use serde::*;
 
 use super::jobsystem::*;
 use super::utility::resource::*;
@@ -12,18 +12,16 @@ pub struct HaulJob {
     pub delivery_target: Option<StructureIdentifier>,
 }
 
-impl HaulJob
-{
+impl HaulJob {
     pub fn new(container_id: ObjectId<StructureContainer>) -> HaulJob {
         HaulJob {
             primary_container: container_id,
-            delivery_target: None
+            delivery_target: None,
         }
     }
 }
 
-impl Job for HaulJob
-{
+impl Job for HaulJob {
     fn run_job(&mut self, data: &JobRuntimeData) {
         let creep = data.owner;
 
@@ -33,7 +31,7 @@ impl Job for HaulJob
 
         let resource = screeps::ResourceType::Energy;
 
-        let capacity = creep.store_capacity(Some(resource));        
+        let capacity = creep.store_capacity(Some(resource));
         let used_capacity = creep.store_used_capacity(Some(resource));
         let available_capacity = capacity - used_capacity;
 
@@ -65,14 +63,17 @@ impl Job for HaulJob
         //
 
         if repick_delivery {
-            self.delivery_target = ResourceUtility::select_resource_delivery(creep, &room, resource).map(|v| StructureIdentifier::new(&v));
+            self.delivery_target =
+                ResourceUtility::select_resource_delivery(creep, &room, resource)
+                    .map(|v| StructureIdentifier::new(&v));
         }
 
         //
         // Transfer energy to structure if possible.
         //
 
-        if let Some(delivery_target_structure) = self.delivery_target.and_then(|v| v.as_structure()) {
+        if let Some(delivery_target_structure) = self.delivery_target.and_then(|v| v.as_structure())
+        {
             if let Some(transferable) = delivery_target_structure.as_transferable() {
                 if creep.pos().is_near_to(&delivery_target_structure) {
                     creep.transfer_all(transferable, resource);
@@ -100,7 +101,10 @@ impl Job for HaulJob
 
                 return;
             } else {
-                error!("Hauler has no assigned pickup container! Name: {}", creep.name());
+                error!(
+                    "Hauler has no assigned pickup container! Name: {}",
+                    creep.name()
+                );
             }
         }
     }

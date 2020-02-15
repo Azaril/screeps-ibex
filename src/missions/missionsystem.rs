@@ -1,11 +1,10 @@
-use specs::*;
 use specs::prelude::*;
 
 use super::data::*;
+use crate::creep::*;
+use crate::jobs::data::*;
 use crate::room::data::*;
 use crate::spawnsystem::*;
-use crate::jobs::data::*;
-use crate::creep::*;
 
 #[derive(SystemData)]
 pub struct MissionSystemData<'a> {
@@ -15,15 +14,15 @@ pub struct MissionSystemData<'a> {
     entities: Entities<'a>,
     spawn_queue: Write<'a, SpawnQueue>,
     creep_owner: ReadStorage<'a, CreepOwner>,
-    job_data: WriteStorage<'a, JobData>
+    job_data: WriteStorage<'a, JobData>,
 }
 
-pub struct MissionExecutionSystemData<'a> {  
+pub struct MissionExecutionSystemData<'a> {
     pub updater: &'a Read<'a, LazyUpdate>,
     pub entities: &'a Entities<'a>,
     pub spawn_queue: &'a Write<'a, SpawnQueue>,
     pub creep_owner: &'a ReadStorage<'a, CreepOwner>,
-    pub job_data: &'a WriteStorage<'a, JobData>
+    pub job_data: &'a WriteStorage<'a, JobData>,
 }
 
 pub struct MissionExecutionRuntimeData<'a> {
@@ -34,11 +33,15 @@ pub struct MissionExecutionRuntimeData<'a> {
 pub enum MissionResult {
     Running,
     Success,
-    Failure
+    Failure,
 }
 
 pub trait Mission {
-    fn run_mission(&mut self, system_data: &MissionExecutionSystemData, runtime_data: &MissionExecutionRuntimeData) -> MissionResult;
+    fn run_mission(
+        &mut self,
+        system_data: &MissionExecutionSystemData,
+        runtime_data: &MissionExecutionRuntimeData,
+    ) -> MissionResult;
 }
 
 pub struct MissionSystem;
@@ -49,27 +52,32 @@ impl<'a> System<'a> for MissionSystem {
     fn run(&mut self, mut data: Self::SystemData) {
         scope_timing!("MissionSystem");
 
-        let system_data = MissionExecutionSystemData{
+        let system_data = MissionExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
             spawn_queue: &data.spawn_queue,
             creep_owner: &data.creep_owner,
-            job_data: &data.job_data
+            job_data: &data.job_data,
         };
 
-        for (entity, room_owner, mission) in (&data.entities, &data.room_owner, &mut data.missions).join() {
-            let runtime_data = MissionExecutionRuntimeData{
+        for (entity, room_owner, mission) in
+            (&data.entities, &data.room_owner, &mut data.missions).join()
+        {
+            let runtime_data = MissionExecutionRuntimeData {
                 entity: &entity,
-                room_owner: &room_owner
-            };            
+                room_owner: &room_owner,
+            };
 
-            let cleanup_mission = match mission.as_mission().run_mission(&system_data, &runtime_data) {
+            let cleanup_mission = match mission
+                .as_mission()
+                .run_mission(&system_data, &runtime_data)
+            {
                 MissionResult::Running => false,
                 MissionResult::Success => {
                     info!("Mission complete, cleaning up.");
 
                     true
-                },
+                }
                 MissionResult::Failure => {
                     info!("Mission failed, cleaning up.");
 
@@ -80,7 +88,10 @@ impl<'a> System<'a> for MissionSystem {
             if cleanup_mission {
                 data.updater.exec_mut(move |world| {
                     if let Err(err) = world.delete_entity(entity) {
-                        warn!("Trying to clean up mission entity that no longer exists. Error: {}", err);
+                        warn!(
+                            "Trying to clean up mission entity that no longer exists. Error: {}",
+                            err
+                        );
                     }
                 });
             }

@@ -1,7 +1,7 @@
-use specs::*;
+use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
-use serde::{Serialize, Deserialize};
+use specs::*;
 
 pub struct SerializeMarkerTag;
 
@@ -20,37 +20,35 @@ pub struct EntityVec(pub Vec<Entity>);
 
 impl EntityVec {
     pub fn new() -> EntityVec {
-        EntityVec{
-            0: vec!()
-        }
+        EntityVec { 0: vec![] }
     }
 }
 
 impl<M: Marker + Serialize> ConvertSaveload<M> for EntityVec
-    where for<'de> M: Deserialize<'de>,
+where
+    for<'de> M: Deserialize<'de>,
 {
     type Data = Vec<M>;
     type Error = NoError;
 
     fn convert_into<F>(&self, mut ids: F) -> Result<Self::Data, Self::Error>
     where
-        F: FnMut(Entity) -> Option<M>
+        F: FnMut(Entity) -> Option<M>,
     {
-        let markers = self.0.iter()
-            .filter_map(|entity| ids(*entity))
-            .collect();
+        let markers = self.0.iter().filter_map(|entity| ids(*entity)).collect();
 
         Ok(markers)
     }
 
     fn convert_from<F>(data: Self::Data, mut ids: F) -> Result<Self, Self::Error>
     where
-        F: FnMut(M) -> Option<Entity>
+        F: FnMut(M) -> Option<Entity>,
     {
-        let entities = data.iter()
+        let entities = data
+            .iter()
             .filter_map(|marker| ids(marker.clone()))
             .collect();
 
-        Ok(EntityVec{0: entities})
+        Ok(EntityVec { 0: entities })
     }
 }

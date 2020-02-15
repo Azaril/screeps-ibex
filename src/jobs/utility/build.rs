@@ -1,5 +1,5 @@
-use screeps::*;
 use crate::findnearest::*;
+use screeps::*;
 
 pub struct BuildUtility;
 

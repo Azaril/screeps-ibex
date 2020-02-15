@@ -1,11 +1,11 @@
-use serde::*;
 use screeps::*;
+use serde::*;
 
 use super::jobsystem::*;
-use super::utility::resource::*;
-use super::utility::resourcebehavior::*;
 use super::utility::build::*;
 use super::utility::buildbehavior::*;
+use super::utility::resource::*;
+use super::utility::resourcebehavior::*;
 use crate::structureidentifier::*;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -16,22 +16,28 @@ pub struct HarvestJob {
     #[serde(default)]
     pub build_target: Option<ObjectId<ConstructionSite>>,
     #[serde(default)]
-    pub pickup_target: Option<ObjectId<Resource>>
+    pub pickup_target: Option<ObjectId<Resource>>,
 }
 
-impl HarvestJob
-{
+impl HarvestJob {
     pub fn new(source_id: ObjectId<Source>) -> HarvestJob {
         HarvestJob {
             harvest_target: source_id,
             delivery_target: None,
             build_target: None,
-            pickup_target: None
+            pickup_target: None,
         }
     }
 
-    pub fn select_delivery_target(&mut self, creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<Structure> {
-        if let Some(delivery_target) = ResourceUtility::select_resource_delivery(creep, room, resource_type) {
+    pub fn select_delivery_target(
+        &mut self,
+        creep: &Creep,
+        room: &Room,
+        resource_type: ResourceType,
+    ) -> Option<Structure> {
+        if let Some(delivery_target) =
+            ResourceUtility::select_resource_delivery(creep, room, resource_type)
+        {
             return Some(delivery_target);
         }
 
@@ -46,18 +52,17 @@ impl HarvestJob
     }
 }
 
-impl Job for HarvestJob
-{
+impl Job for HarvestJob {
     fn run_job(&mut self, data: &JobRuntimeData) {
         let creep = data.owner;
 
         scope_timing!("Harvest Job - {}", creep.name());
-        
+
         let room = creep.room().unwrap();
 
         let resource = screeps::ResourceType::Energy;
 
-        let capacity = creep.store_capacity(Some(resource));        
+        let capacity = creep.store_capacity(Some(resource));
         let used_capacity = creep.store_used_capacity(Some(resource));
         let available_capacity = capacity - used_capacity;
 
@@ -91,14 +96,17 @@ impl Job for HarvestJob
         //
 
         if repick_delivery {
-            self.delivery_target = self.select_delivery_target(&creep, &room, resource).map(|v| StructureIdentifier::new(&v));
+            self.delivery_target = self
+                .select_delivery_target(&creep, &room, resource)
+                .map(|v| StructureIdentifier::new(&v));
         }
 
         //
         // Transfer energy to structure if possible.
         //
 
-        if let Some(delivery_target_structure) = self.delivery_target.and_then(|v| v.as_structure()) {
+        if let Some(delivery_target_structure) = self.delivery_target.and_then(|v| v.as_structure())
+        {
             if let Some(transferable) = delivery_target_structure.as_transferable() {
                 if creep.pos().is_near_to(&delivery_target_structure) {
                     creep.transfer_all(transferable, resource);
@@ -112,15 +120,16 @@ impl Job for HarvestJob
 
         //
         // Compute build target
-        //        
+        //
 
         let repick_build_target = match self.build_target {
             Some(target_id) => target_id.resolve().is_none(),
-            None => capacity > 0 && available_capacity == 0
+            None => capacity > 0 && available_capacity == 0,
         };
 
         if repick_build_target {
-            self.build_target = BuildUtility::select_construction_site(&creep, &room).map(|site| site.id());
+            self.build_target =
+                BuildUtility::select_construction_site(&creep, &room).map(|site| site.id());
         }
 
         //
@@ -137,7 +146,8 @@ impl Job for HarvestJob
         // Upgrade controller.
         //
 
-        if let Some(delivery_target_structure) = self.delivery_target.and_then(|v| v.as_structure()) {
+        if let Some(delivery_target_structure) = self.delivery_target.and_then(|v| v.as_structure())
+        {
             if let Structure::Controller(controller) = delivery_target_structure {
                 if creep.pos().is_near_to(&controller) {
                     creep.upgrade_controller(&controller);
@@ -156,13 +166,14 @@ impl Job for HarvestJob
         //TODO: Factor this in to common code.
         let repick_pickup = match self.pickup_target {
             Some(resource_id) => resource_id.resolve().is_none(),
-            None => capacity > 0 && used_capacity == 0
+            None => capacity > 0 && used_capacity == 0,
         };
 
         if repick_pickup {
             scope_timing!("repick_pickup");
 
-            self.pickup_target = ResourceUtility::select_dropped_resource(creep, &room, resource).map(|resource| resource.id());
+            self.pickup_target = ResourceUtility::select_dropped_resource(creep, &room, resource)
+                .map(|resource| resource.id());
         }
 
         //
