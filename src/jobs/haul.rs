@@ -3,12 +3,13 @@ use serde::*;
 
 use super::jobsystem::*;
 use super::utility::resource::*;
-use crate::structureidentifier::*;
 use super::utility::resourcebehavior::*;
+use crate::remoteobjectid::*;
+use crate::structureidentifier::*;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct HaulJob {
-    pub primary_container: ObjectId<StructureContainer>,
+    pub primary_container: RemoteObjectId<StructureContainer>,
     #[serde(default)]
     pub delivery_target: Option<StructureIdentifier>,
     #[serde(default)]
@@ -16,11 +17,11 @@ pub struct HaulJob {
 }
 
 impl HaulJob {
-    pub fn new(container_id: ObjectId<StructureContainer>) -> HaulJob {
+    pub fn new(container_id: RemoteObjectId<StructureContainer>) -> HaulJob {
         HaulJob {
             primary_container: container_id,
             delivery_target: None,
-            pickup_target: None
+            pickup_target: None,
         }
     }
 }
@@ -53,7 +54,7 @@ impl Job for HaulJob {
         //
 
         let repick_delivery = if let Some(delivery_structure) = self.delivery_target {
-            if let Some(delivery_structure) = delivery_structure.as_structure() {
+            if let Some(delivery_structure) = delivery_structure.resolve() {
                 if let Some(storeable) = delivery_structure.as_has_store() {
                     storeable.store_free_capacity(Some(resource)) == 0
                 } else {
@@ -80,7 +81,7 @@ impl Job for HaulJob {
         // Transfer energy to structure if possible.
         //
 
-        if let Some(delivery_target_structure) = self.delivery_target.and_then(|v| v.as_structure())
+        if let Some(delivery_target_structure) = self.delivery_target.and_then(|id| id.resolve())
         {
             if let Some(transferable) = delivery_target_structure.as_transferable() {
                 if creep.pos().is_near_to(&delivery_target_structure) {
@@ -97,41 +98,19 @@ impl Job for HaulJob {
         // Compute pickup target
         //
 
-        //TODO: Factor this in to common code.
-        let repick_pickup = match self.pickup_target {
-            Some(EnergyPickupTarget::Structure(ref pickup_structure_id)) => {
-                if let Some(pickup_structure) = pickup_structure_id.as_structure() {
-                    if let Some(storeable) = pickup_structure.as_has_store() {
-                        storeable.store_used_capacity(Some(resource)) == 0
-                    } else {
-                        true
-                    }
-                } else {
-                    true
-                }
-            }
-            Some(EnergyPickupTarget::Source(ref source_id)) => {
-                if let Some(source) = source_id.resolve() {
-                    source.energy() == 0
-                } else {
-                    true
-                }
-            }
-            Some(EnergyPickupTarget::DroppedResource(ref resource_id)) => {
-                resource_id.resolve().is_none()
-            },
-            Some(EnergyPickupTarget::Tombstone(ref tombstone_id)) => {
-                tombstone_id.resolve().is_none()
-            },
-            None => capacity > 0 && available_capacity > 0,
-        };
+        let repick_pickup = self
+            .pickup_target
+            .map(|target| target.is_valid_pickup_target())
+            .unwrap_or_else(|| capacity > 0 && available_capacity > 0);
 
         if repick_pickup {
             scope_timing!("repick_pickup");
 
             self.pickup_target = if let Some(container) = self.primary_container.resolve() {
                 if container.store_used_capacity(Some(resource)) > 0 {
-                    Some(EnergyPickupTarget::Structure(StructureIdentifier::new(&container.as_structure())))
+                    Some(EnergyPickupTarget::Structure(
+                        RemoteStructureIdentifier::new(&container.as_structure()),
+                    ))
                 } else {
                     None
                 }
@@ -142,14 +121,15 @@ impl Job for HaulJob {
             let hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
 
             if self.pickup_target.is_none() {
-                let pickup_settings = ResourcePickupSettings{
+                let pickup_settings = ResourcePickupSettings {
                     allow_dropped_resource: !hostile_creeps,
                     allow_tombstone: !hostile_creeps,
                     allow_structure: true,
-                    allow_harvest: false
+                    allow_harvest: false,
                 };
 
-                self.pickup_target = ResourceUtility::select_energy_pickup(&creep, &room, &pickup_settings);
+                self.pickup_target =
+                    ResourceUtility::select_energy_pickup(&creep, &room, &pickup_settings);
             }
         }
 

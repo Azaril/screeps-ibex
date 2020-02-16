@@ -3,27 +3,39 @@ use specs::saveload::*;
 use specs::*;
 
 use super::data::*;
+use crate::remoteobjectid::*;
 
 pub struct CreateRoomDataSystem;
 
 impl<'a> System<'a> for CreateRoomDataSystem {
     type SystemData = (
         Entities<'a>,
-        WriteStorage<'a, RoomOwnerData>,
         WriteStorage<'a, RoomData>,
         Read<'a, LazyUpdate>,
     );
 
-    fn run(&mut self, (entities, rooms, room_datas, updater): Self::SystemData) {
+    fn run(&mut self, (entities, room_datas, updater): Self::SystemData) {
         scope_timing!("CreateRoomDataSystem");
 
-        let existing_rooms = (&entities, &rooms, &room_datas)
+        let existing_rooms = (&entities, &room_datas)
             .join()
-            .map(|(_, room, _)| room.owner)
+            .map(|(_, room_data)| room_data.name)
             .collect::<std::collections::HashSet<RoomName>>();
 
-        let missing_rooms = screeps::game::rooms::keys()
+        let visible_rooms = screeps::game::rooms::keys();
+
+        let flags = screeps::game::flags::values();
+        let flag_rooms = flags.iter().map(|flag| flag.pos().room_name());
+
+        let construction_sites = screeps::game::construction_sites::values();
+        let construction_site_rooms = construction_sites
+            .iter()
+            .map(|construction_site| construction_site.pos().room_name());
+
+        let missing_rooms = visible_rooms
             .into_iter()
+            .chain(flag_rooms)
+            .chain(construction_site_rooms)
             .filter(|name| !existing_rooms.contains(name));
 
         for room in missing_rooms {
@@ -32,9 +44,47 @@ impl<'a> System<'a> for CreateRoomDataSystem {
             updater
                 .create_entity(&entities)
                 .marked::<::serialize::SerializeMarker>()
-                .with(RoomOwnerData::new(room))
-                .with(RoomData::new())
+                .with(RoomData::new(room))
                 .build();
+        }
+    }
+}
+
+//TODO: Move this in to its own file.
+pub struct UpdateRoomDataSystem;
+
+impl UpdateRoomDataSystem
+{
+    fn new_room_visibility_data(room: &Room) -> RoomCachedVisibilityData {
+        RoomCachedVisibilityData::new(
+            room.find(find::SOURCES).into_iter().map(|s| s.remote_id()).collect()
+        )
+    }
+}
+
+impl<'a> System<'a> for UpdateRoomDataSystem {
+    //TODO: Move this to derived system data.
+    type SystemData = (
+        Entities<'a>,
+        WriteStorage<'a, RoomData>,
+        Read<'a, LazyUpdate>,
+    );
+
+    fn run(&mut self, (entities, mut room_datas, _updater): Self::SystemData) {
+        scope_timing!("UpdateRoomDataSystem");
+
+        let rooms = game::rooms::hashmap();
+
+        for (_entity, room_data) in (&entities, &mut room_datas).join() {
+            if let Some(room) = rooms.get(&room_data.name) {
+                room_data.set_visible(true);
+
+                if room_data.get_visibility_data().is_none() {
+                    room_data.set_visibility_data(Self::new_room_visibility_data(&room));
+                }
+            } else {
+                room_data.set_visible(false);
+            }
         }
     }
 }

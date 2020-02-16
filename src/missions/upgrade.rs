@@ -13,24 +13,25 @@ use crate::spawnsystem::*;
 
 #[derive(Clone, Debug, ConvertSaveload)]
 pub struct UpgradeMission {
+    room_data: Entity,
     upgraders: EntityVec,
 }
 
 impl UpgradeMission {
-    pub fn build<B>(builder: B, room_name: RoomName) -> B
+    pub fn build<B>(builder: B, room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = UpgradeMission::new();
+        let mission = UpgradeMission::new(room_data);
 
         builder
             .with(MissionData::Upgrade(mission))
             .marked::<::serialize::SerializeMarker>()
-            .with(::room::data::RoomOwnerData::new(room_name))
     }
 
-    pub fn new() -> UpgradeMission {
+    pub fn new(room_data: Entity) -> UpgradeMission {
         UpgradeMission {
+            room_data,
             upgraders: EntityVec::new(),
         }
     }
@@ -42,7 +43,7 @@ impl Mission for UpgradeMission {
         system_data: &MissionExecutionSystemData,
         runtime_data: &MissionExecutionRuntimeData,
     ) -> MissionResult {
-        scope_timing!("Upgrade - Room: {}", runtime_data.room_owner.owner);
+        scope_timing!("UpgradeMission");
 
         //
         // Cleanup upgraders that no longer exist.
@@ -54,68 +55,73 @@ impl Mission for UpgradeMission {
 
         //TODO: Limit upgraders to 15 total work parts upgrading across all creeps.
 
-        if let Some(room) = game::rooms::get(runtime_data.room_owner.owner) {
-            if let Some(controller) = room.controller() {
-                if controller.my() {
-                    let max_upgraders = 3;
+        if let Some(room_data) = system_data.room_data.get(self.room_data) {
+            if let Some(room) = game::rooms::get(room_data.name) {
+                if let Some(controller) = room.controller() {
+                    if controller.my() {
+                        let max_upgraders = 3;
 
-                    if self.upgraders.0.len() < max_upgraders {
-                        let work_parts_per_tick = (CONTROLLER_MAX_UPGRADE_PER_TICK as f32)
-                            / (UPGRADE_CONTROLLER_POWER as f32);
-                        let work_parts_per_upgrader =
-                            (work_parts_per_tick / (max_upgraders as f32)).ceil() as usize;
+                        if self.upgraders.0.len() < max_upgraders {
+                            let work_parts_per_tick = (CONTROLLER_MAX_UPGRADE_PER_TICK as f32)
+                                / (UPGRADE_CONTROLLER_POWER as f32);
+                            let work_parts_per_upgrader =
+                                (work_parts_per_tick / (max_upgraders as f32)).ceil() as usize;
 
-                        let body_definition = crate::creep::SpawnBodyDefinition {
-                            maximum_energy: room.energy_capacity_available(),
-                            minimum_repeat: Some(1),
-                            maximum_repeat: Some(work_parts_per_upgrader),
-                            pre_body: &[],
-                            repeat_body: &[Part::Work, Part::Carry, Part::Move, Part::Move],
-                            post_body: &[],
-                        };
-
-                        if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
-                            let mission_entity = *runtime_data.entity;
-                            let controller_id = controller.id();
-
-                            let priority = if self.upgraders.0.is_empty() {
-                                SPAWN_PRIORITY_CRITICAL
-                            } else {
-                                SPAWN_PRIORITY_LOW
+                            let body_definition = crate::creep::SpawnBodyDefinition {
+                                maximum_energy: room.energy_capacity_available(),
+                                minimum_repeat: Some(1),
+                                maximum_repeat: Some(work_parts_per_upgrader),
+                                pre_body: &[],
+                                repeat_body: &[Part::Work, Part::Carry, Part::Move, Part::Move],
+                                post_body: &[],
                             };
 
-                            system_data.spawn_queue.request(SpawnRequest::new(
-                                runtime_data.room_owner.owner,
-                                &body,
-                                priority,
-                                Box::new(move |spawn_system_data, name| {
-                                    let name = name.to_string();
+                            if let Ok(body) = crate::creep::Spawning::create_body(&body_definition)
+                            {
+                                let mission_entity = *runtime_data.entity;
+                                let controller_id = controller.id();
 
-                                    spawn_system_data.updater.exec_mut(move |world| {
-                                        let creep_job = JobData::Upgrade(
-                                            ::jobs::upgrade::UpgradeJob::new(&controller_id),
-                                        );
+                                let priority = if self.upgraders.0.is_empty() {
+                                    SPAWN_PRIORITY_CRITICAL
+                                } else {
+                                    SPAWN_PRIORITY_LOW
+                                };
 
-                                        let creep_entity =
-                                            ::creep::Spawning::build(world.create_entity(), &name)
-                                                .with(creep_job)
-                                                .build();
+                                system_data.spawn_queue.request(SpawnRequest::new(
+                                    room_data.name,
+                                    &body,
+                                    priority,
+                                    Box::new(move |spawn_system_data, name| {
+                                        let name = name.to_string();
 
-                                        let mission_data_storage =
-                                            &mut world.write_storage::<MissionData>();
+                                        spawn_system_data.updater.exec_mut(move |world| {
+                                            let creep_job = JobData::Upgrade(
+                                                ::jobs::upgrade::UpgradeJob::new(&controller_id),
+                                            );
 
-                                        if let Some(MissionData::Upgrade(mission_data)) =
-                                            mission_data_storage.get_mut(mission_entity)
-                                        {
-                                            mission_data.upgraders.0.push(creep_entity);
-                                        }
-                                    });
-                                }),
-                            ));
+                                            let creep_entity = ::creep::Spawning::build(
+                                                world.create_entity(),
+                                                &name,
+                                            )
+                                            .with(creep_job)
+                                            .build();
+
+                                            let mission_data_storage =
+                                                &mut world.write_storage::<MissionData>();
+
+                                            if let Some(MissionData::Upgrade(mission_data)) =
+                                                mission_data_storage.get_mut(mission_entity)
+                                            {
+                                                mission_data.upgraders.0.push(creep_entity);
+                                            }
+                                        });
+                                    }),
+                                ));
+                            }
                         }
-                    }
 
-                    return MissionResult::Running;
+                        return MissionResult::Running;
+                    }
                 }
             }
         }

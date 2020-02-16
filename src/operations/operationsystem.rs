@@ -1,23 +1,27 @@
 use specs::prelude::*;
 
 use super::data::*;
+use crate::mappingsystem::MappingData;
+use crate::room::visibilitysystem::*;
 
 #[derive(SystemData)]
 pub struct OperationSystemData<'a> {
     operations: WriteStorage<'a, OperationData>,
     updater: Read<'a, LazyUpdate>,
     entities: Entities<'a>,
-    room_owner: WriteStorage<'a, ::room::data::RoomOwnerData>,
     room_data: WriteStorage<'a, ::room::data::RoomData>,
     mission_data: ReadStorage<'a, ::missions::data::MissionData>,
+    mapping: Read<'a, MappingData>,
+    visibility: Read<'a, VisibilityQueue>
 }
 
 pub struct OperationExecutionSystemData<'a> {
     pub updater: &'a Read<'a, LazyUpdate>,
     pub entities: &'a Entities<'a>,
-    pub room_owner: &'a WriteStorage<'a, ::room::data::RoomOwnerData>,
     pub room_data: &'a WriteStorage<'a, ::room::data::RoomData>,
     pub mission_data: &'a ReadStorage<'a, ::missions::data::MissionData>,
+    pub mapping: &'a Read<'a, MappingData>,
+    pub visibility: &'a Read<'a, VisibilityQueue>, 
 }
 
 pub enum OperationResult {
@@ -41,9 +45,10 @@ impl<'a> System<'a> for OperationSystem {
         let system_data = OperationExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
-            room_owner: &data.room_owner,
             room_data: &data.room_data,
             mission_data: &data.mission_data,
+            mapping: &data.mapping,
+            visibility: &data.visibility,
         };
 
         for (entity, operation) in (&data.entities, &mut data.operations).join() {

@@ -10,7 +10,7 @@ use super::utility::resourcebehavior::*;
 use crate::findnearest::*;
 use crate::structureidentifier::*;
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BuildJob {
     pub room_name: RoomName,
     #[serde(default)]
@@ -86,7 +86,7 @@ impl Job for BuildJob {
 
         let repick_repair_target = match self.repair_target {
             Some(target_id) => {
-                if let Some(structure) = target_id.as_structure() {
+                if let Some(structure) = target_id.resolve() {
                     if let Some(attackable) = structure.as_attackable() {
                         attackable.hits() >= attackable.hits_max()
                     } else {
@@ -106,7 +106,6 @@ impl Job for BuildJob {
 
             for priority in ORDERED_REPAIR_PRIORITIES.iter() {
                 if let Some(structures) = repair_targets.remove(priority) {
-                    info!("Checking repair priority for builder: {:?}", priority);
                     //TODO: Make find_nearest cheap - find_nearest linear is a bad approximation.
                     if let Some(structure) = structures.into_iter().find_nearest_linear(creep.pos())
                     {
@@ -122,7 +121,7 @@ impl Job for BuildJob {
         // Repair structure.
         //
 
-        if let Some(structure) = self.repair_target.and_then(|id| id.as_structure()) {
+        if let Some(structure) = self.repair_target.and_then(|id| id.resolve()) {
             if creep.pos().is_near_to(&structure) {
                 creep.repair(&structure);
             } else {
@@ -136,45 +135,21 @@ impl Job for BuildJob {
         // Compute pickup target
         //
 
-        //TODO: Factor this in to common code.
-        let repick_pickup = match self.pickup_target {
-            Some(EnergyPickupTarget::Structure(ref pickup_structure_id)) => {
-                if let Some(pickup_structure) = pickup_structure_id.as_structure() {
-                    if let Some(storeable) = pickup_structure.as_has_store() {
-                        storeable.store_used_capacity(Some(resource)) == 0
-                    } else {
-                        true
-                    }
-                } else {
-                    true
-                }
-            }
-            Some(EnergyPickupTarget::Source(ref source_id)) => {
-                if let Some(source) = source_id.resolve() {
-                    source.energy() == 0
-                } else {
-                    true
-                }
-            }
-            Some(EnergyPickupTarget::DroppedResource(ref resource_id)) => {
-                resource_id.resolve().is_none()
-            },
-            Some(EnergyPickupTarget::Tombstone(ref tombstone_id)) => {
-                tombstone_id.resolve().is_none()
-            },
-            None => capacity > 0 && available_capacity > 0,
-        };
+        let repick_pickup = self
+            .pickup_target
+            .map(|target| target.is_valid_pickup_target())
+            .unwrap_or_else(|| capacity > 0 && available_capacity > 0);
 
         if repick_pickup {
             scope_timing!("repick_pickup");
 
             let hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
 
-            let settings = ResourcePickupSettings{
+            let settings = ResourcePickupSettings {
                 allow_dropped_resource: !hostile_creeps,
                 allow_tombstone: !hostile_creeps,
                 allow_structure: true,
-                allow_harvest: true
+                allow_harvest: true,
             };
 
             self.pickup_target = ResourceUtility::select_energy_pickup(&creep, &room, &settings);

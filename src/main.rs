@@ -26,10 +26,12 @@ mod jobs;
 mod logging;
 mod missions;
 mod operations;
+mod remoteobjectid;
 mod room;
 mod serialize;
 mod spawnsystem;
 mod structureidentifier;
+mod mappingsystem;
 
 use std::fmt;
 
@@ -88,7 +90,6 @@ fn serialize_world(world: &World, cb: fn(&str)) {
         markers: WriteStorage<'a, serialize::SerializeMarker>,
         creep_spawnings: ReadStorage<'a, creep::CreepSpawning>,
         creep_owners: ReadStorage<'a, creep::CreepOwner>,
-        room_owners: ReadStorage<'a, room::data::RoomOwnerData>,
         room_data: ReadStorage<'a, room::data::RoomData>,
         job_data: ReadStorage<'a, jobs::data::JobData>,
         operation_data: ReadStorage<'a, operations::data::OperationData>,
@@ -105,7 +106,6 @@ fn serialize_world(world: &World, cb: fn(&str)) {
                 &(
                     &data.creep_spawnings,
                     &data.creep_owners,
-                    &data.room_owners,
                     &data.room_data,
                     &data.job_data,
                     &data.operation_data,
@@ -170,7 +170,6 @@ fn deserialize_world(world: &World, data: &str) {
         markers: WriteStorage<'a, serialize::SerializeMarker>,
         creep_spawnings: WriteStorage<'a, creep::CreepSpawning>,
         creep_owners: WriteStorage<'a, creep::CreepOwner>,
-        room_owners: WriteStorage<'a, room::data::RoomOwnerData>,
         room_data: WriteStorage<'a, room::data::RoomData>,
         job_data: WriteStorage<'a, jobs::data::JobData>,
         operation_data: WriteStorage<'a, operations::data::OperationData>,
@@ -184,7 +183,7 @@ fn deserialize_world(world: &World, data: &str) {
             let mut de = serde_json::de::Deserializer::from_str(self.raw_data);
 
             DeserializeComponents::<CombinedSerialiationError, serialize::SerializeMarker>::deserialize(
-                &mut (data.creep_spawnings, data.creep_owners, data.room_owners, data.room_data, data.job_data, data.operation_data, data.mission_data),
+                &mut (data.creep_spawnings, data.creep_owners, data.room_data, data.job_data, data.operation_data, data.mission_data),
                 &data.entities,
                 &mut data.markers,
                 &mut data.marker_alloc,
@@ -217,6 +216,8 @@ fn game_loop() {
         .with(creep::WaitForSpawnSystem, "wait_for_spawn", &[])
         .with(creep::CleanupCreepsSystem, "cleanup_creeps", &[])
         .with(room::system::CreateRoomDataSystem, "create_room_data", &[])
+        .with(room::system::UpdateRoomDataSystem, "update_room_data", &[])
+        .with(mappingsystem::MappingSystem, "mapping", &[])
         .build();
 
     pre_pass_dispatcher.setup(&mut world);
@@ -237,8 +238,9 @@ fn game_loop() {
             &[],
         )
         .with(missions::missionsystem::MissionSystem, "missions", &[])
-        .with(spawnsystem::SpawnQueueSystem, "spawn_queue", &[])
         .with(jobs::jobsystem::JobSystem, "jobs", &[])
+        .with(room::visibilitysystem::VisibilityQueueSystem, "visibility", &[])
+        .with(spawnsystem::SpawnQueueSystem, "spawn_queue", &[])
         .build();
 
     main_dispatcher.setup(&mut world);

@@ -35,15 +35,12 @@ impl Operation for LocalBuildOperation {
     ) -> OperationResult {
         scope_timing!("LocalBuildOperation");
 
-        for (entity, room_owner, room_data) in (
-            system_data.entities,
-            system_data.room_owner,
-            system_data.room_data,
-        )
-            .join()
-        {
-            if let Some(room) = game::rooms::get(room_owner.owner) {
-                if !room.find(find::MY_SPAWNS).is_empty() {
+        for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
+            if let Some(room) = game::rooms::get(room_data.name) {
+                let controller = room.controller();
+                let my_room = controller.map(|controller| controller.my()).unwrap_or(false);
+
+                if my_room {
                     //
                     // Query if any missions running on the room currently fufil the local supply role.
                     //
@@ -64,15 +61,14 @@ impl Operation for LocalBuildOperation {
                     if !has_local_build_mission {
                         info!(
                             "Starting local build for spawning room. Room: {}",
-                            room_owner.owner
+                            room_data.name
                         );
 
                         let room_entity = entity;
-                        let mission_room = room_owner.owner;
 
                         system_data.updater.exec_mut(move |world| {
                             let mission_entity =
-                                LocalBuildMission::build(world.create_entity(), mission_room)
+                                LocalBuildMission::build(world.create_entity(), room_entity)
                                     .build();
 
                             let room_data_storage =

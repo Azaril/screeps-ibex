@@ -3,14 +3,52 @@ use screeps::*;
 use serde::*;
 
 use crate::findnearest::*;
+use crate::remoteobjectid::*;
 use crate::structureidentifier::*;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum EnergyPickupTarget {
-    Structure(StructureIdentifier),
-    Source(ObjectId<Source>),
-    DroppedResource(ObjectId<Resource>),
-    Tombstone(ObjectId<Tombstone>),
+    Structure(RemoteStructureIdentifier),
+    Source(RemoteObjectId<Source>),
+    DroppedResource(RemoteObjectId<Resource>),
+    Tombstone(RemoteObjectId<Tombstone>),
+}
+
+impl EnergyPickupTarget {
+    pub fn is_valid_pickup_target(&self) -> bool {
+        //TODO: Validate room is visible.
+        match self {
+            EnergyPickupTarget::Structure(structure_id) => {
+                if let Some(structure) = structure_id.resolve() {
+                    if let Some(storeable) = structure.as_has_store() {
+                        storeable.store_used_capacity(Some(ResourceType::Energy)) == 0
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                }
+            }
+            EnergyPickupTarget::Source(source_id) => {
+                if let Some(source) = source_id.resolve() {
+                    source.energy() == 0
+                } else {
+                    true
+                }
+            }
+            EnergyPickupTarget::DroppedResource(resource_id) => resource_id.resolve().is_none(),
+            EnergyPickupTarget::Tombstone(tombstone_id) => tombstone_id.resolve().is_none(),
+        }
+    }
+
+    pub fn get_position(&self) -> screeps::Position {
+        match self {
+            EnergyPickupTarget::Structure(structure_id) => structure_id.pos(),
+            EnergyPickupTarget::Source(source_id) => source_id.pos(),
+            EnergyPickupTarget::DroppedResource(resource_id) => resource_id.pos(),
+            EnergyPickupTarget::Tombstone(tombstone_id) => tombstone_id.pos(),
+        }
+    }
 }
 
 pub struct ResourcePickupSettings {
@@ -26,34 +64,37 @@ impl ResourceUtility {
     pub fn select_energy_pickup(
         creep: &Creep,
         room: &Room,
-        settings: &ResourcePickupSettings
+        settings: &ResourcePickupSettings,
     ) -> Option<EnergyPickupTarget> {
         if settings.allow_dropped_resource {
             if let Some(dropped_resource) =
                 Self::select_dropped_resource(creep, room, ResourceType::Energy)
             {
-                return Some(EnergyPickupTarget::DroppedResource(dropped_resource.id()));
+                return Some(EnergyPickupTarget::DroppedResource(
+                    dropped_resource.remote_id(),
+                ));
             }
         }
 
         if settings.allow_tombstone {
             if let Some(tombstone) = Self::select_tombstone(creep, room, ResourceType::Energy) {
-                return Some(EnergyPickupTarget::Tombstone(tombstone.id()));
+                return Some(EnergyPickupTarget::Tombstone(tombstone.remote_id()));
             }
         }
 
         if settings.allow_structure {
-            if let Some(structure) = Self::select_structure_resource(creep, room, ResourceType::Energy)
+            if let Some(structure) =
+                Self::select_structure_resource(creep, room, ResourceType::Energy)
             {
-                return Some(EnergyPickupTarget::Structure(StructureIdentifier::new(
-                    &structure,
-                )));
+                return Some(EnergyPickupTarget::Structure(
+                    RemoteStructureIdentifier::new(&structure),
+                ));
             }
         }
 
         if settings.allow_harvest {
             if let Some(source) = Self::select_active_sources(creep, room) {
-                return Some(EnergyPickupTarget::Source(source.id()));
+                return Some(EnergyPickupTarget::Source(source.remote_id()));
             }
         }
 

@@ -35,14 +35,8 @@ impl Operation for TowerOperation {
     ) -> OperationResult {
         scope_timing!("TowerOperation");
 
-        for (entity, room_owner, room_data) in (
-            system_data.entities,
-            system_data.room_owner,
-            system_data.room_data,
-        )
-            .join()
-        {
-            if let Some(room) = game::rooms::get(room_owner.owner) {
+        for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
+            if let Some(room) = game::rooms::get(room_data.name) {
                 //TODO: Factor this out.
                 let mut towers = room
                     .find(find::MY_STRUCTURES)
@@ -74,17 +68,13 @@ impl Operation for TowerOperation {
                     //
 
                     if !has_tower_mission {
-                        info!(
-                            "Starting tower mission for room. Room: {}",
-                            room_owner.owner
-                        );
+                        info!("Starting tower mission for room. Room: {}", room_data.name);
 
                         let room_entity = entity;
-                        let mission_room = room_owner.owner;
 
                         system_data.updater.exec_mut(move |world| {
                             let mission_entity =
-                                TowerMission::build(world.create_entity(), mission_room).build();
+                                TowerMission::build(world.create_entity(), room_entity).build();
 
                             let room_data_storage =
                                 &mut world.write_storage::<::room::data::RoomData>();

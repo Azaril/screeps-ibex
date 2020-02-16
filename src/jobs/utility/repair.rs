@@ -54,7 +54,12 @@ impl RepairUtility {
         Some(priority)
     }
 
-    fn map_defense_priority(hits: u32, hits_max: u32, available_energy: u32, under_attack: bool) -> Option<RepairPriority> {
+    fn map_defense_priority(
+        hits: u32,
+        hits_max: u32,
+        available_energy: u32,
+        under_attack: bool,
+    ) -> Option<RepairPriority> {
         let health_fraction = (hits as f32) / (hits_max as f32);
 
         if under_attack {
@@ -85,14 +90,18 @@ impl RepairUtility {
         hits: u32,
         hits_max: u32,
         available_energy: u32,
-        under_attack: bool
+        under_attack: bool,
     ) -> Option<RepairPriority> {
         match structure {
             Structure::Spawn(_) => Self::map_high_value_priority(hits, hits_max),
             Structure::Tower(_) => Self::map_high_value_priority(hits, hits_max),
             Structure::Container(_) => Self::map_high_value_priority(hits, hits_max),
-            Structure::Wall(_) => Self::map_defense_priority(hits, hits_max, available_energy, under_attack),
-            Structure::Rampart(_) => Self::map_defense_priority(hits, hits_max, available_energy, under_attack),
+            Structure::Wall(_) => {
+                Self::map_defense_priority(hits, hits_max, available_energy, under_attack)
+            }
+            Structure::Rampart(_) => {
+                Self::map_defense_priority(hits, hits_max, available_energy, under_attack)
+            }
             _ => Self::map_normal_priority(hits, hits_max),
         }
     }
@@ -130,14 +139,23 @@ impl RepairUtility {
     pub fn get_prioritized_repair_targets(room: &Room) -> HashMap<RepairPriority, Vec<Structure>> {
         let are_hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
 
-        let available_energy = room.storage().map(|s| s.store_used_capacity(Some(ResourceType::Energy))).unwrap_or(0);
+        let available_energy = room
+            .storage()
+            .map(|s| s.store_used_capacity(Some(ResourceType::Energy)))
+            .unwrap_or(0);
 
         Self::get_repair_targets(room)
             .into_iter()
             .filter_map(|(structure, hits, hits_max)| {
-                let priority = Self::map_structure_repair_priority(&structure, hits, hits_max, available_energy, are_hostile_creeps);
+                let priority = Self::map_structure_repair_priority(
+                    &structure,
+                    hits,
+                    hits_max,
+                    available_energy,
+                    are_hostile_creeps,
+                );
 
-                priority.map(|p| (p, structure))                
+                priority.map(|p| (p, structure))
             })
             .into_group_map()
     }

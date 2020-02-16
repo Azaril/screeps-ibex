@@ -12,6 +12,8 @@ pub enum MissionData {
     Upgrade(super::upgrade::UpgradeMission),
     LocalBuild(super::localbuild::LocalBuildMission),
     Tower(super::tower::TowerMission),
+    RemoteMine(super::remotemine::RemoteMineMission),
+    Scout(super::scout::ScoutMission),
 }
 
 impl MissionData {
@@ -21,6 +23,8 @@ impl MissionData {
             MissionData::Upgrade(ref mut data) => data,
             MissionData::LocalBuild(ref mut data) => data,
             MissionData::Tower(ref mut data) => data,
+            MissionData::RemoteMine(ref mut data) => data,
+            MissionData::Scout(ref mut data) => data,
         }
     }
 }

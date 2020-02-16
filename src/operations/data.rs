@@ -10,6 +10,7 @@ pub enum OperationData {
     Upgrade(super::upgrade::UpgradeOperation),
     LocalBuild(super::localbuild::LocalBuildOperation),
     Tower(super::tower::TowerOperation),
+    RemoteMine(super::remotemine::RemoteMineOperation),
 }
 
 impl OperationData {
@@ -19,6 +20,7 @@ impl OperationData {
             OperationData::Upgrade(ref mut data) => data,
             OperationData::LocalBuild(ref mut data) => data,
             OperationData::Tower(ref mut data) => data,
+            OperationData::RemoteMine(ref mut data) => data,
         }
     }
 }

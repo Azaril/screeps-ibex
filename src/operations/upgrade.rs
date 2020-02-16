@@ -35,14 +35,8 @@ impl Operation for UpgradeOperation {
     ) -> OperationResult {
         scope_timing!("UpgradeOperation");
 
-        for (entity, room_owner, room_data) in (
-            system_data.entities,
-            system_data.room_owner,
-            system_data.room_data,
-        )
-            .join()
-        {
-            if let Some(room) = game::rooms::get(room_owner.owner) {
+        for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
+            if let Some(room) = game::rooms::get(room_data.name) {
                 if let Some(controller) = room.controller() {
                     if controller.my() {
                         //
@@ -65,15 +59,14 @@ impl Operation for UpgradeOperation {
                         if !has_upgrade_mission {
                             info!(
                                 "Starting upgrade mission for spawning room. Room: {}",
-                                room_owner.owner
+                                room_data.name
                             );
 
                             let room_entity = entity;
-                            let mission_room = room_owner.owner;
 
                             system_data.updater.exec_mut(move |world| {
                                 let mission_entity =
-                                    UpgradeMission::build(world.create_entity(), mission_room)
+                                    UpgradeMission::build(world.create_entity(), room_entity)
                                         .build();
 
                                 //

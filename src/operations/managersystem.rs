@@ -3,6 +3,7 @@ use specs::*;
 use super::data::*;
 use super::localbuild::*;
 use super::localsupply::*;
+use super::remotemine::*;
 use super::tower::*;
 use super::upgrade::*;
 
@@ -18,10 +19,12 @@ impl<'a> System<'a> for OperationManagerSystem {
     fn run(&mut self, (entities, operations, updater): Self::SystemData) {
         scope_timing!("OperationManagerSystem");
 
+        //TODO: Come up with a better way of doing this for always-running operations.
         let mut has_local_supply = false;
         let mut has_upgrade = false;
         let mut has_local_build = false;
         let mut has_tower = false;
+        let mut has_remote_mine = false;
 
         for (_, operation) in (&entities, &operations).join() {
             match operation {
@@ -37,6 +40,7 @@ impl<'a> System<'a> for OperationManagerSystem {
                 OperationData::Tower(_) => {
                     has_tower = true;
                 }
+                OperationData::RemoteMine(_) => has_remote_mine = true,
             }
         }
 
@@ -62,6 +66,12 @@ impl<'a> System<'a> for OperationManagerSystem {
             info!("Tower operation does not exist, creating.");
 
             TowerOperation::build(updater.create_entity(&entities)).build();
+        }
+
+        if !has_remote_mine {
+            info!("Remote mine operation does not exist, creating.");
+
+            RemoteMineOperation::build(updater.create_entity(&entities)).build();
         }
     }
 }

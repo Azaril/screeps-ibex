@@ -6,3 +6,4 @@ pub mod jobsystem;
 pub mod staticmine;
 pub mod upgrade;
 pub mod utility;
+pub mod scout;

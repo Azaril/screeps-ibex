@@ -4,13 +4,14 @@ use specs_derive::*;
 
 use super::jobsystem::*;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Component)]
+#[derive(Clone, Deserialize, Serialize, Component)]
 pub enum JobData {
     Harvest(super::harvest::HarvestJob),
     Upgrade(super::upgrade::UpgradeJob),
     Build(super::build::BuildJob),
     StaticMine(super::staticmine::StaticMineJob),
     Haul(super::haul::HaulJob),
+    Scout(super::scout::ScoutJob),
 }
 
 impl JobData {
@@ -21,6 +22,7 @@ impl JobData {
             JobData::Build(ref mut data) => data,
             JobData::StaticMine(ref mut data) => data,
             JobData::Haul(ref mut data) => data,
+            JobData::Scout(ref mut data) => data,
         }
     }
 }

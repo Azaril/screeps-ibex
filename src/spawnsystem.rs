@@ -55,7 +55,6 @@ pub struct SpawnQueueSystemData<'a> {
     spawn_queue: Write<'a, SpawnQueue>,
     updater: Read<'a, LazyUpdate>,
     entities: Entities<'a>,
-    room_owner: WriteStorage<'a, ::room::data::RoomOwnerData>,
     room_data: WriteStorage<'a, ::room::data::RoomData>,
 }
 
