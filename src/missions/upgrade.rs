@@ -10,6 +10,7 @@ use super::missionsystem::*;
 use crate::jobs::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use crate::remoteobjectid::*;
 
 #[derive(Clone, Debug, ConvertSaveload)]
 pub struct UpgradeMission {
@@ -79,7 +80,8 @@ impl Mission for UpgradeMission {
                             if let Ok(body) = crate::creep::Spawning::create_body(&body_definition)
                             {
                                 let mission_entity = *runtime_data.entity;
-                                let controller_id = controller.id();
+                                let controller_id = controller.remote_id();
+                                let home_room = room_data.name;
 
                                 let priority = if self.upgraders.0.is_empty() {
                                     SPAWN_PRIORITY_CRITICAL
@@ -96,7 +98,7 @@ impl Mission for UpgradeMission {
 
                                         spawn_system_data.updater.exec_mut(move |world| {
                                             let creep_job = JobData::Upgrade(
-                                                ::jobs::upgrade::UpgradeJob::new(&controller_id),
+                                                ::jobs::upgrade::UpgradeJob::new(&controller_id, home_room),
                                             );
 
                                             let creep_entity = ::creep::Spawning::build(

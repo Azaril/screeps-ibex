@@ -2,15 +2,16 @@ use screeps::*;
 use serde::*;
 
 use super::jobsystem::*;
+use crate::remoteobjectid::*;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct StaticMineJob {
-    pub mine_target: ObjectId<Source>,
+    pub mine_target: RemoteObjectId<Source>,
     pub mine_location: RoomPosition,
 }
 
 impl StaticMineJob {
-    pub fn new(source_id: ObjectId<Source>, position: RoomPosition) -> StaticMineJob {
+    pub fn new(source_id: RemoteObjectId<Source>, position: RoomPosition) -> StaticMineJob {
         StaticMineJob {
             mine_target: source_id,
             mine_location: position,
@@ -33,7 +34,7 @@ impl Job for StaticMineJob {
         if creep.pos().is_equal_to(&self.mine_location) {
             if let Some(source) = self.mine_target.resolve() {
                 creep.harvest(&source);
-            } else {
+            } else { 
                 error!(
                     "Harvester has no assigned harvesting source! Name: {}",
                     creep.name()

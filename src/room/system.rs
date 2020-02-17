@@ -3,7 +3,6 @@ use specs::saveload::*;
 use specs::*;
 
 use super::data::*;
-use crate::remoteobjectid::*;
 
 pub struct CreateRoomDataSystem;
 
@@ -53,15 +52,6 @@ impl<'a> System<'a> for CreateRoomDataSystem {
 //TODO: Move this in to its own file.
 pub struct UpdateRoomDataSystem;
 
-impl UpdateRoomDataSystem
-{
-    fn new_room_visibility_data(room: &Room) -> RoomCachedVisibilityData {
-        RoomCachedVisibilityData::new(
-            room.find(find::SOURCES).into_iter().map(|s| s.remote_id()).collect()
-        )
-    }
-}
-
 impl<'a> System<'a> for UpdateRoomDataSystem {
     //TODO: Move this to derived system data.
     type SystemData = (
@@ -77,13 +67,9 @@ impl<'a> System<'a> for UpdateRoomDataSystem {
 
         for (_entity, room_data) in (&entities, &mut room_datas).join() {
             if let Some(room) = rooms.get(&room_data.name) {
-                room_data.set_visible(true);
-
-                if room_data.get_visibility_data().is_none() {
-                    room_data.set_visibility_data(Self::new_room_visibility_data(&room));
-                }
+                room_data.update(&room);
             } else {
-                room_data.set_visible(false);
+                room_data.clear_visible();
             }
         }
     }

@@ -134,4 +134,33 @@ impl ResourceBehaviorUtility {
             EnergyPickupTarget::Tombstone(id) => Self::get_resource_from_tombstone_id(creep, id, ResourceType::Energy),
         }
     }
+
+    pub fn transfer_resource_to_structure(creep: &Creep, structure: &Structure, resource: ResourceType) {
+        scope_timing!("transfer_resource_to_structure");
+
+        if let Some(transferable) = structure.as_transferable() {
+            if creep.pos().is_near_to(structure) {
+                creep.transfer_all(transferable, resource);
+            } else {
+                creep.move_to(structure);
+            }
+        } else {
+            //TODO: Return error result.
+            error!("Failed to convert structure to transferable - wrong structure type. Name: {}", creep.name());
+        }
+    }
+
+    pub fn transfer_resource_to_structure_id(creep: &Creep, structure_id: &RemoteStructureIdentifier, resource: ResourceType) {
+        let target_position = structure_id.pos();
+
+        if creep.pos().room_name() != target_position.room_name() {
+            creep.move_to(&target_position);
+        } else if let Some(structure) = structure_id.resolve() {
+                //TODO: Handle error result.
+                Self::transfer_resource_to_structure(creep, &structure, resource);
+        } else {
+            //TODO: Return error result.
+            error!("Failed to resolve structure to transfer resource to. Name: {}", creep.name());
+        }
+    }
 }

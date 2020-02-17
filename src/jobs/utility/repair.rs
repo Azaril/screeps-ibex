@@ -1,6 +1,8 @@
 use itertools::*;
 use screeps::*;
 use std::collections::HashMap;
+use crate::structureidentifier::*;
+use crate::findnearest::*;
 
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum RepairPriority {
@@ -158,5 +160,48 @@ impl RepairUtility {
                 priority.map(|p| (p, structure))
             })
             .into_group_map()
+    }
+
+    pub fn select_repair_structure(room: &Room, start_pos: RoomPosition) -> Option<Structure> {
+        let mut repair_targets = Self::get_prioritized_repair_targets(room);
+
+        for priority in ORDERED_REPAIR_PRIORITIES.iter() {
+            if let Some(structures) = repair_targets.remove(priority) {
+                //TODO: Make find_nearest cheap - find_nearest linear is a bad approximation.
+                if let Some(structure) = structures.into_iter().find_nearest_linear(start_pos)
+                {
+                    return Some(structure);
+                }
+            }
+        }   
+
+        None
+    }
+}
+
+pub trait ValidateRepairTarget {
+    fn is_valid_repair_target(&self) -> Option<bool>;
+}
+
+impl ValidateRepairTarget for Structure {
+    fn is_valid_repair_target(&self) -> Option<bool> {
+        if let Some(attackable) = self.as_attackable() {
+            Some(attackable.hits() < attackable.hits_max())
+        } else {
+            Some(false)
+        }
+    }
+}
+
+impl ValidateRepairTarget for RemoteStructureIdentifier {
+    fn is_valid_repair_target(&self) -> Option<bool> {
+        if game::rooms::get(self.pos().room_name()).is_some() {
+            self
+                .resolve()
+                .and_then(|s| s.is_valid_repair_target())
+                .or(Some(false))
+        } else {
+            None
+        }
     }
 }

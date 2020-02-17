@@ -67,7 +67,7 @@ impl Mission for LocalSupplyMission {
 
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             if let Some(room) = game::rooms::get(room_data.name) {
-                let sources = room.find(find::SOURCES);
+                let mut sources = room.find(find::SOURCES);
 
                 //
                 // Container mining data gathering.
@@ -90,7 +90,7 @@ impl Mission for LocalSupplyMission {
                             .cloned()
                             .find(|container| container.pos().is_near_to(source));
 
-                        nearby_container.map(|container| (source.id(), container))
+                        nearby_container.map(|container| (source.remote_id(), container))
                     })
                     .into_group_map();
 
@@ -107,7 +107,7 @@ impl Mission for LocalSupplyMission {
                         if let Some(JobData::Harvest(harvester_data)) =
                             system_data.job_data.get(*harvester_entity)
                         {
-                            Some((harvester_data.harvest_target.id(), harvester_entity))
+                            Some((harvester_data.harvest_target, harvester_entity))
                         } else {
                             None
                         }
@@ -141,7 +141,7 @@ impl Mission for LocalSupplyMission {
                             system_data.job_data.get(*hauler_entity)
                         {
                             Some((
-                                hauler_data.primary_container.id(),
+                                hauler_data.primary_container,
                                 (hauler_entity, hauler_data.primary_container.id()),
                             ))
                         } else {
@@ -150,13 +150,29 @@ impl Mission for LocalSupplyMission {
                     })
                     .into_group_map();
 
+                //
+                // Sort sources so requests with equal priority go to the source with the least activity.
+                //
+
                 let total_harvesters = self.harvesters.0.len();
                 let total_miners = self.miners.0.len();
                 let total_haulers = self.haulers.0.len();
                 let total_harvesting_creeps = total_harvesters + total_miners;
 
+                sources.sort_by_cached_key(|source| {
+                    let source_id = source.remote_id();
+                    let source_harvesters = sources_to_harvesters.get(&source_id).map(|harvesters| harvesters.len()).unwrap_or(0);
+                    let source_miners = sources_to_miners.get(&source_id).map(|miners| miners.len()).unwrap_or(0);
+
+                    source_harvesters + source_miners
+                });
+                
+                //
+                // Spawn needed creeps for each source.
+                //
+
                 for source in sources.iter() {
-                    let source_id = source.id();
+                    let source_id = source.remote_id();
 
                     let source_containers = sources_to_containers
                         .remove(&source_id)
@@ -173,7 +189,7 @@ impl Mission for LocalSupplyMission {
                             .iter()
                             .flat_map(|container| {
                                 containers_to_haulers
-                                    .remove(&container.id())
+                                    .remove(&container.remote_id())
                                     .unwrap_or_else(Vec::new)
                             })
                             .collect();
@@ -250,7 +266,7 @@ impl Mission for LocalSupplyMission {
 
                         if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
                             let mission_entity = *runtime_data.entity;
-                            let source_id = source.id();
+                            let source_id = source.remote_id();
                             let mine_location = container.pos();
 
                             let priority = SPAWN_PRIORITY_HIGH;
@@ -310,6 +326,7 @@ impl Mission for LocalSupplyMission {
                         if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
                             let mission_entity = *runtime_data.entity;
                             let container_id = container.remote_id();
+                            let home_room = room_data.name;
 
                             let container_used_capacity =
                                 container.store_used_capacity(Some(ResourceType::Energy));
@@ -336,7 +353,7 @@ impl Mission for LocalSupplyMission {
 
                                     spawn_system_data.updater.exec_mut(move |world| {
                                         let creep_job =
-                                            JobData::Haul(::jobs::haul::HaulJob::new(container_id));
+                                            JobData::Haul(::jobs::haul::HaulJob::new(container_id, home_room));
 
                                         let creep_entity =
                                             ::creep::Spawning::build(world.create_entity(), &name)

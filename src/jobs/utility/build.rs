@@ -1,5 +1,6 @@
 use crate::findnearest::*;
 use screeps::*;
+use crate::remoteobjectid::*;
 
 pub struct BuildUtility;
 
@@ -21,5 +22,25 @@ impl BuildUtility {
                 .cloned()
                 .find_nearest(creep.pos(), PathFinderHelpers::same_room_ignore_creeps)
         })
+    }
+}
+
+pub trait ValidateBuildTarget {
+    fn is_valid_build_target(&self) -> bool;
+}
+
+impl ValidateBuildTarget for ObjectId<ConstructionSite> {
+    fn is_valid_build_target(&self) -> bool {
+        self.resolve().is_some()
+    }
+}
+
+impl ValidateBuildTarget for RemoteObjectId<ConstructionSite> {
+    fn is_valid_build_target(&self) -> bool {
+        if game::rooms::get(self.pos().room_name()).is_some() {
+            self.resolve().is_some()
+        } else {
+            true
+        }
     }
 }

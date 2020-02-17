@@ -7,24 +7,26 @@ use super::utility::buildbehavior::*;
 use super::utility::repair::*;
 use super::utility::resource::*;
 use super::utility::resourcebehavior::*;
-use crate::findnearest::*;
 use crate::structureidentifier::*;
+use crate::remoteobjectid::*;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BuildJob {
-    pub room_name: RoomName,
+    pub home_room: RoomName,
+    pub build_room: RoomName,
     #[serde(default)]
-    pub build_target: Option<ObjectId<ConstructionSite>>,
+    pub build_target: Option<RemoteObjectId<ConstructionSite>>,
     #[serde(default)]
-    pub repair_target: Option<StructureIdentifier>,
+    pub repair_target: Option<RemoteStructureIdentifier>,
     #[serde(default)]
     pub pickup_target: Option<EnergyPickupTarget>,
 }
 
 impl BuildJob {
-    pub fn new(room: RoomName) -> BuildJob {
+    pub fn new(home_room: RoomName, build_room: RoomName) -> BuildJob {
         BuildJob {
-            room_name: room,
+            home_room,
+            build_room,
             build_target: None,
             repair_target: None,
             pickup_target: None,
@@ -38,7 +40,8 @@ impl Job for BuildJob {
 
         scope_timing!("Build Job - {}", creep.name());
 
-        let room = creep.room().unwrap();
+        let home_room = game::rooms::get(self.home_room);
+        let build_room = game::rooms::get(self.build_room);
 
         let resource = screeps::ResourceType::Energy;
 
@@ -59,23 +62,24 @@ impl Job for BuildJob {
         // Compute build target
         //
 
-        let repick_build_target = match self.build_target {
-            Some(target_id) => target_id.resolve().is_none(),
-            None => capacity > 0 && available_capacity == 0,
-        };
+        let repick_build_target = self
+            .build_target
+            .map(|target| !target.is_valid_build_target())
+            .unwrap_or_else(|| capacity > 0 && available_capacity == 0);
 
         if repick_build_target {
-            scope_timing!("repick_build_target");
-            self.build_target =
-                BuildUtility::select_construction_site(&creep, &room).map(|site| site.id());
+            self.build_target = build_room
+                .as_ref()
+                .and_then(|r| BuildUtility::select_construction_site(&creep, &r))
+                .map(|s| s.remote_id());
         }
 
         //
         // Build construction site.
         //
 
-        if let Some(construction_site) = self.build_target.and_then(|id| id.resolve()) {
-            BuildBehaviorUtility::build_construction_site(creep, &construction_site);
+        if let Some(construction_site_id) = self.build_target {
+            BuildBehaviorUtility::build_construction_site_id(creep, &construction_site_id);
 
             return;
         }
@@ -84,37 +88,16 @@ impl Job for BuildJob {
         // Compute repair target
         //
 
-        let repick_repair_target = match self.repair_target {
-            Some(target_id) => {
-                if let Some(structure) = target_id.resolve() {
-                    if let Some(attackable) = structure.as_attackable() {
-                        attackable.hits() >= attackable.hits_max()
-                    } else {
-                        true
-                    }
-                } else {
-                    true
-                }
-            }
-            None => capacity > 0 && available_capacity == 0,
-        };
+        let repick_repair_target = self
+            .repair_target
+            .map(|target| !target.is_valid_repair_target().unwrap_or(true))
+            .unwrap_or_else(|| capacity > 0 && available_capacity == 0);
 
         if repick_repair_target {
-            scope_timing!("repick_repair_target");
-
-            let mut repair_targets = RepairUtility::get_prioritized_repair_targets(&room);
-
-            for priority in ORDERED_REPAIR_PRIORITIES.iter() {
-                if let Some(structures) = repair_targets.remove(priority) {
-                    //TODO: Make find_nearest cheap - find_nearest linear is a bad approximation.
-                    if let Some(structure) = structures.into_iter().find_nearest_linear(creep.pos())
-                    {
-                        self.repair_target = Some(StructureIdentifier::new(&structure));
-
-                        break;
-                    }
-                }
-            }
+            self.repair_target = build_room
+                .as_ref()
+                .and_then(|r| RepairUtility::select_repair_structure(&r, creep.pos()))
+                .map(|s| RemoteStructureIdentifier::new(&s));
         }
 
         //
@@ -137,22 +120,26 @@ impl Job for BuildJob {
 
         let repick_pickup = self
             .pickup_target
-            .map(|target| target.is_valid_pickup_target())
+            .map(|target| !target.is_valid_pickup_target())
             .unwrap_or_else(|| capacity > 0 && available_capacity > 0);
 
         if repick_pickup {
             scope_timing!("repick_pickup");
 
-            let hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
+            self.pickup_target = home_room
+                .and_then(|r| {
+                    //TODO: Should potentially be 'current room if no hostiles'.
+                    let hostile_creeps = !r.find(find::HOSTILE_CREEPS).is_empty();
 
-            let settings = ResourcePickupSettings {
-                allow_dropped_resource: !hostile_creeps,
-                allow_tombstone: !hostile_creeps,
-                allow_structure: true,
-                allow_harvest: true,
-            };
+                    let settings = ResourcePickupSettings {
+                        allow_dropped_resource: !hostile_creeps,
+                        allow_tombstone: !hostile_creeps,
+                        allow_structure: true,
+                        allow_harvest: true,
+                    };
 
-            self.pickup_target = ResourceUtility::select_energy_pickup(&creep, &room, &settings);
+                    ResourceUtility::select_energy_pickup(&creep, &r, &settings)
+                });
         }
 
         //

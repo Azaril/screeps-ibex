@@ -48,8 +48,6 @@ impl Mission for RemoteMineMission {
     ) -> MissionResult {
         scope_timing!("RemoteMineMission");
 
-        //TODO: Handle room becoming claimed (either by friendly or hostile).
-
         //
         // Cleanup harvesters that no longer exist.
         //
@@ -63,7 +61,13 @@ impl Mission for RemoteMineMission {
         //
 
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
-            if let Some(visibility_data) = room_data.get_visibility_data() {
+            if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
+                if dynamic_visibility_data.updated_within(1000) && dynamic_visibility_data.hostile() {
+                    return MissionResult::Failure;
+                }
+            }
+
+            if let Some(static_visibility_data) = room_data.get_static_visibility_data() {
                 if let Some(home_room_data) = system_data.room_data.get(self.home_room_data) {
                     if let Some(home_room) = game::rooms::get(home_room_data.name) {
                         //TODO: Store this mapping data as part of the mission. (Blocked on specs collection serialization.)
@@ -82,7 +86,7 @@ impl Mission for RemoteMineMission {
                             })
                             .into_group_map();
 
-                        for source in visibility_data.sources().iter() {
+                        for source in static_visibility_data.sources().iter() {
                             let source_id = source.id();
 
                             let source_harvesters = sources_to_harvesters

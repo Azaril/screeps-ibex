@@ -2,6 +2,7 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+use itertools::*;
 
 use super::data::*;
 use super::operationsystem::*;
@@ -47,11 +48,17 @@ impl Operation for RemoteMineOperation {
                 
                 if my_room && room_level >= 2 {
                     info!("Looking at nearby rooms for remote mine. Room: {}", room_data.name);
-                    let look_directions = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+                    let mut candidate_rooms = vec!(room_data.name);
 
-                    for direction in look_directions.iter() {
-                        let offset_room_name = room_data.name + *direction;
+                    for _ in 0..1 {
+                        candidate_rooms = candidate_rooms
+                            .into_iter()
+                            .flat_map(|room_name| game::map::describe_exits(room_name).values().cloned().collect::<Vec<RoomName>>())
+                            .unique()
+                            .collect();
+                    }
 
+                    for offset_room_name in candidate_rooms {
                         if let Some(offset_room_entity) = system_data.mapping.rooms.get(&offset_room_name) {
                             if system_data.room_data.get(*offset_room_entity).is_some() {
                                 info!("Desire remote mine mission for room. Room: {}", offset_room_name);
@@ -69,13 +76,62 @@ impl Operation for RemoteMineOperation {
         for (room_data_entity, home_room_data_entity) in desired_missions {
             let room_data = system_data.room_data.get(room_data_entity).unwrap();
 
-            //TODO: Filter out room if it is owned. (Likely needs visibility data cached.)
-
             //
             // Query if any missions running on the room currently fufill the remote miner role.
             //
 
-            if room_data.get_visibility_data().is_some() {
+            let dynamic_visibility_data = room_data.get_dynamic_visibility_data();
+
+            //
+            // Spawn scout missions for remote mine rooms that have not had visibility in 10000 ticks.
+            //
+
+            if dynamic_visibility_data.as_ref().map(|v| !v.updated_within(10000)).unwrap_or(true) {
+                //TODO: wiarchbe: Use trait instead of match.
+                let has_scout_mission =
+                    room_data.missions.0.iter().any(|mission_entity| {
+                        match system_data.mission_data.get(*mission_entity) {
+                            Some(MissionData::Scout(_)) => true,
+                            _ => false,
+                        }
+                    });
+
+                //
+                // Spawn a new mission to fill the scout role if missing.
+                //
+
+                if !has_scout_mission {
+                    info!("Starting scout for room. Room: {}", room_data.name);
+
+                    let room_entity = room_data_entity;
+                    let home_room_entity = home_room_data_entity;
+
+                    system_data.updater.exec_mut(move |world| {
+                        let mission_entity =
+                            ScoutMission::build(world.create_entity(), room_entity, home_room_entity)
+                                .build();
+
+                        let room_data_storage =
+                            &mut world.write_storage::<::room::data::RoomData>();
+
+                        if let Some(room_data) = room_data_storage.get_mut(room_entity) {
+                            room_data.missions.0.push(mission_entity);
+                        }
+                    });
+                }
+            }
+
+            //
+            // Spawn remote mine missions for rooms that are not hostile and have recent visibility.
+            //
+
+            if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
+                if !dynamic_visibility_data.updated_within(10000) && dynamic_visibility_data.hostile() {
+                    continue;
+                }
+
+                //TODO: Check path finding and accessibility to room.
+
                 //TODO: wiarchbe: Use trait instead of match.
                 let has_remote_mine_mission =
                     room_data.missions.0.iter().any(|mission_entity| {
@@ -98,39 +154,6 @@ impl Operation for RemoteMineOperation {
                     system_data.updater.exec_mut(move |world| {
                         let mission_entity =
                             RemoteMineMission::build(world.create_entity(), room_entity, home_room_entity)
-                                .build();
-
-                        let room_data_storage =
-                            &mut world.write_storage::<::room::data::RoomData>();
-
-                        if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                            room_data.missions.0.push(mission_entity);
-                        }
-                    });
-                }
-            } else {
-                //TODO: wiarchbe: Use trait instead of match.
-                let has_scout_mission =
-                    room_data.missions.0.iter().any(|mission_entity| {
-                        match system_data.mission_data.get(*mission_entity) {
-                            Some(MissionData::Scout(_)) => true,
-                            _ => false,
-                        }
-                    });
-
-                //
-                // Spawn a new mission to fill the local build role if missing.
-                //
-
-                if !has_scout_mission {
-                    info!("Starting scout for room. Room: {}", room_data.name);
-
-                    let room_entity = room_data_entity;
-                    let home_room_entity = home_room_data_entity;
-
-                    system_data.updater.exec_mut(move |world| {
-                        let mission_entity =
-                            ScoutMission::build(world.create_entity(), room_entity, home_room_entity)
                                 .build();
 
                         let room_data_storage =

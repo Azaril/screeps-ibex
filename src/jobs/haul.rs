@@ -10,16 +10,18 @@ use crate::structureidentifier::*;
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct HaulJob {
     pub primary_container: RemoteObjectId<StructureContainer>,
+    pub delivery_room: RoomName,
     #[serde(default)]
-    pub delivery_target: Option<StructureIdentifier>,
+    pub delivery_target: Option<RemoteStructureIdentifier>,
     #[serde(default)]
     pub pickup_target: Option<EnergyPickupTarget>,
 }
 
 impl HaulJob {
-    pub fn new(container_id: RemoteObjectId<StructureContainer>) -> HaulJob {
+    pub fn new(container_id: RemoteObjectId<StructureContainer>, delivery_room: RoomName) -> HaulJob {
         HaulJob {
             primary_container: container_id,
+            delivery_room,
             delivery_target: None,
             pickup_target: None,
         }
@@ -32,7 +34,7 @@ impl Job for HaulJob {
 
         scope_timing!("Haul Job - {}", creep.name());
 
-        let room = creep.room().unwrap();
+        let delivery_room = game::rooms::get(self.delivery_room);
 
         let resource = screeps::ResourceType::Energy;
 
@@ -49,49 +51,40 @@ impl Job for HaulJob {
         }
 
         //
-        // If an existing delivery target exists but does not have room for delivery, choose a new target.
-        // If full of energy but no delivery target selected, choose one.
+        // Compute delivery target
         //
 
-        let repick_delivery = if let Some(delivery_structure) = self.delivery_target {
-            if let Some(delivery_structure) = delivery_structure.resolve() {
-                if let Some(storeable) = delivery_structure.as_has_store() {
-                    storeable.store_free_capacity(Some(resource)) == 0
-                } else {
-                    true
-                }
-            } else {
-                true
-            }
-        } else {
-            capacity > 0 && available_capacity == 0
-        };
+        let repick_delivery = self
+            .delivery_target
+            .map(|target| !target.is_valid_delivery_target(resource).unwrap_or(true) && !target.is_valid_controller_upgrade_target())
+            .unwrap_or_else(|| capacity > 0 && available_capacity == 0);
 
         //
         // Pick delivery target
         //
 
         if repick_delivery {
-            self.delivery_target =
-                ResourceUtility::select_resource_delivery(creep, &room, resource)
-                    .map(|v| StructureIdentifier::new(&v));
+            self.delivery_target = delivery_room
+                .as_ref()
+                .and_then(|r| ResourceUtility::select_resource_delivery(&creep, &r, resource))
+                .map(|s| RemoteStructureIdentifier::new(&s));
         }
 
         //
         // Transfer energy to structure if possible.
         //
 
-        if let Some(delivery_target_structure) = self.delivery_target.and_then(|id| id.resolve())
-        {
-            if let Some(transferable) = delivery_target_structure.as_transferable() {
-                if creep.pos().is_near_to(&delivery_target_structure) {
-                    creep.transfer_all(transferable, resource);
-                } else {
-                    creep.move_to(&delivery_target_structure);
-                }
+        //TODO: This is kind of brittle.
+        let transfer_target = match self.delivery_target {
+            Some(RemoteStructureIdentifier::Controller(_)) => None,
+            Some(id) => Some(id),            
+            _ => None
+        };
 
-                return;
-            }
+        if let Some(transfer_target_id) = transfer_target {
+            ResourceBehaviorUtility::transfer_resource_to_structure_id(&creep, &transfer_target_id, resource);
+
+            return;
         }
 
         //
@@ -100,12 +93,13 @@ impl Job for HaulJob {
 
         let repick_pickup = self
             .pickup_target
-            .map(|target| target.is_valid_pickup_target())
+            .map(|target| !target.is_valid_pickup_target())
             .unwrap_or_else(|| capacity > 0 && available_capacity > 0);
 
         if repick_pickup {
             scope_timing!("repick_pickup");
 
+            //TODO: This needs to handle containers in remote rooms. (Or assume they have visibility from a miner?)
             self.pickup_target = if let Some(container) = self.primary_container.resolve() {
                 if container.store_used_capacity(Some(resource)) > 0 {
                     Some(EnergyPickupTarget::Structure(
@@ -118,18 +112,21 @@ impl Job for HaulJob {
                 None
             };
 
-            let hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
-
             if self.pickup_target.is_none() {
-                let pickup_settings = ResourcePickupSettings {
-                    allow_dropped_resource: !hostile_creeps,
-                    allow_tombstone: !hostile_creeps,
-                    allow_structure: true,
-                    allow_harvest: false,
-                };
+                self.pickup_target = delivery_room
+                .and_then(|r| {
+                    //TODO: Should potentially be 'current room if no hostiles'.
+                    let hostile_creeps = !r.find(find::HOSTILE_CREEPS).is_empty();
 
-                self.pickup_target =
-                    ResourceUtility::select_energy_pickup(&creep, &room, &pickup_settings);
+                    let settings = ResourcePickupSettings {
+                        allow_dropped_resource: !hostile_creeps,
+                        allow_tombstone: !hostile_creeps,
+                        allow_structure: true,
+                        allow_harvest: false,
+                    };
+
+                    ResourceUtility::select_energy_pickup(&creep, &r, &settings)
+                })
             }
         }
 

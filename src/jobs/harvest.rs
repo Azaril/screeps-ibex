@@ -6,6 +6,7 @@ use super::utility::build::*;
 use super::utility::buildbehavior::*;
 use super::utility::resource::*;
 use super::utility::resourcebehavior::*;
+use super::utility::controllerbehavior::*;
 use crate::remoteobjectid::*;
 use crate::structureidentifier::*;
 
@@ -14,9 +15,9 @@ pub struct HarvestJob {
     pub harvest_target: RemoteObjectId<Source>,
     pub delivery_room: RoomName,
     #[serde(default)]
-    pub delivery_target: Option<StructureIdentifier>,
+    pub delivery_target: Option<RemoteStructureIdentifier>,
     #[serde(default)]
-    pub build_target: Option<ObjectId<ConstructionSite>>,
+    pub build_target: Option<RemoteObjectId<ConstructionSite>>,
     #[serde(default)]
     pub pickup_target: Option<EnergyPickupTarget>,
 }
@@ -33,10 +34,9 @@ impl HarvestJob {
     }
 
     pub fn select_delivery_target(
-        &mut self,
         creep: &Creep,
         room: &Room,
-        resource_type: ResourceType,
+        resource_type: ResourceType
     ) -> Option<Structure> {
         if let Some(delivery_target) =
             ResourceUtility::select_resource_delivery(creep, room, resource_type)
@@ -44,6 +44,7 @@ impl HarvestJob {
             return Some(delivery_target);
         }
 
+        //
         // If there are no delivery targets, use the controller as a fallback.
         //
 
@@ -82,76 +83,61 @@ impl Job for HarvestJob {
         // Compute delivery target
         //
 
-        let repick_delivery = if let Some(delivery_structure) = self.delivery_target {
-            if let Some(delivery_structure) = delivery_structure.resolve() {
-                if let Some(storeable) = delivery_structure.as_has_store() {
-                    storeable.store_free_capacity(Some(resource)) == 0
-                } else if let Structure::Controller(controller) = delivery_structure {
-                    !controller.my()
-                } else {
-                    true
-                }
-            } else {
-                true
-            }
-        } else {
-            capacity > 0 && available_capacity == 0
-        };
+        let repick_delivery = self
+            .delivery_target
+            .map(|target| !target.is_valid_delivery_target(resource).unwrap_or(true) && !target.is_valid_controller_upgrade_target())
+            .unwrap_or_else(|| capacity > 0 && available_capacity == 0);
 
         //
         // Pick delivery target
         //
 
         if repick_delivery {
-            self.delivery_target = if let Some(delivery_room) = delivery_room.as_ref() {
-                self
-                    .select_delivery_target(&creep, &delivery_room, resource)
-                    .map(|v| StructureIdentifier::new(&v))
-            } else {
-                None
-            }
+            self.delivery_target = delivery_room
+                .as_ref()
+                .and_then(|r| Self::select_delivery_target(&creep, &r, resource))
+                .map(|s| RemoteStructureIdentifier::new(&s));
         }
 
         //
         // Transfer energy to structure if possible.
         //
 
-        if let Some(delivery_target_structure) = self.delivery_target.and_then(|v| v.resolve())
-        {
-            if let Some(transferable) = delivery_target_structure.as_transferable() {
-                if creep.pos().is_near_to(&delivery_target_structure) {
-                    creep.transfer_all(transferable, resource);
-                } else {
-                    creep.move_to(&delivery_target_structure);
-                }
+        //TODO: This is kind of brittle.
+        let transfer_target = match self.delivery_target {
+            Some(RemoteStructureIdentifier::Controller(_)) => None,
+            Some(id) => Some(id),            
+            _ => None
+        };
 
-                return;
-            }
+        if let Some(transfer_target_id) = transfer_target {
+            ResourceBehaviorUtility::transfer_resource_to_structure_id(&creep, &transfer_target_id, resource);
+
+            return;
         }
 
         //
         // Compute build target
         //
 
-        let repick_build_target = match self.build_target {
-            Some(target_id) => target_id.resolve().is_none(),
-            None => capacity > 0 && available_capacity == 0,
-        };
+        let repick_build_target = self
+            .build_target
+            .map(|target| !target.is_valid_build_target())
+            .unwrap_or_else(|| capacity > 0 && available_capacity == 0);
 
         if repick_build_target {
-            self.build_target = if let Some(delivery_room) = delivery_room.as_ref() {
-                BuildUtility::select_construction_site(&creep, &delivery_room).map(|site| site.id())
-            } else {
-                None
-            }
+            self.build_target = delivery_room
+                .as_ref()
+                .and_then(|r| BuildUtility::select_construction_site(&creep, &r))
+                .map(|s| s.remote_id());
         }
 
         //
         // Build construction site.
         //
 
-        if let Some(construction_site) = self.build_target.and_then(|id| id.resolve()) {
-            BuildBehaviorUtility::build_construction_site(creep, &construction_site);
+        if let Some(construction_site_id) = self.build_target {
+            BuildBehaviorUtility::build_construction_site_id(creep, &construction_site_id);
 
             return;
         }
@@ -160,17 +146,10 @@ impl Job for HarvestJob {
         // Upgrade controller.
         //
 
-        if let Some(delivery_target_structure) = self.delivery_target.and_then(|id| id.resolve())
-        {
-            if let Structure::Controller(controller) = delivery_target_structure {
-                if creep.pos().is_near_to(&controller) {
-                    creep.upgrade_controller(&controller);
-                } else {
-                    creep.move_to(&controller);
-                }
+        if let Some(RemoteStructureIdentifier::Controller(id)) = self.delivery_target {
+            ControllerBehaviorUtility::upgrade_controller_id(&creep, &id);
 
-                return;
-            }
+            return;
         }
 
         //
@@ -179,25 +158,26 @@ impl Job for HarvestJob {
 
         let repick_pickup = self
             .pickup_target
-            .map(|target| target.is_valid_pickup_target())
+            .map(|target| !target.is_valid_pickup_target())
             .unwrap_or_else(|| capacity > 0 && available_capacity > 0);
 
         if repick_pickup {
             scope_timing!("repick_pickup");
 
-            let room = creep.room().unwrap();
-
-            let hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
-
-            let settings = ResourcePickupSettings {
-                allow_dropped_resource: !hostile_creeps,
-                allow_tombstone: !hostile_creeps,
-                allow_structure: false,
-                allow_harvest: false,
-            };
-
             self.pickup_target = delivery_room
-                .and_then(|r| ResourceUtility::select_energy_pickup(&creep, &r, &settings))
+                .and_then(|r| {
+                    //TODO: Should potentially be 'current room if no hostiles'.
+                    let hostile_creeps = !r.find(find::HOSTILE_CREEPS).is_empty();
+
+                    let settings = ResourcePickupSettings {
+                        allow_dropped_resource: !hostile_creeps,
+                        allow_tombstone: !hostile_creeps,
+                        allow_structure: false,
+                        allow_harvest: false,
+                    };
+
+                    ResourceUtility::select_energy_pickup(&creep, &r, &settings)
+                })
                 .or_else(|| Some(EnergyPickupTarget::Source(self.harvest_target)));
         }
 

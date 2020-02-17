@@ -15,29 +15,41 @@ pub enum EnergyPickupTarget {
 }
 
 impl EnergyPickupTarget {
+    //TODO: Make this a trait.
     pub fn is_valid_pickup_target(&self) -> bool {
-        //TODO: Validate room is visible.
+        //
+        // If room cannot be resolve, the room is not currently visible.
+        //
+
+        if game::rooms::get(self.get_position().room_name()).is_none() {
+            return true;
+        }
+
+        //
+        // If the room is visible, validate the constraints on the pickup target.
+        //
+
         match self {
             EnergyPickupTarget::Structure(structure_id) => {
                 if let Some(structure) = structure_id.resolve() {
                     if let Some(storeable) = structure.as_has_store() {
-                        storeable.store_used_capacity(Some(ResourceType::Energy)) == 0
+                        storeable.store_used_capacity(Some(ResourceType::Energy)) > 0
                     } else {
-                        true
+                        false
                     }
                 } else {
-                    true
+                    false
                 }
             }
             EnergyPickupTarget::Source(source_id) => {
                 if let Some(source) = source_id.resolve() {
-                    source.energy() == 0
+                    source.energy() > 0
                 } else {
-                    true
+                    false
                 }
             }
-            EnergyPickupTarget::DroppedResource(resource_id) => resource_id.resolve().is_none(),
-            EnergyPickupTarget::Tombstone(tombstone_id) => tombstone_id.resolve().is_none(),
+            EnergyPickupTarget::DroppedResource(resource_id) => resource_id.resolve().is_some(),
+            EnergyPickupTarget::Tombstone(tombstone_id) => tombstone_id.resolve().is_some(),
         }
     }
 
@@ -258,5 +270,66 @@ impl ResourceUtility {
         }
 
         None
+    }
+}
+
+pub trait ValidateDeliveryTarget {
+    fn is_valid_delivery_target(&self, resource: ResourceType) -> Option<bool>;
+}
+
+impl ValidateDeliveryTarget for Structure {
+    fn is_valid_delivery_target(&self, resource: ResourceType) -> Option<bool> {
+        if let Some(storeable) = self.as_has_store() {
+            Some(storeable.store_free_capacity(Some(resource)) > 0)
+        } else {
+            Some(false)
+        }
+    }
+}
+
+impl ValidateDeliveryTarget for RemoteStructureIdentifier {
+    fn is_valid_delivery_target(&self, resource: ResourceType) -> Option<bool> {
+        if game::rooms::get(self.pos().room_name()).is_some() {
+            self
+                .resolve()
+                .and_then(|s| s.is_valid_delivery_target(resource))
+                .or(Some(false))
+        } else {
+            None
+        }
+    }
+}
+
+pub trait ValidateControllerUpgradeTarget {
+    fn is_valid_controller_upgrade_target(&self) -> bool;
+}
+
+impl ValidateControllerUpgradeTarget for StructureController {
+    fn is_valid_controller_upgrade_target(&self) -> bool {
+        self.my()
+    }
+}
+
+impl ValidateControllerUpgradeTarget for Structure {
+    fn is_valid_controller_upgrade_target(&self) -> bool {
+        if let Structure::Controller(controller) = self {
+            controller.is_valid_controller_upgrade_target()
+        } else {
+            false
+        }
+    }
+}
+
+impl ValidateControllerUpgradeTarget for RemoteStructureIdentifier {
+    fn is_valid_controller_upgrade_target(&self) -> bool {
+        if let Some(structure) = self.resolve() {
+            //
+            // NOTE: A controller is an owned structure and provides visibility. It must
+            //       resolve for it to be valid as it cannot be in a hidden room.
+            //
+            structure.is_valid_controller_upgrade_target()
+        } else {
+            false
+        }
     }
 }

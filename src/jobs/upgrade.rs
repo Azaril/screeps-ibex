@@ -4,16 +4,20 @@ use serde::*;
 use super::jobsystem::*;
 use super::utility::resource::*;
 use super::utility::resourcebehavior::*;
+use super::utility::controllerbehavior::*;
+use crate::remoteobjectid::*;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct UpgradeJob {
-    pub upgrade_target: ObjectId<StructureController>,
+    pub home_room: RoomName,
+    pub upgrade_target: RemoteObjectId<StructureController>,
     pub pickup_target: Option<EnergyPickupTarget>,
 }
 
 impl UpgradeJob {
-    pub fn new(upgrade_target: &ObjectId<StructureController>) -> UpgradeJob {
+    pub fn new(upgrade_target: &RemoteObjectId<StructureController>, home_room: RoomName) -> UpgradeJob {
         UpgradeJob {
+            home_room,
             upgrade_target: *upgrade_target,
             pickup_target: None,
         }
@@ -26,7 +30,7 @@ impl Job for UpgradeJob {
 
         scope_timing!("Upgrade Job - {}", creep.name());
 
-        let room = creep.room().unwrap();
+        let home_room = game::rooms::get(self.home_room);
 
         let resource = screeps::ResourceType::Energy;
 
@@ -44,20 +48,26 @@ impl Job for UpgradeJob {
 
         let repick_pickup = self
             .pickup_target
-            .map(|target| target.is_valid_pickup_target())
-            .unwrap_or_else(|| capacity > 0 && used_capacity == 0);
+            .map(|target| !target.is_valid_pickup_target())
+            .unwrap_or_else(|| capacity > 0 && available_capacity > 0);
 
         if repick_pickup {
-            let hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
+            scope_timing!("repick_pickup");
 
-            let settings = ResourcePickupSettings {
-                allow_dropped_resource: !hostile_creeps,
-                allow_tombstone: !hostile_creeps,
-                allow_structure: true,
-                allow_harvest: true,
-            };
+            self.pickup_target = home_room
+                .and_then(|r| {
+                    //TODO: Should potentially be 'current room if no hostiles'.
+                    let hostile_creeps = !r.find(find::HOSTILE_CREEPS).is_empty();
 
-            self.pickup_target = ResourceUtility::select_energy_pickup(&creep, &room, &settings);
+                    let settings = ResourcePickupSettings {
+                        allow_dropped_resource: !hostile_creeps,
+                        allow_tombstone: !hostile_creeps,
+                        allow_structure: true,
+                        allow_harvest: true,
+                    };
+
+                    ResourceUtility::select_energy_pickup(&creep, &r, &settings)
+                });
         }
 
         //
@@ -73,25 +83,14 @@ impl Job for UpgradeJob {
         //
         // Upgrade energy from source.
         //
+        //
+        // Upgrade controller.
+        //
 
         if used_capacity > 0 {
-            if let Some(controller) = self.upgrade_target.resolve() {
-                if creep.pos().is_near_to(&controller) {
-                    creep.upgrade_controller(&controller);
-                } else {
-                    creep.move_to(&controller);
-                }
-            } else {
-                error!(
-                    "Upgrader has no assigned upgrade target! Name: {}",
-                    creep.name()
-                );
-            }
-        } else {
-            error!(
-                "Upgrader with no energy would like to upgrade target! Name: {}",
-                creep.name()
-            );
+            ControllerBehaviorUtility::upgrade_controller_id(&creep, &self.upgrade_target);
+
+            return;
         }
     }
 }
