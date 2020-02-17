@@ -22,6 +22,11 @@ impl Job for ScoutJob {
 
         scope_timing!("Scout Job - {}", creep.name());
 
-        creep.move_to(&Position::new(25, 25, self.room_target));
+        let creep_pos = creep.pos();
+        let target_pos = Position::new(25, 25, self.room_target);
+
+        if creep_pos.get_range_to(&target_pos) > 20 {
+            creep.move_to(&target_pos);
+        }
     }
 }

@@ -215,8 +215,8 @@ fn game_loop() {
     let mut pre_pass_dispatcher = DispatcherBuilder::new()
         .with(creep::WaitForSpawnSystem, "wait_for_spawn", &[])
         .with(creep::CleanupCreepsSystem, "cleanup_creeps", &[])
-        .with(room::system::CreateRoomDataSystem, "create_room_data", &[])
-        .with(room::system::UpdateRoomDataSystem, "update_room_data", &[])
+        .with(room::createroomsystem::CreateRoomDataSystem, "create_room_data", &[])
+        .with(room::updateroomsystem::UpdateRoomDataSystem, "update_room_data", &[])
         .with(mappingsystem::MappingSystem, "mapping", &[])
         .build();
 

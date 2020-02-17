@@ -60,7 +60,9 @@ impl Mission for ScoutMission {
         //
 
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
-            if room_data.get_dynamic_visibility_data().is_some() && self.scouts.0.is_empty() {
+            let data_is_fresh = room_data.get_dynamic_visibility_data().as_ref().map(|v| v.updated_within(10)).unwrap_or(false);
+
+            if data_is_fresh && self.scouts.0.is_empty() {
                 info!("Completing scout mission - room is visible and no active scouts. Room: {}", room_data.name);
 
                 //TODO: Current data is all immutable - this needs to change when there's a freshness value on the data.

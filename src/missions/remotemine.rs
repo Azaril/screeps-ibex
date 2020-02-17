@@ -97,12 +97,8 @@ impl Mission for RemoteMineMission {
                             // Spawn harvesters
                             //
 
-                            info!("Current harvesters: {}", source_harvesters.len());
-
                             //TODO: Compute correct number of harvesters to use for source.
                             if source_harvesters.len() < 2 {
-                                info!("Requesting harvester spawn for remote mining");
-
                                 //TODO: Compute best body parts to use.
                                 let body_definition = crate::creep::SpawnBodyDefinition {
                                     maximum_energy: home_room.energy_capacity_available(),
@@ -153,14 +149,10 @@ impl Mission for RemoteMineMission {
                                 }
                             }
                         }
+
+                        return MissionResult::Running;
                     }
                 }
-
-                return MissionResult::Running;
-            } else {
-                //TODO: Start scout mission.
-                
-                return MissionResult::Running;
             }
         }
             

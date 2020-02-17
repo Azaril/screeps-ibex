@@ -47,7 +47,6 @@ impl Operation for RemoteMineOperation {
                 let (my_room, room_level) = controller.map(|controller| (controller.my(), controller.level())).unwrap_or((false, 0));
                 
                 if my_room && room_level >= 2 {
-                    info!("Looking at nearby rooms for remote mine. Room: {}", room_data.name);
                     let mut candidate_rooms = vec!(room_data.name);
 
                     for _ in 0..1 {
@@ -61,11 +60,9 @@ impl Operation for RemoteMineOperation {
                     for offset_room_name in candidate_rooms {
                         if let Some(offset_room_entity) = system_data.mapping.rooms.get(&offset_room_name) {
                             if system_data.room_data.get(*offset_room_entity).is_some() {
-                                info!("Desire remote mine mission for room. Room: {}", offset_room_name);
                                 desired_missions.push((*offset_room_entity, entity));
                             }                    
                         } else {
-                            info!("Requesting visibility for remote mining room. Room: {}", offset_room_name);
                             system_data.visibility.request(VisibilityRequest::new(offset_room_name, VISIBILITY_PRIORITY_MEDIUM));
                         }
                     }                
@@ -83,10 +80,10 @@ impl Operation for RemoteMineOperation {
             let dynamic_visibility_data = room_data.get_dynamic_visibility_data();
 
             //
-            // Spawn scout missions for remote mine rooms that have not had visibility in 10000 ticks.
+            // Spawn scout missions for remote mine rooms that have not had visibility updated in a long time.
             //
 
-            if dynamic_visibility_data.as_ref().map(|v| !v.updated_within(10000)).unwrap_or(true) {
+            if dynamic_visibility_data.as_ref().map(|v| !v.updated_within(5000)).unwrap_or(true) {
                 //TODO: wiarchbe: Use trait instead of match.
                 let has_scout_mission =
                     room_data.missions.0.iter().any(|mission_entity| {
@@ -126,7 +123,11 @@ impl Operation for RemoteMineOperation {
             //
 
             if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
-                if !dynamic_visibility_data.updated_within(10000) && dynamic_visibility_data.hostile() {
+                if !dynamic_visibility_data.updated_within(1000) {
+                    continue;
+                }
+
+                if dynamic_visibility_data.hostile() {
                     continue;
                 }
 

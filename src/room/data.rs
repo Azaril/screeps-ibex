@@ -32,7 +32,7 @@ impl RoomDynamicVisibilityData {
     }
 
     pub fn updated_within(&self, ticks: u32) -> bool {
-        ticks <= (game::time() - self.update_tick)
+        (game::time() - self.update_tick) <= ticks
     }
 }
 
@@ -91,7 +91,6 @@ impl RoomData {
     fn is_room_hostile(room: &Room) -> bool {
         if let Some(controller) = room.controller() {
             //TODO: Does reservation need to be checked?
-
             return controller.has_owner() && !controller.my();
         }
 

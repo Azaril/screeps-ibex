@@ -49,7 +49,7 @@ impl Job for UpgradeJob {
         let repick_pickup = self
             .pickup_target
             .map(|target| !target.is_valid_pickup_target())
-            .unwrap_or_else(|| capacity > 0 && available_capacity > 0);
+            .unwrap_or_else(|| capacity > 0 && used_capacity == 0);
 
         if repick_pickup {
             scope_timing!("repick_pickup");
