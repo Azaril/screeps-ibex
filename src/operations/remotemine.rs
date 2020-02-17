@@ -127,7 +127,11 @@ impl Operation for RemoteMineOperation {
                     continue;
                 }
 
-                if dynamic_visibility_data.hostile() {
+                if dynamic_visibility_data.owner().is_some() {
+                    continue;
+                }
+
+                if !dynamic_visibility_data.my() && (dynamic_visibility_data.friendly() || dynamic_visibility_data.hostile()) {
                     continue;
                 }
 

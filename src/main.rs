@@ -32,6 +32,7 @@ mod serialize;
 mod spawnsystem;
 mod structureidentifier;
 mod mappingsystem;
+mod globals;
 
 use std::fmt;
 
@@ -254,6 +255,26 @@ fn game_loop() {
         if let Some(data) = entry {
             deserialize_world(&world, &data);
         }
+    }
+
+    //
+    // Prepare globals
+    //
+
+    let username = game::rooms::values()
+        .iter()
+        .filter_map(|room| {
+            if let Some(controller) = room.controller() {
+                if controller.my() {
+                    return controller.owner_name();
+                }
+            }
+            None
+        })
+        .next();
+
+    if let Some(username) = username {
+        globals::user::set_name(&username);
     }
 
     //

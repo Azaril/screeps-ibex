@@ -21,18 +21,46 @@ impl RoomStaticVisibilityData {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RoomDynamicVisibilityData {
+    #[serde(default)]
     update_tick: u32,
+    #[serde(default)]
+    owner: Option<String>,
+    #[serde(default)]
+    reseration_owner: Option<String>,
+    #[serde(default)]
+    my: bool,
+    #[serde(default)]
+    friendly: bool,
     #[serde(default)]
     hostile: bool
 }
 
 impl RoomDynamicVisibilityData {
-    pub fn hostile(&self) -> bool {
-        self.hostile
+    pub fn age(&self) -> u32 {
+        game::time() - self.update_tick
+    }
+    pub fn updated_within(&self, ticks: u32) -> bool {
+        self.age() <= ticks
     }
 
-    pub fn updated_within(&self, ticks: u32) -> bool {
-        (game::time() - self.update_tick) <= ticks
+    pub fn owner(&self) -> &Option<String> {
+        &self.owner
+    }
+
+    pub fn reseration_owner(&self) -> &Option<String> {
+        &self.reseration_owner
+    }
+
+    pub fn my(&self) -> bool {
+        self.my
+    }
+
+    pub fn friendly(&self) -> bool {
+        self.friendly
+    }
+
+    pub fn hostile(&self) -> bool {
+        self.hostile
     }
 }
 
@@ -82,19 +110,26 @@ impl RoomData {
     }
 
     fn create_dynamic_visibility_data(room: &Room) -> RoomDynamicVisibilityData {
+        let controller = room.controller();
+
+        let controller_owner_name = controller.as_ref().and_then(|c| c.owner_name());
+        let controller_reservation_owner_name = controller.as_ref().and_then(|c| c.reservation()).map(|r| r.username);
+        let room_owner = controller_owner_name.clone().or_else(|| controller_reservation_owner_name.clone());
+        let my = room_owner.as_ref().map(|name| name == crate::globals::user::name()).unwrap_or(false);
+
+        //TODO: Friendly/hostile for now only include current user - in future could be other users.
+        let friends = [crate::globals::user::name()];
+        let friendly = room_owner.as_ref().map(|name| friends.iter().any(|friend_name| name == friend_name)).unwrap_or(false);
+        let hostile = room_owner.as_ref().map(|name| !friends.iter().any(|friend_name| name == friend_name)).unwrap_or(false);
+
         RoomDynamicVisibilityData{
             update_tick: game::time(),
-            hostile: Self::is_room_hostile(room)
+            owner: controller_owner_name,
+            reseration_owner: controller_reservation_owner_name,
+            my,
+            friendly,
+            hostile,
         }
-    }
-
-    fn is_room_hostile(room: &Room) -> bool {
-        if let Some(controller) = room.controller() {
-            //TODO: Does reservation need to be checked?
-            return controller.has_owner() && !controller.my();
-        }
-
-        false
     }
 
     pub fn get_static_visibility_data(&self) -> &Option<RoomStaticVisibilityData> {

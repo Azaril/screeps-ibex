@@ -405,7 +405,7 @@ impl Mission for LocalSupplyMission {
                             };
 
                             let mission_entity = *runtime_data.entity;
-                            let delivery_room = room.name();
+                            let delivery_room = room_data.name;
                             let source_id = source.remote_id();
 
                             system_data.spawn_queue.request(SpawnRequest::new(

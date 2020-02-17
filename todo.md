@@ -1,6 +1,8 @@
 # High Priority
 
+- Use 'local supply' mission for both local supply and remote mine.
 - Use correct screeps-game-api crate once owner fix is merged in to master.
+- Add room reservation (needed for remote mining.)
 - Add lost creep recovery - i.e. memory is lost.
 - Add time limiting to scout mission - don't keep running if creep can't complete objective. Don't keep spawning waves.
 - Rampart priorization to prevent decay needs fixing.
@@ -18,3 +20,4 @@
 - Add chrome tracing format profiling.
 - Add fast entity lookup based on room name, global object ID, etc.
 - Add observer support to visibility requests. (Currently just used for triggering room data generation.)
+- Pathfinding solution.
