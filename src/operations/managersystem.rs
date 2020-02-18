@@ -6,6 +6,7 @@ use super::localsupply::*;
 use super::remotemine::*;
 use super::tower::*;
 use super::upgrade::*;
+use super::construction::*;
 
 pub struct OperationManagerSystem;
 
@@ -25,22 +26,16 @@ impl<'a> System<'a> for OperationManagerSystem {
         let mut has_local_build = false;
         let mut has_tower = false;
         let mut has_remote_mine = false;
+        let mut has_construction = false;
 
         for (_, operation) in (&entities, &operations).join() {
             match operation {
-                OperationData::LocalSupply(_) => {
-                    has_local_supply = true;
-                }
-                OperationData::Upgrade(_) => {
-                    has_upgrade = true;
-                }
-                OperationData::LocalBuild(_) => {
-                    has_local_build = true;
-                }
-                OperationData::Tower(_) => {
-                    has_tower = true;
-                }
+                OperationData::LocalSupply(_) => has_local_supply = true,
+                OperationData::Upgrade(_) => has_upgrade = true,
+                OperationData::LocalBuild(_) => has_local_build = true,
+                OperationData::Tower(_) =>  has_tower = true,
                 OperationData::RemoteMine(_) => has_remote_mine = true,
+                OperationData::Construction(_) => has_construction = true,
             }
         }
 
@@ -72,6 +67,12 @@ impl<'a> System<'a> for OperationManagerSystem {
             info!("Remote mine operation does not exist, creating.");
 
             RemoteMineOperation::build(updater.create_entity(&entities)).build();
+        }
+
+        if !has_construction {
+            info!("Construction operation does not exist, creating.");
+
+            ConstructionOperation::build(updater.create_entity(&entities)).build();
         }
     }
 }

@@ -6,3 +6,4 @@ pub mod remotemine;
 pub mod tower;
 pub mod upgrade;
 pub mod scout;
+pub mod construction;

@@ -14,6 +14,7 @@ pub enum MissionData {
     Tower(super::tower::TowerMission),
     RemoteMine(super::remotemine::RemoteMineMission),
     Scout(super::scout::ScoutMission),
+    Construction(super::construction::ConstructionMission),
 }
 
 impl MissionData {
@@ -25,6 +26,7 @@ impl MissionData {
             MissionData::Tower(ref mut data) => data,
             MissionData::RemoteMine(ref mut data) => data,
             MissionData::Scout(ref mut data) => data,
+            MissionData::Construction(ref mut data) => data,
         }
     }
 }

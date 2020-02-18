@@ -39,6 +39,11 @@ impl RoomDynamicVisibilityData {
     pub fn age(&self) -> u32 {
         game::time() - self.update_tick
     }
+
+    pub fn visible(&self) -> bool {
+        self.age() == 0
+    }
+
     pub fn updated_within(&self, ticks: u32) -> bool {
         self.age() <= ticks
     }

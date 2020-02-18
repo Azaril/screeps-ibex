@@ -14,6 +14,7 @@
 - Add remote claiming ability.
 - Add scout mission to get visibility using a creep.
 - Add build priority bucketing.
+- Computer number of hauler/harvester parts needed based on path distance.
 
 # Medium Priority
 
