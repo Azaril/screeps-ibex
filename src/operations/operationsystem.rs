@@ -12,7 +12,7 @@ pub struct OperationSystemData<'a> {
     room_data: WriteStorage<'a, ::room::data::RoomData>,
     mission_data: ReadStorage<'a, ::missions::data::MissionData>,
     mapping: Read<'a, MappingData>,
-    visibility: Read<'a, VisibilityQueue>
+    visibility: Read<'a, VisibilityQueue>,
 }
 
 pub struct OperationExecutionSystemData<'a> {
@@ -21,7 +21,7 @@ pub struct OperationExecutionSystemData<'a> {
     pub room_data: &'a WriteStorage<'a, ::room::data::RoomData>,
     pub mission_data: &'a ReadStorage<'a, ::missions::data::MissionData>,
     pub mapping: &'a Read<'a, MappingData>,
-    pub visibility: &'a Read<'a, VisibilityQueue>, 
+    pub visibility: &'a Read<'a, VisibilityQueue>,
 }
 
 pub enum OperationResult {

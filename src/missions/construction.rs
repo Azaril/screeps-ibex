@@ -14,7 +14,7 @@ use crate::room::planner::*;
 #[derive(Clone, Debug, ConvertSaveload)]
 pub struct ConstructionMission {
     room_data: Entity,
-    last_update: Option<u32>
+    last_update: Option<u32>,
 }
 
 impl ConstructionMission {
@@ -32,7 +32,7 @@ impl ConstructionMission {
     pub fn new(room_data: Entity) -> ConstructionMission {
         ConstructionMission {
             room_data,
-            last_update: None
+            last_update: None,
         }
     }
 }
@@ -65,7 +65,7 @@ impl Mission for ConstructionMission {
                 return MissionResult::Running;
             }
         }
-            
+
         MissionResult::Failure
         */
     }

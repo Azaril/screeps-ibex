@@ -22,8 +22,10 @@ extern crate crossbeam_queue;
 mod timing;
 mod creep;
 mod findnearest;
+mod globals;
 mod jobs;
 mod logging;
+mod mappingsystem;
 mod missions;
 mod operations;
 mod remoteobjectid;
@@ -31,8 +33,6 @@ mod room;
 mod serialize;
 mod spawnsystem;
 mod structureidentifier;
-mod mappingsystem;
-mod globals;
 
 use std::fmt;
 
@@ -216,8 +216,16 @@ fn game_loop() {
     let mut pre_pass_dispatcher = DispatcherBuilder::new()
         .with(creep::WaitForSpawnSystem, "wait_for_spawn", &[])
         .with(creep::CleanupCreepsSystem, "cleanup_creeps", &[])
-        .with(room::createroomsystem::CreateRoomDataSystem, "create_room_data", &[])
-        .with(room::updateroomsystem::UpdateRoomDataSystem, "update_room_data", &[])
+        .with(
+            room::createroomsystem::CreateRoomDataSystem,
+            "create_room_data",
+            &[],
+        )
+        .with(
+            room::updateroomsystem::UpdateRoomDataSystem,
+            "update_room_data",
+            &[],
+        )
         .with(mappingsystem::MappingSystem, "mapping", &[])
         .build();
 
@@ -240,7 +248,11 @@ fn game_loop() {
         )
         .with(missions::missionsystem::MissionSystem, "missions", &[])
         .with(jobs::jobsystem::JobSystem, "jobs", &[])
-        .with(room::visibilitysystem::VisibilityQueueSystem, "visibility", &[])
+        .with(
+            room::visibilitysystem::VisibilityQueueSystem,
+            "visibility",
+            &[],
+        )
         .with(spawnsystem::SpawnQueueSystem, "spawn_queue", &[])
         .build();
 

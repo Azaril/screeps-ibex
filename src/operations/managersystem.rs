@@ -1,12 +1,12 @@
 use specs::*;
 
+use super::construction::*;
 use super::data::*;
 use super::localbuild::*;
 use super::localsupply::*;
 use super::remotemine::*;
 use super::tower::*;
 use super::upgrade::*;
-use super::construction::*;
 
 pub struct OperationManagerSystem;
 
@@ -33,7 +33,7 @@ impl<'a> System<'a> for OperationManagerSystem {
                 OperationData::LocalSupply(_) => has_local_supply = true,
                 OperationData::Upgrade(_) => has_upgrade = true,
                 OperationData::LocalBuild(_) => has_local_build = true,
-                OperationData::Tower(_) =>  has_tower = true,
+                OperationData::Tower(_) => has_tower = true,
                 OperationData::RemoteMine(_) => has_remote_mine = true,
                 OperationData::Construction(_) => has_construction = true,
             }

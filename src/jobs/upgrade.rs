@@ -2,9 +2,9 @@ use screeps::*;
 use serde::*;
 
 use super::jobsystem::*;
+use super::utility::controllerbehavior::*;
 use super::utility::resource::*;
 use super::utility::resourcebehavior::*;
-use super::utility::controllerbehavior::*;
 use crate::remoteobjectid::*;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -15,7 +15,10 @@ pub struct UpgradeJob {
 }
 
 impl UpgradeJob {
-    pub fn new(upgrade_target: &RemoteObjectId<StructureController>, home_room: RoomName) -> UpgradeJob {
+    pub fn new(
+        upgrade_target: &RemoteObjectId<StructureController>,
+        home_room: RoomName,
+    ) -> UpgradeJob {
         UpgradeJob {
             home_room,
             upgrade_target: *upgrade_target,
@@ -54,20 +57,19 @@ impl Job for UpgradeJob {
         if repick_pickup {
             scope_timing!("repick_pickup");
 
-            self.pickup_target = home_room
-                .and_then(|r| {
-                    //TODO: Should potentially be 'current room if no hostiles'.
-                    let hostile_creeps = !r.find(find::HOSTILE_CREEPS).is_empty();
+            self.pickup_target = home_room.and_then(|r| {
+                //TODO: Should potentially be 'current room if no hostiles'.
+                let hostile_creeps = !r.find(find::HOSTILE_CREEPS).is_empty();
 
-                    let settings = ResourcePickupSettings {
-                        allow_dropped_resource: !hostile_creeps,
-                        allow_tombstone: !hostile_creeps,
-                        allow_structure: true,
-                        allow_harvest: true,
-                    };
+                let settings = ResourcePickupSettings {
+                    allow_dropped_resource: !hostile_creeps,
+                    allow_tombstone: !hostile_creeps,
+                    allow_structure: true,
+                    allow_harvest: true,
+                };
 
-                    ResourceUtility::select_energy_pickup(&creep, &r, &settings)
-                });
+                ResourceUtility::select_energy_pickup(&creep, &r, &settings)
+            });
         }
 
         //

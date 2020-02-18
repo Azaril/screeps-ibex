@@ -29,17 +29,16 @@ pub trait FindNearest<T: Sized + HasPosition> {
 pub struct PathFinderHelpers;
 
 impl PathFinderHelpers {
-    pub fn same_room_ignore_creeps(start_pos: RoomPosition, end_pos: RoomPosition) -> Path
-    {
-        let find_options = FindOptions::new()
-            .max_rooms(1)
-            .ignore_creeps(true);
+    pub fn same_room_ignore_creeps(start_pos: RoomPosition, end_pos: RoomPosition) -> Path {
+        let find_options = FindOptions::new().max_rooms(1).ignore_creeps(true);
 
         start_pos.find_path_to(&end_pos, find_options)
     }
 
-    pub fn same_room_ignore_creeps_and_structures(start_pos: RoomPosition, end_pos: RoomPosition) -> Path
-    {
+    pub fn same_room_ignore_creeps_and_structures(
+        start_pos: RoomPosition,
+        end_pos: RoomPosition,
+    ) -> Path {
         let find_options = FindOptions::new()
             .max_rooms(1)
             .ignore_creeps(true)
@@ -80,7 +79,7 @@ where
     {
         self.filter_map(|pos_object| {
             let path = generator(start_pos, pos_object.pos());
-            
+
             let len = if let Path::Vectorized(vector_path) = &path {
                 if !vector_path.is_empty() {
                     //TODO: Check end point is actually target.
@@ -124,7 +123,7 @@ where
     {
         self.filter_map(|pos_object| {
             let path = generator(pos_object.pos(), end_pos);
-            
+
             let len = if let Path::Vectorized(vector_path) = &path {
                 if !vector_path.is_empty() {
                     //TODO: Check end point is actually target.

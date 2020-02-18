@@ -1,8 +1,8 @@
+use crate::findnearest::*;
+use crate::structureidentifier::*;
 use itertools::*;
 use screeps::*;
 use std::collections::HashMap;
-use crate::structureidentifier::*;
-use crate::findnearest::*;
 
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum RepairPriority {
@@ -168,12 +168,11 @@ impl RepairUtility {
         for priority in ORDERED_REPAIR_PRIORITIES.iter() {
             if let Some(structures) = repair_targets.remove(priority) {
                 //TODO: Make find_nearest cheap - find_nearest linear is a bad approximation.
-                if let Some(structure) = structures.into_iter().find_nearest_linear(start_pos)
-                {
+                if let Some(structure) = structures.into_iter().find_nearest_linear(start_pos) {
                     return Some(structure);
                 }
             }
-        }   
+        }
 
         None
     }
@@ -196,8 +195,7 @@ impl ValidateRepairTarget for Structure {
 impl ValidateRepairTarget for RemoteStructureIdentifier {
     fn is_valid_repair_target(&self) -> Option<bool> {
         if game::rooms::get(self.pos().room_name()).is_some() {
-            self
-                .resolve()
+            self.resolve()
                 .and_then(|s| s.is_valid_repair_target())
                 .or(Some(false))
         } else {

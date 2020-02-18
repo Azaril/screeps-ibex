@@ -290,8 +290,7 @@ impl ValidateDeliveryTarget for Structure {
 impl ValidateDeliveryTarget for RemoteStructureIdentifier {
     fn is_valid_delivery_target(&self, resource: ResourceType) -> Option<bool> {
         if game::rooms::get(self.pos().room_name()).is_some() {
-            self
-                .resolve()
+            self.resolve()
                 .and_then(|s| s.is_valid_delivery_target(resource))
                 .or(Some(false))
         } else {

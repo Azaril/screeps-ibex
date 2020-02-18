@@ -4,9 +4,8 @@ use std::collections::HashMap;
 
 #[derive(Default)]
 pub struct MappingData {
-    pub rooms: HashMap<RoomName, Entity>
+    pub rooms: HashMap<RoomName, Entity>,
 }
-
 
 #[derive(SystemData)]
 pub struct MappingSystemData<'a> {

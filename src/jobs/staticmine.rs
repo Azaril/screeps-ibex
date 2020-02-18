@@ -34,7 +34,7 @@ impl Job for StaticMineJob {
         if creep.pos().is_equal_to(&self.mine_location) {
             if let Some(source) = self.mine_target.resolve() {
                 creep.harvest(&source);
-            } else { 
+            } else {
                 error!(
                     "Harvester has no assigned harvesting source! Name: {}",
                     creep.name()

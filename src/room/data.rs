@@ -1,3 +1,4 @@
+use crate::remoteobjectid::*;
 use crate::serialize::EntityVec;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -5,7 +6,6 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use crate::remoteobjectid::*;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RoomStaticVisibilityData {
@@ -32,7 +32,7 @@ pub struct RoomDynamicVisibilityData {
     #[serde(default)]
     friendly: bool,
     #[serde(default)]
-    hostile: bool
+    hostile: bool,
 }
 
 impl RoomDynamicVisibilityData {
@@ -107,10 +107,14 @@ impl RoomData {
     }
 
     fn create_static_visibility_data(room: &Room) -> RoomStaticVisibilityData {
-        let source_ids = room.find(find::SOURCES).into_iter().map(|s| s.remote_id()).collect();
+        let source_ids = room
+            .find(find::SOURCES)
+            .into_iter()
+            .map(|s| s.remote_id())
+            .collect();
 
-        RoomStaticVisibilityData{
-            sources: source_ids
+        RoomStaticVisibilityData {
+            sources: source_ids,
         }
     }
 
@@ -118,16 +122,30 @@ impl RoomData {
         let controller = room.controller();
 
         let controller_owner_name = controller.as_ref().and_then(|c| c.owner_name());
-        let controller_reservation_owner_name = controller.as_ref().and_then(|c| c.reservation()).map(|r| r.username);
-        let room_owner = controller_owner_name.clone().or_else(|| controller_reservation_owner_name.clone());
-        let my = room_owner.as_ref().map(|name| name == crate::globals::user::name()).unwrap_or(false);
+        let controller_reservation_owner_name = controller
+            .as_ref()
+            .and_then(|c| c.reservation())
+            .map(|r| r.username);
+        let room_owner = controller_owner_name
+            .clone()
+            .or_else(|| controller_reservation_owner_name.clone());
+        let my = room_owner
+            .as_ref()
+            .map(|name| name == crate::globals::user::name())
+            .unwrap_or(false);
 
         //TODO: Friendly/hostile for now only include current user - in future could be other users.
         let friends = [crate::globals::user::name()];
-        let friendly = room_owner.as_ref().map(|name| friends.iter().any(|friend_name| name == friend_name)).unwrap_or(false);
-        let hostile = room_owner.as_ref().map(|name| !friends.iter().any(|friend_name| name == friend_name)).unwrap_or(false);
+        let friendly = room_owner
+            .as_ref()
+            .map(|name| friends.iter().any(|friend_name| name == friend_name))
+            .unwrap_or(false);
+        let hostile = room_owner
+            .as_ref()
+            .map(|name| !friends.iter().any(|friend_name| name == friend_name))
+            .unwrap_or(false);
 
-        RoomDynamicVisibilityData{
+        RoomDynamicVisibilityData {
             update_tick: game::time(),
             owner: controller_owner_name,
             reseration_owner: controller_reservation_owner_name,

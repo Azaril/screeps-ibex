@@ -1,12 +1,11 @@
+use crate::findnearest::*;
 use screeps::*;
 use serde::*;
-use crate::findnearest::*;
 
 #[derive(Copy, Clone, Serialize, Deserialize)]
 struct RoomItemData {
-    required_rcl: u32
+    required_rcl: u32,
 }
-
 
 #[derive(Copy, Clone, Serialize, Deserialize)]
 enum RoomItem {
@@ -14,7 +13,7 @@ enum RoomItem {
     Terrain,
     Source,
     Container(RoomItemData),
-    Road
+    Road,
 }
 
 type PlanState = [[RoomItem; 50]; 50];
@@ -35,17 +34,20 @@ impl Plan {
                     let entry = self.get_entry(x, y);
 
                     match entry {
-                        RoomItem::Empty => {},
-                        RoomItem::Terrain => {},
-                        RoomItem::Source => {},
+                        RoomItem::Empty => {}
+                        RoomItem::Terrain => {}
+                        RoomItem::Source => {}
                         RoomItem::Container(data) => {
                             if room_level >= data.required_rcl {
-                                room.create_construction_site(&RoomPosition::new(x as u32, y as u32, room_name), StructureType::Container);
+                                room.create_construction_site(
+                                    &RoomPosition::new(x as u32, y as u32, room_name),
+                                    StructureType::Container,
+                                );
                             }
-                        },
+                        }
                         RoomItem::Road => {}
                     }
-                } 
+                }
             }
         }
     }
@@ -53,26 +55,28 @@ impl Plan {
     pub fn visualize(&self) {
         let room = game::rooms::get(self.room);
 
-        let circle = |x: i32, y: i32, fill: &str, opacity: f32| { js! { @{room.as_ref()}.visual.circle(@{x}, @{y}, { fill: @{fill}, opacity: @{opacity} }); } };
+        let circle = |x: i32, y: i32, fill: &str, opacity: f32| {
+            js! { @{room.as_ref()}.visual.circle(@{x}, @{y}, { fill: @{fill}, opacity: @{opacity} }); }
+        };
 
         for x in 0..50 {
             for y in 0..50 {
                 let entry = self.get_entry(x, y);
 
                 match entry {
-                    RoomItem::Empty => {},
+                    RoomItem::Empty => {}
                     RoomItem::Terrain => {
                         circle(x as i32, y as i32, "grey", 0.5);
-                    },
+                    }
                     RoomItem::Source => {
                         circle(x as i32, y as i32, "green", 1.0);
-                    },
+                    }
                     RoomItem::Container(_) => {
                         circle(x as i32, y as i32, "blue", 1.0);
-                    },
+                    }
                     RoomItem::Road => {}
                 }
-            } 
+            }
         }
     }
 
@@ -82,14 +86,12 @@ impl Plan {
 }
 
 pub struct Planner<'a> {
-    room: &'a Room
+    room: &'a Room,
 }
 
 impl<'a> Planner<'a> {
     pub fn new(room: &Room) -> Planner {
-        Planner {
-            room
-        }
+        Planner { room }
     }
 
     pub fn plan(&self) -> Plan {
@@ -101,12 +103,12 @@ impl<'a> Planner<'a> {
 
         Plan {
             room: self.room.name(),
-            state
+            state,
         }
     }
 
     fn add_terrain(room: &Room, state: &mut PlanState) {
-        let terrain = game::map::get_room_terrain(room.name()); 
+        let terrain = game::map::get_room_terrain(room.name());
 
         let raw_terrain = terrain.get_raw_buffer();
 
@@ -138,17 +140,18 @@ impl<'a> Planner<'a> {
         let sources = room.find(find::SOURCES);
 
         for source in sources {
-            let nearest_spawn_path = spawns
-                .iter()
-                .cloned()
-                .find_nearest_path_to(source.pos(), PathFinderHelpers::same_room_ignore_creeps_and_structures);
-            
+            let nearest_spawn_path = spawns.iter().cloned().find_nearest_path_to(
+                source.pos(),
+                PathFinderHelpers::same_room_ignore_creeps_and_structures,
+            );
+
             if let Some(Path::Vectorized(path)) = nearest_spawn_path {
                 if let Some(last_step) = path.last() {
                     let pos_x = (last_step.x as i32) - last_step.dx;
                     let pos_y = (last_step.y as i32) - last_step.dy;
 
-                    state[pos_x as usize][pos_y as usize] = RoomItem::Container(RoomItemData{ required_rcl: 2 });
+                    state[pos_x as usize][pos_y as usize] =
+                        RoomItem::Container(RoomItemData { required_rcl: 2 });
                 }
             }
         }

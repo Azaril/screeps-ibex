@@ -7,8 +7,8 @@ use super::utility::buildbehavior::*;
 use super::utility::repair::*;
 use super::utility::resource::*;
 use super::utility::resourcebehavior::*;
-use crate::structureidentifier::*;
 use crate::remoteobjectid::*;
+use crate::structureidentifier::*;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BuildJob {
@@ -126,20 +126,19 @@ impl Job for BuildJob {
         if repick_pickup {
             scope_timing!("repick_pickup");
 
-            self.pickup_target = home_room
-                .and_then(|r| {
-                    //TODO: Should potentially be 'current room if no hostiles'.
-                    let hostile_creeps = !r.find(find::HOSTILE_CREEPS).is_empty();
+            self.pickup_target = home_room.and_then(|r| {
+                //TODO: Should potentially be 'current room if no hostiles'.
+                let hostile_creeps = !r.find(find::HOSTILE_CREEPS).is_empty();
 
-                    let settings = ResourcePickupSettings {
-                        allow_dropped_resource: !hostile_creeps,
-                        allow_tombstone: !hostile_creeps,
-                        allow_structure: true,
-                        allow_harvest: true,
-                    };
+                let settings = ResourcePickupSettings {
+                    allow_dropped_resource: !hostile_creeps,
+                    allow_tombstone: !hostile_creeps,
+                    allow_structure: true,
+                    allow_harvest: true,
+                };
 
-                    ResourceUtility::select_energy_pickup(&creep, &r, &settings)
-                });
+                ResourceUtility::select_energy_pickup(&creep, &r, &settings)
+            });
         }
 
         //

@@ -1,5 +1,5 @@
-use screeps::*;
 use crate::remoteobjectid::*;
+use screeps::*;
 
 pub struct BuildBehaviorUtility;
 
@@ -18,7 +18,10 @@ impl BuildBehaviorUtility {
         }
     }
 
-    pub fn build_construction_site_id(creep: &Creep, construction_site_id: &RemoteObjectId<ConstructionSite>) {
+    pub fn build_construction_site_id(
+        creep: &Creep,
+        construction_site_id: &RemoteObjectId<ConstructionSite>,
+    ) {
         let target_position = construction_site_id.pos();
 
         if creep.pos().room_name() != target_position.room_name() {
@@ -28,7 +31,10 @@ impl BuildBehaviorUtility {
             Self::build_construction_site(creep, &construction_site)
         } else {
             //TODO: Return error result.
-            error!("Failed to resolve controller for upgrading. Name: {}", creep.name());
+            error!(
+                "Failed to resolve controller for upgrading. Name: {}",
+                creep.name()
+            );
         }
     }
 }

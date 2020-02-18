@@ -8,9 +8,9 @@ use specs_derive::*;
 use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
+use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
-use crate::remoteobjectid::*;
 
 #[derive(Clone, Debug, ConvertSaveload)]
 pub struct UpgradeMission {
@@ -97,9 +97,11 @@ impl Mission for UpgradeMission {
                                         let name = name.to_string();
 
                                         spawn_system_data.updater.exec_mut(move |world| {
-                                            let creep_job = JobData::Upgrade(
-                                                ::jobs::upgrade::UpgradeJob::new(&controller_id, home_room),
-                                            );
+                                            let creep_job =
+                                                JobData::Upgrade(::jobs::upgrade::UpgradeJob::new(
+                                                    &controller_id,
+                                                    home_room,
+                                                ));
 
                                             let creep_entity = ::creep::Spawning::build(
                                                 world.create_entity(),

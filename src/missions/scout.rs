@@ -5,11 +5,11 @@ use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
 
-use crate::jobs::data::*;
-use crate::spawnsystem::*;
 use super::data::*;
 use super::missionsystem::*;
+use crate::jobs::data::*;
 use crate::serialize::*;
+use crate::spawnsystem::*;
 
 #[derive(Clone, Debug, ConvertSaveload)]
 pub struct ScoutMission {
@@ -60,10 +60,17 @@ impl Mission for ScoutMission {
         //
 
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
-            let data_is_fresh = room_data.get_dynamic_visibility_data().as_ref().map(|v| v.updated_within(10)).unwrap_or(false);
+            let data_is_fresh = room_data
+                .get_dynamic_visibility_data()
+                .as_ref()
+                .map(|v| v.updated_within(10))
+                .unwrap_or(false);
 
             if data_is_fresh && self.scouts.0.is_empty() {
-                info!("Completing scout mission - room is visible and no active scouts. Room: {}", room_data.name);
+                info!(
+                    "Completing scout mission - room is visible and no active scouts. Room: {}",
+                    room_data.name
+                );
 
                 //TODO: Current data is all immutable - this needs to change when there's a freshness value on the data.
                 return MissionResult::Success;
@@ -96,10 +103,9 @@ impl Mission for ScoutMission {
                                     let name = name.to_string();
 
                                     spawn_system_data.updater.exec_mut(move |world| {
-                                        let creep_job =
-                                            JobData::Scout(::jobs::scout::ScoutJob::new(
-                                                scout_room
-                                            ));
+                                        let creep_job = JobData::Scout(
+                                            ::jobs::scout::ScoutJob::new(scout_room),
+                                        );
 
                                         let creep_entity =
                                             ::creep::Spawning::build(world.create_entity(), &name)
@@ -123,10 +129,8 @@ impl Mission for ScoutMission {
                     return MissionResult::Running;
                 }
             }
-
-            
         }
-            
+
         MissionResult::Failure
     }
 }

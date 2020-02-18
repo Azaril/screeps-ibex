@@ -1,6 +1,6 @@
 use crate::findnearest::*;
-use screeps::*;
 use crate::remoteobjectid::*;
+use screeps::*;
 
 pub struct BuildUtility;
 

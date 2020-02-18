@@ -161,12 +161,18 @@ impl Mission for LocalSupplyMission {
 
                 sources.sort_by_cached_key(|source| {
                     let source_id = source.remote_id();
-                    let source_harvesters = sources_to_harvesters.get(&source_id).map(|harvesters| harvesters.len()).unwrap_or(0);
-                    let source_miners = sources_to_miners.get(&source_id).map(|miners| miners.len()).unwrap_or(0);
+                    let source_harvesters = sources_to_harvesters
+                        .get(&source_id)
+                        .map(|harvesters| harvesters.len())
+                        .unwrap_or(0);
+                    let source_miners = sources_to_miners
+                        .get(&source_id)
+                        .map(|miners| miners.len())
+                        .unwrap_or(0);
 
                     source_harvesters + source_miners
                 });
-                
+
                 //
                 // Spawn needed creeps for each source.
                 //
@@ -352,8 +358,10 @@ impl Mission for LocalSupplyMission {
                                     let name = name.to_string();
 
                                     spawn_system_data.updater.exec_mut(move |world| {
-                                        let creep_job =
-                                            JobData::Haul(::jobs::haul::HaulJob::new(container_id, home_room));
+                                        let creep_job = JobData::Haul(::jobs::haul::HaulJob::new(
+                                            container_id,
+                                            home_room,
+                                        ));
 
                                         let creep_entity =
                                             ::creep::Spawning::build(world.create_entity(), &name)

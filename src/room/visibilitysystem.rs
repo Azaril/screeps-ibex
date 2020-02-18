@@ -1,9 +1,9 @@
+use super::data::*;
 use crossbeam_queue::SegQueue;
 use screeps::*;
 use specs::prelude::*;
 use specs::saveload::*;
 use std::collections::HashMap;
-use super::data::*;
 
 pub const VISIBILITY_PRIORITY_CRITICAL: f32 = 100.0;
 pub const VISIBILITY_PRIORITY_HIGH: f32 = 75.0;
@@ -75,7 +75,8 @@ impl<'a> System<'a> for VisibilityQueueSystem {
             .map(|(_, room_data)| room_data.name)
             .collect::<std::collections::HashSet<RoomName>>();
 
-        let missing_rooms = room_priorities.keys()
+        let missing_rooms = room_priorities
+            .keys()
             .filter(|name| !existing_rooms.contains(name));
 
         for room_name in missing_rooms {

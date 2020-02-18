@@ -121,8 +121,9 @@ impl Mission for LocalBuildMission {
                                 let name = name.to_string();
 
                                 spawn_system_data.updater.exec_mut(move |world| {
-                                    let creep_job =
-                                        JobData::Build(::jobs::build::BuildJob::new(room_name, room_name));
+                                    let creep_job = JobData::Build(::jobs::build::BuildJob::new(
+                                        room_name, room_name,
+                                    ));
 
                                     let creep_entity =
                                         ::creep::Spawning::build(world.create_entity(), &name)

@@ -103,7 +103,7 @@ impl<T> Clone for RemoteObjectId<T> {
     fn clone(&self) -> RemoteObjectId<T> {
         RemoteObjectId {
             id: self.id,
-            position: self.position,            
+            position: self.position,
         }
     }
 }
@@ -132,7 +132,7 @@ impl<T: Sized + HasId> HasRemoteObjectId<T> for T {
     fn remote_id(&self) -> RemoteObjectId<Self> {
         RemoteObjectId {
             id: self.id(),
-            position: self.pos(),            
+            position: self.pos(),
         }
     }
 }

@@ -10,9 +10,7 @@ pub struct ScoutJob {
 
 impl ScoutJob {
     pub fn new(room_target: RoomName) -> ScoutJob {
-        ScoutJob {
-            room_target,
-        }
+        ScoutJob { room_target }
     }
 }
 

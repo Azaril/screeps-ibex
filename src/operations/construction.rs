@@ -4,8 +4,8 @@ use specs::*;
 
 use super::data::*;
 use super::operationsystem::*;
-use crate::missions::data::*;
 use crate::missions::construction::*;
+use crate::missions::data::*;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct ConstructionOperation {}

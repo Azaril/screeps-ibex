@@ -1,6 +1,6 @@
+use super::data::*;
 use screeps::*;
 use specs::prelude::*;
-use super::data::*;
 
 pub struct UpdateRoomDataSystem;
 

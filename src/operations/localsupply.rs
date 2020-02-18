@@ -38,7 +38,9 @@ impl Operation for LocalSupplyOperation {
         for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
             if let Some(room) = game::rooms::get(room_data.name) {
                 let controller = room.controller();
-                let my_room = controller.map(|controller| controller.my()).unwrap_or(false);
+                let my_room = controller
+                    .map(|controller| controller.my())
+                    .unwrap_or(false);
 
                 if my_room {
                     //

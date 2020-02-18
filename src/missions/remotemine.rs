@@ -1,16 +1,16 @@
+use itertools::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use itertools::*;
 
-use crate::jobs::data::*;
-use crate::spawnsystem::*;
 use super::data::*;
 use super::missionsystem::*;
+use crate::jobs::data::*;
 use crate::serialize::*;
+use crate::spawnsystem::*;
 
 #[derive(Clone, Debug, ConvertSaveload)]
 pub struct RemoteMineMission {
@@ -62,7 +62,8 @@ impl Mission for RemoteMineMission {
 
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
-                if dynamic_visibility_data.updated_within(1000) && dynamic_visibility_data.hostile() {
+                if dynamic_visibility_data.updated_within(1000) && dynamic_visibility_data.hostile()
+                {
                     return MissionResult::Failure;
                 }
             }
@@ -109,7 +110,9 @@ impl Mission for RemoteMineMission {
                                     post_body: &[],
                                 };
 
-                                if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+                                if let Ok(body) =
+                                    crate::creep::Spawning::create_body(&body_definition)
+                                {
                                     let priority = SPAWN_PRIORITY_LOW;
 
                                     let mission_entity = *runtime_data.entity;
@@ -124,16 +127,19 @@ impl Mission for RemoteMineMission {
                                             let name = name.to_string();
 
                                             spawn_system_data.updater.exec_mut(move |world| {
-                                                let creep_job =
-                                                    JobData::Harvest(::jobs::harvest::HarvestJob::new(
+                                                let creep_job = JobData::Harvest(
+                                                    ::jobs::harvest::HarvestJob::new(
                                                         source_id,
                                                         delivery_room,
-                                                    ));
+                                                    ),
+                                                );
 
-                                                let creep_entity =
-                                                    ::creep::Spawning::build(world.create_entity(), &name)
-                                                        .with(creep_job)
-                                                        .build();
+                                                let creep_entity = ::creep::Spawning::build(
+                                                    world.create_entity(),
+                                                    &name,
+                                                )
+                                                .with(creep_job)
+                                                .build();
 
                                                 let mission_data_storage =
                                                     &mut world.write_storage::<MissionData>();
@@ -155,7 +161,7 @@ impl Mission for RemoteMineMission {
                 }
             }
         }
-            
+
         MissionResult::Failure
     }
 }

@@ -18,7 +18,10 @@ pub struct HaulJob {
 }
 
 impl HaulJob {
-    pub fn new(container_id: RemoteObjectId<StructureContainer>, delivery_room: RoomName) -> HaulJob {
+    pub fn new(
+        container_id: RemoteObjectId<StructureContainer>,
+        delivery_room: RoomName,
+    ) -> HaulJob {
         HaulJob {
             primary_container: container_id,
             delivery_room,
@@ -56,7 +59,10 @@ impl Job for HaulJob {
 
         let repick_delivery = self
             .delivery_target
-            .map(|target| !target.is_valid_delivery_target(resource).unwrap_or(true) && !target.is_valid_controller_upgrade_target())
+            .map(|target| {
+                !target.is_valid_delivery_target(resource).unwrap_or(true)
+                    && !target.is_valid_controller_upgrade_target()
+            })
             .unwrap_or_else(|| capacity > 0 && available_capacity == 0);
 
         //
@@ -77,12 +83,16 @@ impl Job for HaulJob {
         //TODO: This is kind of brittle.
         let transfer_target = match self.delivery_target {
             Some(RemoteStructureIdentifier::Controller(_)) => None,
-            Some(id) => Some(id),            
-            _ => None
+            Some(id) => Some(id),
+            _ => None,
         };
 
         if let Some(transfer_target_id) = transfer_target {
-            ResourceBehaviorUtility::transfer_resource_to_structure_id(&creep, &transfer_target_id, resource);
+            ResourceBehaviorUtility::transfer_resource_to_structure_id(
+                &creep,
+                &transfer_target_id,
+                resource,
+            );
 
             return;
         }
@@ -113,8 +123,7 @@ impl Job for HaulJob {
             };
 
             if self.pickup_target.is_none() {
-                self.pickup_target = delivery_room
-                .and_then(|r| {
+                self.pickup_target = delivery_room.and_then(|r| {
                     //TODO: Should potentially be 'current room if no hostiles'.
                     let hostile_creeps = !r.find(find::HOSTILE_CREEPS).is_empty();
 
