@@ -7,3 +7,4 @@ pub mod remotemine;
 pub mod scout;
 pub mod tower;
 pub mod upgrade;
+pub mod reserve;

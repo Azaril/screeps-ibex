@@ -62,9 +62,16 @@ impl Mission for RemoteMineMission {
 
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
-                if dynamic_visibility_data.updated_within(1000) && dynamic_visibility_data.hostile()
-                {
-                    return MissionResult::Failure;
+                if dynamic_visibility_data.updated_within(1000) {
+                    if dynamic_visibility_data.owner().is_some() {
+                        return MissionResult::Failure;
+                    }
+    
+                    if !dynamic_visibility_data.my()
+                        && (dynamic_visibility_data.friendly() || dynamic_visibility_data.hostile())
+                    {
+                        return MissionResult::Failure;
+                    }
                 }
             }
 
@@ -113,7 +120,11 @@ impl Mission for RemoteMineMission {
                                 if let Ok(body) =
                                     crate::creep::Spawning::create_body(&body_definition)
                                 {
-                                    let priority = SPAWN_PRIORITY_LOW;
+                                    let priority = if source_harvesters.is_empty() {
+                                        SPAWN_PRIORITY_MEDIUM
+                                    } else {
+                                        SPAWN_PRIORITY_LOW
+                                    };
 
                                     let mission_entity = *runtime_data.entity;
                                     let delivery_room = home_room_data.name;

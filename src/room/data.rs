@@ -10,10 +10,16 @@ use specs_derive::*;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RoomStaticVisibilityData {
     #[serde(default)]
+    controller: Option<RemoteObjectId<StructureController>>,
+    #[serde(default)]
     sources: Vec<RemoteObjectId<Source>>,
 }
 
 impl RoomStaticVisibilityData {
+    pub fn controller(&self) -> &Option<RemoteObjectId<StructureController>> {
+        &self.controller
+    }
+
     pub fn sources(&self) -> &Vec<RemoteObjectId<Source>> {
         &self.sources
     }
@@ -113,7 +119,10 @@ impl RoomData {
             .map(|s| s.remote_id())
             .collect();
 
+        let controller_id = room.controller().map(|c| c.remote_id());
+
         RoomStaticVisibilityData {
+            controller: controller_id,
             sources: source_ids,
         }
     }

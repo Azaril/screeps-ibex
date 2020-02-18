@@ -11,6 +11,7 @@ pub struct StaticMineJob {
 }
 
 impl StaticMineJob {
+    //TODO: Pass in container, not position. (Handle container going missing?)
     pub fn new(source_id: RemoteObjectId<Source>, position: RoomPosition) -> StaticMineJob {
         StaticMineJob {
             mine_target: source_id,

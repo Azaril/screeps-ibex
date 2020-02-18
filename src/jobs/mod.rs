@@ -7,3 +7,4 @@ pub mod scout;
 pub mod staticmine;
 pub mod upgrade;
 pub mod utility;
+pub mod reserve;

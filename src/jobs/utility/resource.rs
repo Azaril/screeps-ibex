@@ -21,6 +21,7 @@ impl EnergyPickupTarget {
         // If room cannot be resolve, the room is not currently visible.
         //
 
+        //TODO: Use room visibility cache.
         if game::rooms::get(self.get_position().room_name()).is_none() {
             return true;
         }

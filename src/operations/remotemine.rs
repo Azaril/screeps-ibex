@@ -9,6 +9,7 @@ use super::operationsystem::*;
 use crate::missions::data::*;
 use crate::missions::remotemine::*;
 use crate::missions::scout::*;
+use crate::missions::reserve::*;
 use crate::room::visibilitysystem::*;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -166,7 +167,7 @@ impl Operation for RemoteMineOperation {
                 });
 
                 //
-                // Spawn a new mission to fill the local build role if missing.
+                // Spawn a new mission to fill the remote mine role if missing.
                 //
 
                 if !has_remote_mine_mission {
@@ -177,6 +178,41 @@ impl Operation for RemoteMineOperation {
 
                     system_data.updater.exec_mut(move |world| {
                         let mission_entity = RemoteMineMission::build(
+                            world.create_entity(),
+                            room_entity,
+                            home_room_entity,
+                        )
+                        .build();
+
+                        let room_data_storage =
+                            &mut world.write_storage::<::room::data::RoomData>();
+
+                        if let Some(room_data) = room_data_storage.get_mut(room_entity) {
+                            room_data.missions.0.push(mission_entity);
+                        }
+                    });
+                }
+
+                //TODO: wiarchbe: Use trait instead of match.
+                let has_reservation_mission = room_data.missions.0.iter().any(|mission_entity| {
+                    match system_data.mission_data.get(*mission_entity) {
+                        Some(MissionData::Reserve(_)) => true,
+                        _ => false,
+                    }
+                });
+
+                //
+                // Spawn a new mission to fill the reservation role if missing.
+                //
+
+                if !has_reservation_mission {
+                    info!("Starting reservation for room. Room: {}", room_data.name);
+
+                    let room_entity = room_data_entity;
+                    let home_room_entity = home_room_data_entity;
+
+                    system_data.updater.exec_mut(move |world| {
+                        let mission_entity = ReserveMission::build(
                             world.create_entity(),
                             room_entity,
                             home_room_entity,

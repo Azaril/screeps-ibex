@@ -12,6 +12,7 @@ pub enum JobData {
     StaticMine(super::staticmine::StaticMineJob),
     Haul(super::haul::HaulJob),
     Scout(super::scout::ScoutJob),
+    Reserve(super::reserve::ReserveJob),
 }
 
 impl JobData {
@@ -23,6 +24,7 @@ impl JobData {
             JobData::StaticMine(ref mut data) => data,
             JobData::Haul(ref mut data) => data,
             JobData::Scout(ref mut data) => data,
+            JobData::Reserve(ref mut data) => data,
         }
     }
 }
