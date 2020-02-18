@@ -8,7 +8,7 @@ use super::operationsystem::*;
 use crate::missions::data::*;
 use crate::missions::tower::*;
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct TowerOperation {}
 
 impl TowerOperation {

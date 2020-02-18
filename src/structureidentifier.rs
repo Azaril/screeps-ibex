@@ -3,7 +3,7 @@ use serde::*;
 
 use crate::remoteobjectid::*;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 pub enum StructureIdentifier {
     Container(ObjectId<StructureContainer>),
     Controller(ObjectId<StructureController>),
@@ -82,7 +82,7 @@ impl StructureIdentifier {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 pub enum RemoteStructureIdentifier {
     Container(RemoteObjectId<StructureContainer>),
     Controller(RemoteObjectId<StructureController>),

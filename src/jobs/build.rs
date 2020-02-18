@@ -10,7 +10,7 @@ use super::utility::resourcebehavior::*;
 use crate::remoteobjectid::*;
 use crate::structureidentifier::*;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct BuildJob {
     pub home_room: RoomName,
     pub build_room: RoomName,

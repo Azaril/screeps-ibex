@@ -3,7 +3,7 @@ use serde::*;
 
 use super::jobsystem::*;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 pub struct ScoutJob {
     pub room_target: RoomName,
 }

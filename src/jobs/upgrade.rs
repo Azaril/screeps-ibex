@@ -7,7 +7,7 @@ use super::utility::resource::*;
 use super::utility::resourcebehavior::*;
 use crate::remoteobjectid::*;
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct UpgradeJob {
     pub home_room: RoomName,
     pub upgrade_target: RemoteObjectId<StructureController>,

@@ -11,7 +11,7 @@ use crate::missions::remotemine::*;
 use crate::missions::scout::*;
 use crate::room::visibilitysystem::*;
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct RemoteMineOperation {}
 
 impl RemoteMineOperation {

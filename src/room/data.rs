@@ -7,7 +7,7 @@ use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RoomStaticVisibilityData {
     #[serde(default)]
     sources: Vec<RemoteObjectId<Source>>,
@@ -19,7 +19,7 @@ impl RoomStaticVisibilityData {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RoomDynamicVisibilityData {
     #[serde(default)]
     update_tick: u32,
@@ -69,7 +69,7 @@ impl RoomDynamicVisibilityData {
     }
 }
 
-#[derive(Clone, Debug, Component, ConvertSaveload)]
+#[derive(Clone, Component, ConvertSaveload)]
 pub struct RoomData {
     pub name: RoomName,
     visible: bool,

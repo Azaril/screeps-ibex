@@ -13,7 +13,7 @@ use crate::serialize::*;
 use jobs::data::*;
 use spawnsystem::*;
 
-#[derive(Clone, Debug, ConvertSaveload)]
+#[derive(Clone, ConvertSaveload)]
 pub struct LocalBuildMission {
     room_data: Entity,
     builders: EntityVec,

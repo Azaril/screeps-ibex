@@ -7,7 +7,7 @@ use super::utility::resourcebehavior::*;
 use crate::remoteobjectid::*;
 use crate::structureidentifier::*;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 pub struct HaulJob {
     pub primary_container: RemoteObjectId<StructureContainer>,
     pub delivery_room: RoomName,

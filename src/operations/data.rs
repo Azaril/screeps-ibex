@@ -4,7 +4,7 @@ use specs_derive::*;
 
 use super::operationsystem::*;
 
-#[derive(Clone, Copy, Debug, Component, Serialize, Deserialize)]
+#[derive(Clone, Copy, Component, Serialize, Deserialize)]
 pub enum OperationData {
     LocalSupply(super::localsupply::LocalSupplyOperation),
     Upgrade(super::upgrade::UpgradeOperation),

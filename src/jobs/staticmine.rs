@@ -4,7 +4,7 @@ use serde::*;
 use super::jobsystem::*;
 use crate::remoteobjectid::*;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 pub struct StaticMineJob {
     pub mine_target: RemoteObjectId<Source>,
     pub mine_location: RoomPosition,

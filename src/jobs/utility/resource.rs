@@ -6,7 +6,7 @@ use crate::findnearest::*;
 use crate::remoteobjectid::*;
 use crate::structureidentifier::*;
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub enum EnergyPickupTarget {
     Structure(RemoteStructureIdentifier),
     Source(RemoteObjectId<Source>),

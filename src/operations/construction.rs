@@ -7,7 +7,7 @@ use super::operationsystem::*;
 use crate::missions::construction::*;
 use crate::missions::data::*;
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct ConstructionOperation {}
 
 impl ConstructionOperation {

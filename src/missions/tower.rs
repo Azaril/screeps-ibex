@@ -9,7 +9,7 @@ use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::utility::repair::*;
 
-#[derive(Clone, Debug, ConvertSaveload)]
+#[derive(Clone, ConvertSaveload)]
 pub struct TowerMission {
     room_data: Entity,
 }

@@ -12,7 +12,7 @@ use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 
-#[derive(Clone, Debug, ConvertSaveload)]
+#[derive(Clone, ConvertSaveload)]
 pub struct UpgradeMission {
     room_data: Entity,
     upgraders: EntityVec,

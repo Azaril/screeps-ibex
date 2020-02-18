@@ -12,7 +12,7 @@ use crate::jobs::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 
-#[derive(Clone, Debug, ConvertSaveload)]
+#[derive(Clone, ConvertSaveload)]
 pub struct RemoteMineMission {
     room_data: Entity,
     home_room_data: Entity,

@@ -6,7 +6,7 @@ use specs_derive::*;
 
 use super::missionsystem::*;
 
-#[derive(Clone, Debug, Component, ConvertSaveload)]
+#[derive(Clone, Component, ConvertSaveload)]
 pub enum MissionData {
     LocalSupply(super::localsupply::LocalSupplyMission),
     Upgrade(super::upgrade::UpgradeMission),

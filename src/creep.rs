@@ -4,7 +4,7 @@ use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Component)]
+#[derive(Clone, Copy, Deserialize, Serialize, Component)]
 pub struct CreepOwner {
     pub owner: ObjectId<Creep>,
 }
@@ -15,7 +15,7 @@ impl CreepOwner {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Component)]
+#[derive(Clone, Deserialize, Serialize, Component)]
 pub struct CreepSpawning {
     pub name: String,
 }
