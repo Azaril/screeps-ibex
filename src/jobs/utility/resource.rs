@@ -50,7 +50,13 @@ impl EnergyPickupTarget {
                 }
             }
             EnergyPickupTarget::DroppedResource(resource_id) => resource_id.resolve().is_some(),
-            EnergyPickupTarget::Tombstone(tombstone_id) => tombstone_id.resolve().is_some(),
+            EnergyPickupTarget::Tombstone(tombstone_id) => {
+                if let Some(tombstone) = tombstone_id.resolve() {
+                    tombstone.store_used_capacity(Some(ResourceType::Energy)) > 0
+                } else {
+                    false
+                }
+            }
         }
     }
 
