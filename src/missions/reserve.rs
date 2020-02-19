@@ -47,8 +47,6 @@ impl Mission for ReserveMission {
     ) -> MissionResult {
         scope_timing!("ReserveMission");
 
-        info!("Running reserve mission.");
-
         //
         // Cleanup reservers that no longer exist.
         //
@@ -69,7 +67,7 @@ impl Mission for ReserveMission {
                     }
     
                     if !dynamic_visibility_data.my()
-                        && (dynamic_visibility_data.friendly() || dynamic_visibility_data.hostile())
+                        && (dynamic_visibility_data.friendly_owner() || dynamic_visibility_data.hostile_owner())
                     {
                         return MissionResult::Failure;
                     }
@@ -77,13 +75,9 @@ impl Mission for ReserveMission {
             }
 
             if let Some(static_visibility_data) = room_data.get_static_visibility_data() {
-                info!("Got static data.");
                 if let Some(controller) = static_visibility_data.controller() {
-                    info!("Got controller.");
                     if let Some(home_room_data) = system_data.room_data.get(self.home_room_data) {
-                        info!("Got home room data.");
                         if let Some(home_room) = game::rooms::get(home_room_data.name) {
-                            info!("Got home room.");
                             let alive_reservers = self.reservers.0
                                 .iter()
                                 .filter(|reserver_entity| {
@@ -95,8 +89,6 @@ impl Mission for ReserveMission {
                                 })
                                 .count();
 
-                            info!("Alive reservers: {}", alive_reservers);
-
                             //TODO: Compute number of reservers actually needed.
                             if alive_reservers < 1 {
                                 let body_definition = crate::creep::SpawnBodyDefinition {
@@ -104,7 +96,7 @@ impl Mission for ReserveMission {
                                     minimum_repeat: Some(1),
                                     maximum_repeat: Some(2),
                                     pre_body: &[],
-                                    repeat_body: &[Part::Move, Part::Move, Part::Claim, Part::Claim],
+                                    repeat_body: &[Part::Claim, Part::Move],
                                     post_body: &[],
                                 };
 

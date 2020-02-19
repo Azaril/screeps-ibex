@@ -63,15 +63,25 @@ impl Mission for UpgradeMission {
                         let max_upgraders = 3;
 
                         if self.upgraders.0.len() < max_upgraders {
-                            let work_parts_per_tick = (CONTROLLER_MAX_UPGRADE_PER_TICK as f32)
-                                / (UPGRADE_CONTROLLER_POWER as f32);
-                            let work_parts_per_upgrader =
-                                (work_parts_per_tick / (max_upgraders as f32)).ceil() as usize;
+                            let work_parts_per_upgrader = if controller.level() == 8 {
+                                let work_parts_per_tick = (CONTROLLER_MAX_UPGRADE_PER_TICK as f32)
+                                    / (UPGRADE_CONTROLLER_POWER as f32);
+
+                                let work_parts = (work_parts_per_tick / (max_upgraders as f32)).ceil();
+
+                                Some(work_parts as usize)
+                            } else {
+                                None
+                            };
 
                             let body_definition = crate::creep::SpawnBodyDefinition {
-                                maximum_energy: room.energy_capacity_available(),
+                                maximum_energy: if self.upgraders.0.is_empty() {
+                                    room.energy_available()
+                                } else {
+                                    room.energy_capacity_available()
+                                },
                                 minimum_repeat: Some(1),
-                                maximum_repeat: Some(work_parts_per_upgrader),
+                                maximum_repeat: work_parts_per_upgrader,
                                 pre_body: &[],
                                 repeat_body: &[Part::Work, Part::Carry, Part::Move, Part::Move],
                                 post_body: &[],

@@ -52,6 +52,7 @@ impl Operation for RemoteMineOperation {
                 if my_room && room_level >= 2 {
                     let mut candidate_rooms = vec![room_data.name];
 
+                    //TODO: Configure how far to expand room search.
                     for _ in 0..1 {
                         candidate_rooms = candidate_rooms
                             .into_iter()
@@ -61,6 +62,18 @@ impl Operation for RemoteMineOperation {
                                     .cloned()
                                     .collect::<Vec<RoomName>>()
                             })
+                            .filter(|room_name| {
+                                if let Some(search_room_entity) = system_data.mapping.rooms.get(&room_name) {
+                                    if let Some(search_room_data) = system_data.room_data.get(*search_room_entity) {
+                                        if let Some(search_room_data) = search_room_data.get_dynamic_visibility_data() {
+                                            if search_room_data.updated_within(5000) && (search_room_data.hostile_owner() || search_room_data.source_keeper()) {
+                                                return false;
+                                            }
+                                        }
+                                    }
+                                }
+                                true
+                            })
                             .unique()
                             .collect();
                     }
@@ -69,9 +82,7 @@ impl Operation for RemoteMineOperation {
                         if let Some(offset_room_entity) =
                             system_data.mapping.rooms.get(&offset_room_name)
                         {
-                            if system_data.room_data.get(*offset_room_entity).is_some() {
-                                desired_missions.push((*offset_room_entity, entity));
-                            }
+                            desired_missions.push((*offset_room_entity, entity));
                         } else {
                             system_data.visibility.request(VisibilityRequest::new(
                                 offset_room_name,
@@ -87,8 +98,14 @@ impl Operation for RemoteMineOperation {
             let room_data = system_data.room_data.get(room_data_entity).unwrap();
 
             //
-            // Query if any missions running on the room currently fufill the remote miner role.
+            // Skip rooms that are known to have no sources. (If it is not known yet if they do, at least scout.)
             //
+
+            if let Some(static_visibility_data) = room_data.get_static_visibility_data() {
+                if static_visibility_data.sources().is_empty() {
+                    continue;
+                }
+            }
 
             let dynamic_visibility_data = room_data.get_dynamic_visibility_data();
 
@@ -141,17 +158,17 @@ impl Operation for RemoteMineOperation {
             // Spawn remote mine missions for rooms that are not hostile and have recent visibility.
             //
 
-            if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
+            if let Some(dynamic_visibility_data) = dynamic_visibility_data {
                 if !dynamic_visibility_data.updated_within(1000) {
                     continue;
                 }
 
-                if dynamic_visibility_data.owner().is_some() {
+                if dynamic_visibility_data.owner().is_some() || dynamic_visibility_data.source_keeper() {
                     continue;
                 }
 
                 if !dynamic_visibility_data.my()
-                    && (dynamic_visibility_data.friendly() || dynamic_visibility_data.hostile())
+                    && (dynamic_visibility_data.friendly_owner() || dynamic_visibility_data.hostile_owner())
                 {
                     continue;
                 }

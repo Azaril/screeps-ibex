@@ -127,7 +127,7 @@ impl<'a> System<'a> for SpawnQueueSystem {
                                 // If there was not enough energy available for the highest priority request,
                                 // continue waiting for energy and don't allow any other spawns to occur.
                                 //
-                                true
+                                true                                
                             }
                             _ => {
                                 //

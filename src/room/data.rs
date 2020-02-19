@@ -39,6 +39,8 @@ pub struct RoomDynamicVisibilityData {
     friendly: bool,
     #[serde(default)]
     hostile: bool,
+    #[serde(default)]
+    source_keeper: bool,
 }
 
 impl RoomDynamicVisibilityData {
@@ -66,12 +68,16 @@ impl RoomDynamicVisibilityData {
         self.my
     }
 
-    pub fn friendly(&self) -> bool {
+    pub fn friendly_owner(&self) -> bool {
         self.friendly
     }
 
-    pub fn hostile(&self) -> bool {
+    pub fn hostile_owner(&self) -> bool {
         self.hostile
+    }
+
+    pub fn source_keeper(&self) -> bool {
+        self.source_keeper
     }
 }
 
@@ -154,6 +160,11 @@ impl RoomData {
             .map(|name| !friends.iter().any(|friend_name| name == friend_name))
             .unwrap_or(false);
 
+        //TODO: This is expensive - can really just be calculated for room number. Not possible to calculate given x/y coord is private.
+        let source_keeper = room.find(find::HOSTILE_STRUCTURES)
+            .into_iter()
+            .any(|s| if let Structure::KeeperLair(_) = s.as_structure() { true } else { false });
+
         RoomDynamicVisibilityData {
             update_tick: game::time(),
             owner: controller_owner_name,
@@ -161,6 +172,7 @@ impl RoomData {
             my,
             friendly,
             hostile,
+            source_keeper
         }
     }
 

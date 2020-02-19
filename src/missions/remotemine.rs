@@ -68,7 +68,7 @@ impl Mission for RemoteMineMission {
                     }
     
                     if !dynamic_visibility_data.my()
-                        && (dynamic_visibility_data.friendly() || dynamic_visibility_data.hostile())
+                        && (dynamic_visibility_data.friendly_owner() || dynamic_visibility_data.hostile_owner())
                     {
                         return MissionResult::Failure;
                     }
@@ -106,7 +106,10 @@ impl Mission for RemoteMineMission {
                             //
 
                             //TODO: Compute correct number of harvesters to use for source.
-                            if source_harvesters.len() < 2 {
+                            let current_harvesters = source_harvesters.len();
+                            let desired_harvesters = 2;
+                            
+                            if current_harvesters < desired_harvesters {
                                 //TODO: Compute best body parts to use.
                                 let body_definition = crate::creep::SpawnBodyDefinition {
                                     maximum_energy: home_room.energy_capacity_available(),
@@ -120,11 +123,17 @@ impl Mission for RemoteMineMission {
                                 if let Ok(body) =
                                     crate::creep::Spawning::create_body(&body_definition)
                                 {
-                                    let priority = if source_harvesters.is_empty() {
-                                        SPAWN_PRIORITY_MEDIUM
+                                    let room_offset_distance = home_room_data.name - source.pos().room_name();
+                                    let room_manhattan_distance = room_offset_distance.0.abs() + room_offset_distance.1.abs();
+
+                                    let priority_range = if room_manhattan_distance <= 1 {
+                                        (SPAWN_PRIORITY_MEDIUM, SPAWN_PRIORITY_LOW)
                                     } else {
-                                        SPAWN_PRIORITY_LOW
+                                        (SPAWN_PRIORITY_LOW, SPAWN_PRIORITY_NONE)
                                     };
+
+                                    let interp = (current_harvesters as f32) / (desired_harvesters as f32);
+                                    let priority = (priority_range.0 + priority_range.1) * interp;
 
                                     let mission_entity = *runtime_data.entity;
                                     let delivery_room = home_room_data.name;
