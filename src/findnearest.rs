@@ -35,6 +35,18 @@ impl PathFinderHelpers {
         start_pos.find_path_to(&end_pos, find_options)
     }
 
+    pub fn same_room_ignore_creeps_range_1(start_pos: RoomPosition, end_pos: RoomPosition) -> Path {
+        let find_options = FindOptions::new().max_rooms(1).ignore_creeps(true).range(1);
+
+        start_pos.find_path_to(&end_pos, find_options)
+    }
+
+    pub fn same_room_ignore_creeps_range_3(start_pos: RoomPosition, end_pos: RoomPosition) -> Path {
+        let find_options = FindOptions::new().max_rooms(1).ignore_creeps(true).range(3);
+
+        start_pos.find_path_to(&end_pos, find_options)
+    }
+
     pub fn same_room_ignore_creeps_and_structures(
         start_pos: RoomPosition,
         end_pos: RoomPosition,
@@ -43,6 +55,19 @@ impl PathFinderHelpers {
             .max_rooms(1)
             .ignore_creeps(true)
             .ignore_destructible_structures(true);
+
+        start_pos.find_path_to(&end_pos, find_options)
+    }
+
+    pub fn same_room_ignore_creeps_and_structures_range_1(
+        start_pos: RoomPosition,
+        end_pos: RoomPosition,
+    ) -> Path {
+        let find_options = FindOptions::new()
+            .max_rooms(1)
+            .ignore_creeps(true)
+            .ignore_destructible_structures(true)
+            .range(1);
 
         start_pos.find_path_to(&end_pos, find_options)
     }

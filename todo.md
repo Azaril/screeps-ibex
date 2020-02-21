@@ -1,5 +1,9 @@
 # High Priority
 
+- Containers are not always placed when planning preventing container mining.
+- Remote build (likely) seems to be creating a massive number of builders when supporting a newly claimed room.
+- Add state machine system. Use it to drive operations/missions/jobs. (Requires entity vector fix or workaround.)
+- Add stuck detection and response for creeps.
 - Use 'local supply' mission for both local supply and remote mine.
 - Add lost creep recovery - i.e. memory is lost.
 - Add time limiting to scout mission - don't keep running if creep can't complete objective. Don't keep spawning waves.
@@ -12,6 +16,8 @@
 - Add remote claiming ability.
 - Add build priority bucketing.
 - Computer number of hauler/harvester parts needed based on path distance.
+- Attach missions to operations as needed. (Requires entity vector fix or workaround.)
+- Add heuristics for which rooms to claim next. (Number of sources, source proximity, amount of swamp, etc.)
 
 # Medium Priority
 

@@ -21,7 +21,6 @@ extern crate crossbeam_queue;
 #[macro_use]
 mod timing;
 mod creep;
-mod features;
 mod findnearest;
 mod globals;
 mod jobs;
@@ -34,6 +33,7 @@ mod room;
 mod serialize;
 mod spawnsystem;
 mod structureidentifier;
+mod features;
 
 use std::fmt;
 

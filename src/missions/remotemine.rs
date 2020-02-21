@@ -62,16 +62,9 @@ impl Mission for RemoteMineMission {
 
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
-                if dynamic_visibility_data.updated_within(1000) {
-                    if dynamic_visibility_data.owner().is_some() {
-                        return MissionResult::Failure;
-                    }
-    
-                    if !dynamic_visibility_data.my()
-                        && (dynamic_visibility_data.friendly_owner() || dynamic_visibility_data.hostile_owner())
-                    {
-                        return MissionResult::Failure;
-                    }
+                if dynamic_visibility_data.updated_within(1000) 
+                    && (!dynamic_visibility_data.owner().neutral() || dynamic_visibility_data.reservation().hostile() || dynamic_visibility_data.reservation().friendly()) {
+                    return MissionResult::Failure;
                 }
             }
 
@@ -107,14 +100,14 @@ impl Mission for RemoteMineMission {
 
                             //TODO: Compute correct number of harvesters to use for source.
                             let current_harvesters = source_harvesters.len();
-                            let desired_harvesters = 2;
+                            let desired_harvesters = 1;
                             
                             if current_harvesters < desired_harvesters {
                                 //TODO: Compute best body parts to use.
                                 let body_definition = crate::creep::SpawnBodyDefinition {
                                     maximum_energy: home_room.energy_capacity_available(),
                                     minimum_repeat: Some(1),
-                                    maximum_repeat: Some(6),
+                                    maximum_repeat: Some(8),
                                     pre_body: &[],
                                     repeat_body: &[Part::Move, Part::Move, Part::Carry, Part::Work],
                                     post_body: &[],

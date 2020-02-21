@@ -7,6 +7,7 @@ use super::localsupply::*;
 use super::remotemine::*;
 use super::tower::*;
 use super::upgrade::*;
+use super::claim::*;
 
 pub struct OperationManagerSystem;
 
@@ -27,6 +28,7 @@ impl<'a> System<'a> for OperationManagerSystem {
         let mut has_tower = false;
         let mut has_remote_mine = false;
         let mut has_construction = false;
+        let mut has_claim = false;
 
         for (_, operation) in (&entities, &operations).join() {
             match operation {
@@ -36,6 +38,7 @@ impl<'a> System<'a> for OperationManagerSystem {
                 OperationData::Tower(_) => has_tower = true,
                 OperationData::RemoteMine(_) => has_remote_mine = true,
                 OperationData::Construction(_) => has_construction = true,
+                OperationData::Claim(_) => has_claim = true,
             }
         }
 
@@ -73,6 +76,12 @@ impl<'a> System<'a> for OperationManagerSystem {
             info!("Construction operation does not exist, creating.");
 
             ConstructionOperation::build(updater.create_entity(&entities)).build();
+        }
+
+        if !has_claim {
+            info!("Claim operation does not exist, creating.");
+
+            ClaimOperation::build(updater.create_entity(&entities)).build();
         }
     }
 }

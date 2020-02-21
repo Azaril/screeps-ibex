@@ -10,7 +10,7 @@ pub type SerializeMarker = SimpleMarker<SerializeMarkerTag>;
 pub type SerializeMarkerAllocator = SimpleMarkerAllocator<SerializeMarkerTag>;
 
 //
-// NOTE: EntityVec is a wrapper type due to the built in ConverSaveLoad is overly aggresive
+// NOTE: EntityVec is a wrapper type due to the built in ConvertSaveLoad is overly aggresive
 //       at trying to use Serde derived types and ignores that the contents of the vector
 //       are ConvertSaveLoad types.
 //

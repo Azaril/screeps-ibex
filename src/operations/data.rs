@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
+use specs::error::NoError;
+use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
 
 use super::operationsystem::*;
 
-#[derive(Clone, Copy, Component, Serialize, Deserialize)]
+#[derive(Clone, Component, ConvertSaveload)]
 pub enum OperationData {
     LocalSupply(super::localsupply::LocalSupplyOperation),
     Upgrade(super::upgrade::UpgradeOperation),
@@ -12,6 +14,7 @@ pub enum OperationData {
     Tower(super::tower::TowerOperation),
     RemoteMine(super::remotemine::RemoteMineOperation),
     Construction(super::construction::ConstructionOperation),
+    Claim(super::claim::ClaimOperation),
 }
 
 impl OperationData {
@@ -23,6 +26,7 @@ impl OperationData {
             OperationData::Tower(ref mut data) => data,
             OperationData::RemoteMine(ref mut data) => data,
             OperationData::Construction(ref mut data) => data,
+            OperationData::Claim(ref mut data) => data,
         }
     }
 }

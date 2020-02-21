@@ -27,8 +27,6 @@ impl Job for ReserveJob {
         // Reserver controller.
         //
 
-        //TODO: Validate container still exists? Recyle or reuse miner if it doesn't?
-
         if creep.pos().is_near_to(&self.reserve_target.pos()) {
             if let Some(controller) = self.reserve_target.resolve() {
                 creep.reserve_controller(&controller);

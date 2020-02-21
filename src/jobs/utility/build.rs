@@ -20,7 +20,7 @@ impl BuildUtility {
             construction_sites
                 .iter()
                 .cloned()
-                .find_nearest_from(creep.pos(), PathFinderHelpers::same_room_ignore_creeps)
+                .find_nearest_from(creep.pos(), PathFinderHelpers::same_room_ignore_creeps_range_3)
         })
     }
 }

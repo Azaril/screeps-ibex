@@ -32,6 +32,7 @@ impl Operation for UpgradeOperation {
     fn run_operation<'a>(
         &mut self,
         system_data: &'a OperationExecutionSystemData,
+        _runtime_data: &'a OperationExecutionRuntimeData,
     ) -> OperationResult {
         scope_timing!("UpgradeOperation");
 

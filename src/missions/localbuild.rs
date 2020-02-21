@@ -13,7 +13,7 @@ use crate::serialize::*;
 use jobs::data::*;
 use spawnsystem::*;
 
-#[derive(Clone, ConvertSaveload)]
+#[derive(Clone, Debug, ConvertSaveload)]
 pub struct LocalBuildMission {
     room_data: Entity,
     builders: EntityVec,
@@ -111,10 +111,10 @@ impl Mission for LocalBuildMission {
 
                     if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
                         let mission_entity = *runtime_data.entity;
-                        let room_name = room.name();
+                        let room_name = room_data.name;
 
                         system_data.spawn_queue.request(SpawnRequest::new(
-                            room_name,
+                            room_data.name,
                             &body,
                             priority,
                             Box::new(move |spawn_system_data, name| {

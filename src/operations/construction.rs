@@ -31,12 +31,13 @@ impl Operation for ConstructionOperation {
     fn run_operation<'a>(
         &mut self,
         system_data: &'a OperationExecutionSystemData,
+        _runtime_data: &'a OperationExecutionRuntimeData,
     ) -> OperationResult {
         scope_timing!("ConstructionOperation");
 
         for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
             if let Some(dynamic_room_visiblity) = room_data.get_dynamic_visibility_data() {
-                if dynamic_room_visiblity.visible() && dynamic_room_visiblity.my() {
+                if dynamic_room_visiblity.visible() && dynamic_room_visiblity.owner().mine() {
                     //
                     // Query if any missions running on the room currently fufil the local supply role.
                     //

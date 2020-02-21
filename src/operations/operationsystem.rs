@@ -24,6 +24,10 @@ pub struct OperationExecutionSystemData<'a> {
     pub visibility: &'a Read<'a, VisibilityQueue>,
 }
 
+pub struct OperationExecutionRuntimeData<'a> {
+    pub entity: &'a Entity,
+}
+
 pub enum OperationResult {
     Running,
     Success,
@@ -31,7 +35,7 @@ pub enum OperationResult {
 }
 
 pub trait Operation {
-    fn run_operation(&mut self, system_data: &OperationExecutionSystemData) -> OperationResult;
+    fn run_operation(&mut self, system_data: &OperationExecutionSystemData, runtime_data: &OperationExecutionRuntimeData) -> OperationResult;
 }
 
 pub struct OperationSystem;
@@ -52,7 +56,11 @@ impl<'a> System<'a> for OperationSystem {
         };
 
         for (entity, operation) in (&data.entities, &mut data.operations).join() {
-            let cleanup_operation = match operation.as_operation().run_operation(&system_data) {
+            let runtime_data = OperationExecutionRuntimeData {
+                entity: &entity
+            };
+
+            let cleanup_operation = match operation.as_operation().run_operation(&system_data, &runtime_data) {
                 OperationResult::Running => false,
                 OperationResult::Success => {
                     info!("Operation complete, cleaning up.");

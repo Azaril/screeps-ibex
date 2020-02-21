@@ -10,48 +10,49 @@ use super::missionsystem::*;
 use crate::jobs::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use crate::room::data::*;
 
 #[derive(Clone, ConvertSaveload)]
-pub struct ReserveMission {
+pub struct ClaimMission {
     room_data: Entity,
     home_room_data: Entity,
-    reservers: EntityVec,
+    claimers: EntityVec,
 }
 
-impl ReserveMission {
+impl ClaimMission {
     pub fn build<B>(builder: B, room_data: Entity, home_room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = ReserveMission::new(room_data, home_room_data);
+        let mission = ClaimMission::new(room_data, home_room_data);
 
         builder
-            .with(MissionData::Reserve(mission))
+            .with(MissionData::Claim(mission))
             .marked::<::serialize::SerializeMarker>()
     }
 
-    pub fn new(room_data: Entity, home_room_data: Entity) -> ReserveMission {
-        ReserveMission {
+    pub fn new(room_data: Entity, home_room_data: Entity) -> ClaimMission {
+        ClaimMission {
             room_data,
             home_room_data,
-            reservers: EntityVec::new(),
+            claimers: EntityVec::new(),
         }
     }
 }
 
-impl Mission for ReserveMission {
+impl Mission for ClaimMission {
     fn run_mission<'a>(
         &mut self,
         system_data: &MissionExecutionSystemData,
         runtime_data: &MissionExecutionRuntimeData,
     ) -> MissionResult {
-        scope_timing!("ReserveMission");
+        scope_timing!("ClaimMission");
 
         //
-        // Cleanup reservers that no longer exist.
+        // Cleanup claimers that no longer exist.
         //
 
-        self.reservers
+        self.claimers
             .0
             .retain(|entity| system_data.entities.is_alive(*entity));
 
@@ -62,12 +63,21 @@ impl Mission for ReserveMission {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
                 if dynamic_visibility_data.updated_within(1000) {
-                    if dynamic_visibility_data.owner().mine() {
-                        return MissionResult::Success;
+                    match dynamic_visibility_data.owner() {
+                        RoomDisposition::Mine => { 
+                            return MissionResult::Success;
+                        },
+                        RoomDisposition::Friendly(_) | RoomDisposition::Hostile(_) => {
+                            return MissionResult::Failure
+                        },
+                        RoomDisposition::Neutral => {}
                     }
-    
-                    if !dynamic_visibility_data.owner().neutral() || dynamic_visibility_data.reservation().hostile() || dynamic_visibility_data.reservation().friendly() {
-                        return MissionResult::Failure;
+
+                    match dynamic_visibility_data.reservation() {
+                        RoomDisposition::Mine | RoomDisposition::Neutral => {},
+                        RoomDisposition::Friendly(_) | RoomDisposition::Hostile(_) => {
+                            return MissionResult::Failure
+                        }
                     }
                 }
             }
@@ -76,39 +86,20 @@ impl Mission for ReserveMission {
                 if let Some(controller) = static_visibility_data.controller() {
                     if let Some(home_room_data) = system_data.room_data.get(self.home_room_data) {
                         if let Some(home_room) = game::rooms::get(home_room_data.name) {
-                            let alive_reservers = self.reservers.0
-                                .iter()
-                                .filter(|reserver_entity| {
-                                    if let Some(creep_owner) = system_data.creep_owner.get(**reserver_entity) {
-                                        creep_owner.owner.resolve().and_then(|creep| creep.ticks_to_live().ok()).unwrap_or(0) > 100
-                                    } else {
-                                        false
-                                    }
-                                })
-                                .count();
-
-                            //TODO: Use visibility data to estimate amount thas has ticked down.
-                            let controller_has_sufficient_reservation =  game::rooms::get(room_data.name)
-                                .and_then(|r| r.controller())
-                                .and_then(|c| c.reservation())
-                                .map(|r| r.ticks_to_end > 1000)
-                                .unwrap_or(false);
-
-                            //TODO: Compute number of reservers actually needed.
-                            if alive_reservers < 1 && !controller_has_sufficient_reservation {
+                            if self.claimers.0.is_empty() {
                                 let body_definition = crate::creep::SpawnBodyDefinition {
                                     maximum_energy: home_room.energy_capacity_available(),
-                                    minimum_repeat: Some(1),
-                                    maximum_repeat: Some(2),
-                                    pre_body: &[],
-                                    repeat_body: &[Part::Claim, Part::Move],
+                                    minimum_repeat: None,
+                                    maximum_repeat: None,
+                                    pre_body: &[Part::Claim, Part::Move],
+                                    repeat_body: &[],
                                     post_body: &[],
                                 };
 
                                 if let Ok(body) =
                                     crate::creep::Spawning::create_body(&body_definition)
                                 {
-                                    let priority = SPAWN_PRIORITY_LOW;
+                                    let priority = SPAWN_PRIORITY_MEDIUM;
 
                                     let mission_entity = *runtime_data.entity;
                                     let controller_id = *controller;
@@ -121,8 +112,8 @@ impl Mission for ReserveMission {
                                             let name = name.to_string();
 
                                             spawn_system_data.updater.exec_mut(move |world| {
-                                                let creep_job = JobData::Reserve(
-                                                    ::jobs::reserve::ReserveJob::new(
+                                                let creep_job = JobData::Claim(
+                                                    ::jobs::claim::ClaimJob::new(
                                                         controller_id
                                                     ),
                                                 );
@@ -137,10 +128,10 @@ impl Mission for ReserveMission {
                                                 let mission_data_storage =
                                                     &mut world.write_storage::<MissionData>();
 
-                                                if let Some(MissionData::Reserve(mission_data)) =
+                                                if let Some(MissionData::Claim(mission_data)) =
                                                     mission_data_storage.get_mut(mission_entity)
                                                 {
-                                                    mission_data.reservers.0.push(creep_entity);
+                                                    mission_data.claimers.0.push(creep_entity);
                                                 }
                                             });
                                         }),

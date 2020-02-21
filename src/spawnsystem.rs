@@ -108,39 +108,43 @@ impl<'a> System<'a> for SpawnQueueSystem {
             if let Some(room) = game::rooms::get(room_name) {
                 let mut spawns = room.find(find::MY_SPAWNS);
 
+                let mut available_energy = room.energy_available();
+
                 requests.sort_by(|a, b| b.priority.partial_cmp(&a.priority).unwrap());
 
                 for request in requests {
                     if let Some(pos) = spawns.iter().position(|spawn| !spawn.is_spawning()) {
                         let spawn = &spawns[pos];
 
-                        //TODO: Subtract energy from amount available in the room. (Handle multiple spawns.)
+                        //TODO: Is this needed? is available energy decremented on an Ok response to spawn?
+                        let body_cost: u32 = request.body.iter().map(|p| p.cost()).sum();
 
-                        let spawn_complete = match Self::spawn_creep(&spawn, &request.body) {
+                        if body_cost > available_energy {
+                            break;
+                        }
+
+                        match Self::spawn_creep(&spawn, &request.body) {
                             Ok(name) => {
                                 (*request.callback)(&system_data, &name);
 
-                                true
+                                spawns.remove(pos);
+
+                                available_energy -= body_cost;
                             }
                             Err(ReturnCode::NotEnough) => {
                                 //
                                 // If there was not enough energy available for the highest priority request,
                                 // continue waiting for energy and don't allow any other spawns to occur.
                                 //
-                                true                                
+                                break;                 
                             }
                             _ => {
                                 //
                                 // Any other errors are assumed to be mis-configuration and should be ignored
                                 // rather than block further spawns.
                                 //
-                                false
                             }
                         };
-
-                        if spawn_complete {
-                            spawns.remove(pos);
-                        }
                     }
 
                     if spawns.is_empty() {

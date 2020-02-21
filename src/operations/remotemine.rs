@@ -36,6 +36,7 @@ impl Operation for RemoteMineOperation {
     fn run_operation<'a>(
         &mut self,
         system_data: &'a OperationExecutionSystemData,
+        _runtime_data: &'a OperationExecutionRuntimeData,
     ) -> OperationResult {
         scope_timing!("RemoteMineOperation");
 
@@ -66,7 +67,7 @@ impl Operation for RemoteMineOperation {
                                 if let Some(search_room_entity) = system_data.mapping.rooms.get(&room_name) {
                                     if let Some(search_room_data) = system_data.room_data.get(*search_room_entity) {
                                         if let Some(search_room_data) = search_room_data.get_dynamic_visibility_data() {
-                                            if search_room_data.updated_within(5000) && (search_room_data.hostile_owner() || search_room_data.source_keeper()) {
+                                            if search_room_data.updated_within(5000) && (search_room_data.owner().hostile() || search_room_data.source_keeper()) {
                                                 return false;
                                             }
                                         }
@@ -115,7 +116,7 @@ impl Operation for RemoteMineOperation {
 
             if dynamic_visibility_data
                 .as_ref()
-                .map(|v| !v.updated_within(5000))
+                .map(|v| !v.updated_within(1000))
                 .unwrap_or(true)
             {
                 //TODO: wiarchbe: Use trait instead of match.
@@ -159,17 +160,11 @@ impl Operation for RemoteMineOperation {
             //
 
             if let Some(dynamic_visibility_data) = dynamic_visibility_data {
-                if !dynamic_visibility_data.updated_within(1000) {
-                    continue;
-                }
-
-                if dynamic_visibility_data.owner().is_some() || dynamic_visibility_data.source_keeper() {
-                    continue;
-                }
-
-                if !dynamic_visibility_data.my()
-                    && (dynamic_visibility_data.friendly_owner() || dynamic_visibility_data.hostile_owner())
-                {
+                if !dynamic_visibility_data.updated_within(1000)
+                    || !dynamic_visibility_data.owner().neutral() 
+                    || dynamic_visibility_data.reservation().friendly()
+                    || dynamic_visibility_data.reservation().hostile() 
+                    || dynamic_visibility_data.source_keeper() {
                     continue;
                 }
 
