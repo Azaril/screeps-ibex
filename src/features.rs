@@ -16,7 +16,7 @@ pub mod construction {
     }
 
     pub fn visualize() -> bool {
-        ::memory::root().path_bool("_features.construction.visualize") || super::experimental::on()
+        ::memory::root().path_bool("_features.construction.visualize")
     }
 
     pub fn execute() -> bool {
