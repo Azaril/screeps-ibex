@@ -202,6 +202,8 @@ fn deserialize_world(world: &World, data: &str) {
 fn game_loop() {
     scope_timing!("Main tick");
 
+    features::js::prepare();
+
     //info!("Tick start - CPU: {}", screeps::game::cpu::get_used());
 
     let mut world = World::new();
@@ -209,8 +211,9 @@ fn game_loop() {
     world.insert(serialize::SerializeMarkerAllocator::new());
     world.register::<serialize::SerializeMarker>();
 
-    //TODO: Toggle this depending on if visualization is requested.
-    world.insert(visualize::Visualizer::new());
+    if features::visualize::on() {
+        world.insert(visualize::Visualizer::new());
+    }
 
     //
     // Pre-pass update

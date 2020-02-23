@@ -49,7 +49,7 @@ impl CircleStyle {
 pub struct CircleData {
     x: f32,
     y: f32,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "s", skip_serializing_if = "Option::is_none")]
     style: Option<CircleStyle>,
 }
 
@@ -117,7 +117,7 @@ pub struct LineData {
     y1: f32,
     x2: f32,
     y2: f32,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "s", skip_serializing_if = "Option::is_none")]
     style: Option<LineStyle>,
 }
 
@@ -171,7 +171,7 @@ pub struct RectData {
     width: f32,
     #[serde(rename = "h")]
     height: f32,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "s", skip_serializing_if = "Option::is_none")]
     style: Option<RectStyle>,
 }
 
@@ -220,7 +220,7 @@ impl PolyStyle {
 #[derive(Serialize)]
 pub struct PolyData {
     points: Vec<(f32, f32)>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "s", skip_serializing_if = "Option::is_none")]
     style: Option<PolyStyle>,
 }
 
@@ -232,6 +232,7 @@ enum FontStyle {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum TextAlign {
     Center,
     Left,
@@ -326,7 +327,7 @@ pub struct TextData {
     text: String,
     x: f32,
     y: f32,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "s", skip_serializing_if = "Option::is_none")]
     style: Option<TextStyle>,
 }
 
