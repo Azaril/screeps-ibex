@@ -33,6 +33,7 @@ mod serialize;
 mod spawnsystem;
 mod structureidentifier;
 mod visualize;
+mod ui;
 
 use std::fmt;
 
@@ -213,6 +214,7 @@ fn game_loop() {
 
     if features::visualize::on() {
         world.insert(visualize::Visualizer::new());
+        world.insert(ui::UISystem::new());
     }
 
     //

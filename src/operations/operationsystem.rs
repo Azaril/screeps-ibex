@@ -3,6 +3,8 @@ use specs::prelude::*;
 use super::data::*;
 use crate::mappingsystem::MappingData;
 use crate::room::visibilitysystem::*;
+use crate::visualize::*;
+use crate::ui::*;
 
 #[derive(SystemData)]
 pub struct OperationSystemData<'a> {
@@ -13,6 +15,8 @@ pub struct OperationSystemData<'a> {
     mission_data: ReadStorage<'a, ::missions::data::MissionData>,
     mapping: Read<'a, MappingData>,
     visibility: Write<'a, VisibilityQueue>,
+    visualizer: Option<Write<'a, Visualizer>>,
+    ui: Option<Write<'a, UISystem>>,
 }
 
 pub struct OperationExecutionSystemData<'a> {
@@ -28,6 +32,12 @@ pub struct OperationExecutionRuntimeData<'a> {
     pub visibility: &'a mut VisibilityQueue,
 }
 
+pub struct OperationDescribeData<'a> {
+    pub entity: &'a Entity,
+    pub visualizer: &'a mut Visualizer,
+    pub ui: &'a mut UISystem,
+}
+
 pub enum OperationResult {
     Running,
     Success,
@@ -35,6 +45,19 @@ pub enum OperationResult {
 }
 
 pub trait Operation {
+    fn describe(
+        &mut self,
+        system_data: &OperationExecutionSystemData,
+        describe_data: &mut OperationDescribeData,
+    );
+
+    fn pre_run_operation(
+        &mut self,
+        _system_data: &OperationExecutionSystemData,
+        _runtime_data: &mut OperationExecutionRuntimeData,
+    ) {
+    }
+    
     fn run_operation(
         &mut self,
         system_data: &OperationExecutionSystemData,
@@ -58,15 +81,42 @@ impl<'a> System<'a> for OperationSystem {
             mapping: &data.mapping,
         };
 
-        for (entity, operation) in (&data.entities, &mut data.operations).join() {
+        for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
             let mut runtime_data = OperationExecutionRuntimeData {
                 entity: &entity,
                 visibility: &mut data.visibility,
             };
 
-            let cleanup_operation = match operation
-                .as_operation()
-                .run_operation(&system_data, &mut runtime_data)
+            let operation = operation_data.as_operation();
+
+            operation.pre_run_operation(&system_data, &mut runtime_data);
+        }
+
+        if let Some(visualizer) = &mut data.visualizer {
+            if let Some(ui) = &mut data.ui {
+                for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
+                    let mut describe_data = OperationDescribeData {
+                        entity: &entity,
+                        visualizer,
+                        ui,
+                    };
+
+                    let operation = operation_data.as_operation();
+
+                    operation.describe(&system_data, &mut describe_data);
+                }
+            }
+        }
+
+        for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
+            let mut runtime_data = OperationExecutionRuntimeData {
+                entity: &entity,
+                visibility: &mut data.visibility,
+            };
+
+            let operation = operation_data.as_operation();
+
+            let cleanup_operation = match operation.run_operation(&system_data, &mut runtime_data)
             {
                 OperationResult::Running => false,
                 OperationResult::Success => {

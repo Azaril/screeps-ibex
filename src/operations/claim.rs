@@ -41,13 +41,21 @@ impl ClaimOperation {
 
 #[allow(clippy::cognitive_complexity)]
 impl Operation for ClaimOperation {
-    fn run_operation(
+    fn describe(
+        &mut self,
+        _system_data: &OperationExecutionSystemData,
+        describe_data: &mut OperationDescribeData,
+    ) {
+        describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
+            global_ui.operations().add_text("Claim".to_string(), None);
+        })
+    }
+
+    fn pre_run_operation(
         &mut self,
         system_data: &OperationExecutionSystemData,
-        runtime_data: &mut OperationExecutionRuntimeData,
-    ) -> OperationResult {
-        scope_timing!("ClaimOperation");
-
+        _runtime_data: &mut OperationExecutionRuntimeData,
+    ) {
         //
         // Cleanup missions that no longer exist.
         //
@@ -55,6 +63,14 @@ impl Operation for ClaimOperation {
         self.claim_missions
             .0
             .retain(|entity| system_data.entities.is_alive(*entity));
+    }
+
+    fn run_operation(
+        &mut self,
+        system_data: &OperationExecutionSystemData,
+        runtime_data: &mut OperationExecutionRuntimeData,
+    ) -> OperationResult {
+        scope_timing!("ClaimOperation");
 
         let current_gcl = game::gcl::level();
         let current_claim_missions = self.claim_missions.0.len();

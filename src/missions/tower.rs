@@ -35,13 +35,12 @@ impl Mission for TowerMission {
     fn describe(
         &mut self,
         system_data: &MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
+        describe_data: &mut MissionDescribeData,
     ) {
-        if let Some(visualizer) = &mut runtime_data.visualizer {
-            if let Some(room_data) = system_data.room_data.get(self.room_data) {
-                let _room_visual = visualizer.get_room(room_data.name);
-                //TODO: Add in visualization.
-            }
+        if let Some(room_data) = system_data.room_data.get(self.room_data) {
+            describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
+                room_ui.missions().add_text("Tower".to_string(), None);
+            })
         }
     }
 
