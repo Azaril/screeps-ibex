@@ -224,14 +224,14 @@ pub struct PolyData {
     style: Option<PolyStyle>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(untagged)]
 enum FontStyle {
     Size(f32),
     Custom(String),
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum TextAlign {
     Center,
@@ -254,7 +254,7 @@ impl TextAlign {
     }
 }
 
-#[derive(Serialize, Default)]
+#[derive(Serialize, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TextStyle {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -389,7 +389,7 @@ impl RoomVisualizer {
             .push(Visual::Text(TextData { x, y, text, style }));
     }
 
-    pub fn apply(&self, room: RoomName) {
+    pub fn apply(&self, room: Option<RoomName>) {
         if !self.visuals.is_empty() {
             let data = serde_json::to_string(&self.visuals).unwrap();
 
@@ -403,14 +403,20 @@ impl RoomVisualizer {
 }
 
 pub struct Visualizer {
+    global: RoomVisualizer,
     rooms: HashMap<RoomName, RoomVisualizer>,
 }
 
 impl Visualizer {
     pub fn new() -> Visualizer {
         Visualizer {
+            global: RoomVisualizer::new(),
             rooms: HashMap::new(),
         }
+    }
+
+    pub fn global(&mut self) -> &mut RoomVisualizer {
+        &mut self.global
     }
 
     pub fn get_room(&mut self, room: RoomName) -> &mut RoomVisualizer {
@@ -438,11 +444,55 @@ impl<'a> System<'a> for VisualizerSystem {
         scope_timing!("VisualizerSystem");
 
         if let Some(visualizer) = &mut data.visualizer {
+            visualizer.global.apply(None);
+
             for (room, room_visualizer) in &visualizer.rooms {
-                room_visualizer.apply(*room);
+                room_visualizer.apply(Some(*room));
             }
 
             visualizer.rooms.clear();
         }
+    }
+}
+
+pub struct ListVisualizerState {
+    pos: (f32, f32),
+    pos_offset: (f32, f32),
+    style: Option<TextStyle>, 
+}
+
+impl ListVisualizerState {
+    pub fn visualize<'a>(&mut self, visualizer: &'a mut RoomVisualizer) -> ListVisualizer<'a, '_> {
+        ListVisualizer {
+            visualizer,
+            state: self
+        }
+    }
+}
+
+impl ListVisualizerState {
+    pub fn new(pos: (f32, f32), pos_offset: (f32, f32), style: Option<TextStyle>) -> ListVisualizerState {
+        ListVisualizerState {
+            pos,
+            pos_offset,
+            style
+        }
+    }
+}
+
+pub struct ListVisualizer<'a, 'b>  {
+    visualizer: &'a mut RoomVisualizer,
+    state: &'b mut ListVisualizerState,
+}
+
+impl<'a, 'b> ListVisualizer<'a, 'b> {
+    pub fn add_text(&mut self, text: String, style: Option<TextStyle>) {
+        let visualizer = &mut self.visualizer;
+        let state = &mut self.state;
+
+        visualizer.text(state.pos.0, state.pos.1, text, style.or_else(|| state.style.clone()));
+
+        state.pos.0 += state.pos_offset.0;
+        state.pos.1 += state.pos_offset.1;
     }
 }

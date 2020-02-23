@@ -6,6 +6,7 @@ use crate::jobs::data::*;
 use crate::room::data::*;
 use crate::spawnsystem::*;
 use crate::visualize::*;
+use crate::ui::*;
 
 #[derive(SystemData)]
 pub struct MissionSystemData<'a> {
@@ -17,6 +18,7 @@ pub struct MissionSystemData<'a> {
     creep_owner: ReadStorage<'a, CreepOwner>,
     job_data: WriteStorage<'a, JobData>,
     visualizer: Option<Write<'a, Visualizer>>,
+    ui: Option<Write<'a, UISystem>>,
 }
 
 pub struct MissionExecutionSystemData<'a> {
@@ -33,6 +35,12 @@ pub struct MissionExecutionRuntimeData<'a> {
     pub visualizer: Option<&'a mut Visualizer>,
 }
 
+pub struct MissionDescribeData<'a> {
+    pub entity: &'a Entity,
+    pub visualizer: &'a mut Visualizer,
+    pub ui: &'a mut UISystem,
+}
+
 pub enum MissionResult {
     Running,
     Success,
@@ -43,8 +51,15 @@ pub trait Mission {
     fn describe(
         &mut self,
         system_data: &MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
+        describe_data: &mut MissionDescribeData,
     );
+
+    fn pre_run_mission(
+        &mut self,
+        _system_data: &MissionExecutionSystemData,
+        _runtime_data: &mut MissionExecutionRuntimeData,
+    ) {
+    }
 
     fn run_mission(
         &mut self,
@@ -73,15 +88,38 @@ impl<'a> System<'a> for MissionSystem {
             let mut runtime_data = MissionExecutionRuntimeData {
                 entity: &entity,
                 spawn_queue: &mut data.spawn_queue,
-                visualizer: data
-                    .visualizer
-                    .as_mut()
-                    .map(|v| v as &mut crate::visualize::Visualizer),
+                visualizer: data.visualizer.as_deref_mut(),
             };
 
             let mission = mission_data.as_mission();
 
-            mission.describe(&system_data, &mut runtime_data);
+            mission.pre_run_mission(&system_data, &mut runtime_data);
+        }
+
+        if let Some(visualizer) = &mut data.visualizer {
+            if let Some(ui) = &mut data.ui {
+                for (entity, mission_data) in (&data.entities, &mut data.missions).join() {
+                    let mut describe_data = MissionDescribeData {
+                        entity: &entity,
+                        visualizer,
+                        ui,
+                    };
+
+                    let mission = mission_data.as_mission();
+
+                    mission.describe(&system_data, &mut describe_data);
+                }
+            }
+        }
+
+        for (entity, mission_data) in (&data.entities, &mut data.missions).join() {
+            let mut runtime_data = MissionExecutionRuntimeData {
+                entity: &entity,
+                spawn_queue: &mut data.spawn_queue,
+                visualizer: data.visualizer.as_deref_mut(),
+            };
+
+            let mission = mission_data.as_mission();
 
             let cleanup_mission = match mission.run_mission(&system_data, &mut runtime_data) {
                 MissionResult::Running => false,

@@ -47,23 +47,20 @@ impl Mission for LocalSupplyMission {
     fn describe(
         &mut self,
         system_data: &MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
+        describe_data: &mut MissionDescribeData,
     ) {
-        if let Some(visualizer) = &mut runtime_data.visualizer {
-            if let Some(room_data) = system_data.room_data.get(self.room_data) {
-                let _room_visual = visualizer.get_room(room_data.name);
-                //TODO: Add in visualization.
-            }
+        if let Some(room_data) = system_data.room_data.get(self.room_data) {
+            describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
+                room_ui.missions().add_text("Local Supply".to_string(), None);
+            })
         }
     }
 
-    fn run_mission(
+    fn pre_run_mission(
         &mut self,
         system_data: &MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> MissionResult {
-        scope_timing!("LocalSupplyMission");
-
+        _runtime_data: &mut MissionExecutionRuntimeData,
+    ) {
         //
         // Cleanup creeps that no longer exist.
         //
@@ -77,6 +74,14 @@ impl Mission for LocalSupplyMission {
         self.haulers
             .0
             .retain(|entity| system_data.entities.is_alive(*entity));
+    }
+
+    fn run_mission(
+        &mut self,
+        system_data: &MissionExecutionSystemData,
+        runtime_data: &mut MissionExecutionRuntimeData,
+    ) -> MissionResult {
+        scope_timing!("LocalSupplyMission");
 
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             if let Some(room) = game::rooms::get(room_data.name) {

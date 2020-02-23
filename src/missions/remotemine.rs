@@ -44,14 +44,27 @@ impl Mission for RemoteMineMission {
     fn describe(
         &mut self,
         system_data: &MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
+        describe_data: &mut MissionDescribeData,
     ) {
-        if let Some(visualizer) = &mut runtime_data.visualizer {
-            if let Some(room_data) = system_data.room_data.get(self.room_data) {
-                let _room_visual = visualizer.get_room(room_data.name);
-                //TODO: Add in visualization.
-            }
+        if let Some(room_data) = system_data.room_data.get(self.room_data) {
+            describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
+                room_ui.missions().add_text("Remote Mine".to_string(), None);
+            });
         }
+    }
+
+    fn pre_run_mission(
+        &mut self,
+        system_data: &MissionExecutionSystemData,
+        _runtime_data: &mut MissionExecutionRuntimeData,
+    ) {
+        //
+        // Cleanup creeps that no longer exist.
+        //
+
+        self.harvesters
+            .0
+            .retain(|entity| system_data.entities.is_alive(*entity));
     }
 
     fn run_mission(
@@ -60,14 +73,6 @@ impl Mission for RemoteMineMission {
         runtime_data: &mut MissionExecutionRuntimeData,
     ) -> MissionResult {
         scope_timing!("RemoteMineMission");
-
-        //
-        // Cleanup harvesters that no longer exist.
-        //
-
-        self.harvesters
-            .0
-            .retain(|entity| system_data.entities.is_alive(*entity));
 
         //
         // NOTE: Room may not be visible if there is no creep or building active in the room.

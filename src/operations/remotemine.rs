@@ -33,6 +33,16 @@ impl RemoteMineOperation {
 }
 
 impl Operation for RemoteMineOperation {
+    fn describe(
+        &mut self,
+        _system_data: &OperationExecutionSystemData,
+        describe_data: &mut OperationDescribeData,
+    ) {
+        describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
+            global_ui.operations().add_text("Remote Mine".to_string(), None);
+        })
+    }
+
     fn run_operation(
         &mut self,
         system_data: &OperationExecutionSystemData,

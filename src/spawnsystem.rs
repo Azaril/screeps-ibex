@@ -2,6 +2,7 @@ use crate::visualize::*;
 use screeps::*;
 use specs::prelude::*;
 use std::collections::HashMap;
+use crate::ui::*;
 
 pub const SPAWN_PRIORITY_CRITICAL: f32 = 100.0;
 pub const SPAWN_PRIORITY_HIGH: f32 = 75.0;
@@ -52,40 +53,13 @@ impl SpawnQueue {
         self.requests.clear();
     }
 
-    fn visualize(&self, visualizer: &mut Visualizer) {
+    fn visualize(&self, ui: &mut UISystem, visualizer: &mut Visualizer) {
         for (room_name, requests) in &self.requests {
-            let room_visualizer = visualizer.get_room(*room_name);
-
-            let mut pos = (35.0, 15.0);
-
-            if let Some(room) = game::rooms::get(*room_name) {
-                room_visualizer.text(
-                    pos.0,
-                    pos.1,
-                    format!("Spawn Queue - Energy {} / {}", room.energy_available(), room.energy_capacity_available()),
-                    Some(TextStyle::default().font(0.5).align(TextAlign::Left))
-                );
-            } else {
-                room_visualizer.text(
-                    pos.0,
-                    pos.1,
-                    "Spawn Queue - Energy ? / ?".to_string(),
-                    Some(TextStyle::default().font(0.5).align(TextAlign::Left))
-                );
-            }
-
-            pos.1 += 1.0;
-
-            for request in requests.iter() {
-                room_visualizer.text(
-                    pos.0,
-                    pos.1,
-                    request.description.clone(),
-                    Some(TextStyle::default().font(0.5).align(TextAlign::Left))
-                );
-
-                pos.1 += 1.0;
-            }
+            ui.with_room(*room_name, visualizer, |room_ui| {
+                for request in requests.iter() {
+                    room_ui.spawn_queue().add_text(request.description.clone(), None);
+                }
+            });
         }
     }
 }
@@ -97,6 +71,7 @@ pub struct SpawnQueueSystemData<'a> {
     entities: Entities<'a>,
     room_data: WriteStorage<'a, ::room::data::RoomData>,
     visualizer: Option<Write<'a, Visualizer>>,
+    ui: Option<Write<'a, UISystem>>,
 }
 
 pub struct SpawnQueueExecutionSystemData<'a> {
@@ -131,7 +106,9 @@ impl<'a> System<'a> for SpawnQueueSystem {
         scope_timing!("SpawnQueueSystem");
 
         if let Some(visualizer) = &mut data.visualizer {
-            data.spawn_queue.visualize(visualizer);
+            if let Some(ui) = &mut data.ui {
+                data.spawn_queue.visualize(ui, visualizer);
+            }            
         }
 
         let system_data = SpawnQueueExecutionSystemData {

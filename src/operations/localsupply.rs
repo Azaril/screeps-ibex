@@ -29,6 +29,16 @@ impl LocalSupplyOperation {
 }
 
 impl Operation for LocalSupplyOperation {
+    fn describe(
+        &mut self,
+        _system_data: &OperationExecutionSystemData,
+        describe_data: &mut OperationDescribeData,
+    ) {
+        describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
+            global_ui.operations().add_text("Local Supply".to_string(), None);
+        })
+    }
+
     fn run_operation(
         &mut self,
         system_data: &OperationExecutionSystemData,
