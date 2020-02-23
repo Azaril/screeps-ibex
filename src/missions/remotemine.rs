@@ -41,10 +41,23 @@ impl RemoteMineMission {
 }
 
 impl Mission for RemoteMineMission {
-    fn run_mission<'a>(
+    fn describe(
         &mut self,
         system_data: &MissionExecutionSystemData,
-        runtime_data: &MissionExecutionRuntimeData,
+        runtime_data: &mut MissionExecutionRuntimeData,
+    ) {
+        if let Some(visualizer) = &mut runtime_data.visualizer {
+            if let Some(room_data) = system_data.room_data.get(self.room_data) {
+                let _room_visual = visualizer.get_room(room_data.name);
+                //TODO: Add in visualization.
+            }
+        }
+    }
+
+    fn run_mission(
+        &mut self,
+        system_data: &MissionExecutionSystemData,
+        runtime_data: &mut MissionExecutionRuntimeData,
     ) -> MissionResult {
         scope_timing!("RemoteMineMission");
 
@@ -62,8 +75,11 @@ impl Mission for RemoteMineMission {
 
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
-                if dynamic_visibility_data.updated_within(1000) 
-                    && (!dynamic_visibility_data.owner().neutral() || dynamic_visibility_data.reservation().hostile() || dynamic_visibility_data.reservation().friendly()) {
+                if dynamic_visibility_data.updated_within(1000)
+                    && (!dynamic_visibility_data.owner().neutral()
+                        || dynamic_visibility_data.reservation().hostile()
+                        || dynamic_visibility_data.reservation().friendly())
+                {
                     return MissionResult::Failure;
                 }
             }
@@ -101,7 +117,7 @@ impl Mission for RemoteMineMission {
                             //TODO: Compute correct number of harvesters to use for source.
                             let current_harvesters = source_harvesters.len();
                             let desired_harvesters = 1;
-                            
+
                             if current_harvesters < desired_harvesters {
                                 //TODO: Compute best body parts to use.
                                 let body_definition = crate::creep::SpawnBodyDefinition {
@@ -116,8 +132,10 @@ impl Mission for RemoteMineMission {
                                 if let Ok(body) =
                                     crate::creep::Spawning::create_body(&body_definition)
                                 {
-                                    let room_offset_distance = home_room_data.name - source.pos().room_name();
-                                    let room_manhattan_distance = room_offset_distance.0.abs() + room_offset_distance.1.abs();
+                                    let room_offset_distance =
+                                        home_room_data.name - source.pos().room_name();
+                                    let room_manhattan_distance =
+                                        room_offset_distance.0.abs() + room_offset_distance.1.abs();
 
                                     let priority_range = if room_manhattan_distance <= 1 {
                                         (SPAWN_PRIORITY_MEDIUM, SPAWN_PRIORITY_LOW)
@@ -125,46 +143,58 @@ impl Mission for RemoteMineMission {
                                         (SPAWN_PRIORITY_LOW, SPAWN_PRIORITY_NONE)
                                     };
 
-                                    let interp = (current_harvesters as f32) / (desired_harvesters as f32);
+                                    let interp =
+                                        (current_harvesters as f32) / (desired_harvesters as f32);
                                     let priority = (priority_range.0 + priority_range.1) * interp;
 
                                     let mission_entity = *runtime_data.entity;
                                     let delivery_room = home_room_data.name;
                                     let source_id = *source;
 
-                                    system_data.spawn_queue.request(SpawnRequest::new(
+                                    runtime_data.spawn_queue.request(
                                         home_room_data.name,
-                                        &body,
-                                        priority,
-                                        Box::new(move |spawn_system_data, name| {
-                                            let name = name.to_string();
+                                        SpawnRequest::new(
+                                            format!(
+                                                "Remote Mine - Target Room: {}",
+                                                room_data.name
+                                            ),
+                                            &body,
+                                            priority,
+                                            Box::new(move |spawn_system_data, name| {
+                                                let name = name.to_string();
 
-                                            spawn_system_data.updater.exec_mut(move |world| {
-                                                let creep_job = JobData::Harvest(
-                                                    ::jobs::harvest::HarvestJob::new(
-                                                        source_id,
-                                                        delivery_room,
-                                                    ),
-                                                );
+                                                spawn_system_data.updater.exec_mut(move |world| {
+                                                    let creep_job = JobData::Harvest(
+                                                        ::jobs::harvest::HarvestJob::new(
+                                                            source_id,
+                                                            delivery_room,
+                                                        ),
+                                                    );
 
-                                                let creep_entity = ::creep::Spawning::build(
-                                                    world.create_entity(),
-                                                    &name,
-                                                )
-                                                .with(creep_job)
-                                                .build();
+                                                    let creep_entity = ::creep::Spawning::build(
+                                                        world.create_entity(),
+                                                        &name,
+                                                    )
+                                                    .with(creep_job)
+                                                    .build();
 
-                                                let mission_data_storage =
-                                                    &mut world.write_storage::<MissionData>();
+                                                    let mission_data_storage =
+                                                        &mut world.write_storage::<MissionData>();
 
-                                                if let Some(MissionData::RemoteMine(mission_data)) =
-                                                    mission_data_storage.get_mut(mission_entity)
-                                                {
-                                                    mission_data.harvesters.0.push(creep_entity);
-                                                }
-                                            });
-                                        }),
-                                    ));
+                                                    if let Some(MissionData::RemoteMine(
+                                                        mission_data,
+                                                    )) =
+                                                        mission_data_storage.get_mut(mission_entity)
+                                                    {
+                                                        mission_data
+                                                            .harvesters
+                                                            .0
+                                                            .push(creep_entity);
+                                                    }
+                                                });
+                                            }),
+                                        ),
+                                    );
                                 }
                             }
                         }

@@ -16,6 +16,8 @@ pub struct ScoutMission {
     room_data: Entity,
     home_room_data: Entity,
     scouts: EntityVec,
+    next_spawn: Option<u32>,
+    spawned_scouts: u32,
 }
 
 impl ScoutMission {
@@ -35,15 +37,30 @@ impl ScoutMission {
             room_data,
             home_room_data,
             scouts: EntityVec::new(),
+            next_spawn: None,
+            spawned_scouts: 0,
         }
     }
 }
 
 impl Mission for ScoutMission {
-    fn run_mission<'a>(
+    fn describe(
         &mut self,
         system_data: &MissionExecutionSystemData,
-        runtime_data: &MissionExecutionRuntimeData,
+        runtime_data: &mut MissionExecutionRuntimeData,
+    ) {
+        if let Some(visualizer) = &mut runtime_data.visualizer {
+            if let Some(room_data) = system_data.room_data.get(self.room_data) {
+                let _room_visual = visualizer.get_room(room_data.name);
+                //TODO: Add in visualization.
+            }
+        }
+    }
+
+    fn run_mission(
+        &mut self,
+        system_data: &MissionExecutionSystemData,
+        runtime_data: &mut MissionExecutionRuntimeData,
     ) -> MissionResult {
         scope_timing!("ScoutMission");
 
@@ -78,7 +95,9 @@ impl Mission for ScoutMission {
 
             if let Some(home_room_data) = system_data.room_data.get(self.home_room_data) {
                 if let Some(home_room) = game::rooms::get(home_room_data.name) {
-                    if self.scouts.0.is_empty() {
+                    let should_spawn = self.next_spawn.map(|t| t >= game::time()).unwrap_or(true);
+
+                    if self.scouts.0.is_empty() && should_spawn {
                         //TODO: Compute best body parts to use.
                         let body_definition = crate::creep::SpawnBodyDefinition {
                             maximum_energy: home_room.energy_capacity_available(),
@@ -95,34 +114,45 @@ impl Mission for ScoutMission {
                             let mission_entity = *runtime_data.entity;
                             let scout_room = room_data.name;
 
-                            system_data.spawn_queue.request(SpawnRequest::new(
+                            runtime_data.spawn_queue.request(
                                 home_room_data.name,
-                                &body,
-                                priority,
-                                Box::new(move |spawn_system_data, name| {
-                                    let name = name.to_string();
+                                SpawnRequest::new(
+                                    format!("Scout - Target Room: {}", room_data.name),
+                                    &body,
+                                    priority,
+                                    Box::new(move |spawn_system_data, name| {
+                                        let name = name.to_string();
 
-                                    spawn_system_data.updater.exec_mut(move |world| {
-                                        let creep_job = JobData::Scout(
-                                            ::jobs::scout::ScoutJob::new(scout_room),
-                                        );
+                                        spawn_system_data.updater.exec_mut(move |world| {
+                                            let creep_job = JobData::Scout(
+                                                ::jobs::scout::ScoutJob::new(scout_room),
+                                            );
 
-                                        let creep_entity =
-                                            ::creep::Spawning::build(world.create_entity(), &name)
-                                                .with(creep_job)
-                                                .build();
+                                            let creep_entity = ::creep::Spawning::build(
+                                                world.create_entity(),
+                                                &name,
+                                            )
+                                            .with(creep_job)
+                                            .build();
 
-                                        let mission_data_storage =
-                                            &mut world.write_storage::<MissionData>();
+                                            let mission_data_storage =
+                                                &mut world.write_storage::<MissionData>();
 
-                                        if let Some(MissionData::Scout(mission_data)) =
-                                            mission_data_storage.get_mut(mission_entity)
-                                        {
-                                            mission_data.scouts.0.push(creep_entity);
-                                        }
-                                    });
-                                }),
-                            ));
+                                            if let Some(MissionData::Scout(mission_data)) =
+                                                mission_data_storage.get_mut(mission_entity)
+                                            {
+                                                mission_data.scouts.0.push(creep_entity);
+
+                                                mission_data.spawned_scouts += 1;
+                                                mission_data.next_spawn = Some(std::cmp::min(
+                                                    mission_data.spawned_scouts * 2000,
+                                                    10000,
+                                                ));
+                                            }
+                                        });
+                                    }),
+                                ),
+                            );
                         }
                     }
 

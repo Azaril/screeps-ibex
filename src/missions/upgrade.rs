@@ -39,10 +39,23 @@ impl UpgradeMission {
 }
 
 impl Mission for UpgradeMission {
-    fn run_mission<'a>(
+    fn describe(
         &mut self,
         system_data: &MissionExecutionSystemData,
-        runtime_data: &MissionExecutionRuntimeData,
+        runtime_data: &mut MissionExecutionRuntimeData,
+    ) {
+        if let Some(visualizer) = &mut runtime_data.visualizer {
+            if let Some(room_data) = system_data.room_data.get(self.room_data) {
+                let _room_visual = visualizer.get_room(room_data.name);
+                //TODO: Add in visualization.
+            }
+        }
+    }
+
+    fn run_mission(
+        &mut self,
+        system_data: &MissionExecutionSystemData,
+        runtime_data: &mut MissionExecutionRuntimeData,
     ) -> MissionResult {
         scope_timing!("UpgradeMission");
 
@@ -67,7 +80,8 @@ impl Mission for UpgradeMission {
                                 let work_parts_per_tick = (CONTROLLER_MAX_UPGRADE_PER_TICK as f32)
                                     / (UPGRADE_CONTROLLER_POWER as f32);
 
-                                let work_parts = (work_parts_per_tick / (max_upgraders as f32)).ceil();
+                                let work_parts =
+                                    (work_parts_per_tick / (max_upgraders as f32)).ceil();
 
                                 Some(work_parts as usize)
                             } else {
@@ -99,38 +113,42 @@ impl Mission for UpgradeMission {
                                     SPAWN_PRIORITY_LOW
                                 };
 
-                                system_data.spawn_queue.request(SpawnRequest::new(
+                                runtime_data.spawn_queue.request(
                                     room_data.name,
-                                    &body,
-                                    priority,
-                                    Box::new(move |spawn_system_data, name| {
-                                        let name = name.to_string();
+                                    SpawnRequest::new(
+                                        "Upgrader".to_string(),
+                                        &body,
+                                        priority,
+                                        Box::new(move |spawn_system_data, name| {
+                                            let name = name.to_string();
 
-                                        spawn_system_data.updater.exec_mut(move |world| {
-                                            let creep_job =
-                                                JobData::Upgrade(::jobs::upgrade::UpgradeJob::new(
-                                                    &controller_id,
-                                                    home_room,
-                                                ));
+                                            spawn_system_data.updater.exec_mut(move |world| {
+                                                let creep_job = JobData::Upgrade(
+                                                    ::jobs::upgrade::UpgradeJob::new(
+                                                        &controller_id,
+                                                        home_room,
+                                                    ),
+                                                );
 
-                                            let creep_entity = ::creep::Spawning::build(
-                                                world.create_entity(),
-                                                &name,
-                                            )
-                                            .with(creep_job)
-                                            .build();
+                                                let creep_entity = ::creep::Spawning::build(
+                                                    world.create_entity(),
+                                                    &name,
+                                                )
+                                                .with(creep_job)
+                                                .build();
 
-                                            let mission_data_storage =
-                                                &mut world.write_storage::<MissionData>();
+                                                let mission_data_storage =
+                                                    &mut world.write_storage::<MissionData>();
 
-                                            if let Some(MissionData::Upgrade(mission_data)) =
-                                                mission_data_storage.get_mut(mission_entity)
-                                            {
-                                                mission_data.upgraders.0.push(creep_entity);
-                                            }
-                                        });
-                                    }),
-                                ));
+                                                if let Some(MissionData::Upgrade(mission_data)) =
+                                                    mission_data_storage.get_mut(mission_entity)
+                                                {
+                                                    mission_data.upgraders.0.push(creep_entity);
+                                                }
+                                            });
+                                        }),
+                                    ),
+                                );
                             }
                         }
 

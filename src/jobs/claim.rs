@@ -31,10 +31,7 @@ impl Job for ClaimJob {
             if let Some(controller) = self.claim_target.resolve() {
                 creep.claim_controller(&controller);
             } else {
-                error!(
-                    "Claim has no assigned controller! Name: {}",
-                    creep.name()
-                );
+                error!("Claim has no assigned controller! Name: {}", creep.name());
             }
         } else {
             creep.move_to(&self.claim_target.pos());

@@ -40,10 +40,23 @@ impl ReserveMission {
 }
 
 impl Mission for ReserveMission {
-    fn run_mission<'a>(
+    fn describe(
         &mut self,
         system_data: &MissionExecutionSystemData,
-        runtime_data: &MissionExecutionRuntimeData,
+        runtime_data: &mut MissionExecutionRuntimeData,
+    ) {
+        if let Some(visualizer) = &mut runtime_data.visualizer {
+            if let Some(room_data) = system_data.room_data.get(self.room_data) {
+                let _room_visual = visualizer.get_room(room_data.name);
+                //TODO: Add in visualization.
+            }
+        }
+    }
+
+    fn run_mission(
+        &mut self,
+        system_data: &MissionExecutionSystemData,
+        runtime_data: &mut MissionExecutionRuntimeData,
     ) -> MissionResult {
         scope_timing!("ReserveMission");
 
@@ -65,8 +78,11 @@ impl Mission for ReserveMission {
                     if dynamic_visibility_data.owner().mine() {
                         return MissionResult::Success;
                     }
-    
-                    if !dynamic_visibility_data.owner().neutral() || dynamic_visibility_data.reservation().hostile() || dynamic_visibility_data.reservation().friendly() {
+
+                    if !dynamic_visibility_data.owner().neutral()
+                        || dynamic_visibility_data.reservation().hostile()
+                        || dynamic_visibility_data.reservation().friendly()
+                    {
                         return MissionResult::Failure;
                     }
                 }
@@ -76,11 +92,20 @@ impl Mission for ReserveMission {
                 if let Some(controller) = static_visibility_data.controller() {
                     if let Some(home_room_data) = system_data.room_data.get(self.home_room_data) {
                         if let Some(home_room) = game::rooms::get(home_room_data.name) {
-                            let alive_reservers = self.reservers.0
+                            let alive_reservers = self
+                                .reservers
+                                .0
                                 .iter()
                                 .filter(|reserver_entity| {
-                                    if let Some(creep_owner) = system_data.creep_owner.get(**reserver_entity) {
-                                        creep_owner.owner.resolve().and_then(|creep| creep.ticks_to_live().ok()).unwrap_or(0) > 100
+                                    if let Some(creep_owner) =
+                                        system_data.creep_owner.get(**reserver_entity)
+                                    {
+                                        creep_owner
+                                            .owner
+                                            .resolve()
+                                            .and_then(|creep| creep.ticks_to_live().ok())
+                                            .unwrap_or(0)
+                                            > 100
                                     } else {
                                         false
                                     }
@@ -88,11 +113,12 @@ impl Mission for ReserveMission {
                                 .count();
 
                             //TODO: Use visibility data to estimate amount thas has ticked down.
-                            let controller_has_sufficient_reservation =  game::rooms::get(room_data.name)
-                                .and_then(|r| r.controller())
-                                .and_then(|c| c.reservation())
-                                .map(|r| r.ticks_to_end > 1000)
-                                .unwrap_or(false);
+                            let controller_has_sufficient_reservation =
+                                game::rooms::get(room_data.name)
+                                    .and_then(|r| r.controller())
+                                    .and_then(|c| c.reservation())
+                                    .map(|r| r.ticks_to_end > 1000)
+                                    .unwrap_or(false);
 
                             //TODO: Compute number of reservers actually needed.
                             if alive_reservers < 1 && !controller_has_sufficient_reservation {
@@ -113,38 +139,43 @@ impl Mission for ReserveMission {
                                     let mission_entity = *runtime_data.entity;
                                     let controller_id = *controller;
 
-                                    system_data.spawn_queue.request(SpawnRequest::new(
+                                    runtime_data.spawn_queue.request(
                                         home_room_data.name,
-                                        &body,
-                                        priority,
-                                        Box::new(move |spawn_system_data, name| {
-                                            let name = name.to_string();
+                                        SpawnRequest::new(
+                                            format!("Reserver - Target Room: {}", room_data.name),
+                                            &body,
+                                            priority,
+                                            Box::new(move |spawn_system_data, name| {
+                                                let name = name.to_string();
 
-                                            spawn_system_data.updater.exec_mut(move |world| {
-                                                let creep_job = JobData::Reserve(
-                                                    ::jobs::reserve::ReserveJob::new(
-                                                        controller_id
-                                                    ),
-                                                );
+                                                spawn_system_data.updater.exec_mut(move |world| {
+                                                    let creep_job = JobData::Reserve(
+                                                        ::jobs::reserve::ReserveJob::new(
+                                                            controller_id,
+                                                        ),
+                                                    );
 
-                                                let creep_entity = ::creep::Spawning::build(
-                                                    world.create_entity(),
-                                                    &name,
-                                                )
-                                                .with(creep_job)
-                                                .build();
+                                                    let creep_entity = ::creep::Spawning::build(
+                                                        world.create_entity(),
+                                                        &name,
+                                                    )
+                                                    .with(creep_job)
+                                                    .build();
 
-                                                let mission_data_storage =
-                                                    &mut world.write_storage::<MissionData>();
+                                                    let mission_data_storage =
+                                                        &mut world.write_storage::<MissionData>();
 
-                                                if let Some(MissionData::Reserve(mission_data)) =
-                                                    mission_data_storage.get_mut(mission_entity)
-                                                {
-                                                    mission_data.reservers.0.push(creep_entity);
-                                                }
-                                            });
-                                        }),
-                                    ));
+                                                    if let Some(MissionData::Reserve(
+                                                        mission_data,
+                                                    )) =
+                                                        mission_data_storage.get_mut(mission_entity)
+                                                    {
+                                                        mission_data.reservers.0.push(creep_entity);
+                                                    }
+                                                });
+                                            }),
+                                        ),
+                                    );
                                 }
                             }
 

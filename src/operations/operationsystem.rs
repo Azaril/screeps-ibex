@@ -12,7 +12,7 @@ pub struct OperationSystemData<'a> {
     room_data: WriteStorage<'a, ::room::data::RoomData>,
     mission_data: ReadStorage<'a, ::missions::data::MissionData>,
     mapping: Read<'a, MappingData>,
-    visibility: Read<'a, VisibilityQueue>,
+    visibility: Write<'a, VisibilityQueue>,
 }
 
 pub struct OperationExecutionSystemData<'a> {
@@ -21,11 +21,11 @@ pub struct OperationExecutionSystemData<'a> {
     pub room_data: &'a WriteStorage<'a, ::room::data::RoomData>,
     pub mission_data: &'a ReadStorage<'a, ::missions::data::MissionData>,
     pub mapping: &'a Read<'a, MappingData>,
-    pub visibility: &'a Read<'a, VisibilityQueue>,
 }
 
 pub struct OperationExecutionRuntimeData<'a> {
     pub entity: &'a Entity,
+    pub visibility: &'a mut VisibilityQueue,
 }
 
 pub enum OperationResult {
@@ -35,7 +35,11 @@ pub enum OperationResult {
 }
 
 pub trait Operation {
-    fn run_operation(&mut self, system_data: &OperationExecutionSystemData, runtime_data: &OperationExecutionRuntimeData) -> OperationResult;
+    fn run_operation(
+        &mut self,
+        system_data: &OperationExecutionSystemData,
+        runtime_data: &mut OperationExecutionRuntimeData,
+    ) -> OperationResult;
 }
 
 pub struct OperationSystem;
@@ -52,15 +56,18 @@ impl<'a> System<'a> for OperationSystem {
             room_data: &data.room_data,
             mission_data: &data.mission_data,
             mapping: &data.mapping,
-            visibility: &data.visibility,
         };
 
         for (entity, operation) in (&data.entities, &mut data.operations).join() {
-            let runtime_data = OperationExecutionRuntimeData {
-                entity: &entity
+            let mut runtime_data = OperationExecutionRuntimeData {
+                entity: &entity,
+                visibility: &mut data.visibility,
             };
 
-            let cleanup_operation = match operation.as_operation().run_operation(&system_data, &runtime_data) {
+            let cleanup_operation = match operation
+                .as_operation()
+                .run_operation(&system_data, &mut runtime_data)
+            {
                 OperationResult::Running => false,
                 OperationResult::Success => {
                     info!("Operation complete, cleaning up.");

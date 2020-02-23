@@ -19,7 +19,6 @@ scopeguard = { version = "1.0", optional = true }
 specs = { version = "0.15", default-features = false, features = ["serde", "shred-derive"] }
 specs-derive = "0.4"
 itertools = "0.8"
-crossbeam-queue = "0.2"
 
 [profile.release]
 panic = "abort"

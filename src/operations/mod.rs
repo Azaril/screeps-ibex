@@ -1,3 +1,4 @@
+pub mod claim;
 pub mod construction;
 pub mod data;
 pub mod localbuild;
@@ -7,4 +8,3 @@ pub mod operationsystem;
 pub mod remotemine;
 pub mod tower;
 pub mod upgrade;
-pub mod claim;

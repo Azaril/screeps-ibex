@@ -1,4 +1,5 @@
 use crate::findnearest::*;
+use crate::visualize::*;
 use screeps::*;
 use serde::*;
 use std::collections::*;
@@ -97,25 +98,37 @@ impl Plan {
         }
     }
 
-    pub fn visualize(&self, room: &Room) {
-        let circle = |x: i32, y: i32, fill: &str, opacity: f32| {
-            js! { @{room.as_ref()}.visual.circle(@{x}, @{y}, { fill: @{fill}, opacity: @{opacity} }); }
-        };
-
+    pub fn visualize(&self, visualizer: &mut RoomVisualizer) {
         for (loc, entry) in self.state.iter() {
             match entry {
                 RoomItem::Empty => {}
                 RoomItem::Structure(StructureType::Spawn, _) => {
-                    circle(loc.x() as i32, loc.y() as i32, "green", 1.0);
-                },
+                    visualizer.circle(
+                        loc.x() as f32,
+                        loc.y() as f32,
+                        Some(CircleStyle::default().fill("green").opacity(1.0)),
+                    );
+                }
                 RoomItem::Structure(StructureType::Extension, _) => {
-                    circle(loc.x() as i32, loc.y() as i32, "purple", 1.0);
+                    visualizer.circle(
+                        loc.x() as f32,
+                        loc.y() as f32,
+                        Some(CircleStyle::default().fill("purple").opacity(1.0)),
+                    );
                 }
                 RoomItem::Structure(StructureType::Container, _) => {
-                    circle(loc.x() as i32, loc.y() as i32, "blue", 1.0);
+                    visualizer.circle(
+                        loc.x() as f32,
+                        loc.y() as f32,
+                        Some(CircleStyle::default().fill("blue").opacity(1.0)),
+                    );
                 }
                 RoomItem::Structure(_, _) => {
-                    circle(loc.x() as i32, loc.y() as i32, "yellow", 1.0);
+                    visualizer.circle(
+                        loc.x() as f32,
+                        loc.y() as f32,
+                        Some(CircleStyle::default().fill("yellow").opacity(1.0)),
+                    );
                 }
             }
         }
@@ -136,25 +149,37 @@ impl<'a> Planner<'a> {
 
         let terrain = self.room.get_terrain();
 
-        Self::add_spawns(&self. room, &terrain, &mut state);
+        Self::add_spawns(&self.room, &terrain, &mut state);
         Self::add_containers(&self.room, &terrain, &mut state);
         Self::add_extensions(&self.room, &terrain, &mut state);
 
         Plan { state }
     }
 
-    fn in_room_build_bounds(pos: (i32, i32)) -> bool{
+    fn in_room_build_bounds(pos: (i32, i32)) -> bool {
         pos.0 > 0 && pos.0 < 49 && pos.1 > 0 && pos.1 < 49
     }
 
-    fn get_nearest_empty_terrain(terrain: &RoomTerrain, start_pos: (u32, u32)) -> Option<(u32, u32)> {
-        let expanded = &[(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)];
+    fn get_nearest_empty_terrain(
+        terrain: &RoomTerrain,
+        start_pos: (u32, u32),
+    ) -> Option<(u32, u32)> {
+        let expanded = &[
+            (1, 0),
+            (1, 1),
+            (0, 1),
+            (-1, 1),
+            (-1, 0),
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+        ];
         let center = &[(0, 0)];
         let search_pattern = center.iter().chain(expanded.iter());
 
         for pos in search_pattern {
             let room_pos = ((start_pos.0 as i32 + pos.0), (start_pos.1 as i32 + pos.1));
-            
+
             if Self::in_room_build_bounds(room_pos) {
                 let terrain_data = terrain.get(room_pos.0 as u32, room_pos.1 as u32);
 
@@ -174,27 +199,39 @@ impl<'a> Planner<'a> {
         for source in sources.iter() {
             let pos = source.pos();
 
-            state.insert(Location::from_coords(pos.x(), pos.y()), RoomItem::Structure(StructureType::Spawn, RoomItemData { required_rcl: 0 }));
+            state.insert(
+                Location::from_coords(pos.x(), pos.y()),
+                RoomItem::Structure(StructureType::Spawn, RoomItemData { required_rcl: 0 }),
+            );
         }
 
         if sources.is_empty() {
             let sources = room.find(find::SOURCES);
 
             if sources.len() == 2 {
-                if let Some(empty_start_pos) = Self::get_nearest_empty_terrain(&terrain, sources[0].pos().into()) {
+                if let Some(empty_start_pos) =
+                    Self::get_nearest_empty_terrain(&terrain, sources[0].pos().into())
+                {
                     let find_options = FindOptions::new()
                         .max_rooms(1)
                         .ignore_creeps(true)
                         .ignore_destructible_structures(true);
 
-                    let start_pos = RoomPosition::new(empty_start_pos.0, empty_start_pos.1, room.name());
+                    let start_pos =
+                        RoomPosition::new(empty_start_pos.0, empty_start_pos.1, room.name());
                     let end_pos = sources[1].pos();
-    
+
                     if let Path::Vectorized(path) = start_pos.find_path_to(&end_pos, find_options) {
                         if !path.is_empty() {
                             let mid_point = &path[path.len() / 2];
 
-                            state.insert(Location::from_coords(mid_point.x, mid_point.y), RoomItem::Structure(StructureType::Spawn, RoomItemData { required_rcl: 0 }));
+                            state.insert(
+                                Location::from_coords(mid_point.x, mid_point.y),
+                                RoomItem::Structure(
+                                    StructureType::Spawn,
+                                    RoomItemData { required_rcl: 0 },
+                                ),
+                            );
                         }
                     }
                 }
@@ -212,20 +249,16 @@ impl<'a> Planner<'a> {
             31..=40 => Some(6),
             41..=50 => Some(7),
             51..=60 => Some(8),
-            _ => None
+            _ => None,
         }
     }
 
     fn add_extensions(_room: &Room, terrain: &RoomTerrain, state: &mut PlanState) {
         let spawn_positions: Vec<Location> = state
             .iter()
-            .filter_map(|(pos, entry)| {
-                match entry {
-                    RoomItem::Structure(StructureType::Spawn, _) => {
-                        Some(pos)
-                    },
-                    _ => None
-                }
+            .filter_map(|(pos, entry)| match entry {
+                RoomItem::Structure(StructureType::Spawn, _) => Some(pos),
+                _ => None,
             })
             .cloned()
             .collect();
@@ -237,7 +270,10 @@ impl<'a> Planner<'a> {
         for spawn_pos in spawn_positions {
             let mut expansion = 1;
             while rcl.is_some() {
-                let expanded_corner_points: Vec<(i32, i32)> = corner_points.iter().map(|(x, y)| (x * expansion, y * expansion)).collect();
+                let expanded_corner_points: Vec<(i32, i32)> = corner_points
+                    .iter()
+                    .map(|(x, y)| (x * expansion, y * expansion))
+                    .collect();
                 for i in 0..expanded_corner_points.len() {
                     let mut current_pos = expanded_corner_points[i % expanded_corner_points.len()];
                     let end_pos = expanded_corner_points[(i + 1) % expanded_corner_points.len()];
@@ -249,7 +285,10 @@ impl<'a> Planner<'a> {
                     let delta_y = step_end.1 - step_start.1;
 
                     while current_pos != end_pos && rcl.is_some() {
-                        let room_pos = ((spawn_pos.x() as i32 + current_pos.0), (spawn_pos.y() as i32 + current_pos.1));
+                        let room_pos = (
+                            (spawn_pos.x() as i32 + current_pos.0),
+                            (spawn_pos.y() as i32 + current_pos.1),
+                        );
 
                         let location = Location::from_coords(room_pos.0 as u32, room_pos.1 as u32);
 
@@ -258,14 +297,17 @@ impl<'a> Planner<'a> {
                                 Terrain::Plain | Terrain::Swamp => {
                                     state.insert(
                                         Location::from_coords(room_pos.0 as u32, room_pos.1 as u32),
-                                        RoomItem::Structure(StructureType::Extension, RoomItemData { 
-                                            required_rcl: rcl.unwrap()
-                                        })
+                                        RoomItem::Structure(
+                                            StructureType::Extension,
+                                            RoomItemData {
+                                                required_rcl: rcl.unwrap(),
+                                            },
+                                        ),
                                     );
 
                                     current_extensions += 1;
                                     rcl = Self::extension_count_to_rcl(current_extensions);
-                                },
+                                }
                                 _ => {}
                             }
                         }
@@ -287,22 +329,21 @@ impl<'a> Planner<'a> {
     fn add_containers(room: &Room, _terrain: &RoomTerrain, state: &mut PlanState) {
         let spawn_positions: Vec<Location> = state
             .iter()
-            .filter_map(|(pos, entry)| {
-                match entry {
-                    RoomItem::Structure(StructureType::Spawn, _) => {
-                        Some(pos)
-                    },
-                    _ => None
-                }
+            .filter_map(|(pos, entry)| match entry {
+                RoomItem::Structure(StructureType::Spawn, _) => Some(pos),
+                _ => None,
             })
             .cloned()
             .collect();
 
         for source in room.find(find::SOURCES) {
-            let nearest_spawn_path = spawn_positions.iter().map(|p| p.to_room_position(room.name())).find_nearest_path_to(
-                source.pos(),
-                PathFinderHelpers::same_room_ignore_creeps_and_structures_range_1,
-            );
+            let nearest_spawn_path = spawn_positions
+                .iter()
+                .map(|p| p.to_room_position(room.name()))
+                .find_nearest_path_to(
+                    source.pos(),
+                    PathFinderHelpers::same_room_ignore_creeps_and_structures_range_1,
+                );
 
             if let Some(Path::Vectorized(path)) = nearest_spawn_path {
                 if let Some(last_step) = path.last() {
@@ -311,17 +352,23 @@ impl<'a> Planner<'a> {
 
                     state.insert(
                         Location::from_coords(pos_x as u32, pos_y as u32),
-                        RoomItem::Structure(StructureType::Container, RoomItemData { required_rcl: 2 }),
+                        RoomItem::Structure(
+                            StructureType::Container,
+                            RoomItemData { required_rcl: 2 },
+                        ),
                     );
                 }
             }
         }
 
         if let Some(controller) = room.controller() {
-            let nearest_spawn_path = spawn_positions.iter().map(|p| p.to_room_position(room.name())).find_nearest_path_to(
-                controller.pos(),
-                PathFinderHelpers::same_room_ignore_creeps_and_structures_range_1,
-            );
+            let nearest_spawn_path = spawn_positions
+                .iter()
+                .map(|p| p.to_room_position(room.name()))
+                .find_nearest_path_to(
+                    controller.pos(),
+                    PathFinderHelpers::same_room_ignore_creeps_and_structures_range_1,
+                );
 
             if let Some(Path::Vectorized(path)) = nearest_spawn_path {
                 if let Some(last_step) = path.last() {
@@ -330,7 +377,10 @@ impl<'a> Planner<'a> {
 
                     state.insert(
                         Location::from_coords(pos_x as u32, pos_y as u32),
-                        RoomItem::Structure(StructureType::Container, RoomItemData { required_rcl: 2 }),
+                        RoomItem::Structure(
+                            StructureType::Container,
+                            RoomItemData { required_rcl: 2 },
+                        ),
                     );
                 }
             }

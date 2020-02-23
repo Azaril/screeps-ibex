@@ -123,7 +123,10 @@ impl ResourceUtility {
     pub fn select_active_sources(creep: &Creep, room: &Room) -> Option<Source> {
         room.find(find::SOURCES_ACTIVE)
             .into_iter()
-            .find_nearest_from(creep.pos(), PathFinderHelpers::same_room_ignore_creeps_range_1)
+            .find_nearest_from(
+                creep.pos(),
+                PathFinderHelpers::same_room_ignore_creeps_range_1,
+            )
     }
 
     pub fn select_dropped_resource(
@@ -134,7 +137,10 @@ impl ResourceUtility {
         room.find(find::DROPPED_RESOURCES)
             .into_iter()
             .filter(|resource| resource.resource_type() == resource_type)
-            .find_nearest_from(creep.pos(), PathFinderHelpers::same_room_ignore_creeps_range_1)
+            .find_nearest_from(
+                creep.pos(),
+                PathFinderHelpers::same_room_ignore_creeps_range_1,
+            )
     }
 
     pub fn select_tombstone(
@@ -145,7 +151,10 @@ impl ResourceUtility {
         room.find(find::TOMBSTONES)
             .into_iter()
             .filter(|tombstone| tombstone.store_used_capacity(Some(resource_type)) > 0)
-            .find_nearest_from(creep.pos(), PathFinderHelpers::same_room_ignore_creeps_range_1)
+            .find_nearest_from(
+                creep.pos(),
+                PathFinderHelpers::same_room_ignore_creeps_range_1,
+            )
     }
 
     pub fn select_structure_resource(
@@ -197,10 +206,10 @@ impl ResourceUtility {
         .iter()
         {
             if let Some(structures) = targets.remove(priority) {
-                if let Some(structure) = structures
-                    .into_iter()
-                    .find_nearest_from(creep.pos(), PathFinderHelpers::same_room_ignore_creeps_range_1)
-                {
+                if let Some(structure) = structures.into_iter().find_nearest_from(
+                    creep.pos(),
+                    PathFinderHelpers::same_room_ignore_creeps_range_1,
+                ) {
                     return Some(structure);
                 }
             }
@@ -267,10 +276,10 @@ impl ResourceUtility {
         .iter()
         {
             if let Some(structures) = targets.remove(priority) {
-                if let Some(structure) = structures
-                    .into_iter()
-                    .find_nearest_from(creep.pos(), PathFinderHelpers::same_room_ignore_creeps_range_1)
-                {
+                if let Some(structure) = structures.into_iter().find_nearest_from(
+                    creep.pos(),
+                    PathFinderHelpers::same_room_ignore_creeps_range_1,
+                ) {
                     return Some(structure);
                 }
             }

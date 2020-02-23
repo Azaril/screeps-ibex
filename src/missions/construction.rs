@@ -40,10 +40,23 @@ impl ConstructionMission {
 }
 
 impl Mission for ConstructionMission {
-    fn run_mission<'a>(
+    fn describe(
         &mut self,
         system_data: &MissionExecutionSystemData,
-        _runtime_data: &MissionExecutionRuntimeData,
+        runtime_data: &mut MissionExecutionRuntimeData,
+    ) {
+        if let Some(visualizer) = &mut runtime_data.visualizer {
+            if let Some(room_data) = system_data.room_data.get(self.room_data) {
+                let _room_visual = visualizer.get_room(room_data.name);
+                //TODO: Add in visualization.
+            }
+        }
+    }
+
+    fn run_mission(
+        &mut self,
+        system_data: &MissionExecutionSystemData,
+        runtime_data: &mut MissionExecutionRuntimeData,
     ) -> MissionResult {
         scope_timing!("ConstructionMission");
 
@@ -56,8 +69,10 @@ impl Mission for ConstructionMission {
                 }
 
                 if let Some(plan) = &self.plan {
-                    if crate::features::construction::visualize() {
-                        plan.visualize(&room);
+                    if let Some(visualizer) = &mut runtime_data.visualizer {
+                        if crate::features::construction::visualize() {
+                            plan.visualize(visualizer.get_room(room_data.name));
+                        }
                     }
 
                     let should_execute = crate::features::construction::execute()

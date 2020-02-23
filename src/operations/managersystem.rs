@@ -1,5 +1,6 @@
 use specs::*;
 
+use super::claim::*;
 use super::construction::*;
 use super::data::*;
 use super::localbuild::*;
@@ -7,7 +8,6 @@ use super::localsupply::*;
 use super::remotemine::*;
 use super::tower::*;
 use super::upgrade::*;
-use super::claim::*;
 
 pub struct OperationManagerSystem;
 
