@@ -17,10 +17,10 @@ impl BuildUtility {
             .max_by_key(|site| site.progress());
 
         in_progress_construction_site_id.or_else(|| {
-            construction_sites
-                .iter()
-                .cloned()
-                .find_nearest_from(creep.pos(), PathFinderHelpers::same_room_ignore_creeps_range_3)
+            construction_sites.iter().cloned().find_nearest_from(
+                creep.pos(),
+                PathFinderHelpers::same_room_ignore_creeps_range_3,
+            )
         })
     }
 }

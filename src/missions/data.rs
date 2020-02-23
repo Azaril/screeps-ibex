@@ -17,7 +17,7 @@ pub enum MissionData {
     Construction(super::construction::ConstructionMission),
     Reserve(super::reserve::ReserveMission),
     Claim(super::claim::ClaimMission),
-    RemoteBuild(super::remotebuild::RemoteBuildMission)
+    RemoteBuild(super::remotebuild::RemoteBuildMission),
 }
 
 impl MissionData {

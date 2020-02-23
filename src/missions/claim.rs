@@ -8,9 +8,9 @@ use specs_derive::*;
 use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
+use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
-use crate::room::data::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ClaimMission {
@@ -41,10 +41,23 @@ impl ClaimMission {
 }
 
 impl Mission for ClaimMission {
-    fn run_mission<'a>(
+    fn describe(
         &mut self,
         system_data: &MissionExecutionSystemData,
-        runtime_data: &MissionExecutionRuntimeData,
+        runtime_data: &mut MissionExecutionRuntimeData,
+    ) {
+        if let Some(visualizer) = &mut runtime_data.visualizer {
+            if let Some(room_data) = system_data.room_data.get(self.room_data) {
+                let _room_visual = visualizer.get_room(room_data.name);
+                //TODO: Add in visualization.
+            }
+        }
+    }
+
+    fn run_mission(
+        &mut self,
+        system_data: &MissionExecutionSystemData,
+        runtime_data: &mut MissionExecutionRuntimeData,
     ) -> MissionResult {
         scope_timing!("ClaimMission");
 
@@ -64,17 +77,17 @@ impl Mission for ClaimMission {
             if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
                 if dynamic_visibility_data.updated_within(1000) {
                     match dynamic_visibility_data.owner() {
-                        RoomDisposition::Mine => { 
+                        RoomDisposition::Mine => {
                             return MissionResult::Success;
-                        },
+                        }
                         RoomDisposition::Friendly(_) | RoomDisposition::Hostile(_) => {
                             return MissionResult::Failure
-                        },
+                        }
                         RoomDisposition::Neutral => {}
                     }
 
                     match dynamic_visibility_data.reservation() {
-                        RoomDisposition::Mine | RoomDisposition::Neutral => {},
+                        RoomDisposition::Mine | RoomDisposition::Neutral => {}
                         RoomDisposition::Friendly(_) | RoomDisposition::Hostile(_) => {
                             return MissionResult::Failure
                         }
@@ -104,38 +117,39 @@ impl Mission for ClaimMission {
                                     let mission_entity = *runtime_data.entity;
                                     let controller_id = *controller;
 
-                                    system_data.spawn_queue.request(SpawnRequest::new(
+                                    runtime_data.spawn_queue.request(
                                         home_room_data.name,
-                                        &body,
-                                        priority,
-                                        Box::new(move |spawn_system_data, name| {
-                                            let name = name.to_string();
+                                        SpawnRequest::new(
+                                            "Claimer".to_string(),
+                                            &body,
+                                            priority,
+                                            Box::new(move |spawn_system_data, name| {
+                                                let name = name.to_string();
 
-                                            spawn_system_data.updater.exec_mut(move |world| {
-                                                let creep_job = JobData::Claim(
-                                                    ::jobs::claim::ClaimJob::new(
-                                                        controller_id
-                                                    ),
-                                                );
+                                                spawn_system_data.updater.exec_mut(move |world| {
+                                                    let creep_job = JobData::Claim(
+                                                        ::jobs::claim::ClaimJob::new(controller_id),
+                                                    );
 
-                                                let creep_entity = ::creep::Spawning::build(
-                                                    world.create_entity(),
-                                                    &name,
-                                                )
-                                                .with(creep_job)
-                                                .build();
+                                                    let creep_entity = ::creep::Spawning::build(
+                                                        world.create_entity(),
+                                                        &name,
+                                                    )
+                                                    .with(creep_job)
+                                                    .build();
 
-                                                let mission_data_storage =
-                                                    &mut world.write_storage::<MissionData>();
+                                                    let mission_data_storage =
+                                                        &mut world.write_storage::<MissionData>();
 
-                                                if let Some(MissionData::Claim(mission_data)) =
-                                                    mission_data_storage.get_mut(mission_entity)
-                                                {
-                                                    mission_data.claimers.0.push(creep_entity);
-                                                }
-                                            });
-                                        }),
-                                    ));
+                                                    if let Some(MissionData::Claim(mission_data)) =
+                                                        mission_data_storage.get_mut(mission_entity)
+                                                    {
+                                                        mission_data.claimers.0.push(creep_entity);
+                                                    }
+                                                });
+                                            }),
+                                        ),
+                                    );
                                 }
                             }
 

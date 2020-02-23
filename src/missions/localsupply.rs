@@ -44,10 +44,23 @@ impl LocalSupplyMission {
 }
 
 impl Mission for LocalSupplyMission {
-    fn run_mission<'a>(
+    fn describe(
         &mut self,
         system_data: &MissionExecutionSystemData,
-        runtime_data: &MissionExecutionRuntimeData,
+        runtime_data: &mut MissionExecutionRuntimeData,
+    ) {
+        if let Some(visualizer) = &mut runtime_data.visualizer {
+            if let Some(room_data) = system_data.room_data.get(self.room_data) {
+                let _room_visual = visualizer.get_room(room_data.name);
+                //TODO: Add in visualization.
+            }
+        }
+    }
+
+    fn run_mission(
+        &mut self,
+        system_data: &MissionExecutionSystemData,
+        runtime_data: &mut MissionExecutionRuntimeData,
     ) -> MissionResult {
         scope_timing!("LocalSupplyMission");
 
@@ -277,37 +290,42 @@ impl Mission for LocalSupplyMission {
 
                             let priority = SPAWN_PRIORITY_HIGH;
 
-                            system_data.spawn_queue.request(SpawnRequest::new(
+                            runtime_data.spawn_queue.request(
                                 room_data.name,
-                                &body,
-                                priority,
-                                Box::new(move |spawn_system_data, name| {
-                                    let name = name.to_string();
+                                SpawnRequest::new(
+                                    format!("Container Miner - Source: {}", source_id.id()),
+                                    &body,
+                                    priority,
+                                    Box::new(move |spawn_system_data, name| {
+                                        let name = name.to_string();
 
-                                    spawn_system_data.updater.exec_mut(move |world| {
-                                        let creep_job = JobData::StaticMine(
-                                            ::jobs::staticmine::StaticMineJob::new(
-                                                source_id,
-                                                mine_location,
-                                            ),
-                                        );
+                                        spawn_system_data.updater.exec_mut(move |world| {
+                                            let creep_job = JobData::StaticMine(
+                                                ::jobs::staticmine::StaticMineJob::new(
+                                                    source_id,
+                                                    mine_location,
+                                                ),
+                                            );
 
-                                        let creep_entity =
-                                            ::creep::Spawning::build(world.create_entity(), &name)
-                                                .with(creep_job)
-                                                .build();
+                                            let creep_entity = ::creep::Spawning::build(
+                                                world.create_entity(),
+                                                &name,
+                                            )
+                                            .with(creep_job)
+                                            .build();
 
-                                        let mission_data_storage =
-                                            &mut world.write_storage::<MissionData>();
+                                            let mission_data_storage =
+                                                &mut world.write_storage::<MissionData>();
 
-                                        if let Some(MissionData::LocalSupply(mission_data)) =
-                                            mission_data_storage.get_mut(mission_entity)
-                                        {
-                                            mission_data.miners.0.push(creep_entity);
-                                        }
-                                    });
-                                }),
-                            ));
+                                            if let Some(MissionData::LocalSupply(mission_data)) =
+                                                mission_data_storage.get_mut(mission_entity)
+                                            {
+                                                mission_data.miners.0.push(creep_entity);
+                                            }
+                                        });
+                                    }),
+                                ),
+                            );
                         }
                     }
 
@@ -350,35 +368,39 @@ impl Mission for LocalSupplyMission {
                                 SPAWN_PRIORITY_MEDIUM
                             };
 
-                            system_data.spawn_queue.request(SpawnRequest::new(
+                            runtime_data.spawn_queue.request(
                                 room_data.name,
-                                &body,
-                                priority,
-                                Box::new(move |spawn_system_data, name| {
-                                    let name = name.to_string();
+                                SpawnRequest::new(
+                                    format!("Hauler - Container: {}", container_id.id()),
+                                    &body,
+                                    priority,
+                                    Box::new(move |spawn_system_data, name| {
+                                        let name = name.to_string();
 
-                                    spawn_system_data.updater.exec_mut(move |world| {
-                                        let creep_job = JobData::Haul(::jobs::haul::HaulJob::new(
-                                            container_id,
-                                            home_room,
-                                        ));
+                                        spawn_system_data.updater.exec_mut(move |world| {
+                                            let creep_job = JobData::Haul(
+                                                ::jobs::haul::HaulJob::new(container_id, home_room),
+                                            );
 
-                                        let creep_entity =
-                                            ::creep::Spawning::build(world.create_entity(), &name)
-                                                .with(creep_job)
-                                                .build();
+                                            let creep_entity = ::creep::Spawning::build(
+                                                world.create_entity(),
+                                                &name,
+                                            )
+                                            .with(creep_job)
+                                            .build();
 
-                                        let mission_data_storage =
-                                            &mut world.write_storage::<MissionData>();
+                                            let mission_data_storage =
+                                                &mut world.write_storage::<MissionData>();
 
-                                        if let Some(MissionData::LocalSupply(mission_data)) =
-                                            mission_data_storage.get_mut(mission_entity)
-                                        {
-                                            mission_data.haulers.0.push(creep_entity);
-                                        }
-                                    });
-                                }),
-                            ));
+                                            if let Some(MissionData::LocalSupply(mission_data)) =
+                                                mission_data_storage.get_mut(mission_entity)
+                                            {
+                                                mission_data.haulers.0.push(creep_entity);
+                                            }
+                                        });
+                                    }),
+                                ),
+                            );
                         }
                     }
 
@@ -416,36 +438,41 @@ impl Mission for LocalSupplyMission {
                             let delivery_room = room_data.name;
                             let source_id = source.remote_id();
 
-                            system_data.spawn_queue.request(SpawnRequest::new(
+                            runtime_data.spawn_queue.request(
                                 room_data.name,
-                                &body,
-                                priority,
-                                Box::new(move |spawn_system_data, name| {
-                                    let name = name.to_string();
+                                SpawnRequest::new(
+                                    format!("Harvester - Source: {}", source_id.id()),
+                                    &body,
+                                    priority,
+                                    Box::new(move |spawn_system_data, name| {
+                                        let name = name.to_string();
 
-                                    spawn_system_data.updater.exec_mut(move |world| {
-                                        let creep_job =
-                                            JobData::Harvest(::jobs::harvest::HarvestJob::new(
-                                                source_id,
-                                                delivery_room,
-                                            ));
+                                        spawn_system_data.updater.exec_mut(move |world| {
+                                            let creep_job =
+                                                JobData::Harvest(::jobs::harvest::HarvestJob::new(
+                                                    source_id,
+                                                    delivery_room,
+                                                ));
 
-                                        let creep_entity =
-                                            ::creep::Spawning::build(world.create_entity(), &name)
-                                                .with(creep_job)
-                                                .build();
+                                            let creep_entity = ::creep::Spawning::build(
+                                                world.create_entity(),
+                                                &name,
+                                            )
+                                            .with(creep_job)
+                                            .build();
 
-                                        let mission_data_storage =
-                                            &mut world.write_storage::<MissionData>();
+                                            let mission_data_storage =
+                                                &mut world.write_storage::<MissionData>();
 
-                                        if let Some(MissionData::LocalSupply(mission_data)) =
-                                            mission_data_storage.get_mut(mission_entity)
-                                        {
-                                            mission_data.harvesters.0.push(creep_entity);
-                                        }
-                                    });
-                                }),
-                            ));
+                                            if let Some(MissionData::LocalSupply(mission_data)) =
+                                                mission_data_storage.get_mut(mission_entity)
+                                            {
+                                                mission_data.harvesters.0.push(creep_entity);
+                                            }
+                                        });
+                                    }),
+                                ),
+                            );
                         }
                     }
                 }

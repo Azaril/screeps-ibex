@@ -8,8 +8,8 @@ use super::data::*;
 use super::operationsystem::*;
 use crate::missions::data::*;
 use crate::missions::remotemine::*;
-use crate::missions::scout::*;
 use crate::missions::reserve::*;
+use crate::missions::scout::*;
 use crate::room::visibilitysystem::*;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -33,10 +33,10 @@ impl RemoteMineOperation {
 }
 
 impl Operation for RemoteMineOperation {
-    fn run_operation<'a>(
+    fn run_operation(
         &mut self,
-        system_data: &'a OperationExecutionSystemData,
-        _runtime_data: &'a OperationExecutionRuntimeData,
+        system_data: &OperationExecutionSystemData,
+        runtime_data: &mut OperationExecutionRuntimeData,
     ) -> OperationResult {
         scope_timing!("RemoteMineOperation");
 
@@ -64,10 +64,19 @@ impl Operation for RemoteMineOperation {
                                     .collect::<Vec<RoomName>>()
                             })
                             .filter(|room_name| {
-                                if let Some(search_room_entity) = system_data.mapping.rooms.get(&room_name) {
-                                    if let Some(search_room_data) = system_data.room_data.get(*search_room_entity) {
-                                        if let Some(search_room_data) = search_room_data.get_dynamic_visibility_data() {
-                                            if search_room_data.updated_within(5000) && (search_room_data.owner().hostile() || search_room_data.source_keeper()) {
+                                if let Some(search_room_entity) =
+                                    system_data.mapping.rooms.get(&room_name)
+                                {
+                                    if let Some(search_room_data) =
+                                        system_data.room_data.get(*search_room_entity)
+                                    {
+                                        if let Some(search_room_data) =
+                                            search_room_data.get_dynamic_visibility_data()
+                                        {
+                                            if search_room_data.updated_within(5000)
+                                                && (search_room_data.owner().hostile()
+                                                    || search_room_data.source_keeper())
+                                            {
                                                 return false;
                                             }
                                         }
@@ -85,7 +94,7 @@ impl Operation for RemoteMineOperation {
                         {
                             desired_missions.push((*offset_room_entity, entity));
                         } else {
-                            system_data.visibility.request(VisibilityRequest::new(
+                            runtime_data.visibility.request(VisibilityRequest::new(
                                 offset_room_name,
                                 VISIBILITY_PRIORITY_MEDIUM,
                             ));
@@ -161,10 +170,11 @@ impl Operation for RemoteMineOperation {
 
             if let Some(dynamic_visibility_data) = dynamic_visibility_data {
                 if !dynamic_visibility_data.updated_within(1000)
-                    || !dynamic_visibility_data.owner().neutral() 
+                    || !dynamic_visibility_data.owner().neutral()
                     || dynamic_visibility_data.reservation().friendly()
-                    || dynamic_visibility_data.reservation().hostile() 
-                    || dynamic_visibility_data.source_keeper() {
+                    || dynamic_visibility_data.reservation().hostile()
+                    || dynamic_visibility_data.source_keeper()
+                {
                     continue;
                 }
 

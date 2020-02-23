@@ -1,5 +1,4 @@
 use super::data::*;
-use crossbeam_queue::SegQueue;
 use screeps::*;
 use specs::prelude::*;
 use specs::saveload::*;
@@ -27,19 +26,12 @@ impl VisibilityRequest {
 
 #[derive(Default)]
 pub struct VisibilityQueue {
-    pub requests: SegQueue<VisibilityRequest>,
+    pub requests: Vec<VisibilityRequest>,
 }
 
 impl VisibilityQueue {
-    pub fn request(&self, visibility_request: VisibilityRequest) {
+    pub fn request(&mut self, visibility_request: VisibilityRequest) {
         self.requests.push(visibility_request);
-    }
-}
-
-impl Drop for VisibilityQueue {
-    fn drop(&mut self) {
-        // TODO: remove as soon as leak is fixed in crossbeam
-        while self.requests.pop().is_ok() {}
     }
 }
 
@@ -61,7 +53,7 @@ impl<'a> System<'a> for VisibilityQueueSystem {
 
         let mut room_priorities: HashMap<RoomName, f32> = HashMap::new();
 
-        while let Ok(request) = data.visibility_queue.requests.pop() {
+        for request in &data.visibility_queue.requests {
             if let Some(current_priority) = room_priorities.get_mut(&request.room_name) {
                 let highest_priority = current_priority.max(request.priority);
                 *current_priority = highest_priority;

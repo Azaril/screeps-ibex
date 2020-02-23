@@ -16,11 +16,10 @@ extern crate specs_derive;
 
 extern crate itertools;
 
-extern crate crossbeam_queue;
-
 #[macro_use]
 mod timing;
 mod creep;
+mod features;
 mod findnearest;
 mod globals;
 mod jobs;
@@ -33,7 +32,7 @@ mod room;
 mod serialize;
 mod spawnsystem;
 mod structureidentifier;
-mod features;
+mod visualize;
 
 use std::fmt;
 
@@ -203,12 +202,15 @@ fn deserialize_world(world: &World, data: &str) {
 fn game_loop() {
     scope_timing!("Main tick");
 
-    info!("Tick start - CPU: {}", screeps::game::cpu::get_used());
+    //info!("Tick start - CPU: {}", screeps::game::cpu::get_used());
 
     let mut world = World::new();
 
     world.insert(serialize::SerializeMarkerAllocator::new());
     world.register::<serialize::SerializeMarker>();
+
+    //TODO: Toggle this depending on if visualization is requested.
+    world.insert(visualize::Visualizer::new());
 
     //
     // Pre-pass update
@@ -225,9 +227,13 @@ fn game_loop() {
         .with(
             room::updateroomsystem::UpdateRoomDataSystem,
             "update_room_data",
-            &[],
+            &["create_room_data"],
         )
-        .with(mappingsystem::MappingSystem, "mapping", &[])
+        .with(
+            mappingsystem::MappingSystem,
+            "mapping",
+            &["create_room_data"],
+        )
         .build();
 
     pre_pass_dispatcher.setup(&mut world);
@@ -245,7 +251,7 @@ fn game_loop() {
         .with(
             operations::operationsystem::OperationSystem,
             "operations",
-            &[],
+            &["operations_manager"],
         )
         .with(missions::missionsystem::MissionSystem, "missions", &[])
         .with(jobs::jobsystem::JobSystem, "jobs", &[])
@@ -254,7 +260,10 @@ fn game_loop() {
             "visibility",
             &[],
         )
+        .with_barrier()
         .with(spawnsystem::SpawnQueueSystem, "spawn_queue", &[])
+        .with_barrier()
+        .with(visualize::VisualizerSystem, "visualizer", &[])
         .build();
 
     main_dispatcher.setup(&mut world);
@@ -315,7 +324,7 @@ fn game_loop() {
         memory::root().set("native", data);
     });
 
-    info!("Tick end - CPU: {}", screeps::game::cpu::get_used());
+    //info!("Tick end - CPU: {}", screeps::game::cpu::get_used());
 }
 
 fn cleanup_memory() -> Result<(), Box<dyn (::std::error::Error)>> {

@@ -41,10 +41,23 @@ impl RemoteBuildMission {
 }
 
 impl Mission for RemoteBuildMission {
-    fn run_mission<'a>(
+    fn describe(
         &mut self,
         system_data: &MissionExecutionSystemData,
-        runtime_data: &MissionExecutionRuntimeData,
+        runtime_data: &mut MissionExecutionRuntimeData,
+    ) {
+        if let Some(visualizer) = &mut runtime_data.visualizer {
+            if let Some(room_data) = system_data.room_data.get(self.room_data) {
+                let _room_visual = visualizer.get_room(room_data.name);
+                //TODO: Add in visualization.
+            }
+        }
+    }
+
+    fn run_mission(
+        &mut self,
+        system_data: &MissionExecutionSystemData,
+        runtime_data: &mut MissionExecutionRuntimeData,
     ) -> MissionResult {
         scope_timing!("RemoteBuildMission");
 
@@ -71,7 +84,7 @@ impl Mission for RemoteBuildMission {
                         } else {
                             SPAWN_PRIORITY_LOW
                         };
-                    
+
                         let body_definition = SpawnBodyDefinition {
                             maximum_energy: home_room.energy_capacity_available(),
                             minimum_repeat: Some(1),
@@ -85,35 +98,42 @@ impl Mission for RemoteBuildMission {
                             let mission_entity = *runtime_data.entity;
                             let build_room_name = room_data.name;
 
-                            system_data.spawn_queue.request(SpawnRequest::new(
+                            runtime_data.spawn_queue.request(
                                 home_room_data.name,
-                                &body,
-                                priority,
-                                Box::new(move |spawn_system_data, name| {
-                                    let name = name.to_string();
+                                SpawnRequest::new(
+                                    format!("Remote Builder - Target Room: {}", room_data.name),
+                                    &body,
+                                    priority,
+                                    Box::new(move |spawn_system_data, name| {
+                                        let name = name.to_string();
 
-                                    spawn_system_data.updater.exec_mut(move |world| {
-                                        let creep_job = JobData::Build(::jobs::build::BuildJob::new(
-                                            //TODO: Pass an array of home rooms - allow for hauling energy if harvesting is not possible.
-                                            build_room_name, build_room_name
-                                        ));
+                                        spawn_system_data.updater.exec_mut(move |world| {
+                                            let creep_job =
+                                                JobData::Build(::jobs::build::BuildJob::new(
+                                                    //TODO: Pass an array of home rooms - allow for hauling energy if harvesting is not possible.
+                                                    build_room_name,
+                                                    build_room_name,
+                                                ));
 
-                                        let creep_entity =
-                                            ::creep::Spawning::build(world.create_entity(), &name)
-                                                .with(creep_job)
-                                                .build();
+                                            let creep_entity = ::creep::Spawning::build(
+                                                world.create_entity(),
+                                                &name,
+                                            )
+                                            .with(creep_job)
+                                            .build();
 
-                                        let mission_data_storage =
-                                            &mut world.write_storage::<MissionData>();
+                                            let mission_data_storage =
+                                                &mut world.write_storage::<MissionData>();
 
-                                        if let Some(MissionData::RemoteBuild(mission_data)) =
-                                            mission_data_storage.get_mut(mission_entity)
-                                        {
-                                            mission_data.builders.0.push(creep_entity);
-                                        }
-                                    });
-                                }),
-                            ));
+                                            if let Some(MissionData::RemoteBuild(mission_data)) =
+                                                mission_data_storage.get_mut(mission_entity)
+                                            {
+                                                mission_data.builders.0.push(creep_entity);
+                                            }
+                                        });
+                                    }),
+                                ),
+                            );
                         }
                     }
 

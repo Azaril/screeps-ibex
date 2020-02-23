@@ -29,10 +29,10 @@ impl LocalSupplyOperation {
 }
 
 impl Operation for LocalSupplyOperation {
-    fn run_operation<'a>(
+    fn run_operation(
         &mut self,
-        system_data: &'a OperationExecutionSystemData,
-        _runtime_data: &'a OperationExecutionRuntimeData,
+        system_data: &OperationExecutionSystemData,
+        _runtime_data: &mut OperationExecutionRuntimeData,
     ) -> OperationResult {
         scope_timing!("LocalSupplyOperation");
 

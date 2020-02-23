@@ -30,7 +30,7 @@ pub enum RoomDisposition {
     Neutral,
     Mine,
     Friendly(String),
-    Hostile(String)
+    Hostile(String),
 }
 
 impl RoomDisposition {
@@ -39,7 +39,7 @@ impl RoomDisposition {
             RoomDisposition::Neutral => None,
             RoomDisposition::Mine => Some(crate::globals::user::name()),
             RoomDisposition::Friendly(name) => Some(name),
-            RoomDisposition::Hostile(name) => Some(name) 
+            RoomDisposition::Hostile(name) => Some(name),
         }
     }
 
@@ -167,17 +167,16 @@ impl RoomData {
     fn name_option_to_disposition(name: Option<String>) -> RoomDisposition {
         let friends: &[String] = &[];
 
-        name
-            .map(|name| {
-                if name == crate::globals::user::name() {
-                    RoomDisposition::Mine
-                } else if friends.iter().any(|friend_name| &name == friend_name) {
-                    RoomDisposition::Friendly(name)
-                } else {
-                    RoomDisposition::Hostile(name)
-                }
-            })
-            .unwrap_or_else(|| RoomDisposition::Neutral)
+        name.map(|name| {
+            if name == crate::globals::user::name() {
+                RoomDisposition::Mine
+            } else if friends.iter().any(|friend_name| &name == friend_name) {
+                RoomDisposition::Friendly(name)
+            } else {
+                RoomDisposition::Hostile(name)
+            }
+        })
+        .unwrap_or_else(|| RoomDisposition::Neutral)
     }
 
     fn create_dynamic_visibility_data(room: &Room) -> RoomDynamicVisibilityData {
@@ -190,18 +189,23 @@ impl RoomData {
             .as_ref()
             .and_then(|c| c.reservation())
             .map(|r| r.username);
-        let controller_reservation_disposition = Self::name_option_to_disposition(controller_reservation_name);
+        let controller_reservation_disposition =
+            Self::name_option_to_disposition(controller_reservation_name);
 
         //TODO: This is expensive - can really just be calculated for room number. Not possible to calculate given x/y coord is private.
-        let source_keeper = room.find(find::HOSTILE_STRUCTURES)
-            .into_iter()
-            .any(|s| if let Structure::KeeperLair(_) = s.as_structure() { true } else { false });
+        let source_keeper = room.find(find::HOSTILE_STRUCTURES).into_iter().any(|s| {
+            if let Structure::KeeperLair(_) = s.as_structure() {
+                true
+            } else {
+                false
+            }
+        });
 
         RoomDynamicVisibilityData {
             update_tick: game::time(),
             owner: controller_owner_disposition,
             reservation: controller_reservation_disposition,
-            source_keeper
+            source_keeper,
         }
     }
 
