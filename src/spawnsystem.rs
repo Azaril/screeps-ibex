@@ -54,18 +54,34 @@ impl SpawnQueue {
 
     fn visualize(&self, visualizer: &mut Visualizer) {
         for (room_name, requests) in &self.requests {
-            //TODO: Add better UI.
-            //TODO: Add energy numbers.
             let room_visualizer = visualizer.get_room(*room_name);
 
-            let mut pos = (40.0, 15.0);
+            let mut pos = (35.0, 15.0);
+
+            if let Some(room) = game::rooms::get(*room_name) {
+                room_visualizer.text(
+                    pos.0,
+                    pos.1,
+                    format!("Spawn Queue - Energy {} / {}", room.energy_available(), room.energy_capacity_available()),
+                    Some(TextStyle::default().font(0.5).align(TextAlign::Left))
+                );
+            } else {
+                room_visualizer.text(
+                    pos.0,
+                    pos.1,
+                    "Spawn Queue - Energy ? / ?".to_string(),
+                    Some(TextStyle::default().font(0.5).align(TextAlign::Left))
+                );
+            }
+
+            pos.1 += 1.0;
 
             for request in requests.iter() {
                 room_visualizer.text(
                     pos.0,
                     pos.1,
                     request.description.clone(),
-                    Some(TextStyle::default().font(0.5).align(TextAlign::Left)),
+                    Some(TextStyle::default().font(0.5).align(TextAlign::Left))
                 );
 
                 pos.1 += 1.0;

@@ -1,25 +1,38 @@
-pub mod experimental {
-    #[cfg(feature = "experimental")]
-    pub fn on() -> bool {
-        true
+pub mod js {
+    pub fn prepare() {
+        js!{
+            _.defaultsDeep(Memory, {
+                _features: {
+                    visualize: {
+                        on: false
+                    },
+                    construction: {
+                        plan: true,
+                        visualize: false,
+                        execute: true
+                    }
+                }
+            });
+        }
     }
+}
 
-    #[cfg(not(feature = "experimental"))]
+pub mod visualize {
     pub fn on() -> bool {
-        false
+        ::memory::root().path_bool("_features.visualize.on")
     }
 }
 
 pub mod construction {
     pub fn plan() -> bool {
-        ::memory::root().path_bool("_features.construction.plan") || super::experimental::on()
+        ::memory::root().path_bool("_features.construction.plan")
     }
 
     pub fn visualize() -> bool {
-        ::memory::root().path_bool("_features.construction.visualize") || super::experimental::on()
+        ::memory::root().path_bool("_features.construction.visualize")
     }
 
     pub fn execute() -> bool {
-        ::memory::root().path_bool("_features.construction.execute") || super::experimental::on()
+        ::memory::root().path_bool("_features.construction.execute")
     }
 }

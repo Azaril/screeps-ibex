@@ -4,8 +4,7 @@ version = "0.0.1"
 authors = []
 
 [features]
-default = ["experimental"]
-experimental = []
+default = []
 timing = ["scopeguard"]
 
 [dependencies]
