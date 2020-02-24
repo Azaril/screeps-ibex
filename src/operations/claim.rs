@@ -94,6 +94,8 @@ impl Operation for ClaimOperation {
             return OperationResult::Running;
         }
 
+        //TODO: Do this in a single pass and use closest room to be the home room.
+
         let mut desired_missions = vec![];
 
         for (entity, room_data) in (system_data.entities, system_data.room_data).join() {

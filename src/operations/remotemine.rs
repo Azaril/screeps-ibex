@@ -52,6 +52,8 @@ impl Operation for RemoteMineOperation {
 
         let mut desired_missions = vec![];
 
+        //TODO: Do this in a single pass and use closest room to be the home room.
+
         for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
             if let Some(room) = game::rooms::get(room_data.name) {
                 let controller = room.controller();
