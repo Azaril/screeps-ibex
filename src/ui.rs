@@ -4,6 +4,7 @@ use std::collections::hash_map::*;
 use std::collections::HashMap;
 
 pub const SPAWN_QUEUE_POS: (f32, f32) = (35.0, 5.0);
+pub const JOBS_POS: (f32, f32) = (35.0, 25.0);
 pub const OPERATIONS_POS: (f32, f32) = (5.0, 5.0);
 pub const MISSION_POS: (f32, f32) = (5.0, 25.0);
 
@@ -24,21 +25,28 @@ impl<'a> RoomUI<'a> {
     pub fn spawn_queue(&mut self) -> ListVisualizer {
         self.room_state.spawn_queue.visualize(&mut self.room_visualizer)
     }
+
+    pub fn jobs(&mut self) -> ListVisualizer {
+        self.room_state.jobs.visualize(&mut self.room_visualizer)
+    }
 }
 
 pub struct RoomUIState {
     missions: ListVisualizerState,
     spawn_queue: ListVisualizerState,
+    jobs: ListVisualizerState,
 }
 
 impl RoomUIState {
     pub fn new() -> RoomUIState {
         let missions_text_style = TextStyle::default().font(0.5).align(TextAlign::Left);
         let spawn_queue_text_style = TextStyle::default().font(0.5).align(TextAlign::Left);
+        let jobs_text_style = TextStyle::default().font(0.5).align(TextAlign::Left);
 
         RoomUIState {
             missions: ListVisualizerState::new(MISSION_POS, (0.0, 1.0), Some(missions_text_style)),
             spawn_queue: ListVisualizerState::new(SPAWN_QUEUE_POS, (0.0, 1.0), Some(spawn_queue_text_style)),
+            jobs: ListVisualizerState::new(JOBS_POS, (0.0, 1.0), Some(jobs_text_style)),
         }
     }
 }
@@ -144,6 +152,8 @@ impl UISystem {
 
     fn initialize_room(room_name: RoomName, room_ui: &mut RoomUI) {
         room_ui.missions().add_text("Missions".to_string(), None);
+
+        room_ui.jobs().add_text("Jobs".to_string(), None);
 
         if let Some(room) = game::rooms::get(room_name) {
             room_ui.spawn_queue().add_text(
