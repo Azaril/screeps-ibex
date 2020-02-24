@@ -45,11 +45,9 @@ impl<'a> System<'a> for WaitForSpawnSystem {
             } else {
                 warn!("Deleting entity for spawning creep as it no longer exists. Name: {}", spawning.name);
 
-                updater.exec_mut(move |world| {
-                    if let Err(error) = world.delete_entity(entity) {
-                        warn!("Failed to delete creep entity that was stale. Error: {}", error);
-                    }
-                });
+                if let Err(error) = entities.delete(entity) {
+                    warn!("Failed to delete creep entity that was stale. Error: {}", error);
+                }
             }
         }
     }
@@ -60,19 +58,17 @@ pub struct CleanupCreepsSystem;
 impl<'a> System<'a> for CleanupCreepsSystem {
     type SystemData = (Entities<'a>, ReadStorage<'a, CreepOwner>, Read<'a, LazyUpdate>);
 
-    fn run(&mut self, (entities, creeps, updater): Self::SystemData) {
+    fn run(&mut self, (entities, creeps, _updater): Self::SystemData) {
         scope_timing!("CleanupCreepsSystem");
 
         for (entity, creep) in (&entities, &creeps).join() {
             if creep.owner.resolve().is_none() {
-                updater.exec_mut(move |world| {
-                    if let Err(error) = world.delete_entity(entity) {
-                        warn!(
-                            "Failed to delete creep entity that had been deleted by the simulation. Error: {}",
-                            error
-                        );
-                    }
-                });
+                if let Err(error) = entities.delete(entity) {
+                    warn!(
+                        "Failed to delete creep entity that had been deleted by the simulation. Error: {}",
+                        error
+                    );
+                }
             }
         }
     }
