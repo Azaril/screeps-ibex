@@ -125,33 +125,6 @@ impl<'a> System<'a> for RunOperationSystem {
 
             let operation = operation_data.as_operation();
 
-            operation.pre_run_operation(&system_data, &mut runtime_data);
-        }
-
-        if let Some(visualizer) = &mut data.visualizer {
-            if let Some(ui) = &mut data.ui {
-                for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
-                    let mut describe_data = OperationDescribeData {
-                        entity: &entity,
-                        visualizer,
-                        ui,
-                    };
-
-                    let operation = operation_data.as_operation();
-
-                    operation.describe(&system_data, &mut describe_data);
-                }
-            }
-        }
-
-        for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
-            let mut runtime_data = OperationExecutionRuntimeData {
-                entity: &entity,
-                visibility: &mut data.visibility,
-            };
-
-            let operation = operation_data.as_operation();
-
             let cleanup_operation = match operation.run_operation(&system_data, &mut runtime_data) {
                 Ok(OperationResult::Running) => false,
                 Ok(OperationResult::Success) => {
