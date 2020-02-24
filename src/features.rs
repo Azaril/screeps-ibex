@@ -1,6 +1,6 @@
 pub mod js {
     pub fn prepare() {
-        js!{
+        js! {
             _.defaultsDeep(Memory, {
                 _features: {
                     visualize: {

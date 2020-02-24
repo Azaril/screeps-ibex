@@ -5,8 +5,8 @@ use crate::creep::*;
 use crate::jobs::data::*;
 use crate::room::data::*;
 use crate::spawnsystem::*;
-use crate::visualize::*;
 use crate::ui::*;
+use crate::visualize::*;
 
 #[derive(SystemData)]
 pub struct MissionSystemData<'a> {
@@ -44,28 +44,18 @@ pub struct MissionDescribeData<'a> {
 pub enum MissionResult {
     Running,
     Success,
-    Failure,
 }
 
 pub trait Mission {
-    fn describe(
-        &mut self,
-        system_data: &MissionExecutionSystemData,
-        describe_data: &mut MissionDescribeData,
-    );
+    fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData);
 
-    fn pre_run_mission(
-        &mut self,
-        _system_data: &MissionExecutionSystemData,
-        _runtime_data: &mut MissionExecutionRuntimeData,
-    ) {
-    }
+    fn pre_run_mission(&mut self, _system_data: &MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {}
 
     fn run_mission(
         &mut self,
         system_data: &MissionExecutionSystemData,
         runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> MissionResult;
+    ) -> Result<MissionResult, String>;
 }
 
 pub struct MissionSystem;
@@ -122,13 +112,13 @@ impl<'a> System<'a> for MissionSystem {
             let mission = mission_data.as_mission();
 
             let cleanup_mission = match mission.run_mission(&system_data, &mut runtime_data) {
-                MissionResult::Running => false,
-                MissionResult::Success => {
+                Ok(MissionResult::Running) => false,
+                Ok(MissionResult::Success) => {
                     info!("Mission complete, cleaning up.");
                     true
                 }
-                MissionResult::Failure => {
-                    info!("Mission failed, cleaning up.");
+                Err(error) => {
+                    info!("Mission failed, cleaning up. Error: {}", error);
                     true
                 }
             };
@@ -136,10 +126,7 @@ impl<'a> System<'a> for MissionSystem {
             if cleanup_mission {
                 data.updater.exec_mut(move |world| {
                     if let Err(err) = world.delete_entity(entity) {
-                        warn!(
-                            "Trying to clean up mission entity that no longer exists. Error: {}",
-                            err
-                        );
+                        warn!("Trying to clean up mission entity that no longer exists. Error: {}", err);
                     }
                 });
             }

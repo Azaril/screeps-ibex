@@ -3,8 +3,8 @@ use specs::prelude::*;
 use super::data::*;
 use crate::mappingsystem::MappingData;
 use crate::room::visibilitysystem::*;
-use crate::visualize::*;
 use crate::ui::*;
+use crate::visualize::*;
 
 #[derive(SystemData)]
 pub struct OperationSystemData<'a> {
@@ -41,28 +41,18 @@ pub struct OperationDescribeData<'a> {
 pub enum OperationResult {
     Running,
     Success,
-    Failure,
 }
 
 pub trait Operation {
-    fn describe(
-        &mut self,
-        system_data: &OperationExecutionSystemData,
-        describe_data: &mut OperationDescribeData,
-    );
+    fn describe(&mut self, system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData);
 
-    fn pre_run_operation(
-        &mut self,
-        _system_data: &OperationExecutionSystemData,
-        _runtime_data: &mut OperationExecutionRuntimeData,
-    ) {
-    }
-    
+    fn pre_run_operation(&mut self, _system_data: &OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {}
+
     fn run_operation(
         &mut self,
         system_data: &OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
-    ) -> OperationResult;
+    ) -> Result<OperationResult, ()>;
 }
 
 pub struct OperationSystem;
@@ -116,15 +106,14 @@ impl<'a> System<'a> for OperationSystem {
 
             let operation = operation_data.as_operation();
 
-            let cleanup_operation = match operation.run_operation(&system_data, &mut runtime_data)
-            {
-                OperationResult::Running => false,
-                OperationResult::Success => {
+            let cleanup_operation = match operation.run_operation(&system_data, &mut runtime_data) {
+                Ok(OperationResult::Running) => false,
+                Ok(OperationResult::Success) => {
                     info!("Operation complete, cleaning up.");
 
                     true
                 }
-                OperationResult::Failure => {
+                Err(_) => {
                     info!("Operation failed, cleaning up.");
 
                     true
@@ -134,10 +123,7 @@ impl<'a> System<'a> for OperationSystem {
             if cleanup_operation {
                 data.updater.exec_mut(move |world| {
                     if let Err(err) = world.delete_entity(entity) {
-                        warn!(
-                            "Trying to clean up operation entity that no longer exists. Error: {}",
-                            err
-                        );
+                        warn!("Trying to clean up operation entity that no longer exists. Error: {}", err);
                     }
                 });
             }

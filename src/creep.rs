@@ -31,11 +31,7 @@ impl CreepSpawning {
 pub struct WaitForSpawnSystem;
 
 impl<'a> System<'a> for WaitForSpawnSystem {
-    type SystemData = (
-        Entities<'a>,
-        ReadStorage<'a, CreepSpawning>,
-        Read<'a, LazyUpdate>,
-    );
+    type SystemData = (Entities<'a>, ReadStorage<'a, CreepSpawning>, Read<'a, LazyUpdate>);
 
     fn run(&mut self, (entities, spawnings, updater): Self::SystemData) {
         scope_timing!("WaitForSpawnSystem");
@@ -47,17 +43,11 @@ impl<'a> System<'a> for WaitForSpawnSystem {
                     updater.insert(entity, CreepOwner::new(&creep));
                 }
             } else {
-                warn!(
-                    "Deleting entity for spawning creep as it no longer exists. Name: {}",
-                    spawning.name
-                );
+                warn!("Deleting entity for spawning creep as it no longer exists. Name: {}", spawning.name);
 
                 updater.exec_mut(move |world| {
                     if let Err(error) = world.delete_entity(entity) {
-                        warn!(
-                            "Failed to delete creep entity that was stale. Error: {}",
-                            error
-                        );
+                        warn!("Failed to delete creep entity that was stale. Error: {}", error);
                     }
                 });
             }
@@ -68,11 +58,7 @@ impl<'a> System<'a> for WaitForSpawnSystem {
 pub struct CleanupCreepsSystem;
 
 impl<'a> System<'a> for CleanupCreepsSystem {
-    type SystemData = (
-        Entities<'a>,
-        ReadStorage<'a, CreepOwner>,
-        Read<'a, LazyUpdate>,
-    );
+    type SystemData = (Entities<'a>, ReadStorage<'a, CreepOwner>, Read<'a, LazyUpdate>);
 
     fn run(&mut self, (entities, creeps, updater): Self::SystemData) {
         scope_timing!("CleanupCreepsSystem");
@@ -81,7 +67,10 @@ impl<'a> System<'a> for CleanupCreepsSystem {
             if creep.owner.resolve().is_none() {
                 updater.exec_mut(move |world| {
                     if let Err(error) = world.delete_entity(entity) {
-                        warn!("Failed to delete creep entity that had been deleted by the simulation. Error: {}", error);
+                        warn!(
+                            "Failed to delete creep entity that had been deleted by the simulation. Error: {}",
+                            error
+                        );
                     }
                 });
             }
@@ -105,9 +94,7 @@ impl Spawning {
     where
         B: Builder + MarkedBuilder,
     {
-        builder
-            .marked::<::serialize::SerializeMarker>()
-            .with(CreepSpawning::new(&name))
+        builder.marked::<::serialize::SerializeMarker>().with(CreepSpawning::new(&name))
     }
 
     //TODO: Move this to a utility location.
@@ -135,8 +122,7 @@ impl Spawning {
 
         let remaining_available_energy: u32 = definition.maximum_energy - fixed_body_cost;
 
-        let max_possible_repeat_parts =
-            ((remaining_available_energy as f32) / (repeat_body_cost as f32)).floor() as usize;
+        let max_possible_repeat_parts = ((remaining_available_energy as f32) / (repeat_body_cost as f32)).floor() as usize;
 
         if let Some(min_parts) = definition.minimum_repeat {
             if max_possible_repeat_parts < min_parts {

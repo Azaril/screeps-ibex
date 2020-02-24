@@ -1,8 +1,8 @@
+use crate::ui::*;
 use crate::visualize::*;
 use screeps::*;
 use specs::prelude::*;
 use std::collections::HashMap;
-use crate::ui::*;
 
 pub const SPAWN_PRIORITY_CRITICAL: f32 = 100.0;
 pub const SPAWN_PRIORITY_HIGH: f32 = 75.0;
@@ -108,12 +108,10 @@ impl<'a> System<'a> for SpawnQueueSystem {
         if let Some(visualizer) = &mut data.visualizer {
             if let Some(ui) = &mut data.ui {
                 data.spawn_queue.visualize(ui, visualizer);
-            }            
+            }
         }
 
-        let system_data = SpawnQueueExecutionSystemData {
-            updater: data.updater,
-        };
+        let system_data = SpawnQueueExecutionSystemData { updater: data.updater };
 
         for (room_name, requests) in &mut data.spawn_queue.requests {
             if let Some(room) = game::rooms::get(*room_name) {

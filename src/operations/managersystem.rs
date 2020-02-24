@@ -12,11 +12,7 @@ use super::upgrade::*;
 pub struct OperationManagerSystem;
 
 impl<'a> System<'a> for OperationManagerSystem {
-    type SystemData = (
-        Entities<'a>,
-        ReadStorage<'a, OperationData>,
-        Read<'a, LazyUpdate>,
-    );
+    type SystemData = (Entities<'a>, ReadStorage<'a, OperationData>, Read<'a, LazyUpdate>);
 
     fn run(&mut self, (entities, operations, updater): Self::SystemData) {
         scope_timing!("OperationManagerSystem");

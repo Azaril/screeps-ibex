@@ -31,10 +31,7 @@ impl Job for ReserveJob {
             if let Some(controller) = self.reserve_target.resolve() {
                 creep.reserve_controller(&controller);
             } else {
-                error!(
-                    "Reserver has no assigned controller! Name: {}",
-                    creep.name()
-                );
+                error!("Reserver has no assigned controller! Name: {}", creep.name());
             }
         } else {
             creep.move_to(&self.reserve_target.pos());

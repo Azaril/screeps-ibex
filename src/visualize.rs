@@ -356,8 +356,7 @@ impl RoomVisualizer {
     }
 
     pub fn circle(&mut self, x: f32, y: f32, style: Option<CircleStyle>) {
-        self.visuals
-            .push(Visual::Circle(CircleData { x, y, style }));
+        self.visuals.push(Visual::Circle(CircleData { x, y, style }));
     }
 
     pub fn line(&mut self, from: (f32, f32), to: (f32, f32), style: Option<LineStyle>) {
@@ -385,8 +384,7 @@ impl RoomVisualizer {
     }
 
     pub fn text(&mut self, x: f32, y: f32, text: String, style: Option<TextStyle>) {
-        self.visuals
-            .push(Visual::Text(TextData { x, y, text, style }));
+        self.visuals.push(Visual::Text(TextData { x, y, text, style }));
     }
 
     pub fn apply(&self, room: Option<RoomName>) {
@@ -458,29 +456,22 @@ impl<'a> System<'a> for VisualizerSystem {
 pub struct ListVisualizerState {
     pos: (f32, f32),
     pos_offset: (f32, f32),
-    style: Option<TextStyle>, 
+    style: Option<TextStyle>,
 }
 
 impl ListVisualizerState {
     pub fn visualize<'a>(&mut self, visualizer: &'a mut RoomVisualizer) -> ListVisualizer<'a, '_> {
-        ListVisualizer {
-            visualizer,
-            state: self
-        }
+        ListVisualizer { visualizer, state: self }
     }
 }
 
 impl ListVisualizerState {
     pub fn new(pos: (f32, f32), pos_offset: (f32, f32), style: Option<TextStyle>) -> ListVisualizerState {
-        ListVisualizerState {
-            pos,
-            pos_offset,
-            style
-        }
+        ListVisualizerState { pos, pos_offset, style }
     }
 }
 
-pub struct ListVisualizer<'a, 'b>  {
+pub struct ListVisualizer<'a, 'b> {
     visualizer: &'a mut RoomVisualizer,
     state: &'b mut ListVisualizerState,
 }

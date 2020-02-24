@@ -80,18 +80,10 @@ pub struct ResourcePickupSettings {
 pub struct ResourceUtility;
 
 impl ResourceUtility {
-    pub fn select_energy_pickup(
-        creep: &Creep,
-        room: &Room,
-        settings: &ResourcePickupSettings,
-    ) -> Option<EnergyPickupTarget> {
+    pub fn select_energy_pickup(creep: &Creep, room: &Room, settings: &ResourcePickupSettings) -> Option<EnergyPickupTarget> {
         if settings.allow_dropped_resource {
-            if let Some(dropped_resource) =
-                Self::select_dropped_resource(creep, room, ResourceType::Energy)
-            {
-                return Some(EnergyPickupTarget::DroppedResource(
-                    dropped_resource.remote_id(),
-                ));
+            if let Some(dropped_resource) = Self::select_dropped_resource(creep, room, ResourceType::Energy) {
+                return Some(EnergyPickupTarget::DroppedResource(dropped_resource.remote_id()));
             }
         }
 
@@ -102,12 +94,8 @@ impl ResourceUtility {
         }
 
         if settings.allow_structure {
-            if let Some(structure) =
-                Self::select_structure_resource(creep, room, ResourceType::Energy)
-            {
-                return Some(EnergyPickupTarget::Structure(
-                    RemoteStructureIdentifier::new(&structure),
-                ));
+            if let Some(structure) = Self::select_structure_resource(creep, room, ResourceType::Energy) {
+                return Some(EnergyPickupTarget::Structure(RemoteStructureIdentifier::new(&structure)));
             }
         }
 
@@ -123,45 +111,24 @@ impl ResourceUtility {
     pub fn select_active_sources(creep: &Creep, room: &Room) -> Option<Source> {
         room.find(find::SOURCES_ACTIVE)
             .into_iter()
-            .find_nearest_from(
-                creep.pos(),
-                PathFinderHelpers::same_room_ignore_creeps_range_1,
-            )
+            .find_nearest_from(creep.pos(), PathFinderHelpers::same_room_ignore_creeps_range_1)
     }
 
-    pub fn select_dropped_resource(
-        creep: &Creep,
-        room: &Room,
-        resource_type: ResourceType,
-    ) -> Option<Resource> {
+    pub fn select_dropped_resource(creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<Resource> {
         room.find(find::DROPPED_RESOURCES)
             .into_iter()
             .filter(|resource| resource.resource_type() == resource_type)
-            .find_nearest_from(
-                creep.pos(),
-                PathFinderHelpers::same_room_ignore_creeps_range_1,
-            )
+            .find_nearest_from(creep.pos(), PathFinderHelpers::same_room_ignore_creeps_range_1)
     }
 
-    pub fn select_tombstone(
-        creep: &Creep,
-        room: &Room,
-        resource_type: ResourceType,
-    ) -> Option<Tombstone> {
+    pub fn select_tombstone(creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<Tombstone> {
         room.find(find::TOMBSTONES)
             .into_iter()
             .filter(|tombstone| tombstone.store_used_capacity(Some(resource_type)) > 0)
-            .find_nearest_from(
-                creep.pos(),
-                PathFinderHelpers::same_room_ignore_creeps_range_1,
-            )
+            .find_nearest_from(creep.pos(), PathFinderHelpers::same_room_ignore_creeps_range_1)
     }
 
-    pub fn select_structure_resource(
-        creep: &Creep,
-        room: &Room,
-        resource_type: ResourceType,
-    ) -> Option<Structure> {
+    pub fn select_structure_resource(creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<Structure> {
         #[derive(PartialEq, Eq, Hash, Debug)]
         enum PickupPriority {
             High,
@@ -198,18 +165,12 @@ impl ResourceUtility {
         // Find the pickup target with the highest priority and the shortest path.
         //
 
-        for priority in [
-            PickupPriority::High,
-            PickupPriority::Medium,
-            PickupPriority::Low,
-        ]
-        .iter()
-        {
+        for priority in [PickupPriority::High, PickupPriority::Medium, PickupPriority::Low].iter() {
             if let Some(structures) = targets.remove(priority) {
-                if let Some(structure) = structures.into_iter().find_nearest_from(
-                    creep.pos(),
-                    PathFinderHelpers::same_room_ignore_creeps_range_1,
-                ) {
+                if let Some(structure) = structures
+                    .into_iter()
+                    .find_nearest_from(creep.pos(), PathFinderHelpers::same_room_ignore_creeps_range_1)
+                {
                     return Some(structure);
                 }
             }
@@ -218,11 +179,7 @@ impl ResourceUtility {
         None
     }
 
-    pub fn select_resource_delivery(
-        creep: &Creep,
-        room: &Room,
-        resource_type: ResourceType,
-    ) -> Option<Structure> {
+    pub fn select_resource_delivery(creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<Structure> {
         #[derive(PartialEq, Eq, Hash, Debug)]
         enum DeliveryPriority {
             Critical,
@@ -276,10 +233,10 @@ impl ResourceUtility {
         .iter()
         {
             if let Some(structures) = targets.remove(priority) {
-                if let Some(structure) = structures.into_iter().find_nearest_from(
-                    creep.pos(),
-                    PathFinderHelpers::same_room_ignore_creeps_range_1,
-                ) {
+                if let Some(structure) = structures
+                    .into_iter()
+                    .find_nearest_from(creep.pos(), PathFinderHelpers::same_room_ignore_creeps_range_1)
+                {
                     return Some(structure);
                 }
             }
@@ -306,9 +263,7 @@ impl ValidateDeliveryTarget for Structure {
 impl ValidateDeliveryTarget for RemoteStructureIdentifier {
     fn is_valid_delivery_target(&self, resource: ResourceType) -> Option<bool> {
         if game::rooms::get(self.pos().room_name()).is_some() {
-            self.resolve()
-                .and_then(|s| s.is_valid_delivery_target(resource))
-                .or(Some(false))
+            self.resolve().and_then(|s| s.is_valid_delivery_target(resource)).or(Some(false))
         } else {
             None
         }

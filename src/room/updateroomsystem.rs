@@ -6,11 +6,7 @@ pub struct UpdateRoomDataSystem;
 
 impl<'a> System<'a> for UpdateRoomDataSystem {
     //TODO: Move this to derived system data.
-    type SystemData = (
-        Entities<'a>,
-        WriteStorage<'a, RoomData>,
-        Read<'a, LazyUpdate>,
-    );
+    type SystemData = (Entities<'a>, WriteStorage<'a, RoomData>, Read<'a, LazyUpdate>);
 
     fn run(&mut self, (entities, mut room_datas, _updater): Self::SystemData) {
         scope_timing!("UpdateRoomDataSystem");

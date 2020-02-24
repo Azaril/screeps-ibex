@@ -40,11 +40,7 @@ impl ConstructionMission {
 }
 
 impl Mission for ConstructionMission {
-    fn describe(
-        &mut self,
-        system_data: &MissionExecutionSystemData,
-        describe_data: &mut MissionDescribeData,
-    ) {
+    fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
                 room_ui.missions().add_text("Construction".to_string(), None);
@@ -56,41 +52,37 @@ impl Mission for ConstructionMission {
         &mut self,
         system_data: &MissionExecutionSystemData,
         runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> MissionResult {
+    ) -> Result<MissionResult, String> {
         scope_timing!("ConstructionMission");
 
-        if let Some(room_data) = system_data.room_data.get(self.room_data) {
-            if let Some(room) = game::rooms::get(room_data.name) {
-                if self.plan.is_none() && crate::features::construction::plan() {
-                    let planner = Planner::new(&room);
+        let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
+        let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
-                    self.plan = Some(planner.plan());
+        if self.plan.is_none() && crate::features::construction::plan() {
+            let planner = Planner::new(&room);
+
+            self.plan = Some(planner.plan());
+        }
+
+        if let Some(plan) = &self.plan {
+            if let Some(visualizer) = &mut runtime_data.visualizer {
+                if crate::features::construction::visualize() {
+                    plan.visualize(visualizer.get_room(room_data.name));
                 }
+            }
 
-                if let Some(plan) = &self.plan {
-                    if let Some(visualizer) = &mut runtime_data.visualizer {
-                        if crate::features::construction::visualize() {
-                            plan.visualize(visualizer.get_room(room_data.name));
-                        }
-                    }
+            let should_execute = crate::features::construction::execute()
+                && self.last_update.map(|last_time| game::time() - last_time > 500).unwrap_or(true);
 
-                    let should_execute = crate::features::construction::execute()
-                        && self
-                            .last_update
-                            .map(|last_time| game::time() - last_time > 500)
-                            .unwrap_or(true);
+            if should_execute {
+                plan.execute(&room);
 
-                    if should_execute {
-                        plan.execute(&room);
+                //TODO: Finish when plan is complete?
 
-                        self.last_update = Some(game::time());
-                    }
-                }
-
-                return MissionResult::Running;
+                self.last_update = Some(game::time());
             }
         }
 
-        MissionResult::Failure
+        Ok(MissionResult::Running)
     }
 }

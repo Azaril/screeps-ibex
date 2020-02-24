@@ -74,10 +74,7 @@ impl<'de, T> Deserialize<'de> for RemoteObjectId<T> {
                 formatter.write_str("Room name and object id")
             }
 
-            fn visit_seq<A: SeqAccess<'de>>(
-                self,
-                mut seq: A,
-            ) -> std::result::Result<Self::Value, A::Error> {
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error> {
                 if let Some(id) = seq.next_element()? {
                     if let Some(position) = seq.next_element()? {
                         return Ok(RemoteObjectId { id, position });

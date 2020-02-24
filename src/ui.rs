@@ -1,15 +1,15 @@
 use crate::visualize::*;
 use screeps::*;
-use std::collections::HashMap;
 use std::collections::hash_map::*;
+use std::collections::HashMap;
 
-pub const SPAWN_QUEUE_POS: (f32, f32) = (35.0, 15.0);
+pub const SPAWN_QUEUE_POS: (f32, f32) = (35.0, 5.0);
 pub const OPERATIONS_POS: (f32, f32) = (5.0, 5.0);
 pub const MISSION_POS: (f32, f32) = (5.0, 25.0);
 
 pub struct RoomUI<'a> {
     room_state: &'a mut RoomUIState,
-    room_visualizer: &'a mut RoomVisualizer
+    room_visualizer: &'a mut RoomVisualizer,
 }
 
 impl<'a> RoomUI<'a> {
@@ -38,14 +38,14 @@ impl RoomUIState {
 
         RoomUIState {
             missions: ListVisualizerState::new(MISSION_POS, (0.0, 1.0), Some(missions_text_style)),
-            spawn_queue: ListVisualizerState::new(SPAWN_QUEUE_POS, (0.0, 1.0), Some(spawn_queue_text_style))
+            spawn_queue: ListVisualizerState::new(SPAWN_QUEUE_POS, (0.0, 1.0), Some(spawn_queue_text_style)),
         }
     }
 }
 
 pub struct GlobalUI<'a> {
     global_state: &'a mut GlobalUIState,
-    global_visualizer: &'a mut RoomVisualizer
+    global_visualizer: &'a mut RoomVisualizer,
 }
 
 impl<'a> GlobalUI<'a> {
@@ -59,21 +59,21 @@ impl<'a> GlobalUI<'a> {
 }
 
 pub struct GlobalUIState {
-    operations: ListVisualizerState
+    operations: ListVisualizerState,
 }
 
 impl GlobalUIState {
     pub fn new() -> GlobalUIState {
         let opereations_text_style = TextStyle::default().font(0.5).align(TextAlign::Left);
         GlobalUIState {
-            operations: ListVisualizerState::new(OPERATIONS_POS, (0.0, 1.0), Some(opereations_text_style))
+            operations: ListVisualizerState::new(OPERATIONS_POS, (0.0, 1.0), Some(opereations_text_style)),
         }
     }
 }
 
 pub struct UISystem {
     global_state: Option<GlobalUIState>,
-    room_states: HashMap<RoomName, RoomUIState>
+    room_states: HashMap<RoomName, RoomUIState>,
 }
 
 impl Default for UISystem {
@@ -90,7 +90,10 @@ impl UISystem {
         }
     }
 
-    pub fn with_global<T>(&mut self, visualizer: &mut Visualizer, callback: T) where T: Fn(&mut GlobalUI) {
+    pub fn with_global<T>(&mut self, visualizer: &mut Visualizer, callback: T)
+    where
+        T: Fn(&mut GlobalUI),
+    {
         let mut global_visualizer = visualizer.global();
         let global_initialized = self.global_state.is_some();
 
@@ -110,19 +113,22 @@ impl UISystem {
         callback(&mut global_ui);
     }
 
-    pub fn with_room<T>(&mut self, room: RoomName, visualizer: &mut Visualizer, callback: T) where T: Fn(&mut RoomUI) {
+    pub fn with_room<T>(&mut self, room: RoomName, visualizer: &mut Visualizer, callback: T)
+    where
+        T: Fn(&mut RoomUI),
+    {
         let mut room_visualizer = visualizer.get_room(room);
         let room_state_entry = self.room_states.entry(room);
         let room_initialized = match &room_state_entry {
             Entry::Occupied(_) => true,
-            Entry::Vacant(_) => false
+            Entry::Vacant(_) => false,
         };
 
         let mut room_state = room_state_entry.or_insert_with(RoomUIState::new);
 
         let mut room_ui = RoomUI {
             room_state: &mut room_state,
-            room_visualizer: &mut room_visualizer
+            room_visualizer: &mut room_visualizer,
         };
 
         if !room_initialized {
@@ -140,7 +146,14 @@ impl UISystem {
         room_ui.missions().add_text("Missions".to_string(), None);
 
         if let Some(room) = game::rooms::get(room_name) {
-            room_ui.spawn_queue().add_text(format!("Spawn Queue - Energy {} / {}", room.energy_available(), room.energy_capacity_available()), None);
+            room_ui.spawn_queue().add_text(
+                format!(
+                    "Spawn Queue - Energy {} / {}",
+                    room.energy_available(),
+                    room.energy_capacity_available()
+                ),
+                None,
+            );
         } else {
             room_ui.spawn_queue().add_text("Spawn Queue - Energy ? / ?".to_string(), None);
         }

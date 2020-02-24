@@ -150,11 +150,7 @@ impl RoomData {
     }
 
     fn create_static_visibility_data(room: &Room) -> RoomStaticVisibilityData {
-        let source_ids = room
-            .find(find::SOURCES)
-            .into_iter()
-            .map(|s| s.remote_id())
-            .collect();
+        let source_ids = room.find(find::SOURCES).into_iter().map(|s| s.remote_id()).collect();
 
         let controller_id = room.controller().map(|c| c.remote_id());
 
@@ -185,12 +181,8 @@ impl RoomData {
         let controller_owner_name = controller.as_ref().and_then(|c| c.owner_name());
         let controller_owner_disposition = Self::name_option_to_disposition(controller_owner_name);
 
-        let controller_reservation_name = controller
-            .as_ref()
-            .and_then(|c| c.reservation())
-            .map(|r| r.username);
-        let controller_reservation_disposition =
-            Self::name_option_to_disposition(controller_reservation_name);
+        let controller_reservation_name = controller.as_ref().and_then(|c| c.reservation()).map(|r| r.username);
+        let controller_reservation_disposition = Self::name_option_to_disposition(controller_reservation_name);
 
         //TODO: This is expensive - can really just be calculated for room number. Not possible to calculate given x/y coord is private.
         let source_keeper = room.find(find::HOSTILE_STRUCTURES).into_iter().any(|s| {
@@ -209,11 +201,11 @@ impl RoomData {
         }
     }
 
-    pub fn get_static_visibility_data(&self) -> &Option<RoomStaticVisibilityData> {
-        &self.static_visibility_data
+    pub fn get_static_visibility_data(&self) -> Option<&RoomStaticVisibilityData> {
+        self.static_visibility_data.as_ref()
     }
 
-    pub fn get_dynamic_visibility_data(&self) -> &Option<RoomDynamicVisibilityData> {
-        &self.dynamic_visibility_data
+    pub fn get_dynamic_visibility_data(&self) -> Option<&RoomDynamicVisibilityData> {
+        self.dynamic_visibility_data.as_ref()
     }
 }

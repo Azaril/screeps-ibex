@@ -33,14 +33,8 @@ impl HarvestJob {
         }
     }
 
-    pub fn select_delivery_target(
-        creep: &Creep,
-        room: &Room,
-        resource_type: ResourceType,
-    ) -> Option<Structure> {
-        if let Some(delivery_target) =
-            ResourceUtility::select_resource_delivery(creep, room, resource_type)
-        {
+    pub fn select_delivery_target(creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<Structure> {
+        if let Some(delivery_target) = ResourceUtility::select_resource_delivery(creep, room, resource_type) {
             return Some(delivery_target);
         }
 
@@ -85,10 +79,7 @@ impl Job for HarvestJob {
 
         let repick_delivery = self
             .delivery_target
-            .map(|target| {
-                !target.is_valid_delivery_target(resource).unwrap_or(true)
-                    && !target.is_valid_controller_upgrade_target()
-            })
+            .map(|target| !target.is_valid_delivery_target(resource).unwrap_or(true) && !target.is_valid_controller_upgrade_target())
             .unwrap_or_else(|| capacity > 0 && available_capacity == 0);
 
         //
@@ -114,11 +105,7 @@ impl Job for HarvestJob {
         };
 
         if let Some(transfer_target_id) = transfer_target {
-            ResourceBehaviorUtility::transfer_resource_to_structure_id(
-                &creep,
-                &transfer_target_id,
-                resource,
-            );
+            ResourceBehaviorUtility::transfer_resource_to_structure_id(&creep, &transfer_target_id, resource);
 
             return;
         }
