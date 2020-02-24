@@ -55,13 +55,59 @@ pub trait Operation {
     ) -> Result<OperationResult, ()>;
 }
 
-pub struct OperationSystem;
+pub struct PreRunOperationSystem;
 
-impl<'a> System<'a> for OperationSystem {
+impl<'a> System<'a> for PreRunOperationSystem {
     type SystemData = OperationSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        scope_timing!("OperationSystem");
+        scope_timing!("PreRunOperationSystem");
+
+        let system_data = OperationExecutionSystemData {
+            updater: &data.updater,
+            entities: &data.entities,
+            room_data: &data.room_data,
+            mission_data: &data.mission_data,
+            mapping: &data.mapping,
+        };
+
+        for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
+            let mut runtime_data = OperationExecutionRuntimeData {
+                entity: &entity,
+                visibility: &mut data.visibility,
+            };
+
+            let operation = operation_data.as_operation();
+
+            operation.pre_run_operation(&system_data, &mut runtime_data);
+        }
+
+        //TODO: Is this the right phase for visualization? Potentially better at the end of tick?
+        if let Some(visualizer) = &mut data.visualizer {
+            if let Some(ui) = &mut data.ui {
+                for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
+                    let mut describe_data = OperationDescribeData {
+                        entity: &entity,
+                        visualizer,
+                        ui,
+                    };
+
+                    let operation = operation_data.as_operation();
+
+                    operation.describe(&system_data, &mut describe_data);
+                }
+            }
+        }
+    }
+}
+
+pub struct RunOperationSystem;
+
+impl<'a> System<'a> for RunOperationSystem {
+    type SystemData = OperationSystemData<'a>;
+
+    fn run(&mut self, mut data: Self::SystemData) {
+        scope_timing!("RunOperationSystem");
 
         let system_data = OperationExecutionSystemData {
             updater: &data.updater,

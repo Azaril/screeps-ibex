@@ -58,13 +58,13 @@ pub trait Mission {
     ) -> Result<MissionResult, String>;
 }
 
-pub struct MissionSystem;
+pub struct PreRunMissionSystem;
 
-impl<'a> System<'a> for MissionSystem {
+impl<'a> System<'a> for PreRunMissionSystem {
     type SystemData = MissionSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        scope_timing!("MissionSystem");
+        scope_timing!("PreRunMissionSystem");
 
         let system_data = MissionExecutionSystemData {
             updater: &data.updater,
@@ -86,6 +86,7 @@ impl<'a> System<'a> for MissionSystem {
             mission.pre_run_mission(&system_data, &mut runtime_data);
         }
 
+        //TODO: Is this the right phase for visualization? Potentially better at the end of tick?
         if let Some(visualizer) = &mut data.visualizer {
             if let Some(ui) = &mut data.ui {
                 for (entity, mission_data) in (&data.entities, &mut data.missions).join() {
@@ -101,6 +102,25 @@ impl<'a> System<'a> for MissionSystem {
                 }
             }
         }
+    }
+}
+
+
+pub struct RunMissionSystem;
+
+impl<'a> System<'a> for RunMissionSystem {
+    type SystemData = MissionSystemData<'a>;
+
+    fn run(&mut self, mut data: Self::SystemData) {
+        scope_timing!("RunMissionSystem");
+
+        let system_data = MissionExecutionSystemData {
+            updater: &data.updater,
+            entities: &data.entities,
+            room_data: &data.room_data,
+            creep_owner: &data.creep_owner,
+            job_data: &data.job_data,
+        };
 
         for (entity, mission_data) in (&data.entities, &mut data.missions).join() {
             let mut runtime_data = MissionExecutionRuntimeData {

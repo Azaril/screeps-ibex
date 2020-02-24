@@ -18,8 +18,17 @@ impl ReserveJob {
 }
 
 impl Job for ReserveJob {
-    fn run_job(&mut self, data: &JobRuntimeData) {
-        let creep = data.owner;
+    fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
+        let name = describe_data.owner.name();
+        if let Some(room) = describe_data.owner.room() {
+            describe_data.ui.with_room(room.name(), &mut describe_data.visualizer, |room_ui| {
+                room_ui.jobs().add_text(format!("Reserve - {}", name), None);
+            })
+        }
+    }
+
+    fn run_job(&mut self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
+        let creep = runtime_data.owner;
 
         scope_timing!("Reserve Job - {}", creep.name());
 
