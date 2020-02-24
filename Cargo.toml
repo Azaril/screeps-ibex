@@ -21,6 +21,6 @@ itertools = "0.8"
 
 [profile.release]
 panic = "abort"
-opt-level = 3
+opt-level = "z"
 lto = true
 codegen-units = 1
