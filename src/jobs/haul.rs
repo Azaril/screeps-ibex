@@ -18,10 +18,7 @@ pub struct HaulJob {
 }
 
 impl HaulJob {
-    pub fn new(
-        container_id: RemoteObjectId<StructureContainer>,
-        delivery_room: RoomName,
-    ) -> HaulJob {
+    pub fn new(container_id: RemoteObjectId<StructureContainer>, delivery_room: RoomName) -> HaulJob {
         HaulJob {
             primary_container: container_id,
             delivery_room,
@@ -59,10 +56,7 @@ impl Job for HaulJob {
 
         let repick_delivery = self
             .delivery_target
-            .map(|target| {
-                !target.is_valid_delivery_target(resource).unwrap_or(true)
-                    && !target.is_valid_controller_upgrade_target()
-            })
+            .map(|target| !target.is_valid_delivery_target(resource).unwrap_or(true) && !target.is_valid_controller_upgrade_target())
             .unwrap_or_else(|| capacity > 0 && available_capacity == 0);
 
         //
@@ -88,11 +82,7 @@ impl Job for HaulJob {
         };
 
         if let Some(transfer_target_id) = transfer_target {
-            ResourceBehaviorUtility::transfer_resource_to_structure_id(
-                &creep,
-                &transfer_target_id,
-                resource,
-            );
+            ResourceBehaviorUtility::transfer_resource_to_structure_id(&creep, &transfer_target_id, resource);
 
             return;
         }
@@ -112,9 +102,9 @@ impl Job for HaulJob {
             //TODO: This needs to handle containers in remote rooms. (Or assume they have visibility from a miner?)
             self.pickup_target = if let Some(container) = self.primary_container.resolve() {
                 if container.store_used_capacity(Some(resource)) > 0 {
-                    Some(EnergyPickupTarget::Structure(
-                        RemoteStructureIdentifier::new(&container.as_structure()),
-                    ))
+                    Some(EnergyPickupTarget::Structure(RemoteStructureIdentifier::new(
+                        &container.as_structure(),
+                    )))
                 } else {
                     None
                 }

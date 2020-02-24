@@ -41,14 +41,76 @@ impl LocalSupplyMission {
             haulers: EntityVec::new(),
         }
     }
+
+    fn create_handle_container_miner_spawn(
+        mission_entity: Entity,
+        source_id: RemoteObjectId<Source>,
+        container_id: RemoteObjectId<StructureContainer>,
+    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync> {
+        Box::new(move |spawn_system_data, name| {
+            let name = name.to_string();
+
+            spawn_system_data.updater.exec_mut(move |world| {
+                let creep_job = JobData::StaticMine(::jobs::staticmine::StaticMineJob::new(source_id, container_id));
+
+                let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
+
+                let mission_data_storage = &mut world.write_storage::<MissionData>();
+
+                if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
+                    mission_data.miners.0.push(creep_entity);
+                }
+            });
+        })
+    }
+
+    fn create_handle_hauler_spawn(
+        mission_entity: Entity,
+        container_id: RemoteObjectId<StructureContainer>,
+        home_room: RoomName,
+    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync> {
+        Box::new(move |spawn_system_data, name| {
+            let name = name.to_string();
+
+            spawn_system_data.updater.exec_mut(move |world| {
+                let creep_job = JobData::Haul(::jobs::haul::HaulJob::new(container_id, home_room));
+
+                let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
+
+                let mission_data_storage = &mut world.write_storage::<MissionData>();
+
+                if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
+                    mission_data.haulers.0.push(creep_entity);
+                }
+            });
+        })
+    }
+
+    fn create_handle_harvester_spawn(
+        mission_entity: Entity,
+        source_id: RemoteObjectId<Source>,
+        delivery_room: RoomName,
+    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync> {
+        Box::new(move |spawn_system_data, name| {
+            let name = name.to_string();
+
+            spawn_system_data.updater.exec_mut(move |world| {
+                let creep_job = JobData::Harvest(::jobs::harvest::HarvestJob::new(source_id, delivery_room));
+
+                let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
+
+                let mission_data_storage = &mut world.write_storage::<MissionData>();
+
+                if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
+                    mission_data.harvesters.0.push(creep_entity);
+                }
+            });
+        })
+    }
 }
 
 impl Mission for LocalSupplyMission {
-    fn describe(
-        &mut self,
-        system_data: &MissionExecutionSystemData,
-        describe_data: &mut MissionDescribeData,
-    ) {
+    fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
                 room_ui.missions().add_text("Local Supply".to_string(), None);
@@ -56,438 +118,301 @@ impl Mission for LocalSupplyMission {
         }
     }
 
-    fn pre_run_mission(
-        &mut self,
-        system_data: &MissionExecutionSystemData,
-        _runtime_data: &mut MissionExecutionRuntimeData,
-    ) {
+    fn pre_run_mission(&mut self, system_data: &MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {
         //
         // Cleanup creeps that no longer exist.
         //
 
-        self.harvesters
-            .0
-            .retain(|entity| system_data.entities.is_alive(*entity));
-        self.miners
-            .0
-            .retain(|entity| system_data.entities.is_alive(*entity));
-        self.haulers
-            .0
-            .retain(|entity| system_data.entities.is_alive(*entity));
+        self.harvesters.0.retain(|entity| system_data.entities.is_alive(*entity));
+        self.miners.0.retain(|entity| system_data.entities.is_alive(*entity));
+        self.haulers.0.retain(|entity| system_data.entities.is_alive(*entity));
     }
 
     fn run_mission(
         &mut self,
         system_data: &MissionExecutionSystemData,
         runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> MissionResult {
+    ) -> Result<MissionResult, String> {
         scope_timing!("LocalSupplyMission");
 
-        if let Some(room_data) = system_data.room_data.get(self.room_data) {
-            if let Some(room) = game::rooms::get(room_data.name) {
-                let mut sources = room.find(find::SOURCES);
+        let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
+        let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
-                //
-                // Container mining data gathering.
-                //
+        let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility")?;
+        let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility")?;
+        let sources = static_visibility_data.sources();
 
-                let room_containers: Vec<StructureContainer> = room
-                    .find(find::STRUCTURES)
-                    .into_iter()
-                    .filter_map(|structure| match structure {
-                        Structure::Container(container) => Some(container),
-                        _ => None,
-                    })
-                    .collect();
+        //
+        // Container mining data gathering.
+        //
 
-                let mut sources_to_containers = sources
+        let room_containers: Vec<StructureContainer> = room
+            .find(find::STRUCTURES)
+            .into_iter()
+            .filter_map(|structure| match structure {
+                Structure::Container(container) => Some(container),
+                _ => None,
+            })
+            .collect();
+
+        let mut sources_to_containers = sources
+            .iter()
+            .filter_map(|source| {
+                let nearby_container = room_containers
                     .iter()
-                    .filter_map(|source| {
-                        let nearby_container = room_containers
-                            .iter()
-                            .cloned()
-                            .find(|container| container.pos().is_near_to(source));
+                    .cloned()
+                    .find(|container| container.pos().is_near_to(&source.pos()));
 
-                        nearby_container.map(|container| (source.remote_id(), container))
-                    })
-                    .into_group_map();
+                nearby_container.map(|container| (source, container))
+            })
+            .into_group_map();
 
-                //
-                // Creep data gathering.
-                //
+        //
+        // Creep data gathering.
+        //
 
-                //TODO: Store this mapping data as part of the mission. (Blocked on specs collection serialization.)
-                let mut sources_to_harvesters = self
-                    .harvesters
-                    .0
-                    .iter()
-                    .filter_map(|harvester_entity| {
-                        if let Some(JobData::Harvest(harvester_data)) =
-                            system_data.job_data.get(*harvester_entity)
-                        {
-                            Some((harvester_data.harvest_target, harvester_entity))
-                        } else {
-                            None
-                        }
-                    })
-                    .into_group_map();
-
-                let mut sources_to_miners = self
-                    .miners
-                    .0
-                    .iter()
-                    .filter_map(|miner_entity| {
-                        if let Some(JobData::StaticMine(miner_data)) =
-                            system_data.job_data.get(*miner_entity)
-                        {
-                            Some((
-                                miner_data.mine_target,
-                                (miner_entity, miner_data.mine_location),
-                            ))
-                        } else {
-                            None
-                        }
-                    })
-                    .into_group_map();
-
-                let mut containers_to_haulers = self
-                    .haulers
-                    .0
-                    .iter()
-                    .filter_map(|hauler_entity| {
-                        if let Some(JobData::Haul(hauler_data)) =
-                            system_data.job_data.get(*hauler_entity)
-                        {
-                            Some((
-                                hauler_data.primary_container,
-                                (hauler_entity, hauler_data.primary_container.id()),
-                            ))
-                        } else {
-                            None
-                        }
-                    })
-                    .into_group_map();
-
-                //
-                // Sort sources so requests with equal priority go to the source with the least activity.
-                //
-
-                let total_harvesters = self.harvesters.0.len();
-                let total_miners = self.miners.0.len();
-                let total_haulers = self.haulers.0.len();
-                let total_harvesting_creeps = total_harvesters + total_miners;
-
-                sources.sort_by_cached_key(|source| {
-                    let source_id = source.remote_id();
-                    let source_harvesters = sources_to_harvesters
-                        .get(&source_id)
-                        .map(|harvesters| harvesters.len())
-                        .unwrap_or(0);
-                    let source_miners = sources_to_miners
-                        .get(&source_id)
-                        .map(|miners| miners.len())
-                        .unwrap_or(0);
-
-                    source_harvesters + source_miners
-                });
-
-                //
-                // Spawn needed creeps for each source.
-                //
-
-                for source in sources.iter() {
-                    let source_id = source.remote_id();
-
-                    let source_containers = sources_to_containers
-                        .remove(&source_id)
-                        .unwrap_or_else(Vec::new);
-                    let source_harvesters = sources_to_harvesters
-                        .remove(&source_id)
-                        .unwrap_or_else(Vec::new);
-                    let source_miners = sources_to_miners
-                        .remove(&source_id)
-                        .unwrap_or_else(Vec::new);
-                    let source_miners_count = source_miners.len();
-                    let source_haulers: Vec<(&Entity, ObjectId<StructureContainer>)> =
-                        source_containers
-                            .iter()
-                            .flat_map(|container| {
-                                containers_to_haulers
-                                    .remove(&container.remote_id())
-                                    .unwrap_or_else(Vec::new)
-                            })
-                            .collect();
-
-                    let alive_source_miners: Vec<(&Entity, RoomPosition)> = source_miners
-                        .into_iter()
-                        .filter(|(&miner_entity, _)| {
-                            if let Some(creep_owner) = system_data.creep_owner.get(miner_entity) {
-                                if let Some(creep) = creep_owner.owner.resolve() {
-                                    creep.ticks_to_live().unwrap_or(0) > 100
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
-                        })
-                        .collect();
-
-                    let alive_source_haulers: Vec<(&Entity, ObjectId<StructureContainer>)> =
-                        source_haulers
-                            .into_iter()
-                            .filter(|(&hauler_entity, _)| {
-                                if let Some(creep_owner) =
-                                    system_data.creep_owner.get(hauler_entity)
-                                {
-                                    if let Some(creep) = creep_owner.owner.resolve() {
-                                        creep.ticks_to_live().unwrap_or(0) > 100
-                                    } else {
-                                        false
-                                    }
-                                } else {
-                                    false
-                                }
-                            })
-                            .collect();
-
-                    let available_containers_for_miners = source_containers
-                        .iter()
-                        .filter(|container| {
-                            !alive_source_miners
-                                .iter()
-                                .any(|(_, location)| *location == container.pos())
-                        })
-                        .cloned();
-
-                    let available_containers_for_haulers = source_containers
-                        .iter()
-                        .filter(|container| {
-                            !alive_source_haulers
-                                .iter()
-                                .any(|(_, primary_container)| *primary_container == container.id())
-                        })
-                        .cloned();
-
-                    //
-                    // Spawn container miners.
-                    //
-
-                    for container in available_containers_for_miners {
-                        let energy_per_tick =
-                            (source.energy_capacity() as f32) / (ENERGY_REGEN_TIME as f32);
-                        let work_parts_per_tick =
-                            (energy_per_tick / (HARVEST_POWER as f32)).ceil() as usize;
-
-                        let body_definition = crate::creep::SpawnBodyDefinition {
-                            maximum_energy: room.energy_capacity_available(),
-                            minimum_repeat: Some(1),
-                            maximum_repeat: Some(work_parts_per_tick),
-                            pre_body: &[Part::Move],
-                            repeat_body: &[Part::Work],
-                            post_body: &[],
-                        };
-
-                        if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
-                            let mission_entity = *runtime_data.entity;
-                            let source_id = source.remote_id();
-                            let mine_location = container.pos();
-
-                            let priority = SPAWN_PRIORITY_HIGH;
-
-                            runtime_data.spawn_queue.request(
-                                room_data.name,
-                                SpawnRequest::new(
-                                    format!("Container Miner - Source: {}", source_id.id()),
-                                    &body,
-                                    priority,
-                                    Box::new(move |spawn_system_data, name| {
-                                        let name = name.to_string();
-
-                                        spawn_system_data.updater.exec_mut(move |world| {
-                                            let creep_job = JobData::StaticMine(
-                                                ::jobs::staticmine::StaticMineJob::new(
-                                                    source_id,
-                                                    mine_location,
-                                                ),
-                                            );
-
-                                            let creep_entity = ::creep::Spawning::build(
-                                                world.create_entity(),
-                                                &name,
-                                            )
-                                            .with(creep_job)
-                                            .build();
-
-                                            let mission_data_storage =
-                                                &mut world.write_storage::<MissionData>();
-
-                                            if let Some(MissionData::LocalSupply(mission_data)) =
-                                                mission_data_storage.get_mut(mission_entity)
-                                            {
-                                                mission_data.miners.0.push(creep_entity);
-                                            }
-                                        });
-                                    }),
-                                ),
-                            );
-                        }
-                    }
-
-                    //
-                    // Spawn haulers
-                    //
-
-                    for container in available_containers_for_haulers {
-                        let body_definition = crate::creep::SpawnBodyDefinition {
-                            maximum_energy: if total_haulers == 0 {
-                                room.energy_available()
-                            } else {
-                                room.energy_capacity_available()
-                            },
-                            minimum_repeat: Some(1),
-                            maximum_repeat: Some(5),
-                            pre_body: &[],
-                            repeat_body: &[Part::Carry, Part::Move],
-                            post_body: &[],
-                        };
-
-                        if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
-                            let mission_entity = *runtime_data.entity;
-                            let container_id = container.remote_id();
-                            let home_room = room_data.name;
-
-                            let container_used_capacity =
-                                container.store_used_capacity(Some(ResourceType::Energy));
-                            let container_store_capacity =
-                                container.store_capacity(Some(ResourceType::Energy));
-
-                            let storage_fraction = (container_used_capacity as f32)
-                                / (container_store_capacity as f32);
-
-                            let priority = if storage_fraction > 0.75 {
-                                SPAWN_PRIORITY_CRITICAL
-                            } else if source_miners_count > 0 {
-                                SPAWN_PRIORITY_HIGH
-                            } else {
-                                SPAWN_PRIORITY_MEDIUM
-                            };
-
-                            runtime_data.spawn_queue.request(
-                                room_data.name,
-                                SpawnRequest::new(
-                                    format!("Hauler - Container: {}", container_id.id()),
-                                    &body,
-                                    priority,
-                                    Box::new(move |spawn_system_data, name| {
-                                        let name = name.to_string();
-
-                                        spawn_system_data.updater.exec_mut(move |world| {
-                                            let creep_job = JobData::Haul(
-                                                ::jobs::haul::HaulJob::new(container_id, home_room),
-                                            );
-
-                                            let creep_entity = ::creep::Spawning::build(
-                                                world.create_entity(),
-                                                &name,
-                                            )
-                                            .with(creep_job)
-                                            .build();
-
-                                            let mission_data_storage =
-                                                &mut world.write_storage::<MissionData>();
-
-                                            if let Some(MissionData::LocalSupply(mission_data)) =
-                                                mission_data_storage.get_mut(mission_entity)
-                                            {
-                                                mission_data.haulers.0.push(creep_entity);
-                                            }
-                                        });
-                                    }),
-                                ),
-                            );
-                        }
-                    }
-
-                    //
-                    // Spawn harvesters
-                    //
-
-                    //TODO: Compute correct number of harvesters to use for source.
-                    //TODO: Compute the correct time to spawn emergency harvesters.
-                    if (source_containers.is_empty() && source_harvesters.len() < 4)
-                        || total_harvesting_creeps == 0
-                    {
-                        //TODO: Compute best body parts to use.
-                        let body_definition = crate::creep::SpawnBodyDefinition {
-                            maximum_energy: if total_harvesting_creeps == 0 {
-                                room.energy_available()
-                            } else {
-                                room.energy_capacity_available()
-                            },
-                            minimum_repeat: Some(1),
-                            maximum_repeat: Some(5),
-                            pre_body: &[],
-                            repeat_body: &[Part::Move, Part::Move, Part::Carry, Part::Work],
-                            post_body: &[],
-                        };
-
-                        if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
-                            let priority = if total_harvesting_creeps == 0 {
-                                SPAWN_PRIORITY_CRITICAL
-                            } else {
-                                SPAWN_PRIORITY_HIGH
-                            };
-
-                            let mission_entity = *runtime_data.entity;
-                            let delivery_room = room_data.name;
-                            let source_id = source.remote_id();
-
-                            runtime_data.spawn_queue.request(
-                                room_data.name,
-                                SpawnRequest::new(
-                                    format!("Harvester - Source: {}", source_id.id()),
-                                    &body,
-                                    priority,
-                                    Box::new(move |spawn_system_data, name| {
-                                        let name = name.to_string();
-
-                                        spawn_system_data.updater.exec_mut(move |world| {
-                                            let creep_job =
-                                                JobData::Harvest(::jobs::harvest::HarvestJob::new(
-                                                    source_id,
-                                                    delivery_room,
-                                                ));
-
-                                            let creep_entity = ::creep::Spawning::build(
-                                                world.create_entity(),
-                                                &name,
-                                            )
-                                            .with(creep_job)
-                                            .build();
-
-                                            let mission_data_storage =
-                                                &mut world.write_storage::<MissionData>();
-
-                                            if let Some(MissionData::LocalSupply(mission_data)) =
-                                                mission_data_storage.get_mut(mission_entity)
-                                            {
-                                                mission_data.harvesters.0.push(creep_entity);
-                                            }
-                                        });
-                                    }),
-                                ),
-                            );
-                        }
-                    }
+        //TODO: Store this mapping data as part of the mission. (Blocked on specs collection serialization.)
+        let mut sources_to_harvesters = self
+            .harvesters
+            .0
+            .iter()
+            .filter_map(|harvester_entity| {
+                if let Some(JobData::Harvest(harvester_data)) = system_data.job_data.get(*harvester_entity) {
+                    Some((harvester_data.harvest_target, harvester_entity))
+                } else {
+                    None
                 }
+            })
+            .into_group_map();
 
-                MissionResult::Running
-            } else {
-                MissionResult::Failure
+        let mut sources_to_miners = self
+            .miners
+            .0
+            .iter()
+            .filter_map(|miner_entity| {
+                if let Some(JobData::StaticMine(miner_data)) = system_data.job_data.get(*miner_entity) {
+                    Some((miner_data.mine_target, (miner_entity, miner_data.container_target)))
+                } else {
+                    None
+                }
+            })
+            .into_group_map();
+
+        let mut containers_to_haulers = self
+            .haulers
+            .0
+            .iter()
+            .filter_map(|hauler_entity| {
+                if let Some(JobData::Haul(hauler_data)) = system_data.job_data.get(*hauler_entity) {
+                    Some((hauler_data.primary_container, (hauler_entity, hauler_data.primary_container.id())))
+                } else {
+                    None
+                }
+            })
+            .into_group_map();
+
+        //
+        // Sort sources so requests with equal priority go to the source with the least activity.
+        //
+
+        let total_harvesters = self.harvesters.0.len();
+        let total_miners = self.miners.0.len();
+        let total_haulers = self.haulers.0.len();
+        let total_harvesting_creeps = total_harvesters + total_miners;
+
+        let mut prioritized_sources = sources.clone();
+        
+        prioritized_sources.sort_by_cached_key(|source| {
+            let source_harvesters = sources_to_harvesters.get(source).map(|harvesters| harvesters.len()).unwrap_or(0);
+
+            let source_miners = sources_to_miners.get(source).map(|miners| miners.len()).unwrap_or(0);
+
+            source_harvesters + source_miners
+        });
+
+        //
+        // Spawn needed creeps for each source.
+        //
+
+        for source_id in prioritized_sources.iter() {
+            let source_containers = sources_to_containers.remove(source_id).unwrap_or_else(Vec::new);
+            let source_harvesters = sources_to_harvesters.remove(source_id).unwrap_or_else(Vec::new);
+            let source_miners = sources_to_miners.remove(source_id).unwrap_or_else(Vec::new);
+            let source_miners_count = source_miners.len();
+            let source_haulers: Vec<(&Entity, ObjectId<StructureContainer>)> = source_containers
+                .iter()
+                .flat_map(|container| containers_to_haulers.remove(&container.remote_id()).unwrap_or_else(Vec::new))
+                .collect();
+
+            let alive_source_miners: Vec<(&Entity, RemoteObjectId<StructureContainer>)> = source_miners
+                .into_iter()
+                .filter(|(&miner_entity, _)| {
+                    if let Some(creep_owner) = system_data.creep_owner.get(miner_entity) {
+                        if let Some(creep) = creep_owner.owner.resolve() {
+                            creep.ticks_to_live().unwrap_or(0) > 100
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+
+            let alive_source_haulers: Vec<(&Entity, ObjectId<StructureContainer>)> = source_haulers
+                .into_iter()
+                .filter(|(&hauler_entity, _)| {
+                    if let Some(creep_owner) = system_data.creep_owner.get(hauler_entity) {
+                        if let Some(creep) = creep_owner.owner.resolve() {
+                            creep.ticks_to_live().unwrap_or(0) > 100
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+
+            let available_containers_for_miners = source_containers
+                .iter()
+                .filter(|container| {
+                    !alive_source_miners
+                        .iter()
+                        .any(|(_, other_container)| container.id() == other_container.id())
+                })
+                .cloned();
+
+            let available_containers_for_haulers = source_containers
+                .iter()
+                .filter(|container| {
+                    !alive_source_haulers
+                        .iter()
+                        .any(|(_, primary_container)| *primary_container == container.id())
+                })
+                .cloned();
+
+            //
+            // Spawn container miners.
+            //
+
+            for container in available_containers_for_miners {
+                let owned_room = dynamic_visibility_data.updated_within(2000)
+                    && (dynamic_visibility_data.owner().mine() || dynamic_visibility_data.reservation().mine());
+                let energy_capacity = if owned_room {
+                    SOURCE_ENERGY_CAPACITY
+                } else {
+                    SOURCE_ENERGY_NEUTRAL_CAPACITY
+                };
+                let energy_per_tick = (energy_capacity as f32) / (ENERGY_REGEN_TIME as f32);
+                let work_parts_per_tick = (energy_per_tick / (HARVEST_POWER as f32)).ceil() as usize;
+
+                let body_definition = crate::creep::SpawnBodyDefinition {
+                    maximum_energy: room.energy_capacity_available(),
+                    minimum_repeat: Some(1),
+                    maximum_repeat: Some(work_parts_per_tick),
+                    pre_body: &[Part::Move],
+                    repeat_body: &[Part::Work],
+                    post_body: &[],
+                };
+
+                if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+                    let spawn_request = SpawnRequest::new(
+                        format!("Container Miner - Source: {}", source_id.id()),
+                        &body,
+                        SPAWN_PRIORITY_HIGH,
+                        Self::create_handle_container_miner_spawn(*runtime_data.entity, *source_id, container.remote_id()),
+                    );
+
+                    runtime_data.spawn_queue.request(room_data.name, spawn_request);
+                }
             }
-        } else {
-            MissionResult::Failure
+
+            //
+            // Spawn haulers
+            //
+
+            for container in available_containers_for_haulers {
+                let body_definition = crate::creep::SpawnBodyDefinition {
+                    maximum_energy: if total_haulers == 0 {
+                        room.energy_available()
+                    } else {
+                        room.energy_capacity_available()
+                    },
+                    minimum_repeat: Some(1),
+                    maximum_repeat: Some(5),
+                    pre_body: &[],
+                    repeat_body: &[Part::Carry, Part::Move],
+                    post_body: &[],
+                };
+
+                if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+                    let container_used_capacity = container.store_used_capacity(Some(ResourceType::Energy));
+                    let container_store_capacity = container.store_capacity(Some(ResourceType::Energy));
+
+                    let storage_fraction = (container_used_capacity as f32) / (container_store_capacity as f32);
+
+                    let priority = if storage_fraction > 0.75 {
+                        SPAWN_PRIORITY_CRITICAL
+                    } else if source_miners_count > 0 {
+                        SPAWN_PRIORITY_HIGH
+                    } else {
+                        SPAWN_PRIORITY_MEDIUM
+                    };
+
+                    let container_id = container.remote_id();
+
+                    let spawn_request = SpawnRequest::new(
+                        format!("Hauler - Container: {}", container_id.id()),
+                        &body,
+                        priority,
+                        Self::create_handle_hauler_spawn(*runtime_data.entity, container_id, room_data.name),
+                    );
+
+                    runtime_data.spawn_queue.request(room_data.name, spawn_request);
+                }
+            }
+
+            //
+            // Spawn harvesters
+            //
+
+            //TODO: Compute correct number of harvesters to use for source.
+            //TODO: Compute the correct time to spawn emergency harvesters.
+            if (source_containers.is_empty() && source_harvesters.len() < 4) || total_harvesting_creeps == 0 {
+                //TODO: Compute best body parts to use.
+                let body_definition = crate::creep::SpawnBodyDefinition {
+                    maximum_energy: if total_harvesting_creeps == 0 {
+                        room.energy_available()
+                    } else {
+                        room.energy_capacity_available()
+                    },
+                    minimum_repeat: Some(1),
+                    maximum_repeat: Some(5),
+                    pre_body: &[],
+                    repeat_body: &[Part::Move, Part::Move, Part::Carry, Part::Work],
+                    post_body: &[],
+                };
+
+                if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+                    let priority = if total_harvesting_creeps == 0 {
+                        SPAWN_PRIORITY_CRITICAL
+                    } else {
+                        SPAWN_PRIORITY_HIGH
+                    };
+
+                    let spawn_request = SpawnRequest::new(
+                        format!("Harvester - Source: {}", source_id.id()),
+                        &body,
+                        priority,
+                        Self::create_handle_harvester_spawn(*runtime_data.entity, *source_id, room_data.name),
+                    );
+
+                    runtime_data.spawn_queue.request(room_data.name, spawn_request);
+                }
+            }
         }
+
+        Ok(MissionResult::Running)
     }
 }

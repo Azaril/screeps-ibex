@@ -15,10 +15,7 @@ pub struct UpgradeJob {
 }
 
 impl UpgradeJob {
-    pub fn new(
-        upgrade_target: &RemoteObjectId<StructureController>,
-        home_room: RoomName,
-    ) -> UpgradeJob {
+    pub fn new(upgrade_target: &RemoteObjectId<StructureController>, home_room: RoomName) -> UpgradeJob {
         UpgradeJob {
             home_room,
             upgrade_target: *upgrade_target,

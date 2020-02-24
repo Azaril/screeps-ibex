@@ -7,15 +7,14 @@ use crate::remoteobjectid::*;
 #[derive(Clone, Copy, Deserialize, Serialize)]
 pub struct StaticMineJob {
     pub mine_target: RemoteObjectId<Source>,
-    pub mine_location: RoomPosition,
+    pub container_target: RemoteObjectId<StructureContainer>,
 }
 
 impl StaticMineJob {
-    //TODO: Pass in container, not position. (Handle container going missing?)
-    pub fn new(source_id: RemoteObjectId<Source>, position: RoomPosition) -> StaticMineJob {
+    pub fn new(source_id: RemoteObjectId<Source>, container_id: RemoteObjectId<StructureContainer>) -> StaticMineJob {
         StaticMineJob {
             mine_target: source_id,
-            mine_location: position,
+            container_target: container_id,
         }
     }
 }
@@ -32,17 +31,14 @@ impl Job for StaticMineJob {
 
         //TODO: Validate container still exists? Recyle or reuse miner if it doesn't?
 
-        if creep.pos().is_equal_to(&self.mine_location) {
+        if creep.pos().is_equal_to(&self.container_target.pos()) {
             if let Some(source) = self.mine_target.resolve() {
                 creep.harvest(&source);
             } else {
-                error!(
-                    "Harvester has no assigned harvesting source! Name: {}",
-                    creep.name()
-                );
+                error!("Harvester has no assigned harvesting source! Name: {}", creep.name());
             }
         } else {
-            creep.move_to(&self.mine_location);
+            creep.move_to(&self.container_target.pos());
         }
     }
 }

@@ -7,11 +7,7 @@ use crate::structureidentifier::*;
 pub struct ResourceBehaviorUtility;
 
 impl ResourceBehaviorUtility {
-    pub fn get_resource_from_structure(
-        creep: &Creep,
-        structure: &Structure,
-        resource: ResourceType,
-    ) {
+    pub fn get_resource_from_structure(creep: &Creep, structure: &Structure, resource: ResourceType) {
         scope_timing!("get_resource_from_structure");
 
         if let Some(withdrawable) = structure.as_withdrawable() {
@@ -22,15 +18,14 @@ impl ResourceBehaviorUtility {
             }
         } else {
             //TODO: Return error result.
-            error!("Expected to be able to withdraw from structure but it was the wrong type. Name: {}", creep.name());
+            error!(
+                "Expected to be able to withdraw from structure but it was the wrong type. Name: {}",
+                creep.name()
+            );
         }
     }
 
-    pub fn get_resource_from_structure_id(
-        creep: &Creep,
-        structure_id: &RemoteStructureIdentifier,
-        resource: ResourceType,
-    ) {
+    pub fn get_resource_from_structure_id(creep: &Creep, structure_id: &RemoteStructureIdentifier, resource: ResourceType) {
         let target_position = structure_id.pos();
 
         if creep.pos().room_name() != target_position.room_name() {
@@ -40,10 +35,7 @@ impl ResourceBehaviorUtility {
             Self::get_resource_from_structure(creep, &structure, resource);
         } else {
             //TODO: Return error result.
-            error!(
-                "Failed to resolve pickup structure for getting resource. Name: {}",
-                creep.name()
-            );
+            error!("Failed to resolve pickup structure for getting resource. Name: {}", creep.name());
         }
     }
 
@@ -67,10 +59,7 @@ impl ResourceBehaviorUtility {
             Self::get_energy_from_source(creep, &source);
         } else {
             //TODO: Return error result.
-            error!(
-                "Failed to resolve source for getting energy. Name: {}",
-                creep.name()
-            );
+            error!("Failed to resolve source for getting energy. Name: {}", creep.name());
         }
     }
 
@@ -84,10 +73,7 @@ impl ResourceBehaviorUtility {
         }
     }
 
-    pub fn get_resource_from_dropped_resource_id(
-        creep: &Creep,
-        dropped_resource_id: &RemoteObjectId<Resource>,
-    ) {
+    pub fn get_resource_from_dropped_resource_id(creep: &Creep, dropped_resource_id: &RemoteObjectId<Resource>) {
         let target_position = dropped_resource_id.pos();
 
         if creep.pos().room_name() != target_position.room_name() {
@@ -97,18 +83,11 @@ impl ResourceBehaviorUtility {
             Self::get_resource_from_dropped_resource(creep, &dropped_resource);
         } else {
             //TODO: Return error result.
-            error!(
-                "Failed to resolve dropped resource for getting resource. Name: {}",
-                creep.name()
-            );
+            error!("Failed to resolve dropped resource for getting resource. Name: {}", creep.name());
         }
     }
 
-    pub fn get_resource_from_tombstone(
-        creep: &Creep,
-        tombstone: &Tombstone,
-        resource: ResourceType,
-    ) {
+    pub fn get_resource_from_tombstone(creep: &Creep, tombstone: &Tombstone, resource: ResourceType) {
         scope_timing!("get_energy_from_tombstone");
 
         if creep.pos().is_near_to(tombstone) {
@@ -118,11 +97,7 @@ impl ResourceBehaviorUtility {
         }
     }
 
-    pub fn get_resource_from_tombstone_id(
-        creep: &Creep,
-        tombstone_id: &RemoteObjectId<Tombstone>,
-        resource: ResourceType,
-    ) {
+    pub fn get_resource_from_tombstone_id(creep: &Creep, tombstone_id: &RemoteObjectId<Tombstone>, resource: ResourceType) {
         let target_position = tombstone_id.pos();
 
         if creep.pos().room_name() != target_position.room_name() {
@@ -132,10 +107,7 @@ impl ResourceBehaviorUtility {
             Self::get_resource_from_tombstone(creep, &tombstone, resource);
         } else {
             //TODO: Return error result.
-            error!(
-                "Failed to resolve tombstone for getting resource. Name: {}",
-                creep.name()
-            );
+            error!("Failed to resolve tombstone for getting resource. Name: {}", creep.name());
         }
     }
 
@@ -143,24 +115,14 @@ impl ResourceBehaviorUtility {
         scope_timing!("get_energy");
 
         match target {
-            EnergyPickupTarget::Structure(id) => {
-                Self::get_resource_from_structure_id(creep, id, ResourceType::Energy)
-            }
+            EnergyPickupTarget::Structure(id) => Self::get_resource_from_structure_id(creep, id, ResourceType::Energy),
             EnergyPickupTarget::Source(id) => Self::get_energy_from_source_id(creep, id),
-            EnergyPickupTarget::DroppedResource(id) => {
-                Self::get_resource_from_dropped_resource_id(creep, id)
-            }
-            EnergyPickupTarget::Tombstone(id) => {
-                Self::get_resource_from_tombstone_id(creep, id, ResourceType::Energy)
-            }
+            EnergyPickupTarget::DroppedResource(id) => Self::get_resource_from_dropped_resource_id(creep, id),
+            EnergyPickupTarget::Tombstone(id) => Self::get_resource_from_tombstone_id(creep, id, ResourceType::Energy),
         }
     }
 
-    pub fn transfer_resource_to_structure(
-        creep: &Creep,
-        structure: &Structure,
-        resource: ResourceType,
-    ) {
+    pub fn transfer_resource_to_structure(creep: &Creep, structure: &Structure, resource: ResourceType) {
         scope_timing!("transfer_resource_to_structure");
 
         if let Some(transferable) = structure.as_transferable() {
@@ -178,11 +140,7 @@ impl ResourceBehaviorUtility {
         }
     }
 
-    pub fn transfer_resource_to_structure_id(
-        creep: &Creep,
-        structure_id: &RemoteStructureIdentifier,
-        resource: ResourceType,
-    ) {
+    pub fn transfer_resource_to_structure_id(creep: &Creep, structure_id: &RemoteStructureIdentifier, resource: ResourceType) {
         let target_position = structure_id.pos();
 
         if creep.pos().room_name() != target_position.room_name() {
@@ -192,10 +150,7 @@ impl ResourceBehaviorUtility {
             Self::transfer_resource_to_structure(creep, &structure, resource);
         } else {
             //TODO: Return error result.
-            error!(
-                "Failed to resolve structure to transfer resource to. Name: {}",
-                creep.name()
-            );
+            error!("Failed to resolve structure to transfer resource to. Name: {}", creep.name());
         }
     }
 }

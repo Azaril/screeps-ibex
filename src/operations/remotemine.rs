@@ -33,11 +33,7 @@ impl RemoteMineOperation {
 }
 
 impl Operation for RemoteMineOperation {
-    fn describe(
-        &mut self,
-        _system_data: &OperationExecutionSystemData,
-        describe_data: &mut OperationDescribeData,
-    ) {
+    fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
             global_ui.operations().add_text("Remote Mine".to_string(), None);
         })
@@ -47,7 +43,7 @@ impl Operation for RemoteMineOperation {
         &mut self,
         system_data: &OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
-    ) -> OperationResult {
+    ) -> Result<OperationResult, ()> {
         scope_timing!("RemoteMineOperation");
 
         let mut desired_missions = vec![];
@@ -69,25 +65,13 @@ impl Operation for RemoteMineOperation {
                     for _ in 0..1 {
                         candidate_rooms = candidate_rooms
                             .into_iter()
-                            .flat_map(|room_name| {
-                                game::map::describe_exits(room_name)
-                                    .values()
-                                    .cloned()
-                                    .collect::<Vec<RoomName>>()
-                            })
+                            .flat_map(|room_name| game::map::describe_exits(room_name).values().cloned().collect::<Vec<RoomName>>())
                             .filter(|room_name| {
-                                if let Some(search_room_entity) =
-                                    system_data.mapping.rooms.get(&room_name)
-                                {
-                                    if let Some(search_room_data) =
-                                        system_data.room_data.get(*search_room_entity)
-                                    {
-                                        if let Some(search_room_data) =
-                                            search_room_data.get_dynamic_visibility_data()
-                                        {
+                                if let Some(search_room_entity) = system_data.mapping.rooms.get(&room_name) {
+                                    if let Some(search_room_data) = system_data.room_data.get(*search_room_entity) {
+                                        if let Some(search_room_data) = search_room_data.get_dynamic_visibility_data() {
                                             if search_room_data.updated_within(5000)
-                                                && (search_room_data.owner().hostile()
-                                                    || search_room_data.source_keeper())
+                                                && (search_room_data.owner().hostile() || search_room_data.source_keeper())
                                             {
                                                 return false;
                                             }
@@ -101,15 +85,12 @@ impl Operation for RemoteMineOperation {
                     }
 
                     for offset_room_name in candidate_rooms {
-                        if let Some(offset_room_entity) =
-                            system_data.mapping.rooms.get(&offset_room_name)
-                        {
+                        if let Some(offset_room_entity) = system_data.mapping.rooms.get(&offset_room_name) {
                             desired_missions.push((*offset_room_entity, entity));
                         } else {
-                            runtime_data.visibility.request(VisibilityRequest::new(
-                                offset_room_name,
-                                VISIBILITY_PRIORITY_MEDIUM,
-                            ));
+                            runtime_data
+                                .visibility
+                                .request(VisibilityRequest::new(offset_room_name, VISIBILITY_PRIORITY_MEDIUM));
                         }
                     }
                 }
@@ -135,18 +116,17 @@ impl Operation for RemoteMineOperation {
             // Spawn scout missions for remote mine rooms that have not had visibility updated in a long time.
             //
 
-            if dynamic_visibility_data
-                .as_ref()
-                .map(|v| !v.updated_within(1000))
-                .unwrap_or(true)
-            {
+            if dynamic_visibility_data.as_ref().map(|v| !v.updated_within(1000)).unwrap_or(true) {
                 //TODO: wiarchbe: Use trait instead of match.
-                let has_scout_mission = room_data.missions.0.iter().any(|mission_entity| {
-                    match system_data.mission_data.get(*mission_entity) {
-                        Some(MissionData::Scout(_)) => true,
-                        _ => false,
-                    }
-                });
+                let has_scout_mission =
+                    room_data
+                        .missions
+                        .0
+                        .iter()
+                        .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
+                            Some(MissionData::Scout(_)) => true,
+                            _ => false,
+                        });
 
                 //
                 // Spawn a new mission to fill the scout role if missing.
@@ -159,15 +139,9 @@ impl Operation for RemoteMineOperation {
                     let home_room_entity = home_room_data_entity;
 
                     system_data.updater.exec_mut(move |world| {
-                        let mission_entity = ScoutMission::build(
-                            world.create_entity(),
-                            room_entity,
-                            home_room_entity,
-                        )
-                        .build();
+                        let mission_entity = ScoutMission::build(world.create_entity(), room_entity, home_room_entity).build();
 
-                        let room_data_storage =
-                            &mut world.write_storage::<::room::data::RoomData>();
+                        let room_data_storage = &mut world.write_storage::<::room::data::RoomData>();
 
                         if let Some(room_data) = room_data_storage.get_mut(room_entity) {
                             room_data.missions.0.push(mission_entity);
@@ -193,12 +167,15 @@ impl Operation for RemoteMineOperation {
                 //TODO: Check path finding and accessibility to room.
 
                 //TODO: wiarchbe: Use trait instead of match.
-                let has_remote_mine_mission = room_data.missions.0.iter().any(|mission_entity| {
-                    match system_data.mission_data.get(*mission_entity) {
-                        Some(MissionData::RemoteMine(_)) => true,
-                        _ => false,
-                    }
-                });
+                let has_remote_mine_mission =
+                    room_data
+                        .missions
+                        .0
+                        .iter()
+                        .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
+                            Some(MissionData::RemoteMine(_)) => true,
+                            _ => false,
+                        });
 
                 //
                 // Spawn a new mission to fill the remote mine role if missing.
@@ -211,15 +188,9 @@ impl Operation for RemoteMineOperation {
                     let home_room_entity = home_room_data_entity;
 
                     system_data.updater.exec_mut(move |world| {
-                        let mission_entity = RemoteMineMission::build(
-                            world.create_entity(),
-                            room_entity,
-                            home_room_entity,
-                        )
-                        .build();
+                        let mission_entity = RemoteMineMission::build(world.create_entity(), room_entity, home_room_entity).build();
 
-                        let room_data_storage =
-                            &mut world.write_storage::<::room::data::RoomData>();
+                        let room_data_storage = &mut world.write_storage::<::room::data::RoomData>();
 
                         if let Some(room_data) = room_data_storage.get_mut(room_entity) {
                             room_data.missions.0.push(mission_entity);
@@ -228,12 +199,15 @@ impl Operation for RemoteMineOperation {
                 }
 
                 //TODO: wiarchbe: Use trait instead of match.
-                let has_reservation_mission = room_data.missions.0.iter().any(|mission_entity| {
-                    match system_data.mission_data.get(*mission_entity) {
-                        Some(MissionData::Reserve(_)) => true,
-                        _ => false,
-                    }
-                });
+                let has_reservation_mission =
+                    room_data
+                        .missions
+                        .0
+                        .iter()
+                        .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
+                            Some(MissionData::Reserve(_)) => true,
+                            _ => false,
+                        });
 
                 //
                 // Spawn a new mission to fill the reservation role if missing.
@@ -246,15 +220,9 @@ impl Operation for RemoteMineOperation {
                     let home_room_entity = home_room_data_entity;
 
                     system_data.updater.exec_mut(move |world| {
-                        let mission_entity = ReserveMission::build(
-                            world.create_entity(),
-                            room_entity,
-                            home_room_entity,
-                        )
-                        .build();
+                        let mission_entity = ReserveMission::build(world.create_entity(), room_entity, home_room_entity).build();
 
-                        let room_data_storage =
-                            &mut world.write_storage::<::room::data::RoomData>();
+                        let room_data_storage = &mut world.write_storage::<::room::data::RoomData>();
 
                         if let Some(room_data) = room_data_storage.get_mut(room_entity) {
                             room_data.missions.0.push(mission_entity);
@@ -264,6 +232,6 @@ impl Operation for RemoteMineOperation {
             }
         }
 
-        OperationResult::Running
+        Ok(OperationResult::Running)
     }
 }

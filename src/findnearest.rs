@@ -24,6 +24,10 @@ pub trait FindNearest<T: Sized + HasPosition> {
     fn find_nearest_linear(self, other_pos: RoomPosition) -> Option<T>
     where
         Self: Sized;
+
+    fn find_nearest_linear_distance(self, other_pos: RoomPosition) -> Option<u32>
+    where
+        Self: Sized;
 }
 
 pub struct PathFinderHelpers;
@@ -47,10 +51,7 @@ impl PathFinderHelpers {
         start_pos.find_path_to(&end_pos, find_options)
     }
 
-    pub fn same_room_ignore_creeps_and_structures(
-        start_pos: RoomPosition,
-        end_pos: RoomPosition,
-    ) -> Path {
+    pub fn same_room_ignore_creeps_and_structures(start_pos: RoomPosition, end_pos: RoomPosition) -> Path {
         let find_options = FindOptions::new()
             .max_rooms(1)
             .ignore_creeps(true)
@@ -59,10 +60,7 @@ impl PathFinderHelpers {
         start_pos.find_path_to(&end_pos, find_options)
     }
 
-    pub fn same_room_ignore_creeps_and_structures_range_1(
-        start_pos: RoomPosition,
-        end_pos: RoomPosition,
-    ) -> Path {
+    pub fn same_room_ignore_creeps_and_structures_range_1(start_pos: RoomPosition, end_pos: RoomPosition) -> Path {
         let find_options = FindOptions::new()
             .max_rooms(1)
             .ignore_creeps(true)
@@ -170,5 +168,9 @@ where
         self.map(|pos_object| (other_pos.get_range_to(&pos_object), pos_object))
             .min_by_key(|(length, _)| *length)
             .map(|(_, pos_object)| pos_object)
+    }
+
+    fn find_nearest_linear_distance(self, other_pos: RoomPosition) -> Option<u32> {
+        self.map(|pos_object| other_pos.get_range_to(&pos_object)).min()
     }
 }

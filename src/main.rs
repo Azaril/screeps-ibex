@@ -32,8 +32,8 @@ mod room;
 mod serialize;
 mod spawnsystem;
 mod structureidentifier;
-mod visualize;
 mod ui;
+mod visualize;
 
 use std::fmt;
 
@@ -45,10 +45,7 @@ use screeps::*;
 use specs::{
     error::NoError,
     prelude::*,
-    saveload::{
-        DeserializeComponents, MarkedBuilder, SerializeComponents, SimpleMarker,
-        SimpleMarkerAllocator,
-    },
+    saveload::{DeserializeComponents, MarkedBuilder, SerializeComponents, SimpleMarker, SimpleMarkerAllocator},
 };
 
 fn main() {
@@ -185,11 +182,18 @@ fn deserialize_world(world: &World, data: &str) {
             let mut de = serde_json::de::Deserializer::from_str(self.raw_data);
 
             DeserializeComponents::<CombinedSerialiationError, serialize::SerializeMarker>::deserialize(
-                &mut (data.creep_spawnings, data.creep_owners, data.room_data, data.job_data, data.operation_data, data.mission_data),
+                &mut (
+                    data.creep_spawnings,
+                    data.creep_owners,
+                    data.room_data,
+                    data.job_data,
+                    data.operation_data,
+                    data.mission_data,
+                ),
                 &data.entities,
                 &mut data.markers,
                 &mut data.marker_alloc,
-                &mut de
+                &mut de,
             )
             .unwrap_or_else(|e| eprintln!("Error: {}", e));
         }
@@ -224,21 +228,13 @@ fn game_loop() {
     let mut pre_pass_dispatcher = DispatcherBuilder::new()
         .with(creep::WaitForSpawnSystem, "wait_for_spawn", &[])
         .with(creep::CleanupCreepsSystem, "cleanup_creeps", &[])
-        .with(
-            room::createroomsystem::CreateRoomDataSystem,
-            "create_room_data",
-            &[],
-        )
+        .with(room::createroomsystem::CreateRoomDataSystem, "create_room_data", &[])
         .with(
             room::updateroomsystem::UpdateRoomDataSystem,
             "update_room_data",
             &["create_room_data"],
         )
-        .with(
-            mappingsystem::MappingSystem,
-            "mapping",
-            &["create_room_data"],
-        )
+        .with(mappingsystem::MappingSystem, "mapping", &["create_room_data"])
         .build();
 
     pre_pass_dispatcher.setup(&mut world);
@@ -248,23 +244,11 @@ fn game_loop() {
     //
 
     let mut main_dispatcher = DispatcherBuilder::new()
-        .with(
-            operations::managersystem::OperationManagerSystem,
-            "operations_manager",
-            &[],
-        )
-        .with(
-            operations::operationsystem::OperationSystem,
-            "operations",
-            &["operations_manager"],
-        )
+        .with(operations::managersystem::OperationManagerSystem, "operations_manager", &[])
+        .with(operations::operationsystem::OperationSystem, "operations", &["operations_manager"])
         .with(missions::missionsystem::MissionSystem, "missions", &[])
         .with(jobs::jobsystem::JobSystem, "jobs", &[])
-        .with(
-            room::visibilitysystem::VisibilityQueueSystem,
-            "visibility",
-            &[],
-        )
+        .with(room::visibilitysystem::VisibilityQueueSystem, "visibility", &[])
         .with_barrier()
         .with(spawnsystem::SpawnQueueSystem, "spawn_queue", &[])
         .with_barrier()

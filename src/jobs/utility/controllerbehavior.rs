@@ -14,10 +14,7 @@ impl ControllerBehaviorUtility {
         }
     }
 
-    pub fn upgrade_controller_id(
-        creep: &Creep,
-        controller_id: &RemoteObjectId<StructureController>,
-    ) {
+    pub fn upgrade_controller_id(creep: &Creep, controller_id: &RemoteObjectId<StructureController>) {
         let target_position = controller_id.pos();
 
         if creep.pos().room_name() != target_position.room_name() {
@@ -27,10 +24,7 @@ impl ControllerBehaviorUtility {
             Self::upgrade_controller(creep, &controller)
         } else {
             //TODO: Return error result.
-            error!(
-                "Failed to resolve controller for upgrading. Name: {}",
-                creep.name()
-            );
+            error!("Failed to resolve controller for upgrading. Name: {}", creep.name());
         }
     }
 }

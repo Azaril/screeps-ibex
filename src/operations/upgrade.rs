@@ -29,11 +29,7 @@ impl UpgradeOperation {
 }
 
 impl Operation for UpgradeOperation {
-    fn describe(
-        &mut self,
-        _system_data: &OperationExecutionSystemData,
-        describe_data: &mut OperationDescribeData,
-    ) {
+    fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
             global_ui.operations().add_text("Upgrade".to_string(), None);
         })
@@ -43,7 +39,7 @@ impl Operation for UpgradeOperation {
         &mut self,
         system_data: &OperationExecutionSystemData,
         _runtime_data: &mut OperationExecutionRuntimeData,
-    ) -> OperationResult {
+    ) -> Result<OperationResult, ()> {
         scope_timing!("UpgradeOperation");
 
         for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
@@ -56,36 +52,32 @@ impl Operation for UpgradeOperation {
 
                         //TODO: wiarchbe: Use trait instead of match.
                         let has_upgrade_mission =
-                            room_data.missions.0.iter().any(|mission_entity| {
-                                match system_data.mission_data.get(*mission_entity) {
+                            room_data
+                                .missions
+                                .0
+                                .iter()
+                                .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
                                     Some(MissionData::Upgrade(_)) => true,
                                     _ => false,
-                                }
-                            });
+                                });
 
                         //
                         // Spawn a new mission to fill the upgrade role if missing.
                         //
 
                         if !has_upgrade_mission {
-                            info!(
-                                "Starting upgrade mission for spawning room. Room: {}",
-                                room_data.name
-                            );
+                            info!("Starting upgrade mission for spawning room. Room: {}", room_data.name);
 
                             let room_entity = entity;
 
                             system_data.updater.exec_mut(move |world| {
-                                let mission_entity =
-                                    UpgradeMission::build(world.create_entity(), room_entity)
-                                        .build();
+                                let mission_entity = UpgradeMission::build(world.create_entity(), room_entity).build();
 
                                 //
                                 // Attach the mission to the room.
                                 //
 
-                                let room_data_storage =
-                                    &mut world.write_storage::<::room::data::RoomData>();
+                                let room_data_storage = &mut world.write_storage::<::room::data::RoomData>();
 
                                 if let Some(room_data) = room_data_storage.get_mut(room_entity) {
                                     room_data.missions.0.push(mission_entity);
@@ -97,6 +89,6 @@ impl Operation for UpgradeOperation {
             }
         }
 
-        OperationResult::Running
+        Ok(OperationResult::Running)
     }
 }

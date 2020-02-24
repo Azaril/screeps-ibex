@@ -28,11 +28,7 @@ impl ConstructionOperation {
 }
 
 impl Operation for ConstructionOperation {
-    fn describe(
-        &mut self,
-        _system_data: &OperationExecutionSystemData,
-        describe_data: &mut OperationDescribeData,
-    ) {
+    fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
             global_ui.operations().add_text("Construction".to_string(), None);
         })
@@ -42,7 +38,7 @@ impl Operation for ConstructionOperation {
         &mut self,
         system_data: &OperationExecutionSystemData,
         _runtime_data: &mut OperationExecutionRuntimeData,
-    ) -> OperationResult {
+    ) -> Result<OperationResult, ()> {
         scope_timing!("ConstructionOperation");
 
         for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
@@ -54,32 +50,28 @@ impl Operation for ConstructionOperation {
 
                     //TODO: wiarchbe: Use trait instead of match.
                     let has_construction_mission =
-                        room_data.missions.0.iter().any(|mission_entity| {
-                            match system_data.mission_data.get(*mission_entity) {
+                        room_data
+                            .missions
+                            .0
+                            .iter()
+                            .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
                                 Some(MissionData::Construction(_)) => true,
                                 _ => false,
-                            }
-                        });
+                            });
 
                     //
                     // Spawn a new mission to fill the construction role if missing.
                     //
 
                     if !has_construction_mission {
-                        info!(
-                            "Starting construction mission for room. Room: {}",
-                            room_data.name
-                        );
+                        info!("Starting construction mission for room. Room: {}", room_data.name);
 
                         let room_entity = entity;
 
                         system_data.updater.exec_mut(move |world| {
-                            let mission_entity =
-                                ConstructionMission::build(world.create_entity(), room_entity)
-                                    .build();
+                            let mission_entity = ConstructionMission::build(world.create_entity(), room_entity).build();
 
-                            let room_data_storage =
-                                &mut world.write_storage::<::room::data::RoomData>();
+                            let room_data_storage = &mut world.write_storage::<::room::data::RoomData>();
 
                             if let Some(room_data) = room_data_storage.get_mut(room_entity) {
                                 room_data.missions.0.push(mission_entity);
@@ -90,6 +82,6 @@ impl Operation for ConstructionOperation {
             }
         }
 
-        OperationResult::Running
+        Ok(OperationResult::Running)
     }
 }

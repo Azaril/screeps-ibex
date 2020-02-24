@@ -44,10 +44,7 @@ where
     where
         F: FnMut(M) -> Option<Entity>,
     {
-        let entities = data
-            .iter()
-            .filter_map(|marker| ids(marker.clone()))
-            .collect();
+        let entities = data.iter().filter_map(|marker| ids(marker.clone())).collect();
 
         Ok(EntityVec { 0: entities })
     }

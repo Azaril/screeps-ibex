@@ -17,10 +17,7 @@ pub struct VisibilityRequest {
 
 impl VisibilityRequest {
     pub fn new(room_name: RoomName, priority: f32) -> VisibilityRequest {
-        VisibilityRequest {
-            room_name,
-            priority,
-        }
+        VisibilityRequest { room_name, priority }
     }
 }
 
@@ -67,9 +64,7 @@ impl<'a> System<'a> for VisibilityQueueSystem {
             .map(|(_, room_data)| room_data.name)
             .collect::<std::collections::HashSet<RoomName>>();
 
-        let missing_rooms = room_priorities
-            .keys()
-            .filter(|name| !existing_rooms.contains(name));
+        let missing_rooms = room_priorities.keys().filter(|name| !existing_rooms.contains(name));
 
         for room_name in missing_rooms {
             info!("Creating room data for room: {}", room_name);

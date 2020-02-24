@@ -29,11 +29,7 @@ impl TowerOperation {
 }
 
 impl Operation for TowerOperation {
-    fn describe(
-        &mut self,
-        _system_data: &OperationExecutionSystemData,
-        describe_data: &mut OperationDescribeData,
-    ) {
+    fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
             global_ui.operations().add_text("Tower".to_string(), None);
         })
@@ -43,7 +39,7 @@ impl Operation for TowerOperation {
         &mut self,
         system_data: &OperationExecutionSystemData,
         _runtime_data: &mut OperationExecutionRuntimeData,
-    ) -> OperationResult {
+    ) -> Result<OperationResult, ()> {
         scope_timing!("TowerOperation");
 
         for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
@@ -67,12 +63,15 @@ impl Operation for TowerOperation {
                     //
 
                     //TODO: wiarchbe: Use trait instead of match.
-                    let has_tower_mission = room_data.missions.0.iter().any(|mission_entity| {
-                        match system_data.mission_data.get(*mission_entity) {
-                            Some(MissionData::Tower(_)) => true,
-                            _ => false,
-                        }
-                    });
+                    let has_tower_mission =
+                        room_data
+                            .missions
+                            .0
+                            .iter()
+                            .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
+                                Some(MissionData::Tower(_)) => true,
+                                _ => false,
+                            });
 
                     //
                     // Spawn a new mission to fill the local tower control role if missing.
@@ -84,11 +83,9 @@ impl Operation for TowerOperation {
                         let room_entity = entity;
 
                         system_data.updater.exec_mut(move |world| {
-                            let mission_entity =
-                                TowerMission::build(world.create_entity(), room_entity).build();
+                            let mission_entity = TowerMission::build(world.create_entity(), room_entity).build();
 
-                            let room_data_storage =
-                                &mut world.write_storage::<::room::data::RoomData>();
+                            let room_data_storage = &mut world.write_storage::<::room::data::RoomData>();
 
                             if let Some(room_data) = room_data_storage.get_mut(room_entity) {
                                 room_data.missions.0.push(mission_entity);
@@ -99,6 +96,6 @@ impl Operation for TowerOperation {
             }
         }
 
-        OperationResult::Running
+        Ok(OperationResult::Running)
     }
 }
