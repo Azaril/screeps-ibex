@@ -1,6 +1,7 @@
 pub mod claim;
 pub mod construction;
 pub mod data;
+pub mod haul;
 pub mod localbuild;
 pub mod localsupply;
 pub mod managersystem;

@@ -11,13 +11,15 @@ timing = ["scopeguard"]
 stdweb = "0.4"
 log = "0.4"
 fern = "0.5"
-screeps-game-api = { git = "https://github.com/rustyscreeps/screeps-game-api" }
+#screeps-game-api = { git = "https://github.com/Azaril/screeps-game-api" }
+screeps-game-api = { path = "C:\\Source\\screeps-game-api" }
 serde = "1.0"
 serde_json = "1.0"
 scopeguard = { version = "1.0", optional = true }
 specs = { version = "0.15", default-features = false, features = ["serde", "shred-derive"] }
 specs-derive = "0.4"
 itertools = "0.8"
+bitflags = "1.2.1"
 
 [profile.release]
 panic = "abort"

@@ -69,12 +69,18 @@ impl Mission for ClaimMission {
         }
     }
 
-    fn pre_run_mission(&mut self, system_data: &MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {
+    fn pre_run_mission(
+        &mut self,
+        system_data: &MissionExecutionSystemData,
+        _runtime_data: &mut MissionExecutionRuntimeData,
+    ) -> Result<(), String> {
         //
         // Cleanup claimers that no longer exist.
         //
 
         self.claimers.0.retain(|entity| system_data.entities.is_alive(*entity));
+
+        Ok(())
     }
 
     fn run_mission(

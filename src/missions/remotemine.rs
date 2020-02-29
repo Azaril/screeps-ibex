@@ -72,12 +72,18 @@ impl Mission for RemoteMineMission {
         }
     }
 
-    fn pre_run_mission(&mut self, system_data: &MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {
+    fn pre_run_mission(
+        &mut self,
+        system_data: &MissionExecutionSystemData,
+        _runtime_data: &mut MissionExecutionRuntimeData,
+    ) -> Result<(), String> {
         //
         // Cleanup creeps that no longer exist.
         //
 
         self.harvesters.0.retain(|entity| system_data.entities.is_alive(*entity));
+
+        Ok(())
     }
 
     fn run_mission(

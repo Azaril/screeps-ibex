@@ -17,6 +17,9 @@ extern crate specs_derive;
 extern crate itertools;
 
 #[macro_use]
+extern crate bitflags;
+
+#[macro_use]
 mod timing;
 mod creep;
 mod features;
@@ -32,6 +35,7 @@ mod room;
 mod serialize;
 mod spawnsystem;
 mod structureidentifier;
+mod transfer;
 mod ui;
 mod visualize;
 
@@ -255,6 +259,7 @@ fn game_loop() {
         .with_barrier()
         .with(room::visibilitysystem::VisibilityQueueSystem, "visibility", &[])
         .with(spawnsystem::SpawnQueueSystem, "spawn_queue", &[])
+        .with(transfer::transfersystem::TransferQueueSystem, "transfer", &[])
         .with_barrier()
         .with(visualize::VisualizerSystem, "visualizer", &[])
         .build();

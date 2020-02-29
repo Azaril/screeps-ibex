@@ -30,6 +30,19 @@ pub trait FindNearest<T: Sized + HasPosition> {
         Self: Sized;
 }
 
+pub trait FindNearestBy<T: Sized> {
+    //TODO: Add other methods for pathfinding etc.
+    fn find_nearest_linear_by<F>(self, other_pos: RoomPosition, pos_generator: F) -> Option<T>
+    where
+        Self: Sized,
+        F: Fn(&T) -> RoomPosition;
+
+    fn find_nearest_linear_distance_by<F>(self, other_pos: RoomPosition, pos_generator: F) -> Option<u32>
+    where
+        Self: Sized,
+        F: Fn(&T) -> RoomPosition;
+}
+
 pub struct PathFinderHelpers;
 
 impl PathFinderHelpers {
@@ -68,6 +81,29 @@ impl PathFinderHelpers {
             .range(1);
 
         start_pos.find_path_to(&end_pos, find_options)
+    }
+}
+
+impl<I> FindNearestBy<I::Item> for I
+where
+    I: Iterator,
+{
+    fn find_nearest_linear_by<F>(self, other_pos: RoomPosition, pos_generator: F) -> Option<I::Item>
+    where
+        Self: Sized,
+        F: Fn(&I::Item) -> RoomPosition,
+    {
+        self.map(|pos_object| (other_pos.get_range_to(&pos_generator(&pos_object)), pos_object))
+            .min_by_key(|(length, _)| *length)
+            .map(|(_, pos_object)| pos_object)
+    }
+
+    fn find_nearest_linear_distance_by<F>(self, other_pos: RoomPosition, pos_generator: F) -> Option<u32>
+    where
+        Self: Sized,
+        F: Fn(&I::Item) -> RoomPosition,
+    {
+        self.map(|pos_object| other_pos.get_range_to(&pos_generator(&pos_object))).min()
     }
 }
 

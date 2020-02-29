@@ -72,7 +72,7 @@ impl Mission for ConstructionMission {
             }
 
             let should_execute = crate::features::construction::execute()
-                && self.last_update.map(|last_time| game::time() - last_time > 500).unwrap_or(true);
+                && self.last_update.map(|last_time| game::time() - last_time > 100).unwrap_or(true);
 
             if should_execute {
                 plan.execute(&room);

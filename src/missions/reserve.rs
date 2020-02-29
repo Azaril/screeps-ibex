@@ -68,12 +68,18 @@ impl Mission for ReserveMission {
         }
     }
 
-    fn pre_run_mission(&mut self, system_data: &MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {
+    fn pre_run_mission(
+        &mut self,
+        system_data: &MissionExecutionSystemData,
+        _runtime_data: &mut MissionExecutionRuntimeData,
+    ) -> Result<(), String> {
         //
         // Cleanup reservers that no longer exist.
         //
 
         self.reservers.0.retain(|entity| system_data.entities.is_alive(*entity));
+
+        Ok(())
     }
 
     fn run_mission(
