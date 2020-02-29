@@ -5,6 +5,7 @@ use crate::creep::*;
 use crate::jobs::data::*;
 use crate::room::data::*;
 use crate::spawnsystem::*;
+use crate::transfer::transfersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
 
@@ -19,6 +20,7 @@ pub struct MissionSystemData<'a> {
     job_data: WriteStorage<'a, JobData>,
     visualizer: Option<Write<'a, Visualizer>>,
     ui: Option<Write<'a, UISystem>>,
+    transfer_queue: Write<'a, TransferQueue>,
 }
 
 pub struct MissionExecutionSystemData<'a> {
@@ -33,6 +35,7 @@ pub struct MissionExecutionRuntimeData<'a> {
     pub entity: &'a Entity,
     pub spawn_queue: &'a mut SpawnQueue,
     pub visualizer: Option<&'a mut Visualizer>,
+    pub transfer_queue: &'a mut TransferQueue,
 }
 
 pub struct MissionDescribeData<'a> {
@@ -49,7 +52,13 @@ pub enum MissionResult {
 pub trait Mission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData);
 
-    fn pre_run_mission(&mut self, _system_data: &MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {}
+    fn pre_run_mission(
+        &mut self,
+        _system_data: &MissionExecutionSystemData,
+        _runtime_data: &mut MissionExecutionRuntimeData,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 
     fn run_mission(
         &mut self,
@@ -79,11 +88,26 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 entity: &entity,
                 spawn_queue: &mut data.spawn_queue,
                 visualizer: data.visualizer.as_deref_mut(),
+                transfer_queue: &mut data.transfer_queue,
             };
 
             let mission = mission_data.as_mission();
 
-            mission.pre_run_mission(&system_data, &mut runtime_data);
+            let cleanup_mission = match mission.pre_run_mission(&system_data, &mut runtime_data) {
+                Ok(()) => false,
+                Err(error) => {
+                    info!("Mission failed, cleaning up. Error: {}", error);
+                    true
+                }
+            };
+
+            if cleanup_mission {
+                data.updater.exec_mut(move |world| {
+                    if let Err(err) = world.delete_entity(entity) {
+                        warn!("Trying to clean up mission entity that no longer exists. Error: {}", err);
+                    }
+                });
+            }
         }
 
         //TODO: Is this the right phase for visualization? Potentially better at the end of tick?
@@ -104,7 +128,6 @@ impl<'a> System<'a> for PreRunMissionSystem {
         }
     }
 }
-
 
 pub struct RunMissionSystem;
 
@@ -127,6 +150,7 @@ impl<'a> System<'a> for RunMissionSystem {
                 entity: &entity,
                 spawn_queue: &mut data.spawn_queue,
                 visualizer: data.visualizer.as_deref_mut(),
+                transfer_queue: &mut data.transfer_queue,
             };
 
             let mission = mission_data.as_mission();

@@ -4,7 +4,7 @@ pub mod js {
             _.defaultsDeep(Memory, {
                 _features: {
                     visualize: {
-                        on: false
+                        on: true
                     },
                     construction: {
                         plan: true,

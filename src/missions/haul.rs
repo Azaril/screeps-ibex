@@ -8,61 +8,62 @@ use specs_derive::*;
 use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
-use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 
 #[derive(Clone, ConvertSaveload)]
-pub struct UpgradeMission {
+pub struct HaulMission {
     room_data: Entity,
-    upgraders: EntityVec,
+    haulers: EntityVec,
 }
 
-impl UpgradeMission {
+impl HaulMission {
     pub fn build<B>(builder: B, room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = UpgradeMission::new(room_data);
+        let mission = HaulMission::new(room_data);
 
-        builder.with(MissionData::Upgrade(mission)).marked::<::serialize::SerializeMarker>()
+        builder.with(MissionData::Haul(mission)).marked::<::serialize::SerializeMarker>()
     }
 
-    pub fn new(room_data: Entity) -> UpgradeMission {
-        UpgradeMission {
+    pub fn new(room_data: Entity) -> HaulMission {
+        HaulMission {
             room_data,
-            upgraders: EntityVec::new(),
+            haulers: EntityVec::new(),
         }
     }
 
-    fn create_handle_upgrader_spawn(
+    fn create_handle_hauler_spawn(
         mission_entity: Entity,
-        controller_id: RemoteObjectId<StructureController>,
-        home_room: RoomName,
+        haul_rooms: &[RoomName],
     ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync> {
+        let rooms = haul_rooms.to_vec();
+
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
+            let rooms = rooms.clone();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Upgrade(::jobs::upgrade::UpgradeJob::new(&controller_id, home_room));
+                let creep_job = JobData::Haul(::jobs::haul::HaulJob::new(&rooms));
 
                 let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
 
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
-                if let Some(MissionData::Upgrade(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.upgraders.0.push(creep_entity);
+                if let Some(MissionData::Haul(mission_data)) = mission_data_storage.get_mut(mission_entity) {
+                    mission_data.haulers.0.push(creep_entity);
                 }
             });
         })
     }
 }
 
-impl Mission for UpgradeMission {
+impl Mission for HaulMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui.missions().add_text("Upgrade".to_string(), None);
+                room_ui.missions().add_text("Haul".to_string(), None);
             })
         }
     }
@@ -73,10 +74,10 @@ impl Mission for UpgradeMission {
         _runtime_data: &mut MissionExecutionRuntimeData,
     ) -> Result<(), String> {
         //
-        // Cleanup scouts that no longer exist.
+        // Cleanup haulers that no longer exist.
         //
 
-        self.upgraders.0.retain(|entity| system_data.entities.is_alive(*entity));
+        self.haulers.0.retain(|entity| system_data.entities.is_alive(*entity));
 
         Ok(())
     }
@@ -86,56 +87,53 @@ impl Mission for UpgradeMission {
         system_data: &MissionExecutionSystemData,
         runtime_data: &mut MissionExecutionRuntimeData,
     ) -> Result<MissionResult, String> {
-        scope_timing!("UpgradeMission");
-
-        //TODO: Limit upgraders to 15 total work parts upgrading across all creeps.
+        scope_timing!("HaulMission");
 
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
-        let controller = room.controller().ok_or("Expected controller")?;
 
-        if !controller.my() {
-            return Err("Room not owned by user".to_string());
-        }
+        let need_hauling = runtime_data
+            .transfer_queue
+            .try_get_room(room_data.name)
+            .map(|r| r.stats())
+            .map(|s| s.total_withdrawl > 0)
+            .unwrap_or(false);
 
-        let max_upgraders = 3;
+        let should_spawn = need_hauling && self.haulers.0.len() < 2;
 
-        if self.upgraders.0.len() < max_upgraders {
-            let work_parts_per_upgrader = if controller.level() == 8 {
-                let work_parts_per_tick = (CONTROLLER_MAX_UPGRADE_PER_TICK as f32) / (UPGRADE_CONTROLLER_POWER as f32);
-
-                let work_parts = (work_parts_per_tick / (max_upgraders as f32)).ceil();
-
-                Some(work_parts as usize)
+        if should_spawn {
+            let energy_to_use = if self.haulers.0.is_empty() {
+                room.energy_available()
             } else {
-                None
+                room.energy_capacity_available()
             };
 
+            //TODO: Compute best body parts to use.
             let body_definition = crate::creep::SpawnBodyDefinition {
-                maximum_energy: if self.upgraders.0.is_empty() {
-                    room.energy_available()
-                } else {
-                    room.energy_capacity_available()
-                },
+                maximum_energy: energy_to_use,
                 minimum_repeat: Some(1),
-                maximum_repeat: work_parts_per_upgrader,
+                maximum_repeat: Some(8),
                 pre_body: &[],
-                repeat_body: &[Part::Work, Part::Carry, Part::Move, Part::Move],
+                repeat_body: &[Part::Carry, Part::Move],
                 post_body: &[],
             };
 
             if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
-                let priority = if self.upgraders.0.is_empty() {
-                    SPAWN_PRIORITY_CRITICAL
+                let haul_rooms = &[room_data.name];
+
+                let priority = if self.haulers.0.is_empty() {
+                    SPAWN_PRIORITY_HIGH
                 } else {
-                    SPAWN_PRIORITY_LOW
+                    SPAWN_PRIORITY_MEDIUM
                 };
 
+                //TODO: Compute priority based on transfer requests.
+                //TODO: Make sure there is handling for starvation/bootstrap mode.
                 let spawn_request = SpawnRequest::new(
-                    "Upgrader".to_string(),
+                    format!("Haul - Target Room: {}", room_data.name),
                     &body,
                     priority,
-                    Self::create_handle_upgrader_spawn(*runtime_data.entity, controller.remote_id(), room_data.name),
+                    Self::create_handle_hauler_spawn(*runtime_data.entity, haul_rooms),
                 );
 
                 runtime_data.spawn_queue.request(room_data.name, spawn_request);

@@ -74,12 +74,18 @@ impl Mission for ScoutMission {
         }
     }
 
-    fn pre_run_mission(&mut self, system_data: &MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {
+    fn pre_run_mission(
+        &mut self,
+        system_data: &MissionExecutionSystemData,
+        _runtime_data: &mut MissionExecutionRuntimeData,
+    ) -> Result<(), String> {
         //
         // Cleanup scouts that no longer exist.
         //
 
         self.scouts.0.retain(|entity| system_data.entities.is_alive(*entity));
+
+        Ok(())
     }
 
     fn run_mission(

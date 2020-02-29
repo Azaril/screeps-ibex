@@ -2,9 +2,10 @@ use screeps::*;
 use specs::prelude::*;
 
 use super::data::JobData;
-use creep::CreepOwner;
+use crate::transfer::transfersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
+use creep::CreepOwner;
 
 #[derive(SystemData)]
 pub struct JobSystemData<'a> {
@@ -14,6 +15,7 @@ pub struct JobSystemData<'a> {
     entities: Entities<'a>,
     visualizer: Option<Write<'a, Visualizer>>,
     ui: Option<Write<'a, UISystem>>,
+    transfer_queue: Write<'a, TransferQueue>,
 }
 
 pub struct JobExecutionSystemData<'a> {
@@ -23,6 +25,7 @@ pub struct JobExecutionSystemData<'a> {
 
 pub struct JobExecutionRuntimeData<'a> {
     pub owner: &'a Creep,
+    pub transfer_queue: &'a mut TransferQueue,
 }
 
 pub struct JobDescribeData<'a> {
@@ -56,6 +59,7 @@ impl<'a> System<'a> for PreRunJobSystem {
             if let Some(owner) = creep.owner.resolve() {
                 let mut runtime_data = JobExecutionRuntimeData {
                     owner: &owner,
+                    transfer_queue: &mut data.transfer_queue,
                 };
 
                 job_data.as_job().pre_run_job(&system_data, &mut runtime_data);
@@ -98,6 +102,7 @@ impl<'a> System<'a> for RunJobSystem {
             if let Some(owner) = creep.owner.resolve() {
                 let mut runtime_data = JobExecutionRuntimeData {
                     owner: &owner,
+                    transfer_queue: &mut data.transfer_queue,
                 };
 
                 job_data.as_job().run_job(&system_data, &mut runtime_data);

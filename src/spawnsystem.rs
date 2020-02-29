@@ -35,7 +35,7 @@ impl SpawnRequest {
 
 #[derive(Default)]
 pub struct SpawnQueue {
-    pub requests: HashMap<RoomName, Vec<SpawnRequest>>,
+    requests: HashMap<RoomName, Vec<SpawnRequest>>,
 }
 
 impl SpawnQueue {

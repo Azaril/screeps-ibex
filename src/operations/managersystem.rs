@@ -3,6 +3,7 @@ use specs::*;
 use super::claim::*;
 use super::construction::*;
 use super::data::*;
+use super::haul::*;
 use super::localbuild::*;
 use super::localsupply::*;
 use super::remotemine::*;
@@ -25,6 +26,7 @@ impl<'a> System<'a> for OperationManagerSystem {
         let mut has_remote_mine = false;
         let mut has_construction = false;
         let mut has_claim = false;
+        let mut has_haul = false;
 
         for (_, operation) in (&entities, &operations).join() {
             match operation {
@@ -35,6 +37,7 @@ impl<'a> System<'a> for OperationManagerSystem {
                 OperationData::RemoteMine(_) => has_remote_mine = true,
                 OperationData::Construction(_) => has_construction = true,
                 OperationData::Claim(_) => has_claim = true,
+                OperationData::Haul(_) => has_haul = true,
             }
         }
 
@@ -78,6 +81,12 @@ impl<'a> System<'a> for OperationManagerSystem {
             info!("Claim operation does not exist, creating.");
 
             ClaimOperation::build(updater.create_entity(&entities)).build();
+        }
+
+        if !has_haul {
+            info!("Haul operation does not exist, creating.");
+
+            HaulOperation::build(updater.create_entity(&entities)).build();
         }
     }
 }

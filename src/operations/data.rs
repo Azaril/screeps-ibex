@@ -15,6 +15,7 @@ pub enum OperationData {
     RemoteMine(super::remotemine::RemoteMineOperation),
     Construction(super::construction::ConstructionOperation),
     Claim(super::claim::ClaimOperation),
+    Haul(super::haul::HaulOperation),
 }
 
 impl OperationData {
@@ -27,6 +28,7 @@ impl OperationData {
             OperationData::RemoteMine(ref mut data) => data,
             OperationData::Construction(ref mut data) => data,
             OperationData::Claim(ref mut data) => data,
+            OperationData::Haul(ref mut data) => data,
         }
     }
 }
