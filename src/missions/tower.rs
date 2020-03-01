@@ -8,6 +8,8 @@ use specs_derive::*;
 use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::utility::repair::*;
+use crate::transfer::transfersystem::*;
+use crate::remoteobjectid::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct TowerMission {
@@ -36,6 +38,52 @@ impl Mission for TowerMission {
                 room_ui.missions().add_text("Tower".to_string(), None);
             })
         }
+    }
+
+    fn pre_run_mission(
+        &mut self,
+        system_data: &MissionExecutionSystemData,
+        runtime_data: &mut MissionExecutionRuntimeData,
+    ) -> Result<(), String> {
+        let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
+        let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
+
+        let towers = room
+            .find(find::MY_STRUCTURES)
+            .into_iter()
+            .map(|owned_structure| owned_structure.as_structure())
+            .filter_map(|structure| {
+                if let Structure::Tower(tower) = structure {
+                    Some(tower)
+                } else {
+                    None
+                }
+            });
+
+        let hostile_creeps = room.find(find::HOSTILE_CREEPS);
+        let are_hostile_creeps = !hostile_creeps.is_empty();
+
+        let priority = if are_hostile_creeps {
+            TransferPriority::High
+        } else {
+            TransferPriority::Low
+        };
+
+        for tower in towers {
+            let tower_free_capacity = tower.store_free_capacity(Some(ResourceType::Energy));
+            if tower_free_capacity > 0 {
+                let transfer_request = TransferDepositRequest::new(
+                    TransferTarget::Tower(tower.remote_id()),
+                    None,
+                    priority,
+                    tower_free_capacity,
+                );
+
+                runtime_data.transfer_queue.request_deposit(transfer_request);
+            }
+        }
+
+        Ok(())
     }
 
     fn run_mission(
