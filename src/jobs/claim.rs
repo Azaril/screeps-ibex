@@ -32,10 +32,6 @@ impl Job for ClaimJob {
 
         scope_timing!("Claim Job - {}", creep.name());
 
-        //
-        // Claim controller.
-        //
-
         if creep.pos().is_near_to(&self.claim_target.pos()) {
             if let Some(controller) = self.claim_target.resolve() {
                 creep.claim_controller(&controller);

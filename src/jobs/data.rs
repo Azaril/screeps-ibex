@@ -1,10 +1,12 @@
 use serde::*;
+use specs::error::NoError;
+use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
 
 use super::jobsystem::*;
 
-#[derive(Clone, Deserialize, Serialize, Component)]
+#[derive(Clone, Component, ConvertSaveload)]
 pub enum JobData {
     Harvest(super::harvest::HarvestJob),
     Upgrade(super::upgrade::UpgradeJob),

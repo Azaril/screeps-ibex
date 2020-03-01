@@ -1,197 +1,279 @@
 use screeps::*;
-use serde::*;
+use serde::{Deserialize, Serialize};
+use specs::error::NoError;
+use specs::saveload::*;
+use specs::*;
+use specs_derive::*;
 
 use super::jobsystem::*;
-use super::utility::build::*;
 use super::utility::buildbehavior::*;
 use super::utility::controllerbehavior::*;
-use super::utility::resource::*;
-use super::utility::resourcebehavior::*;
+use super::utility::harvestbehavior::*;
+use super::utility::haulbehavior::*;
+use super::utility::repairbehavior::*;
 use crate::remoteobjectid::*;
+use crate::room::data::*;
 use crate::structureidentifier::*;
+use crate::transfer::transfersystem::*;
+use crate::visualize::*;
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
+pub enum HarvestState {
+    Idle,
+    Harvest(RemoteObjectId<Source>),
+    Pickup(TransferWithdrawTicket),
+    FinishedPickup,
+    Delivery(TransferDepositTicket),
+    FinishedDelivery,
+    Build(RemoteObjectId<ConstructionSite>),
+    FinishedBuild,
+    Repair(RemoteStructureIdentifier),
+    FinishedRepair,
+    Upgrade(RemoteObjectId<StructureController>),
+}
+
+#[derive(Clone, ConvertSaveload)]
 pub struct HarvestJob {
-    pub harvest_target: RemoteObjectId<Source>,
-    pub delivery_room: RoomName,
-    #[serde(default)]
-    pub delivery_target: Option<RemoteStructureIdentifier>,
-    #[serde(default)]
-    pub build_target: Option<RemoteObjectId<ConstructionSite>>,
-    #[serde(default)]
-    pub pickup_target: Option<EnergyPickupTarget>,
+    harvest_target: RemoteObjectId<Source>,
+    delivery_room: Entity,
+    state: HarvestState,
 }
 
 impl HarvestJob {
-    pub fn new(harvest_target: RemoteObjectId<Source>, delivery_room: RoomName) -> HarvestJob {
+    pub fn new(harvest_target: RemoteObjectId<Source>, delivery_room: Entity) -> HarvestJob {
         HarvestJob {
             harvest_target,
             delivery_room,
-            delivery_target: None,
-            build_target: None,
-            pickup_target: None,
+            state: HarvestState::Idle,
         }
     }
 
-    pub fn select_delivery_target(creep: &Creep, room: &Room, resource_type: ResourceType) -> Option<Structure> {
-        if let Some(delivery_target) = ResourceUtility::select_resource_delivery(creep, room, resource_type) {
-            return Some(delivery_target);
-        }
+    pub fn harvest_target(&self) -> &RemoteObjectId<Source> {
+        &self.harvest_target
+    }
 
-        //
-        // If there are no delivery targets, use the controller as a fallback.
-        //
+    fn run_idle_state(
+        creep: &Creep,
+        delivery_room_data: &RoomData,
+        transfer_queue: &mut TransferQueue,
+        harvest_target: &RemoteObjectId<Source>,
+    ) -> Option<HarvestState> {
+        get_new_pickup_state(
+            creep,
+            &[delivery_room_data],
+            TransferPriorityFlags::HIGH,
+            transfer_queue,
+            HarvestState::Pickup,
+        )
+        .or_else(|| get_new_harvest_target_state(creep, harvest_target, HarvestState::Harvest))
+        .or_else(|| {
+            get_new_pickup_state(
+                creep,
+                &[delivery_room_data],
+                TransferPriorityFlags::MEDIUM | TransferPriorityFlags::LOW,
+                transfer_queue,
+                HarvestState::Pickup,
+            )
+        })
+        .or_else(|| {
+            get_new_delivery_current_resources_state(
+                creep,
+                &[delivery_room_data],
+                TransferPriorityFlags::HIGH,
+                transfer_queue,
+                HarvestState::Delivery,
+            )
+        })
+        .or_else(|| get_new_build_state(creep, delivery_room_data, HarvestState::Build))
+        .or_else(|| get_new_repair_state(creep, delivery_room_data, HarvestState::Repair))
+        .or_else(|| {
+            [TransferPriority::Medium, TransferPriority::Low, TransferPriority::None]
+                .iter()
+                .filter_map(|priority| {
+                    get_new_delivery_current_resources_state(
+                        creep,
+                        &[delivery_room_data],
+                        TransferPriorityFlags::from(priority),
+                        transfer_queue,
+                        HarvestState::Delivery,
+                    )
+                })
+                .next()
+        })
+    }
 
-        if let Some(controller) = room.controller() {
-            return Some(controller.as_structure());
-        }
+    fn run_finished_pickup_state(
+        creep: &Creep,
+        delivery_room_data: &RoomData,
+        transfer_queue: &mut TransferQueue,
+        harvest_target: &RemoteObjectId<Source>,
+    ) -> Option<HarvestState> {
+        get_new_pickup_state(
+            creep,
+            &[delivery_room_data],
+            TransferPriorityFlags::HIGH,
+            transfer_queue,
+            HarvestState::Pickup,
+        )
+        .or_else(|| get_new_harvest_target_state(creep, harvest_target, HarvestState::Harvest))
+        .or_else(|| {
+            get_new_pickup_state(
+                creep,
+                &[delivery_room_data],
+                TransferPriorityFlags::MEDIUM | TransferPriorityFlags::LOW,
+                transfer_queue,
+                HarvestState::Pickup,
+            )
+        })
+        .or_else(|| Some(HarvestState::Idle))
+    }
 
-        None
+    fn run_finished_delivery_state(
+        creep: &Creep,
+        delivery_room_data: &RoomData,
+        transfer_queue: &mut TransferQueue,
+    ) -> Option<HarvestState> {
+        ALL_TRANSFER_PRIORITIES
+            .iter()
+            .filter_map(|priority| {
+                get_new_delivery_current_resources_state(
+                    creep,
+                    &[delivery_room_data],
+                    TransferPriorityFlags::from(priority),
+                    transfer_queue,
+                    HarvestState::Delivery,
+                )
+            })
+            .next()
+            .or(Some(HarvestState::Idle))
+    }
+
+    fn run_finished_build_state(creep: &Creep, delivery_room_data: &RoomData) -> Option<HarvestState> {
+        get_new_build_state(creep, delivery_room_data, HarvestState::Build).or(Some(HarvestState::Idle))
+    }
+
+    fn run_finished_repair_state(creep: &Creep, delivery_room_data: &RoomData) -> Option<HarvestState> {
+        get_new_repair_state(creep, delivery_room_data, HarvestState::Repair).or(Some(HarvestState::Idle))
     }
 }
 
 impl Job for HarvestJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();
+        let pos = describe_data.owner.pos();
+
         if let Some(room) = describe_data.owner.room() {
-            describe_data.ui.with_room(room.name(), &mut describe_data.visualizer, |room_ui| {
-                room_ui.jobs().add_text(format!("Harvest - {}", name), None);
-            })
+            describe_data
+                .ui
+                .with_room(room.name(), &mut describe_data.visualizer, |room_ui| match &self.state {
+                    HarvestState::Idle => {
+                        room_ui.jobs().add_text(format!("Harvest - {} - Idle", name), None);
+                    }
+                    HarvestState::Harvest(_) => {
+                        room_ui.jobs().add_text(format!("Harvest - {} - Harvest", name), None);
+                    },
+                    HarvestState::Pickup(ticket) => {
+                        room_ui.jobs().add_text(format!("Harvest - {} - Pickup", name), None);
+
+                        let to = ticket.target().pos();
+                        room_ui.visualizer().line(
+                            (pos.x() as f32, pos.y() as f32),
+                            (to.x() as f32, to.y() as f32),
+                            Some(LineStyle::default().color("blue")),
+                        );
+                    },
+                    HarvestState::FinishedPickup => {
+                        room_ui.jobs().add_text(format!("Harvest - {} - FinishedPickup", name), None);
+                    },
+                    HarvestState::Delivery(ticket) => {
+                        room_ui.jobs().add_text(format!("Harvest - {} - Delivery", name), None);
+
+                        let to = ticket.target().pos();
+                        room_ui.visualizer().line(
+                            (pos.x() as f32, pos.y() as f32),
+                            (to.x() as f32, to.y() as f32),
+                            Some(LineStyle::default().color("green")),
+                        );
+                    },
+                    HarvestState::FinishedDelivery => {
+                        room_ui.jobs().add_text(format!("Harvest - {} - FinishedDelivery", name), None);
+                    },
+                    HarvestState::Build(_) => {
+                        room_ui.jobs().add_text(format!("Harvest - {} - Build", name), None);
+                    },
+                    HarvestState::FinishedBuild => {
+                        room_ui.jobs().add_text(format!("Harvest - {} - FinishedBuild", name), None);
+                    },
+                    HarvestState::Repair(_) => {
+                        room_ui.jobs().add_text(format!("Harvest - {} - Repair", name), None);
+                    },
+                    HarvestState::FinishedRepair => {
+                        room_ui.jobs().add_text(format!("Harvest - {} - FinishedRepair", name), None);
+                    },
+                    HarvestState::Upgrade(_) => {
+                        room_ui.jobs().add_text(format!("Harvest - {} - Upgrade                                                                                                                                                                    ", name), None);
+                    }
+                })
         }
     }
 
-    fn run_job(&mut self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
+    fn pre_run_job(&mut self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
+        match &self.state {
+            HarvestState::Idle => {}
+            HarvestState::Harvest(_) => {}
+            HarvestState::Pickup(ticket) => runtime_data.transfer_queue.register_pickup(&ticket),
+            HarvestState::FinishedPickup => {}
+            HarvestState::Delivery(ticket) => runtime_data.transfer_queue.register_delivery(&ticket),
+            HarvestState::FinishedDelivery => {}
+            HarvestState::Build(_) => {}
+            HarvestState::FinishedBuild => {}
+            HarvestState::Repair(_) => {}
+            HarvestState::FinishedRepair => {}
+            HarvestState::Upgrade(_) => {}
+        };
+    }
+
+    fn run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         let creep = runtime_data.owner;
 
-        scope_timing!("Harvest Job - {}", creep.name());
+        scope_timing!("Build Job - {}", creep.name());
 
-        let delivery_room = game::rooms::get(self.delivery_room);
+        if let Some(delivery_room_data) = system_data.room_data.get(self.delivery_room) {
+            loop {
+                let state_result = match &mut self.state {
+                    HarvestState::Idle => {
+                        Self::run_idle_state(creep, delivery_room_data, runtime_data.transfer_queue, &self.harvest_target)
+                    }
+                    HarvestState::Harvest(source_id) => run_harvest_state(creep, source_id, || HarvestState::Idle),
+                    HarvestState::Pickup(ticket) => {
+                        run_pickup_state(creep, ticket, runtime_data.transfer_queue, || HarvestState::FinishedPickup)
+                    }
+                    HarvestState::FinishedPickup => {
+                        Self::run_finished_pickup_state(creep, delivery_room_data, runtime_data.transfer_queue, &self.harvest_target)
+                    }
+                    HarvestState::Delivery(ticket) => {
+                        run_delivery_state(creep, ticket, runtime_data.transfer_queue, || HarvestState::FinishedDelivery)
+                    }
+                    HarvestState::FinishedDelivery => {
+                        Self::run_finished_delivery_state(creep, delivery_room_data, runtime_data.transfer_queue)
+                    }
+                    HarvestState::Build(construction_site_id) => {
+                        run_build_state(creep, construction_site_id, || HarvestState::FinishedBuild)
+                    }
+                    HarvestState::FinishedBuild => Self::run_finished_build_state(creep, delivery_room_data),
+                    HarvestState::Repair(repair_structure_id) => {
+                        run_repair_state(creep, repair_structure_id, || HarvestState::FinishedRepair)
+                    }
+                    HarvestState::FinishedRepair => Self::run_finished_repair_state(creep, delivery_room_data),
+                    HarvestState::Upgrade(controller_id) => run_upgrade_state(creep, controller_id, || HarvestState::Idle),
+                };
 
-        let resource = screeps::ResourceType::Energy;
-
-        let capacity = creep.store_capacity(Some(resource));
-        let used_capacity = creep.store_used_capacity(Some(resource));
-        let available_capacity = capacity - used_capacity;
-
-        if used_capacity == 0 {
-            self.delivery_target = None;
-            self.build_target = None;
-        }
-
-        if available_capacity == 0 {
-            self.pickup_target = None;
-        }
-
-        //
-        // Compute delivery target
-        //
-
-        let repick_delivery = self
-            .delivery_target
-            .map(|target| !target.is_valid_delivery_target(resource).unwrap_or(true) && !target.is_valid_controller_upgrade_target())
-            .unwrap_or_else(|| capacity > 0 && available_capacity == 0);
-
-        //
-        // Pick delivery target
-        //
-
-        if repick_delivery {
-            self.delivery_target = delivery_room
-                .as_ref()
-                .and_then(|r| Self::select_delivery_target(&creep, &r, resource))
-                .map(|s| RemoteStructureIdentifier::new(&s));
-        }
-
-        //
-        // Transfer energy to structure if possible.
-        //
-
-        //TODO: This is kind of brittle.
-        let transfer_target = match self.delivery_target {
-            Some(RemoteStructureIdentifier::Controller(_)) => None,
-            Some(id) => Some(id),
-            _ => None,
-        };
-
-        if let Some(transfer_target_id) = transfer_target {
-            ResourceBehaviorUtility::transfer_resource_to_structure_id(&creep, &transfer_target_id, resource);
-
-            return;
-        }
-
-        //
-        // Compute build target
-        //
-
-        let repick_build_target = self
-            .build_target
-            .map(|target| !target.is_valid_build_target())
-            .unwrap_or_else(|| capacity > 0 && available_capacity == 0);
-
-        if repick_build_target {
-            self.build_target = delivery_room
-                .as_ref()
-                .and_then(|r| BuildUtility::select_construction_site(&creep, &r))
-                .map(|s| s.remote_id());
-        }
-
-        //
-        // Build construction site.
-        //
-
-        if let Some(construction_site_id) = self.build_target {
-            BuildBehaviorUtility::build_construction_site_id(creep, &construction_site_id);
-
-            return;
-        }
-
-        //
-        // Upgrade controller.
-        //
-
-        if let Some(RemoteStructureIdentifier::Controller(id)) = self.delivery_target {
-            ControllerBehaviorUtility::upgrade_controller_id(&creep, &id);
-
-            return;
-        }
-
-        //
-        // Compute pickup target
-        //
-
-        let repick_pickup = self
-            .pickup_target
-            .map(|target| !target.is_valid_pickup_target())
-            .unwrap_or_else(|| capacity > 0 && available_capacity > 0);
-
-        if repick_pickup {
-            scope_timing!("repick_pickup");
-
-            self.pickup_target = delivery_room
-                .and_then(|r| {
-                    //TODO: Should potentially be 'current room if no hostiles'.
-                    let hostile_creeps = !r.find(find::HOSTILE_CREEPS).is_empty();
-
-                    let settings = ResourcePickupSettings {
-                        allow_dropped_resource: !hostile_creeps,
-                        allow_tombstone: !hostile_creeps,
-                        allow_structure: false,
-                        allow_harvest: false,
-                    };
-
-                    ResourceUtility::select_energy_pickup(&creep, &r, &settings)
-                })
-                .or_else(|| Some(EnergyPickupTarget::Source(self.harvest_target)));
-        }
-
-        //
-        // Move to and get energy.
-        //
-
-        if let Some(pickup_target) = self.pickup_target {
-            ResourceBehaviorUtility::get_energy(creep, &pickup_target);
-
-            return;
+                if let Some(next_state) = state_result {
+                    self.state = next_state;
+                } else {
+                    break;
+                }
+            }
         }
     }
 }

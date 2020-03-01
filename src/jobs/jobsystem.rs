@@ -2,6 +2,7 @@ use screeps::*;
 use specs::prelude::*;
 
 use super::data::JobData;
+use crate::room::data::*;
 use crate::transfer::transfersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
@@ -16,11 +17,13 @@ pub struct JobSystemData<'a> {
     visualizer: Option<Write<'a, Visualizer>>,
     ui: Option<Write<'a, UISystem>>,
     transfer_queue: Write<'a, TransferQueue>,
+    room_data: ReadStorage<'a, RoomData>,
 }
 
 pub struct JobExecutionSystemData<'a> {
     pub updater: &'a Read<'a, LazyUpdate>,
     pub entities: &'a Entities<'a>,
+    pub room_data: &'a ReadStorage<'a, RoomData>,
 }
 
 pub struct JobExecutionRuntimeData<'a> {
@@ -53,6 +56,7 @@ impl<'a> System<'a> for PreRunJobSystem {
         let system_data = JobExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
+            room_data: &data.room_data,
         };
 
         for (creep, job_data) in (&data.creep_owners, &mut data.jobs).join() {
@@ -96,6 +100,7 @@ impl<'a> System<'a> for RunJobSystem {
         let system_data = JobExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
+            room_data: &data.room_data,
         };
 
         for (creep, job_data) in (&data.creep_owners, &mut data.jobs).join() {

@@ -43,7 +43,7 @@ impl RemoteMineMission {
     fn create_handle_harvester_spawn(
         mission_entity: Entity,
         source_id: RemoteObjectId<Source>,
-        delivery_room: RoomName,
+        delivery_room: Entity,
     ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
@@ -116,7 +116,7 @@ impl Mission for RemoteMineMission {
             .iter()
             .filter_map(|harvester_entity| {
                 if let Some(JobData::Harvest(harvester_data)) = system_data.job_data.get(*harvester_entity) {
-                    Some((harvester_data.harvest_target.id(), harvester_entity))
+                    Some((harvester_data.harvest_target().id(), harvester_entity))
                 } else {
                     None
                 }
@@ -164,7 +164,7 @@ impl Mission for RemoteMineMission {
                         format!("Remote Mine - Target Room: {}", room_data.name),
                         &body,
                         priority,
-                        Self::create_handle_harvester_spawn(*runtime_data.entity, *source, home_room_data.name),
+                        Self::create_handle_harvester_spawn(*runtime_data.entity, *source, self.home_room_data),
                     );
 
                     runtime_data.spawn_queue.request(home_room_data.name, spawn_request);

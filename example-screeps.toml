@@ -1,5 +1,8 @@
 default_deploy_mode = "upload"
 
+[build]
+initialization_header_file = "js/main.js"
+
 [upload]
 username = "your username or email"
 password = "your password"

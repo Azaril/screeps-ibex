@@ -46,7 +46,7 @@ impl LocalBuildMission {
                 Some(SPAWN_PRIORITY_MEDIUM)
             }
         } else {
-            let repair_targets = RepairUtility::get_prioritized_repair_targets(&room);
+            let repair_targets = get_prioritized_repair_targets(&room);
             let repair_priorities = [RepairPriority::Critical, RepairPriority::High, RepairPriority::Medium];
 
             let mut has_repair_target = false;
@@ -69,13 +69,13 @@ impl LocalBuildMission {
 
     fn create_handle_builder_spawn(
         mission_entity: Entity,
-        room_name: RoomName,
+        room_entity: Entity,
     ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Build(::jobs::build::BuildJob::new(room_name, room_name));
+                let creep_job = JobData::Build(::jobs::build::BuildJob::new(room_entity, room_entity));
 
                 let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
 
@@ -148,7 +148,7 @@ impl Mission for LocalBuildMission {
                             "Local Builder".to_string(),
                             &body,
                             priority,
-                            Self::create_handle_builder_spawn(*runtime_data.entity, room_data.name),
+                            Self::create_handle_builder_spawn(*runtime_data.entity, self.room_data),
                         );
 
                         runtime_data.spawn_queue.request(room_data.name, spawn_request);
