@@ -23,6 +23,6 @@ bitflags = "1.2.1"
 
 [profile.release]
 panic = "abort"
-opt-level = "s"
+opt-level = "z"
 lto = true
 codegen-units = 1

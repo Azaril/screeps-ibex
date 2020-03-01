@@ -120,7 +120,7 @@ impl<'a> System<'a> for SpawnQueueSystem {
                 let mut available_energy = room.energy_available();
 
                 for request in requests {
-                    if let Some(pos) = spawns.iter().position(|spawn| !spawn.is_spawning()) {
+                    if let Some(pos) = spawns.iter().position(|spawn| spawn.is_active() && !spawn.is_spawning()) {
                         let spawn = &spawns[pos];
 
                         //TODO: Is this needed? is available energy decremented on an Ok response to spawn?
