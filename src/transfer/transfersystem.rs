@@ -64,6 +64,7 @@ pub enum TransferTarget {
     Spawn(RemoteObjectId<StructureSpawn>),
     Extension(RemoteObjectId<StructureExtension>),
     Storage(RemoteObjectId<StructureStorage>),
+    Tower(RemoteObjectId<StructureTower>),
 }
 
 impl TransferTarget {
@@ -73,6 +74,7 @@ impl TransferTarget {
             TransferTarget::Spawn(id) => id.pos(),
             TransferTarget::Extension(id) => id.pos(),
             TransferTarget::Storage(id) => id.pos(),
+            TransferTarget::Tower(id) => id.pos(),
         }
     }
 
@@ -82,6 +84,7 @@ impl TransferTarget {
             TransferTarget::Spawn(id) => id.resolve().map(|s| s.as_structure()),
             TransferTarget::Extension(id) => id.resolve().map(|s| s.as_structure()),
             TransferTarget::Storage(id) => id.resolve().map(|s| s.as_structure()),
+            TransferTarget::Tower(id) => id.resolve().map(|s| s.as_structure()),
         }
     }
 }
