@@ -27,6 +27,7 @@ struct StructureData {
     sources_to_containers: HashMap<RemoteObjectId<Source>, Vec<RemoteObjectId<StructureContainer>>>,
     sources_to_links: HashMap<RemoteObjectId<Source>, Vec<RemoteObjectId<StructureLink>>>,
     extractors_to_containers: HashMap<RemoteObjectId<StructureExtractor>, Vec<RemoteObjectId<StructureContainer>>>,
+    controllers_to_containers: HashMap<RemoteObjectId<StructureController>, Vec<RemoteObjectId<StructureContainer>>>,
     containers: Vec<RemoteObjectId<StructureContainer>>,
 }
 
@@ -101,7 +102,9 @@ impl LocalSupplyMission {
 
     fn create_structure_data(room_data: &RoomData, room: &Room) -> Result<StructureData, String> {
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility")?;
+        
         let sources = static_visibility_data.sources();
+        let controller = static_visibility_data.controller();
 
         let structures = room.find(find::STRUCTURES);
 
@@ -133,6 +136,18 @@ impl LocalSupplyMission {
             })
             .into_group_map();
 
+        let controllers_to_containers = controller
+            .iter()
+            .filter_map(|controller| {
+                let nearby_container = containers
+                    .iter()
+                    .cloned()
+                    .find(|container| container.pos().is_near_to(&controller.pos()));
+
+                nearby_container.map(|container| (**controller, container))
+            })
+            .into_group_map();
+
         let extractors_to_containers = room_extractors
             .iter()
             .filter_map(|extractor| {
@@ -153,6 +168,7 @@ impl LocalSupplyMission {
             })
             .collect_vec();
 
+        //TODO: This should actually be range 2 since creeps cannot stand on top of it.
         let sources_to_links = sources
             .iter()
             .filter_map(|source| {
@@ -166,6 +182,7 @@ impl LocalSupplyMission {
             sources_to_containers,
             sources_to_links,
             extractors_to_containers,
+            controllers_to_containers,
             containers,
         };
 
@@ -424,8 +441,27 @@ impl LocalSupplyMission {
             }
         }
 
+        for containers in structure_data.controllers_to_containers.values() {
+            for container_id in containers {
+                if let Some(container) = container_id.resolve() {
+                    let container_free_capacity = container.store_free_capacity(Some(ResourceType::Energy));
+                    if container_free_capacity > 0 {
+                        let transfer_request = TransferDepositRequest::new(
+                            TransferTarget::Container(*container_id),
+                            None,
+                            TransferPriority::Low,
+                            container_free_capacity,
+                        );
+    
+                        runtime_data.transfer_queue.request_deposit(transfer_request);
+                    }
+                }
+            }
+        }
+
         let storage_containers = structure_data.containers.iter().filter(|container| {
             !structure_data.sources_to_containers.values().any(|c| c.contains(container))
+                && !structure_data.controllers_to_containers.values().any(|c| c.contains(container))
                 && !structure_data.extractors_to_containers.values().any(|c| c.contains(container))
         });
 

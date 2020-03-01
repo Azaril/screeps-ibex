@@ -8,12 +8,18 @@ function wasm_initialize() {
     if (Game.cpu.bucket < 500) {
         return;
     }
+
     if (wasm_module == null) {
-        let wasm_bytes = wasm_fetch_module_bytes();
-        wasm_module = new WebAssembly.Module(wasm_bytes);
+        const wasm_bytes = wasm_fetch_module_bytes();
+        console.log("Reset! Code length: " + wasm_bytes.length);
+        try {
+            wasm_module = new WebAssembly.Module(wasm_bytes);
+        } catch(err) {
+            console.log("Failed to load WASM module, resetting VM.");
+            Game.cpu.halt()
+        }
     }
-    // The biggest CPU users will be the call to `new WebAssembly.Module` and
-    // `new WebAssembly.Instance`, so having two checks will be useful.
+
     if (Game.cpu.bucket < 500) {
         return;
     }

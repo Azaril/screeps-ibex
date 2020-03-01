@@ -45,8 +45,6 @@ impl Job for ScoutJob {
             }
         }
 
-        //TODO: Handle stuck - it burns a lot of CPU.
-
         if creep_pos.get_range_to(&target_pos) > 20 {
             creep.move_to(&target_pos);
         }

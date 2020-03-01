@@ -92,10 +92,12 @@ impl Mission for HaulMission {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
-        let need_hauling = runtime_data
+        let stats = runtime_data
             .transfer_queue
             .try_get_room(room_data.name)
-            .map(|r| r.stats())
+            .map(|r| r.stats());
+
+        let need_hauling = stats
             .map(|s| s.total_withdrawl > 0)
             .unwrap_or(false);
 
