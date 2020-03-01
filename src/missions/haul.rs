@@ -36,7 +36,7 @@ impl HaulMission {
 
     fn create_handle_hauler_spawn(
         mission_entity: Entity,
-        haul_rooms: &[RoomName],
+        haul_rooms: &[Entity],
     ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync> {
         let rooms = haul_rooms.to_vec();
 
@@ -119,7 +119,7 @@ impl Mission for HaulMission {
             };
 
             if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
-                let haul_rooms = &[room_data.name];
+                let haul_rooms = &[self.room_data];
 
                 let priority = if self.haulers.0.is_empty() {
                     SPAWN_PRIORITY_HIGH

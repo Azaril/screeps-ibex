@@ -24,6 +24,12 @@ impl EntityVec {
     }
 }
 
+impl From<&[Entity]> for EntityVec {
+    fn from(other: &[Entity]) -> EntityVec {
+        EntityVec { 0: other.to_vec() }
+    }
+}
+
 impl<M: Marker + Serialize> ConvertSaveload<M> for EntityVec
 where
     for<'de> M: Deserialize<'de>,

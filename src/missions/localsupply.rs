@@ -80,7 +80,7 @@ impl LocalSupplyMission {
     fn create_handle_harvester_spawn(
         mission_entity: Entity,
         source_id: RemoteObjectId<Source>,
-        delivery_room: RoomName,
+        delivery_room: Entity,
     ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
@@ -184,7 +184,7 @@ impl LocalSupplyMission {
             .iter()
             .filter_map(|harvester_entity| {
                 if let Some(JobData::Harvest(harvester_data)) = system_data.job_data.get(*harvester_entity) {
-                    Some((harvester_data.harvest_target, *harvester_entity))
+                    Some((*harvester_data.harvest_target(), *harvester_entity))
                 } else {
                     None
                 }
@@ -372,7 +372,7 @@ impl LocalSupplyMission {
                         format!("Harvester - Source: {}", source_id.id()),
                         &body,
                         priority,
-                        Self::create_handle_harvester_spawn(*runtime_data.entity, *source_id, room_data.name),
+                        Self::create_handle_harvester_spawn(*runtime_data.entity, *source_id, self.room_data),
                     );
 
                     runtime_data.spawn_queue.request(room_data.name, spawn_request);
@@ -404,20 +404,18 @@ impl LocalSupplyMission {
                         let container_store_capacity = container.store_capacity(None);
 
                         let storage_fraction = (container_used_capacity as f32) / (container_store_capacity as f32);
-                        let priority = if storage_fraction > 0.5 {
+                        let priority = if storage_fraction > 0.75 {
                             TransferPriority::High
+                        } else if storage_fraction > 0.25 {
+                            TransferPriority::Medium
                         } else {
                             TransferPriority::Low
                         };
 
                         for resource in container.store_types() {
                             let resource_amount = container.store_used_capacity(Some(resource));
-                            let transfer_request = TransferWithdrawRequest::new(
-                                TransferTarget::Container(*container_id),
-                                resource,
-                                Some(priority),
-                                resource_amount,
-                            );
+                            let transfer_request =
+                                TransferWithdrawRequest::new(TransferTarget::Container(*container_id), resource, priority, resource_amount);
 
                             runtime_data.transfer_queue.request_withdraw(transfer_request);
                         }
@@ -433,10 +431,19 @@ impl LocalSupplyMission {
 
         for container_id in storage_containers {
             if let Some(container) = container_id.resolve() {
-                let container_free_capacity = container.store_free_capacity(None);
+                let capacity = container.store_capacity(None);
+                let store_types = container.store_types();
+                let used_capacity = store_types.iter().map(|r| container.store_used_capacity(Some(*r))).sum::<u32>();
+                //TODO: Fix this when _sum double count bug is fixed.
+                //let container_free_capacity = container.store_free_capacity(None);
+                let container_free_capacity = capacity - used_capacity;
                 if container_free_capacity > 0 {
-                    let transfer_request =
-                        TransferDepositRequest::new(TransferTarget::Container(*container_id), None, None, container_free_capacity);
+                    let transfer_request = TransferDepositRequest::new(
+                        TransferTarget::Container(*container_id),
+                        None,
+                        TransferPriority::None,
+                        container_free_capacity,
+                    );
 
                     runtime_data.transfer_queue.request_deposit(transfer_request);
                 }
@@ -456,7 +463,7 @@ impl LocalSupplyMission {
                         let transfer_request = TransferDepositRequest::new(
                             TransferTarget::Spawn(spawn.remote_id()),
                             Some(ResourceType::Energy),
-                            Some(TransferPriority::High),
+                            TransferPriority::High,
                             free_capacity,
                         );
 
@@ -469,13 +476,13 @@ impl LocalSupplyMission {
                         let transfer_request = TransferDepositRequest::new(
                             TransferTarget::Extension(extension.remote_id()),
                             Some(ResourceType::Energy),
-                            Some(TransferPriority::High),
+                            TransferPriority::High,
                             free_capacity,
                         );
 
                         runtime_data.transfer_queue.request_deposit(transfer_request);
                     }
-                },
+                }
                 Structure::Storage(storage) => {
                     let storage_id = storage.remote_id();
 
@@ -486,7 +493,7 @@ impl LocalSupplyMission {
                         let transfer_request = TransferWithdrawRequest::new(
                             TransferTarget::Storage(storage_id),
                             resource,
-                            None,
+                            TransferPriority::None,
                             resource_amount,
                         );
 
@@ -498,12 +505,8 @@ impl LocalSupplyMission {
                     let free_capacity = storage.store_capacity(None) - used_capacity;
 
                     if free_capacity > 0 {
-                        let transfer_request = TransferDepositRequest::new(
-                            TransferTarget::Storage(storage_id),
-                            None,
-                            None,
-                            free_capacity,
-                        );
+                        let transfer_request =
+                            TransferDepositRequest::new(TransferTarget::Storage(storage_id), None, TransferPriority::None, free_capacity);
 
                         runtime_data.transfer_queue.request_deposit(transfer_request);
                     }

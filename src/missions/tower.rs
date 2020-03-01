@@ -71,7 +71,7 @@ impl Mission for TowerMission {
             .filter(|creep| creep.hits() < creep.hits_max())
             .min_by_key(|creep| creep.hits());
 
-        let mut repair_targets = RepairUtility::get_prioritized_repair_targets(&room);
+        let mut repair_targets = get_prioritized_repair_targets(&room);
         let mut repair_priorities = if are_hostile_creeps {
             [RepairPriority::Critical, RepairPriority::High, RepairPriority::Medium].iter()
         } else {

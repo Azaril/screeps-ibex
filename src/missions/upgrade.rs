@@ -8,7 +8,6 @@ use specs_derive::*;
 use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
-use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 
@@ -37,14 +36,13 @@ impl UpgradeMission {
 
     fn create_handle_upgrader_spawn(
         mission_entity: Entity,
-        controller_id: RemoteObjectId<StructureController>,
-        home_room: RoomName,
+        home_room: Entity,
     ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Upgrade(::jobs::upgrade::UpgradeJob::new(&controller_id, home_room));
+                let creep_job = JobData::Upgrade(::jobs::upgrade::UpgradeJob::new(home_room));
 
                 let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
 
@@ -73,7 +71,7 @@ impl Mission for UpgradeMission {
         _runtime_data: &mut MissionExecutionRuntimeData,
     ) -> Result<(), String> {
         //
-        // Cleanup scouts that no longer exist.
+        // Cleanup creeps that no longer exist.
         //
 
         self.upgraders.0.retain(|entity| system_data.entities.is_alive(*entity));
@@ -135,7 +133,7 @@ impl Mission for UpgradeMission {
                     "Upgrader".to_string(),
                     &body,
                     priority,
-                    Self::create_handle_upgrader_spawn(*runtime_data.entity, controller.remote_id(), room_data.name),
+                    Self::create_handle_upgrader_spawn(*runtime_data.entity, self.room_data),
                 );
 
                 runtime_data.spawn_queue.request(room_data.name, spawn_request);

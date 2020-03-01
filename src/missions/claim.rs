@@ -132,7 +132,7 @@ impl Mission for ClaimMission {
                     "Claimer".to_string(),
                     &body,
                     SPAWN_PRIORITY_MEDIUM,
-                    Self::create_handle_claimer_spawn(*runtime_data.entity, controller),
+                    Self::create_handle_claimer_spawn(*runtime_data.entity, *controller),
                 );
 
                 runtime_data.spawn_queue.request(home_room_data.name, spawn_request);

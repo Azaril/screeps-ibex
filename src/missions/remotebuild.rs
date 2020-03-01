@@ -41,7 +41,7 @@ impl RemoteBuildMission {
 
     fn create_handle_builder_spawn(
         mission_entity: Entity,
-        build_room_name: RoomName,
+        build_room_entity: Entity,
     ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
@@ -49,8 +49,8 @@ impl RemoteBuildMission {
             spawn_system_data.updater.exec_mut(move |world| {
                 let creep_job = JobData::Build(::jobs::build::BuildJob::new(
                     //TODO: Pass an array of home rooms - allow for hauling energy if harvesting is not possible.
-                    build_room_name,
-                    build_room_name,
+                    build_room_entity,
+                    build_room_entity,
                 ));
 
                 let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
@@ -127,7 +127,7 @@ impl Mission for RemoteBuildMission {
                     format!("Remote Builder - Target Room: {}", room_data.name),
                     &body,
                     priority,
-                    Self::create_handle_builder_spawn(*runtime_data.entity, room_data.name),
+                    Self::create_handle_builder_spawn(*runtime_data.entity, self.room_data),
                 );
 
                 runtime_data.spawn_queue.request(home_room_data.name, spawn_request);

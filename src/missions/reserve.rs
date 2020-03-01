@@ -152,7 +152,7 @@ impl Mission for ReserveMission {
                     format!("Reserver - Target Room: {}", room_data.name),
                     &body,
                     SPAWN_PRIORITY_LOW,
-                    Self::create_handle_reserver_spawn(*runtime_data.entity, controller_id),
+                    Self::create_handle_reserver_spawn(*runtime_data.entity, *controller_id),
                 );
 
                 runtime_data.spawn_queue.request(home_room_data.name, spawn_request);

@@ -3,14 +3,16 @@ use serde::*;
 
 use super::jobsystem::*;
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct ScoutJob {
-    pub room_target: RoomName,
+    room_target: RoomName,
+    #[serde(default)]
+    room_history: Vec<RoomName>
 }
 
 impl ScoutJob {
     pub fn new(room_target: RoomName) -> ScoutJob {
-        ScoutJob { room_target }
+        ScoutJob { room_target, room_history: Vec::new() }
     }
 }
 
@@ -31,6 +33,17 @@ impl Job for ScoutJob {
 
         let creep_pos = creep.pos();
         let target_pos = Position::new(25, 25, self.room_target);
+
+        //TODO: Need better stuck detection.
+        if self.room_history.last().map(|r| *r != creep_pos.room_name()).unwrap_or(true) {
+            self.room_history.push(creep_pos.room_name());
+
+            if self.room_history.iter().filter(|r| **r == creep_pos.room_name()).count() > 4 {
+                creep.suicide();
+
+                return;
+            }
+        }
 
         //TODO: Handle stuck - it burns a lot of CPU.
 

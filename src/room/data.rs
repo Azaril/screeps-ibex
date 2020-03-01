@@ -16,8 +16,8 @@ pub struct RoomStaticVisibilityData {
 }
 
 impl RoomStaticVisibilityData {
-    pub fn controller(&self) -> &Option<RemoteObjectId<StructureController>> {
-        &self.controller
+    pub fn controller(&self) -> Option<&RemoteObjectId<StructureController>> {
+        self.controller.as_ref()
     }
 
     pub fn sources(&self) -> &Vec<RemoteObjectId<Source>> {
