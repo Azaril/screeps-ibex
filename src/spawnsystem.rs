@@ -31,6 +31,10 @@ impl SpawnRequest {
             callback,
         }
     }
+
+    pub fn cost(&self) -> u32 {
+        self.body.iter().map(|p| p.cost()).sum()
+    }
 }
 
 #[derive(Default)]
@@ -57,7 +61,9 @@ impl SpawnQueue {
         for (room_name, requests) in &self.requests {
             ui.with_room(*room_name, visualizer, |room_ui| {
                 for request in requests.iter() {
-                    room_ui.spawn_queue().add_text(request.description.clone(), None);
+                    let text = format!("{} - {} - {}", request.priority, request.cost(), request.description);
+
+                    room_ui.spawn_queue().add_text(text, None);
                 }
             });
         }
@@ -145,16 +151,14 @@ impl<'a> System<'a> for SpawnQueueSystem {
                                 //
                                 break;
                             }
-                            _ => {
+                            Err(_) => {
                                 //
                                 // Any other errors are assumed to be mis-configuration and should be ignored
                                 // rather than block further spawns.
                                 //
                             }
                         };
-                    }
-
-                    if spawns.is_empty() {
+                    } else {
                         break;
                     }
                 }
