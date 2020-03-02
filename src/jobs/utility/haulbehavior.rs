@@ -73,7 +73,7 @@ pub fn run_pickup_state<F, R>(
 where
     F: Fn() -> R,
 {
-    if !ticket.target().is_valid() {
+    if !ticket.target().is_valid() || ticket.get_next_withdrawl().is_none() {
         return Some(next_state());
     }
 
@@ -122,7 +122,7 @@ pub fn run_delivery_state<F, R>(
 where
     F: Fn() -> R,
 {
-    if !ticket.target().is_valid() {
+    if !ticket.target().is_valid() || ticket.get_next_deposit().is_none() {
         return Some(next_state());
     }
 
