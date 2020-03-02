@@ -96,7 +96,8 @@ impl Mission for UpgradeMission {
             return Err("Room not owned by user".to_string());
         }
 
-        let max_upgraders = 3;
+        //TODO: Need better calculation for maximum number of upgraders.
+        let max_upgraders = if controller.level() <= 4 { 3 } else { 1 };
 
         if self.upgraders.0.len() < max_upgraders {
             let work_parts_per_upgrader = if controller.level() == 8 {
@@ -109,12 +110,14 @@ impl Mission for UpgradeMission {
                 None
             };
 
+            let maximum_energy = if self.upgraders.0.is_empty() && controller_downgrade(controller.level()).map(|ticks| controller.ticks_to_downgrade() < ticks / 2).unwrap_or(false) {
+                room.energy_available()
+            } else {
+                room.energy_capacity_available()
+            };
+
             let body_definition = crate::creep::SpawnBodyDefinition {
-                maximum_energy: if self.upgraders.0.is_empty() {
-                    room.energy_available()
-                } else {
-                    room.energy_capacity_available()
-                },
+                maximum_energy,
                 minimum_repeat: Some(1),
                 maximum_repeat: work_parts_per_upgrader,
                 pre_body: &[],
