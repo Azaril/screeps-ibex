@@ -1,6 +1,47 @@
 use screeps::*;
-use screeps::memory::*;
 use specs::prelude::*;
+use serde::*;
+use std::collections::HashMap;
+
+#[derive(Serialize)]
+pub struct CpuStats {
+    bucket: f64,
+    limit: f64,
+    used: f64
+}
+
+#[derive(Serialize)]
+pub struct RoomStats {
+    energy_available: u32,
+    energy_capacity_available: u32,
+
+    storage_energy: u32,
+    terminal_energy: u32,
+
+    controller_progress: u32,
+    controller_progress_total: u32,
+    controller_level: u32,
+}
+
+#[derive(Serialize)]
+pub struct GclStats {
+    progress: f64,
+    progress_total: f64,
+    level: u32
+}
+
+#[derive(Serialize)]
+pub struct ShardStats {
+    time: u32,
+    gcl: GclStats,
+    cpu: CpuStats,
+    room: HashMap<RoomName, RoomStats>
+}
+
+#[derive(Serialize)]
+pub struct Stats {
+    shard: HashMap<String, ShardStats>
+}
 
 #[derive(SystemData)]
 pub struct StatsSystemData<'a> {
@@ -11,40 +52,67 @@ pub struct StatsSystemData<'a> {
 pub struct StatsSystem;
 
 impl StatsSystem {
-    fn add_gcl(gcl_node: &mut MemoryReference) {
-        gcl_node.set("progress", game::gcl::progress());
-        gcl_node.set("progress_total", game::gcl::progress_total());
-        gcl_node.set("level", game::gcl::level());
-    }
-
-    fn add_cpu(cpu_node: &mut MemoryReference) {
-        cpu_node.set("bucket", game::cpu::bucket());
-        cpu_node.set("limit", game::cpu::limit());
-        cpu_node.set("used", game::cpu::get_used());
-    }
-
-    fn add_rooms(rooms_node: &mut MemoryReference, data: &StatsSystemData) {
-        for (_, room_data) in (&data.entities, &data.room_data).join() {
-            if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
-                if dynamic_visibility_data.visible() && dynamic_visibility_data.owner().mine() {
-                    if let Some(room) = game::rooms::get(room_data.name) {
-                        let room_node = rooms_node.dict_or_create(&room_data.name.to_string()).unwrap();
-
-                        room_node.set("storage_energy", room.storage().map(|s| s.store_used_capacity(Some(ResourceType::Energy))).unwrap_or(0));
-                        room_node.set("terminal_energy", room.terminal().map(|s| s.store_used_capacity(Some(ResourceType::Energy))).unwrap_or(0));
-
-                        room_node.set("energy_available", room.energy_available());
-                        room_node.set("energy_capacity_available", room.energy_capacity_available());
-
-                        let controller = room.controller();
-
-                        room_node.set("controller_progress", controller.as_ref().and_then(|c| c.progress()).unwrap_or(0));
-                        room_node.set("controller_progress_total", controller.as_ref().and_then(|c| c.progress_total()).unwrap_or(0));
-                        room_node.set("controller_level", controller.as_ref().map(|c| c.level()).unwrap_or(0));
-                    }
-                }
-            }
+    fn get_gcl_stats() -> GclStats {
+        GclStats {
+            progress: game::gcl::progress(),
+            progress_total: game::gcl::progress_total(),
+            level: game::gcl::level()
         }
+    }
+
+    fn get_cpu_stats() -> CpuStats {
+        CpuStats {
+            bucket: game::cpu::bucket(),
+            limit: game::cpu::limit(),
+            used: game::cpu::get_used()
+        }
+    }
+
+    fn get_room_stats(data: &StatsSystemData) -> HashMap<RoomName, RoomStats> {
+        (&data.entities, &data.room_data)
+            .join()
+            .filter(|(_, room_data)| {
+                room_data.get_dynamic_visibility_data().map(|v| v.visible() && v.owner().mine()).unwrap_or(false)
+            })
+            .filter_map(|(_, room_data)| {
+                if let Some(room) = game::rooms::get(room_data.name) {
+                    let controller = room.controller();
+
+                    let stats = RoomStats {
+                        energy_available: room.energy_available(),
+                        energy_capacity_available: room.energy_capacity_available(),
+
+                        storage_energy: room.storage().map(|s| s.store_used_capacity(Some(ResourceType::Energy))).unwrap_or(0),
+                        terminal_energy: room.terminal().map(|s| s.store_used_capacity(Some(ResourceType::Energy))).unwrap_or(0),
+
+                        controller_progress: controller.as_ref().and_then(|c| c.progress()).unwrap_or(0),
+                        controller_progress_total: controller.as_ref().and_then(|c| c.progress_total()).unwrap_or(0),
+                        controller_level: controller.as_ref().map(|c| c.level()).unwrap_or(0)
+                    };
+
+                    Some((room_data.name, stats))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn get_shard_stats(data: &StatsSystemData) -> ShardStats {
+        ShardStats {
+            time: game::time(),
+            gcl: Self::get_gcl_stats(),
+            cpu: Self::get_cpu_stats(),
+            room: Self::get_room_stats(data)
+        }
+    }
+
+    fn get_shards_stats(data: &StatsSystemData) -> HashMap<String, ShardStats> {
+        let mut shards = HashMap::new();
+
+        shards.insert(game::shards::name(), Self::get_shard_stats(data));
+
+        shards
     }
 }
 
@@ -54,15 +122,15 @@ impl<'a> System<'a> for StatsSystem {
     fn run(&mut self, data: Self::SystemData) {
         scope_timing!("StatsSystem");
 
-        let stats = MemoryReference::new();
-        let shard = stats.dict_or_create(&game::shards::name()).unwrap();
+        let stats = Stats {
+            shard: Self::get_shards_stats(&data)
+        };
 
-        shard.set("time", game::time());
+        //TODO: Add system to gather segment requests.
+        raw_memory::set_active_segments(&[99]);
 
-        Self::add_rooms(&mut shard.dict_or_create("room").unwrap(), &data);
-        Self::add_gcl(&mut shard.dict_or_create("gcl").unwrap());
-        Self::add_cpu(&mut shard.dict_or_create("cpu").unwrap());
-
-        memory::root().set("_stats", stats.as_ref());
+        if let Ok(stats_data) = serde_json::to_string(&stats) {
+            raw_memory::set_segment(99, &stats_data);
+        }
     }
 }
