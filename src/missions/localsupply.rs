@@ -444,12 +444,25 @@ impl LocalSupplyMission {
                     if container_free_capacity > 0 {
                         let transfer_request = TransferDepositRequest::new(
                             TransferTarget::Container(*container_id),
-                            None,
-                            TransferPriority::Low,
+                            Some(ResourceType::Energy),
+                            //TODO: This should be 'Low' to move energy here for usage. However, right now that creates a feedback loop.
+                            TransferPriority::None,
                             container_free_capacity,
                         );
     
                         transfer_queue.request_deposit(transfer_request);
+                    }
+
+                    let container_used_capacity = container.store_used_capacity(Some(ResourceType::Energy));
+                    if container_used_capacity > 0 {
+                        let transfer_request = TransferWithdrawRequest::new(
+                            TransferTarget::Container(*container_id),
+                            ResourceType::Energy,
+                            TransferPriority::None,
+                            container_used_capacity,
+                        );
+    
+                        transfer_queue.request_withdraw(transfer_request);
                     }
                 }
             }
