@@ -118,7 +118,16 @@ impl Spawning {
 
         let remaining_available_energy: u32 = definition.maximum_energy - fixed_body_cost;
 
-        let max_possible_repeat_parts = ((remaining_available_energy as f32) / (repeat_body_cost as f32)).floor() as usize;
+        let max_possible_repeat_parts_by_cost = ((remaining_available_energy as f32) / (repeat_body_cost as f32)).floor() as usize;
+
+        let fixed_body_length = definition.pre_body.len() + definition.post_body.len();
+        if fixed_body_length > MAX_CREEP_SIZE as usize {
+            return Err(())
+        }
+
+        let max_possible_repeat_parts_by_length = (MAX_CREEP_SIZE as usize - fixed_body_length) / definition.repeat_body.len();
+
+        let max_possible_repeat_parts = max_possible_repeat_parts_by_cost.min(max_possible_repeat_parts_by_length);
 
         if let Some(min_parts) = definition.minimum_repeat {
             if max_possible_repeat_parts < min_parts {
