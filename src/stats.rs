@@ -23,6 +23,6 @@ impl<'a> System<'a> for StatsSystem {
         stats.set(&format!("{}.cpu.tick_limit", shard_name), game::cpu::tick_limit());
         stats.set(&format!("{}.cpu.bucket", shard_name), game::cpu::bucket());
         
-        memory::root().set("stats", stats.as_ref());
+        memory::root().set("_stats", stats.as_ref());
     }
 }
