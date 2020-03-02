@@ -68,7 +68,7 @@ impl Operation for ClaimOperation {
 
         for (_, room_data) in (system_data.entities, system_data.room_data).join() {
             if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
-                if dynamic_visibility_data.owner().mine() {
+                if dynamic_visibility_data.visible() && dynamic_visibility_data.owner().mine() {
                     currently_owned_rooms += 1;
                 }
             }
