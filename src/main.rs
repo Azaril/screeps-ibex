@@ -38,6 +38,7 @@ mod structureidentifier;
 mod transfer;
 mod ui;
 mod visualize;
+mod stats;
 
 use std::fmt;
 
@@ -73,7 +74,7 @@ fn main() {
                 console_error("resetting VM next tick.");
                 // reset the VM since we don't know if everything was cleaned up and don't
                 // want an inconsistent state.
-                module.exports.loop = wasm_initialize;
+                Game.cpu.halt()
             }
         }
     }
@@ -262,6 +263,7 @@ fn game_loop() {
         .with(transfer::transfersystem::TransferQueueSystem, "transfer", &[])
         .with_barrier()
         .with(visualize::VisualizerSystem, "visualizer", &[])
+        .with(stats::StatsSystem, "stats", &[])
         .build();
 
     main_dispatcher.setup(&mut world);
