@@ -6,10 +6,8 @@
 - Add lost creep recovery - i.e. memory is lost.
 - Add time limiting to scout mission - don't keep running if creep can't complete objective. Don't keep spawning waves.
 - Rampart priorization to prevent decay needs fixing.
-- Add pre-pass to operations/missions/jobs to gather information.
 1. Gather haul requests/providers/state.
 2. Gather visibility requests and missions in progress to gather visibility.
-- Add hauling requests and in-progress deliveries.
 - Add remote mining capability. (Static + container mining needed. Switch from remote harvesting.)
 - Add build priority bucketing.
 - Computer number of hauler/harvester parts needed based on path distance.
