@@ -36,7 +36,7 @@ where
     }
 
     if let Some(controller) = controller_id.resolve() {
-        if !creep_pos.is_near_to(&controller) {
+        if !creep_pos.in_range_to(&controller, 3) {
             creep.move_to(&target_position);
 
             return None;
