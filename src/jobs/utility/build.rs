@@ -1,5 +1,4 @@
 use crate::findnearest::*;
-use crate::remoteobjectid::*;
 use screeps::*;
 
 pub fn select_construction_site(creep: &Creep, room: &Room) -> Option<ConstructionSite> {
@@ -19,24 +18,4 @@ pub fn select_construction_site(creep: &Creep, room: &Room) -> Option<Constructi
             .cloned()
             .find_nearest_from(creep.pos(), PathFinderHelpers::same_room_ignore_creeps_range_3)
     })
-}
-
-pub trait ValidateBuildTarget {
-    fn is_valid_build_target(&self) -> bool;
-}
-
-impl ValidateBuildTarget for ObjectId<ConstructionSite> {
-    fn is_valid_build_target(&self) -> bool {
-        self.resolve().is_some()
-    }
-}
-
-impl ValidateBuildTarget for RemoteObjectId<ConstructionSite> {
-    fn is_valid_build_target(&self) -> bool {
-        if game::rooms::get(self.pos().room_name()).is_some() {
-            self.resolve().is_some()
-        } else {
-            true
-        }
-    }
 }

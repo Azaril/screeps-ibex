@@ -73,6 +73,10 @@ pub fn run_pickup_state<F, R>(
 where
     F: Fn() -> R,
 {
+    if !ticket.target().is_valid() {
+        return Some(next_state());
+    }
+
     let capacity = creep.store_capacity(None);
     let store_types = creep.store_types();
     let used_capacity = store_types.iter().map(|r| creep.store_used_capacity(Some(*r))).sum::<u32>();
@@ -100,18 +104,8 @@ where
         if let Some((resource, amount)) = ticket.get_next_withdrawl() {
             ticket.consume_withdrawl(resource, amount);
 
-            if let Some(structure) = ticket.target().as_structure() {
-                let withdraw_amount = if let Some(store) = structure.as_has_store() {
-                    store.store_used_capacity(Some(resource)).min(amount)
-                } else {
-                    amount
-                };
-
-                if let Some(withdrawable) = structure.as_withdrawable() {
-                    if creep.withdraw_amount(withdrawable, resource, withdraw_amount) == ReturnCode::Ok {
-                        break None;
-                    }
-                }
+            if ticket.target().withdraw_resource_amount(creep, resource, amount) == ReturnCode::Ok {
+                break None;
             }
         } else {
             break Some(next_state());
@@ -128,6 +122,10 @@ pub fn run_delivery_state<F, R>(
 where
     F: Fn() -> R,
 {
+    if !ticket.target().is_valid() {
+        return Some(next_state());
+    }
+
     let store_types = creep.store_types();
     let stored_resources = store_types.iter().map(|r| (r, creep.store_used_capacity(Some(*r))));
 
@@ -167,18 +165,8 @@ where
         if let Some((resource, amount)) = ticket.get_next_deposit() {
             ticket.consume_deposit(resource, amount);
 
-            if let Some(structure) = ticket.target().as_structure() {
-                let transfer_amount = if let Some(store) = structure.as_has_store() {
-                    store.store_free_capacity(Some(resource)).min(amount)
-                } else {
-                    amount
-                };
-
-                if let Some(transferable) = structure.as_transferable() {
-                    if creep.transfer_amount(transferable, resource, transfer_amount) == ReturnCode::Ok {
-                        break None;
-                    }
-                }
+            if ticket.target().transfer_resource_amount(creep, resource, amount) == ReturnCode::Ok {
+                break None;
             }
         } else {
             break Some(next_state());

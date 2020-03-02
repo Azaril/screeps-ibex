@@ -5,7 +5,7 @@ use itertools::*;
 use remoteobjectid::*;
 use screeps::*;
 use serde::*;
-use specs::prelude::*;
+use specs::prelude::{ResourceId, WriteStorage, Write, LazyUpdate, Read, Entities, SystemData, System, World};
 use std::collections::hash_map::*;
 use std::collections::HashMap;
 
@@ -65,9 +65,35 @@ pub enum TransferTarget {
     Extension(RemoteObjectId<StructureExtension>),
     Storage(RemoteObjectId<StructureStorage>),
     Tower(RemoteObjectId<StructureTower>),
+    Link(RemoteObjectId<StructureLink>),
+    Ruin(RemoteObjectId<Ruin>),
+    Tombstone(RemoteObjectId<Tombstone>),
+    Resource(RemoteObjectId<Resource>)
 }
 
 impl TransferTarget {
+    fn is_valid_from_id<T>(target: &RemoteObjectId<T>) -> bool where T: HasId + SizedRoomObject {
+        if game::rooms::get(target.pos().room_name()).is_some() {
+            target.resolve().is_some()
+        } else {
+            true
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        match self {
+            TransferTarget::Container(id) => Self::is_valid_from_id(id),
+            TransferTarget::Spawn(id) => Self::is_valid_from_id(id),
+            TransferTarget::Extension(id) => Self::is_valid_from_id(id),
+            TransferTarget::Storage(id) => Self::is_valid_from_id(id),
+            TransferTarget::Tower(id) => Self::is_valid_from_id(id),
+            TransferTarget::Link(id) => Self::is_valid_from_id(id),
+            TransferTarget::Ruin(id) => Self::is_valid_from_id(id),
+            TransferTarget::Tombstone(id) => Self::is_valid_from_id(id),
+            TransferTarget::Resource(id) => Self::is_valid_from_id(id),
+        }
+    }
+
     pub fn pos(&self) -> RoomPosition {
         match self {
             TransferTarget::Container(id) => id.pos(),
@@ -75,16 +101,67 @@ impl TransferTarget {
             TransferTarget::Extension(id) => id.pos(),
             TransferTarget::Storage(id) => id.pos(),
             TransferTarget::Tower(id) => id.pos(),
+            TransferTarget::Link(id) => id.pos(),
+            TransferTarget::Ruin(id) => id.pos(),
+            TransferTarget::Tombstone(id) => id.pos(),
+            TransferTarget::Resource(id) => id.pos(),
         }
     }
 
-    pub fn as_structure(&self) -> Option<Structure> {
+    fn withdraw_resource_amount_from_id<T>(target: &RemoteObjectId<T>, creep: &Creep, resource: ResourceType, amount: u32) -> ReturnCode where T: Withdrawable + HasStore + HasId + SizedRoomObject {
+        if let Some(obj) = target.resolve() {
+            let withdraw_amount = obj.store_used_capacity(Some(resource)).min(amount);
+
+            creep.withdraw_amount(&obj, resource, withdraw_amount)
+        } else {
+            ReturnCode::NotFound
+        }
+    }
+
+    fn pickup_resource_from_id(target: &RemoteObjectId<Resource>, creep: &Creep) -> ReturnCode {
+        if let Some(obj) = target.resolve() {
+            creep.pickup(&obj)
+        } else {
+            ReturnCode::NotFound
+        }
+    }
+
+    pub fn withdraw_resource_amount(&self, creep: &Creep, resource: ResourceType, amount: u32) -> ReturnCode {
         match self {
-            TransferTarget::Container(id) => id.resolve().map(|s| s.as_structure()),
-            TransferTarget::Spawn(id) => id.resolve().map(|s| s.as_structure()),
-            TransferTarget::Extension(id) => id.resolve().map(|s| s.as_structure()),
-            TransferTarget::Storage(id) => id.resolve().map(|s| s.as_structure()),
-            TransferTarget::Tower(id) => id.resolve().map(|s| s.as_structure()),
+            TransferTarget::Container(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
+            TransferTarget::Spawn(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
+            TransferTarget::Extension(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
+            TransferTarget::Storage(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
+            TransferTarget::Tower(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
+            TransferTarget::Link(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
+            TransferTarget::Ruin(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
+            TransferTarget::Tombstone(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
+            TransferTarget::Resource(id) => Self::pickup_resource_from_id(id, creep),
+        }
+    }
+
+    fn transfer_resource_amount_to_id<T>(target: &RemoteObjectId<T>, creep: &Creep, resource: ResourceType, amount: u32) -> ReturnCode where T: Transferable + HasStore + HasId + SizedRoomObject {
+        if let Some(obj) = target.resolve() {
+            let transfer_amount = obj.store_free_capacity(Some(resource)).min(amount);
+
+            creep.transfer_amount(&obj, resource, transfer_amount)
+        } else {
+            ReturnCode::NotFound
+        }
+    }
+
+    pub fn transfer_resource_amount(&self, creep: &Creep, resource: ResourceType, amount: u32) -> ReturnCode {
+        match self {
+            TransferTarget::Container(id) => Self::transfer_resource_amount_to_id(id, creep, resource, amount),
+            TransferTarget::Spawn(id) => Self::transfer_resource_amount_to_id(id, creep, resource, amount),
+            TransferTarget::Extension(id) => Self::transfer_resource_amount_to_id(id, creep, resource, amount),
+            TransferTarget::Storage(id) => Self::transfer_resource_amount_to_id(id, creep, resource, amount),
+            TransferTarget::Tower(id) => Self::transfer_resource_amount_to_id(id, creep, resource, amount),
+            TransferTarget::Link(id) => Self::transfer_resource_amount_to_id(id, creep, resource, amount),
+            TransferTarget::Ruin(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
+            TransferTarget::Tombstone(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
+            //TODO: Split pickup and deposit targets.
+            TransferTarget::Resource(_) => { panic!("Attempting to transfer resources to a dropped resource.") }
         }
     }
 }

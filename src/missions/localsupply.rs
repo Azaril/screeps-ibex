@@ -400,14 +400,10 @@ impl LocalSupplyMission {
         Ok(())
     }
 
-    fn request_transfer(
-        &mut self,
-        _system_data: &MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
+    fn request_transfer_for_containers(
+        transfer_queue: &mut TransferQueue,
         structure_data: &StructureData,
-        _creep_data: &CreepData,
-        room: &Room,
-    ) -> Result<(), String> {
+    ) {
         let provider_containers = structure_data
             .sources_to_containers
             .values()
@@ -434,7 +430,7 @@ impl LocalSupplyMission {
                             let transfer_request =
                                 TransferWithdrawRequest::new(TransferTarget::Container(*container_id), resource, priority, resource_amount);
 
-                            runtime_data.transfer_queue.request_withdraw(transfer_request);
+                            transfer_queue.request_withdraw(transfer_request);
                         }
                     }
                 }
@@ -453,7 +449,7 @@ impl LocalSupplyMission {
                             container_free_capacity,
                         );
     
-                        runtime_data.transfer_queue.request_deposit(transfer_request);
+                        transfer_queue.request_deposit(transfer_request);
                     }
                 }
             }
@@ -481,13 +477,16 @@ impl LocalSupplyMission {
                         container_free_capacity,
                     );
 
-                    runtime_data.transfer_queue.request_deposit(transfer_request);
+                    transfer_queue.request_deposit(transfer_request);
                 }
             }
         }
+    }
 
-        //TODO: Add container placed near controller for low priority energy fill.
-
+    fn request_transfer_for_structures(
+        transfer_queue: &mut TransferQueue,
+        room: &Room,
+    ) {
         //TODO: Migrate these to a better place?
         //TODO: Fill out remaining structures.
 
@@ -503,7 +502,7 @@ impl LocalSupplyMission {
                             free_capacity,
                         );
 
-                        runtime_data.transfer_queue.request_deposit(transfer_request);
+                        transfer_queue.request_deposit(transfer_request);
                     }
                 }
                 Structure::Extension(extension) => {
@@ -516,7 +515,7 @@ impl LocalSupplyMission {
                             free_capacity,
                         );
 
-                        runtime_data.transfer_queue.request_deposit(transfer_request);
+                        transfer_queue.request_deposit(transfer_request);
                     }
                 }
                 Structure::Storage(storage) => {
@@ -533,7 +532,7 @@ impl LocalSupplyMission {
                             resource_amount,
                         );
 
-                        runtime_data.transfer_queue.request_withdraw(transfer_request);
+                        transfer_queue.request_withdraw(transfer_request);
 
                         used_capacity += resource_amount;
                     }
@@ -544,14 +543,99 @@ impl LocalSupplyMission {
                         let transfer_request =
                             TransferDepositRequest::new(TransferTarget::Storage(storage_id), None, TransferPriority::None, free_capacity);
 
-                        runtime_data.transfer_queue.request_deposit(transfer_request);
+                        transfer_queue.request_deposit(transfer_request);
+                    }
+                },
+                Structure::Link(link) => {
+                    let free_capacity = link.store_free_capacity(Some(ResourceType::Energy));
+                    if free_capacity > 0 {
+                        let transfer_request = TransferDepositRequest::new(
+                            TransferTarget::Link(link.remote_id()),
+                            Some(ResourceType::Energy),
+                            TransferPriority::None,
+                            free_capacity,
+                        );
+
+                        transfer_queue.request_deposit(transfer_request);
+                    }
+
+                    let used_capacity = link.store_used_capacity(Some(ResourceType::Energy));
+                    if used_capacity > 0 {
+                        let transfer_request = TransferWithdrawRequest::new(
+                            TransferTarget::Link(link.remote_id()),
+                            ResourceType::Energy,
+                            TransferPriority::None,
+                            used_capacity,
+                        );
+
+                        transfer_queue.request_withdraw(transfer_request);
                     }
                 }
                 _ => {}
             }
         }
+    }
 
-        Ok(())
+    fn request_transfer_for_ruins(
+        transfer_queue: &mut TransferQueue,
+        room: &Room,
+    ) {
+        for ruin in room.find(find::RUINS) {
+            let ruin_id = ruin.remote_id();
+
+            for resource in ruin.store_types() {
+                let resource_amount = ruin.store_used_capacity(Some(resource));
+                let transfer_request = TransferWithdrawRequest::new(
+                    TransferTarget::Ruin(ruin_id),
+                    resource,
+                    TransferPriority::Medium,
+                    resource_amount,
+                );
+
+                transfer_queue.request_withdraw(transfer_request);
+            }
+        }
+    }
+
+    fn request_transfer_for_tombstones(
+        transfer_queue: &mut TransferQueue,
+        room: &Room,
+    ) {
+        for tombstone in room.find(find::TOMBSTONES) {
+            let tombstone_id = tombstone.remote_id();
+
+            for resource in tombstone.store_types() {
+                let resource_amount = tombstone.store_used_capacity(Some(resource));
+                let transfer_request = TransferWithdrawRequest::new(
+                    TransferTarget::Tombstone(tombstone_id),
+                    resource,
+                    TransferPriority::Medium,
+                    resource_amount,
+                );
+
+                transfer_queue.request_withdraw(transfer_request);
+            }
+        }
+    }
+
+    fn request_transfer_for_dropped_resources(
+        transfer_queue: &mut TransferQueue,
+        room: &Room,
+    ) {
+        for dropped_resource in room.find(find::DROPPED_RESOURCES) {
+            let dropped_resource_id = dropped_resource.remote_id();
+
+            let resource = dropped_resource.resource_type();
+            let resource_amount = dropped_resource.amount();
+            let transfer_request = TransferWithdrawRequest::new(
+                TransferTarget::Resource(dropped_resource_id),
+                resource,
+                TransferPriority::Medium,
+                resource_amount,
+            );
+
+            transfer_queue.request_withdraw(transfer_request);
+        }
     }
 }
 
@@ -584,9 +668,12 @@ impl Mission for LocalSupplyMission {
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
         let structure_data = Self::create_structure_data(room_data, &room)?;
-        let creep_data = self.create_creep_data(system_data)?;
 
-        self.request_transfer(system_data, runtime_data, &structure_data, &creep_data, &room)?;
+        Self::request_transfer_for_containers(&mut runtime_data.transfer_queue, &structure_data);
+        Self::request_transfer_for_structures(&mut runtime_data.transfer_queue, &room);
+        Self::request_transfer_for_ruins(&mut runtime_data.transfer_queue, &room);
+        Self::request_transfer_for_tombstones(&mut runtime_data.transfer_queue, &room);
+        Self::request_transfer_for_dropped_resources(&mut runtime_data.transfer_queue, &room);
 
         Ok(())
     }

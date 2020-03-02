@@ -1,5 +1,4 @@
 use crate::findnearest::*;
-use crate::structureidentifier::*;
 use itertools::*;
 use screeps::*;
 use std::collections::HashMap;
@@ -157,28 +156,4 @@ pub fn select_repair_structure(room: &Room, start_pos: RoomPosition) -> Option<S
     }
 
     None
-}
-
-pub trait ValidateRepairTarget {
-    fn is_valid_repair_target(&self) -> Option<bool>;
-}
-
-impl ValidateRepairTarget for Structure {
-    fn is_valid_repair_target(&self) -> Option<bool> {
-        if let Some(attackable) = self.as_attackable() {
-            Some(attackable.hits() < attackable.hits_max())
-        } else {
-            Some(false)
-        }
-    }
-}
-
-impl ValidateRepairTarget for RemoteStructureIdentifier {
-    fn is_valid_repair_target(&self) -> Option<bool> {
-        if game::rooms::get(self.pos().room_name()).is_some() {
-            self.resolve().and_then(|s| s.is_valid_repair_target()).or(Some(false))
-        } else {
-            None
-        }
-    }
 }
