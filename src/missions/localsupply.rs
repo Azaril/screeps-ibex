@@ -445,8 +445,7 @@ impl LocalSupplyMission {
                         let transfer_request = TransferDepositRequest::new(
                             TransferTarget::Container(*container_id),
                             Some(ResourceType::Energy),
-                            //TODO: This should be 'Low' to move energy here for usage. However, right now that creates a feedback loop.
-                            TransferPriority::None,
+                            TransferPriority::Low,
                             container_free_capacity,
                         );
     
@@ -657,7 +656,7 @@ impl Mission for LocalSupplyMission {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
                 room_ui.missions().add_text(
-                    format!("Local Supply - Mine: {} Harvest: {}", self.miners.0.len(), self.harvesters.0.len()),
+                    format!("Local Supply - Miners: {} Harvesters: {}", self.miners.0.len(), self.harvesters.0.len()),
                     None,
                 );
             })

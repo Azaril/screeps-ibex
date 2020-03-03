@@ -64,7 +64,10 @@ impl Mission for ClaimMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui.missions().add_text("Claim".to_string(), None);
+                room_ui.missions().add_text(
+                    format!("Claim - Claimers: {}", self.claimers.0.len()),
+                    None,
+                );
             })
         }
     }
