@@ -100,6 +100,7 @@ impl HarvestJob {
                 })
                 .next()
         })
+        .or_else(|| get_new_upgrade_state(creep, delivery_room_data, HarvestState::Upgrade))
     }
 
     fn run_finished_pickup_state(
@@ -211,7 +212,7 @@ impl Job for HarvestJob {
                         room_ui.jobs().add_text(format!("Harvest - {} - FinishedRepair", name), None);
                     },
                     HarvestState::Upgrade(_) => {
-                        room_ui.jobs().add_text(format!("Harvest - {} - Upgrade                                                                                                                                                                    ", name), None);
+                        room_ui.jobs().add_text(format!("Harvest - {} - Upgrade", name), None);
                     }
                 })
         }
