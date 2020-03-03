@@ -1,6 +1,5 @@
 # High Priority
 
-- Add state machine system. Use it to drive operations/missions/jobs. (Requires entity vector fix or workaround.)
 - Add stuck detection and response for creeps.
 - Use 'local supply' mission for both local supply and remote mine.
 - Add lost creep recovery - i.e. memory is lost.
@@ -19,3 +18,8 @@
 - Add chrome tracing format profiling.
 - Add observer support to visibility requests. (Currently just used for triggering room data generation.)
 - Pathfinding solution. (Use built in path finder.)
+- Add per-room stats (i.e. energy availble over X minutes) to use for predicting needed roles.
+
+# Low priority
+
+- Add consumed pipelines to creep actions to allow parallel actions.
