@@ -119,38 +119,24 @@ impl Mission for TowerMission {
             .filter(|creep| creep.hits() < creep.hits_max())
             .min_by_key(|creep| creep.hits());
 
-        let mut repair_targets = get_prioritized_repair_targets(&room);
-        let mut repair_priorities = if are_hostile_creeps {
-            [RepairPriority::Critical, RepairPriority::High, RepairPriority::Medium].iter()
-        } else {
-            [RepairPriority::Critical, RepairPriority::High].iter()
-        };
+        let minimum_repair_priority = if are_hostile_creeps { Some(RepairPriority::Medium) } else { Some(RepairPriority::High )};
+        let repair_targets = get_prioritized_repair_targets(&room, minimum_repair_priority);
 
-        let repair_structure = loop {
-            if let Some(priority) = repair_priorities.next() {
-                if let Some(structures) = repair_targets.remove(priority) {
-                    let weakest_structure = structures
-                        .into_iter()
-                        .filter_map(|structure| {
-                            let hits = if let Some(attackable) = structure.as_attackable() {
-                                Some((attackable.hits(), attackable.hits_max()))
-                            } else {
-                                None
-                            };
+        let repair_structure = ORDERED_REPAIR_PRIORITIES
+            .iter()
+            .filter_map(|priority| repair_targets.get(priority))
+            .flat_map(|i| i.iter())
+            .filter_map(|structure| {
+                let hits = if let Some(attackable) = structure.as_attackable() {
+                    Some((attackable.hits(), attackable.hits_max()))
+                } else {
+                    None
+                };
 
-                            hits.map(|(hits, hits_max)| (structure, hits, hits_max))
-                        })
-                        .min_by_key(|(_, hits, _)| *hits)
-                        .map(|(structure, _, _)| structure);
-
-                    if let Some(weakest_structure) = weakest_structure {
-                        break Some(weakest_structure);
-                    }
-                }
-            } else {
-                break None;
-            }
-        };
+                hits.map(|(hits, hits_max)| (structure, hits, hits_max))
+            })
+            .min_by_key(|(_, hits, _)| *hits)
+            .map(|(structure, _, _)| structure);
 
         //TODO: Partition targets between towers. (Don't over damage, heal or repair.)
 
@@ -166,7 +152,7 @@ impl Mission for TowerMission {
             }
 
             if let Some(structure) = repair_structure.as_ref() {
-                tower.repair(structure);
+                tower.repair(*structure);
                 continue;
             }
         }

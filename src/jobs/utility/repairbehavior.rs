@@ -3,14 +3,14 @@ use crate::room::data::*;
 use crate::structureidentifier::*;
 use screeps::*;
 
-pub fn get_new_repair_state<F, R>(creep: &Creep, build_room: &RoomData, state_map: F) -> Option<R>
+pub fn get_new_repair_state<F, R>(creep: &Creep, build_room: &RoomData, minimum_priority: Option<RepairPriority>, state_map: F) -> Option<R>
 where
     F: Fn(RemoteStructureIdentifier) -> R,
 {
     if creep.store_used_capacity(Some(ResourceType::Energy)) > 0 {
         //TODO: This requires visibility and could fail?
         if let Some(room) = game::rooms::get(build_room.name) {
-            if let Some(structure) = select_repair_structure(&room, creep.pos()) {
+            if let Some(structure) = select_repair_structure(&room, creep.pos(), minimum_priority) {
                 return Some(state_map(RemoteStructureIdentifier::new(&structure)));
             }
         }

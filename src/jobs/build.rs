@@ -46,7 +46,7 @@ impl BuildJob {
 
     fn run_idle_state(creep: &Creep, build_room_data: &RoomData, transfer_queue: &mut TransferQueue) -> Option<BuildState> {
         get_new_build_state(creep, build_room_data, BuildState::Build)
-            .or_else(|| get_new_repair_state(creep, build_room_data, BuildState::Repair))
+            .or_else(|| get_new_repair_state(creep, build_room_data, None, BuildState::Repair))
             .or_else(|| {
                 get_new_pickup_state(
                     creep,
@@ -68,7 +68,7 @@ impl BuildJob {
     }
 
     fn run_finished_repair_state(creep: &Creep, repair_room: &RoomData) -> Option<BuildState> {
-        get_new_repair_state(&creep, repair_room, BuildState::Repair).or(Some(BuildState::Idle))
+        get_new_repair_state(&creep, repair_room, None, BuildState::Repair).or(Some(BuildState::Idle))
     }
 }
 
