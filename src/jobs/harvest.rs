@@ -10,6 +10,7 @@ use super::utility::buildbehavior::*;
 use super::utility::controllerbehavior::*;
 use super::utility::harvestbehavior::*;
 use super::utility::haulbehavior::*;
+use super::utility::repair::*;
 use super::utility::repairbehavior::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
@@ -85,7 +86,7 @@ impl HarvestJob {
             )
         })
         .or_else(|| get_new_build_state(creep, delivery_room_data, HarvestState::Build))
-        .or_else(|| get_new_repair_state(creep, delivery_room_data, HarvestState::Repair))
+        .or_else(|| get_new_repair_state(creep, delivery_room_data, Some(RepairPriority::Medium), HarvestState::Repair))
         .or_else(|| {
             [TransferPriority::Medium, TransferPriority::Low, TransferPriority::None]
                 .iter()
@@ -154,7 +155,7 @@ impl HarvestJob {
     }
 
     fn run_finished_repair_state(creep: &Creep, delivery_room_data: &RoomData) -> Option<HarvestState> {
-        get_new_repair_state(creep, delivery_room_data, HarvestState::Repair).or(Some(HarvestState::Idle))
+        get_new_repair_state(creep, delivery_room_data, Some(RepairPriority::Medium), HarvestState::Repair).or(Some(HarvestState::Idle))
     }
 }
 

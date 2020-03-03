@@ -3,13 +3,13 @@ use itertools::*;
 use screeps::*;
 use std::collections::HashMap;
 
-#[derive(PartialEq, Eq, Hash, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Ord, PartialOrd)]
 pub enum RepairPriority {
-    Critical,
-    High,
-    Medium,
-    Low,
     VeryLow,
+    Low,
+    Medium,
+    High,
+    Critical,
 }
 
 pub static ORDERED_REPAIR_PRIORITIES: &[RepairPriority] = &[
@@ -125,7 +125,7 @@ pub fn get_repair_targets(room: &Room) -> Vec<(Structure, u32, u32)> {
         .collect()
 }
 
-pub fn get_prioritized_repair_targets(room: &Room) -> HashMap<RepairPriority, Vec<Structure>> {
+pub fn get_prioritized_repair_targets(room: &Room, minimum_priority: Option<RepairPriority>) -> HashMap<RepairPriority, Vec<Structure>> {
     let are_hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
 
     let available_energy = room
@@ -136,15 +136,15 @@ pub fn get_prioritized_repair_targets(room: &Room) -> HashMap<RepairPriority, Ve
     get_repair_targets(room)
         .into_iter()
         .filter_map(|(structure, hits, hits_max)| {
-            let priority = map_structure_repair_priority(&structure, hits, hits_max, available_energy, are_hostile_creeps);
-
-            priority.map(|p| (p, structure))
+            map_structure_repair_priority(&structure, hits, hits_max, available_energy, are_hostile_creeps)
+                .filter(|p| minimum_priority.map(|op| *p >= op).unwrap_or(true))
+                .map(|p| (p, structure))
         })
         .into_group_map()
 }
 
-pub fn select_repair_structure(room: &Room, start_pos: RoomPosition) -> Option<Structure> {
-    let mut repair_targets = get_prioritized_repair_targets(room);
+pub fn select_repair_structure(room: &Room, start_pos: RoomPosition, minimum_priority: Option<RepairPriority>) -> Option<Structure> {
+    let mut repair_targets = get_prioritized_repair_targets(room, minimum_priority);
 
     for priority in ORDERED_REPAIR_PRIORITIES.iter() {
         if let Some(structures) = repair_targets.remove(priority) {

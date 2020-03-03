@@ -46,18 +46,8 @@ impl LocalBuildMission {
                 Some(SPAWN_PRIORITY_MEDIUM)
             }
         } else {
-            let repair_targets = get_prioritized_repair_targets(&room);
-            let repair_priorities = [RepairPriority::Critical, RepairPriority::High, RepairPriority::Medium];
-
-            let mut has_repair_target = false;
-
-            for priority in repair_priorities.iter() {
-                if let Some(structures) = repair_targets.get(priority) {
-                    if !structures.is_empty() {
-                        has_repair_target = true;
-                    }
-                }
-            }
+            //TODO: Not requiring full hashmap just to check for presence would be cheaper. Lazy iterator would be sufficient.
+            let has_repair_target = !get_prioritized_repair_targets(&room, Some(RepairPriority::Medium)).is_empty();
 
             if has_repair_target {
                 Some(SPAWN_PRIORITY_HIGH)
