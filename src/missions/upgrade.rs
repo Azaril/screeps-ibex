@@ -4,6 +4,8 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 use super::data::*;
 use super::missionsystem::*;
@@ -17,6 +19,7 @@ pub struct UpgradeMission {
     upgraders: EntityVec,
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl UpgradeMission {
     pub fn build<B>(builder: B, room_data: Entity) -> B
     where
@@ -56,6 +59,7 @@ impl UpgradeMission {
     }
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl Mission for UpgradeMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
@@ -87,8 +91,6 @@ impl Mission for UpgradeMission {
         system_data: &MissionExecutionSystemData,
         runtime_data: &mut MissionExecutionRuntimeData,
     ) -> Result<MissionResult, String> {
-        scope_timing!("UpgradeMission");
-
         //TODO: Limit upgraders to 15 total work parts upgrading across all creeps.
 
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;

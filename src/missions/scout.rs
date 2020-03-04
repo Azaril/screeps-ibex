@@ -4,6 +4,8 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 use super::data::*;
 use super::missionsystem::*;
@@ -20,6 +22,7 @@ pub struct ScoutMission {
     spawned_scouts: u32,
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl ScoutMission {
     pub fn build<B>(builder: B, room_data: Entity, home_room_data: Entity) -> B
     where
@@ -65,6 +68,7 @@ impl ScoutMission {
     }
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl Mission for ScoutMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
@@ -96,8 +100,6 @@ impl Mission for ScoutMission {
         system_data: &MissionExecutionSystemData,
         runtime_data: &mut MissionExecutionRuntimeData,
     ) -> Result<MissionResult, String> {
-        scope_timing!("ScoutMission");
-
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
         let data_is_fresh = room_data

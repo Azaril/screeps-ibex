@@ -34,8 +34,6 @@ impl<'a> System<'a> for WaitForSpawnSystem {
     type SystemData = (Entities<'a>, ReadStorage<'a, CreepSpawning>, Read<'a, LazyUpdate>);
 
     fn run(&mut self, (entities, spawnings, updater): Self::SystemData) {
-        scope_timing!("WaitForSpawnSystem");
-
         for (entity, spawning) in (&entities, &spawnings).join() {
             if let Some(creep) = game::creeps::get(&spawning.name) {
                 if !creep.spawning() {
@@ -59,8 +57,6 @@ impl<'a> System<'a> for CleanupCreepsSystem {
     type SystemData = (Entities<'a>, ReadStorage<'a, CreepOwner>, Read<'a, LazyUpdate>);
 
     fn run(&mut self, (entities, creeps, _updater): Self::SystemData) {
-        scope_timing!("CleanupCreepsSystem");
-
         for (entity, creep) in (&entities, &creeps).join() {
             if creep.owner.resolve().is_none() {
                 if let Err(error) = entities.delete(entity) {

@@ -2,7 +2,10 @@ use crate::findnearest::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use screeps::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
+#[cfg_attr(feature = "time", timing)]
 pub fn get_new_harvest_state<F, R>(creep: &Creep, harvest_room_data: &RoomData, state_map: F) -> Option<R>
 where
     F: Fn(RemoteObjectId<Source>) -> R,
@@ -22,17 +25,19 @@ where
     None
 }
 
+#[cfg_attr(feature = "time", timing)]
 pub fn get_new_harvest_target_state<F, R>(creep: &Creep, source_id: &RemoteObjectId<Source>, state_map: F) -> Option<R>
 where
     F: Fn(RemoteObjectId<Source>) -> R,
 {
-    if creep.store_free_capacity(Some(ResourceType::Energy)) > 0 {
+    if creep.store_free_capacity(Some(ResourceType::Energy)) > 0 && source_id.resolve().map(|s| s.energy() > 0).unwrap_or(true) {
         return Some(state_map(*source_id));
     }
 
     None
 }
 
+#[cfg_attr(feature = "time", timing)]
 pub fn run_harvest_state<F, R>(creep: &Creep, source_id: &RemoteObjectId<Source>, next_state: F) -> Option<R>
 where
     F: Fn() -> R,

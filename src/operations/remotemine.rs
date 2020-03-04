@@ -3,6 +3,8 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 use super::data::*;
 use super::operationsystem::*;
@@ -15,6 +17,7 @@ use crate::room::visibilitysystem::*;
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct RemoteMineOperation {}
 
+#[cfg_attr(feature = "time", timing)]
 impl RemoteMineOperation {
     pub fn build<B>(builder: B) -> B
     where
@@ -32,6 +35,7 @@ impl RemoteMineOperation {
     }
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl Operation for RemoteMineOperation {
     fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
@@ -44,8 +48,6 @@ impl Operation for RemoteMineOperation {
         system_data: &OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
-        scope_timing!("RemoteMineOperation");
-
         let mut desired_missions = vec![];
 
         //TODO: Do this in a single pass and use closest room to be the home room.

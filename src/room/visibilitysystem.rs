@@ -46,8 +46,6 @@ impl<'a> System<'a> for VisibilityQueueSystem {
     type SystemData = VisibilityQueueSystemData<'a>;
 
     fn run(&mut self, data: Self::SystemData) {
-        scope_timing!("VisibilityQueueSystem");
-
         let mut room_priorities: HashMap<RoomName, f32> = HashMap::new();
 
         for request in &data.visibility_queue.requests {

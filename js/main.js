@@ -12,12 +12,7 @@ function wasm_initialize() {
     if (wasm_module == null) {
         const wasm_bytes = wasm_fetch_module_bytes();
         console.log("Reset! Code length: " + wasm_bytes.length);
-        try {
-            wasm_module = new WebAssembly.Module(wasm_bytes);
-        } catch(err) {
-            console.log("Failed to load WASM module, resetting VM.");
-            Game.cpu.halt()
-        }
+        wasm_module = new WebAssembly.Module(wasm_bytes);
     }
 
     if (Game.cpu.bucket < 500) {
@@ -50,6 +45,9 @@ function wasm_initialize() {
         return;
     }
 
+    console.log("Complete");
+
+    //module.exports.loop = function() { console.log("Tick"); };
     module.exports.loop();
 }
 

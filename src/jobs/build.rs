@@ -4,6 +4,8 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 use super::jobsystem::*;
 use super::utility::buildbehavior::*;
@@ -35,6 +37,7 @@ pub struct BuildJob {
     state: BuildState,
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl BuildJob {
     pub fn new(home_room: Entity, build_room: Entity) -> BuildJob {
         BuildJob {
@@ -72,6 +75,7 @@ impl BuildJob {
     }
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl Job for BuildJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();
@@ -131,8 +135,6 @@ impl Job for BuildJob {
 
     fn run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         let creep = runtime_data.owner;
-
-        scope_timing!("Build Job - {}", creep.name());
 
         if let Some(build_room_data) = system_data.room_data.get(self.build_room) {
             loop {

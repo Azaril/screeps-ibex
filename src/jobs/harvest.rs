@@ -18,6 +18,9 @@ use crate::structureidentifier::*;
 use crate::transfer::transfersystem::*;
 use crate::visualize::*;
 
+#[cfg(feature = "time")]
+use timing_annotate::*;
+
 #[derive(Clone, Serialize, Deserialize)]
 pub enum HarvestState {
     Idle,
@@ -40,6 +43,7 @@ pub struct HarvestJob {
     state: HarvestState,
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl HarvestJob {
     pub fn new(harvest_target: RemoteObjectId<Source>, delivery_room: Entity) -> HarvestJob {
         HarvestJob {
@@ -159,6 +163,7 @@ impl HarvestJob {
     }
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl Job for HarvestJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();
@@ -237,8 +242,6 @@ impl Job for HarvestJob {
 
     fn run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         let creep = runtime_data.owner;
-
-        scope_timing!("Build Job - {}", creep.name());
 
         if let Some(delivery_room_data) = system_data.room_data.get(self.delivery_room) {
             loop {

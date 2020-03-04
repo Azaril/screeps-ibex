@@ -7,6 +7,8 @@ use crate::transfer::transfersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
 use creep::CreepOwner;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 #[derive(SystemData)]
 pub struct JobSystemData<'a> {
@@ -47,12 +49,11 @@ pub trait Job {
 
 pub struct PreRunJobSystem;
 
+#[cfg_attr(feature = "time", timing)]
 impl<'a> System<'a> for PreRunJobSystem {
     type SystemData = JobSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        scope_timing!("PreRunJobSystem");
-
         let system_data = JobExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
@@ -91,12 +92,11 @@ impl<'a> System<'a> for PreRunJobSystem {
 
 pub struct RunJobSystem;
 
+#[cfg_attr(feature = "time", timing)]
 impl<'a> System<'a> for RunJobSystem {
     type SystemData = JobSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        scope_timing!("RunJobSystem");
-
         let system_data = JobExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,

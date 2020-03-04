@@ -20,8 +20,6 @@ impl<'a> System<'a> for MappingSystem {
     type SystemData = MappingSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        scope_timing!("MappingSystem");
-
         let mapping = &mut data.mapping;
 
         for (entity, room_data) in (&data.entities, &data.room_data).join() {

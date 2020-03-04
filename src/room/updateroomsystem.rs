@@ -9,8 +9,6 @@ impl<'a> System<'a> for UpdateRoomDataSystem {
     type SystemData = (Entities<'a>, WriteStorage<'a, RoomData>, Read<'a, LazyUpdate>);
 
     fn run(&mut self, (entities, mut room_datas, _updater): Self::SystemData) {
-        scope_timing!("UpdateRoomDataSystem");
-
         let rooms = game::rooms::hashmap();
 
         for (_entity, room_data) in (&entities, &mut room_datas).join() {

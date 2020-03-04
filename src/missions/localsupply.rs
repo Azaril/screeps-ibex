@@ -6,6 +6,8 @@ use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
 use std::collections::HashMap;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 use super::data::*;
 use super::missionsystem::*;
@@ -36,6 +38,7 @@ struct CreepData {
     containers_to_miners: HashMap<RemoteObjectId<StructureContainer>, Vec<Entity>>,
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl LocalSupplyMission {
     pub fn build<B>(builder: B, room_data: Entity) -> B
     where
@@ -651,6 +654,7 @@ impl LocalSupplyMission {
     }
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl Mission for LocalSupplyMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
@@ -695,8 +699,6 @@ impl Mission for LocalSupplyMission {
         system_data: &MissionExecutionSystemData,
         runtime_data: &mut MissionExecutionRuntimeData,
     ) -> Result<MissionResult, String> {
-        scope_timing!("LocalSupplyMission");
-
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 

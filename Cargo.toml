@@ -5,7 +5,7 @@ authors = []
 
 [features]
 default = []
-timing = ["scopeguard"]
+time = ["timing", "timing-annotate"]
 
 [dependencies]
 stdweb = "0.4"
@@ -20,6 +20,8 @@ specs = { version = "0.15", default-features = false, features = ["serde", "shre
 specs-derive = "0.4"
 itertools = "0.8"
 bitflags = "1.2.1"
+timing = { path = "libs/timing", optional = true }
+timing-annotate = { path = "libs/timing-annotate", optional = true }
 
 [profile.release]
 panic = "abort"

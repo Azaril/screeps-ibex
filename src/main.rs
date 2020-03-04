@@ -2,6 +2,8 @@
 #![allow(dead_code)]
 #![warn(clippy::all)]
 
+#![feature(proc_macro_hygiene)]
+
 extern crate fern;
 #[macro_use]
 extern crate log;
@@ -16,11 +18,16 @@ extern crate specs_derive;
 
 extern crate itertools;
 
+#[cfg(feature = "time")]
+extern crate timing;
+#[cfg(feature = "time")]
+extern crate timing_annotate;
+#[cfg(feature = "time")]
+use timing_annotate::*;
+
 #[macro_use]
 extern crate bitflags;
 
-#[macro_use]
-mod timing;
 mod creep;
 mod features;
 mod findnearest;
@@ -39,6 +46,7 @@ mod transfer;
 mod ui;
 mod visualize;
 mod stats;
+mod memorysystem;
 
 use std::fmt;
 
@@ -80,15 +88,14 @@ fn main() {
     }
 }
 
-fn serialize_world(world: &World, cb: fn(&str)) {
-    scope_timing!("serialize_world");
-
+fn serialize_world(world: &World, segment: u32) {
     struct Serialize {
-        writer: Vec<u8>,
+        segment: u32,
     }
 
     #[derive(SystemData)]
     struct SerializeSystemData<'a> {
+        memory_arbiter: Write<'a, memorysystem::MemoryArbiter>,
         entities: Entities<'a>,
         marker_allocator: Write<'a, serialize::SerializeMarkerAllocator>,
         markers: WriteStorage<'a, serialize::SerializeMarker>,
@@ -104,7 +111,9 @@ fn serialize_world(world: &World, cb: fn(&str)) {
         type SystemData = SerializeSystemData<'a>;
 
         fn run(&mut self, mut data: Self::SystemData) {
-            let mut ser = serde_json::ser::Serializer::new(&mut self.writer);
+            let mut writer = Vec::<u8>::with_capacity(1024 * 100);
+
+            let mut ser = serde_json::ser::Serializer::new(&mut writer);
 
             SerializeComponents::<NoError, serialize::SerializeMarker>::serialize_recursive(
                 &(
@@ -121,18 +130,18 @@ fn serialize_world(world: &World, cb: fn(&str)) {
                 &mut ser,
             )
             .unwrap_or_else(|e| error!("Error: {}", e));
+            
+            let world_data = unsafe { std::str::from_utf8_unchecked(&writer) };
+
+            data.memory_arbiter.set(self.segment, world_data);
         }
     }
 
     let mut sys = Serialize {
-        writer: Vec::<u8>::with_capacity(1024 * 16),
+        segment
     };
 
     sys.run_now(&world);
-
-    let data = unsafe { std::str::from_utf8_unchecked(&sys.writer) };
-
-    cb(&data);
 }
 
 #[derive(Debug)]
@@ -160,15 +169,14 @@ impl From<NoError> for CombinedSerialiationError {
     }
 }
 
-fn deserialize_world(world: &World, data: &str) {
-    scope_timing!("deserialize_world");
-
-    struct Deserialize<'a> {
-        raw_data: &'a str,
+fn deserialize_world(world: &World, segment: u32) {
+    struct Deserialize {
+        segment: u32
     }
 
     #[derive(SystemData)]
     struct DeserializeSystemData<'a> {
+        memory_arbiter: Write<'a, memorysystem::MemoryArbiter>,
         entities: Entities<'a>,
         marker_alloc: Write<'a, serialize::SerializeMarkerAllocator>,
         markers: WriteStorage<'a, serialize::SerializeMarker>,
@@ -180,43 +188,66 @@ fn deserialize_world(world: &World, data: &str) {
         mission_data: WriteStorage<'a, missions::data::MissionData>,
     }
 
-    impl<'a> System<'a> for Deserialize<'a> {
+    impl<'a> System<'a> for Deserialize {
         type SystemData = DeserializeSystemData<'a>;
 
         fn run(&mut self, mut data: Self::SystemData) {
-            let mut de = serde_json::de::Deserializer::from_str(self.raw_data);
+            //
+            // NOTE: System assumes that segment is available and will panic if data is not accesible.
+            //
 
-            DeserializeComponents::<CombinedSerialiationError, serialize::SerializeMarker>::deserialize(
-                &mut (
-                    data.creep_spawnings,
-                    data.creep_owners,
-                    data.room_data,
-                    data.job_data,
-                    data.operation_data,
-                    data.mission_data,
-                ),
-                &data.entities,
-                &mut data.markers,
-                &mut data.marker_alloc,
-                &mut de,
-            )
-            .unwrap_or_else(|e| eprintln!("Error: {}", e));
+            let world_data = data.memory_arbiter.get(self.segment).unwrap();
+
+            if !world_data.is_empty() {
+                let mut de = serde_json::de::Deserializer::from_str(&world_data);
+
+                DeserializeComponents::<CombinedSerialiationError, serialize::SerializeMarker>::deserialize(
+                    &mut (
+                        data.creep_spawnings,
+                        data.creep_owners,
+                        data.room_data,
+                        data.job_data,
+                        data.operation_data,
+                        data.mission_data,
+                    ),
+                    &data.entities,
+                    &mut data.markers,
+                    &mut data.marker_alloc,
+                    &mut de,
+                )
+                .unwrap_or_else(|e| error!("Error: {}", e));
+            }
         }
     }
 
-    let mut sys = Deserialize { raw_data: data };
+    let mut sys = Deserialize { segment };
 
     sys.run_now(&world);
 }
 
+#[cfg_attr(feature = "time", timing)]
 fn game_loop() {
-    scope_timing!("Main tick");
-
     features::js::prepare();
 
-    //info!("Tick start - CPU: {}", screeps::game::cpu::get_used());
-
     let mut world = World::new();
+
+    let mut memory_arbiter = memorysystem::MemoryArbiter::default();
+
+    let component_segment = 50;
+
+    memory_arbiter.request(component_segment);
+
+    if !memory_arbiter.is_active(component_segment) {
+        world.insert(memory_arbiter);
+
+        let mut memory_system = memorysystem::MemoryArbiterSystem {};
+
+        memory_system.run_now(&world);
+
+        return;
+    } else {
+        world.insert(memory_arbiter);
+    }
 
     world.insert(serialize::SerializeMarkerAllocator::new());
     world.register::<serialize::SerializeMarker>();
@@ -264,6 +295,7 @@ fn game_loop() {
         .with_barrier()
         .with(visualize::VisualizerSystem, "visualizer", &[])
         .with(stats::StatsSystem, "stats", &[])
+        .with(memorysystem::MemoryArbiterSystem, "memory", &[])
         .build();
 
     main_dispatcher.setup(&mut world);
@@ -272,12 +304,7 @@ fn game_loop() {
     // Deserialize world state.
     //
 
-    //TODO: Use a memory segment and raw memory to avoid extra string serialize.
-    if let Ok(entry) = memory::root().string("native") {
-        if let Some(data) = entry {
-            deserialize_world(&world, &data);
-        }
-    }
+    deserialize_world(&world, component_segment);
 
     //
     // Prepare globals
@@ -319,12 +346,7 @@ fn game_loop() {
     // Serialize world state.
     //
 
-    serialize_world(&world, |data| {
-        //TODO: Use a memory segment and raw memory to avoid extra string serialize.
-        memory::root().set("native", data);
-    });
-
-    //info!("Tick end - CPU: {}", screeps::game::cpu::get_used());
+    serialize_world(&world, component_segment);
 }
 
 fn cleanup_memory() -> Result<(), Box<dyn (::std::error::Error)>> {

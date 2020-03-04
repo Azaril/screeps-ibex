@@ -10,8 +10,6 @@ impl<'a> System<'a> for CreateRoomDataSystem {
     type SystemData = (Entities<'a>, WriteStorage<'a, RoomData>, Read<'a, LazyUpdate>);
 
     fn run(&mut self, (entities, room_datas, updater): Self::SystemData) {
-        scope_timing!("CreateRoomDataSystem");
-
         let existing_rooms = (&entities, &room_datas)
             .join()
             .map(|(_, room_data)| room_data.name)
