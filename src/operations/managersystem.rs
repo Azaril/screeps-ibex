@@ -1,4 +1,6 @@
 use specs::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 use super::claim::*;
 use super::construction::*;
@@ -12,12 +14,11 @@ use super::upgrade::*;
 
 pub struct OperationManagerSystem;
 
+#[cfg_attr(feature = "time", timing)]
 impl<'a> System<'a> for OperationManagerSystem {
     type SystemData = (Entities<'a>, ReadStorage<'a, OperationData>, Read<'a, LazyUpdate>);
 
     fn run(&mut self, (entities, operations, updater): Self::SystemData) {
-        scope_timing!("OperationManagerSystem");
-
         //TODO: Come up with a better way of doing this for always-running operations.
         let mut has_local_supply = false;
         let mut has_upgrade = false;

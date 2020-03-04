@@ -5,6 +5,8 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 use super::data::*;
 use super::operationsystem::*;
@@ -20,6 +22,7 @@ pub struct ClaimOperation {
     claim_missions: EntityVec,
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl ClaimOperation {
     pub fn build<B>(builder: B) -> B
     where
@@ -40,6 +43,7 @@ impl ClaimOperation {
 }
 
 #[allow(clippy::cognitive_complexity)]
+#[cfg_attr(feature = "time", timing)]
 impl Operation for ClaimOperation {
     fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
@@ -60,8 +64,6 @@ impl Operation for ClaimOperation {
         system_data: &OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
-        scope_timing!("ClaimOperation");
-
         let current_gcl = game::gcl::level();
         let current_claim_missions = self.claim_missions.0.len();
         let mut currently_owned_rooms = 0;

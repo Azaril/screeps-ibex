@@ -1,4 +1,6 @@
 use specs::prelude::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 use super::data::*;
 use crate::creep::*;
@@ -69,12 +71,11 @@ pub trait Mission {
 
 pub struct PreRunMissionSystem;
 
+#[cfg_attr(feature = "time", timing)]
 impl<'a> System<'a> for PreRunMissionSystem {
     type SystemData = MissionSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        scope_timing!("PreRunMissionSystem");
-
         let system_data = MissionExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
@@ -131,12 +132,11 @@ impl<'a> System<'a> for PreRunMissionSystem {
 
 pub struct RunMissionSystem;
 
+#[cfg_attr(feature = "time", timing)]
 impl<'a> System<'a> for RunMissionSystem {
     type SystemData = MissionSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        scope_timing!("RunMissionSystem");
-
         let system_data = MissionExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,

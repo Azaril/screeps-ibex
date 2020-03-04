@@ -1,5 +1,7 @@
 use screeps::*;
 use serde::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 use super::jobsystem::*;
 
@@ -10,12 +12,14 @@ pub struct ScoutJob {
     room_history: Vec<RoomName>
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl ScoutJob {
     pub fn new(room_target: RoomName) -> ScoutJob {
         ScoutJob { room_target, room_history: Vec::new() }
     }
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl Job for ScoutJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();
@@ -28,8 +32,6 @@ impl Job for ScoutJob {
 
     fn run_job(&mut self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         let creep = runtime_data.owner;
-
-        scope_timing!("Scout Job - {}", creep.name());
 
         let creep_pos = creep.pos();
         let target_pos = Position::new(25, 25, self.room_target);

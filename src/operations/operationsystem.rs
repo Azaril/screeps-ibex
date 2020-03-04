@@ -1,4 +1,6 @@
 use specs::prelude::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 use super::data::*;
 use crate::mappingsystem::MappingData;
@@ -57,12 +59,11 @@ pub trait Operation {
 
 pub struct PreRunOperationSystem;
 
+#[cfg_attr(feature = "time", timing)]
 impl<'a> System<'a> for PreRunOperationSystem {
     type SystemData = OperationSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        scope_timing!("PreRunOperationSystem");
-
         let system_data = OperationExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
@@ -103,12 +104,11 @@ impl<'a> System<'a> for PreRunOperationSystem {
 
 pub struct RunOperationSystem;
 
+#[cfg_attr(feature = "time", timing)]
 impl<'a> System<'a> for RunOperationSystem {
     type SystemData = OperationSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        scope_timing!("RunOperationSystem");
-
         let system_data = OperationExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,

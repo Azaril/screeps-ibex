@@ -1,6 +1,7 @@
 use screeps::*;
 use serde::*;
-
+#[cfg(feature = "time")]
+use timing_annotate::*;
 use super::jobsystem::*;
 use crate::remoteobjectid::*;
 
@@ -9,6 +10,7 @@ pub struct ReserveJob {
     pub reserve_target: RemoteObjectId<StructureController>,
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl ReserveJob {
     pub fn new(controller_id: RemoteObjectId<StructureController>) -> ReserveJob {
         ReserveJob {
@@ -17,6 +19,7 @@ impl ReserveJob {
     }
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl Job for ReserveJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();
@@ -29,8 +32,6 @@ impl Job for ReserveJob {
 
     fn run_job(&mut self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         let creep = runtime_data.owner;
-
-        scope_timing!("Reserve Job - {}", creep.name());
 
         //
         // Reserver controller.

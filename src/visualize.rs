@@ -439,8 +439,6 @@ impl<'a> System<'a> for VisualizerSystem {
     type SystemData = VisualizerSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        scope_timing!("VisualizerSystem");
-
         if let Some(visualizer) = &mut data.visualizer {
             visualizer.global.apply(None);
 

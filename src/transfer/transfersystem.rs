@@ -735,8 +735,6 @@ impl<'a> System<'a> for TransferQueueSystem {
     type SystemData = TransferQueueSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        scope_timing!("TransferQueueSystem");
-
         if let Some(visualizer) = &mut data.visualizer {
             if let Some(ui) = &mut data.ui {
                 data.transfer_queue.visualize(ui, visualizer);

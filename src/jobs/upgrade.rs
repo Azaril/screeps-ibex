@@ -4,6 +4,8 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 use super::jobsystem::*;
 use super::utility::controllerbehavior::*;
@@ -29,6 +31,7 @@ pub struct UpgradeJob {
     state: UpgradeState,
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl UpgradeJob {
     pub fn new(home_room: Entity) -> UpgradeJob {
         UpgradeJob {
@@ -61,6 +64,7 @@ impl UpgradeJob {
     }
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl Job for UpgradeJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();
@@ -108,8 +112,6 @@ impl Job for UpgradeJob {
 
     fn run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         let creep = runtime_data.owner;
-
-        scope_timing!("Build Job - {}", creep.name());
 
         if let Some(home_room_data) = system_data.room_data.get(self.home_room) {
             loop {

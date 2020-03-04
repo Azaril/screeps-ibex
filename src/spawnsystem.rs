@@ -109,8 +109,6 @@ impl<'a> System<'a> for SpawnQueueSystem {
     type SystemData = SpawnQueueSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        scope_timing!("SpawnQueueSystem");
-
         if let Some(visualizer) = &mut data.visualizer {
             if let Some(ui) = &mut data.ui {
                 data.spawn_queue.visualize(ui, visualizer);

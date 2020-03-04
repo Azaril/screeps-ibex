@@ -2,6 +2,7 @@ use screeps::*;
 use specs::prelude::*;
 use serde::*;
 use std::collections::HashMap;
+use super::memorysystem::*;
 
 #[derive(Serialize)]
 pub struct CpuStats {
@@ -41,12 +42,6 @@ pub struct ShardStats {
 #[derive(Serialize)]
 pub struct Stats {
     shard: HashMap<String, ShardStats>
-}
-
-#[derive(SystemData)]
-pub struct StatsSystemData<'a> {
-    entities: Entities<'a>,
-    room_data: WriteStorage<'a, ::room::data::RoomData>
 }
 
 pub struct StatsSystem;
@@ -116,21 +111,27 @@ impl StatsSystem {
     }
 }
 
+#[derive(SystemData)]
+pub struct StatsSystemData<'a> {
+    entities: Entities<'a>,
+    room_data: ReadStorage<'a, ::room::data::RoomData>,
+    memory_arbiter: Write<'a, MemoryArbiter>,
+}
+
 impl<'a> System<'a> for StatsSystem {
     type SystemData = StatsSystemData<'a>;
 
-    fn run(&mut self, data: Self::SystemData) {
-        scope_timing!("StatsSystem");
+    fn run(&mut self, mut data: Self::SystemData) {
+        data.memory_arbiter.request(99);
 
-        let stats = Stats {
-            shard: Self::get_shards_stats(&data)
-        };
-
-        //TODO: Add system to gather segment requests.
-        raw_memory::set_active_segments(&[99]);
-
-        if let Ok(stats_data) = serde_json::to_string(&stats) {
-            raw_memory::set_segment(99, &stats_data);
-        }
+        if data.memory_arbiter.is_active(99) {
+            let stats = Stats {
+                shard: Self::get_shards_stats(&data)
+            };
+    
+            if let Ok(stats_data) = serde_json::to_string(&stats) {
+                data.memory_arbiter.set(99, &stats_data);
+            }
+        }        
     }
 }

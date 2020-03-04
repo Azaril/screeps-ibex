@@ -3,7 +3,10 @@ use crate::transfer::transfersystem::*;
 use itertools::*;
 use screeps::*;
 use std::collections::HashMap;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
+#[cfg_attr(feature = "time", timing)]
 pub fn get_new_pickup_state<F, R>(
     creep: &Creep,
     pickup_rooms: &[&RoomData],
@@ -36,6 +39,7 @@ where
     None
 }
 
+#[cfg_attr(feature = "time", timing)]
 pub fn get_new_delivery_current_resources_state<F, R>(
     creep: &Creep,
     delivery_rooms: &[&RoomData],
@@ -64,6 +68,7 @@ where
     None
 }
 
+#[cfg_attr(feature = "time", timing)]
 pub fn run_pickup_state<F, R>(
     creep: &Creep,
     ticket: &mut TransferWithdrawTicket,
@@ -113,6 +118,7 @@ where
     }
 }
 
+#[cfg_attr(feature = "time", timing)]
 pub fn run_delivery_state<F, R>(
     creep: &Creep,
     ticket: &mut TransferDepositTicket,

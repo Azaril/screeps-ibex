@@ -2,6 +2,8 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 use super::data::*;
 use super::operationsystem::*;
@@ -11,6 +13,7 @@ use crate::missions::tower::*;
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct TowerOperation {}
 
+#[cfg_attr(feature = "time", timing)]
 impl TowerOperation {
     pub fn build<B>(builder: B) -> B
     where
@@ -28,6 +31,7 @@ impl TowerOperation {
     }
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl Operation for TowerOperation {
     fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
@@ -40,8 +44,6 @@ impl Operation for TowerOperation {
         system_data: &OperationExecutionSystemData,
         _runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
-        scope_timing!("TowerOperation");
-
         for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
             if let Some(room) = game::rooms::get(room_data.name) {
                 //TODO: Factor this out.

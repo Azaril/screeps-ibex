@@ -5,6 +5,8 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 use super::jobsystem::*;
 use super::utility::haulbehavior::*;
@@ -28,6 +30,7 @@ pub struct HaulJob {
     pub state: HaulState,
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl HaulJob {
     pub fn new(haul_rooms: &[Entity]) -> HaulJob {
         HaulJob {
@@ -129,6 +132,7 @@ impl HaulJob {
     }
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl Job for HaulJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();
@@ -183,8 +187,6 @@ impl Job for HaulJob {
 
     fn run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         let creep = runtime_data.owner;
-
-        scope_timing!("Haul Job - {}", creep.name());
 
         let haul_rooms = self.haul_rooms.0.iter().filter_map(|e| system_data.room_data.get(*e)).collect_vec();
 

@@ -2,7 +2,10 @@ use super::build::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use screeps::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
+#[cfg_attr(feature = "time", timing)]
 pub fn get_new_build_state<F, R>(creep: &Creep, build_room: &RoomData, state_map: F) -> Option<R>
 where
     F: Fn(RemoteObjectId<ConstructionSite>) -> R,
@@ -19,6 +22,7 @@ where
     None
 }
 
+#[cfg_attr(feature = "time", timing)]
 pub fn run_build_state<F, R>(creep: &Creep, construction_site_id: &RemoteObjectId<ConstructionSite>, next_state: F) -> Option<R>
 where
     F: Fn() -> R,

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 use super::data::*;
 use super::operationsystem::*;
@@ -10,6 +12,7 @@ use crate::missions::data::*;
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct ConstructionOperation {}
 
+#[cfg_attr(feature = "time", timing)]
 impl ConstructionOperation {
     pub fn build<B>(builder: B) -> B
     where
@@ -27,6 +30,7 @@ impl ConstructionOperation {
     }
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl Operation for ConstructionOperation {
     fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
@@ -39,8 +43,6 @@ impl Operation for ConstructionOperation {
         system_data: &OperationExecutionSystemData,
         _runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
-        scope_timing!("ConstructionOperation");
-
         for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
             if let Some(dynamic_room_visiblity) = room_data.get_dynamic_visibility_data() {
                 if dynamic_room_visiblity.visible() && dynamic_room_visiblity.owner().mine() {

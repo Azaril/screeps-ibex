@@ -5,6 +5,8 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 use super::data::*;
 use super::missionsystem::*;
@@ -20,6 +22,7 @@ pub struct RemoteMineMission {
     harvesters: EntityVec,
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl RemoteMineMission {
     pub fn build<B>(builder: B, room_data: Entity, home_room_data: Entity) -> B
     where
@@ -63,6 +66,7 @@ impl RemoteMineMission {
     }
 }
 
+#[cfg_attr(feature = "time", timing)]
 impl Mission for RemoteMineMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
@@ -94,8 +98,6 @@ impl Mission for RemoteMineMission {
         system_data: &MissionExecutionSystemData,
         runtime_data: &mut MissionExecutionRuntimeData,
     ) -> Result<MissionResult, String> {
-        scope_timing!("RemoteMineMission");
-
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility data")?;
 
