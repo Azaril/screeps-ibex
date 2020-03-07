@@ -28,6 +28,10 @@ impl Location {
         }
     }
 
+    fn from_pos(pos: RoomPosition) -> Self {
+        Self::from_coords(pos.x(), pos.y())
+    }
+
     #[inline]
     pub fn x(self) -> u8 {
         ((self.packed >> 8) & 0xFF) as u8
@@ -149,6 +153,7 @@ impl<'a> Planner<'a> {
         Self::add_spawns(&self.room, &terrain, &mut state);
         Self::add_containers(&self.room, &terrain, &mut state);
         Self::add_extensions(&self.room, &terrain, &mut state);
+        Self::add_extractors(&self.room, &terrain, &mut state);
 
         Plan { state }
     }
@@ -342,6 +347,41 @@ impl<'a> Planner<'a> {
                     state.insert(
                         Location::from_coords(pos_x as u32, pos_y as u32),
                         RoomItem::Structure(StructureType::Container, RoomItemData { required_rcl: 2 }),
+                    );
+                }
+            }
+        }
+    }
+
+    fn add_extractors(room: &Room, _terrain: &RoomTerrain, state: &mut PlanState) {
+        let spawn_positions: Vec<Location> = state
+            .iter()
+            .filter_map(|(pos, entry)| match entry {
+                RoomItem::Structure(StructureType::Spawn, _) => Some(pos),
+                _ => None,
+            })
+            .cloned()
+            .collect();
+
+        for mineral in room.find(find::MINERALS) {
+            state.insert(
+                Location::from_pos(mineral.pos()),
+                RoomItem::Structure(StructureType::Extractor, RoomItemData { required_rcl: 6 }),
+            );
+
+            let nearest_spawn_path = spawn_positions
+                .iter()
+                .map(|p| p.to_room_position(room.name()))
+                .find_nearest_path_to(mineral.pos(), PathFinderHelpers::same_room_ignore_creeps_and_structures_range_1);
+
+            if let Some(Path::Vectorized(path)) = nearest_spawn_path {
+                if let Some(last_step) = path.last() {
+                    let pos_x = last_step.x as i32;
+                    let pos_y = last_step.y as i32;
+
+                    state.insert(
+                        Location::from_coords(pos_x as u32, pos_y as u32),
+                        RoomItem::Structure(StructureType::Container, RoomItemData { required_rcl: 6 }),
                     );
                 }
             }
