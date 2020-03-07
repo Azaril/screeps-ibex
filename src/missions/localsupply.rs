@@ -90,7 +90,7 @@ impl LocalSupplyMission {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Harvest(::jobs::harvest::HarvestJob::new(source_id, delivery_room));
+                let creep_job = JobData::Harvest(::jobs::harvest::HarvestJob::new(source_id, delivery_room, true));
 
                 let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
 
@@ -683,8 +683,8 @@ impl Mission for LocalSupplyMission {
         // Cleanup creeps that no longer exist.
         //
 
-        self.harvesters.0.retain(|entity| system_data.entities.is_alive(*entity));
-        self.miners.0.retain(|entity| system_data.entities.is_alive(*entity));
+        self.harvesters.0.retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
+        self.miners.0.retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         //TODO: Cache structure + creep data.
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;

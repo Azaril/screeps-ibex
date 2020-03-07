@@ -90,7 +90,7 @@ impl Mission for ScoutMission {
         // Cleanup scouts that no longer exist.
         //
 
-        self.scouts.0.retain(|entity| system_data.entities.is_alive(*entity));
+        self.scouts.0.retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
     }

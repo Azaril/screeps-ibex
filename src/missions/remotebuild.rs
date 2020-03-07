@@ -90,7 +90,7 @@ impl Mission for RemoteBuildMission {
         // Cleanup creeps that no longer exist.
         //
 
-        self.builders.0.retain(|entity| system_data.entities.is_alive(*entity));
+        self.builders.0.retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
     }
