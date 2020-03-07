@@ -51,10 +51,11 @@ impl BuildJob {
         get_new_build_state(creep, build_room_data, BuildState::Build)
             .or_else(|| get_new_repair_state(creep, build_room_data, None, BuildState::Repair))
             .or_else(|| {
-                get_new_pickup_state(
+                get_new_pickup_state_fill_resource(
                     creep,
                     &[build_room_data],
                     TransferPriorityFlags::ALL,
+                    ResourceType::Energy,
                     transfer_queue,
                     BuildState::Pickup,
                 )
@@ -63,7 +64,7 @@ impl BuildJob {
     }
 
     fn run_finished_pickup_state(creep: &Creep, pickup_rooms: &[&RoomData], transfer_queue: &mut TransferQueue) -> Option<BuildState> {
-        get_new_pickup_state(creep, pickup_rooms, TransferPriorityFlags::ALL, transfer_queue, BuildState::Pickup).or(Some(BuildState::Idle))
+        get_new_pickup_state_fill_resource(creep, pickup_rooms, TransferPriorityFlags::ALL, ResourceType::Energy, transfer_queue, BuildState::Pickup).or(Some(BuildState::Idle))
     }
 
     fn run_finished_build_state(creep: &Creep, build_room: &RoomData) -> Option<BuildState> {

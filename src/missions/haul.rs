@@ -119,7 +119,7 @@ impl Mission for HaulMission {
             let body_definition = crate::creep::SpawnBodyDefinition {
                 maximum_energy: energy_to_use,
                 minimum_repeat: Some(1),
-                maximum_repeat: Some(8),
+                maximum_repeat: Some(5),
                 pre_body: &[],
                 repeat_body: &[Part::Carry, Part::Move],
                 post_body: &[],

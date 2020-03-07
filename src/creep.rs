@@ -121,7 +121,11 @@ impl Spawning {
             return Err(())
         }
 
-        let max_possible_repeat_parts_by_length = (MAX_CREEP_SIZE as usize - fixed_body_length) / definition.repeat_body.len();
+        let max_possible_repeat_parts_by_length = if !definition.repeat_body.is_empty() {
+            (MAX_CREEP_SIZE as usize - fixed_body_length) / definition.repeat_body.len()
+        } else {
+            0usize
+        };
 
         let max_possible_repeat_parts = max_possible_repeat_parts_by_cost.min(max_possible_repeat_parts_by_length);
 

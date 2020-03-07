@@ -1,3 +1,5 @@
+use screeps::*;
+
 #[macro_use] 
 extern crate log;
 
@@ -41,13 +43,13 @@ pub fn start_guard<S: Into<StrCow>>(name: S) -> SpanGuard {
 fn start<S: Into<StrCow>>(name: S) {
     let name = name.into();
 
-    info!("Enter: {:?}", name);
+    info!("Enter: {:?} - CPU: {}", name, game::cpu::get_used());
 }
 
 fn end<S: Into<StrCow>>(name: S) -> u64 {
     let name = name.into();
 
-    info!("Exit: {:?}", name);
+    info!("Exit: {:?} - CPU: {}", name, game::cpu::get_used());
 
     0
 }

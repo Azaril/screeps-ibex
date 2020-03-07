@@ -19,6 +19,7 @@ pub struct MissionSystemData<'a> {
     entities: Entities<'a>,
     spawn_queue: Write<'a, SpawnQueue>,
     creep_owner: ReadStorage<'a, CreepOwner>,
+    creep_spawning: ReadStorage<'a, CreepSpawning>,
     job_data: WriteStorage<'a, JobData>,
     visualizer: Option<Write<'a, Visualizer>>,
     ui: Option<Write<'a, UISystem>>,
@@ -30,6 +31,7 @@ pub struct MissionExecutionSystemData<'a> {
     pub room_data: &'a WriteStorage<'a, RoomData>,
     pub entities: &'a Entities<'a>,
     pub creep_owner: &'a ReadStorage<'a, CreepOwner>,
+    pub creep_spawning: &'a ReadStorage<'a, CreepSpawning>,
     pub job_data: &'a WriteStorage<'a, JobData>,
 }
 
@@ -81,6 +83,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
             entities: &data.entities,
             room_data: &data.room_data,
             creep_owner: &data.creep_owner,
+            creep_spawning: &data.creep_spawning,
             job_data: &data.job_data,
         };
 
@@ -142,6 +145,7 @@ impl<'a> System<'a> for RunMissionSystem {
             entities: &data.entities,
             room_data: &data.room_data,
             creep_owner: &data.creep_owner,
+            creep_spawning: &data.creep_spawning,
             job_data: &data.job_data,
         };
 

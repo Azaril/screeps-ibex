@@ -4,8 +4,17 @@ let stdweb_vars = null;
 let wasm_instance = null;
 let initialized_stdweb_vars = false;
 
+function wasm_reset() {
+    wasm_module = null;
+    stdweb_vars = null;
+    wasm_instance = null;
+    initialized_stdweb_vars = false;
+
+    module.exports.loop = wasm_initialize;
+}
+
 function wasm_initialize() {
-    if (Game.cpu.bucket < 500) {
+    if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
         return;
     }
 
@@ -13,25 +22,31 @@ function wasm_initialize() {
         const wasm_bytes = wasm_fetch_module_bytes();
         console.log("Reset! Code length: " + wasm_bytes.length);
         wasm_module = new WebAssembly.Module(wasm_bytes);
+
+        return;
     }
 
-    if (Game.cpu.bucket < 500) {
+    if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
         return;
     }
     
     if (stdweb_vars == null) {
         stdweb_vars = wasm_create_stdweb_vars();
+
+        return;
     }
 
-    if (Game.cpu.bucket < 500) {
+    if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
         return;
     }
 
     if (wasm_instance == null) {
         wasm_instance = new WebAssembly.Instance(wasm_module, stdweb_vars.imports);
+
+        return;
     }
     
-    if (Game.cpu.bucket < 500) {
+    if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
         return;
     }
 
@@ -39,15 +54,14 @@ function wasm_initialize() {
         stdweb_vars.initialize(wasm_instance);
 
         initialized_stdweb_vars = true;
+
+        return;
     }
     
-    if (Game.cpu.bucket < 500) {
+    if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
         return;
     }
 
-    console.log("Complete");
-
-    //module.exports.loop = function() { console.log("Tick"); };
     module.exports.loop();
 }
 

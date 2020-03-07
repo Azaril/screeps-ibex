@@ -53,6 +53,7 @@ pub struct PreRunJobSystem;
 impl<'a> System<'a> for PreRunJobSystem {
     type SystemData = JobSystemData<'a>;
 
+    #[cfg_attr(feature = "time", timing)]
     fn run(&mut self, mut data: Self::SystemData) {
         let system_data = JobExecutionSystemData {
             updater: &data.updater,
@@ -96,6 +97,7 @@ pub struct RunJobSystem;
 impl<'a> System<'a> for RunJobSystem {
     type SystemData = JobSystemData<'a>;
 
+    #[cfg_attr(feature = "time", timing)]
     fn run(&mut self, mut data: Self::SystemData) {
         let system_data = JobExecutionSystemData {
             updater: &data.updater,

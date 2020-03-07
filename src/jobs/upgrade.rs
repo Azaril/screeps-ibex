@@ -41,10 +41,11 @@ impl UpgradeJob {
     }
 
     fn run_idle_state(creep: &Creep, home_room_data: &RoomData, transfer_queue: &mut TransferQueue) -> Option<UpgradeState> {
-        get_new_pickup_state(
+        get_new_pickup_state_fill_resource(
             creep,
             &[home_room_data],
             TransferPriorityFlags::ALL,
+            ResourceType::Energy,
             transfer_queue,
             UpgradeState::Pickup,
         )
@@ -53,10 +54,11 @@ impl UpgradeJob {
     }
 
     fn run_finished_pickup_state(creep: &Creep, delivery_room_data: &RoomData, transfer_queue: &mut TransferQueue) -> Option<UpgradeState> {
-        get_new_pickup_state(
+        get_new_pickup_state_fill_resource(
             creep,
             &[delivery_room_data],
             TransferPriorityFlags::ALL,
+            ResourceType::Energy,
             transfer_queue,
             UpgradeState::Pickup,
         )

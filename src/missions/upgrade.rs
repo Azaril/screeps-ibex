@@ -115,7 +115,9 @@ impl Mission for UpgradeMission {
                 None
             };
 
-            let maximum_energy = if self.upgraders.0.is_empty() && controller_downgrade(controller.level()).map(|ticks| controller.ticks_to_downgrade() < ticks / 2).unwrap_or(false) {
+            let downgrade_risk = controller_downgrade(controller.level()).map(|ticks| controller.ticks_to_downgrade() < ticks / 2).unwrap_or(false);
+
+            let maximum_energy = if self.upgraders.0.is_empty() && downgrade_risk {
                 room.energy_available()
             } else {
                 room.energy_capacity_available()
@@ -131,8 +133,8 @@ impl Mission for UpgradeMission {
             };
 
             if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
-                let priority = if self.upgraders.0.is_empty() {
-                    SPAWN_PRIORITY_CRITICAL
+                let priority = if self.upgraders.0.is_empty() && downgrade_risk {
+                    SPAWN_PRIORITY_HIGH
                 } else {
                     SPAWN_PRIORITY_LOW
                 };

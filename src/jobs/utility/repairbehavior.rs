@@ -36,7 +36,7 @@ where
             }
         }
 
-        if !creep.pos().is_near_to(&structure) {
+        if !creep.pos().in_range_to(&structure, 3) {
             creep.move_to(&structure);
 
             return None;
