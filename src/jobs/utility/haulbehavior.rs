@@ -128,10 +128,6 @@ where
                 }                
             }
 
-            if deliveries.len() > 1 {
-                info!("Got multi delivery");
-            }
-
             return Some(state_map(pickup, deliveries));
         }
     }

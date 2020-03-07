@@ -84,7 +84,7 @@ impl Mission for ReserveMission {
         // Cleanup reservers that no longer exist.
         //
 
-        self.reservers.0.retain(|entity| system_data.entities.is_alive(*entity));
+        self.reservers.0.retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
     }

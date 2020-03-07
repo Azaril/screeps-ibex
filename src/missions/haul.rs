@@ -84,7 +84,7 @@ impl Mission for HaulMission {
         // Cleanup haulers that no longer exist.
         //
 
-        self.haulers.0.retain(|entity| system_data.entities.is_alive(*entity));
+        self.haulers.0.retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
     }
@@ -119,7 +119,7 @@ impl Mission for HaulMission {
             let body_definition = crate::creep::SpawnBodyDefinition {
                 maximum_energy: energy_to_use,
                 minimum_repeat: Some(1),
-                maximum_repeat: Some(5),
+                maximum_repeat: Some(6),
                 pre_body: &[],
                 repeat_body: &[Part::Carry, Part::Move],
                 post_body: &[],

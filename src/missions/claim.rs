@@ -85,7 +85,7 @@ impl Mission for ClaimMission {
         // Cleanup claimers that no longer exist.
         //
 
-        self.claimers.0.retain(|entity| system_data.entities.is_alive(*entity));
+        self.claimers.0.retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
     }
