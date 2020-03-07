@@ -792,7 +792,7 @@ pub struct TransferQueue {
     rooms: HashMap<RoomName, TransferQueueRoomData>,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum TransferCapacity {
     Infinite,
     Finite(u32)
@@ -1087,17 +1087,13 @@ impl TransferQueue {
         let available_resources = self
             .try_get_room(target.pos().room_name())
             .and_then(|r| r.try_get_node(target))
-            .map(|n| n.get_available_withdrawl_by_priorities(allowed_priorities))?;
+            .map(|n| n.get_available_withdrawl_by_priorities(TransferPriorityFlags::ALL))?;
 
         if available_resources.is_empty() {
             return None;
         }
 
-        let delivery = ALL_TRANSFER_PRIORITIES
-            .iter()
-            .filter(|priority| allowed_priorities.contains((*priority).into()))
-            .flat_map(|priority| self.get_additional_delivery(rooms, *priority, &available_resources, available_capacity, anchor_location))
-            .next()?;
+        let delivery = self.get_additional_delivery(rooms, allowed_priorities, &available_resources, available_capacity, anchor_location)?;
             
         let delivery_resources = delivery
             .resources()
@@ -1130,7 +1126,7 @@ impl TransferQueue {
     pub fn get_additional_delivery(
         &mut self,
         rooms: &[RoomName],
-        delivery_priority: TransferPriority,
+        allowed_priorities: TransferPriorityFlags,
         available_resources: &HashMap<ResourceType, u32>,
         available_capacity: TransferCapacity,
         anchor_location: RoomPosition
@@ -1139,7 +1135,7 @@ impl TransferQueue {
             return None;
         }
 
-        self.select_deliveries(rooms, delivery_priority.into(), &available_resources, available_capacity)
+        self.select_deliveries(rooms, allowed_priorities, &available_resources, available_capacity)
             .iter()
             .map(|delivery| {
                 let resources = delivery.resources.iter().flat_map(|(_, entries)| entries.iter().map(|e| e.amount)).sum::<u32>();

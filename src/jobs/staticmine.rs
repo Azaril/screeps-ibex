@@ -8,16 +8,22 @@ use crate::remoteobjectid::*;
 use timing_annotate::*;
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
+pub enum StaticMineTarget {
+    Source(RemoteObjectId<Source>),
+    Mineral(RemoteObjectId<Mineral>, RemoteObjectId<StructureExtractor>)
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
 pub struct StaticMineJob {
-    pub mine_target: RemoteObjectId<Source>,
+    pub mine_target: StaticMineTarget,
     pub container_target: RemoteObjectId<StructureContainer>,
 }
 
 #[cfg_attr(feature = "time", timing)]
 impl StaticMineJob {
-    pub fn new(source_id: RemoteObjectId<Source>, container_id: RemoteObjectId<StructureContainer>) -> StaticMineJob {
+    pub fn new(mine_target: StaticMineTarget, container_id: RemoteObjectId<StructureContainer>) -> StaticMineJob {
         StaticMineJob {
-            mine_target: source_id,
+            mine_target,
             container_target: container_id,
         }
     }
@@ -44,10 +50,25 @@ impl Job for StaticMineJob {
         //TODO: Validate container still exists? Recyle or reuse miner if it doesn't?
 
         if creep.pos().is_equal_to(&self.container_target.pos()) {
-            if let Some(source) = self.mine_target.resolve() {
-                creep.harvest(&source);
-            } else {
-                error!("Harvester has no assigned harvesting source! Name: {}", creep.name());
+            match self.mine_target {
+                StaticMineTarget::Source(source_id) => {
+                    if let Some(source) = source_id.resolve() {
+                        creep.harvest(&source);
+                    } else {
+                        error!("Harvester has no assigned harvesting source! Name: {}", creep.name());
+                    }
+                },
+                StaticMineTarget::Mineral(mineral_id, extractor_id) => {
+                    if let Some(extractor) = extractor_id.resolve() {
+                        if extractor.cooldown() == 0 {
+                            if let Some(mineral) = mineral_id.resolve() {
+                                creep.harvest(&mineral);
+                            } else {
+                                error!("Harvester has no assigned harvesting extractor! Name: {}", creep.name());
+                            }
+                        }
+                    }
+                }
             }
         } else {
             creep.move_to(&self.container_target.pos());

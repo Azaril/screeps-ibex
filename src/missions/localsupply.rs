@@ -15,6 +15,7 @@ use crate::remoteobjectid::*;
 use crate::room::data::*;
 use crate::serialize::*;
 use crate::transfer::transfersystem::*;
+use crate::jobs::staticmine::*;
 use jobs::data::*;
 use spawnsystem::*;
 
@@ -22,20 +23,24 @@ use spawnsystem::*;
 pub struct LocalSupplyMission {
     room_data: Entity,
     harvesters: EntityVec,
-    miners: EntityVec,
+    source_miners: EntityVec,
+    mineral_miners: EntityVec
 }
+
+type MineralExtractorPair = (RemoteObjectId<Mineral>, RemoteObjectId<StructureExtractor>);
 
 struct StructureData {
     sources_to_containers: HashMap<RemoteObjectId<Source>, Vec<RemoteObjectId<StructureContainer>>>,
     sources_to_links: HashMap<RemoteObjectId<Source>, Vec<RemoteObjectId<StructureLink>>>,
-    extractors_to_containers: HashMap<RemoteObjectId<StructureExtractor>, Vec<RemoteObjectId<StructureContainer>>>,
+    mineral_extractors_to_containers: HashMap<MineralExtractorPair, Vec<RemoteObjectId<StructureContainer>>>,
     controllers_to_containers: HashMap<RemoteObjectId<StructureController>, Vec<RemoteObjectId<StructureContainer>>>,
     containers: Vec<RemoteObjectId<StructureContainer>>,
 }
 
 struct CreepData {
     sources_to_harvesters: HashMap<RemoteObjectId<Source>, Vec<Entity>>,
-    containers_to_miners: HashMap<RemoteObjectId<StructureContainer>, Vec<Entity>>,
+    containers_to_source_miners: HashMap<RemoteObjectId<StructureContainer>, Vec<Entity>>,
+    containers_to_mineral_miners: HashMap<RemoteObjectId<StructureContainer>, Vec<Entity>>
 }
 
 #[cfg_attr(feature = "time", timing)]
@@ -55,27 +60,31 @@ impl LocalSupplyMission {
         LocalSupplyMission {
             room_data,
             harvesters: EntityVec::new(),
-            miners: EntityVec::new(),
+            source_miners: EntityVec::new(),
+            mineral_miners: EntityVec::new(),
         }
     }
 
     fn create_handle_container_miner_spawn(
         mission_entity: Entity,
-        source_id: RemoteObjectId<Source>,
-        container_id: RemoteObjectId<StructureContainer>,
+        target: StaticMineTarget,
+        container_id: RemoteObjectId<StructureContainer>
     ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::StaticMine(::jobs::staticmine::StaticMineJob::new(source_id, container_id));
+                let creep_job = JobData::StaticMine(::jobs::staticmine::StaticMineJob::new(target, container_id));
 
                 let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
 
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.miners.0.push(creep_entity);
+                    match target {
+                        StaticMineTarget::Source(_) => mission_data.source_miners.0.push(creep_entity),
+                        StaticMineTarget::Mineral(_, _) => mission_data.mineral_miners.0.push(creep_entity)
+                    }
                 }
             });
         })
@@ -151,15 +160,21 @@ impl LocalSupplyMission {
             })
             .into_group_map();
 
-        let extractors_to_containers = room_extractors
+        let minerals = room.find(find::MINERALS);
+
+        let mineral_extractors_to_containers = room_extractors
             .iter()
             .filter_map(|extractor| {
-                let nearby_container = containers
-                    .iter()
-                    .cloned()
-                    .find(|container| container.pos().is_near_to(&extractor.pos()));
+                if let Some(mineral) = minerals.iter().find(|m| m.pos() == extractor.pos()) {
+                    let nearby_container = containers
+                        .iter()
+                        .cloned()
+                        .find(|container| container.pos().is_near_to(&extractor.pos()));
 
-                nearby_container.map(|container| (*extractor, container))
+                    nearby_container.map(|container| ((mineral.remote_id(), *extractor), container))
+                } else {
+                    None
+                }
             })
             .into_group_map();
 
@@ -184,7 +199,7 @@ impl LocalSupplyMission {
         let structure_data = StructureData {
             sources_to_containers,
             sources_to_links,
-            extractors_to_containers,
+            mineral_extractors_to_containers,
             controllers_to_containers,
             containers,
         };
@@ -211,8 +226,21 @@ impl LocalSupplyMission {
             })
             .into_group_map();
 
-        let containers_to_miners = self
-            .miners
+        let containers_to_source_miners = self
+            .source_miners
+            .0
+            .iter()
+            .filter_map(|miner_entity| {
+                if let Some(JobData::StaticMine(miner_data)) = system_data.job_data.get(*miner_entity) {
+                    Some((miner_data.container_target, *miner_entity))
+                } else {
+                    None
+                }
+            })
+            .into_group_map();
+
+        let containers_to_mineral_miners = self
+            .mineral_miners
             .0
             .iter()
             .filter_map(|miner_entity| {
@@ -226,7 +254,8 @@ impl LocalSupplyMission {
 
         let creep_data = CreepData {
             sources_to_harvesters,
-            containers_to_miners,
+            containers_to_source_miners,
+            containers_to_mineral_miners,
         };
 
         Ok(creep_data)
@@ -254,8 +283,8 @@ impl LocalSupplyMission {
         //
 
         let total_harvesters = self.harvesters.0.len();
-        let total_miners = self.miners.0.len();
-        let total_harvesting_creeps = total_harvesters + total_miners;
+        let total_source_miners = self.source_miners.0.len();
+        let total_harvesting_creeps = total_harvesters + total_source_miners;
 
         let mut prioritized_sources = sources.clone();
 
@@ -274,7 +303,7 @@ impl LocalSupplyMission {
                         .iter()
                         .map(|container| {
                             creep_data
-                                .containers_to_miners
+                                .containers_to_source_miners
                                 .get(container)
                                 .map(|miners| miners.len())
                                 .unwrap_or(0)
@@ -299,7 +328,7 @@ impl LocalSupplyMission {
             let source_harvesters = creep_data.sources_to_harvesters.get(source_id).map(Vec::as_slice).unwrap_or(&[]);
             let source_miners = source_containers
                 .iter()
-                .filter_map(|container| creep_data.containers_to_miners.get(container))
+                .filter_map(|container| creep_data.containers_to_source_miners.get(container))
                 .flat_map(|m| m)
                 .collect_vec();
 
@@ -322,9 +351,9 @@ impl LocalSupplyMission {
                 .map(|entity| **entity)
                 .collect_vec();
 
-            let available_containers_for_miners = source_containers.iter().filter(|container| {
+            let available_containers_for_source_miners = source_containers.iter().filter(|container| {
                 creep_data
-                    .containers_to_miners
+                    .containers_to_source_miners
                     .get(container)
                     .map(|miners| !miners.iter().any(|miner| alive_source_miners.contains(miner)))
                     .unwrap_or(true)
@@ -334,7 +363,7 @@ impl LocalSupplyMission {
             // Spawn container miners.
             //
 
-            for container in available_containers_for_miners {
+            for container in available_containers_for_source_miners {
                 let energy_capacity = if likely_owned_room {
                     SOURCE_ENERGY_CAPACITY
                 } else {
@@ -358,7 +387,7 @@ impl LocalSupplyMission {
                         format!("Container Miner - Source: {}", source_id.id()),
                         &body,
                         SPAWN_PRIORITY_HIGH,
-                        Self::create_handle_container_miner_spawn(*runtime_data.entity, *source_id, *container),
+                        Self::create_handle_container_miner_spawn(*runtime_data.entity, StaticMineTarget::Source(*source_id), *container),
                     );
 
                     runtime_data.spawn_queue.request(room_data.name, spawn_request);
@@ -405,6 +434,68 @@ impl LocalSupplyMission {
             }
         }
 
+        for ((mineral_id, extractor_id), container_ids) in structure_data.mineral_extractors_to_containers.iter() {
+            let mineral_miners = container_ids
+                .iter()
+                .filter_map(|container| creep_data.containers_to_mineral_miners.get(container))
+                .flat_map(|m| m)
+                .collect_vec();
+
+            let alive_mineral_miners = mineral_miners
+                .iter()
+                .filter(|entity| {
+                    system_data
+                        .creep_spawning
+                        .get(***entity)
+                        .is_some() ||
+
+                    system_data
+                        .creep_owner
+                        .get(***entity)
+                        .and_then(|creep_owner| creep_owner.owner.resolve())
+                        .and_then(|creep| creep.ticks_to_live().ok())
+                        .map(|count| count > 50)
+                        .unwrap_or(false)
+                })
+                .map(|entity| **entity)
+                .collect_vec();
+
+            let available_containers_for_miners = container_ids.iter().filter(|container| {
+                    creep_data
+                        .containers_to_mineral_miners
+                        .get(container)
+                        .map(|miners| !miners.iter().any(|miner| alive_mineral_miners.contains(miner)))
+                        .unwrap_or(true)
+                });
+
+            //
+            // Spawn container miners.
+            //
+
+            for container in available_containers_for_miners {
+                //TODO: Compute correct body type.
+                let body_definition = crate::creep::SpawnBodyDefinition {
+                    maximum_energy: room.energy_capacity_available(),
+                    minimum_repeat: Some(1),
+                    maximum_repeat: Some(10),
+                    pre_body: &[Part::Move],
+                    repeat_body: &[Part::Work],
+                    post_body: &[],
+                };
+
+                if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+                    let spawn_request = SpawnRequest::new(
+                        format!("Container Miner - Extractor: {}", extractor_id.id()),
+                        &body,
+                        SPAWN_PRIORITY_LOW,
+                        Self::create_handle_container_miner_spawn(*runtime_data.entity, StaticMineTarget::Mineral(*mineral_id, *extractor_id), *container),
+                    );
+
+                    runtime_data.spawn_queue.request(room_data.name, spawn_request);
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -415,7 +506,7 @@ impl LocalSupplyMission {
         let provider_containers = structure_data
             .sources_to_containers
             .values()
-            .chain(structure_data.extractors_to_containers.values());
+            .chain(structure_data.mineral_extractors_to_containers.values());
 
         for containers in provider_containers {
             for container_id in containers {
@@ -480,7 +571,7 @@ impl LocalSupplyMission {
         let storage_containers = structure_data.containers.iter().filter(|container| {
             !structure_data.sources_to_containers.values().any(|c| c.contains(container))
                 && !structure_data.controllers_to_containers.values().any(|c| c.contains(container))
-                && !structure_data.extractors_to_containers.values().any(|c| c.contains(container))
+                && !structure_data.mineral_extractors_to_containers.values().any(|c| c.contains(container))
         });
 
         for container_id in storage_containers {
@@ -667,7 +758,7 @@ impl Mission for LocalSupplyMission {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
                 room_ui.missions().add_text(
-                    format!("Local Supply - Miners: {} Harvesters: {}", self.miners.0.len(), self.harvesters.0.len()),
+                    format!("Local Supply - Miners: {} Harvesters: {} Minerals: {}", self.source_miners.0.len(), self.harvesters.0.len(), self.mineral_miners.0.len()),
                     None,
                 );
             })
@@ -684,7 +775,8 @@ impl Mission for LocalSupplyMission {
         //
 
         self.harvesters.0.retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
-        self.miners.0.retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
+        self.source_miners.0.retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
+        self.mineral_miners.0.retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         //TODO: Cache structure + creep data.
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
