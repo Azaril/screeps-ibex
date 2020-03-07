@@ -5,3 +5,4 @@ pub mod harvestbehavior;
 pub mod haulbehavior;
 pub mod repair;
 pub mod repairbehavior;
+pub mod movebehavior;

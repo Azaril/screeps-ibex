@@ -307,6 +307,11 @@ impl LocalSupplyMission {
                 .iter()
                 .filter(|entity| {
                     system_data
+                        .creep_spawning
+                        .get(***entity)
+                        .is_some() ||
+
+                    system_data
                         .creep_owner
                         .get(***entity)
                         .and_then(|creep_owner| creep_owner.owner.resolve())
@@ -422,10 +427,12 @@ impl LocalSupplyMission {
                         let storage_fraction = (container_used_capacity as f32) / (container_store_capacity as f32);
                         let priority = if storage_fraction > 0.75 {
                             TransferPriority::High
-                        } else if storage_fraction > 0.25 {
+                        } else if storage_fraction > 0.5 {
                             TransferPriority::Medium
-                        } else {
+                        } else if storage_fraction > 0.25 {
                             TransferPriority::Low
+                        } else {
+                            TransferPriority::None
                         };
 
                         for resource in container.store_types() {

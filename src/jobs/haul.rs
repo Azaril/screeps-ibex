@@ -18,9 +18,8 @@ use crate::visualize::*;
 #[derive(Clone, Serialize, Deserialize)]
 pub enum HaulState {
     Idle,
-    Pickup(TransferWithdrawTicket),
-    FinishedPickup,
-    Delivery(TransferDepositTicket),
+    Pickup(TransferWithdrawTicket, Vec<TransferDepositTicket>),
+    Delivery(Vec<TransferDepositTicket>),
     FinishedDelivery,
 }
 
@@ -32,6 +31,7 @@ pub struct HaulJob {
 
 #[cfg_attr(feature = "time", timing)]
 impl HaulJob {
+    #[cfg_attr(feature = "time", timing)]
     pub fn new(haul_rooms: &[Entity]) -> HaulJob {
         HaulJob {
             haul_rooms: haul_rooms.into(),
@@ -39,6 +39,7 @@ impl HaulJob {
         }
     }
 
+    #[cfg_attr(feature = "time", timing)]
     fn run_idle_state(creep: &Creep, haul_rooms: &[&RoomData], transfer_queue: &mut TransferQueue) -> Option<HaulState> {
         ACTIVE_TRANSFER_PRIORITIES
             .iter()
@@ -51,7 +52,7 @@ impl HaulJob {
                     HaulState::Delivery,
                 )
                 .or_else(|| {
-                    get_new_pickup_state(
+                    get_new_pickup_and_delivery_full_capacity_state(
                         creep,
                         haul_rooms,
                         TransferPriorityFlags::from(priority),
@@ -72,31 +73,7 @@ impl HaulJob {
             })
     }
 
-    fn run_finished_pickup_state(creep: &Creep, haul_rooms: &[&RoomData], transfer_queue: &mut TransferQueue) -> Option<HaulState> {
-        ACTIVE_TRANSFER_PRIORITIES
-            .iter()
-            .filter_map(|priority| {
-                get_new_pickup_state(
-                    creep,
-                    haul_rooms,
-                    TransferPriorityFlags::from(priority),
-                    transfer_queue,
-                    HaulState::Pickup,
-                )
-                .or_else(|| {
-                    get_new_delivery_current_resources_state(
-                        creep,
-                        haul_rooms,
-                        TransferPriorityFlags::from(priority),
-                        transfer_queue,
-                        HaulState::Delivery,
-                    )
-                })
-            })
-            .next()
-            .or(Some(HaulState::Idle))
-    }
-
+    #[cfg_attr(feature = "time", timing)]
     fn run_finished_delivery_state(creep: &Creep, haul_rooms: &[&RoomData], transfer_queue: &mut TransferQueue) -> Option<HaulState> {
         ACTIVE_TRANSFER_PRIORITIES
             .iter()
@@ -109,7 +86,7 @@ impl HaulJob {
                     HaulState::Delivery,
                 )
                 .or_else(|| {
-                    get_new_pickup_state(
+                    get_new_pickup_and_delivery_full_capacity_state(
                         creep,
                         haul_rooms,
                         TransferPriorityFlags::from(priority),
@@ -134,6 +111,7 @@ impl HaulJob {
 
 #[cfg_attr(feature = "time", timing)]
 impl Job for HaulJob {
+    #[cfg_attr(feature = "time", timing)]
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();
         let pos = describe_data.owner.pos();
@@ -145,28 +123,44 @@ impl Job for HaulJob {
                     HaulState::Idle => {
                         room_ui.jobs().add_text(format!("Haul - {} - Idle", name), None);
                     }
-                    HaulState::Pickup(ticket) => {
+                    HaulState::Pickup(pickup_ticket, delivery_tickets) => {
                         room_ui.jobs().add_text(format!("Haul - {} - Pickup", name), None);
 
-                        let to = ticket.target().pos();
-                        room_ui.visualizer().line(
-                            (pos.x() as f32, pos.y() as f32),
-                            (to.x() as f32, to.y() as f32),
-                            Some(LineStyle::default().color("blue")),
-                        );
+                        if crate::features::transfer::visualize_haul() {
+                            let pickup_pos = pickup_ticket.target().pos();
+                            room_ui.visualizer().line(
+                                (pos.x() as f32, pos.y() as f32),
+                                (pickup_pos.x() as f32, pickup_pos.y() as f32),
+                                Some(LineStyle::default().color("blue")),
+                            );
+
+                            let mut last_pos = pickup_pos;
+                            for delivery_ticket in delivery_tickets.iter() {
+                                let delivery_pos = delivery_ticket.target().pos();
+                                room_ui.visualizer().line(
+                                    (last_pos.x() as f32, last_pos.y() as f32),
+                                    (delivery_pos.x() as f32, delivery_pos.y() as f32),
+                                    Some(LineStyle::default().color("green")),
+                                );
+                                last_pos = delivery_pos;
+                            }
+                        }
                     }
-                    HaulState::FinishedPickup => {
-                        room_ui.jobs().add_text(format!("Haul - {} - Finished Pickup", name), None);
-                    }
-                    HaulState::Delivery(ticket) => {
+                    HaulState::Delivery(delivery_tickets) => {
                         room_ui.jobs().add_text(format!("Haul - {} - Delivery", name), None);
 
-                        let to = ticket.target().pos();
-                        room_ui.visualizer().line(
-                            (pos.x() as f32, pos.y() as f32),
-                            (to.x() as f32, to.y() as f32),
-                            Some(LineStyle::default().color("green")),
-                        );
+                        if crate::features::transfer::visualize_haul() {
+                            let mut last_pos = pos;
+                            for delivery_ticket in delivery_tickets.iter() {
+                                let delivery_pos = delivery_ticket.target().pos();
+                                room_ui.visualizer().line(
+                                    (last_pos.x() as f32, last_pos.y() as f32),
+                                    (delivery_pos.x() as f32, delivery_pos.y() as f32),
+                                    Some(LineStyle::default().color("green")),
+                                );
+                                last_pos = delivery_pos;
+                            }
+                        }
                     }
                     HaulState::FinishedDelivery => {
                         room_ui.jobs().add_text(format!("Haul - {} - Finished Delivery", name), None);
@@ -175,16 +169,26 @@ impl Job for HaulJob {
         }
     }
 
+    #[cfg_attr(feature = "time", timing)]
     fn pre_run_job(&mut self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         match &self.state {
             HaulState::Idle => {}
-            HaulState::Pickup(ticket) => runtime_data.transfer_queue.register_pickup(&ticket),
-            HaulState::FinishedPickup => {}
-            HaulState::Delivery(ticket) => runtime_data.transfer_queue.register_delivery(&ticket),
+            HaulState::Pickup(pickup_ticket, delivery_tickets) => {
+                runtime_data.transfer_queue.register_pickup(&pickup_ticket);
+                for delivery_ticket in delivery_tickets.iter() {
+                    runtime_data.transfer_queue.register_delivery(&delivery_ticket);
+                }
+            },
+            HaulState::Delivery(delivery_tickets) => {
+                for delivery_ticket in delivery_tickets.iter() {
+                    runtime_data.transfer_queue.register_delivery(&delivery_ticket);
+                }
+            },
             HaulState::FinishedDelivery => {}
         };
     }
 
+    #[cfg_attr(feature = "time", timing)]
     fn run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         let creep = runtime_data.owner;
 
@@ -193,10 +197,9 @@ impl Job for HaulJob {
         loop {
             let state_result = match &mut self.state {
                 HaulState::Idle => Self::run_idle_state(creep, &haul_rooms, runtime_data.transfer_queue),
-                HaulState::Pickup(ticket) => run_pickup_state(creep, ticket, runtime_data.transfer_queue, || HaulState::FinishedPickup),
-                HaulState::FinishedPickup => Self::run_finished_pickup_state(creep, &haul_rooms, runtime_data.transfer_queue),
-                HaulState::Delivery(ticket) => {
-                    run_delivery_state(creep, ticket, runtime_data.transfer_queue, || HaulState::FinishedDelivery)
+                HaulState::Pickup(pickup_ticket, delivery_tickets) => run_pickup_state(creep, pickup_ticket, runtime_data.transfer_queue, || HaulState::Delivery(delivery_tickets.clone())),
+                HaulState::Delivery(delivery_tickets) => {
+                    run_delivery_state(creep, delivery_tickets, runtime_data.transfer_queue, || HaulState::FinishedDelivery)
                 }
                 HaulState::FinishedDelivery => Self::run_finished_delivery_state(creep, &haul_rooms, runtime_data.transfer_queue),
             };

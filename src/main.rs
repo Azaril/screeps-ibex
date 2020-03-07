@@ -45,7 +45,7 @@ mod structureidentifier;
 mod transfer;
 mod ui;
 mod visualize;
-mod stats;
+mod statssystem;
 mod memorysystem;
 
 use std::fmt;
@@ -82,7 +82,8 @@ fn main() {
                 console_error("resetting VM next tick.");
                 // reset the VM since we don't know if everything was cleaned up and don't
                 // want an inconsistent state.
-                Game.cpu.halt()
+                module.exports.loop = wasm_reset;
+                //TODO: Halting here seems to cause more problems than it solves.
             }
         }
     }
@@ -289,12 +290,12 @@ fn game_loop() {
         .with(missions::missionsystem::RunMissionSystem, "run_missions", &[])
         .with(jobs::jobsystem::RunJobSystem, "run_jobs", &[])
         .with_barrier()
-        .with(room::visibilitysystem::VisibilityQueueSystem, "visibility", &[])
+        .with(room::visibilitysystem::VisibilityQueueSystem, "visibility_queue", &[])
         .with(spawnsystem::SpawnQueueSystem, "spawn_queue", &[])
-        .with(transfer::transfersystem::TransferQueueSystem, "transfer", &[])
+        .with(transfer::transfersystem::TransferQueueSystem, "transfer_queue", &[])
         .with_barrier()
         .with(visualize::VisualizerSystem, "visualizer", &[])
-        .with(stats::StatsSystem, "stats", &[])
+        .with(statssystem::StatsSystem, "stats", &[])
         .with(memorysystem::MemoryArbiterSystem, "memory", &[])
         .build();
 
