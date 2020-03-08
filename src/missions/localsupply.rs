@@ -319,7 +319,7 @@ impl LocalSupplyMission {
         // Spawn needed creeps for each source.
         //
 
-        for source_id in prioritized_sources.iter() {
+        for source_id in prioritized_sources.iter().rev() {
             let source_containers = structure_data
                 .sources_to_containers
                 .get(source_id)
