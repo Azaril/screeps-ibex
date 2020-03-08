@@ -10,8 +10,8 @@ pub struct CreepOwner {
 }
 
 impl CreepOwner {
-    pub fn new(creep: &Creep) -> CreepOwner {
-        CreepOwner { owner: creep.id() }
+    pub fn new(creep_id: ObjectId<Creep>) -> CreepOwner {
+        CreepOwner { owner: creep_id }
     }
 }
 
@@ -31,14 +31,15 @@ impl CreepSpawning {
 pub struct WaitForSpawnSystem;
 
 impl<'a> System<'a> for WaitForSpawnSystem {
-    type SystemData = (Entities<'a>, ReadStorage<'a, CreepSpawning>, Read<'a, LazyUpdate>);
+    type SystemData = (Entities<'a>, WriteStorage<'a, CreepSpawning>, WriteStorage<'a, CreepOwner>);
 
-    fn run(&mut self, (entities, spawnings, updater): Self::SystemData) {
-        for (entity, spawning) in (&entities, &spawnings).join() {
+    fn run(&mut self, (entities, mut creep_spawning, mut creep_owner): Self::SystemData) {
+        let mut ready_creeps = Vec::new();
+
+        for (entity, spawning) in (&entities, &creep_spawning).join() {
             if let Some(creep) = game::creeps::get(&spawning.name) {
                 if !creep.spawning() {
-                    updater.remove::<CreepSpawning>(entity);
-                    updater.insert(entity, CreepOwner::new(&creep));
+                    ready_creeps.push((entity, creep.id()));
                 }
             } else {
                 warn!("Deleting entity for spawning creep as it no longer exists. Name: {}", spawning.name);
@@ -47,6 +48,11 @@ impl<'a> System<'a> for WaitForSpawnSystem {
                     warn!("Failed to delete creep entity that was stale. Error: {}", error);
                 }
             }
+        }
+
+        for (entity, creep_id) in ready_creeps {
+            creep_spawning.remove(entity);
+            let _ = creep_owner.insert(entity, CreepOwner::new(creep_id));
         }
     }
 }
