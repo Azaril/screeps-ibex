@@ -82,26 +82,56 @@ impl Mission for TerminalMission {
                     _ => 10_000
                 };
 
+                //
+                // If there is excess resources in storage and a shortage in the terminal, request transfer of
+                // those resources.
+                //
+
                 if current_storage_amount > desired_storage_amount && current_terminal_amount < desired_terminal_amount {
                     let storage_excess = current_storage_amount - desired_storage_amount;
                     let terminal_shortage = desired_terminal_amount - current_terminal_amount;
 
                     let transfer_amount = storage_excess.min(terminal_shortage);
 
-                    let transfer_request = TransferDepositRequest::new(TransferTarget::Terminal(terminal_id), Some(*resource_type), TransferPriority::Medium, transfer_amount);
+                    if transfer_amount > 0 {
+                        let transfer_request = TransferDepositRequest::new(TransferTarget::Terminal(terminal_id), Some(*resource_type), TransferPriority::Medium, transfer_amount);
 
-                    runtime_data.transfer_queue.request_deposit(transfer_request);
+                        runtime_data.transfer_queue.request_deposit(transfer_request);
+                    }
                 }
 
-                if current_terminal_amount > desired_terminal_amount && current_storage_amount < desired_storage_amount {
+                //
+                // Make available any resources that are in the terminal and there is not sufficient amount in storage.
+                //
+
+                let made_available_amount = if current_storage_amount < desired_storage_amount {
+                    let transfer_amount = (desired_storage_amount - current_storage_amount).min(current_terminal_amount);
+
+                    if transfer_amount > 0 {
+                        let transfer_request = TransferWithdrawRequest::new(TransferTarget::Terminal(terminal_id), *resource_type, TransferPriority::None, transfer_amount);
+
+                        runtime_data.transfer_queue.request_withdraw(transfer_request);   
+                    }
+
+                    transfer_amount
+                } else { 
+                    0
+                };
+
+                //
+                // Actively transfer any resources that are in excess of the desired terminal amount and are not already
+                // being made avaiable due to storage shortage.
+                //
+
+                if current_terminal_amount > desired_terminal_amount {
                     let terminal_excess = current_terminal_amount - desired_terminal_amount;
-                    let storage_shortage = desired_storage_amount - current_storage_amount;
+                    let transfer_amount = (terminal_excess as i32) - (made_available_amount as i32);
 
-                    let transfer_amount = terminal_excess.min(storage_shortage);
+                    if transfer_amount > 0 {
+                        let transfer_request = TransferWithdrawRequest::new(TransferTarget::Terminal(terminal_id), *resource_type, TransferPriority::Medium, transfer_amount as u32);
 
-                    let transfer_request = TransferWithdrawRequest::new(TransferTarget::Terminal(terminal_id), *resource_type, TransferPriority::Medium, transfer_amount);
-
-                    runtime_data.transfer_queue.request_withdraw(transfer_request);
+                        runtime_data.transfer_queue.request_withdraw(transfer_request);
+                    }
                 }
             }
         }
