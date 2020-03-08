@@ -1,13 +1,12 @@
+use super::data::*;
+use super::operationsystem::*;
+use crate::missions::construction::*;
+use crate::missions::data::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 #[cfg(feature = "time")]
 use timing_annotate::*;
-
-use super::data::*;
-use super::operationsystem::*;
-use crate::missions::construction::*;
-use crate::missions::data::*;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct ConstructionOperation {}

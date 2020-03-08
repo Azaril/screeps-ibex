@@ -1,24 +1,23 @@
+use super::actions::*;
+use super::jobsystem::*;
+use super::utility::buildbehavior::*;
+use super::utility::controllerbehavior::*;
+use super::utility::harvestbehavior::*;
+use super::utility::haulbehavior::*;
+use super::utility::movebehavior::*;
+use super::utility::repair::*;
+use super::utility::repairbehavior::*;
+use crate::remoteobjectid::*;
+use crate::room::data::*;
+use crate::structureidentifier::*;
+use crate::transfer::transfersystem::*;
+use crate::visualize::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-
-use super::jobsystem::*;
-use super::utility::buildbehavior::*;
-use super::utility::controllerbehavior::*;
-use super::utility::harvestbehavior::*;
-use super::utility::haulbehavior::*;
-use super::utility::repair::*;
-use super::utility::repairbehavior::*;
-use super::utility::movebehavior::*;
-use super::actions::*;
-use crate::remoteobjectid::*;
-use crate::room::data::*;
-use crate::structureidentifier::*;
-use crate::transfer::transfersystem::*;
-use crate::visualize::*;
 
 #[cfg(feature = "time")]
 use timing_annotate::*;
@@ -66,7 +65,7 @@ impl HarvestJob {
         delivery_room_data: &RoomData,
         transfer_queue: &mut TransferQueue,
         harvest_target: &RemoteObjectId<Source>,
-        allow_haul: bool
+        allow_haul: bool,
     ) -> Option<HarvestState> {
         let in_delivery_room = creep.room().map(|r| r.name() == delivery_room_data.name).unwrap_or(false);
 
@@ -83,7 +82,7 @@ impl HarvestJob {
         }
 
         if let Some(state) = get_new_harvest_target_state(creep, harvest_target, HarvestState::Harvest) {
-            return Some(state)
+            return Some(state);
         };
 
         if in_delivery_room {
@@ -172,7 +171,7 @@ impl Job for HarvestJob {
                     }
                     HarvestState::Harvest(_) => {
                         room_ui.jobs().add_text(format!("Harvest - {} - Harvest", name), None);
-                    },
+                    }
                     HarvestState::Pickup(pickup_ticket, delivery_tickets) => {
                         room_ui.jobs().add_text(format!("Harvest - {} - Pickup", name), None);
 
@@ -193,9 +192,9 @@ impl Job for HarvestJob {
                                     Some(LineStyle::default().color("green")),
                                 );
                                 last_pos = delivery_pos;
-                            }         
+                            }
                         }
-                    },
+                    }
                     HarvestState::Delivery(delivery_tickets) => {
                         room_ui.jobs().add_text(format!("Harvest - {} - Delivery", name), None);
 
@@ -211,25 +210,25 @@ impl Job for HarvestJob {
                                 last_pos = delivery_pos;
                             }
                         }
-                    },
+                    }
                     HarvestState::FinishedDelivery => {
                         room_ui.jobs().add_text(format!("Harvest - {} - FinishedDelivery", name), None);
-                    },
+                    }
                     HarvestState::Build(_) => {
                         room_ui.jobs().add_text(format!("Harvest - {} - Build", name), None);
-                    },
+                    }
                     HarvestState::FinishedBuild => {
                         room_ui.jobs().add_text(format!("Harvest - {} - FinishedBuild", name), None);
-                    },
+                    }
                     HarvestState::Repair(_) => {
                         room_ui.jobs().add_text(format!("Harvest - {} - Repair", name), None);
-                    },
+                    }
                     HarvestState::FinishedRepair => {
                         room_ui.jobs().add_text(format!("Harvest - {} - FinishedRepair", name), None);
-                    },
+                    }
                     HarvestState::Upgrade(_) => {
                         room_ui.jobs().add_text(format!("Harvest - {} - Upgrade", name), None);
-                    },
+                    }
                     HarvestState::MoveToDeliveryRoom => {
                         room_ui.jobs().add_text(format!("Harvest - {} - MoveToDeliveryRoom", name), None);
                     }
@@ -246,12 +245,12 @@ impl Job for HarvestJob {
                 for delivery_ticket in delivery_tickets {
                     runtime_data.transfer_queue.register_delivery(&delivery_ticket);
                 }
-            },
+            }
             HarvestState::Delivery(delivery_tickets) => {
                 for delivery_ticket in delivery_tickets {
                     runtime_data.transfer_queue.register_delivery(&delivery_ticket);
                 }
-            },
+            }
             HarvestState::FinishedDelivery => {}
             HarvestState::Build(_) => {}
             HarvestState::FinishedBuild => {}
@@ -270,15 +269,23 @@ impl Job for HarvestJob {
         if let Some(delivery_room_data) = system_data.room_data.get(self.delivery_room) {
             loop {
                 let state_result = match &mut self.state {
-                    HarvestState::Idle => {
-                        Self::run_idle_state(creep, delivery_room_data, runtime_data.transfer_queue, &self.harvest_target, self.allow_haul)
-                    }
+                    HarvestState::Idle => Self::run_idle_state(
+                        creep,
+                        delivery_room_data,
+                        runtime_data.transfer_queue,
+                        &self.harvest_target,
+                        self.allow_haul,
+                    ),
                     HarvestState::Harvest(source_id) => run_harvest_state(creep, source_id, || HarvestState::Idle),
                     HarvestState::Pickup(pickup_ticket, delivery_ticket) => {
-                        run_pickup_state(creep, &mut action_flags, pickup_ticket, runtime_data.transfer_queue, || HarvestState::Delivery(delivery_ticket.clone()))
+                        run_pickup_state(creep, &mut action_flags, pickup_ticket, runtime_data.transfer_queue, || {
+                            HarvestState::Delivery(delivery_ticket.clone())
+                        })
                     }
                     HarvestState::Delivery(tickets) => {
-                        run_delivery_state(creep, &mut action_flags, tickets, runtime_data.transfer_queue, || HarvestState::FinishedDelivery)
+                        run_delivery_state(creep, &mut action_flags, tickets, runtime_data.transfer_queue, || {
+                            HarvestState::FinishedDelivery
+                        })
                     }
                     HarvestState::FinishedDelivery => {
                         Self::run_finished_delivery_state(creep, delivery_room_data, runtime_data.transfer_queue)

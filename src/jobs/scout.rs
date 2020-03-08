@@ -1,21 +1,23 @@
+use super::jobsystem::*;
 use screeps::*;
 use serde::*;
 #[cfg(feature = "time")]
 use timing_annotate::*;
 
-use super::jobsystem::*;
-
 #[derive(Clone, Deserialize, Serialize)]
 pub struct ScoutJob {
     room_target: RoomName,
     #[serde(default)]
-    room_history: Vec<RoomName>
+    room_history: Vec<RoomName>,
 }
 
 #[cfg_attr(feature = "time", timing)]
 impl ScoutJob {
     pub fn new(room_target: RoomName) -> ScoutJob {
-        ScoutJob { room_target, room_history: Vec::new() }
+        ScoutJob {
+            room_target,
+            room_history: Vec::new(),
+        }
     }
 }
 

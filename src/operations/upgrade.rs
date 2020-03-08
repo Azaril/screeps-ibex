@@ -1,14 +1,13 @@
+use super::data::*;
+use super::operationsystem::*;
+use crate::missions::data::*;
+use crate::missions::upgrade::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 #[cfg(feature = "time")]
 use timing_annotate::*;
-
-use super::data::*;
-use super::operationsystem::*;
-use crate::missions::data::*;
-use crate::missions::upgrade::*;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct UpgradeOperation {}

@@ -1,3 +1,8 @@
+use super::data::*;
+use super::missionsystem::*;
+use crate::jobs::data::*;
+use crate::serialize::*;
+use crate::spawnsystem::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
@@ -6,12 +11,6 @@ use specs::*;
 use specs_derive::*;
 #[cfg(feature = "time")]
 use timing_annotate::*;
-
-use super::data::*;
-use super::missionsystem::*;
-use crate::jobs::data::*;
-use crate::serialize::*;
-use crate::spawnsystem::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ScoutMission {
@@ -43,10 +42,7 @@ impl ScoutMission {
         }
     }
 
-    fn create_handle_scout_spawn(
-        mission_entity: Entity,
-        scout_room: RoomName,
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    fn create_handle_scout_spawn(mission_entity: Entity, scout_room: RoomName) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
@@ -73,10 +69,9 @@ impl Mission for ScoutMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui.missions().add_text(
-                    format!("Scout - Scouts: {}", self.scouts.0.len()),
-                    None,
-                );
+                room_ui
+                    .missions()
+                    .add_text(format!("Scout - Scouts: {}", self.scouts.0.len()), None);
             });
         }
     }
@@ -90,7 +85,9 @@ impl Mission for ScoutMission {
         // Cleanup scouts that no longer exist.
         //
 
-        self.scouts.0.retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
+        self.scouts
+            .0
+            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
     }

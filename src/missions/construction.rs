@@ -1,4 +1,6 @@
-#[allow(unused_imports)]
+use super::data::*;
+use super::missionsystem::*;
+use crate::room::planner::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
@@ -7,11 +9,6 @@ use specs::*;
 use specs_derive::*;
 #[cfg(feature = "time")]
 use timing_annotate::*;
-
-use super::data::*;
-use super::missionsystem::*;
-#[allow(unused_imports)]
-use crate::room::planner::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ConstructionMission {

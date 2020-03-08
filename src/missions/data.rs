@@ -1,10 +1,9 @@
+use super::missionsystem::*;
 use serde::*;
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-
-use super::missionsystem::*;
 
 #[derive(Clone, Component, ConvertSaveload)]
 pub enum MissionData {
@@ -36,7 +35,7 @@ impl MissionData {
             MissionData::Claim(ref mut data) => data,
             MissionData::RemoteBuild(ref mut data) => data,
             MissionData::Haul(ref mut data) => data,
-            MissionData::Terminal(ref mut data) => data
+            MissionData::Terminal(ref mut data) => data,
         }
     }
 }

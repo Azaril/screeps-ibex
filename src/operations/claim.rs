@@ -1,3 +1,11 @@
+use super::data::*;
+use super::operationsystem::*;
+use crate::missions::claim::*;
+use crate::missions::data::*;
+use crate::missions::remotebuild::*;
+use crate::missions::scout::*;
+use crate::room::visibilitysystem::*;
+use crate::serialize::*;
 use itertools::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -7,15 +15,6 @@ use specs::*;
 use specs_derive::*;
 #[cfg(feature = "time")]
 use timing_annotate::*;
-
-use super::data::*;
-use super::operationsystem::*;
-use crate::missions::claim::*;
-use crate::missions::data::*;
-use crate::missions::remotebuild::*;
-use crate::missions::scout::*;
-use crate::room::visibilitysystem::*;
-use crate::serialize::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ClaimOperation {

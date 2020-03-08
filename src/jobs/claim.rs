@@ -1,10 +1,9 @@
+use super::jobsystem::*;
+use crate::remoteobjectid::*;
 use screeps::*;
 use serde::*;
 #[cfg(feature = "time")]
 use timing_annotate::*;
-
-use super::jobsystem::*;
-use crate::remoteobjectid::*;
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 pub struct ClaimJob {

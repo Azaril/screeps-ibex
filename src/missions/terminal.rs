@@ -1,20 +1,16 @@
-#[allow(unused_imports)]
+use super::data::*;
+use super::missionsystem::*;
+use crate::remoteobjectid::*;
+use crate::transfer::transfersystem::*;
+use itertools::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use itertools::*;
 #[cfg(feature = "time")]
 use timing_annotate::*;
-
-use super::data::*;
-use super::missionsystem::*;
-#[allow(unused_imports)]
-use crate::room::planner::*;
-use crate::remoteobjectid::*;
-use crate::transfer::transfersystem::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct TerminalMission {
@@ -35,9 +31,7 @@ impl TerminalMission {
     }
 
     pub fn new(room_data: Entity) -> TerminalMission {
-        TerminalMission {
-            room_data,
-        }
+        TerminalMission { room_data }
     }
 }
 
@@ -62,7 +56,7 @@ impl Mission for TerminalMission {
         let terminal = room.terminal().ok_or("Expected terminal")?;
         let terminal_storage_types = terminal.store_types();
         let terminal_id = terminal.remote_id();
-        
+
         if let Some(storage) = room.storage() {
             let storage_resource_types = storage.store_types();
 
@@ -74,12 +68,12 @@ impl Mission for TerminalMission {
 
                 let desired_storage_amount = match resource_type {
                     ResourceType::Energy => 500_000,
-                    _ => 10_000
+                    _ => 10_000,
                 };
-                
+
                 let desired_terminal_amount = match resource_type {
                     ResourceType::Energy => 50_000,
-                    _ => 10_000
+                    _ => 10_000,
                 };
 
                 //
@@ -94,7 +88,12 @@ impl Mission for TerminalMission {
                     let transfer_amount = storage_excess.min(terminal_shortage);
 
                     if transfer_amount > 0 {
-                        let transfer_request = TransferDepositRequest::new(TransferTarget::Terminal(terminal_id), Some(*resource_type), TransferPriority::Medium, transfer_amount);
+                        let transfer_request = TransferDepositRequest::new(
+                            TransferTarget::Terminal(terminal_id),
+                            Some(*resource_type),
+                            TransferPriority::Medium,
+                            transfer_amount,
+                        );
 
                         runtime_data.transfer_queue.request_deposit(transfer_request);
                     }
@@ -108,13 +107,18 @@ impl Mission for TerminalMission {
                     let transfer_amount = (desired_storage_amount - current_storage_amount).min(current_terminal_amount);
 
                     if transfer_amount > 0 {
-                        let transfer_request = TransferWithdrawRequest::new(TransferTarget::Terminal(terminal_id), *resource_type, TransferPriority::None, transfer_amount);
+                        let transfer_request = TransferWithdrawRequest::new(
+                            TransferTarget::Terminal(terminal_id),
+                            *resource_type,
+                            TransferPriority::None,
+                            transfer_amount,
+                        );
 
-                        runtime_data.transfer_queue.request_withdraw(transfer_request);   
+                        runtime_data.transfer_queue.request_withdraw(transfer_request);
                     }
 
                     transfer_amount
-                } else { 
+                } else {
                     0
                 };
 
@@ -128,14 +132,19 @@ impl Mission for TerminalMission {
                     let transfer_amount = (terminal_excess as i32) - (made_available_amount as i32);
 
                     if transfer_amount > 0 {
-                        let transfer_request = TransferWithdrawRequest::new(TransferTarget::Terminal(terminal_id), *resource_type, TransferPriority::Medium, transfer_amount as u32);
+                        let transfer_request = TransferWithdrawRequest::new(
+                            TransferTarget::Terminal(terminal_id),
+                            *resource_type,
+                            TransferPriority::Medium,
+                            transfer_amount as u32,
+                        );
 
                         runtime_data.transfer_queue.request_withdraw(transfer_request);
                     }
                 }
             }
         }
-        
+
         Ok(())
     }
 

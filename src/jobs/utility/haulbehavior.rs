@@ -1,12 +1,12 @@
+use crate::jobs::actions::*;
 use crate::room::data::*;
 use crate::transfer::transfersystem::*;
+use findnearest::*;
 use itertools::*;
 use screeps::*;
 use std::collections::HashMap;
 #[cfg(feature = "time")]
 use timing_annotate::*;
-use findnearest::*;
-use crate::jobs::actions::*;
 
 #[cfg_attr(feature = "time", timing)]
 pub fn get_new_pickup_state_fill_resource<F, R>(
@@ -34,9 +34,17 @@ where
 
         let pickup_room_names = pickup_rooms.iter().map(|r| r.name).collect_vec();
 
-        let pickups = transfer_queue.select_pickups(&pickup_room_names, allowed_priorities, &desired_resources, TransferCapacity::Infinite);
+        let pickups = transfer_queue.select_pickups(
+            &pickup_room_names,
+            allowed_priorities,
+            &desired_resources,
+            TransferCapacity::Infinite,
+        );
 
-        if let Some(pickup) = pickups.into_iter().find_nearest_linear_by(creep.pos(), |ticket| ticket.target().pos()) {
+        if let Some(pickup) = pickups
+            .into_iter()
+            .find_nearest_linear_by(creep.pos(), |ticket| ticket.target().pos())
+        {
             transfer_queue.register_pickup(&pickup);
 
             return Some(state_map(pickup));
@@ -63,12 +71,16 @@ where
     if !available_capacity.empty() {
         let delivery_room_names = delivery_rooms.iter().map(|r| r.name).collect_vec();
 
-        let deliveries = transfer_queue.select_deliveries(&delivery_room_names, allowed_priorities, &available_resources, available_capacity);
+        let deliveries =
+            transfer_queue.select_deliveries(&delivery_room_names, allowed_priorities, &available_resources, available_capacity);
 
-        if let Some(delivery) = deliveries.into_iter().find_nearest_linear_by(creep.pos(), |ticket| ticket.target().pos()) {
+        if let Some(delivery) = deliveries
+            .into_iter()
+            .find_nearest_linear_by(creep.pos(), |ticket| ticket.target().pos())
+        {
             transfer_queue.register_delivery(&delivery);
 
-            let deliveries = vec!(delivery);
+            let deliveries = vec![delivery];
 
             //TODO: Add multi-delivery expansion.
 
@@ -94,11 +106,13 @@ where
     if !available_capacity.empty() {
         let pickup_room_names = pickup_rooms.iter().map(|r| r.name).collect_vec();
 
-        if let Some((mut pickup, delivery)) = transfer_queue.select_pickup_and_delivery(&pickup_room_names, allowed_priorities, creep.pos(), available_capacity) {
+        if let Some((mut pickup, delivery)) =
+            transfer_queue.select_pickup_and_delivery(&pickup_room_names, allowed_priorities, creep.pos(), available_capacity)
+        {
             transfer_queue.register_pickup(&pickup);
             transfer_queue.register_delivery(&delivery);
 
-            let mut deliveries = vec!(delivery);
+            let mut deliveries = vec![delivery];
 
             let mut remaining_capacity = available_capacity;
 
@@ -111,7 +125,13 @@ where
             while !remaining_capacity.empty() {
                 let last_delivery_pos = deliveries.last().unwrap().target().pos();
 
-                if let Some((additional_pickup, additional_delivery)) = transfer_queue.get_additional_delivery_from_target(&pickup_room_names, pickup.target(), allowed_priorities, remaining_capacity, last_delivery_pos) {
+                if let Some((additional_pickup, additional_delivery)) = transfer_queue.get_additional_delivery_from_target(
+                    &pickup_room_names,
+                    pickup.target(),
+                    allowed_priorities,
+                    remaining_capacity,
+                    last_delivery_pos,
+                ) {
                     transfer_queue.register_pickup(&additional_pickup);
                     pickup.combine_with(&additional_pickup);
 
@@ -126,7 +146,7 @@ where
                     }
                 } else {
                     break;
-                }                
+                }
             }
 
             return Some(state_map(pickup, deliveries));
@@ -153,7 +173,14 @@ where
     //let used_capacity = creep.store_used_capacity(None);
     let available_capacity = capacity - used_capacity;
 
-    get_new_pickup_and_delivery_state(creep, pickup_rooms, allowed_priorities, TransferCapacity::Finite(available_capacity), transfer_queue, state_map)
+    get_new_pickup_and_delivery_state(
+        creep,
+        pickup_rooms,
+        allowed_priorities,
+        TransferCapacity::Finite(available_capacity),
+        transfer_queue,
+        state_map,
+    )
 }
 
 #[cfg_attr(feature = "time", timing)]
@@ -215,22 +242,22 @@ where
     while let Some(ticket) = tickets.first_mut() {
         if ticket.target().is_valid() && ticket.get_next_deposit().is_some() {
             let pos = ticket.target().pos();
-        
+
             if !creep.pos().is_near_to(&pos) {
                 if !action_flags.contains(SimultaneousActionFlags::MOVE) {
                     action_flags.insert(SimultaneousActionFlags::MOVE);
                     creep.move_to(&pos);
                 }
-        
+
                 return None;
             }
-        
+
             while let Some((resource, amount)) = ticket.get_next_deposit() {
                 if !action_flags.contains(SimultaneousActionFlags::TRANSFER) {
                     action_flags.insert(SimultaneousActionFlags::TRANSFER);
 
                     ticket.consume_deposit(resource, amount);
-        
+
                     if ticket.target().transfer_resource_amount(creep, resource, amount) == ReturnCode::Ok {
                         return None;
                     }

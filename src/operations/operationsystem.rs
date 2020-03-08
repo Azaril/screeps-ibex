@@ -1,12 +1,11 @@
-use specs::prelude::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
-
 use super::data::*;
 use crate::mappingsystem::MappingData;
 use crate::room::visibilitysystem::*;
 use crate::ui::*;
 use crate::visualize::*;
+use specs::prelude::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 #[derive(SystemData)]
 pub struct OperationSystemData<'a> {

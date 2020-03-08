@@ -37,10 +37,7 @@ impl HaulMission {
         }
     }
 
-    fn create_handle_hauler_spawn(
-        mission_entity: Entity,
-        haul_rooms: &[Entity],
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    fn create_handle_hauler_spawn(mission_entity: Entity, haul_rooms: &[Entity]) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         let rooms = haul_rooms.to_vec();
 
         Box::new(move |spawn_system_data, name| {
@@ -67,10 +64,9 @@ impl Mission for HaulMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui.missions().add_text(
-                    format!("Hauler - Haulers: {}", self.haulers.0.len()),
-                    None,
-                );
+                room_ui
+                    .missions()
+                    .add_text(format!("Hauler - Haulers: {}", self.haulers.0.len()), None);
             })
         }
     }
@@ -84,7 +80,9 @@ impl Mission for HaulMission {
         // Cleanup haulers that no longer exist.
         //
 
-        self.haulers.0.retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
+        self.haulers
+            .0
+            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
     }
@@ -97,10 +95,7 @@ impl Mission for HaulMission {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
-        let stats = runtime_data
-            .transfer_queue
-            .try_get_room(room_data.name)
-            .map(|r| r.stats());
+        let stats = runtime_data.transfer_queue.try_get_room(room_data.name).map(|r| r.stats());
 
         let desired_haulers = if let Some(stats) = stats {
             if stats.total_active_withdrawl > 10000 || stats.total_active_deposit > 10000 {

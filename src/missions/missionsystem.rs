@@ -1,7 +1,3 @@
-use specs::prelude::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
-
 use super::data::*;
 use crate::creep::*;
 use crate::jobs::data::*;
@@ -10,6 +6,9 @@ use crate::spawnsystem::*;
 use crate::transfer::transfersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
+use specs::prelude::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 #[derive(SystemData)]
 pub struct MissionSystemData<'a> {

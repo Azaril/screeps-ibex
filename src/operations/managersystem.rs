@@ -1,7 +1,3 @@
-use specs::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
-
 use super::claim::*;
 use super::construction::*;
 use super::data::*;
@@ -9,9 +5,12 @@ use super::haul::*;
 use super::localbuild::*;
 use super::localsupply::*;
 use super::remotemine::*;
+use super::terminal::*;
 use super::tower::*;
 use super::upgrade::*;
-use super::terminal::*;
+use specs::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 pub struct OperationManagerSystem;
 

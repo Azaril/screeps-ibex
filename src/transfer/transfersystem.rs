@@ -4,7 +4,7 @@ use itertools::*;
 use remoteobjectid::*;
 use screeps::*;
 use serde::*;
-use specs::prelude::{ResourceId, WriteStorage, Write, LazyUpdate, Read, Entities, SystemData, System, World};
+use specs::prelude::{Entities, LazyUpdate, Read, ResourceId, System, SystemData, World, Write, WriteStorage};
 use std::collections::hash_map::*;
 use std::collections::HashMap;
 #[cfg(feature = "time")]
@@ -73,7 +73,10 @@ pub enum TransferTarget {
 }
 
 impl TransferTarget {
-    fn is_valid_from_id<T>(target: &RemoteObjectId<T>) -> bool where T: HasId + SizedRoomObject {
+    fn is_valid_from_id<T>(target: &RemoteObjectId<T>) -> bool
+    where
+        T: HasId + SizedRoomObject,
+    {
         if game::rooms::get(target.pos().room_name()).is_some() {
             target.resolve().is_some()
         } else {
@@ -111,7 +114,10 @@ impl TransferTarget {
         }
     }
 
-    fn withdraw_resource_amount_from_id<T>(target: &RemoteObjectId<T>, creep: &Creep, resource: ResourceType, amount: u32) -> ReturnCode where T: Withdrawable + HasStore + HasId + SizedRoomObject {
+    fn withdraw_resource_amount_from_id<T>(target: &RemoteObjectId<T>, creep: &Creep, resource: ResourceType, amount: u32) -> ReturnCode
+    where
+        T: Withdrawable + HasStore + HasId + SizedRoomObject,
+    {
         if let Some(obj) = target.resolve() {
             let withdraw_amount = obj.store_used_capacity(Some(resource)).min(amount);
 
@@ -144,7 +150,10 @@ impl TransferTarget {
         }
     }
 
-    fn transfer_resource_amount_to_id<T>(target: &RemoteObjectId<T>, creep: &Creep, resource: ResourceType, amount: u32) -> ReturnCode where T: Transferable + HasStore + HasId + SizedRoomObject {
+    fn transfer_resource_amount_to_id<T>(target: &RemoteObjectId<T>, creep: &Creep, resource: ResourceType, amount: u32) -> ReturnCode
+    where
+        T: Transferable + HasStore + HasId + SizedRoomObject,
+    {
         if let Some(obj) = target.resolve() {
             let transfer_amount = obj.store_free_capacity(Some(resource)).min(amount);
 
@@ -164,9 +173,9 @@ impl TransferTarget {
             TransferTarget::Link(id) => Self::transfer_resource_amount_to_id(id, creep, resource, amount),
             TransferTarget::Terminal(id) => Self::transfer_resource_amount_to_id(id, creep, resource, amount),
             //TODO: Split pickup and deposit targets.
-            TransferTarget::Ruin(_) => { panic!("Attempting to transfer resources to a dropped resource.") },
-            TransferTarget::Tombstone(_) => { panic!("Attempting to transfer resources to a dropped resource.") },
-            TransferTarget::Resource(_) => { panic!("Attempting to transfer resources to a dropped resource.") },
+            TransferTarget::Ruin(_) => panic!("Attempting to transfer resources to a dropped resource."),
+            TransferTarget::Tombstone(_) => panic!("Attempting to transfer resources to a dropped resource."),
+            TransferTarget::Resource(_) => panic!("Attempting to transfer resources to a dropped resource."),
         }
     }
 }
@@ -285,7 +294,12 @@ impl TransferNode {
         }
     }
 
-    pub fn select_pickup(&self, allowed_priorities: TransferPriorityFlags, desired_resources: &HashMap<Option<ResourceType>, u32>, available_capacity: TransferCapacity) -> HashMap<ResourceType, Vec<TransferWithdrawlTicketResourceEntry>> {
+    pub fn select_pickup(
+        &self,
+        allowed_priorities: TransferPriorityFlags,
+        desired_resources: &HashMap<Option<ResourceType>, u32>,
+        available_capacity: TransferCapacity,
+    ) -> HashMap<ResourceType, Vec<TransferWithdrawlTicketResourceEntry>> {
         let mut pickup_resources: HashMap<ResourceType, Vec<TransferWithdrawlTicketResourceEntry>> = HashMap::new();
 
         let mut remaining_capacity = available_capacity;
@@ -307,14 +321,14 @@ impl TransferNode {
                                     .or_insert_with(Vec::new)
                                     .push(TransferWithdrawlTicketResourceEntry {
                                         amount: pickup_amount as u32,
-                                        priority: *priority
+                                        priority: *priority,
                                     });
 
                                 remaining_capacity.consume(pickup_amount);
                             }
                         }
                     }
-                }            
+                }
             } else {
                 fill_none = Some(*amount);
             }
@@ -335,26 +349,21 @@ impl TransferNode {
                         if remaining_amount > 0 {
                             let pickedup_resources = pickup_resources
                                 .get(resource)
-                                .map(|entries| {
-                                    entries
-                                        .iter()
-                                        .filter(|e| e.priority == *priority)
-                                        .map(|e| e.amount)
-                                        .sum()
-                                })
+                                .map(|entries| entries.iter().filter(|e| e.priority == *priority).map(|e| e.amount).sum())
                                 .unwrap_or(0);
 
                             let unconsumed_remaining_amount = remaining_amount - pickedup_resources;
 
                             if unconsumed_remaining_amount > 0 {
-                                let pickup_amount = remaining_none_amount.clamp(remaining_capacity.clamp(unconsumed_remaining_amount as u32));
+                                let pickup_amount =
+                                    remaining_none_amount.clamp(remaining_capacity.clamp(unconsumed_remaining_amount as u32));
 
                                 pickup_resources
                                     .entry(*resource)
                                     .or_insert_with(Vec::new)
                                     .push(TransferWithdrawlTicketResourceEntry {
                                         amount: pickup_amount as u32,
-                                        priority: *priority
+                                        priority: *priority,
                                     });
 
                                 remaining_capacity.consume(pickup_amount);
@@ -381,7 +390,7 @@ impl TransferNode {
         &self,
         allowed_priorities: TransferPriorityFlags,
         available_resources: &HashMap<ResourceType, u32>,
-        available_capacity: TransferCapacity
+        available_capacity: TransferCapacity,
     ) -> HashMap<ResourceType, Vec<TransferDepositTicketResourceEntry>> {
         let mut delivery_resources: HashMap<ResourceType, Vec<TransferDepositTicketResourceEntry>> = HashMap::new();
         let mut remaining_capacity = available_capacity;
@@ -401,7 +410,7 @@ impl TransferNode {
                                 .push(TransferDepositTicketResourceEntry {
                                     target_resource: Some(*resource),
                                     amount: delivery_amount as u32,
-                                    priority: *priority
+                                    priority: *priority,
                                 });
 
                             remaining_capacity.consume(delivery_amount);
@@ -428,19 +437,14 @@ impl TransferNode {
                         for (resource, amount) in available_resources {
                             let deposited_resources = delivery_resources
                                 .get(resource)
-                                .map(|entries| {
-                                    entries
-                                        .iter()
-                                        .filter(|e| e.priority == *priority)
-                                        .map(|e| e.amount)
-                                        .sum()
-                                })
+                                .map(|entries| entries.iter().filter(|e| e.priority == *priority).map(|e| e.amount).sum())
                                 .unwrap_or(0);
 
                             let unconsumed_remaining_amount = amount - deposited_resources;
 
                             if unconsumed_remaining_amount > 0 {
-                                let delivery_amount = remaining_none_amount.clamp(remaining_capacity.clamp(unconsumed_remaining_amount as u32));
+                                let delivery_amount =
+                                    remaining_none_amount.clamp(remaining_capacity.clamp(unconsumed_remaining_amount as u32));
 
                                 delivery_resources
                                     .entry(*resource)
@@ -448,7 +452,7 @@ impl TransferNode {
                                     .push(TransferDepositTicketResourceEntry {
                                         target_resource: None,
                                         amount: delivery_amount as u32,
-                                        priority: *priority
+                                        priority: *priority,
                                     });
 
                                 remaining_capacity.consume(delivery_amount);
@@ -472,41 +476,29 @@ impl TransferNode {
     }
 
     pub fn visualize(&self, visualizer: &mut RoomVisualizer, pos: RoomPosition) {
-        let withdraw_text = self
-            .withdrawls
-            .iter()
-            .flat_map(|(resource, entries)| {
-                entries
-                    .iter()
-                    .map(move |(priority, amount)| format!("{:?} {:?} {:?}", resource, priority, amount))
-            });
+        let withdraw_text = self.withdrawls.iter().flat_map(|(resource, entries)| {
+            entries
+                .iter()
+                .map(move |(priority, amount)| format!("{:?} {:?} {:?}", resource, priority, amount))
+        });
 
-        let pending_withdraw_text = self
-            .pending_withdrawls
-            .iter()
-            .flat_map(|(resource, entries)| {
-                entries
-                    .iter()
-                    .map(move |(priority, amount)| format!("{:?} {:?} {:?}", resource, priority, amount))
-            });
+        let pending_withdraw_text = self.pending_withdrawls.iter().flat_map(|(resource, entries)| {
+            entries
+                .iter()
+                .map(move |(priority, amount)| format!("{:?} {:?} {:?}", resource, priority, amount))
+        });
 
-        let deposit_text = self
-            .deposits
-            .iter()
-            .flat_map(|(resource, entries)| {
-                entries
-                    .iter()
-                    .map(move |(priority, amount)| format!("{:?} {:?} {:?}", resource, priority, amount))
-            });
+        let deposit_text = self.deposits.iter().flat_map(|(resource, entries)| {
+            entries
+                .iter()
+                .map(move |(priority, amount)| format!("{:?} {:?} {:?}", resource, priority, amount))
+        });
 
-        let pending_deposit_text = self
-            .pending_deposits
-            .iter()
-            .flat_map(|(resource, entries)| {
-                entries
-                    .iter()
-                    .map(move |(priority, amount)| format!("{:?} {:?} {:?}", resource, priority, amount))
-            });
+        let pending_deposit_text = self.pending_deposits.iter().flat_map(|(resource, entries)| {
+            entries
+                .iter()
+                .map(move |(priority, amount)| format!("{:?} {:?} {:?}", resource, priority, amount))
+        });
 
         let full_text = withdraw_text
             .chain(pending_withdraw_text)
@@ -540,7 +532,7 @@ impl TransferWithdrawRequest {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct TransferWithdrawlTicketResourceEntry {
     amount: u32,
-    priority: TransferPriority
+    priority: TransferPriority,
 }
 
 impl TransferWithdrawlTicketResourceEntry {
@@ -639,7 +631,7 @@ impl TransferDepositRequest {
 pub struct TransferDepositTicketResourceEntry {
     target_resource: Option<ResourceType>,
     amount: u32,
-    priority: TransferPriority
+    priority: TransferPriority,
 }
 
 impl TransferDepositTicketResourceEntry {
@@ -677,7 +669,10 @@ impl TransferDepositTicket {
                 .entry(*resource)
                 .and_modify(|existing| {
                     for entry in entries {
-                        if let Some(deposit_resource_entry) = existing.iter_mut().find(|oe| oe.target_resource == entry.target_resource && oe.priority == entry.priority) {
+                        if let Some(deposit_resource_entry) = existing
+                            .iter_mut()
+                            .find(|oe| oe.target_resource == entry.target_resource && oe.priority == entry.priority)
+                        {
                             deposit_resource_entry.amount += entry.amount;
                         } else {
                             existing.push(entry.clone());
@@ -805,28 +800,30 @@ pub struct TransferQueue {
 #[derive(Copy, Clone, Debug)]
 pub enum TransferCapacity {
     Infinite,
-    Finite(u32)
+    Finite(u32),
 }
 
 impl TransferCapacity {
     pub fn empty(self) -> bool {
         match self {
             TransferCapacity::Infinite => false,
-            TransferCapacity::Finite(current) => current == 0
+            TransferCapacity::Finite(current) => current == 0,
         }
     }
 
     pub fn consume(&mut self, amount: u32) {
         match self {
-            TransferCapacity::Infinite => {},
-            TransferCapacity::Finite(current) => { *current -= amount; },
+            TransferCapacity::Infinite => {}
+            TransferCapacity::Finite(current) => {
+                *current -= amount;
+            }
         }
     }
 
     pub fn clamp(self, amount: u32) -> u32 {
         match self {
             TransferCapacity::Infinite => amount,
-            TransferCapacity::Finite(current) => amount.min(current)
+            TransferCapacity::Finite(current) => amount.min(current),
         }
     }
 }
@@ -844,15 +841,16 @@ impl TransferQueue {
     pub fn request_withdraw(&mut self, withdraw_request: TransferWithdrawRequest) {
         let room = self.get_room(withdraw_request.target.pos().room_name());
         room.stats.total_withdrawl += withdraw_request.amount;
-        
+
         let priority_flag = withdraw_request.priority.into();
         room.stats.withdrawl_priorities |= priority_flag;
 
         if TransferPriorityFlags::ACTIVE.contains(priority_flag) {
             room.stats.total_active_withdrawl += withdraw_request.amount;
         }
-        
-        let resource_stats = room.stats
+
+        let resource_stats = room
+            .stats
             .withdrawl_resource_stats
             .entry(withdraw_request.resource)
             .or_insert_with(HashMap::new)
@@ -876,7 +874,8 @@ impl TransferQueue {
             room.stats.total_active_deposit += deposit_request.amount;
         }
 
-        let resource_stats = room.stats
+        let resource_stats = room
+            .stats
             .deposit_resource_stats
             .entry(deposit_request.resource)
             .or_insert_with(HashMap::new)
@@ -901,7 +900,7 @@ impl TransferQueue {
                     .entry(entry.priority)
                     .or_insert_with(TransferQueueResourceStatsData::new);
 
-                    resource_stats.amount += entry.amount;
+                resource_stats.amount += entry.amount;
             }
         }
 
@@ -935,7 +934,7 @@ impl TransferQueue {
         rooms: &[RoomName],
         allowed_priorities: TransferPriorityFlags,
         desired_resources: &HashMap<Option<ResourceType>, u32>,
-        available_capacity: TransferCapacity
+        available_capacity: TransferCapacity,
     ) -> Vec<TransferWithdrawTicket> {
         rooms
             .iter()
@@ -962,7 +961,7 @@ impl TransferQueue {
         rooms: &[RoomName],
         allowed_priorities: TransferPriorityFlags,
         available_resources: &HashMap<ResourceType, u32>,
-        available_capacity: TransferCapacity
+        available_capacity: TransferCapacity,
     ) -> Vec<TransferDepositTicket> {
         rooms
             .iter()
@@ -991,9 +990,7 @@ impl TransferQueue {
             if let Some(room) = self.try_get_room(*room_name) {
                 for (resource, entries) in &room.stats.withdrawl_resource_stats {
                     if let Some(entry) = entries.get(&withdrawl_priority) {
-                        let current_amount = available_resources
-                            .entry(*resource)
-                            .or_insert(0);
+                        let current_amount = available_resources.entry(*resource).or_insert(0);
 
                         let unfufilled_amount = entry.unfufilled_amount();
 
@@ -1008,16 +1005,18 @@ impl TransferQueue {
         available_resources
     }
 
-    pub fn get_available_deposit_totals(&self, rooms: &[RoomName], deposit_priority: TransferPriority) -> HashMap<Option<ResourceType>, u32> {
+    pub fn get_available_deposit_totals(
+        &self,
+        rooms: &[RoomName],
+        deposit_priority: TransferPriority,
+    ) -> HashMap<Option<ResourceType>, u32> {
         let mut available_resources: HashMap<_, u32> = HashMap::new();
 
         for room_name in rooms {
             if let Some(room) = self.try_get_room(*room_name) {
                 for (resource, entries) in &room.stats.deposit_resource_stats {
                     if let Some(entry) = entries.get(&deposit_priority) {
-                        let current_amount = available_resources
-                            .entry(*resource)
-                            .or_insert(0);
+                        let current_amount = available_resources.entry(*resource).or_insert(0);
 
                         let unfufilled_amount = entry.unfufilled_amount();
 
@@ -1032,13 +1031,14 @@ impl TransferQueue {
         available_resources
     }
 
-    pub fn select_best_delivery(&mut self,
+    pub fn select_best_delivery(
+        &mut self,
         rooms: &[RoomName],
         pickup_priority: TransferPriority,
         delivery_priority: TransferPriority,
         current_position: RoomPosition,
-        available_capacity: TransferCapacity) -> Option<(TransferWithdrawTicket, TransferDepositTicket)>
-    {
+        available_capacity: TransferCapacity,
+    ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)> {
         if available_capacity.empty() {
             return None;
         }
@@ -1053,7 +1053,7 @@ impl TransferQueue {
             .iter()
             .map(|delivery| {
                 let mut delivery_resources = HashMap::new();
-                
+
                 for entries in delivery.resources.values() {
                     for entry in entries.iter() {
                         delivery_resources
@@ -1069,27 +1069,25 @@ impl TransferQueue {
             })
             .flat_map(|(pickups, delivery)| {
                 let delivery_pos = delivery.target().pos();
-                
-                pickups
-                    .into_iter()
-                    .map(move |pickup| {
-                        let pickup_pos = pickup.target.pos();
-                        let pickup_length = current_position.get_range_to(&pickup_pos);
 
-                        let delivery_length = pickup_pos.get_range_to(&delivery_pos);
+                pickups.into_iter().map(move |pickup| {
+                    let pickup_pos = pickup.target.pos();
+                    let pickup_length = current_position.get_range_to(&pickup_pos);
 
-                        let resources = pickup.resources.iter().flat_map(|(_, entries)| entries.iter().map(|e| e.amount)).sum::<u32>();
-                        let value = (resources as f32) / (pickup_length as f32 + delivery_length as f32);
+                    let delivery_length = pickup_pos.get_range_to(&delivery_pos);
 
-                        (pickup, delivery, value)
-                    })
+                    let resources = pickup
+                        .resources
+                        .iter()
+                        .flat_map(|(_, entries)| entries.iter().map(|e| e.amount))
+                        .sum::<u32>();
+                    let value = (resources as f32) / (pickup_length as f32 + delivery_length as f32);
+
+                    (pickup, delivery, value)
                 })
-            .max_by(|(_, _, a), (_, _, b)| {
-                a.partial_cmp(b).unwrap()
             })
-            .map(|(pickup, delivery, _)| {
-                (pickup, delivery.clone())
-            })
+            .max_by(|(_, _, a), (_, _, b)| a.partial_cmp(b).unwrap())
+            .map(|(pickup, delivery, _)| (pickup, delivery.clone()))
     }
 
     pub fn get_additional_delivery_from_target(
@@ -1098,7 +1096,7 @@ impl TransferQueue {
         target: &TransferTarget,
         allowed_priorities: TransferPriorityFlags,
         available_capacity: TransferCapacity,
-        anchor_location: RoomPosition
+        anchor_location: RoomPosition,
     ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)> {
         if available_capacity.empty() {
             return None;
@@ -1113,8 +1111,9 @@ impl TransferQueue {
             return None;
         }
 
-        let delivery = self.get_additional_delivery(rooms, allowed_priorities, &available_resources, available_capacity, anchor_location)?;
-            
+        let delivery =
+            self.get_additional_delivery(rooms, allowed_priorities, &available_resources, available_capacity, anchor_location)?;
+
         let delivery_resources = delivery
             .resources()
             .iter()
@@ -1125,9 +1124,7 @@ impl TransferQueue {
             })
             .collect();
 
-        let node = self
-            .try_get_room(target.pos().room_name())
-            .and_then(|r| r.try_get_node(target))?;
+        let node = self.try_get_room(target.pos().room_name()).and_then(|r| r.try_get_node(target))?;
 
         //
         // NOTE: Priority is ignored here as it's already known that the delivery priority is allowed. Additionally,
@@ -1137,9 +1134,9 @@ impl TransferQueue {
 
         let pickup = TransferWithdrawTicket {
             target: *target,
-            resources: node.select_pickup(TransferPriorityFlags::ALL, &delivery_resources, available_capacity)
+            resources: node.select_pickup(TransferPriorityFlags::ALL, &delivery_resources, available_capacity),
         };
-        
+
         Some((pickup, delivery))
     }
 
@@ -1149,7 +1146,7 @@ impl TransferQueue {
         allowed_priorities: TransferPriorityFlags,
         available_resources: &HashMap<ResourceType, u32>,
         available_capacity: TransferCapacity,
-        anchor_location: RoomPosition
+        anchor_location: RoomPosition,
     ) -> Option<TransferDepositTicket> {
         if available_capacity.empty() {
             return None;
@@ -1158,16 +1155,18 @@ impl TransferQueue {
         self.select_deliveries(rooms, allowed_priorities, &available_resources, available_capacity)
             .iter()
             .map(|delivery| {
-                let resources = delivery.resources.iter().flat_map(|(_, entries)| entries.iter().map(|e| e.amount)).sum::<u32>();
+                let resources = delivery
+                    .resources
+                    .iter()
+                    .flat_map(|(_, entries)| entries.iter().map(|e| e.amount))
+                    .sum::<u32>();
 
                 let length = anchor_location.get_range_to(&delivery.target.pos());
                 let value = (resources as f32) / (length as f32);
 
                 (delivery, value)
             })
-            .max_by(|(_, a), (_, b)| {
-                a.partial_cmp(b).unwrap()
-            })
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
             .map(|(delivery, _)| delivery.clone())
     }
 
@@ -1176,20 +1175,20 @@ impl TransferQueue {
         rooms: &[RoomName],
         allowed_priorities: TransferPriorityFlags,
         current_position: RoomPosition,
-        available_capacity: TransferCapacity
+        available_capacity: TransferCapacity,
     ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)> {
-        let mut priorities = ALL_TRANSFER_PRIORITIES.iter().cartesian_product(ALL_TRANSFER_PRIORITIES.iter())
+        let mut priorities = ALL_TRANSFER_PRIORITIES
+            .iter()
+            .cartesian_product(ALL_TRANSFER_PRIORITIES.iter())
             .filter(|(&p1, &p2)| allowed_priorities.contains(p1.into()) || allowed_priorities.contains(p2.into()))
             .collect_vec();
-            
-        priorities.sort_by(|(a_1, a_2), (b_1, b_2)| {
-            a_1.max(a_2).cmp(b_1.max(b_2))
-                .then_with(|| a_1.cmp(b_1))
-                .then_with(|| a_2.cmp(b_2))
-        });      
-        
+
+        priorities.sort_by(|(a_1, a_2), (b_1, b_2)| a_1.max(a_2).cmp(b_1.max(b_2)).then_with(|| a_1.cmp(b_1)).then_with(|| a_2.cmp(b_2)));
+
         for (pickup_priority, delivery_priority) in priorities {
-            if let Some((pickup_ticket, delivery_ticket)) = self.select_best_delivery(rooms, *pickup_priority, *delivery_priority, current_position, available_capacity) {
+            if let Some((pickup_ticket, delivery_ticket)) =
+                self.select_best_delivery(rooms, *pickup_priority, *delivery_priority, current_position, available_capacity)
+            {
                 return Some((pickup_ticket, delivery_ticket));
             }
         }

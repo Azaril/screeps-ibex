@@ -124,7 +124,7 @@ impl Spawning {
 
         let fixed_body_length = definition.pre_body.len() + definition.post_body.len();
         if fixed_body_length > MAX_CREEP_SIZE as usize {
-            return Err(())
+            return Err(());
         }
 
         let max_possible_repeat_parts_by_length = if !definition.repeat_body.is_empty() {

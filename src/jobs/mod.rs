@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod build;
 pub mod claim;
 pub mod data;
@@ -9,4 +10,3 @@ pub mod scout;
 pub mod staticmine;
 pub mod upgrade;
 pub mod utility;
-pub mod actions;

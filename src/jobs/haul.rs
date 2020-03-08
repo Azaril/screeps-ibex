@@ -1,3 +1,10 @@
+use super::actions::*;
+use super::jobsystem::*;
+use super::utility::haulbehavior::*;
+use crate::room::data::*;
+use crate::serialize::*;
+use crate::transfer::transfersystem::*;
+use crate::visualize::*;
 use itertools::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -7,14 +14,6 @@ use specs::*;
 use specs_derive::*;
 #[cfg(feature = "time")]
 use timing_annotate::*;
-
-use super::jobsystem::*;
-use super::utility::haulbehavior::*;
-use crate::room::data::*;
-use crate::serialize::*;
-use crate::transfer::transfersystem::*;
-use crate::visualize::*;
-use super::actions::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum HaulState {
@@ -49,13 +48,7 @@ impl HaulJob {
             HaulState::Delivery,
         )
         .or_else(|| {
-            get_new_delivery_current_resources_state(
-                creep,
-                haul_rooms,
-                TransferPriorityFlags::NONE,
-                transfer_queue,
-                HaulState::Delivery,
-            )
+            get_new_delivery_current_resources_state(creep, haul_rooms, TransferPriorityFlags::NONE, transfer_queue, HaulState::Delivery)
         })
         .or_else(|| {
             ACTIVE_TRANSFER_PRIORITIES
@@ -140,7 +133,7 @@ impl Job for HaulJob {
                 for delivery_ticket in delivery_tickets.iter() {
                     runtime_data.transfer_queue.register_delivery(&delivery_ticket);
                 }
-            },
+            }
             HaulState::Delivery(delivery_tickets) => {
                 for delivery_ticket in delivery_tickets.iter() {
                     runtime_data.transfer_queue.register_delivery(&delivery_ticket);
@@ -160,9 +153,15 @@ impl Job for HaulJob {
         loop {
             let state_result = match &mut self.state {
                 HaulState::Idle => Self::run_idle_state(creep, &haul_rooms, runtime_data.transfer_queue),
-                HaulState::Pickup(pickup_ticket, delivery_tickets) => run_pickup_state(creep, &mut action_flags, pickup_ticket, runtime_data.transfer_queue, || HaulState::Delivery(delivery_tickets.clone())),
+                HaulState::Pickup(pickup_ticket, delivery_tickets) => {
+                    run_pickup_state(creep, &mut action_flags, pickup_ticket, runtime_data.transfer_queue, || {
+                        HaulState::Delivery(delivery_tickets.clone())
+                    })
+                }
                 HaulState::Delivery(delivery_tickets) => {
-                    run_delivery_state(creep, &mut action_flags, delivery_tickets, runtime_data.transfer_queue, || HaulState::Idle)
+                    run_delivery_state(creep, &mut action_flags, delivery_tickets, runtime_data.transfer_queue, || {
+                        HaulState::Idle
+                    })
                 }
             };
 
