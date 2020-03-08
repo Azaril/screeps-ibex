@@ -719,10 +719,18 @@ impl LocalSupplyMission {
 
             for resource in tombstone.store_types() {
                 let resource_amount = tombstone.store_used_capacity(Some(resource));
+
+                //TODO: Only apply this if no hostiles in the room?
+                let priority = if resource_amount > 200 || resource != ResourceType::Energy {
+                    TransferPriority::High
+                } else {
+                    TransferPriority::Medium
+                };
+
                 let transfer_request = TransferWithdrawRequest::new(
                     TransferTarget::Tombstone(tombstone_id),
                     resource,
-                    TransferPriority::Medium,
+                    priority,
                     resource_amount,
                 );
 
@@ -740,10 +748,18 @@ impl LocalSupplyMission {
 
             let resource = dropped_resource.resource_type();
             let resource_amount = dropped_resource.amount();
+
+            //TODO: Only apply this if no hostiles in the room?
+            let priority = if resource_amount > 500 || resource != ResourceType::Energy {
+                TransferPriority::High
+            } else {
+                TransferPriority::Medium
+            };
+
             let transfer_request = TransferWithdrawRequest::new(
                 TransferTarget::Resource(dropped_resource_id),
                 resource,
-                TransferPriority::Medium,
+                priority,
                 resource_amount,
             );
 
