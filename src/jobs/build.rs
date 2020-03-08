@@ -1,3 +1,14 @@
+use super::actions::*;
+use super::jobsystem::*;
+use super::utility::buildbehavior::*;
+use super::utility::harvestbehavior::*;
+use super::utility::haulbehavior::*;
+use super::utility::repairbehavior::*;
+use crate::remoteobjectid::*;
+use crate::room::data::*;
+use crate::structureidentifier::*;
+use crate::transfer::transfersystem::*;
+use crate::visualize::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
@@ -6,18 +17,6 @@ use specs::*;
 use specs_derive::*;
 #[cfg(feature = "time")]
 use timing_annotate::*;
-
-use super::jobsystem::*;
-use super::utility::buildbehavior::*;
-use super::utility::harvestbehavior::*;
-use super::utility::haulbehavior::*;
-use super::utility::repairbehavior::*;
-use super::actions::*;
-use crate::remoteobjectid::*;
-use crate::room::data::*;
-use crate::structureidentifier::*;
-use crate::transfer::transfersystem::*;
-use crate::visualize::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum BuildState {
@@ -65,7 +64,15 @@ impl BuildJob {
     }
 
     fn run_finished_pickup_state(creep: &Creep, pickup_rooms: &[&RoomData], transfer_queue: &mut TransferQueue) -> Option<BuildState> {
-        get_new_pickup_state_fill_resource(creep, pickup_rooms, TransferPriorityFlags::ALL, ResourceType::Energy, transfer_queue, BuildState::Pickup).or(Some(BuildState::Idle))
+        get_new_pickup_state_fill_resource(
+            creep,
+            pickup_rooms,
+            TransferPriorityFlags::ALL,
+            ResourceType::Energy,
+            transfer_queue,
+            BuildState::Pickup,
+        )
+        .or(Some(BuildState::Idle))
     }
 
     fn run_finished_build_state(creep: &Creep, build_room: &RoomData) -> Option<BuildState> {
@@ -144,9 +151,9 @@ impl Job for BuildJob {
             loop {
                 let state_result = match &mut self.state {
                     BuildState::Idle => Self::run_idle_state(creep, build_room_data, runtime_data.transfer_queue),
-                    BuildState::Pickup(ticket) => {
-                        run_pickup_state(creep, &mut action_flags, ticket, runtime_data.transfer_queue, || BuildState::FinishedPickup)
-                    }
+                    BuildState::Pickup(ticket) => run_pickup_state(creep, &mut action_flags, ticket, runtime_data.transfer_queue, || {
+                        BuildState::FinishedPickup
+                    }),
                     BuildState::FinishedPickup => Self::run_finished_pickup_state(creep, &[build_room_data], runtime_data.transfer_queue),
                     BuildState::Harvest(source_id) => run_harvest_state(creep, source_id, || BuildState::Idle),
                     BuildState::Build(construction_site_id) => run_build_state(creep, construction_site_id, || BuildState::FinishedBuild),

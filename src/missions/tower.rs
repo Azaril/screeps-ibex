@@ -1,3 +1,8 @@
+use super::data::*;
+use super::missionsystem::*;
+use crate::jobs::utility::repair::*;
+use crate::remoteobjectid::*;
+use crate::transfer::transfersystem::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
@@ -6,12 +11,6 @@ use specs::*;
 use specs_derive::*;
 #[cfg(feature = "time")]
 use timing_annotate::*;
-
-use super::data::*;
-use super::missionsystem::*;
-use crate::jobs::utility::repair::*;
-use crate::transfer::transfersystem::*;
-use crate::remoteobjectid::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct TowerMission {
@@ -76,12 +75,8 @@ impl Mission for TowerMission {
         for tower in towers {
             let tower_free_capacity = tower.store_free_capacity(Some(ResourceType::Energy));
             if tower_free_capacity > 0 {
-                let transfer_request = TransferDepositRequest::new(
-                    TransferTarget::Tower(tower.remote_id()),
-                    None,
-                    priority,
-                    tower_free_capacity,
-                );
+                let transfer_request =
+                    TransferDepositRequest::new(TransferTarget::Tower(tower.remote_id()), None, priority, tower_free_capacity);
 
                 runtime_data.transfer_queue.request_deposit(transfer_request);
             }
@@ -121,7 +116,11 @@ impl Mission for TowerMission {
             .filter(|creep| creep.hits() < creep.hits_max())
             .min_by_key(|creep| creep.hits());
 
-        let minimum_repair_priority = if are_hostile_creeps { Some(RepairPriority::Medium) } else { Some(RepairPriority::High )};
+        let minimum_repair_priority = if are_hostile_creeps {
+            Some(RepairPriority::Medium)
+        } else {
+            Some(RepairPriority::High)
+        };
         let repair_targets = get_prioritized_repair_targets(&room, minimum_repair_priority);
 
         let repair_structure = ORDERED_REPAIR_PRIORITIES

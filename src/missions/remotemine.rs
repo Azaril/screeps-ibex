@@ -1,3 +1,9 @@
+use super::data::*;
+use super::missionsystem::*;
+use crate::jobs::data::*;
+use crate::remoteobjectid::*;
+use crate::serialize::*;
+use crate::spawnsystem::*;
 use itertools::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -7,13 +13,6 @@ use specs::*;
 use specs_derive::*;
 #[cfg(feature = "time")]
 use timing_annotate::*;
-
-use super::data::*;
-use super::missionsystem::*;
-use crate::jobs::data::*;
-use crate::remoteobjectid::*;
-use crate::serialize::*;
-use crate::spawnsystem::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct RemoteMineMission {
@@ -71,10 +70,9 @@ impl Mission for RemoteMineMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui.missions().add_text(
-                    format!("Remote Mine - Harvesters: {}", self.harvesters.0.len()),
-                    None,
-                );
+                room_ui
+                    .missions()
+                    .add_text(format!("Remote Mine - Harvesters: {}", self.harvesters.0.len()), None);
             });
         }
     }
@@ -88,7 +86,9 @@ impl Mission for RemoteMineMission {
         // Cleanup creeps that no longer exist.
         //
 
-        self.harvesters.0.retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
+        self.harvesters
+            .0
+            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
     }

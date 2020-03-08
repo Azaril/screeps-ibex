@@ -1,8 +1,7 @@
+use super::data::*;
 use screeps::*;
 use specs::saveload::*;
 use specs::*;
-
-use super::data::*;
 
 pub struct CreateRoomDataSystem;
 

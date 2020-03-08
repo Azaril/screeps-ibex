@@ -2,29 +2,20 @@
 #![allow(dead_code)]
 #![warn(clippy::all)]
 
-#![feature(proc_macro_hygiene)]
-
 extern crate fern;
 #[macro_use]
 extern crate log;
 extern crate screeps;
 #[macro_use]
 extern crate stdweb;
-
+extern crate itertools;
 extern crate serde;
-
 extern crate specs;
 extern crate specs_derive;
-
-extern crate itertools;
-
 #[cfg(feature = "time")]
 extern crate timing;
 #[cfg(feature = "time")]
 extern crate timing_annotate;
-#[cfg(feature = "time")]
-use timing_annotate::*;
-
 #[macro_use]
 extern crate bitflags;
 
@@ -35,31 +26,29 @@ mod globals;
 mod jobs;
 mod logging;
 mod mappingsystem;
+mod memorysystem;
 mod missions;
 mod operations;
 mod remoteobjectid;
 mod room;
 mod serialize;
 mod spawnsystem;
+mod statssystem;
 mod structureidentifier;
 mod transfer;
 mod ui;
 mod visualize;
-mod statssystem;
-mod memorysystem;
 
-use std::fmt;
-
-use std::collections::HashSet;
-
-#[allow(unused_imports)]
 use screeps::*;
-#[allow(unused_imports)]
 use specs::{
     error::NoError,
     prelude::*,
-    saveload::{DeserializeComponents, MarkedBuilder, SerializeComponents, SimpleMarker, SimpleMarkerAllocator},
+    saveload::{DeserializeComponents, SerializeComponents},
 };
+use std::collections::HashSet;
+use std::fmt;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 fn main() {
     stdweb::initialize();
@@ -131,16 +120,14 @@ fn serialize_world(world: &World, segment: u32) {
                 &mut ser,
             )
             .unwrap_or_else(|e| error!("Error: {}", e));
-            
+
             let world_data = unsafe { std::str::from_utf8_unchecked(&writer) };
 
             data.memory_arbiter.set(self.segment, world_data);
         }
     }
 
-    let mut sys = Serialize {
-        segment
-    };
+    let mut sys = Serialize { segment };
 
     sys.run_now(&world);
 }
@@ -172,7 +159,7 @@ impl From<NoError> for CombinedSerialiationError {
 
 fn deserialize_world(world: &World, segment: u32) {
     struct Deserialize {
-        segment: u32
+        segment: u32,
     }
 
     #[derive(SystemData)]

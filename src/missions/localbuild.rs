@@ -1,19 +1,18 @@
-use screeps::*;
-use serde::{Deserialize, Serialize};
-use specs::error::NoError;
-use specs::saveload::*;
-use specs::*;
-use specs_derive::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
-
 use super::data::*;
 use super::missionsystem::*;
 use crate::creep::*;
 use crate::jobs::utility::repair::*;
 use crate::serialize::*;
 use jobs::data::*;
+use screeps::*;
+use serde::{Deserialize, Serialize};
 use spawnsystem::*;
+use specs::error::NoError;
+use specs::saveload::*;
+use specs::*;
+use specs_derive::*;
+#[cfg(feature = "time")]
+use timing_annotate::*;
 
 #[derive(Clone, Debug, ConvertSaveload)]
 pub struct LocalBuildMission {
@@ -60,10 +59,7 @@ impl LocalBuildMission {
         }
     }
 
-    fn create_handle_builder_spawn(
-        mission_entity: Entity,
-        room_entity: Entity,
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    fn create_handle_builder_spawn(mission_entity: Entity, room_entity: Entity) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
@@ -87,10 +83,9 @@ impl Mission for LocalBuildMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui.missions().add_text(
-                    format!("Local Build - Builders: {}", self.builders.0.len()),
-                    None,
-                );
+                room_ui
+                    .missions()
+                    .add_text(format!("Local Build - Builders: {}", self.builders.0.len()), None);
             })
         }
     }
@@ -104,7 +99,9 @@ impl Mission for LocalBuildMission {
         // Cleanup creeps that no longer exist.
         //
 
-        self.builders.0.retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
+        self.builders
+            .0
+            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
     }

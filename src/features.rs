@@ -54,7 +54,7 @@ pub mod transfer {
 
     pub fn visualize_haul() -> bool {
         ::memory::root().path_bool("_features.transfer.visualize.haul") && visualize()
-    }    
+    }
 
     pub fn visualize_demand() -> bool {
         ::memory::root().path_bool("_features.transfer.visualize.demand") && visualize()

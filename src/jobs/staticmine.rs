@@ -1,16 +1,14 @@
-use screeps::*;
-use serde::*;
-
 use super::jobsystem::*;
 use crate::remoteobjectid::*;
-
+use screeps::*;
+use serde::*;
 #[cfg(feature = "time")]
 use timing_annotate::*;
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 pub enum StaticMineTarget {
     Source(RemoteObjectId<Source>),
-    Mineral(RemoteObjectId<Mineral>, RemoteObjectId<StructureExtractor>)
+    Mineral(RemoteObjectId<Mineral>, RemoteObjectId<StructureExtractor>),
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -57,7 +55,7 @@ impl Job for StaticMineJob {
                     } else {
                         error!("Harvester has no assigned harvesting source! Name: {}", creep.name());
                     }
-                },
+                }
                 StaticMineTarget::Mineral(mineral_id, extractor_id) => {
                     if let Some(extractor) = extractor_id.resolve() {
                         if extractor.cooldown() == 0 {

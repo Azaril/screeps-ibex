@@ -1,10 +1,9 @@
+use super::jobsystem::*;
 use serde::*;
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-
-use super::jobsystem::*;
 
 #[derive(Clone, Component, ConvertSaveload)]
 pub enum JobData {

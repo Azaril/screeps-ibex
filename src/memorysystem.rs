@@ -14,9 +14,9 @@ impl MemoryArbiter {
     }
 
     pub fn is_active(&mut self, active: u32) -> bool {
-        self.active.get_or_insert_with(|| {
-            raw_memory::get_active_segments().into_iter().collect()
-        }).contains(&active)
+        self.active
+            .get_or_insert_with(|| raw_memory::get_active_segments().into_iter().collect())
+            .contains(&active)
     }
 
     pub fn get(&self, segment: u32) -> Option<String> {
