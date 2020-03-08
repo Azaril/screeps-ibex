@@ -40,7 +40,7 @@ impl UpgradeMission {
     fn create_handle_upgrader_spawn(
         mission_entity: Entity,
         home_room: Entity,
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync> {
+    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 

@@ -14,7 +14,7 @@ pub struct SpawnRequest {
     description: String,
     body: Vec<Part>,
     priority: f32,
-    callback: Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync>,
+    callback: Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)>,
 }
 
 impl SpawnRequest {
@@ -22,7 +22,7 @@ impl SpawnRequest {
         description: String,
         body: &[Part],
         priority: f32,
-        callback: Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync>,
+        callback: Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)>,
     ) -> SpawnRequest {
         SpawnRequest {
             description,

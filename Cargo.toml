@@ -16,7 +16,7 @@ screeps-game-api = { path = "C:\\Source\\screeps-game-api" }
 serde = "1.0"
 serde_json = "1.0"
 scopeguard = { version = "1.0", optional = true }
-specs = { version = "0.15", default-features = false, features = ["serde", "shred-derive"] }
+specs = { version = "0.16", default-features = false, features = ["serde", "shred-derive"] }
 specs-derive = "0.4"
 itertools = "0.8"
 bitflags = "1.2.1"

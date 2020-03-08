@@ -69,7 +69,7 @@ impl LocalSupplyMission {
         mission_entity: Entity,
         target: StaticMineTarget,
         container_id: RemoteObjectId<StructureContainer>
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync> {
+    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
@@ -94,7 +94,7 @@ impl LocalSupplyMission {
         mission_entity: Entity,
         source_id: RemoteObjectId<Source>,
         delivery_room: Entity,
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync> {
+    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
