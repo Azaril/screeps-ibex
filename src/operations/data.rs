@@ -16,6 +16,7 @@ pub enum OperationData {
     Construction(super::construction::ConstructionOperation),
     Claim(super::claim::ClaimOperation),
     Haul(super::haul::HaulOperation),
+    Terminal(super::terminal::TerminalOperation),
 }
 
 impl OperationData {
@@ -29,6 +30,7 @@ impl OperationData {
             OperationData::Construction(ref mut data) => data,
             OperationData::Claim(ref mut data) => data,
             OperationData::Haul(ref mut data) => data,
+            OperationData::Terminal(ref mut data) => data,
         }
     }
 }

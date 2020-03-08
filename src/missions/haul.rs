@@ -102,11 +102,19 @@ impl Mission for HaulMission {
             .try_get_room(room_data.name)
             .map(|r| r.stats());
 
-        let need_hauling = stats
-            .map(|s| s.total_withdrawl > 0)
-            .unwrap_or(false);
+        let desired_haulers = if let Some(stats) = stats {
+            if stats.total_active_withdrawl > 10000 || stats.total_active_deposit > 10000 {
+                3
+            } else if stats.total_active_withdrawl > 0 || stats.total_active_deposit > 0 {
+                2
+            } else {
+                0
+            }
+        } else {
+            0
+        };
 
-        let should_spawn = need_hauling && self.haulers.0.len() < 2;
+        let should_spawn = self.haulers.0.len() < desired_haulers;
 
         if should_spawn {
             let energy_to_use = if self.haulers.0.is_empty() {
@@ -119,7 +127,7 @@ impl Mission for HaulMission {
             let body_definition = crate::creep::SpawnBodyDefinition {
                 maximum_energy: energy_to_use,
                 minimum_repeat: Some(1),
-                maximum_repeat: Some(6),
+                maximum_repeat: Some(8),
                 pre_body: &[],
                 repeat_body: &[Part::Carry, Part::Move],
                 post_body: &[],

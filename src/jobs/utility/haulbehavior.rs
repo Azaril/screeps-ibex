@@ -6,6 +6,7 @@ use std::collections::HashMap;
 #[cfg(feature = "time")]
 use timing_annotate::*;
 use findnearest::*;
+use crate::jobs::actions::*;
 
 #[cfg_attr(feature = "time", timing)]
 pub fn get_new_pickup_state_fill_resource<F, R>(
@@ -158,6 +159,7 @@ where
 #[cfg_attr(feature = "time", timing)]
 pub fn run_pickup_state<F, R>(
     creep: &Creep,
+    action_flags: &mut SimultaneousActionFlags,
     ticket: &mut TransferWithdrawTicket,
     _transfer_queue: &mut TransferQueue,
     next_state: F,
@@ -172,16 +174,25 @@ where
     let pos = ticket.target().pos();
 
     if !creep.pos().is_near_to(&pos) {
-        creep.move_to(&pos);
+        if !action_flags.contains(SimultaneousActionFlags::MOVE) {
+            action_flags.insert(SimultaneousActionFlags::MOVE);
+            creep.move_to(&pos);
+        }
 
         return None;
     }
 
     loop {
         if let Some((resource, amount)) = ticket.get_next_withdrawl() {
-            ticket.consume_withdrawl(resource, amount);
+            if !action_flags.contains(SimultaneousActionFlags::TRANSFER) {
+                action_flags.insert(SimultaneousActionFlags::TRANSFER);
 
-            if ticket.target().withdraw_resource_amount(creep, resource, amount) == ReturnCode::Ok {
+                ticket.consume_withdrawl(resource, amount);
+
+                if ticket.target().withdraw_resource_amount(creep, resource, amount) == ReturnCode::Ok {
+                    break None;
+                }
+            } else {
                 break None;
             }
         } else {
@@ -193,6 +204,7 @@ where
 #[cfg_attr(feature = "time", timing)]
 pub fn run_delivery_state<F, R>(
     creep: &Creep,
+    action_flags: &mut SimultaneousActionFlags,
     tickets: &mut Vec<TransferDepositTicket>,
     _transfer_queue: &mut TransferQueue,
     next_state: F,
@@ -205,15 +217,24 @@ where
             let pos = ticket.target().pos();
         
             if !creep.pos().is_near_to(&pos) {
-                creep.move_to(&pos);
+                if !action_flags.contains(SimultaneousActionFlags::MOVE) {
+                    action_flags.insert(SimultaneousActionFlags::MOVE);
+                    creep.move_to(&pos);
+                }
         
                 return None;
             }
         
             while let Some((resource, amount)) = ticket.get_next_deposit() {
-                ticket.consume_deposit(resource, amount);
-    
-                if ticket.target().transfer_resource_amount(creep, resource, amount) == ReturnCode::Ok {
+                if !action_flags.contains(SimultaneousActionFlags::TRANSFER) {
+                    action_flags.insert(SimultaneousActionFlags::TRANSFER);
+
+                    ticket.consume_deposit(resource, amount);
+        
+                    if ticket.target().transfer_resource_amount(creep, resource, amount) == ReturnCode::Ok {
+                        return None;
+                    }
+                } else {
                     return None;
                 }
             }

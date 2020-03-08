@@ -19,6 +19,7 @@ pub enum MissionData {
     Claim(super::claim::ClaimMission),
     RemoteBuild(super::remotebuild::RemoteBuildMission),
     Haul(super::haul::HaulMission),
+    Terminal(super::terminal::TerminalMission),
 }
 
 impl MissionData {
@@ -35,6 +36,7 @@ impl MissionData {
             MissionData::Claim(ref mut data) => data,
             MissionData::RemoteBuild(ref mut data) => data,
             MissionData::Haul(ref mut data) => data,
+            MissionData::Terminal(ref mut data) => data
         }
     }
 }
