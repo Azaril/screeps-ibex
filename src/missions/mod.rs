@@ -11,3 +11,4 @@ pub mod reserve;
 pub mod scout;
 pub mod tower;
 pub mod upgrade;
+pub mod terminal;

@@ -54,6 +54,7 @@ bitflags! {
         const NONE = 1u8 << (TransferPriority::None as u8);
 
         const ALL = Self::HIGH.bits | Self::MEDIUM.bits | Self::LOW.bits | Self::NONE.bits;
+        const ACTIVE = Self::HIGH.bits | Self::MEDIUM.bits | Self::LOW.bits;
     }
 }
 
@@ -67,7 +68,8 @@ pub enum TransferTarget {
     Link(RemoteObjectId<StructureLink>),
     Ruin(RemoteObjectId<Ruin>),
     Tombstone(RemoteObjectId<Tombstone>),
-    Resource(RemoteObjectId<Resource>)
+    Resource(RemoteObjectId<Resource>),
+    Terminal(RemoteObjectId<StructureTerminal>),
 }
 
 impl TransferTarget {
@@ -90,6 +92,7 @@ impl TransferTarget {
             TransferTarget::Ruin(id) => Self::is_valid_from_id(id),
             TransferTarget::Tombstone(id) => Self::is_valid_from_id(id),
             TransferTarget::Resource(id) => Self::is_valid_from_id(id),
+            TransferTarget::Terminal(id) => Self::is_valid_from_id(id),
         }
     }
 
@@ -104,6 +107,7 @@ impl TransferTarget {
             TransferTarget::Ruin(id) => id.pos(),
             TransferTarget::Tombstone(id) => id.pos(),
             TransferTarget::Resource(id) => id.pos(),
+            TransferTarget::Terminal(id) => id.pos(),
         }
     }
 
@@ -136,6 +140,7 @@ impl TransferTarget {
             TransferTarget::Ruin(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
             TransferTarget::Tombstone(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
             TransferTarget::Resource(id) => Self::pickup_resource_from_id(id, creep),
+            TransferTarget::Terminal(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
         }
     }
 
@@ -157,10 +162,11 @@ impl TransferTarget {
             TransferTarget::Storage(id) => Self::transfer_resource_amount_to_id(id, creep, resource, amount),
             TransferTarget::Tower(id) => Self::transfer_resource_amount_to_id(id, creep, resource, amount),
             TransferTarget::Link(id) => Self::transfer_resource_amount_to_id(id, creep, resource, amount),
-            TransferTarget::Ruin(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
-            TransferTarget::Tombstone(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
+            TransferTarget::Terminal(id) => Self::transfer_resource_amount_to_id(id, creep, resource, amount),
             //TODO: Split pickup and deposit targets.
-            TransferTarget::Resource(_) => { panic!("Attempting to transfer resources to a dropped resource.") }
+            TransferTarget::Ruin(_) => { panic!("Attempting to transfer resources to a dropped resource.") },
+            TransferTarget::Tombstone(_) => { panic!("Attempting to transfer resources to a dropped resource.") },
+            TransferTarget::Resource(_) => { panic!("Attempting to transfer resources to a dropped resource.") },
         }
     }
 }
@@ -739,9 +745,11 @@ impl TransferQueueResourceStatsData {
 
 pub struct TransferQueueRoomStatsData {
     pub total_withdrawl: u32,
+    pub total_active_withdrawl: u32,
     withdrawl_resource_stats: HashMap<ResourceType, HashMap<TransferPriority, TransferQueueResourceStatsData>>,
     withdrawl_priorities: TransferPriorityFlags,
     pub total_deposit: u32,
+    pub total_active_deposit: u32,
     deposit_resource_stats: HashMap<Option<ResourceType>, HashMap<TransferPriority, TransferQueueResourceStatsData>>,
     deposit_priorities: TransferPriorityFlags,
 }
@@ -750,9 +758,11 @@ impl TransferQueueRoomStatsData {
     pub fn new() -> TransferQueueRoomStatsData {
         TransferQueueRoomStatsData {
             total_withdrawl: 0,
+            total_active_withdrawl: 0,
             withdrawl_resource_stats: HashMap::new(),
             withdrawl_priorities: TransferPriorityFlags::UNSET,
             total_deposit: 0,
+            total_active_deposit: 0,
             deposit_resource_stats: HashMap::new(),
             deposit_priorities: TransferPriorityFlags::UNSET,
         }
@@ -834,8 +844,13 @@ impl TransferQueue {
     pub fn request_withdraw(&mut self, withdraw_request: TransferWithdrawRequest) {
         let room = self.get_room(withdraw_request.target.pos().room_name());
         room.stats.total_withdrawl += withdraw_request.amount;
+        
         let priority_flag = withdraw_request.priority.into();
         room.stats.withdrawl_priorities |= priority_flag;
+
+        if TransferPriorityFlags::ACTIVE.contains(priority_flag) {
+            room.stats.total_active_withdrawl += withdraw_request.amount;
+        }
         
         let resource_stats = room.stats
             .withdrawl_resource_stats
@@ -853,8 +868,13 @@ impl TransferQueue {
     pub fn request_deposit(&mut self, deposit_request: TransferDepositRequest) {
         let room = self.get_room(deposit_request.target.pos().room_name());
         room.stats.total_deposit += deposit_request.amount;
+
         let priority_flag = deposit_request.priority.into();
         room.stats.deposit_priorities |= priority_flag;
+
+        if TransferPriorityFlags::ACTIVE.contains(priority_flag) {
+            room.stats.total_active_deposit += deposit_request.amount;
+        }
 
         let resource_stats = room.stats
             .deposit_resource_stats

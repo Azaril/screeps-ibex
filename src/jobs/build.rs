@@ -12,6 +12,7 @@ use super::utility::buildbehavior::*;
 use super::utility::harvestbehavior::*;
 use super::utility::haulbehavior::*;
 use super::utility::repairbehavior::*;
+use super::actions::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use crate::structureidentifier::*;
@@ -137,12 +138,14 @@ impl Job for BuildJob {
     fn run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         let creep = runtime_data.owner;
 
+        let mut action_flags = SimultaneousActionFlags::UNSET;
+
         if let Some(build_room_data) = system_data.room_data.get(self.build_room) {
             loop {
                 let state_result = match &mut self.state {
                     BuildState::Idle => Self::run_idle_state(creep, build_room_data, runtime_data.transfer_queue),
                     BuildState::Pickup(ticket) => {
-                        run_pickup_state(creep, ticket, runtime_data.transfer_queue, || BuildState::FinishedPickup)
+                        run_pickup_state(creep, &mut action_flags, ticket, runtime_data.transfer_queue, || BuildState::FinishedPickup)
                     }
                     BuildState::FinishedPickup => Self::run_finished_pickup_state(creep, &[build_room_data], runtime_data.transfer_queue),
                     BuildState::Harvest(source_id) => run_harvest_state(creep, source_id, || BuildState::Idle),

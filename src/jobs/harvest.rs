@@ -13,6 +13,7 @@ use super::utility::haulbehavior::*;
 use super::utility::repair::*;
 use super::utility::repairbehavior::*;
 use super::utility::movebehavior::*;
+use super::actions::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use crate::structureidentifier::*;
@@ -264,6 +265,8 @@ impl Job for HarvestJob {
     fn run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         let creep = runtime_data.owner;
 
+        let mut action_flags = SimultaneousActionFlags::UNSET;
+
         if let Some(delivery_room_data) = system_data.room_data.get(self.delivery_room) {
             loop {
                 let state_result = match &mut self.state {
@@ -272,10 +275,10 @@ impl Job for HarvestJob {
                     }
                     HarvestState::Harvest(source_id) => run_harvest_state(creep, source_id, || HarvestState::Idle),
                     HarvestState::Pickup(pickup_ticket, delivery_ticket) => {
-                        run_pickup_state(creep, pickup_ticket, runtime_data.transfer_queue, || HarvestState::Delivery(delivery_ticket.clone()))
+                        run_pickup_state(creep, &mut action_flags, pickup_ticket, runtime_data.transfer_queue, || HarvestState::Delivery(delivery_ticket.clone()))
                     }
                     HarvestState::Delivery(tickets) => {
-                        run_delivery_state(creep, tickets, runtime_data.transfer_queue, || HarvestState::FinishedDelivery)
+                        run_delivery_state(creep, &mut action_flags, tickets, runtime_data.transfer_queue, || HarvestState::FinishedDelivery)
                     }
                     HarvestState::FinishedDelivery => {
                         Self::run_finished_delivery_state(creep, delivery_room_data, runtime_data.transfer_queue)

@@ -14,13 +14,13 @@ use crate::room::data::*;
 use crate::serialize::*;
 use crate::transfer::transfersystem::*;
 use crate::visualize::*;
+use super::actions::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum HaulState {
     Idle,
     Pickup(TransferWithdrawTicket, Vec<TransferDepositTicket>),
     Delivery(Vec<TransferDepositTicket>),
-    FinishedDelivery,
 }
 
 #[derive(Clone, ConvertSaveload)]
@@ -41,17 +41,26 @@ impl HaulJob {
 
     #[cfg_attr(feature = "time", timing)]
     fn run_idle_state(creep: &Creep, haul_rooms: &[&RoomData], transfer_queue: &mut TransferQueue) -> Option<HaulState> {
-        ACTIVE_TRANSFER_PRIORITIES
-            .iter()
-            .filter_map(|priority| {
-                get_new_delivery_current_resources_state(
-                    creep,
-                    haul_rooms,
-                    TransferPriorityFlags::from(priority),
-                    transfer_queue,
-                    HaulState::Delivery,
-                )
-                .or_else(|| {
+        get_new_delivery_current_resources_state(
+            creep,
+            haul_rooms,
+            TransferPriorityFlags::ACTIVE,
+            transfer_queue,
+            HaulState::Delivery,
+        )
+        .or_else(|| {
+            get_new_delivery_current_resources_state(
+                creep,
+                haul_rooms,
+                TransferPriorityFlags::NONE,
+                transfer_queue,
+                HaulState::Delivery,
+            )
+        })
+        .or_else(|| {
+            ACTIVE_TRANSFER_PRIORITIES
+                .iter()
+                .filter_map(|priority| {
                     get_new_pickup_and_delivery_full_capacity_state(
                         creep,
                         haul_rooms,
@@ -60,52 +69,8 @@ impl HaulJob {
                         HaulState::Pickup,
                     )
                 })
-            })
-            .next()
-            .or_else(|| {
-                get_new_delivery_current_resources_state(
-                    creep,
-                    haul_rooms,
-                    TransferPriorityFlags::NONE,
-                    transfer_queue,
-                    HaulState::Delivery,
-                )
-            })
-    }
-
-    #[cfg_attr(feature = "time", timing)]
-    fn run_finished_delivery_state(creep: &Creep, haul_rooms: &[&RoomData], transfer_queue: &mut TransferQueue) -> Option<HaulState> {
-        ACTIVE_TRANSFER_PRIORITIES
-            .iter()
-            .filter_map(|priority| {
-                get_new_delivery_current_resources_state(
-                    creep,
-                    haul_rooms,
-                    TransferPriorityFlags::from(priority),
-                    transfer_queue,
-                    HaulState::Delivery,
-                )
-                .or_else(|| {
-                    get_new_pickup_and_delivery_full_capacity_state(
-                        creep,
-                        haul_rooms,
-                        TransferPriorityFlags::from(priority),
-                        transfer_queue,
-                        HaulState::Pickup,
-                    )
-                })
-            })
-            .next()
-            .or_else(|| {
-                get_new_delivery_current_resources_state(
-                    creep,
-                    haul_rooms,
-                    TransferPriorityFlags::NONE,
-                    transfer_queue,
-                    HaulState::Delivery,
-                )
-            })
-            .or(Some(HaulState::Idle))
+                .next()
+        })
     }
 }
 
@@ -162,9 +127,6 @@ impl Job for HaulJob {
                             }
                         }
                     }
-                    HaulState::FinishedDelivery => {
-                        room_ui.jobs().add_text(format!("Haul - {} - Finished Delivery", name), None);
-                    }
                 })
         }
     }
@@ -183,8 +145,7 @@ impl Job for HaulJob {
                 for delivery_ticket in delivery_tickets.iter() {
                     runtime_data.transfer_queue.register_delivery(&delivery_ticket);
                 }
-            },
-            HaulState::FinishedDelivery => {}
+            }
         };
     }
 
@@ -194,14 +155,15 @@ impl Job for HaulJob {
 
         let haul_rooms = self.haul_rooms.0.iter().filter_map(|e| system_data.room_data.get(*e)).collect_vec();
 
+        let mut action_flags = SimultaneousActionFlags::UNSET;
+
         loop {
             let state_result = match &mut self.state {
                 HaulState::Idle => Self::run_idle_state(creep, &haul_rooms, runtime_data.transfer_queue),
-                HaulState::Pickup(pickup_ticket, delivery_tickets) => run_pickup_state(creep, pickup_ticket, runtime_data.transfer_queue, || HaulState::Delivery(delivery_tickets.clone())),
+                HaulState::Pickup(pickup_ticket, delivery_tickets) => run_pickup_state(creep, &mut action_flags, pickup_ticket, runtime_data.transfer_queue, || HaulState::Delivery(delivery_tickets.clone())),
                 HaulState::Delivery(delivery_tickets) => {
-                    run_delivery_state(creep, delivery_tickets, runtime_data.transfer_queue, || HaulState::FinishedDelivery)
+                    run_delivery_state(creep, &mut action_flags, delivery_tickets, runtime_data.transfer_queue, || HaulState::Idle)
                 }
-                HaulState::FinishedDelivery => Self::run_finished_delivery_state(creep, &haul_rooms, runtime_data.transfer_queue),
             };
 
             if let Some(next_state) = state_result {

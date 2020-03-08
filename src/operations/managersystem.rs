@@ -11,6 +11,7 @@ use super::localsupply::*;
 use super::remotemine::*;
 use super::tower::*;
 use super::upgrade::*;
+use super::terminal::*;
 
 pub struct OperationManagerSystem;
 
@@ -28,6 +29,7 @@ impl<'a> System<'a> for OperationManagerSystem {
         let mut has_construction = false;
         let mut has_claim = false;
         let mut has_haul = false;
+        let mut has_terminal = false;
 
         for (_, operation) in (&entities, &operations).join() {
             match operation {
@@ -39,6 +41,7 @@ impl<'a> System<'a> for OperationManagerSystem {
                 OperationData::Construction(_) => has_construction = true,
                 OperationData::Claim(_) => has_claim = true,
                 OperationData::Haul(_) => has_haul = true,
+                OperationData::Terminal(_) => has_terminal = true,
             }
         }
 
@@ -88,6 +91,12 @@ impl<'a> System<'a> for OperationManagerSystem {
             info!("Haul operation does not exist, creating.");
 
             HaulOperation::build(updater.create_entity(&entities)).build();
+        }
+
+        if !has_terminal {
+            info!("Terminal operation does not exist, creating.");
+
+            TerminalOperation::build(updater.create_entity(&entities)).build();
         }
     }
 }
