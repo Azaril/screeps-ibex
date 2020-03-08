@@ -46,7 +46,7 @@ impl ScoutMission {
     fn create_handle_scout_spawn(
         mission_entity: Entity,
         scout_room: RoomName,
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync> {
+    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 

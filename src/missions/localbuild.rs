@@ -63,7 +63,7 @@ impl LocalBuildMission {
     fn create_handle_builder_spawn(
         mission_entity: Entity,
         room_entity: Entity,
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync> {
+    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 

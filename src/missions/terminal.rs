@@ -82,8 +82,6 @@ impl Mission for TerminalMission {
                     _ => 10_000
                 };
 
-                info!("Resource: {:?} - Storage: ({}/{}) Terminal: ({}/{})", resource_type, current_storage_amount, desired_storage_amount, current_terminal_amount, desired_terminal_amount);
-
                 if current_storage_amount > desired_storage_amount && current_terminal_amount < desired_terminal_amount {
                     let storage_excess = current_storage_amount - desired_storage_amount;
                     let terminal_shortage = desired_terminal_amount - current_terminal_amount;

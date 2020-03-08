@@ -40,7 +40,7 @@ impl HaulMission {
     fn create_handle_hauler_spawn(
         mission_entity: Entity,
         haul_rooms: &[Entity],
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str) + Send + Sync> {
+    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         let rooms = haul_rooms.to_vec();
 
         Box::new(move |spawn_system_data, name| {
