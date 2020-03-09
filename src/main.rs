@@ -280,6 +280,7 @@ fn game_loop() {
         .with(room::visibilitysystem::VisibilityQueueSystem, "visibility_queue", &[])
         .with(spawnsystem::SpawnQueueSystem, "spawn_queue", &[])
         .with(transfer::transfersystem::TransferQueueSystem, "transfer_queue", &[])
+        .with(transfer::ordersystem::OrderQueueSystem, "order_queue", &[])
         .with_barrier()
         .with(visualize::VisualizerSystem, "visualizer", &[])
         .with(statssystem::StatsSystem, "stats", &[])

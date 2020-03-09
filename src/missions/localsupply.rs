@@ -430,6 +430,12 @@ impl LocalSupplyMission {
         }
 
         for ((mineral_id, extractor_id), container_ids) in structure_data.mineral_extractors_to_containers.iter() {
+            if let Some(mineral) = mineral_id.resolve() {
+                if mineral.mineral_amount() == 0 {
+                    continue;
+                }
+            }
+
             let mineral_miners = container_ids
                 .iter()
                 .filter_map(|container| creep_data.containers_to_mineral_miners.get(container))

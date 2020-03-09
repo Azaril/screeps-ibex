@@ -99,7 +99,11 @@ impl Mission for UpgradeMission {
         }
 
         //TODO: Need better calculation for maximum number of upgraders.
-        let max_upgraders = if controller.level() <= 4 { 3 } else { 1 };
+        let max_upgraders = if controller.level() <= 4 || (controller.level() < 8 && room.storage().map(|s| s.store_used_capacity(Some(ResourceType::Energy)) > 250_000).unwrap_or(false)) {
+            3
+        } else { 
+            1 
+        };
 
         if self.upgraders.0.len() < max_upgraders {
             let work_parts_per_upgrader = if controller.level() == 8 {

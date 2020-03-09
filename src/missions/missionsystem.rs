@@ -4,6 +4,7 @@ use crate::jobs::data::*;
 use crate::room::data::*;
 use crate::spawnsystem::*;
 use crate::transfer::transfersystem::*;
+use crate::transfer::ordersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
 use specs::prelude::*;
@@ -23,6 +24,7 @@ pub struct MissionSystemData<'a> {
     visualizer: Option<Write<'a, Visualizer>>,
     ui: Option<Write<'a, UISystem>>,
     transfer_queue: Write<'a, TransferQueue>,
+    order_queue: Write<'a, OrderQueue>,
 }
 
 pub struct MissionExecutionSystemData<'a> {
@@ -39,6 +41,7 @@ pub struct MissionExecutionRuntimeData<'a> {
     pub spawn_queue: &'a mut SpawnQueue,
     pub visualizer: Option<&'a mut Visualizer>,
     pub transfer_queue: &'a mut TransferQueue,
+    pub order_queue: &'a mut OrderQueue
 }
 
 pub struct MissionDescribeData<'a> {
@@ -92,6 +95,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 spawn_queue: &mut data.spawn_queue,
                 visualizer: data.visualizer.as_deref_mut(),
                 transfer_queue: &mut data.transfer_queue,
+                order_queue: &mut data.order_queue,
             };
 
             let mission = mission_data.as_mission();
@@ -154,6 +158,7 @@ impl<'a> System<'a> for RunMissionSystem {
                 spawn_queue: &mut data.spawn_queue,
                 visualizer: data.visualizer.as_deref_mut(),
                 transfer_queue: &mut data.transfer_queue,
+                order_queue: &mut data.order_queue,
             };
 
             let mission = mission_data.as_mission();

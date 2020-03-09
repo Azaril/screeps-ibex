@@ -58,23 +58,53 @@ impl Mission for TerminalMission {
         let terminal_id = terminal.remote_id();
 
         if let Some(storage) = room.storage() {
+            //
+            // Transfer energy needed for purchase/sale to the terminal.
+            //
+            let energy_reserve = runtime_data.order_queue.maximum_transfer_cost();
+            let current_terminal_energy = terminal.store_used_capacity(Some(ResourceType::Energy));
+
+            if current_terminal_energy < energy_reserve {
+                let transfer_amount = energy_reserve - current_terminal_energy;
+
+                let transfer_request = TransferDepositRequest::new(
+                    TransferTarget::Terminal(terminal_id),
+                    Some(ResourceType::Energy),
+                    TransferPriority::Medium,
+                    transfer_amount,
+                );
+
+                runtime_data.transfer_queue.request_deposit(transfer_request);
+            }
+
             let storage_resource_types = storage.store_types();
 
             let all_resource_types = storage_resource_types.iter().chain(terminal_storage_types.iter()).unique();
 
             for resource_type in all_resource_types {
                 let current_storage_amount = storage.store_used_capacity(Some(*resource_type));
-                let current_terminal_amount = terminal.store_used_capacity(Some(*resource_type));
+                let mut current_terminal_amount = terminal.store_used_capacity(Some(*resource_type));
+
+                if *resource_type == ResourceType::Energy {
+                    current_terminal_amount -= energy_reserve.min(current_terminal_amount);
+                }
 
                 let desired_storage_amount = match resource_type {
                     ResourceType::Energy => 500_000,
                     _ => 10_000,
                 };
 
-                let desired_terminal_amount = match resource_type {
+                let desired_passive_terminal_amount = match resource_type {
                     ResourceType::Energy => 50_000,
                     _ => 10_000,
                 };
+
+                let desired_active_terminal_amount = match resource_type {
+                    ResourceType::Energy => 10_000,
+                    _ => 5_000
+                };
+
+                let desired_terminal_amount = desired_passive_terminal_amount + desired_active_terminal_amount;
 
                 //
                 // If there is excess resources in storage and a shortage in the terminal, request transfer of
@@ -140,6 +170,20 @@ impl Mission for TerminalMission {
                         );
 
                         runtime_data.transfer_queue.request_withdraw(transfer_request);
+                    }
+                }
+
+                //
+                // If there are sufficient resources in the terminal and storage, request selling them.
+                //
+
+                if current_storage_amount > 0 && current_terminal_amount >= desired_passive_terminal_amount {
+                    runtime_data.order_queue.request_passive_sale(room_data.name, *resource_type, current_storage_amount);
+
+                    if current_storage_amount > desired_passive_terminal_amount {
+                        let active_amount = current_terminal_amount - desired_passive_terminal_amount;
+
+                        runtime_data.order_queue.request_active_sale(room_data.name, *resource_type, active_amount);
                     }
                 }
             }

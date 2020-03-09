@@ -792,11 +792,6 @@ impl TransferQueueRoomData {
     }
 }
 
-#[derive(Default)]
-pub struct TransferQueue {
-    rooms: HashMap<RoomName, TransferQueueRoomData>,
-}
-
 #[derive(Copy, Clone, Debug)]
 pub enum TransferCapacity {
     Infinite,
@@ -826,6 +821,11 @@ impl TransferCapacity {
             TransferCapacity::Finite(current) => amount.min(current),
         }
     }
+}
+
+#[derive(Default)]
+pub struct TransferQueue {
+    rooms: HashMap<RoomName, TransferQueueRoomData>,
 }
 
 #[cfg_attr(feature = "time", timing)]
@@ -1221,10 +1221,6 @@ pub struct TransferQueueSystemData<'a> {
     room_data: WriteStorage<'a, ::room::data::RoomData>,
     visualizer: Option<Write<'a, Visualizer>>,
     ui: Option<Write<'a, UISystem>>,
-}
-
-pub struct TransferQueueExecutionSystemData<'a> {
-    pub updater: Read<'a, LazyUpdate>,
 }
 
 pub struct TransferQueueSystem;

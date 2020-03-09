@@ -8,11 +8,11 @@ pub mod js {
                     },
                     construction: {
                         plan: true,
+                        execute: true,
                         visualize: {
                             on: true,
                             plan: true,
                         },
-                        execute: true
                     },
                     transfer: {
                         visualize: {
@@ -38,12 +38,12 @@ pub mod construction {
         ::memory::root().path_bool("_features.construction.plan")
     }
 
-    pub fn visualize() -> bool {
-        ::memory::root().path_bool("_features.construction.visualize.on")
-    }
-
     pub fn execute() -> bool {
         ::memory::root().path_bool("_features.construction.execute")
+    }
+
+    pub fn visualize() -> bool {
+        ::memory::root().path_bool("_features.construction.visualize.on")
     }
 }
 
@@ -58,5 +58,9 @@ pub mod transfer {
 
     pub fn visualize_demand() -> bool {
         ::memory::root().path_bool("_features.transfer.visualize.demand") && visualize()
+    }
+
+    pub fn visualize_orders() -> bool {
+        ::memory::root().path_bool("_features.transfer.visualize.orders") && visualize()
     }
 }
