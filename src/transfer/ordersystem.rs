@@ -139,10 +139,10 @@ impl OrderQueueSystem {
 
             match create_order(OrderType::Sell, market_resource_type, params.price, sell_amount, Some(params.room_name)) {
                 ReturnCode::Ok => {
-                    info!("Placed sell order! Room: {} Resource: {:?} Price: {} Amount {}", params.room_name, params.resource, params.price, sell_amount);
+                    info!("Placed sell order! Room: {} Resource: {:?} Price: {} Amount: {}", params.room_name, params.resource, params.price, sell_amount);
                 },
                 err => {
-                    info!("Failed to place sell order! Error: {:?} Room: {} Resource: {:?} Price: {} Amount {}", err, params.room_name, params.resource, params.price, sell_amount);
+                    info!("Failed to place sell order! Error: {:?} Room: {} Resource: {:?} Price: {} Amount: {}", err, params.room_name, params.resource, params.price, sell_amount);
                 }
             }
         }
