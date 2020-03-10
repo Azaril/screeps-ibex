@@ -93,7 +93,13 @@ pub struct OrderQueueSystemData<'a> {
     ui: Option<Write<'a, UISystem>>,
 }
 
-pub struct OrderQueueSystem;
+struct PassiveSellOrderParameters {
+    room_name: RoomName,
+    resource: ResourceType,
+    amount: u32, 
+    minimum_sale_amount: u32, 
+    price: f64, 
+}
 
 struct ActiveSellOrderParameters<'a> {
     room_name: RoomName,
@@ -106,7 +112,42 @@ struct ActiveSellOrderParameters<'a> {
     energy_cost: f64
 }
 
+pub struct OrderQueueSystem;
+
 impl OrderQueueSystem {
+    fn sell_passive_order(my_orders: &HashMap<String, MyOrder>, params: PassiveSellOrderParameters) {
+        if params.amount < params.minimum_sale_amount {
+            //TODO: Handle order in progress, cancel etc.?
+            return;
+        }
+
+        let market_resource_type = MarketResourceType::Resource(params.resource);
+
+        let current_orders: Vec<_> = my_orders
+            .values()
+            .filter(|o| o.order_type == OrderType::Sell && o.resource_type == market_resource_type)
+            .filter(|o| o.remaining_amount > 0)
+            .filter(|o| o.room_name.map(|order_room_name| order_room_name == params.room_name).unwrap_or(false))
+            .collect();
+
+        //
+        // NOTE: Sell in block of minimum sale amount, not total capacity.
+        //
+
+        if current_orders.is_empty() {
+            let sell_amount = params.minimum_sale_amount;
+
+            match create_order(OrderType::Sell, market_resource_type, params.price, sell_amount, Some(params.room_name)) {
+                ReturnCode::Ok => {
+                    info!("Placed sell order! Room: {} Resource: {:?} Price: {} Amount {}", params.room_name, params.resource, params.price, sell_amount);
+                },
+                err => {
+                    info!("Failed to place sell order! Error: {:?} Room: {} Resource: {:?} Price: {} Amount {}", err, params.room_name, params.resource, params.price, sell_amount);
+                }
+            }
+        }
+    }
+    
     fn sell_active_order(orders: &[Order], params: ActiveSellOrderParameters) {
         if params.amount == 0 || params.terminal.cooldown() > 0 || params.terminal.store_used_capacity(Some(ResourceType::Energy)) == 0 {
             return;
@@ -121,7 +162,7 @@ impl OrderQueueSystem {
                     let transfer_amount = o.remaining_amount.min(params.amount);
 
                     if transfer_amount > 0 {
-                        let transfer_cost = game::market::calc_transaction_cost(transfer_amount, params.room_name, order_room_name);
+                        let transfer_cost = calc_transaction_cost(transfer_amount, params.room_name, order_room_name);
                         let transfer_cost_per_unit = transfer_cost / (transfer_amount as f64);
                         let energy_transfer_cost_per_unit = transfer_cost_per_unit * params.energy_cost;
 
@@ -141,12 +182,12 @@ impl OrderQueueSystem {
             let terminal_energy = params.terminal.store_used_capacity(Some(ResourceType::Energy));
             
             if transfer_cost <= terminal_energy as f64 {
-                match game::market::deal(&best_order.id, transfer_amount, Some(params.room_name)) {
+                match deal(&best_order.id, transfer_amount, Some(params.room_name)) {
                     ReturnCode::Ok => {
-                        info!("Completed deal! Resource: {:?} Amount: {} Transfer Cost: {} Price: {} Effective Price: {} Id: {}", params.resource, transfer_amount, transfer_cost, best_order.price, effective_price_per_unit, best_order.id);
+                        info!("Completed deal! Room: {} Resource: {:?} Amount: {} Transfer Cost: {} Price: {} Effective Price: {} Id: {}", params.room_name, params.resource, transfer_amount, transfer_cost, best_order.price, effective_price_per_unit, best_order.id);
                     },
                     err => {
-                        info!("Failed to complete deal! Error: {:?} Resource: {:?} Amount: {} Transfer Cost: {} Price: {} Effectice Price: {} Id: {}", err, params.resource, transfer_amount, transfer_cost, best_order.price, effective_price_per_unit, best_order.id);
+                        info!("Failed to complete deal! Error: {:?} Room: {}Resource: {:?} Amount: {} Transfer Cost: {} Price: {} Effectice Price: {} Id: {}", err, params.room_name, params.resource, transfer_amount, transfer_cost, best_order.price, effective_price_per_unit, best_order.id);
                 
                     }
                 }
@@ -165,13 +206,13 @@ impl<'a> System<'a> for OrderQueueSystem {
             }
         }
 
-        if game::time() % 10 != 0 {
+        if game::time() % 50 != 0 {
             return;
         }
 
         if !data.order_queue.rooms.is_empty() {
             let orders = game::market::get_all_orders();
-            //let my_orders = game::market::orders();
+            let my_orders = game::market::orders();
 
             let mut resource_history = HashMap::new();
 
@@ -195,11 +236,18 @@ impl<'a> System<'a> for OrderQueueSystem {
                             .or_insert_with(|| game::market::get_history(Some(energy_market_resource)));
                         
                         //TODO: Validate that the current average price is sane (compare to prior day?).
+                        //TODO: Need better pricing calculations.
 
                         if let Some(latest_history) = resource_history.get(&market_resource).unwrap().last() {
                             if let Some(latest_energy_history) = resource_history.get(&energy_market_resource).unwrap().last() {
                                 if entry.passive_sale > 0 {
-                                    //TODO: Implement!
+                                    Self::sell_passive_order(&my_orders, PassiveSellOrderParameters {
+                                        room_name: *room_name,
+                                        resource: *resource,
+                                        amount: entry.passive_sale,
+                                        minimum_sale_amount: 2000,
+                                        price: latest_history.avg_price + (latest_history.stddev_price * 0.1),
+                                    });
                                 }
 
                                 if entry.active_sale > 0 {

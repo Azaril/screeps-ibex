@@ -153,8 +153,8 @@ impl Mission for TerminalMission {
                 };
 
                 //
-                // Actively transfer any resources that are in excess of the desired terminal amount and are not already
-                // being made avaiable due to storage shortage.
+                // Actively transfer any resources that are in excess of the desired terminal amount (active and passive) 
+                // and are not already being made avaiable due to storage shortage.
                 //
 
                 if current_terminal_amount > desired_terminal_amount {
@@ -177,12 +177,16 @@ impl Mission for TerminalMission {
                 // If there are sufficient resources in the terminal and storage, request selling them.
                 //
 
-                if current_storage_amount > 0 && current_terminal_amount >= desired_passive_terminal_amount {
-                    runtime_data.order_queue.request_passive_sale(room_data.name, *resource_type, current_storage_amount);
+                if current_storage_amount >= desired_storage_amount {
+                    let passive_amount = current_terminal_amount.min(desired_passive_terminal_amount);
 
-                    if current_storage_amount > desired_passive_terminal_amount {
-                        let active_amount = current_terminal_amount - desired_passive_terminal_amount;
+                    if passive_amount > 0 {
+                        runtime_data.order_queue.request_passive_sale(room_data.name, *resource_type, passive_amount);
+                    }
 
+                    let active_amount = current_terminal_amount - passive_amount;
+
+                    if active_amount > 0 {
                         runtime_data.order_queue.request_active_sale(room_data.name, *resource_type, active_amount);
                     }
                 }
