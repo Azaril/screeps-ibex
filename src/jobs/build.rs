@@ -155,10 +155,10 @@ impl Job for BuildJob {
                         BuildState::FinishedPickup
                     }),
                     BuildState::FinishedPickup => Self::run_finished_pickup_state(creep, &[build_room_data], runtime_data.transfer_queue),
-                    BuildState::Harvest(source_id) => run_harvest_state(creep, source_id, || BuildState::Idle),
-                    BuildState::Build(construction_site_id) => run_build_state(creep, construction_site_id, || BuildState::FinishedBuild),
+                    BuildState::Harvest(source_id) => run_harvest_state(creep, &mut action_flags, source_id, false, || BuildState::Idle),
+                    BuildState::Build(construction_site_id) => run_build_state(creep, &mut action_flags, construction_site_id, || BuildState::FinishedBuild),
                     BuildState::FinishedBuild => Self::run_finished_build_state(creep, build_room_data),
-                    BuildState::Repair(structure_id) => run_repair_state(creep, structure_id, || BuildState::FinishedRepair),
+                    BuildState::Repair(structure_id) => run_repair_state(creep, &mut action_flags, structure_id, || BuildState::FinishedRepair),
                     BuildState::FinishedRepair => Self::run_finished_repair_state(creep, build_room_data),
                 };
 

@@ -259,7 +259,7 @@ where
                     ticket.consume_deposit(resource, amount);
 
                     if ticket.target().transfer_resource_amount(creep, resource, amount) == ReturnCode::Ok {
-                        return None;
+                        break;
                     }
                 } else {
                     return None;
@@ -267,6 +267,51 @@ where
             }
         } else {
             tickets.remove(0);
+        }
+    }
+
+    Some(next_state())
+}
+
+#[cfg_attr(feature = "time", timing)]
+pub fn run_deposit_all_resources_state<F, R>(
+    creep: &Creep,
+    action_flags: &mut SimultaneousActionFlags,
+    target: TransferTarget,
+    next_state: F,
+) -> Option<R>
+where
+    F: Fn() -> R,
+{
+    if target.is_valid() {
+        let pos = target.pos();
+
+        if !creep.pos().is_near_to(&pos) {
+            if !action_flags.contains(SimultaneousActionFlags::MOVE) {
+                action_flags.insert(SimultaneousActionFlags::MOVE);
+                creep.move_to(&pos);
+            }
+
+            return None;
+        }
+
+        let store_types = creep.store_types();
+        if let Some(resource) = store_types.first() {
+            if !action_flags.contains(SimultaneousActionFlags::TRANSFER) {
+                action_flags.insert(SimultaneousActionFlags::TRANSFER);
+
+                let amount = creep.store_used_capacity(Some(*resource));
+
+                if target.transfer_resource_amount(creep, *resource, amount) == ReturnCode::Ok {
+                    if store_types.len() == 1 {
+                        return Some(next_state())
+                    } else {
+                        return None
+                    }
+                }
+            } else {
+                return None;
+            }
         }
     }
 

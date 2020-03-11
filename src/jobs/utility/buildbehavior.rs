@@ -4,6 +4,7 @@ use crate::room::data::*;
 use screeps::*;
 #[cfg(feature = "time")]
 use timing_annotate::*;
+use crate::jobs::actions::*;
 
 #[cfg_attr(feature = "time", timing)]
 pub fn get_new_build_state<F, R>(creep: &Creep, build_room: &RoomData, state_map: F) -> Option<R>
@@ -23,7 +24,7 @@ where
 }
 
 #[cfg_attr(feature = "time", timing)]
-pub fn run_build_state<F, R>(creep: &Creep, construction_site_id: &RemoteObjectId<ConstructionSite>, next_state: F) -> Option<R>
+pub fn run_build_state<F, R>(creep: &Creep, action_flags: &mut SimultaneousActionFlags, construction_site_id: &RemoteObjectId<ConstructionSite>, next_state: F) -> Option<R>
 where
     F: Fn() -> R,
 {
@@ -33,21 +34,33 @@ where
     //TODO: Check visibility cache and cancel if construction site doesn't exist?
 
     if creep_pos.room_name() != target_position.room_name() {
-        creep.move_to(&target_position);
+        if !action_flags.contains(SimultaneousActionFlags::MOVE) {
+            action_flags.insert(SimultaneousActionFlags::MOVE);
+            creep.move_to(&target_position);
+        }
 
         return None;
     }
 
     if let Some(construction_site) = construction_site_id.resolve() {
         if !creep_pos.in_range_to(&construction_site, 3) {
-            creep.move_to(&target_position);
+            if !action_flags.contains(SimultaneousActionFlags::MOVE) {
+                action_flags.insert(SimultaneousActionFlags::MOVE);
+                creep.move_to(&target_position);
+            }
 
             return None;
         }
 
-        match creep.build(&construction_site) {
-            ReturnCode::Ok => None,
-            _ => Some(next_state()),
+        if !action_flags.contains(SimultaneousActionFlags::BUILD) {
+            action_flags.insert(SimultaneousActionFlags::BUILD);
+
+            match creep.build(&construction_site) {
+                ReturnCode::Ok => None,
+                _ => Some(next_state()),
+            }
+        } else {
+            None
         }
     } else {
         Some(next_state())
