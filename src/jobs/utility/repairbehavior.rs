@@ -4,6 +4,7 @@ use crate::structureidentifier::*;
 use screeps::*;
 #[cfg(feature = "time")]
 use timing_annotate::*;
+use crate::jobs::actions::*;
 
 #[cfg_attr(feature = "time", timing)]
 pub fn get_new_repair_state<F, R>(creep: &Creep, build_room: &RoomData, minimum_priority: Option<RepairPriority>, state_map: F) -> Option<R>
@@ -23,7 +24,7 @@ where
 }
 
 #[cfg_attr(feature = "time", timing)]
-pub fn run_repair_state<F, R>(creep: &Creep, repair_structure_id: &RemoteStructureIdentifier, next_state: F) -> Option<R>
+pub fn run_repair_state<F, R>(creep: &Creep, action_flags: &mut SimultaneousActionFlags, repair_structure_id: &RemoteStructureIdentifier, next_state: F) -> Option<R>
 where
     F: Fn() -> R,
 {
@@ -37,14 +38,23 @@ where
         }
 
         if !creep.pos().in_range_to(&structure, 3) {
-            creep.move_to(&structure);
+            if !action_flags.contains(SimultaneousActionFlags::MOVE) {
+                action_flags.insert(SimultaneousActionFlags::MOVE);
+
+                creep.move_to(&structure);
+            }
 
             return None;
         }
 
-        match creep.repair(&structure) {
-            ReturnCode::Ok => None,
-            _ => Some(next_state()),
+        if !action_flags.contains(SimultaneousActionFlags::REPAIR) {
+            action_flags.insert(SimultaneousActionFlags::REPAIR);
+            match creep.repair(&structure) {
+                ReturnCode::Ok => None,
+                _ => Some(next_state()),
+            }
+        } else {
+            None
         }
     } else {
         Some(next_state())

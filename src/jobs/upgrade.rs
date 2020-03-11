@@ -121,7 +121,7 @@ impl Job for UpgradeJob {
             loop {
                 let state_result = match &mut self.state {
                     UpgradeState::Idle => Self::run_idle_state(creep, home_room_data, runtime_data.transfer_queue),
-                    UpgradeState::Harvest(source_id) => run_harvest_state(creep, source_id, || UpgradeState::Idle),
+                    UpgradeState::Harvest(source_id) => run_harvest_state(creep, &mut action_flags, source_id, false, || UpgradeState::Idle),
                     UpgradeState::Pickup(ticket) => run_pickup_state(creep, &mut action_flags, ticket, runtime_data.transfer_queue, || {
                         UpgradeState::FinishedPickup
                     }),

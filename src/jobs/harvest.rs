@@ -276,7 +276,7 @@ impl Job for HarvestJob {
                         &self.harvest_target,
                         self.allow_haul,
                     ),
-                    HarvestState::Harvest(source_id) => run_harvest_state(creep, source_id, || HarvestState::Idle),
+                    HarvestState::Harvest(source_id) => run_harvest_state(creep, &mut action_flags, source_id, false, || HarvestState::Idle),
                     HarvestState::Pickup(pickup_ticket, delivery_ticket) => {
                         run_pickup_state(creep, &mut action_flags, pickup_ticket, runtime_data.transfer_queue, || {
                             HarvestState::Delivery(delivery_ticket.clone())
@@ -291,11 +291,11 @@ impl Job for HarvestJob {
                         Self::run_finished_delivery_state(creep, delivery_room_data, runtime_data.transfer_queue)
                     }
                     HarvestState::Build(construction_site_id) => {
-                        run_build_state(creep, construction_site_id, || HarvestState::FinishedBuild)
+                        run_build_state(creep, &mut action_flags, construction_site_id, || HarvestState::FinishedBuild)
                     }
                     HarvestState::FinishedBuild => Self::run_finished_build_state(creep, delivery_room_data),
                     HarvestState::Repair(repair_structure_id) => {
-                        run_repair_state(creep, repair_structure_id, || HarvestState::FinishedRepair)
+                        run_repair_state(creep, &mut action_flags, repair_structure_id, || HarvestState::FinishedRepair)
                     }
                     HarvestState::FinishedRepair => Self::run_finished_repair_state(creep, delivery_room_data),
                     HarvestState::Upgrade(controller_id) => run_upgrade_state(creep, controller_id, || HarvestState::Idle),
