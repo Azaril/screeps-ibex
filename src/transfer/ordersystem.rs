@@ -210,10 +210,18 @@ impl<'a> System<'a> for OrderQueueSystem {
             return;
         }
 
-        if !data.order_queue.rooms.is_empty() {
-            let orders = game::market::get_all_orders();
-            let my_orders = game::market::orders();
+        let orders = game::market::get_all_orders();
+        let my_orders = game::market::orders();
 
+        let complete_orders = my_orders
+            .values()
+            .filter(|order| order.remaining_amount == 0);
+
+        for order in complete_orders {
+            game::market::cancel_order(&order.id);
+        }
+
+        if !data.order_queue.rooms.is_empty() {         
             let mut resource_history = HashMap::new();
 
             for (room_name, room_data) in &data.order_queue.rooms {
