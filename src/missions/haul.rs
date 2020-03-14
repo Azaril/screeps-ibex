@@ -106,8 +106,8 @@ impl Mission for HaulMission {
 
         let desired_haulers = match total_unfufilled {
             0 => 0,
-            1..=1000 => 1,
-            1001..=5000 => 2,
+            1..=5000 => 1,
+            5001..=15000 => 2,
             _ => 3,
         };
 
