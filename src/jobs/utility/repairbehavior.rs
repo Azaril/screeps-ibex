@@ -14,7 +14,7 @@ where
     if creep.store_used_capacity(Some(ResourceType::Energy)) > 0 {
         //TODO: This requires visibility and could fail?
         if let Some(room) = game::rooms::get(build_room.name) {
-            if let Some(structure) = select_repair_structure(&room, creep.pos(), minimum_priority, true) {
+            if let Some(structure) = select_repair_structure(&room, minimum_priority, true) {
                 return Some(state_map(RemoteStructureIdentifier::new(&structure)));
             }
         }

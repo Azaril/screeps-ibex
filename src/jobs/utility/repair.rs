@@ -1,4 +1,3 @@
-use crate::findnearest::*;
 use itertools::*;
 use screeps::*;
 use std::collections::HashMap;
@@ -155,7 +154,7 @@ pub fn get_prioritized_repair_targets(room: &Room, minimum_priority: Option<Repa
 }
 
 #[cfg_attr(feature = "time", timing)]
-pub fn select_repair_structure(room: &Room, start_pos: RoomPosition, minimum_priority: Option<RepairPriority>, allow_walls: bool) -> Option<Structure> {
+pub fn select_repair_structure(room: &Room, minimum_priority: Option<RepairPriority>, allow_walls: bool) -> Option<Structure> {
     let mut repair_targets = get_prioritized_repair_targets(room, minimum_priority, allow_walls);
 
     ORDERED_REPAIR_PRIORITIES
@@ -163,6 +162,6 @@ pub fn select_repair_structure(room: &Room, start_pos: RoomPosition, minimum_pri
         .filter_map(|priority| {
             repair_targets.remove(priority)
         })
-        .filter_map(|targets| targets.into_iter().find_nearest_linear(start_pos))
+        .filter_map(|targets| targets.into_iter().min_by_key(|structure| structure.as_attackable().unwrap().hits()))
         .next()
 }
