@@ -49,7 +49,7 @@ impl LocalBuildMission {
             }
         } else {
             //TODO: Not requiring full hashmap just to check for presence would be cheaper. Lazy iterator would be sufficient.
-            let repair_targets = get_prioritized_repair_targets(&room, Some(RepairPriority::Medium));
+            let repair_targets = get_prioritized_repair_targets(&room, Some(RepairPriority::Medium), true);
 
             let has_priority = |priority| repair_targets.get(&priority).map(|s| !s.is_empty()).unwrap_or(false);
 

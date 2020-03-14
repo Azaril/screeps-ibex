@@ -119,9 +119,10 @@ impl Mission for TowerMission {
         let minimum_repair_priority = if are_hostile_creeps {
             Some(RepairPriority::Medium)
         } else {
-            Some(RepairPriority::High)
+            Some(RepairPriority::Low)
         };
-        let repair_targets = get_prioritized_repair_targets(&room, minimum_repair_priority);
+
+        let repair_targets = get_prioritized_repair_targets(&room, Some(RepairPriority::Medium), false);
 
         let repair_structure = ORDERED_REPAIR_PRIORITIES
             .iter()
