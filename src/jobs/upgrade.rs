@@ -3,6 +3,7 @@ use super::jobsystem::*;
 use super::utility::controllerbehavior::*;
 use super::utility::harvestbehavior::*;
 use super::utility::haulbehavior::*;
+use super::utility::waitbehavior::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use crate::transfer::transfersystem::*;
@@ -18,11 +19,12 @@ use timing_annotate::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum UpgradeState {
-    Idle,
+    Idle(),
     Harvest(RemoteObjectId<Source>, u8),
     Pickup(TransferWithdrawTicket),
-    FinishedPickup,
+    FinishedPickup(),
     Upgrade(RemoteObjectId<StructureController>),
+    Wait(u32)
 }
 
 #[derive(Clone, ConvertSaveload)]
@@ -37,7 +39,7 @@ impl UpgradeJob {
     pub fn new(home_room: Entity, allow_harvest: bool) -> UpgradeJob {
         UpgradeJob {
             home_room,
-            state: UpgradeState::Idle,
+            state: UpgradeState::Idle(),
             allow_harvest
         }
     }
@@ -57,6 +59,7 @@ impl UpgradeJob {
             None
         })
         .or_else(|| get_new_upgrade_state(creep, home_room_data, UpgradeState::Upgrade))
+        .or_else(|| Some(UpgradeState::Wait(5)))
     }
 
     fn run_finished_pickup_state(creep: &Creep, delivery_room_data: &RoomData, transfer_queue: &mut TransferQueue) -> Option<UpgradeState> {
@@ -68,7 +71,7 @@ impl UpgradeJob {
             transfer_queue,
             UpgradeState::Pickup,
         )
-        .or_else(|| Some(UpgradeState::Idle))
+        .or_else(|| Some(UpgradeState::Idle()))
     }
 }
 
@@ -82,7 +85,7 @@ impl Job for UpgradeJob {
             describe_data
                 .ui
                 .with_room(room.name(), &mut describe_data.visualizer, |room_ui| match &self.state {
-                    UpgradeState::Idle => {
+                    UpgradeState::Idle() => {
                         room_ui.jobs().add_text(format!("Upgrade - {} - Idle", name), None);
                     }
                     UpgradeState::Harvest(_, _) => {
@@ -98,11 +101,14 @@ impl Job for UpgradeJob {
                             Some(LineStyle::default().color("blue")),
                         );
                     },
-                    UpgradeState::FinishedPickup => {
+                    UpgradeState::FinishedPickup() => {
                         room_ui.jobs().add_text(format!("Upgrade - {} - FinishedPickup", name), None);
                     },
                     UpgradeState::Upgrade(_) => {
                         room_ui.jobs().add_text(format!("Upgrade - {} - Upgrade                                                                                                                                                                    ", name), None);
+                    }
+                    UpgradeState::Wait(_) => {
+                        room_ui.jobs().add_text(format!("Upgrade - {} - Wait                                                                                                                                                                    ", name), None);
                     }
                 })
         }
@@ -110,11 +116,12 @@ impl Job for UpgradeJob {
 
     fn pre_run_job(&mut self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         match &self.state {
-            UpgradeState::Idle => {}
+            UpgradeState::Idle() => {}
             UpgradeState::Harvest(_, _) => {}
             UpgradeState::Pickup(ticket) => runtime_data.transfer_queue.register_pickup(&ticket, TransferType::Haul),
-            UpgradeState::FinishedPickup => {}
+            UpgradeState::FinishedPickup() => {}
             UpgradeState::Upgrade(_) => {}
+            UpgradeState::Wait(_) => {}
         };
     }
 
@@ -126,13 +133,12 @@ impl Job for UpgradeJob {
         if let Some(home_room_data) = system_data.room_data.get(self.home_room) {
             loop {
                 let state_result = match &mut self.state {
-                    UpgradeState::Idle => Self::run_idle_state(creep, home_room_data, runtime_data.transfer_queue, self.allow_harvest),
-                    UpgradeState::Harvest(source_id, stuck_count) => run_harvest_state(creep, &mut action_flags, source_id, false, stuck_count, || UpgradeState::Idle),
-                    UpgradeState::Pickup(ticket) => run_pickup_state(creep, &mut action_flags, ticket, runtime_data.transfer_queue, || {
-                        UpgradeState::FinishedPickup
-                    }),
-                    UpgradeState::FinishedPickup => Self::run_finished_pickup_state(creep, home_room_data, runtime_data.transfer_queue),
-                    UpgradeState::Upgrade(controller_id) => run_upgrade_state(creep, controller_id, || UpgradeState::Idle),
+                    UpgradeState::Idle() => Self::run_idle_state(creep, home_room_data, runtime_data.transfer_queue, self.allow_harvest),
+                    UpgradeState::Harvest(source_id, stuck_count) => run_harvest_state(creep, &mut action_flags, source_id, false, stuck_count, UpgradeState::Idle),
+                    UpgradeState::Pickup(ticket) => run_pickup_state(creep, &mut action_flags, ticket, runtime_data.transfer_queue, UpgradeState::FinishedPickup),
+                    UpgradeState::FinishedPickup() => Self::run_finished_pickup_state(creep, home_room_data, runtime_data.transfer_queue),
+                    UpgradeState::Upgrade(controller_id) => run_upgrade_state(creep, controller_id, UpgradeState::Idle),
+                    UpgradeState::Wait(time) => run_wait_state(time, UpgradeState::Idle)
                 };
 
                 if let Some(next_state) = state_result {

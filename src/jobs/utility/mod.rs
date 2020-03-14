@@ -6,3 +6,4 @@ pub mod haulbehavior;
 pub mod movebehavior;
 pub mod repair;
 pub mod repairbehavior;
+pub mod waitbehavior;
