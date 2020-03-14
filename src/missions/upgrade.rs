@@ -106,7 +106,11 @@ impl Mission for UpgradeMission {
         };
 
         if self.upgraders.0.len() < max_upgraders {
-            let work_parts_per_upgrader = if controller.level() == 8 {
+            let storage_sufficient = room.storage().map(|s| s.store_used_capacity(Some(ResourceType::Energy)) > 50_000).unwrap_or(true);
+
+            let work_parts_per_upgrader = if !storage_sufficient {
+                Some(1)
+            } else if controller.level() == 8 {
                 let work_parts_per_tick = (CONTROLLER_MAX_UPGRADE_PER_TICK as f32) / (UPGRADE_CONTROLLER_POWER as f32);
 
                 let work_parts = (work_parts_per_tick / (max_upgraders as f32)).ceil();
