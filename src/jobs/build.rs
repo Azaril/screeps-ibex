@@ -23,7 +23,7 @@ pub enum BuildState {
     Idle,
     Pickup(TransferWithdrawTicket),
     FinishedPickup,
-    Harvest(RemoteObjectId<Source>),
+    Harvest(RemoteObjectId<Source>, u8),
     Build(RemoteObjectId<ConstructionSite>),
     FinishedBuild,
     Repair(RemoteStructureIdentifier),
@@ -35,19 +35,21 @@ pub struct BuildJob {
     home_room: Entity,
     build_room: Entity,
     state: BuildState,
+    allow_harvest: bool,
 }
 
 #[cfg_attr(feature = "time", timing)]
 impl BuildJob {
-    pub fn new(home_room: Entity, build_room: Entity) -> BuildJob {
+    pub fn new(home_room: Entity, build_room: Entity, allow_harvest: bool) -> BuildJob {
         BuildJob {
             home_room,
             build_room,
             state: BuildState::Idle,
+            allow_harvest
         }
     }
 
-    fn run_idle_state(creep: &Creep, build_room_data: &RoomData, transfer_queue: &mut TransferQueue) -> Option<BuildState> {
+    fn run_idle_state(creep: &Creep, build_room_data: &RoomData, transfer_queue: &mut TransferQueue, allow_harvest: bool) -> Option<BuildState> {
         get_new_build_state(creep, build_room_data, BuildState::Build)
             .or_else(|| get_new_repair_state(creep, build_room_data, None, BuildState::Repair))
             .or_else(|| {
@@ -60,7 +62,11 @@ impl BuildJob {
                     BuildState::Pickup,
                 )
             })
-            .or_else(|| get_new_harvest_state(creep, build_room_data, BuildState::Harvest))
+            .or_else(|| if allow_harvest {
+                get_new_harvest_state(creep, build_room_data, |id| BuildState::Harvest(id, 0))
+            } else {
+                None
+            })
     }
 
     fn run_finished_pickup_state(creep: &Creep, pickup_rooms: &[&RoomData], transfer_queue: &mut TransferQueue) -> Option<BuildState> {
@@ -109,7 +115,7 @@ impl Job for BuildJob {
                     BuildState::FinishedPickup => {
                         room_ui.jobs().add_text(format!("Build - {} - FinishedPickup", name), None);
                     }
-                    BuildState::Harvest(_) => {
+                    BuildState::Harvest(_, _) => {
                         room_ui.jobs().add_text(format!("Build - {} - Harvest", name), None);
                     }
                     BuildState::Build(_) => {
@@ -134,7 +140,7 @@ impl Job for BuildJob {
             BuildState::Idle => {}
             BuildState::Pickup(ticket) => runtime_data.transfer_queue.register_pickup(&ticket, TransferType::Haul),
             BuildState::FinishedPickup => {}
-            BuildState::Harvest(_) => {}
+            BuildState::Harvest(_, _) => {}
             BuildState::Build(_) => {}
             BuildState::FinishedBuild => {}
             BuildState::Repair(_) => {}
@@ -150,12 +156,12 @@ impl Job for BuildJob {
         if let Some(build_room_data) = system_data.room_data.get(self.build_room) {
             loop {
                 let state_result = match &mut self.state {
-                    BuildState::Idle => Self::run_idle_state(creep, build_room_data, runtime_data.transfer_queue),
+                    BuildState::Idle => Self::run_idle_state(creep, build_room_data, runtime_data.transfer_queue, self.allow_harvest),
                     BuildState::Pickup(ticket) => run_pickup_state(creep, &mut action_flags, ticket, runtime_data.transfer_queue, || {
                         BuildState::FinishedPickup
                     }),
                     BuildState::FinishedPickup => Self::run_finished_pickup_state(creep, &[build_room_data], runtime_data.transfer_queue),
-                    BuildState::Harvest(source_id) => run_harvest_state(creep, &mut action_flags, source_id, false, || BuildState::Idle),
+                    BuildState::Harvest(source_id, stuck_count) => run_harvest_state(creep, &mut action_flags, source_id, false, stuck_count, || BuildState::Idle),
                     BuildState::Build(construction_site_id) => run_build_state(creep, &mut action_flags, construction_site_id, || BuildState::FinishedBuild),
                     BuildState::FinishedBuild => Self::run_finished_build_state(creep, build_room_data),
                     BuildState::Repair(structure_id) => run_repair_state(creep, &mut action_flags, structure_id, || BuildState::FinishedRepair),

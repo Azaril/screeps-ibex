@@ -40,7 +40,7 @@ where
 }
 
 #[cfg_attr(feature = "time", timing)]
-pub fn run_harvest_state<F, R>(creep: &Creep, action_flags: &mut SimultaneousActionFlags, source_id: &RemoteObjectId<Source>, optimistic_completion: bool, next_state: F) -> Option<R>
+pub fn run_harvest_state<F, R>(creep: &Creep, action_flags: &mut SimultaneousActionFlags, source_id: &RemoteObjectId<Source>, optimistic_completion: bool, stuck_count: &mut u8, next_state: F) -> Option<R>
 where
     F: Fn() -> R,
 {
@@ -60,7 +60,16 @@ where
     if creep_pos.room_name() != target_position.room_name() {
         if !action_flags.contains(SimultaneousActionFlags::MOVE) {
             action_flags.insert(SimultaneousActionFlags::MOVE);
-            creep.move_to(&target_position);
+            match creep.move_to(&target_position) {
+                ReturnCode::NoPath => {
+                    *stuck_count += 1;
+
+                    if *stuck_count > 5 {
+                        return Some(next_state());
+                    }
+                },
+                _ => {}
+            }
         }
 
         return None;
@@ -70,7 +79,16 @@ where
         if !creep.pos().is_near_to(&source) {
             if !action_flags.contains(SimultaneousActionFlags::MOVE) {
                 action_flags.insert(SimultaneousActionFlags::MOVE);
-                creep.move_to(&source);
+                match creep.move_to(&target_position) {
+                    ReturnCode::NoPath => {
+                        *stuck_count += 1;
+    
+                        if *stuck_count > 5 {
+                            return Some(next_state());
+                        }
+                    },
+                    _ => {}
+                }
             }
 
             return None;

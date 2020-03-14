@@ -41,7 +41,7 @@ impl RemoteBuildMission {
         }
     }
 
-    fn create_handle_builder_spawn(mission_entity: Entity, build_room_entity: Entity) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    fn create_handle_builder_spawn(mission_entity: Entity, build_room_entity: Entity, allow_harvest: bool) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
@@ -50,6 +50,7 @@ impl RemoteBuildMission {
                     //TODO: Pass an array of home rooms - allow for hauling energy if harvesting is not possible.
                     build_room_entity,
                     build_room_entity,
+                    allow_harvest
                 ));
 
                 let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
@@ -124,12 +125,13 @@ impl Mission for RemoteBuildMission {
                 post_body: &[],
             };
 
+            //TODO: Pass in home room if in close proximity (i.e. adjacent) to allow hauling from storage.
             if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
                 let spawn_request = SpawnRequest::new(
                     format!("Remote Builder - Target Room: {}", room_data.name),
                     &body,
                     priority,
-                    Self::create_handle_builder_spawn(*runtime_data.entity, self.room_data),
+                    Self::create_handle_builder_spawn(*runtime_data.entity, self.room_data, true),
                 );
 
                 runtime_data.spawn_queue.request(home_room_data.name, spawn_request);
