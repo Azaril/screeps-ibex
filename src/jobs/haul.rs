@@ -1,6 +1,7 @@
 use super::actions::*;
 use super::jobsystem::*;
 use super::utility::haulbehavior::*;
+use super::utility::waitbehavior::*;
 use crate::room::data::*;
 use crate::serialize::*;
 use crate::transfer::transfersystem::*;
@@ -17,9 +18,10 @@ use timing_annotate::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum HaulState {
-    Idle,
+    Idle(),
     Pickup(TransferWithdrawTicket, Vec<TransferDepositTicket>),
     Delivery(Vec<TransferDepositTicket>),
+    Wait(u32)
 }
 
 #[derive(Clone, ConvertSaveload)]
@@ -34,7 +36,7 @@ impl HaulJob {
     pub fn new(haul_rooms: &[Entity]) -> HaulJob {
         HaulJob {
             haul_rooms: haul_rooms.into(),
-            state: HaulState::Idle,
+            state: HaulState::Idle(),
         }
     }
 
@@ -64,6 +66,9 @@ impl HaulJob {
                 })
                 .next()
         })
+        .or_else(|| {
+            Some(HaulState::Wait(5))
+        })
     }
 }
 
@@ -78,7 +83,7 @@ impl Job for HaulJob {
             describe_data
                 .ui
                 .with_room(room.name(), &mut describe_data.visualizer, |room_ui| match &self.state {
-                    HaulState::Idle => {
+                    HaulState::Idle() => {
                         room_ui.jobs().add_text(format!("Haul - {} - Idle", name), None);
                     }
                     HaulState::Pickup(pickup_ticket, delivery_tickets) => {
@@ -120,6 +125,9 @@ impl Job for HaulJob {
                             }
                         }
                     }
+                    HaulState::Wait(_) => {
+                        room_ui.jobs().add_text(format!("Haul - {} - Wait", name), None);
+                    }
                 })
         }
     }
@@ -127,7 +135,7 @@ impl Job for HaulJob {
     #[cfg_attr(feature = "time", timing)]
     fn pre_run_job(&mut self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         match &self.state {
-            HaulState::Idle => {}
+            HaulState::Idle() => {}
             HaulState::Pickup(pickup_ticket, delivery_tickets) => {
                 runtime_data.transfer_queue.register_pickup(&pickup_ticket, TransferType::Haul);
                 for delivery_ticket in delivery_tickets.iter() {
@@ -139,6 +147,7 @@ impl Job for HaulJob {
                     runtime_data.transfer_queue.register_delivery(&delivery_ticket, TransferType::Haul);
                 }
             }
+            HaulState::Wait(_) => {}
         };
     }
 
@@ -152,17 +161,16 @@ impl Job for HaulJob {
 
         loop {
             let state_result = match &mut self.state {
-                HaulState::Idle => Self::run_idle_state(creep, &haul_rooms, runtime_data.transfer_queue),
+                HaulState::Idle() => Self::run_idle_state(creep, &haul_rooms, runtime_data.transfer_queue),
                 HaulState::Pickup(pickup_ticket, delivery_tickets) => {
                     run_pickup_state(creep, &mut action_flags, pickup_ticket, runtime_data.transfer_queue, || {
                         HaulState::Delivery(delivery_tickets.clone())
                     })
                 }
                 HaulState::Delivery(delivery_tickets) => {
-                    run_delivery_state(creep, &mut action_flags, delivery_tickets, runtime_data.transfer_queue, || {
-                        HaulState::Idle
-                    })
+                    run_delivery_state(creep, &mut action_flags, delivery_tickets, runtime_data.transfer_queue, HaulState::Idle)
                 }
+                HaulState::Wait(time) => run_wait_state(time, HaulState::Idle)
             };
 
             if let Some(next_state) = state_result {

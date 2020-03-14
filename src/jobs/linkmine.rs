@@ -12,7 +12,7 @@ use crate::transfer::transfersystem::*;
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub enum LinkMineState {
     Harvest(u8),
-    Deposit
+    Deposit()
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -43,7 +43,7 @@ impl Job for LinkMineJob {
                     LinkMineState::Harvest(_) => {
                         room_ui.jobs().add_text(format!("Link Mine - {} - Harvest", name), None);
                     }
-                    LinkMineState::Deposit => {
+                    LinkMineState::Deposit() => {
                         room_ui.jobs().add_text(format!("Link Mine - {} - Deposit", name), None);
                     }
                 };
@@ -58,8 +58,8 @@ impl Job for LinkMineJob {
 
         loop {
             let state_result = match &mut self.state {
-                LinkMineState::Harvest(stuck_count) => run_harvest_state(creep, &mut action_flags, &self.mine_target, true, stuck_count, || LinkMineState::Deposit),
-                LinkMineState::Deposit => run_deposit_all_resources_state(creep, &mut action_flags, TransferTarget::Link(self.link_target), || LinkMineState::Harvest(0)),
+                LinkMineState::Harvest(stuck_count) => run_harvest_state(creep, &mut action_flags, &self.mine_target, true, stuck_count, LinkMineState::Deposit),
+                LinkMineState::Deposit() => run_deposit_all_resources_state(creep, &mut action_flags, TransferTarget::Link(self.link_target), || LinkMineState::Harvest(0)),
             };
 
             if let Some(next_state) = state_result {
