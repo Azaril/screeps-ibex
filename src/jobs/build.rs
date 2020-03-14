@@ -132,7 +132,7 @@ impl Job for BuildJob {
     fn pre_run_job(&mut self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         match &self.state {
             BuildState::Idle => {}
-            BuildState::Pickup(ticket) => runtime_data.transfer_queue.register_pickup(&ticket),
+            BuildState::Pickup(ticket) => runtime_data.transfer_queue.register_pickup(&ticket, TransferType::Haul),
             BuildState::FinishedPickup => {}
             BuildState::Harvest(_) => {}
             BuildState::Build(_) => {}

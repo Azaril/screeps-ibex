@@ -106,7 +106,7 @@ impl Job for UpgradeJob {
         match &self.state {
             UpgradeState::Idle => {}
             UpgradeState::Harvest(_) => {}
-            UpgradeState::Pickup(ticket) => runtime_data.transfer_queue.register_pickup(&ticket),
+            UpgradeState::Pickup(ticket) => runtime_data.transfer_queue.register_pickup(&ticket, TransferType::Haul),
             UpgradeState::FinishedPickup => {}
             UpgradeState::Upgrade(_) => {}
         };

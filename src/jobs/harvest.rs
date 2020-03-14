@@ -241,14 +241,14 @@ impl Job for HarvestJob {
             HarvestState::Idle => {}
             HarvestState::Harvest(_) => {}
             HarvestState::Pickup(pickup_ticket, delivery_tickets) => {
-                runtime_data.transfer_queue.register_pickup(&pickup_ticket);
+                runtime_data.transfer_queue.register_pickup(&pickup_ticket, TransferType::Haul);
                 for delivery_ticket in delivery_tickets {
-                    runtime_data.transfer_queue.register_delivery(&delivery_ticket);
+                    runtime_data.transfer_queue.register_delivery(&delivery_ticket, TransferType::Haul);
                 }
             }
             HarvestState::Delivery(delivery_tickets) => {
                 for delivery_ticket in delivery_tickets {
-                    runtime_data.transfer_queue.register_delivery(&delivery_ticket);
+                    runtime_data.transfer_queue.register_delivery(&delivery_ticket, TransferType::Haul);
                 }
             }
             HarvestState::FinishedDelivery => {}

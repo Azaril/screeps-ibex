@@ -122,7 +122,7 @@ impl Mission for LocalBuildMission {
 
         if self.builders.0.len() < max_count {
             if let Some(priority) = self.get_builder_priority(&room) {
-                let desired_count = if priority > SPAWN_PRIORITY_MEDIUM { max_count } else { 1 };
+                let desired_count = if priority >= SPAWN_PRIORITY_HIGH { max_count } else { 1 };
                 if self.builders.0.len() < desired_count {
                     let use_energy_max = if self.builders.0.is_empty() && priority >= SPAWN_PRIORITY_HIGH {
                         room.energy_available()
