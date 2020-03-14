@@ -98,9 +98,16 @@ fn map_structure_repair_priority(
 }
 
 #[cfg_attr(feature = "time", timing)]
-pub fn get_repair_targets(room: &Room) -> Vec<(Structure, u32, u32)> {
+pub fn get_repair_targets(room: &Room, allow_walls: bool) -> Vec<(Structure, u32, u32)> {
     room.find(find::STRUCTURES)
         .into_iter()
+        .filter(|structure| {
+            match structure {
+                Structure::Wall(_) => allow_walls,
+                Structure::Rampart(_) => allow_walls,
+                _ => true 
+            }
+        })
         .filter(|structure| {
             if let Some(owned_structure) = structure.as_owned() {
                 owned_structure.my()
@@ -129,7 +136,7 @@ pub fn get_repair_targets(room: &Room) -> Vec<(Structure, u32, u32)> {
 }
 
 #[cfg_attr(feature = "time", timing)]
-pub fn get_prioritized_repair_targets(room: &Room, minimum_priority: Option<RepairPriority>) -> HashMap<RepairPriority, Vec<Structure>> {
+pub fn get_prioritized_repair_targets(room: &Room, minimum_priority: Option<RepairPriority>, allow_walls: bool) -> HashMap<RepairPriority, Vec<Structure>> {
     let are_hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
 
     let available_energy = room
@@ -137,7 +144,7 @@ pub fn get_prioritized_repair_targets(room: &Room, minimum_priority: Option<Repa
         .map(|s| s.store_used_capacity(Some(ResourceType::Energy)))
         .unwrap_or(0);
 
-    get_repair_targets(room)
+    get_repair_targets(room, allow_walls)
         .into_iter()
         .filter_map(|(structure, hits, hits_max)| {
             map_structure_repair_priority(&structure, hits, hits_max, available_energy, are_hostile_creeps)
@@ -148,17 +155,14 @@ pub fn get_prioritized_repair_targets(room: &Room, minimum_priority: Option<Repa
 }
 
 #[cfg_attr(feature = "time", timing)]
-pub fn select_repair_structure(room: &Room, start_pos: RoomPosition, minimum_priority: Option<RepairPriority>) -> Option<Structure> {
-    let mut repair_targets = get_prioritized_repair_targets(room, minimum_priority);
+pub fn select_repair_structure(room: &Room, start_pos: RoomPosition, minimum_priority: Option<RepairPriority>, allow_walls: bool) -> Option<Structure> {
+    let mut repair_targets = get_prioritized_repair_targets(room, minimum_priority, allow_walls);
 
-    for priority in ORDERED_REPAIR_PRIORITIES.iter() {
-        if let Some(structures) = repair_targets.remove(priority) {
-            //TODO: Make find_nearest cheap - find_nearest linear is a bad approximation.
-            if let Some(structure) = structures.into_iter().find_nearest_linear(start_pos) {
-                return Some(structure);
-            }
-        }
-    }
-
-    None
+    ORDERED_REPAIR_PRIORITIES
+        .iter()
+        .filter_map(|priority| {
+            repair_targets.remove(priority)
+        })
+        .filter_map(|targets| targets.into_iter().find_nearest_linear(start_pos))
+        .next()
 }
