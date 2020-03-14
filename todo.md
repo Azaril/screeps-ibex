@@ -1,5 +1,6 @@
 # High Priority
 
+- Lazy evaluation of transfer data. (Register callback to materialize when requested.)
 - Add stuck detection and response for creeps.
 - Use 'local supply' mission for both local supply and remote mine.
 - Add lost creep recovery - i.e. memory is lost.
@@ -12,9 +13,13 @@
 - Computer number of hauler/harvester parts needed based on path distance.
 - Attach missions to operations as needed. (Requires entity vector fix or workaround.)
 - Add heuristics for which rooms to claim next. (Number of sources, source proximity, amount of swamp, etc.)
+- Factory usage.
+- Lab usage.
 
 # Medium Priority
 
+- Find a common pattern for state storage.
+- Room-to-room terminal transfer. (Multi-room chaining if needed.)
 - Add chrome tracing format profiling.
 - Add observer support to visibility requests. (Currently just used for triggering room data generation.)
 - Pathfinding solution. (Use built in path finder.)
@@ -22,4 +27,4 @@
 
 # Low priority
 
-- Add consumed pipelines to creep actions to allow parallel actions.
+- Add market statistics that can be used to drive buy/sell price.

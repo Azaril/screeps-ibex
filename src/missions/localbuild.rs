@@ -130,10 +130,16 @@ impl Mission for LocalBuildMission {
                         room.energy_capacity_available()
                     };
 
+                    let max_body = if priority >= SPAWN_PRIORITY_HIGH { 
+                        None
+                    } else {
+                        Some(5)
+                    };
+
                     let body_definition = SpawnBodyDefinition {
                         maximum_energy: use_energy_max,
                         minimum_repeat: Some(1),
-                        maximum_repeat: None,
+                        maximum_repeat: max_body,
                         pre_body: &[],
                         repeat_body: &[Part::Carry, Part::Work, Part::Move, Part::Move],
                         post_body: &[],
