@@ -35,7 +35,7 @@ pub enum HarvestState {
     Repair(RemoteStructureIdentifier),
     FinishedRepair(),
     Upgrade(RemoteObjectId<StructureController>),
-    MoveToDeliveryRoom(),
+    MoveToRoom(RoomName),
     Wait(u32),
 }
 
@@ -124,9 +124,14 @@ impl HarvestJob {
                     .next()
             })
             .or_else(|| get_new_upgrade_state(creep, delivery_room_data, HarvestState::Upgrade))
+            .or_else(|| if creep.store_used_capacity(None) == 0 {
+                get_new_move_to_room_state(creep, harvest_target.pos().room_name(), HarvestState::MoveToRoom)
+            } else {
+                None
+            })
             .or_else(|| Some(HarvestState::Wait(5)))
         } else {
-            Some(HarvestState::MoveToDeliveryRoom())
+            get_new_move_to_room_state(creep, delivery_room_data.name, HarvestState::MoveToRoom)
         }
     }
 
@@ -232,8 +237,8 @@ impl Job for HarvestJob {
                     HarvestState::Upgrade(_) => {
                         room_ui.jobs().add_text(format!("Harvest - {} - Upgrade", name), None);
                     }
-                    HarvestState::MoveToDeliveryRoom() => {
-                        room_ui.jobs().add_text(format!("Harvest - {} - MoveToDeliveryRoom", name), None);
+                    HarvestState::MoveToRoom(room) => {
+                        room_ui.jobs().add_text(format!("Harvest - {} - MoveToRoom - {}", name, room), None);
                     }
                     HarvestState::Wait(_) => {
                         room_ui.jobs().add_text(format!("Harvest - {} - Wait", name), None);
@@ -263,7 +268,7 @@ impl Job for HarvestJob {
             HarvestState::Repair(_) => {}
             HarvestState::FinishedRepair() => {}
             HarvestState::Upgrade(_) => {}
-            HarvestState::MoveToDeliveryRoom() => {}
+            HarvestState::MoveToRoom(_) => {}
             HarvestState::Wait(_) => {}
         };
     }
@@ -304,7 +309,7 @@ impl Job for HarvestJob {
                     }
                     HarvestState::FinishedRepair() => Self::run_finished_repair_state(creep, delivery_room_data),
                     HarvestState::Upgrade(controller_id) => run_upgrade_state(creep, controller_id, HarvestState::Idle),
-                    HarvestState::MoveToDeliveryRoom() => run_move_to_room_state(creep, delivery_room_data.name, HarvestState::Idle),
+                    HarvestState::MoveToRoom(room) => run_move_to_room_state(creep, *room, HarvestState::Idle),
                     HarvestState::Wait(time) => run_wait_state(time, HarvestState::Idle)
                 };
 
