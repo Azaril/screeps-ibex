@@ -11,7 +11,7 @@ use crate::transfer::transfersystem::*;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub enum LinkMineState {
-    Harvest,
+    Harvest(u8),
     Deposit
 }
 
@@ -28,7 +28,7 @@ impl LinkMineJob {
         LinkMineJob {
             mine_target,
             link_target: link_id,
-            state: LinkMineState::Harvest
+            state: LinkMineState::Harvest(0)
         }
     }
 }
@@ -40,7 +40,7 @@ impl Job for LinkMineJob {
         if let Some(room) = describe_data.owner.room() {
             describe_data.ui.with_room(room.name(), &mut describe_data.visualizer, |room_ui| {
                 match &self.state {
-                    LinkMineState::Harvest => {
+                    LinkMineState::Harvest(_) => {
                         room_ui.jobs().add_text(format!("Link Mine - {} - Harvest", name), None);
                     }
                     LinkMineState::Deposit => {
@@ -58,8 +58,8 @@ impl Job for LinkMineJob {
 
         loop {
             let state_result = match &mut self.state {
-                LinkMineState::Harvest => run_harvest_state(creep, &mut action_flags, &self.mine_target, true, || LinkMineState::Deposit),
-                LinkMineState::Deposit => run_deposit_all_resources_state(creep, &mut action_flags, TransferTarget::Link(self.link_target), || LinkMineState::Harvest),
+                LinkMineState::Harvest(stuck_count) => run_harvest_state(creep, &mut action_flags, &self.mine_target, true, stuck_count, || LinkMineState::Deposit),
+                LinkMineState::Deposit => run_deposit_all_resources_state(creep, &mut action_flags, TransferTarget::Link(self.link_target), || LinkMineState::Harvest(0)),
             };
 
             if let Some(next_state) = state_result {

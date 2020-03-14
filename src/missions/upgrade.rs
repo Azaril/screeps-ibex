@@ -36,12 +36,12 @@ impl UpgradeMission {
         }
     }
 
-    fn create_handle_upgrader_spawn(mission_entity: Entity, home_room: Entity) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    fn create_handle_upgrader_spawn(mission_entity: Entity, home_room: Entity, allow_harvest: bool) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Upgrade(::jobs::upgrade::UpgradeJob::new(home_room));
+                let creep_job = JobData::Upgrade(::jobs::upgrade::UpgradeJob::new(home_room, allow_harvest));
 
                 let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
 
@@ -142,11 +142,13 @@ impl Mission for UpgradeMission {
                     SPAWN_PRIORITY_LOW
                 };
 
+                let allow_harvest = controller.level() <= 3;
+
                 let spawn_request = SpawnRequest::new(
                     "Upgrader".to_string(),
                     &body,
                     priority,
-                    Self::create_handle_upgrader_spawn(*runtime_data.entity, self.room_data),
+                    Self::create_handle_upgrader_spawn(*runtime_data.entity, self.room_data, allow_harvest),
                 );
 
                 runtime_data.spawn_queue.request(room_data.name, spawn_request);

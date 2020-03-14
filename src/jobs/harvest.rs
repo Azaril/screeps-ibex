@@ -25,7 +25,7 @@ use timing_annotate::*;
 #[derive(Clone, Serialize, Deserialize)]
 pub enum HarvestState {
     Idle,
-    Harvest(RemoteObjectId<Source>),
+    Harvest(RemoteObjectId<Source>, u8),
     Pickup(TransferWithdrawTicket, Vec<TransferDepositTicket>),
     Delivery(Vec<TransferDepositTicket>),
     FinishedDelivery,
@@ -81,7 +81,7 @@ impl HarvestJob {
             }
         }
 
-        if let Some(state) = get_new_harvest_target_state(creep, harvest_target, HarvestState::Harvest) {
+        if let Some(state) = get_new_harvest_target_state(creep, harvest_target, |id| HarvestState::Harvest(id, 0)) {
             return Some(state);
         };
 
@@ -169,7 +169,7 @@ impl Job for HarvestJob {
                     HarvestState::Idle => {
                         room_ui.jobs().add_text(format!("Harvest - {} - Idle", name), None);
                     }
-                    HarvestState::Harvest(_) => {
+                    HarvestState::Harvest(_, _) => {
                         room_ui.jobs().add_text(format!("Harvest - {} - Harvest", name), None);
                     }
                     HarvestState::Pickup(pickup_ticket, delivery_tickets) => {
@@ -239,7 +239,7 @@ impl Job for HarvestJob {
     fn pre_run_job(&mut self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         match &self.state {
             HarvestState::Idle => {}
-            HarvestState::Harvest(_) => {}
+            HarvestState::Harvest(_, _) => {}
             HarvestState::Pickup(pickup_ticket, delivery_tickets) => {
                 runtime_data.transfer_queue.register_pickup(&pickup_ticket, TransferType::Haul);
                 for delivery_ticket in delivery_tickets {
@@ -276,7 +276,7 @@ impl Job for HarvestJob {
                         &self.harvest_target,
                         self.allow_haul,
                     ),
-                    HarvestState::Harvest(source_id) => run_harvest_state(creep, &mut action_flags, source_id, false, || HarvestState::Idle),
+                    HarvestState::Harvest(source_id, stuck_count) => run_harvest_state(creep, &mut action_flags, source_id, false, stuck_count, || HarvestState::Idle),
                     HarvestState::Pickup(pickup_ticket, delivery_ticket) => {
                         run_pickup_state(creep, &mut action_flags, pickup_ticket, runtime_data.transfer_queue, || {
                             HarvestState::Delivery(delivery_ticket.clone())

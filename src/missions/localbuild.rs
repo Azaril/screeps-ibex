@@ -63,12 +63,12 @@ impl LocalBuildMission {
         }
     }
 
-    fn create_handle_builder_spawn(mission_entity: Entity, room_entity: Entity) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    fn create_handle_builder_spawn(mission_entity: Entity, room_entity: Entity, allow_harvest: bool) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Build(::jobs::build::BuildJob::new(room_entity, room_entity));
+                let creep_job = JobData::Build(::jobs::build::BuildJob::new(room_entity, room_entity, allow_harvest));
 
                 let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
 
@@ -146,11 +146,13 @@ impl Mission for LocalBuildMission {
                     };
 
                     if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+                        let allow_harvest = room.controller().map(|c| c.level() <= 3).unwrap_or(false);
+
                         let spawn_request = SpawnRequest::new(
                             "Local Builder".to_string(),
                             &body,
                             priority,
-                            Self::create_handle_builder_spawn(*runtime_data.entity, self.room_data),
+                            Self::create_handle_builder_spawn(*runtime_data.entity, self.room_data, allow_harvest),
                         );
 
                         runtime_data.spawn_queue.request(room_data.name, spawn_request);
