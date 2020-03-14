@@ -6,12 +6,13 @@ use specs::*;
 use specs_derive::*;
 #[cfg(feature = "time")]
 use timing_annotate::*;
-
 use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use crate::transfer::transfersystem::*;
+use std::collections::HashMap;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct HaulMission {
@@ -95,20 +96,19 @@ impl Mission for HaulMission {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
-        let stats = runtime_data.transfer_queue.try_get_room(room_data.name).map(|r| r.stats());
+        let unfufilled = runtime_data
+            .transfer_queue
+            .try_get_room(room_data.name)
+            .map(|r| r.stats().total_unfufilled_resources(TransferType::Haul))
+            .unwrap_or_else(HashMap::new);
 
-        let desired_haulers = if let Some(stats) = stats {
-            if stats.total_active_withdrawl > 10000 || stats.total_active_deposit > 10000 {
-                3
-            } else if stats.total_active_withdrawl > 1000 || stats.total_active_deposit > 1000 {
-                2
-            } else if stats.total_active_withdrawl > 0 || stats.total_active_deposit > 0 {
-                1
-            } else {
-                0
-            }
-        } else {
-            0
+        let total_unfufilled = unfufilled.values().sum();
+
+        let desired_haulers = match total_unfufilled {
+            0 => 0,
+            1..=1000 => 1,
+            1001..=5000 => 2,
+            _ => 3,
         };
 
         let should_spawn = self.haulers.0.len() < desired_haulers;
