@@ -809,12 +809,12 @@ impl TransferQueueResourceStatsData {
 }
 
 pub struct TransferQueueRoomStatsData {
-    pub total_withdrawl: u32,
-    pub total_active_withdrawl: u32,
+    total_withdrawl: u32,
+    total_active_withdrawl: u32,
     withdrawl_resource_stats: HashMap<TransferWithdrawlKey, TransferQueueResourceStatsData>,
     withdrawl_priorities: TransferPriorityFlags,
-    pub total_deposit: u32,
-    pub total_active_deposit: u32,
+    total_deposit: u32,
+    total_active_deposit: u32,
     deposit_resource_stats: HashMap<TransferDepositKey, TransferQueueResourceStatsData>,
     deposit_priorities: TransferPriorityFlags,
 }
@@ -831,6 +831,153 @@ impl TransferQueueRoomStatsData {
             deposit_resource_stats: HashMap::new(),
             deposit_priorities: TransferPriorityFlags::UNSET,
         }
+    }
+
+    pub fn total_withdrawl(&self) -> u32 {
+        self.total_withdrawl
+    }
+
+    pub fn total_active_withdrawl(&self) -> u32 {
+        self.total_active_withdrawl
+    }
+
+    pub fn total_deposit(&self) -> u32 {
+        self.total_deposit
+    }
+
+    pub fn total_active_deposit(&self) -> u32 {
+        self.total_active_deposit
+    }
+
+    pub fn total_unfufilled_resources(&self, transfer_type: TransferType) -> HashMap<ResourceType, u32> {
+        struct StatsEntry {
+            active: u32,
+            inactive: u32
+        };
+
+        let mut withdrawls: HashMap<ResourceType, StatsEntry> = HashMap::new();
+        let mut deposits: HashMap<Option<ResourceType>, StatsEntry> = HashMap::new(); 
+
+        let mut total_pickup: HashMap<ResourceType, u32> = HashMap::new();
+
+        let mut add_resource = |resource: ResourceType, amount: u32| {
+            let current = total_pickup
+                .entry(resource)
+                .or_insert(0);
+
+            *current += amount;
+        };
+
+        //
+        // Get current unfufilled requests.
+        //
+
+        for (key, stats) in &self.withdrawl_resource_stats {
+            if key.allowed_type == transfer_type {
+                let resource_entry = withdrawls
+                    .entry(key.resource)
+                    .or_insert(StatsEntry{ active: 0, inactive: 0 });
+
+                if TransferPriorityFlags::ACTIVE.contains(key.priority.into()) {
+                    resource_entry.active += stats.unfufilled_amount().max(0) as u32;
+                } else {
+                    resource_entry.inactive += stats.unfufilled_amount().max(0) as u32;
+                }
+            }
+        }
+
+        for (key, stats) in &self.deposit_resource_stats {
+            if key.allowed_type == transfer_type {
+                let resource_entry = deposits
+                    .entry(key.resource)
+                    .or_insert(StatsEntry{ active: 0, inactive: 0 });
+
+                if TransferPriorityFlags::ACTIVE.contains(key.priority.into()) {
+                    resource_entry.active += stats.unfufilled_amount().max(0) as u32;
+                } else {
+                    resource_entry.inactive += stats.unfufilled_amount().max(0) as u32;
+                }
+            }
+        }
+
+        //
+        // Active <-> Active
+        //
+
+        for (resource, deposit_stats) in &mut deposits {
+            if let Some(resource) = resource {
+                if let Some(withdrawl_stats) = withdrawls.get_mut(&resource) {
+                    let consume = withdrawl_stats.active.min(deposit_stats.active);
+
+                    withdrawl_stats.active -= consume;
+                    deposit_stats.active -= consume;
+
+                    add_resource(*resource, consume);
+                }
+            }
+        }
+
+        for (resource, deposit_stats) in &mut deposits {
+            if let None = resource {
+                for (other_resource, withdrawl_stats) in &mut withdrawls {
+                    let consume = withdrawl_stats.active.min(deposit_stats.active);
+
+                    withdrawl_stats.active -= consume;
+                    deposit_stats.active -= consume;
+
+                    add_resource(*other_resource, consume);
+                }
+            }
+        }
+
+        //
+        // Inactive -> Active
+        //
+
+        for (resource, deposit_stats) in &mut deposits {
+            if let Some(resource) = resource {
+                if let Some(withdrawl_stats) = withdrawls.get_mut(&resource) {
+                    let consume = withdrawl_stats.inactive.min(deposit_stats.active);
+
+                    withdrawl_stats.inactive -= consume;
+                    deposit_stats.active -= consume;
+
+                    add_resource(*resource, consume);
+                }
+            }
+        }
+
+        for (resource, deposit_stats) in &mut deposits {
+            if let None = resource {
+                for (other_resource, withdrawl_stats) in &mut withdrawls {
+                    let consume = withdrawl_stats.inactive.min(deposit_stats.active);
+
+                    withdrawl_stats.inactive -= consume;
+                    deposit_stats.active -= consume;
+
+                    add_resource(*other_resource, consume);
+                }
+            }
+        }
+
+        //
+        // Active -> Inactive
+        //
+
+        for (resource, withdrawl_stats) in &mut withdrawls {
+            if let Some(deposit_stats) = deposits.get_mut(&Some(*resource)) {
+                let consume = withdrawl_stats.active.min(deposit_stats.inactive);
+
+                withdrawl_stats.active -= consume;
+                deposit_stats.inactive -= consume;                
+
+                add_resource(*resource, consume);
+            }
+        }
+
+        total_pickup.retain(|_, amount| *amount > 0);
+
+        total_pickup
     }
 }
 
