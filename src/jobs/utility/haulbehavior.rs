@@ -37,6 +37,7 @@ where
         let pickups = transfer_queue.select_pickups(
             &pickup_room_names,
             allowed_priorities,
+            TransferType::Haul,
             &desired_resources,
             TransferCapacity::Infinite,
         );
@@ -45,7 +46,7 @@ where
             .into_iter()
             .find_nearest_linear_by(creep.pos(), |ticket| ticket.target().pos())
         {
-            transfer_queue.register_pickup(&pickup);
+            transfer_queue.register_pickup(&pickup, TransferType::Haul);
 
             return Some(state_map(pickup));
         }
@@ -72,13 +73,13 @@ where
         let delivery_room_names = delivery_rooms.iter().map(|r| r.name).collect_vec();
 
         let deliveries =
-            transfer_queue.select_deliveries(&delivery_room_names, allowed_priorities, &available_resources, available_capacity);
+            transfer_queue.select_deliveries(&delivery_room_names, allowed_priorities, TransferType::Haul, &available_resources, available_capacity);
 
         if let Some(delivery) = deliveries
             .into_iter()
             .find_nearest_linear_by(creep.pos(), |ticket| ticket.target().pos())
         {
-            transfer_queue.register_delivery(&delivery);
+            transfer_queue.register_delivery(&delivery, TransferType::Haul);
 
             let deliveries = vec![delivery];
 
@@ -107,10 +108,10 @@ where
         let pickup_room_names = pickup_rooms.iter().map(|r| r.name).collect_vec();
 
         if let Some((mut pickup, delivery)) =
-            transfer_queue.select_pickup_and_delivery(&pickup_room_names, allowed_priorities, creep.pos(), available_capacity)
+            transfer_queue.select_pickup_and_delivery(&pickup_room_names, allowed_priorities, TransferType::Haul, creep.pos(), available_capacity)
         {
-            transfer_queue.register_pickup(&pickup);
-            transfer_queue.register_delivery(&delivery);
+            transfer_queue.register_pickup(&pickup, TransferType::Haul);
+            transfer_queue.register_delivery(&delivery, TransferType::Haul);
 
             let mut deliveries = vec![delivery];
 
@@ -125,17 +126,25 @@ where
             while !remaining_capacity.empty() {
                 let last_delivery_pos = deliveries.last().unwrap().target().pos();
 
-                if let Some((additional_pickup, additional_delivery)) = transfer_queue.get_additional_delivery_from_target(
+                //
+                // NOTE: Pickup priority is ignored here as it's already known that the delivery priority is allowed. Additionally,
+                //       the node is already being visited so it's worthwhile picking up any resource that can be transfered
+                //       on the route.
+                //
+
+                if let Some((additional_pickup, additional_delivery)) = transfer_queue.get_delivery_from_target(
                     &pickup_room_names,
                     pickup.target(),
+                    TransferPriorityFlags::ALL,
                     allowed_priorities,
+                    TransferType::Haul,
                     remaining_capacity,
                     last_delivery_pos,
                 ) {
-                    transfer_queue.register_pickup(&additional_pickup);
+                    transfer_queue.register_pickup(&additional_pickup, TransferType::Haul);
                     pickup.combine_with(&additional_pickup);
 
-                    transfer_queue.register_delivery(&additional_delivery);
+                    transfer_queue.register_delivery(&additional_delivery, TransferType::Haul);
 
                     deliveries.push(additional_delivery);
 
@@ -258,7 +267,7 @@ where
 
                     ticket.consume_deposit(resource, amount);
 
-                    if ticket.target().transfer_resource_amount(creep, resource, amount) == ReturnCode::Ok {
+                    if ticket.target().creep_transfer_resource_amount(creep, resource, amount) == ReturnCode::Ok {
                         break;
                     }
                 } else {
@@ -302,7 +311,7 @@ where
 
                 let amount = creep.store_used_capacity(Some(*resource));
 
-                if target.transfer_resource_amount(creep, *resource, amount) == ReturnCode::Ok {
+                if target.creep_transfer_resource_amount(creep, *resource, amount) == ReturnCode::Ok {
                     if store_types.len() == 1 {
                         return Some(next_state())
                     } else {

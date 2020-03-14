@@ -129,14 +129,14 @@ impl Job for HaulJob {
         match &self.state {
             HaulState::Idle => {}
             HaulState::Pickup(pickup_ticket, delivery_tickets) => {
-                runtime_data.transfer_queue.register_pickup(&pickup_ticket);
+                runtime_data.transfer_queue.register_pickup(&pickup_ticket, TransferType::Haul);
                 for delivery_ticket in delivery_tickets.iter() {
-                    runtime_data.transfer_queue.register_delivery(&delivery_ticket);
+                    runtime_data.transfer_queue.register_delivery(&delivery_ticket, TransferType::Haul);
                 }
             }
             HaulState::Delivery(delivery_tickets) => {
                 for delivery_ticket in delivery_tickets.iter() {
-                    runtime_data.transfer_queue.register_delivery(&delivery_ticket);
+                    runtime_data.transfer_queue.register_delivery(&delivery_ticket, TransferType::Haul);
                 }
             }
         };

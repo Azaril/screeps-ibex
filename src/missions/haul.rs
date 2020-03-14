@@ -100,8 +100,10 @@ impl Mission for HaulMission {
         let desired_haulers = if let Some(stats) = stats {
             if stats.total_active_withdrawl > 10000 || stats.total_active_deposit > 10000 {
                 3
-            } else if stats.total_active_withdrawl > 0 || stats.total_active_deposit > 0 {
+            } else if stats.total_active_withdrawl > 1000 || stats.total_active_deposit > 1000 {
                 2
+            } else if stats.total_active_withdrawl > 0 || stats.total_active_deposit > 0 {
+                1
             } else {
                 0
             }

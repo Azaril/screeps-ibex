@@ -41,10 +41,10 @@ impl Job for LinkMineJob {
             describe_data.ui.with_room(room.name(), &mut describe_data.visualizer, |room_ui| {
                 match &self.state {
                     LinkMineState::Harvest => {
-                        room_ui.jobs().add_text(format!("Build - {} - Harvest", name), None);
+                        room_ui.jobs().add_text(format!("Link Mine - {} - Harvest", name), None);
                     }
                     LinkMineState::Deposit => {
-                        room_ui.jobs().add_text(format!("Build - {} - Deposit", name), None);
+                        room_ui.jobs().add_text(format!("Link Mine - {} - Deposit", name), None);
                     }
                 };
             })

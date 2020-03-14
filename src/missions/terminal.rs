@@ -72,6 +72,7 @@ impl Mission for TerminalMission {
                     Some(ResourceType::Energy),
                     TransferPriority::Medium,
                     transfer_amount,
+                    TransferType::Haul
                 );
 
                 runtime_data.transfer_queue.request_deposit(transfer_request);
@@ -123,6 +124,7 @@ impl Mission for TerminalMission {
                             Some(*resource_type),
                             TransferPriority::Medium,
                             transfer_amount,
+                            TransferType::Haul
                         );
 
                         runtime_data.transfer_queue.request_deposit(transfer_request);
@@ -142,6 +144,7 @@ impl Mission for TerminalMission {
                             *resource_type,
                             TransferPriority::None,
                             transfer_amount,
+                            TransferType::Haul
                         );
 
                         runtime_data.transfer_queue.request_withdraw(transfer_request);
@@ -167,6 +170,7 @@ impl Mission for TerminalMission {
                             *resource_type,
                             TransferPriority::Medium,
                             transfer_amount as u32,
+                            TransferType::Haul
                         );
 
                         runtime_data.transfer_queue.request_withdraw(transfer_request);

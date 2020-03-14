@@ -315,16 +315,38 @@ impl LocalSupplyMission {
     fn link_transfer(
         &mut self,
         structure_data: &StructureData,
+        transfer_queue: &mut TransferQueue
     ) -> Result<(), String> {
-        for link_id in structure_data.sources_to_links.values().flatten() {
-            if let Some(link) = link_id.resolve() {
-                let nearest_storage_link = structure_data.storage_links.iter()
-                    .filter_map(|target_link_id| target_link_id.resolve())
-                    .filter(|target_link| target_link.store_free_capacity(Some(ResourceType::Energy)) > 0)
-                    .min_by_key(|target_link| target_link.pos().get_range_to(&link));
+        let all_links = structure_data.sources_to_links.values().flatten().chain(structure_data.storage_links.iter());
 
-                if let Some(nearest_storage_link) = nearest_storage_link {
-                    link.transfer_energy(&nearest_storage_link, None);
+        for link_id in all_links {
+            if let Some(link) = link_id.resolve() {
+                if link.cooldown() == 0 {
+                    let link_pos = link.pos();
+                    let room_name = link_pos.room_name();
+
+                    let best_transfer = ALL_TRANSFER_PRIORITIES
+                        .iter()
+                        .filter_map(|priority| transfer_queue.get_delivery_from_target(
+                            &[room_name],
+                            &TransferTarget::Link(*link_id),
+                            TransferPriorityFlags::ACTIVE,
+                            priority.into(),
+                            TransferType::Link,
+                            TransferCapacity::Infinite,
+                            link_pos
+                        ))
+                        .next();
+
+                    if let Some((pickup, delivery)) = best_transfer {
+                        transfer_queue.register_pickup(&pickup, TransferType::Link);
+                        transfer_queue.register_delivery(&delivery, TransferType::Link);
+
+                        //TODO: Validate there isn't non-energy in here?
+                        let transfer_amount = delivery.resources().get(&ResourceType::Energy).map(|entries| entries.iter().map(|entry| entry.amount()).sum()).unwrap_or(0);
+
+                        delivery.target().link_transfer_energy_amount(&link, transfer_amount);
+                    }
                 }
             }
         }
@@ -665,7 +687,7 @@ impl LocalSupplyMission {
                         for resource in container.store_types() {
                             let resource_amount = container.store_used_capacity(Some(resource));
                             let transfer_request =
-                                TransferWithdrawRequest::new(TransferTarget::Container(*container_id), resource, priority, resource_amount);
+                                TransferWithdrawRequest::new(TransferTarget::Container(*container_id), resource, priority, resource_amount, TransferType::Haul);
 
                             transfer_queue.request_withdraw(transfer_request);
                         }
@@ -684,6 +706,7 @@ impl LocalSupplyMission {
                             Some(ResourceType::Energy),
                             TransferPriority::Low,
                             container_free_capacity,
+                            TransferType::Haul
                         );
 
                         transfer_queue.request_deposit(transfer_request);
@@ -696,6 +719,7 @@ impl LocalSupplyMission {
                             ResourceType::Energy,
                             TransferPriority::None,
                             container_used_capacity,
+                            TransferType::Haul
                         );
 
                         transfer_queue.request_withdraw(transfer_request);
@@ -727,6 +751,7 @@ impl LocalSupplyMission {
                         None,
                         TransferPriority::None,
                         container_free_capacity,
+                        TransferType::Haul
                     );
 
                     transfer_queue.request_deposit(transfer_request);
@@ -749,6 +774,7 @@ impl LocalSupplyMission {
                             Some(ResourceType::Energy),
                             TransferPriority::High,
                             free_capacity,
+                            TransferType::Haul
                         );
 
                         transfer_queue.request_deposit(transfer_request);
@@ -762,6 +788,7 @@ impl LocalSupplyMission {
                             Some(ResourceType::Energy),
                             TransferPriority::High,
                             free_capacity,
+                            TransferType::Haul
                         );
 
                         transfer_queue.request_deposit(transfer_request);
@@ -779,6 +806,7 @@ impl LocalSupplyMission {
                             resource,
                             TransferPriority::None,
                             resource_amount,
+                            TransferType::Haul
                         );
 
                         transfer_queue.request_withdraw(transfer_request);
@@ -790,7 +818,7 @@ impl LocalSupplyMission {
 
                     if free_capacity > 0 {
                         let transfer_request =
-                            TransferDepositRequest::new(TransferTarget::Storage(storage_id), None, TransferPriority::None, free_capacity);
+                            TransferDepositRequest::new(TransferTarget::Storage(storage_id), None, TransferPriority::None, free_capacity, TransferType::Haul);
 
                         transfer_queue.request_deposit(transfer_request);
                     }
@@ -802,6 +830,51 @@ impl LocalSupplyMission {
 
     fn request_transfer_for_storage_links(transfer_queue: &mut TransferQueue, structure_data: &StructureData) {
         for link_id in &structure_data.storage_links {
+            if let Some(link) = link_id.resolve() {
+                let free_capacity = link.store_free_capacity(Some(ResourceType::Energy));
+
+                if free_capacity > 0 {
+                    let transfer_request = TransferDepositRequest::new(
+                        TransferTarget::Link(link.remote_id()),
+                        Some(ResourceType::Energy),
+                        TransferPriority::None,
+                        free_capacity,
+                        TransferType::Link
+                    );
+
+                    transfer_queue.request_deposit(transfer_request);
+                }
+
+                let used_capacity = link.store_used_capacity(Some(ResourceType::Energy));
+
+                if used_capacity > 0 {
+                    let available_capacity = link.store_capacity(Some(ResourceType::Energy));
+                    let storage_fraction = (used_capacity as f32) / (available_capacity as f32);
+
+                    let priority = if storage_fraction > 0.5 {
+                        TransferPriority::High
+                    } else if storage_fraction > 0.25 {
+                        TransferPriority::Low
+                    } else {
+                        TransferPriority::None
+                    };
+
+                    let transfer_request = TransferWithdrawRequest::new(
+                        TransferTarget::Link(link.remote_id()),
+                        ResourceType::Energy,
+                        priority,
+                        used_capacity,
+                        TransferType::Haul
+                    );
+
+                    transfer_queue.request_withdraw(transfer_request);
+                }
+            }
+        }
+    }
+
+    fn request_transfer_for_source_links(transfer_queue: &mut TransferQueue, structure_data: &StructureData) {
+        for link_id in structure_data.sources_to_links.values().flatten() {
             if let Some(link) = link_id.resolve() {
                 let used_capacity = link.store_used_capacity(Some(ResourceType::Energy));
 
@@ -822,6 +895,7 @@ impl LocalSupplyMission {
                         ResourceType::Energy,
                         priority,
                         used_capacity,
+                        TransferType::Link
                     );
 
                     transfer_queue.request_withdraw(transfer_request);
@@ -837,7 +911,7 @@ impl LocalSupplyMission {
             for resource in ruin.store_types() {
                 let resource_amount = ruin.store_used_capacity(Some(resource));
                 let transfer_request =
-                    TransferWithdrawRequest::new(TransferTarget::Ruin(ruin_id), resource, TransferPriority::Medium, resource_amount);
+                    TransferWithdrawRequest::new(TransferTarget::Ruin(ruin_id), resource, TransferPriority::Medium, resource_amount, TransferType::Haul);
 
                 transfer_queue.request_withdraw(transfer_request);
             }
@@ -859,7 +933,7 @@ impl LocalSupplyMission {
                 };
 
                 let transfer_request =
-                    TransferWithdrawRequest::new(TransferTarget::Tombstone(tombstone_id), resource, priority, resource_amount);
+                    TransferWithdrawRequest::new(TransferTarget::Tombstone(tombstone_id), resource, priority, resource_amount, TransferType::Haul);
 
                 transfer_queue.request_withdraw(transfer_request);
             }
@@ -881,7 +955,7 @@ impl LocalSupplyMission {
             };
 
             let transfer_request =
-                TransferWithdrawRequest::new(TransferTarget::Resource(dropped_resource_id), resource, priority, resource_amount);
+                TransferWithdrawRequest::new(TransferTarget::Resource(dropped_resource_id), resource, priority, resource_amount, TransferType::Haul);
 
             transfer_queue.request_withdraw(transfer_request);
         }
@@ -939,6 +1013,7 @@ impl Mission for LocalSupplyMission {
         Self::request_transfer_for_ruins(&mut runtime_data.transfer_queue, &room);
         Self::request_transfer_for_tombstones(&mut runtime_data.transfer_queue, &room);
         Self::request_transfer_for_dropped_resources(&mut runtime_data.transfer_queue, &room);
+        Self::request_transfer_for_source_links(&mut runtime_data.transfer_queue, &structure_data);
         Self::request_transfer_for_storage_links(&mut runtime_data.transfer_queue, &structure_data);
 
         Ok(())
@@ -957,7 +1032,7 @@ impl Mission for LocalSupplyMission {
 
         self.spawn_creeps(system_data, runtime_data, &structure_data, &creep_data)?;
 
-        self.link_transfer(&structure_data)?;
+        self.link_transfer(&structure_data, runtime_data.transfer_queue)?;
 
         Ok(MissionResult::Running)
     }
