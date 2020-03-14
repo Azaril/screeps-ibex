@@ -833,7 +833,7 @@ impl LocalSupplyMission {
             if let Some(link) = link_id.resolve() {
                 let free_capacity = link.store_free_capacity(Some(ResourceType::Energy));
 
-                if free_capacity > 0 {
+                if free_capacity > 1 {
                     let transfer_request = TransferDepositRequest::new(
                         TransferTarget::Link(link.remote_id()),
                         Some(ResourceType::Energy),

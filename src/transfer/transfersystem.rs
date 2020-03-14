@@ -419,8 +419,8 @@ impl TransferNode {
             }
         }
 
-        if let Some(amount) = fill_none {
-            let mut remaining_none_amount = TransferCapacity::Finite(amount);
+        if let Some(fill_none_amount) = fill_none {
+            let mut remaining_none_amount = TransferCapacity::Finite(fill_none_amount);
 
             for key in self.withdrawls.keys() {
                 if allowed_priorities.contains(key.priority.into()) && pickup_type == key.allowed_type {
@@ -1312,16 +1312,7 @@ impl TransferQueue {
             for (room_name, room) in &self.rooms {
                 ui.with_room(*room_name, visualizer, |room_ui| {
                     for (target, node) in &room.nodes {
-                        let show = match target {
-                            TransferTarget::Storage(_) => true,
-                            TransferTarget::Link(_) => true,
-                            TransferTarget::Spawn(_) => true,
-                            _ => false
-                        };
-
-                        if show {
-                            node.visualize(room_ui.visualizer(), target.pos());
-                        }
+                        node.visualize(room_ui.visualizer(), target.pos());
                     }
                 });
             }
