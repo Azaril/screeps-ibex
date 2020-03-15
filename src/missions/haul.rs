@@ -4,8 +4,6 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
 use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
@@ -13,6 +11,7 @@ use crate::serialize::*;
 use crate::spawnsystem::*;
 use crate::transfer::transfersystem::*;
 use std::collections::HashMap;
+use crate::jobs::haul::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct HaulMission {
@@ -20,7 +19,6 @@ pub struct HaulMission {
     haulers: EntityVec,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl HaulMission {
     pub fn build<B>(builder: B, room_data: Entity) -> B
     where
@@ -28,7 +26,7 @@ impl HaulMission {
     {
         let mission = HaulMission::new(room_data);
 
-        builder.with(MissionData::Haul(mission)).marked::<::serialize::SerializeMarker>()
+        builder.with(MissionData::Haul(mission)).marked::<SerializeMarker>()
     }
 
     pub fn new(room_data: Entity) -> HaulMission {
@@ -46,9 +44,9 @@ impl HaulMission {
             let rooms = rooms.clone();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Haul(::jobs::haul::HaulJob::new(&rooms));
+                let creep_job = JobData::Haul(HaulJob::new(&rooms));
 
-                let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
+                let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
@@ -60,7 +58,6 @@ impl HaulMission {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Mission for HaulMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
@@ -130,7 +127,7 @@ impl Mission for HaulMission {
                 post_body: &[],
             };
 
-            if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+            if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                 let haul_rooms = &[self.room_data];
 
                 let priority = if self.haulers.0.is_empty() {

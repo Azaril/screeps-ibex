@@ -1,9 +1,6 @@
 use crate::findnearest::*;
 use screeps::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
 
-#[cfg_attr(feature = "time", timing)]
 pub fn select_construction_site(creep: &Creep, room: &Room) -> Option<ConstructionSite> {
     let construction_sites = room.find(find::MY_CONSTRUCTION_SITES);
 

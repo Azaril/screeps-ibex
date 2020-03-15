@@ -11,8 +11,7 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
+use crate::jobs::harvest::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct RemoteMineMission {
@@ -21,7 +20,6 @@ pub struct RemoteMineMission {
     harvesters: EntityVec,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl RemoteMineMission {
     pub fn build<B>(builder: B, room_data: Entity, home_room_data: Entity) -> B
     where
@@ -31,7 +29,7 @@ impl RemoteMineMission {
 
         builder
             .with(MissionData::RemoteMine(mission))
-            .marked::<::serialize::SerializeMarker>()
+            .marked::<SerializeMarker>()
     }
 
     pub fn new(room_data: Entity, home_room_data: Entity) -> RemoteMineMission {
@@ -51,9 +49,9 @@ impl RemoteMineMission {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Harvest(::jobs::harvest::HarvestJob::new(source_id, delivery_room, false));
+                let creep_job = JobData::Harvest(HarvestJob::new(source_id, delivery_room, false));
 
-                let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
+                let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
@@ -65,7 +63,6 @@ impl RemoteMineMission {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Mission for RemoteMineMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
@@ -152,7 +149,7 @@ impl Mission for RemoteMineMission {
                     post_body: &[],
                 };
 
-                if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+                if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                     let room_offset_distance = home_room_data.name - source.pos().room_name();
                     let room_manhattan_distance = room_offset_distance.0.abs() + room_offset_distance.1.abs();
 

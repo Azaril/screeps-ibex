@@ -3,13 +3,11 @@ use crate::room::data::*;
 use crate::transfer::transfersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
-use creep::CreepOwner;
+use crate::creep::CreepOwner;
 use screeps::*;
 use specs::prelude::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
 
-#[derive(SystemData)]
+#[derive(specs::SystemData)]
 pub struct JobSystemData<'a> {
     creep_owners: ReadStorage<'a, CreepOwner>,
     jobs: WriteStorage<'a, JobData>,
@@ -48,12 +46,10 @@ pub trait Job {
 
 pub struct PreRunJobSystem;
 
-#[cfg_attr(feature = "time", timing)]
 impl<'a> System<'a> for PreRunJobSystem {
     type SystemData = JobSystemData<'a>;
 
-    #[cfg_attr(feature = "time", timing)]
-    fn run(&mut self, mut data: Self::SystemData) {
+        fn run(&mut self, mut data: Self::SystemData) {
         let system_data = JobExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
@@ -92,12 +88,10 @@ impl<'a> System<'a> for PreRunJobSystem {
 
 pub struct RunJobSystem;
 
-#[cfg_attr(feature = "time", timing)]
 impl<'a> System<'a> for RunJobSystem {
     type SystemData = JobSystemData<'a>;
 
-    #[cfg_attr(feature = "time", timing)]
-    fn run(&mut self, mut data: Self::SystemData) {
+        fn run(&mut self, mut data: Self::SystemData) {
         let system_data = JobExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,

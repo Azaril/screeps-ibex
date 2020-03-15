@@ -13,8 +13,6 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum HaulState {
@@ -30,18 +28,15 @@ pub struct HaulJob {
     pub state: HaulState,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl HaulJob {
-    #[cfg_attr(feature = "time", timing)]
-    pub fn new(haul_rooms: &[Entity]) -> HaulJob {
+        pub fn new(haul_rooms: &[Entity]) -> HaulJob {
         HaulJob {
             haul_rooms: haul_rooms.into(),
             state: HaulState::Idle(),
         }
     }
 
-    #[cfg_attr(feature = "time", timing)]
-    fn run_idle_state(creep: &Creep, haul_rooms: &[&RoomData], transfer_queue: &mut TransferQueue) -> Option<HaulState> {
+        fn run_idle_state(creep: &Creep, haul_rooms: &[&RoomData], transfer_queue: &mut TransferQueue) -> Option<HaulState> {
         get_new_delivery_current_resources_state(
             creep,
             haul_rooms,
@@ -74,10 +69,8 @@ impl HaulJob {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Job for HaulJob {
-    #[cfg_attr(feature = "time", timing)]
-    fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
+        fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();
         let pos = describe_data.owner.pos();
 
@@ -134,8 +127,7 @@ impl Job for HaulJob {
         }
     }
 
-    #[cfg_attr(feature = "time", timing)]
-    fn pre_run_job(&mut self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
+        fn pre_run_job(&mut self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         match &self.state {
             HaulState::Idle() => {}
             HaulState::Pickup(pickup_ticket, delivery_tickets) => {
@@ -153,8 +145,7 @@ impl Job for HaulJob {
         };
     }
 
-    #[cfg_attr(feature = "time", timing)]
-    fn run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
+        fn run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         let creep = runtime_data.owner;
 
         let haul_rooms = self.haul_rooms.0.iter().filter_map(|e| system_data.room_data.get(*e)).collect_vec();

@@ -1,14 +1,11 @@
 use crate::jobs::actions::*;
 use crate::room::data::*;
 use crate::transfer::transfersystem::*;
-use findnearest::*;
+use crate::findnearest::*;
 use itertools::*;
 use screeps::*;
 use std::collections::HashMap;
-#[cfg(feature = "time")]
-use timing_annotate::*;
 
-#[cfg_attr(feature = "time", timing)]
 pub fn get_new_pickup_state_fill_resource<F, R>(
     creep: &Creep,
     pickup_rooms: &[&RoomData],
@@ -56,7 +53,6 @@ where
     None
 }
 
-#[cfg_attr(feature = "time", timing)]
 pub fn get_new_delivery_current_resources_state<F, R>(
     creep: &Creep,
     delivery_rooms: &[&RoomData],
@@ -94,7 +90,6 @@ where
     None
 }
 
-#[cfg_attr(feature = "time", timing)]
 pub fn get_new_pickup_and_delivery_state<F, R>(
     creep: &Creep,
     pickup_rooms: &[&RoomData],
@@ -168,7 +163,6 @@ where
     None
 }
 
-#[cfg_attr(feature = "time", timing)]
 pub fn get_new_pickup_and_delivery_full_capacity_state<F, R>(
     creep: &Creep,
     pickup_rooms: &[&RoomData],
@@ -197,7 +191,6 @@ where
     )
 }
 
-#[cfg_attr(feature = "time", timing)]
 pub fn run_pickup_state<F, R>(
     creep: &Creep,
     action_flags: &mut SimultaneousActionFlags,
@@ -242,7 +235,6 @@ where
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 pub fn run_delivery_state<F, R>(
     creep: &Creep,
     action_flags: &mut SimultaneousActionFlags,
@@ -287,7 +279,6 @@ where
     Some(next_state())
 }
 
-#[cfg_attr(feature = "time", timing)]
 pub fn run_deposit_all_resources_state<F, R>(
     creep: &Creep,
     action_flags: &mut SimultaneousActionFlags,

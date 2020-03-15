@@ -4,8 +4,7 @@ use screeps::*;
 use screeps::game::market::*;
 use specs::prelude::{Entities, LazyUpdate, Read, ResourceId, System, SystemData, World, Write, WriteStorage};
 use std::collections::HashMap;
-#[cfg(feature = "time")]
-use timing_annotate::*;
+use crate::room::data::*;
 
 pub struct OrderQueueResourceData {
     passive_sale: u32,
@@ -38,7 +37,6 @@ pub struct OrderQueue {
     rooms: HashMap<RoomName, OrderQueueRoomData>,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl OrderQueue {
     pub fn maximum_transfer_cost(&self) -> u32 {
         5000
@@ -88,7 +86,7 @@ pub struct OrderQueueSystemData<'a> {
     order_queue: Write<'a, OrderQueue>,
     updater: Read<'a, LazyUpdate>,
     entities: Entities<'a>,
-    room_data: WriteStorage<'a, ::room::data::RoomData>,
+    room_data: WriteStorage<'a, RoomData>,
     visualizer: Option<Write<'a, Visualizer>>,
     ui: Option<Write<'a, UISystem>>,
 }

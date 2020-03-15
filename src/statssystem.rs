@@ -3,6 +3,7 @@ use screeps::*;
 use serde::*;
 use specs::prelude::*;
 use std::collections::HashMap;
+use crate::room::data::*;
 
 #[derive(Serialize)]
 pub struct CpuStats {
@@ -136,7 +137,7 @@ impl StatsSystem {
 #[derive(SystemData)]
 pub struct StatsSystemData<'a> {
     entities: Entities<'a>,
-    room_data: ReadStorage<'a, ::room::data::RoomData>,
+    room_data: ReadStorage<'a, RoomData>,
     memory_arbiter: Write<'a, MemoryArbiter>,
 }
 

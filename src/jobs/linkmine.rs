@@ -2,8 +2,6 @@ use super::jobsystem::*;
 use crate::remoteobjectid::*;
 use screeps::*;
 use serde::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
 use crate::jobs::actions::*;
 use super::utility::haulbehavior::*;
 use super::utility::harvestbehavior::*;
@@ -22,7 +20,6 @@ pub struct LinkMineJob {
     state: LinkMineState,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl LinkMineJob {
     pub fn new(mine_target: RemoteObjectId<Source>, link_id: RemoteObjectId<StructureLink>) -> LinkMineJob {
         LinkMineJob {
@@ -33,7 +30,6 @@ impl LinkMineJob {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Job for LinkMineJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();

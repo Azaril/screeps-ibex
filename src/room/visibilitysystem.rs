@@ -3,6 +3,7 @@ use screeps::*;
 use specs::prelude::*;
 use specs::saveload::*;
 use std::collections::HashMap;
+use crate::serialize::*;
 
 pub const VISIBILITY_PRIORITY_CRITICAL: f32 = 100.0;
 pub const VISIBILITY_PRIORITY_HIGH: f32 = 75.0;
@@ -37,7 +38,7 @@ pub struct VisibilityQueueSystemData<'a> {
     visibility_queue: Write<'a, VisibilityQueue>,
     updater: Read<'a, LazyUpdate>,
     entities: Entities<'a>,
-    room_datas: WriteStorage<'a, ::room::data::RoomData>,
+    room_datas: WriteStorage<'a, RoomData>,
 }
 
 pub struct VisibilityQueueSystem;
@@ -69,7 +70,7 @@ impl<'a> System<'a> for VisibilityQueueSystem {
 
             data.updater
                 .create_entity(&data.entities)
-                .marked::<::serialize::SerializeMarker>()
+                .marked::<SerializeMarker>()
                 .with(RoomData::new(*room_name))
                 .build();
         }

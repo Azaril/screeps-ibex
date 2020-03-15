@@ -10,8 +10,7 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
+use crate::jobs::reserve::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ReserveMission {
@@ -20,7 +19,6 @@ pub struct ReserveMission {
     reservers: EntityVec,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl ReserveMission {
     pub fn build<B>(builder: B, room_data: Entity, home_room_data: Entity) -> B
     where
@@ -28,7 +26,7 @@ impl ReserveMission {
     {
         let mission = ReserveMission::new(room_data, home_room_data);
 
-        builder.with(MissionData::Reserve(mission)).marked::<::serialize::SerializeMarker>()
+        builder.with(MissionData::Reserve(mission)).marked::<SerializeMarker>()
     }
 
     pub fn new(room_data: Entity, home_room_data: Entity) -> ReserveMission {
@@ -47,9 +45,9 @@ impl ReserveMission {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Reserve(::jobs::reserve::ReserveJob::new(controller_id));
+                let creep_job = JobData::Reserve(ReserveJob::new(controller_id));
 
-                let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
+                let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
@@ -61,7 +59,6 @@ impl ReserveMission {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Mission for ReserveMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
@@ -152,7 +149,7 @@ impl Mission for ReserveMission {
                 post_body: &[],
             };
 
-            if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+            if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                 let spawn_request = SpawnRequest::new(
                     format!("Reserver - Target Room: {}", room_data.name),
                     &body,

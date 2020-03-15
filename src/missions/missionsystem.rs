@@ -8,8 +8,6 @@ use crate::transfer::ordersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
 use specs::prelude::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
 
 #[derive(SystemData)]
 pub struct MissionSystemData<'a> {
@@ -75,7 +73,6 @@ pub trait Mission {
 
 pub struct PreRunMissionSystem;
 
-#[cfg_attr(feature = "time", timing)]
 impl<'a> System<'a> for PreRunMissionSystem {
     type SystemData = MissionSystemData<'a>;
 
@@ -138,7 +135,6 @@ impl<'a> System<'a> for PreRunMissionSystem {
 
 pub struct RunMissionSystem;
 
-#[cfg_attr(feature = "time", timing)]
 impl<'a> System<'a> for RunMissionSystem {
     type SystemData = MissionSystemData<'a>;
 

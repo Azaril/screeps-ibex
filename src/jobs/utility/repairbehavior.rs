@@ -2,11 +2,8 @@ use super::repair::*;
 use crate::room::data::*;
 use crate::structureidentifier::*;
 use screeps::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
 use crate::jobs::actions::*;
 
-#[cfg_attr(feature = "time", timing)]
 pub fn get_new_repair_state<F, R>(creep: &Creep, build_room: &RoomData, minimum_priority: Option<RepairPriority>, state_map: F) -> Option<R>
 where
     F: Fn(RemoteStructureIdentifier) -> R,
@@ -23,7 +20,6 @@ where
     None
 }
 
-#[cfg_attr(feature = "time", timing)]
 pub fn run_repair_state<F, R>(creep: &Creep, action_flags: &mut SimultaneousActionFlags, repair_structure_id: &RemoteStructureIdentifier, next_state: F) -> Option<R>
 where
     F: Fn() -> R,

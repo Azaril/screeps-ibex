@@ -9,15 +9,13 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
+use crate::serialize::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct TowerMission {
     room_data: Entity,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl TowerMission {
     pub fn build<B>(builder: B, room_data: Entity) -> B
     where
@@ -25,7 +23,7 @@ impl TowerMission {
     {
         let mission = TowerMission::new(room_data);
 
-        builder.with(MissionData::Tower(mission)).marked::<::serialize::SerializeMarker>()
+        builder.with(MissionData::Tower(mission)).marked::<SerializeMarker>()
     }
 
     pub fn new(room_data: Entity) -> TowerMission {
@@ -33,7 +31,6 @@ impl TowerMission {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Mission for TowerMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {

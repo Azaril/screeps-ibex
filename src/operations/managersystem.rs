@@ -9,12 +9,9 @@ use super::terminal::*;
 use super::tower::*;
 use super::upgrade::*;
 use specs::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
 
 pub struct OperationManagerSystem;
 
-#[cfg_attr(feature = "time", timing)]
 impl<'a> System<'a> for OperationManagerSystem {
     type SystemData = (Entities<'a>, ReadStorage<'a, OperationData>, Read<'a, LazyUpdate>);
 
