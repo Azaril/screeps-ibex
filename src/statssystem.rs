@@ -32,11 +32,17 @@ pub struct GclStats {
 }
 
 #[derive(Serialize)]
+pub struct MarketStats {
+    credits: f64,
+}
+
+#[derive(Serialize)]
 pub struct ShardStats {
     time: u32,
     gcl: GclStats,
     cpu: CpuStats,
     room: HashMap<RoomName, RoomStats>,
+    market: MarketStats,
 }
 
 #[derive(Serialize)]
@@ -102,12 +108,19 @@ impl StatsSystem {
             .collect()
     }
 
+    fn get_market_stats() -> MarketStats {
+        MarketStats {
+            credits: game::market::credits()
+        }
+    }
+
     fn get_shard_stats(data: &StatsSystemData) -> ShardStats {
         ShardStats {
             time: game::time(),
             gcl: Self::get_gcl_stats(),
             cpu: Self::get_cpu_stats(),
             room: Self::get_room_stats(data),
+            market: Self::get_market_stats()
         }
     }
 
