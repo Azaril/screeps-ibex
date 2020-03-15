@@ -46,11 +46,12 @@ impl HaulJob {
             creep,
             haul_rooms,
             TransferPriorityFlags::ACTIVE,
+            TransferTypeFlags::HAUL,
             transfer_queue,
             HaulState::Delivery,
         )
         .or_else(|| {
-            get_new_delivery_current_resources_state(creep, haul_rooms, TransferPriorityFlags::NONE, transfer_queue, HaulState::Delivery)
+            get_new_delivery_current_resources_state(creep, haul_rooms, TransferPriorityFlags::NONE, TransferTypeFlags::HAUL, transfer_queue, HaulState::Delivery)
         })
         .or_else(|| {
             ACTIVE_TRANSFER_PRIORITIES
@@ -60,6 +61,7 @@ impl HaulJob {
                         creep,
                         haul_rooms,
                         TransferPriorityFlags::from(priority),
+                        TransferType::Haul,
                         transfer_queue,
                         HaulState::Pickup,
                     )

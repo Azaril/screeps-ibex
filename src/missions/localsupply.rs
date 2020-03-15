@@ -719,7 +719,7 @@ impl LocalSupplyMission {
                             ResourceType::Energy,
                             TransferPriority::None,
                             container_used_capacity,
-                            TransferType::Haul
+                            TransferType::Use
                         );
 
                         transfer_queue.request_withdraw(transfer_request);

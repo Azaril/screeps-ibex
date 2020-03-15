@@ -13,6 +13,7 @@ pub fn get_new_pickup_state_fill_resource<F, R>(
     creep: &Creep,
     pickup_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
+    transfer_types: TransferTypeFlags,
     desired_resource: ResourceType,
     transfer_queue: &mut TransferQueue,
     state_map: F,
@@ -37,7 +38,7 @@ where
         let pickups = transfer_queue.select_pickups(
             &pickup_room_names,
             allowed_priorities,
-            TransferType::Haul,
+            transfer_types,
             &desired_resources,
             TransferCapacity::Infinite,
         );
@@ -60,6 +61,7 @@ pub fn get_new_delivery_current_resources_state<F, R>(
     creep: &Creep,
     delivery_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
+    transfer_types: TransferTypeFlags,
     transfer_queue: &mut TransferQueue,
     state_map: F,
 ) -> Option<R>
@@ -73,7 +75,7 @@ where
         let delivery_room_names = delivery_rooms.iter().map(|r| r.name).collect_vec();
 
         let deliveries =
-            transfer_queue.select_deliveries(&delivery_room_names, allowed_priorities, TransferType::Haul, &available_resources, available_capacity);
+            transfer_queue.select_deliveries(&delivery_room_names, allowed_priorities, transfer_types, &available_resources, available_capacity);
 
         if let Some(delivery) = deliveries
             .into_iter()
@@ -97,6 +99,7 @@ pub fn get_new_pickup_and_delivery_state<F, R>(
     creep: &Creep,
     pickup_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
+    transfer_type: TransferType,
     available_capacity: TransferCapacity,
     transfer_queue: &mut TransferQueue,
     state_map: F,
@@ -108,7 +111,7 @@ where
         let pickup_room_names = pickup_rooms.iter().map(|r| r.name).collect_vec();
 
         if let Some((mut pickup, delivery)) =
-            transfer_queue.select_pickup_and_delivery(&pickup_room_names, allowed_priorities, TransferType::Haul, creep.pos(), available_capacity)
+            transfer_queue.select_pickup_and_delivery(&pickup_room_names, allowed_priorities, transfer_type, creep.pos(), available_capacity)
         {
             transfer_queue.register_pickup(&pickup, TransferType::Haul);
             transfer_queue.register_delivery(&delivery, TransferType::Haul);
@@ -170,6 +173,7 @@ pub fn get_new_pickup_and_delivery_full_capacity_state<F, R>(
     creep: &Creep,
     pickup_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
+    transfer_type: TransferType,
     transfer_queue: &mut TransferQueue,
     state_map: F,
 ) -> Option<R>
@@ -186,6 +190,7 @@ where
         creep,
         pickup_rooms,
         allowed_priorities,
+        transfer_type,
         TransferCapacity::Finite(available_capacity),
         transfer_queue,
         state_map,
