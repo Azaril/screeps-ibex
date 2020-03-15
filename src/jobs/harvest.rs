@@ -76,6 +76,7 @@ impl HarvestJob {
                 creep,
                 &[delivery_room_data],
                 TransferPriorityFlags::HIGH,
+                TransferType::Haul,
                 transfer_queue,
                 HarvestState::Pickup,
             ) {
@@ -93,6 +94,7 @@ impl HarvestJob {
                     creep,
                     &[delivery_room_data],
                     TransferPriorityFlags::MEDIUM | TransferPriorityFlags::LOW,
+                    TransferType::Haul,
                     transfer_queue,
                     HarvestState::Pickup,
                 ) {
@@ -104,6 +106,7 @@ impl HarvestJob {
                 creep,
                 &[delivery_room_data],
                 TransferPriorityFlags::HIGH,
+                TransferTypeFlags::HAUL,
                 transfer_queue,
                 HarvestState::Delivery,
             )
@@ -117,6 +120,7 @@ impl HarvestJob {
                             creep,
                             &[delivery_room_data],
                             TransferPriorityFlags::from(priority),
+                            TransferTypeFlags::HAUL,
                             transfer_queue,
                             HarvestState::Delivery,
                         )
@@ -146,7 +150,8 @@ impl HarvestJob {
                 get_new_delivery_current_resources_state(
                     creep,
                     &[delivery_room_data],
-                    TransferPriorityFlags::from(priority),
+                    priority.into(),
+                    TransferTypeFlags::HAUL,
                     transfer_queue,
                     HarvestState::Delivery,
                 )
