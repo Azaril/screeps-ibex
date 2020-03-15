@@ -4,16 +4,16 @@ use crate::room::visibilitysystem::*;
 use crate::ui::*;
 use crate::visualize::*;
 use specs::prelude::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
+use crate::missions::data::*;
+use crate::room::data::*;
 
 #[derive(SystemData)]
 pub struct OperationSystemData<'a> {
     operations: WriteStorage<'a, OperationData>,
     updater: Read<'a, LazyUpdate>,
     entities: Entities<'a>,
-    room_data: WriteStorage<'a, ::room::data::RoomData>,
-    mission_data: ReadStorage<'a, ::missions::data::MissionData>,
+    room_data: WriteStorage<'a, RoomData>,
+    mission_data: ReadStorage<'a, MissionData>,
     mapping: Read<'a, MappingData>,
     visibility: Write<'a, VisibilityQueue>,
     visualizer: Option<Write<'a, Visualizer>>,
@@ -23,8 +23,8 @@ pub struct OperationSystemData<'a> {
 pub struct OperationExecutionSystemData<'a> {
     pub updater: &'a Read<'a, LazyUpdate>,
     pub entities: &'a Entities<'a>,
-    pub room_data: &'a WriteStorage<'a, ::room::data::RoomData>,
-    pub mission_data: &'a ReadStorage<'a, ::missions::data::MissionData>,
+    pub room_data: &'a WriteStorage<'a, RoomData>,
+    pub mission_data: &'a ReadStorage<'a, MissionData>,
     pub mapping: &'a Read<'a, MappingData>,
 }
 
@@ -58,7 +58,6 @@ pub trait Operation {
 
 pub struct PreRunOperationSystem;
 
-#[cfg_attr(feature = "time", timing)]
 impl<'a> System<'a> for PreRunOperationSystem {
     type SystemData = OperationSystemData<'a>;
 
@@ -103,7 +102,6 @@ impl<'a> System<'a> for PreRunOperationSystem {
 
 pub struct RunOperationSystem;
 
-#[cfg_attr(feature = "time", timing)]
 impl<'a> System<'a> for RunOperationSystem {
     type SystemData = OperationSystemData<'a>;
 

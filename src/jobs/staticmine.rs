@@ -2,8 +2,6 @@ use super::jobsystem::*;
 use crate::remoteobjectid::*;
 use screeps::*;
 use serde::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 pub enum StaticMineTarget {
@@ -17,7 +15,6 @@ pub struct StaticMineJob {
     pub container_target: RemoteObjectId<StructureContainer>,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl StaticMineJob {
     pub fn new(mine_target: StaticMineTarget, container_id: RemoteObjectId<StructureContainer>) -> StaticMineJob {
         StaticMineJob {
@@ -27,7 +24,6 @@ impl StaticMineJob {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Job for StaticMineJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();

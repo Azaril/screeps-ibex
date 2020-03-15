@@ -1,8 +1,6 @@
 use super::jobsystem::*;
 use screeps::*;
 use serde::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct ScoutJob {
@@ -11,7 +9,6 @@ pub struct ScoutJob {
     room_history: Vec<RoomName>,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl ScoutJob {
     pub fn new(room_target: RoomName) -> ScoutJob {
         ScoutJob {
@@ -21,7 +18,6 @@ impl ScoutJob {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Job for ScoutJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();

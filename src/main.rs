@@ -1,6 +1,7 @@
 #![recursion_limit = "128"]
 #![allow(dead_code)]
 #![warn(clippy::all)]
+//#[feature(proc_macro_hygiene)]
 
 extern crate fern;
 #[macro_use]
@@ -12,31 +13,49 @@ extern crate itertools;
 extern crate serde;
 extern crate specs;
 extern crate specs_derive;
-#[cfg(feature = "time")]
-extern crate timing;
-#[cfg(feature = "time")]
-extern crate timing_annotate;
 #[macro_use]
 extern crate bitflags;
 
+#[cfg(feature = "profile")]
+extern crate timing;
+
+#[cfg_attr(feature = "profile", timing)]
 mod creep;
+#[cfg_attr(feature = "profile", timing)]
 mod features;
+#[cfg_attr(feature = "profile", timing)]
 mod findnearest;
+#[cfg_attr(feature = "profile", timing)]
 mod globals;
+#[cfg_attr(feature = "profile", timing)]
 mod jobs;
+#[cfg_attr(feature = "profile", timing)]
 mod logging;
+#[cfg_attr(feature = "profile", timing)]
 mod mappingsystem;
+#[cfg_attr(feature = "profile", timing)]
 mod memorysystem;
+#[cfg_attr(feature = "profile", timing)]
 mod missions;
+#[cfg_attr(feature = "profile", timing)]
 mod operations;
+#[cfg_attr(feature = "profile", timing)]
 mod remoteobjectid;
+#[cfg_attr(feature = "profile", timing)]
 mod room;
+#[cfg_attr(feature = "profile", timing)]
 mod serialize;
+#[cfg_attr(feature = "profile", timing)]
 mod spawnsystem;
+#[cfg_attr(feature = "profile", timing)]
 mod statssystem;
+#[cfg_attr(feature = "profile", timing)]
 mod structureidentifier;
+#[cfg_attr(feature = "profile", timing)]
 mod transfer;
+#[cfg_attr(feature = "profile", timing)]
 mod ui;
+#[cfg_attr(feature = "profile", timing)]
 mod visualize;
 
 use screeps::*;
@@ -47,7 +66,7 @@ use specs::{
 };
 use std::collections::HashSet;
 use std::fmt;
-#[cfg(feature = "time")]
+#[cfg(feature = "profile")]
 use timing_annotate::*;
 
 fn main() {
@@ -213,8 +232,25 @@ fn deserialize_world(world: &World, segment: u32) {
     sys.run_now(&world);
 }
 
-#[cfg_attr(feature = "time", timing)]
 fn game_loop() {
+    #[cfg(feature = "profile")]
+    {
+        timing::start_trace();
+    }
+    
+    game_loop_internal();
+
+    #[cfg(feature = "profile")]
+    {
+        let trace = timing::stop_trace();
+
+        if let Some(trace_output) = serde_json::to_string(&trace).ok() {
+            info!("{}", trace_output);
+        }
+    }   
+}
+
+fn game_loop_internal() {
     features::js::prepare();
 
     let mut world = World::new();

@@ -2,16 +2,15 @@ use super::data::*;
 use super::missionsystem::*;
 use crate::creep::*;
 use crate::serialize::*;
-use jobs::data::*;
+use crate::jobs::data::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
-use spawnsystem::*;
+use crate::spawnsystem::*;
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
+use crate::jobs::build::*;
 
 #[derive(Clone, Debug, ConvertSaveload)]
 pub struct RemoteBuildMission {
@@ -20,7 +19,6 @@ pub struct RemoteBuildMission {
     builders: EntityVec,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl RemoteBuildMission {
     pub fn build<B>(builder: B, room_data: Entity, home_room_data: Entity) -> B
     where
@@ -30,7 +28,7 @@ impl RemoteBuildMission {
 
         builder
             .with(MissionData::RemoteBuild(mission))
-            .marked::<::serialize::SerializeMarker>()
+            .marked::<SerializeMarker>()
     }
 
     pub fn new(room_data: Entity, home_room_data: Entity) -> RemoteBuildMission {
@@ -46,14 +44,14 @@ impl RemoteBuildMission {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Build(::jobs::build::BuildJob::new(
+                let creep_job = JobData::Build(BuildJob::new(
                     //TODO: Pass an array of home rooms - allow for hauling energy if harvesting is not possible.
                     build_room_entity,
                     build_room_entity,
                     allow_harvest
                 ));
 
-                let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
+                let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
@@ -65,7 +63,6 @@ impl RemoteBuildMission {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Mission for RemoteBuildMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
@@ -126,7 +123,7 @@ impl Mission for RemoteBuildMission {
             };
 
             //TODO: Pass in home room if in close proximity (i.e. adjacent) to allow hauling from storage.
-            if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+            if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                 let spawn_request = SpawnRequest::new(
                     format!("Remote Builder - Target Room: {}", room_data.name),
                     &body,

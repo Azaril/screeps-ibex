@@ -13,15 +13,13 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
+use crate::room::data::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ClaimOperation {
     claim_missions: EntityVec,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl ClaimOperation {
     pub fn build<B>(builder: B) -> B
     where
@@ -31,7 +29,7 @@ impl ClaimOperation {
 
         builder
             .with(OperationData::Claim(operation))
-            .marked::<::serialize::SerializeMarker>()
+            .marked::<SerializeMarker>()
     }
 
     pub fn new() -> ClaimOperation {
@@ -42,7 +40,6 @@ impl ClaimOperation {
 }
 
 #[allow(clippy::cognitive_complexity)]
-#[cfg_attr(feature = "time", timing)]
 impl Operation for ClaimOperation {
     fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
@@ -187,7 +184,7 @@ impl Operation for ClaimOperation {
                     system_data.updater.exec_mut(move |world| {
                         let mission_entity = ScoutMission::build(world.create_entity(), room_entity, home_room_entity).build();
 
-                        let room_data_storage = &mut world.write_storage::<::room::data::RoomData>();
+                        let room_data_storage = &mut world.write_storage::<RoomData>();
 
                         if let Some(room_data) = room_data_storage.get_mut(room_entity) {
                             room_data.missions.0.push(mission_entity);
@@ -238,13 +235,13 @@ impl Operation for ClaimOperation {
                     system_data.updater.exec_mut(move |world| {
                         let mission_entity = ClaimMission::build(world.create_entity(), room_entity, home_room_entity).build();
 
-                        let room_data_storage = &mut world.write_storage::<::room::data::RoomData>();
+                        let room_data_storage = &mut world.write_storage::<RoomData>();
 
                         if let Some(room_data) = room_data_storage.get_mut(room_entity) {
                             room_data.missions.0.push(mission_entity);
                         }
 
-                        let operation_data_storage = &mut world.write_storage::<::operations::data::OperationData>();
+                        let operation_data_storage = &mut world.write_storage::<OperationData>();
 
                         if let Some(OperationData::Claim(operation_data)) = operation_data_storage.get_mut(operation_entity) {
                             operation_data.claim_missions.0.push(mission_entity);
@@ -327,7 +324,7 @@ impl Operation for ClaimOperation {
                                                 RemoteBuildMission::build(world.create_entity(), room_entity, home_room_data_entity)
                                                     .build();
 
-                                            let room_data_storage = &mut world.write_storage::<::room::data::RoomData>();
+                                            let room_data_storage = &mut world.write_storage::<RoomData>();
 
                                             if let Some(room_data) = room_data_storage.get_mut(room_entity) {
                                                 room_data.missions.0.push(mission_entity);

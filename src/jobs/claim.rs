@@ -2,15 +2,12 @@ use super::jobsystem::*;
 use crate::remoteobjectid::*;
 use screeps::*;
 use serde::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 pub struct ClaimJob {
     pub claim_target: RemoteObjectId<StructureController>,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl ClaimJob {
     pub fn new(controller_id: RemoteObjectId<StructureController>) -> ClaimJob {
         ClaimJob {
@@ -19,7 +16,6 @@ impl ClaimJob {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Job for ClaimJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();

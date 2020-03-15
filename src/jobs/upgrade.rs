@@ -14,8 +14,6 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum UpgradeState {
@@ -34,7 +32,6 @@ pub struct UpgradeJob {
     allow_harvest: bool
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl UpgradeJob {
     pub fn new(home_room: Entity, allow_harvest: bool) -> UpgradeJob {
         UpgradeJob {
@@ -77,7 +74,6 @@ impl UpgradeJob {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Job for UpgradeJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();

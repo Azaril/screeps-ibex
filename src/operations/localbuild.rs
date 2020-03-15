@@ -6,13 +6,12 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
+use crate::serialize::*;
+use crate::room::data::*;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct LocalBuildOperation {}
 
-#[cfg_attr(feature = "time", timing)]
 impl LocalBuildOperation {
     pub fn build<B>(builder: B) -> B
     where
@@ -22,7 +21,7 @@ impl LocalBuildOperation {
 
         builder
             .with(OperationData::LocalBuild(operation))
-            .marked::<::serialize::SerializeMarker>()
+            .marked::<SerializeMarker>()
     }
 
     pub fn new() -> LocalBuildOperation {
@@ -30,7 +29,6 @@ impl LocalBuildOperation {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Operation for LocalBuildOperation {
     fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
@@ -76,7 +74,7 @@ impl Operation for LocalBuildOperation {
                         system_data.updater.exec_mut(move |world| {
                             let mission_entity = LocalBuildMission::build(world.create_entity(), room_entity).build();
 
-                            let room_data_storage = &mut world.write_storage::<::room::data::RoomData>();
+                            let room_data_storage = &mut world.write_storage::<RoomData>();
 
                             if let Some(room_data) = room_data_storage.get_mut(room_entity) {
                                 room_data.missions.0.push(mission_entity);

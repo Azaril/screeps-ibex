@@ -9,8 +9,7 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
+use crate::jobs::scout::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ScoutMission {
@@ -21,7 +20,6 @@ pub struct ScoutMission {
     spawned_scouts: u32,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl ScoutMission {
     pub fn build<B>(builder: B, room_data: Entity, home_room_data: Entity) -> B
     where
@@ -29,7 +27,7 @@ impl ScoutMission {
     {
         let mission = ScoutMission::new(room_data, home_room_data);
 
-        builder.with(MissionData::Scout(mission)).marked::<::serialize::SerializeMarker>()
+        builder.with(MissionData::Scout(mission)).marked::<SerializeMarker>()
     }
 
     pub fn new(room_data: Entity, home_room_data: Entity) -> ScoutMission {
@@ -47,9 +45,9 @@ impl ScoutMission {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Scout(::jobs::scout::ScoutJob::new(scout_room));
+                let creep_job = JobData::Scout(ScoutJob::new(scout_room));
 
-                let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
+                let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
@@ -64,7 +62,6 @@ impl ScoutMission {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Mission for ScoutMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
@@ -130,7 +127,7 @@ impl Mission for ScoutMission {
                 post_body: &[],
             };
 
-            if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+            if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                 let spawn_request = SpawnRequest::new(
                     format!("Scout - Target Room: {}", room_data.name),
                     &body,

@@ -1,6 +1,8 @@
 use screeps::*;
+use specs::*;
 use specs::prelude::*;
 use std::collections::HashMap;
+use crate::room::data::*;
 
 #[derive(Default)]
 pub struct MappingData {
@@ -11,7 +13,7 @@ pub struct MappingData {
 pub struct MappingSystemData<'a> {
     mapping: Write<'a, MappingData>,
     entities: Entities<'a>,
-    room_data: ReadStorage<'a, ::room::data::RoomData>,
+    room_data: ReadStorage<'a, RoomData>,
 }
 
 pub struct MappingSystem;

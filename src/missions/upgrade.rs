@@ -9,8 +9,7 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
+use crate::jobs::upgrade::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct UpgradeMission {
@@ -18,7 +17,6 @@ pub struct UpgradeMission {
     upgraders: EntityVec,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl UpgradeMission {
     pub fn build<B>(builder: B, room_data: Entity) -> B
     where
@@ -26,7 +24,7 @@ impl UpgradeMission {
     {
         let mission = UpgradeMission::new(room_data);
 
-        builder.with(MissionData::Upgrade(mission)).marked::<::serialize::SerializeMarker>()
+        builder.with(MissionData::Upgrade(mission)).marked::<SerializeMarker>()
     }
 
     pub fn new(room_data: Entity) -> UpgradeMission {
@@ -41,9 +39,9 @@ impl UpgradeMission {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Upgrade(::jobs::upgrade::UpgradeJob::new(home_room, allow_harvest));
+                let creep_job = JobData::Upgrade(UpgradeJob::new(home_room, allow_harvest));
 
-                let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
+                let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
@@ -55,7 +53,6 @@ impl UpgradeMission {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Mission for UpgradeMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
@@ -139,7 +136,7 @@ impl Mission for UpgradeMission {
                 post_body: &[],
             };
 
-            if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+            if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                 let priority = if self.upgraders.0.is_empty() && downgrade_risk {
                     SPAWN_PRIORITY_HIGH
                 } else {

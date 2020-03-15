@@ -1,8 +1,6 @@
 use itertools::*;
 use screeps::*;
 use std::collections::HashMap;
-#[cfg(feature = "time")]
-use timing_annotate::*;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Ord, PartialOrd)]
 pub enum RepairPriority {
@@ -96,7 +94,6 @@ fn map_structure_repair_priority(
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 pub fn get_repair_targets(room: &Room, allow_walls: bool) -> Vec<(Structure, u32, u32)> {
     room.find(find::STRUCTURES)
         .into_iter()
@@ -134,7 +131,6 @@ pub fn get_repair_targets(room: &Room, allow_walls: bool) -> Vec<(Structure, u32
         .collect()
 }
 
-#[cfg_attr(feature = "time", timing)]
 pub fn get_prioritized_repair_targets(room: &Room, minimum_priority: Option<RepairPriority>, allow_walls: bool) -> HashMap<RepairPriority, Vec<Structure>> {
     let are_hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
 
@@ -153,7 +149,6 @@ pub fn get_prioritized_repair_targets(room: &Room, minimum_priority: Option<Repa
         .into_group_map()
 }
 
-#[cfg_attr(feature = "time", timing)]
 pub fn select_repair_structure(room: &Room, minimum_priority: Option<RepairPriority>, allow_walls: bool) -> Option<Structure> {
     let mut repair_targets = get_prioritized_repair_targets(room, minimum_priority, allow_walls);
 

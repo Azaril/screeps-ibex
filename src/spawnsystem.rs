@@ -3,6 +3,7 @@ use crate::visualize::*;
 use screeps::*;
 use specs::prelude::*;
 use std::collections::HashMap;
+use crate::room::data::*;
 
 pub const SPAWN_PRIORITY_CRITICAL: f32 = 100.0;
 pub const SPAWN_PRIORITY_HIGH: f32 = 75.0;
@@ -75,7 +76,7 @@ pub struct SpawnQueueSystemData<'a> {
     spawn_queue: Write<'a, SpawnQueue>,
     updater: Read<'a, LazyUpdate>,
     entities: Entities<'a>,
-    room_data: WriteStorage<'a, ::room::data::RoomData>,
+    room_data: WriteStorage<'a, RoomData>,
     visualizer: Option<Write<'a, Visualizer>>,
     ui: Option<Write<'a, UISystem>>,
 }

@@ -2,10 +2,11 @@
 name = "screeps-ibex"
 version = "0.0.1"
 authors = []
+edition = "2018"
 
 [features]
 default = []
-time = ["timing", "timing-annotate"]
+profile = ["timing", "timing-annotate"]
 
 [dependencies]
 stdweb = "0.4"

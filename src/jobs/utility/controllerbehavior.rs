@@ -1,10 +1,7 @@
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use screeps::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
 
-#[cfg_attr(feature = "time", timing)]
 pub fn get_new_upgrade_state<F, R>(creep: &Creep, upgrade_room: &RoomData, state_map: F) -> Option<R>
 where
     F: Fn(RemoteObjectId<StructureController>) -> R,
@@ -23,7 +20,6 @@ where
     None
 }
 
-#[cfg_attr(feature = "time", timing)]
 pub fn run_upgrade_state<F, R>(creep: &Creep, controller_id: &RemoteObjectId<StructureController>, next_state: F) -> Option<R>
 where
     F: Fn() -> R,

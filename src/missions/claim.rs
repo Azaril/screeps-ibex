@@ -5,14 +5,13 @@ use crate::remoteobjectid::*;
 use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use crate::jobs::claim::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ClaimMission {
@@ -21,7 +20,6 @@ pub struct ClaimMission {
     claimers: EntityVec,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl ClaimMission {
     pub fn build<B>(builder: B, room_data: Entity, home_room_data: Entity) -> B
     where
@@ -29,7 +27,7 @@ impl ClaimMission {
     {
         let mission = ClaimMission::new(room_data, home_room_data);
 
-        builder.with(MissionData::Claim(mission)).marked::<::serialize::SerializeMarker>()
+        builder.with(MissionData::Claim(mission)).marked::<SerializeMarker>()
     }
 
     pub fn new(room_data: Entity, home_room_data: Entity) -> ClaimMission {
@@ -48,9 +46,9 @@ impl ClaimMission {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Claim(::jobs::claim::ClaimJob::new(controller_id));
+                let creep_job = JobData::Claim(ClaimJob::new(controller_id));
 
-                let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
+                let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
@@ -62,7 +60,6 @@ impl ClaimMission {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Mission for ClaimMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
@@ -132,7 +129,7 @@ impl Mission for ClaimMission {
                 post_body: &[],
             };
 
-            if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+            if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                 let spawn_request = SpawnRequest::new(
                     "Claimer".to_string(),
                     &body,

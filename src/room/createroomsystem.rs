@@ -2,6 +2,7 @@ use super::data::*;
 use screeps::*;
 use specs::saveload::*;
 use specs::*;
+use crate::serialize::*;
 
 pub struct CreateRoomDataSystem;
 
@@ -35,7 +36,7 @@ impl<'a> System<'a> for CreateRoomDataSystem {
 
             updater
                 .create_entity(&entities)
-                .marked::<::serialize::SerializeMarker>()
+                .marked::<SerializeMarker>()
                 .with(RoomData::new(room))
                 .build();
         }

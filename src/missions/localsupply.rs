@@ -6,17 +6,17 @@ use crate::room::data::*;
 use crate::serialize::*;
 use crate::transfer::transfersystem::*;
 use itertools::*;
-use jobs::data::*;
+use crate::jobs::data::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
-use spawnsystem::*;
+use crate::spawnsystem::*;
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
 use std::collections::HashMap;
-#[cfg(feature = "time")]
-use timing_annotate::*;
+use crate::jobs::linkmine::*;
+use crate::jobs::harvest::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct LocalSupplyMission {
@@ -45,7 +45,6 @@ struct CreepData {
     containers_to_mineral_miners: HashMap<RemoteObjectId<StructureContainer>, Vec<Entity>>,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl LocalSupplyMission {
     pub fn build<B>(builder: B, room_data: Entity) -> B
     where
@@ -55,7 +54,7 @@ impl LocalSupplyMission {
 
         builder
             .with(MissionData::LocalSupply(mission))
-            .marked::<::serialize::SerializeMarker>()
+            .marked::<SerializeMarker>()
     }
 
     pub fn new(room_data: Entity) -> LocalSupplyMission {
@@ -77,9 +76,9 @@ impl LocalSupplyMission {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::StaticMine(::jobs::staticmine::StaticMineJob::new(target, container_id));
+                let creep_job = JobData::StaticMine(StaticMineJob::new(target, container_id));
 
-                let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
+                let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
@@ -102,9 +101,9 @@ impl LocalSupplyMission {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::LinkMine(::jobs::linkmine::LinkMineJob::new(source_id, link_id));
+                let creep_job = JobData::LinkMine(LinkMineJob::new(source_id, link_id));
 
-                let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
+                let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
@@ -124,9 +123,9 @@ impl LocalSupplyMission {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Harvest(::jobs::harvest::HarvestJob::new(source_id, delivery_room, true));
+                let creep_job = JobData::Harvest(HarvestJob::new(source_id, delivery_room, true));
 
-                let creep_entity = ::creep::Spawning::build(world.create_entity(), &name).with(creep_job).build();
+                let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
@@ -466,7 +465,7 @@ impl LocalSupplyMission {
                     post_body: &[],
                 };
 
-                if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+                if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                     let priority = if total_harvesting_creeps == 0 {
                         SPAWN_PRIORITY_CRITICAL
                     } else {
@@ -531,7 +530,7 @@ impl LocalSupplyMission {
                             post_body: &[],
                         };
 
-                        if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+                        if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                             let spawn_request = SpawnRequest::new(
                                 format!("Link Miner - Source: {}", source_id.id()),
                                 &body,
@@ -574,7 +573,7 @@ impl LocalSupplyMission {
                             post_body: &[],
                         };
 
-                        if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+                        if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                             let spawn_request = SpawnRequest::new(
                                 format!("Container Miner - Source: {}", source_id.id()),
                                 &body,
@@ -640,7 +639,7 @@ impl LocalSupplyMission {
                     post_body: &[],
                 };
 
-                if let Ok(body) = crate::creep::Spawning::create_body(&body_definition) {
+                if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                     let spawn_request = SpawnRequest::new(
                         format!("Container Miner - Extractor: {}", extractor_id.id()),
                         &body,
@@ -962,7 +961,6 @@ impl LocalSupplyMission {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Mission for LocalSupplyMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {

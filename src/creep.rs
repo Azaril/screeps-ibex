@@ -3,6 +3,7 @@ use serde::*;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
+use crate::serialize::*;
 
 #[derive(Clone, Copy, Deserialize, Serialize, Component)]
 pub struct CreepOwner {
@@ -76,8 +77,6 @@ impl<'a> System<'a> for CleanupCreepsSystem {
     }
 }
 
-pub struct Spawning;
-
 pub struct SpawnBodyDefinition<'a> {
     pub maximum_energy: u32,
     pub minimum_repeat: Option<usize>,
@@ -87,16 +86,18 @@ pub struct SpawnBodyDefinition<'a> {
     pub post_body: &'a [Part],
 }
 
-impl Spawning {
+pub mod spawning {
+    use super::*;
+
     pub fn build<B>(builder: B, name: &str) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        builder.marked::<::serialize::SerializeMarker>().with(CreepSpawning::new(&name))
+        builder.marked::<SerializeMarker>().with(CreepSpawning::new(&name))
     }
 
     //TODO: Move this to a utility location.
-    pub fn clamp<T: PartialOrd>(val: T, min: T, max: T) -> T {
+    fn clamp<T: PartialOrd>(val: T, min: T, max: T) -> T {
         if val < min {
             min
         } else if val > max {
@@ -141,7 +142,7 @@ impl Spawning {
             }
         }
 
-        let repeat_parts = Self::clamp(
+        let repeat_parts = clamp(
             max_possible_repeat_parts,
             definition.minimum_repeat.unwrap_or(0),
             definition.maximum_repeat.unwrap_or(usize::max_value()),

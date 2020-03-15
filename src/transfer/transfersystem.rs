@@ -1,14 +1,13 @@
 use crate::ui::*;
 use crate::visualize::*;
 use itertools::*;
-use remoteobjectid::*;
+use crate::remoteobjectid::*;
 use screeps::*;
 use serde::*;
 use specs::prelude::{Entities, LazyUpdate, Read, ResourceId, System, SystemData, World, Write, WriteStorage};
 use std::collections::hash_map::*;
 use std::collections::HashMap;
-#[cfg(feature = "time")]
-use timing_annotate::*;
+use crate::room::data::*;
 
 #[derive(Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Clone, Copy, Serialize, Deserialize)]
 #[repr(u8)]
@@ -277,7 +276,6 @@ pub struct TransferNode {
     pending_deposits: HashMap<TransferDepositKey, u32>,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl TransferNode {
     pub fn new() -> TransferNode {
         TransferNode {
@@ -1090,7 +1088,6 @@ pub struct TransferQueue {
     rooms: HashMap<RoomName, TransferQueueRoomData>,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl TransferQueue {
     pub fn get_room(&mut self, room: RoomName) -> &mut TransferQueueRoomData {
         self.rooms.entry(room).or_insert_with(TransferQueueRoomData::new)
@@ -1501,7 +1498,7 @@ pub struct TransferQueueSystemData<'a> {
     transfer_queue: Write<'a, TransferQueue>,
     updater: Read<'a, LazyUpdate>,
     entities: Entities<'a>,
-    room_data: WriteStorage<'a, ::room::data::RoomData>,
+    room_data: WriteStorage<'a, RoomData>,
     visualizer: Option<Write<'a, Visualizer>>,
     ui: Option<Write<'a, UISystem>>,
 }

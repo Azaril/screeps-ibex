@@ -9,15 +9,13 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
+use crate::serialize::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct TerminalMission {
     room_data: Entity,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl TerminalMission {
     pub fn build<B>(builder: B, room_data: Entity) -> B
     where
@@ -27,7 +25,7 @@ impl TerminalMission {
 
         builder
             .with(MissionData::Terminal(mission))
-            .marked::<::serialize::SerializeMarker>()
+            .marked::<SerializeMarker>()
     }
 
     pub fn new(room_data: Entity) -> TerminalMission {
@@ -35,7 +33,6 @@ impl TerminalMission {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Mission for TerminalMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {

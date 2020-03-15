@@ -16,8 +16,6 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum BuildState {
@@ -40,7 +38,6 @@ pub struct BuildJob {
     allow_harvest: bool,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl BuildJob {
     pub fn new(home_room: Entity, build_room: Entity, allow_harvest: bool) -> BuildJob {
         BuildJob {
@@ -95,7 +92,6 @@ impl BuildJob {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Job for BuildJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();

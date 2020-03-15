@@ -20,8 +20,6 @@ use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
 
-#[cfg(feature = "time")]
-use timing_annotate::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum HarvestState {
@@ -47,7 +45,6 @@ pub struct HarvestJob {
     state: HarvestState,
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl HarvestJob {
     pub fn new(harvest_target: RemoteObjectId<Source>, delivery_room: Entity, allow_haul: bool) -> HarvestJob {
         HarvestJob {
@@ -169,7 +166,6 @@ impl HarvestJob {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Job for HarvestJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();

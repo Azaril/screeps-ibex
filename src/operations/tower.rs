@@ -6,13 +6,12 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-#[cfg(feature = "time")]
-use timing_annotate::*;
+use crate::room::data::*;
+use crate::serialize::*;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct TowerOperation {}
 
-#[cfg_attr(feature = "time", timing)]
 impl TowerOperation {
     pub fn build<B>(builder: B) -> B
     where
@@ -22,7 +21,7 @@ impl TowerOperation {
 
         builder
             .with(OperationData::Tower(operation))
-            .marked::<::serialize::SerializeMarker>()
+            .marked::<SerializeMarker>()
     }
 
     pub fn new() -> TowerOperation {
@@ -30,7 +29,6 @@ impl TowerOperation {
     }
 }
 
-#[cfg_attr(feature = "time", timing)]
 impl Operation for TowerOperation {
     fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
@@ -86,7 +84,7 @@ impl Operation for TowerOperation {
                         system_data.updater.exec_mut(move |world| {
                             let mission_entity = TowerMission::build(world.create_entity(), room_entity).build();
 
-                            let room_data_storage = &mut world.write_storage::<::room::data::RoomData>();
+                            let room_data_storage = &mut world.write_storage::<RoomData>();
 
                             if let Some(room_data) = room_data_storage.get_mut(room_entity) {
                                 room_data.missions.0.push(mission_entity);
