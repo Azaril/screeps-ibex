@@ -9,6 +9,7 @@ use super::terminal::*;
 use super::tower::*;
 use super::upgrade::*;
 use specs::*;
+use log::*;
 
 pub struct OperationManagerSystem;
 

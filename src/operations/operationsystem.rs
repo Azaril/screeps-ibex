@@ -6,6 +6,7 @@ use crate::visualize::*;
 use specs::prelude::*;
 use crate::missions::data::*;
 use crate::room::data::*;
+use log::*;
 
 #[derive(SystemData)]
 pub struct OperationSystemData<'a> {

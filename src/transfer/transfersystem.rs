@@ -8,6 +8,7 @@ use specs::prelude::{Entities, LazyUpdate, Read, ResourceId, System, SystemData,
 use std::collections::hash_map::*;
 use std::collections::HashMap;
 use crate::room::data::*;
+use bitflags::*;
 
 #[derive(Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Clone, Copy, Serialize, Deserialize)]
 #[repr(u8)]

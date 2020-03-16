@@ -4,6 +4,7 @@ use specs::prelude::*;
 use specs::saveload::*;
 use std::collections::HashMap;
 use crate::serialize::*;
+use log::*;
 
 pub const VISIBILITY_PRIORITY_CRITICAL: f32 = 100.0;
 pub const VISIBILITY_PRIORITY_HIGH: f32 = 75.0;

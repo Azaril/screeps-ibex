@@ -3,18 +3,8 @@
 #![warn(clippy::all)]
 //#[feature(proc_macro_hygiene)]
 
-extern crate fern;
 #[macro_use]
-extern crate log;
-extern crate screeps;
-#[macro_use]
-extern crate stdweb;
-extern crate itertools;
-extern crate serde;
-extern crate specs;
-extern crate specs_derive;
-#[macro_use]
-extern crate bitflags;
+use log::*;
 
 #[cfg(feature = "profile")]
 extern crate timing;
@@ -68,6 +58,7 @@ use std::collections::HashSet;
 use std::fmt;
 #[cfg(feature = "profile")]
 use timing_annotate::*;
+use stdweb::*;
 
 fn main() {
     stdweb::initialize();
