@@ -38,6 +38,7 @@ pub struct OrderQueue {
     rooms: HashMap<RoomName, OrderQueueRoomData>,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl OrderQueue {
     pub fn maximum_transfer_cost(&self) -> u32 {
         5000
@@ -113,6 +114,7 @@ struct ActiveSellOrderParameters<'a> {
 
 pub struct OrderQueueSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl OrderQueueSystem {
     fn sell_passive_order(my_orders: &HashMap<String, MyOrder>, params: PassiveSellOrderParameters) {
         if params.amount < params.minimum_sale_amount {
@@ -195,6 +197,7 @@ impl OrderQueueSystem {
     }
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for OrderQueueSystem {
     type SystemData = OrderQueueSystemData<'a>;
 

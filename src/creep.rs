@@ -32,6 +32,7 @@ impl CreepSpawning {
 
 pub struct WaitForSpawnSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for WaitForSpawnSystem {
     type SystemData = (Entities<'a>, WriteStorage<'a, CreepSpawning>, WriteStorage<'a, CreepOwner>);
 
@@ -61,6 +62,7 @@ impl<'a> System<'a> for WaitForSpawnSystem {
 
 pub struct CleanupCreepsSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for CleanupCreepsSystem {
     type SystemData = (Entities<'a>, ReadStorage<'a, CreepOwner>, Read<'a, LazyUpdate>);
 
@@ -87,6 +89,7 @@ pub struct SpawnBodyDefinition<'a> {
     pub post_body: &'a [Part],
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub mod spawning {
     use super::*;
 

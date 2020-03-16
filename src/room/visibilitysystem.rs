@@ -44,6 +44,7 @@ pub struct VisibilityQueueSystemData<'a> {
 
 pub struct VisibilityQueueSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for VisibilityQueueSystem {
     type SystemData = VisibilityQueueSystemData<'a>;
 

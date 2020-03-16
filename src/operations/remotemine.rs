@@ -17,6 +17,7 @@ use log::*;
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct RemoteMineOperation {}
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl RemoteMineOperation {
     pub fn build<B>(builder: B) -> B
     where
@@ -34,6 +35,7 @@ impl RemoteMineOperation {
     }
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Operation for RemoteMineOperation {
     fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {

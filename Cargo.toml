@@ -5,8 +5,9 @@ authors = []
 edition = "2018"
 
 [features]
-default = ["profile"]
+default = ["wee-alloc", "profile"]
 profile = ["screeps-timing", "screeps-timing-annotate"]
+wee-alloc = ["wee_alloc"]
 
 [dependencies]
 stdweb = "0.4"
@@ -22,7 +23,10 @@ specs-derive = "0.4"
 itertools = "0.8"
 bitflags = "1.2.1"
 screeps-timing = { git = "https://github.com/Azaril/screeps-timing", optional = true }
-screeps-timing-annotate = { git = "https://github.com/Azaril/screeps-timing-annotate", optional = true }
+#screeps-timing = { path = "C:\\Source\\screeps-timing", optional = true }
+#screeps-timing-annotate = { git = "https://github.com/Azaril/screeps-timing-annotate", optional = true }
+screeps-timing-annotate = { path = "C:\\Source\\screeps-timing-annotate", optional = true }
+wee_alloc = { version = "0.4", optional = true }
 
 [profile.release]
 panic = "abort"

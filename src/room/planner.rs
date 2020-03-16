@@ -82,6 +82,7 @@ pub struct Plan {
     state: PlanState,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Plan {
     pub fn execute(&self, room: &Room) {
         let room_name = room.name();
@@ -140,6 +141,7 @@ pub struct Planner<'a> {
     room: &'a Room,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> Planner<'a> {
     pub fn new(room: &Room) -> Planner {
         Planner { room }

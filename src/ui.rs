@@ -90,6 +90,7 @@ impl Default for UISystem {
     }
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl UISystem {
     pub fn new() -> UISystem {
         UISystem {

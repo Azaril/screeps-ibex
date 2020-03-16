@@ -109,6 +109,7 @@ pub enum TransferTarget {
     Terminal(RemoteObjectId<StructureTerminal>),
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl TransferTarget {
     fn is_valid_from_id<T>(target: &RemoteObjectId<T>) -> bool
     where
@@ -277,6 +278,7 @@ pub struct TransferNode {
     pending_deposits: HashMap<TransferDepositKey, u32>,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl TransferNode {
     pub fn new() -> TransferNode {
         TransferNode {
@@ -647,6 +649,7 @@ pub struct TransferWithdrawTicket {
     resources: HashMap<ResourceType, Vec<TransferWithdrawlTicketResourceEntry>>,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl TransferWithdrawTicket {
     pub fn target(&self) -> &TransferTarget {
         &self.target
@@ -752,6 +755,7 @@ pub struct TransferDepositTicket {
     resources: HashMap<ResourceType, Vec<TransferDepositTicketResourceEntry>>,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl TransferDepositTicket {
     pub fn target(&self) -> &TransferTarget {
         &self.target
@@ -847,6 +851,7 @@ pub struct TransferQueueRoomStatsData {
     deposit_priorities: TransferPriorityFlags,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl TransferQueueRoomStatsData {
     pub fn new() -> TransferQueueRoomStatsData {
         TransferQueueRoomStatsData {
@@ -1027,6 +1032,7 @@ impl TransferQueueRoomData {
     }
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl TransferQueueRoomData {
     pub fn get_node(&mut self, target: &TransferTarget) -> &mut TransferNode {
         self.nodes.entry(*target).or_insert_with(TransferNode::new)
@@ -1089,6 +1095,7 @@ pub struct TransferQueue {
     rooms: HashMap<RoomName, TransferQueueRoomData>,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl TransferQueue {
     pub fn get_room(&mut self, room: RoomName) -> &mut TransferQueueRoomData {
         self.rooms.entry(room).or_insert_with(TransferQueueRoomData::new)
@@ -1506,6 +1513,7 @@ pub struct TransferQueueSystemData<'a> {
 
 pub struct TransferQueueSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for TransferQueueSystem {
     type SystemData = TransferQueueSystemData<'a>;
 

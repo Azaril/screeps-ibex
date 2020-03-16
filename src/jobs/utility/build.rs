@@ -1,6 +1,7 @@
 use crate::findnearest::*;
 use screeps::*;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn select_construction_site(creep: &Creep, room: &Room) -> Option<ConstructionSite> {
     let construction_sites = room.find(find::MY_CONSTRUCTION_SITES);
 

@@ -32,6 +32,7 @@ pub struct UpgradeJob {
     allow_harvest: bool
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl UpgradeJob {
     pub fn new(home_room: Entity, allow_harvest: bool) -> UpgradeJob {
         UpgradeJob {
@@ -74,6 +75,7 @@ impl UpgradeJob {
     }
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Job for UpgradeJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();

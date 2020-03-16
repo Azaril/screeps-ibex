@@ -16,6 +16,7 @@ pub struct TerminalMission {
     room_data: Entity,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl TerminalMission {
     pub fn build<B>(builder: B, room_data: Entity) -> B
     where
@@ -33,6 +34,7 @@ impl TerminalMission {
     }
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for TerminalMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {

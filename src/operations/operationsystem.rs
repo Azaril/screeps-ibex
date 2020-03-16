@@ -1,5 +1,5 @@
 use super::data::*;
-use crate::mappingsystem::MappingData;
+use crate::entitymappingsystem::EntityMappingData;
 use crate::room::visibilitysystem::*;
 use crate::ui::*;
 use crate::visualize::*;
@@ -15,7 +15,7 @@ pub struct OperationSystemData<'a> {
     entities: Entities<'a>,
     room_data: WriteStorage<'a, RoomData>,
     mission_data: ReadStorage<'a, MissionData>,
-    mapping: Read<'a, MappingData>,
+    mapping: Read<'a, EntityMappingData>,
     visibility: Write<'a, VisibilityQueue>,
     visualizer: Option<Write<'a, Visualizer>>,
     ui: Option<Write<'a, UISystem>>,
@@ -26,7 +26,7 @@ pub struct OperationExecutionSystemData<'a> {
     pub entities: &'a Entities<'a>,
     pub room_data: &'a WriteStorage<'a, RoomData>,
     pub mission_data: &'a ReadStorage<'a, MissionData>,
-    pub mapping: &'a Read<'a, MappingData>,
+    pub mapping: &'a Read<'a, EntityMappingData>,
 }
 
 pub struct OperationExecutionRuntimeData<'a> {
@@ -45,6 +45,7 @@ pub enum OperationResult {
     Success,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub trait Operation {
     fn describe(&mut self, system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData);
 
@@ -59,6 +60,7 @@ pub trait Operation {
 
 pub struct PreRunOperationSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for PreRunOperationSystem {
     type SystemData = OperationSystemData<'a>;
 
@@ -103,6 +105,7 @@ impl<'a> System<'a> for PreRunOperationSystem {
 
 pub struct RunOperationSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for RunOperationSystem {
     type SystemData = OperationSystemData<'a>;
 

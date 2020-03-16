@@ -54,6 +54,7 @@ pub enum MissionResult {
     Success,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub trait Mission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData);
 
@@ -74,6 +75,7 @@ pub trait Mission {
 
 pub struct PreRunMissionSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for PreRunMissionSystem {
     type SystemData = MissionSystemData<'a>;
 
@@ -136,6 +138,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
 
 pub struct RunMissionSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for RunMissionSystem {
     type SystemData = MissionSystemData<'a>;
 

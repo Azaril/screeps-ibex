@@ -4,6 +4,7 @@ use specs::prelude::*;
 
 pub struct UpdateRoomDataSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for UpdateRoomDataSystem {
     //TODO: Move this to derived system data.
     type SystemData = (Entities<'a>, WriteStorage<'a, RoomData>, Read<'a, LazyUpdate>);

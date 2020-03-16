@@ -19,6 +19,7 @@ pub struct RemoteBuildMission {
     builders: EntityVec,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl RemoteBuildMission {
     pub fn build<B>(builder: B, room_data: Entity, home_room_data: Entity) -> B
     where
@@ -63,6 +64,7 @@ impl RemoteBuildMission {
     }
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for RemoteBuildMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {

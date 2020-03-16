@@ -28,15 +28,16 @@ pub struct HaulJob {
     pub state: HaulState,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl HaulJob {
-        pub fn new(haul_rooms: &[Entity]) -> HaulJob {
+    pub fn new(haul_rooms: &[Entity]) -> HaulJob {
         HaulJob {
             haul_rooms: haul_rooms.into(),
             state: HaulState::Idle(),
         }
     }
 
-        fn run_idle_state(creep: &Creep, haul_rooms: &[&RoomData], transfer_queue: &mut TransferQueue) -> Option<HaulState> {
+    fn run_idle_state(creep: &Creep, haul_rooms: &[&RoomData], transfer_queue: &mut TransferQueue) -> Option<HaulState> {
         get_new_delivery_current_resources_state(
             creep,
             haul_rooms,
@@ -69,6 +70,7 @@ impl HaulJob {
     }
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Job for HaulJob {
         fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();

@@ -5,21 +5,22 @@ use std::collections::HashMap;
 use crate::room::data::*;
 
 #[derive(Default)]
-pub struct MappingData {
+pub struct EntityMappingData {
     pub rooms: HashMap<RoomName, Entity>,
 }
 
 #[derive(SystemData)]
-pub struct MappingSystemData<'a> {
-    mapping: Write<'a, MappingData>,
+pub struct EntityMappingSystemData<'a> {
+    mapping: Write<'a, EntityMappingData>,
     entities: Entities<'a>,
     room_data: ReadStorage<'a, RoomData>,
 }
 
-pub struct MappingSystem;
+pub struct EntityMappingSystem;
 
-impl<'a> System<'a> for MappingSystem {
-    type SystemData = MappingSystemData<'a>;
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+impl<'a> System<'a> for EntityMappingSystem {
+    type SystemData = EntityMappingSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
         let mapping = &mut data.mapping;

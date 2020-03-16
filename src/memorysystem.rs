@@ -8,6 +8,7 @@ pub struct MemoryArbiter {
     requests: HashSet<u32>,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl MemoryArbiter {
     pub fn request(&mut self, segment: u32) {
         self.requests.insert(segment);
@@ -39,6 +40,7 @@ pub struct MemoryArbiterSystemData<'a> {
 
 pub struct MemoryArbiterSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for MemoryArbiterSystem {
     type SystemData = MemoryArbiterSystemData<'a>;
 

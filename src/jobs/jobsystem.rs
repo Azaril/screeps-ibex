@@ -36,6 +36,7 @@ pub struct JobDescribeData<'a> {
     pub ui: &'a mut UISystem,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub trait Job {
     fn describe(&mut self, system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData);
 
@@ -46,6 +47,7 @@ pub trait Job {
 
 pub struct PreRunJobSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for PreRunJobSystem {
     type SystemData = JobSystemData<'a>;
 
@@ -88,6 +90,7 @@ impl<'a> System<'a> for PreRunJobSystem {
 
 pub struct RunJobSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for RunJobSystem {
     type SystemData = JobSystemData<'a>;
 

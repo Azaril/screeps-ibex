@@ -13,6 +13,7 @@ use log::*;
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct LocalSupplyOperation {}
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl LocalSupplyOperation {
     pub fn build<B>(builder: B) -> B
     where
@@ -30,6 +31,7 @@ impl LocalSupplyOperation {
     }
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Operation for LocalSupplyOperation {
     fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
