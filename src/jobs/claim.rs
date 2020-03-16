@@ -2,6 +2,8 @@ use super::jobsystem::*;
 use crate::remoteobjectid::*;
 use screeps::*;
 use serde::*;
+#[macro_use]
+use log::*;
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 pub struct ClaimJob {

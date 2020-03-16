@@ -1,4 +1,6 @@
 pub mod js {
+    use stdweb::*;
+    
     pub fn prepare() {
         js! {
             _.defaultsDeep(Memory, {

@@ -1,6 +1,7 @@
 use fern;
 use log;
 use screeps;
+use stdweb::*;
 
 pub use log::LevelFilter::*;
 

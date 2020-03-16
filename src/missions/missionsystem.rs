@@ -8,6 +8,7 @@ use crate::transfer::ordersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
 use specs::prelude::*;
+use log::*;
 
 #[derive(SystemData)]
 pub struct MissionSystemData<'a> {

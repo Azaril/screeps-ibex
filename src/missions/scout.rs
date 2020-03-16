@@ -10,6 +10,7 @@ use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
 use crate::jobs::scout::*;
+use log::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ScoutMission {

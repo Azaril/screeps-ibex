@@ -2,6 +2,7 @@ use super::jobsystem::*;
 use crate::remoteobjectid::*;
 use screeps::*;
 use serde::*;
+use log::*;
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 pub struct ReserveJob {

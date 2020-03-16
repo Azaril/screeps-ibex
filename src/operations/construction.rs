@@ -7,6 +7,7 @@ use specs::saveload::*;
 use specs::*;
 use crate::serialize::*;
 use crate::room::data::*;
+use log::*;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct ConstructionOperation {}

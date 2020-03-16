@@ -5,6 +5,7 @@ use screeps::game::market::*;
 use specs::prelude::{Entities, LazyUpdate, Read, ResourceId, System, SystemData, World, Write, WriteStorage};
 use std::collections::HashMap;
 use crate::room::data::*;
+use log::*;
 
 pub struct OrderQueueResourceData {
     passive_sale: u32,

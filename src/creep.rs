@@ -4,6 +4,8 @@ use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
 use crate::serialize::*;
+#[macro_use]
+use log::*;
 
 #[derive(Clone, Copy, Deserialize, Serialize, Component)]
 pub struct CreepOwner {

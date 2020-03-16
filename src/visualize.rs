@@ -391,6 +391,8 @@ impl RoomVisualizer {
         if !self.visuals.is_empty() {
             let data = serde_json::to_string(&self.visuals).unwrap();
 
+            use stdweb::*;
+
             //TODO: Really horrible hack here that it's needed to JSON.parse and then pass in to the visual function as
             //      JSON.stringify in console.addVisual prevents direct string concatenation. (Double string escaping happens.)
             js! {

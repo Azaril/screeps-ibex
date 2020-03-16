@@ -1,4 +1,6 @@
 
+use bitflags::*;
+
 //TODO: This needs a better API. It also needs to correctly represent pipelines.
 
 bitflags! {

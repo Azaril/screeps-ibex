@@ -8,6 +8,7 @@ use specs::saveload::*;
 use specs::*;
 use crate::room::data::*;
 use crate::serialize::*;
+use log::*;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct HaulOperation {}
