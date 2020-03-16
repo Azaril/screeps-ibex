@@ -21,6 +21,7 @@ pub struct ClaimOperation {
     claim_missions: EntityVec,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl ClaimOperation {
     pub fn build<B>(builder: B) -> B
     where
@@ -40,6 +41,7 @@ impl ClaimOperation {
     }
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 #[allow(clippy::cognitive_complexity)]
 impl Operation for ClaimOperation {
     fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {

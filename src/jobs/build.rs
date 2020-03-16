@@ -38,6 +38,7 @@ pub struct BuildJob {
     allow_harvest: bool,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl BuildJob {
     pub fn new(home_room: Entity, build_room: Entity, allow_harvest: bool) -> BuildJob {
         BuildJob {
@@ -92,6 +93,7 @@ impl BuildJob {
     }
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Job for BuildJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();

@@ -9,6 +9,7 @@ pub struct ReserveJob {
     pub reserve_target: RemoteObjectId<StructureController>,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl ReserveJob {
     pub fn new(controller_id: RemoteObjectId<StructureController>) -> ReserveJob {
         ReserveJob {
@@ -17,6 +18,7 @@ impl ReserveJob {
     }
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Job for ReserveJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();

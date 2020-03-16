@@ -45,6 +45,7 @@ pub struct HarvestJob {
     state: HarvestState,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl HarvestJob {
     pub fn new(harvest_target: RemoteObjectId<Source>, delivery_room: Entity, allow_haul: bool) -> HarvestJob {
         HarvestJob {
@@ -166,6 +167,7 @@ impl HarvestJob {
     }
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Job for HarvestJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();

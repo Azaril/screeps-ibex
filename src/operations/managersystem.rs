@@ -13,6 +13,7 @@ use log::*;
 
 pub struct OperationManagerSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for OperationManagerSystem {
     type SystemData = (Entities<'a>, ReadStorage<'a, OperationData>, Read<'a, LazyUpdate>);
 

@@ -20,6 +20,7 @@ pub struct LinkMineJob {
     state: LinkMineState,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl LinkMineJob {
     pub fn new(mine_target: RemoteObjectId<Source>, link_id: RemoteObjectId<StructureLink>) -> LinkMineJob {
         LinkMineJob {
@@ -30,6 +31,7 @@ impl LinkMineJob {
     }
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Job for LinkMineJob {
     fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         let name = describe_data.owner.name();

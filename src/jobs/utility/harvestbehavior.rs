@@ -4,6 +4,7 @@ use crate::room::data::*;
 use screeps::*;
 use crate::jobs::actions::*;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_harvest_state<F, R>(creep: &Creep, harvest_room_data: &RoomData, state_map: F) -> Option<R>
 where
     F: Fn(RemoteObjectId<Source>) -> R,
@@ -23,6 +24,7 @@ where
     None
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_harvest_target_state<F, R>(creep: &Creep, source_id: &RemoteObjectId<Source>, state_map: F) -> Option<R>
 where
     F: Fn(RemoteObjectId<Source>) -> R,
@@ -35,6 +37,7 @@ where
     None
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn run_harvest_state<F, R>(creep: &Creep, action_flags: &mut SimultaneousActionFlags, source_id: &RemoteObjectId<Source>, optimistic_completion: bool, stuck_count: &mut u8, next_state: F) -> Option<R>
 where
     F: Fn() -> R,

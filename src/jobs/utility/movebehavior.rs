@@ -1,5 +1,6 @@
 use screeps::*;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_move_to_room_state<F, R>(creep: &Creep, room_name: RoomName, state_map: F) -> Option<R>
 where
     F: Fn(RoomName) -> R,
@@ -11,6 +12,7 @@ where
     None
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn run_move_to_room_state<F, R>(creep: &Creep, room_name: RoomName, next_state: F) -> Option<R>
 where
     F: Fn() -> R,

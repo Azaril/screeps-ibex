@@ -45,6 +45,7 @@ pub trait FindNearestBy<T: Sized> {
 
 pub struct PathFinderHelpers;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl PathFinderHelpers {
     pub fn same_room_ignore_creeps(start_pos: RoomPosition, end_pos: RoomPosition) -> Path {
         let find_options = FindOptions::new().max_rooms(1).ignore_creeps(true);
@@ -84,6 +85,7 @@ impl PathFinderHelpers {
     }
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<I> FindNearestBy<I::Item> for I
 where
     I: Iterator,
@@ -107,6 +109,7 @@ where
     }
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<I> FindNearest<I::Item> for I
 where
     I: Iterator,

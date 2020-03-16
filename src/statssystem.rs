@@ -53,6 +53,7 @@ pub struct Stats {
 
 pub struct StatsSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl StatsSystem {
     fn get_gcl_stats() -> GclStats {
         GclStats {
@@ -141,6 +142,7 @@ pub struct StatsSystemData<'a> {
     memory_arbiter: Write<'a, MemoryArbiter>,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for StatsSystem {
     type SystemData = StatsSystemData<'a>;
 

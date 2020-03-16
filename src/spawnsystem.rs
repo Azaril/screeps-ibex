@@ -43,6 +43,7 @@ pub struct SpawnQueue {
     requests: HashMap<RoomName, Vec<SpawnRequest>>,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl SpawnQueue {
     pub fn request(&mut self, room: RoomName, spawn_request: SpawnRequest) {
         let requests = self.requests.entry(room).or_insert_with(Vec::new);
@@ -87,6 +88,7 @@ pub struct SpawnQueueExecutionSystemData<'a> {
 
 pub struct SpawnQueueSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl SpawnQueueSystem {
     fn spawn_creep(spawn: &StructureSpawn, parts: &[Part]) -> Result<String, ReturnCode> {
         let time = screeps::game::time();

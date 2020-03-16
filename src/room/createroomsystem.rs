@@ -7,6 +7,7 @@ use log::*;
 
 pub struct CreateRoomDataSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for CreateRoomDataSystem {
     type SystemData = (Entities<'a>, WriteStorage<'a, RoomData>, Read<'a, LazyUpdate>);
 

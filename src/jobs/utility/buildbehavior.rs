@@ -4,6 +4,7 @@ use crate::room::data::*;
 use screeps::*;
 use crate::jobs::actions::*;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_build_state<F, R>(creep: &Creep, build_room: &RoomData, state_map: F) -> Option<R>
 where
     F: Fn(RemoteObjectId<ConstructionSite>) -> R,
@@ -20,6 +21,7 @@ where
     None
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn run_build_state<F, R>(creep: &Creep, action_flags: &mut SimultaneousActionFlags, construction_site_id: &RemoteObjectId<ConstructionSite>, next_state: F) -> Option<R>
 where
     F: Fn() -> R,

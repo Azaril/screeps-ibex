@@ -131,6 +131,7 @@ pub fn get_repair_targets(room: &Room, allow_walls: bool) -> Vec<(Structure, u32
         .collect()
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_prioritized_repair_targets(room: &Room, minimum_priority: Option<RepairPriority>, allow_walls: bool) -> HashMap<RepairPriority, Vec<Structure>> {
     let are_hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
 
@@ -149,6 +150,7 @@ pub fn get_prioritized_repair_targets(room: &Room, minimum_priority: Option<Repa
         .into_group_map()
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn select_repair_structure(room: &Room, minimum_priority: Option<RepairPriority>, allow_walls: bool) -> Option<Structure> {
     let mut repair_targets = get_prioritized_repair_targets(room, minimum_priority, allow_walls);
 

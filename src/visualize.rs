@@ -350,6 +350,7 @@ pub struct RoomVisualizer {
     visuals: Vec<Visual>,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl RoomVisualizer {
     pub fn new() -> RoomVisualizer {
         RoomVisualizer { visuals: vec![] }
@@ -407,6 +408,7 @@ pub struct Visualizer {
     rooms: HashMap<RoomName, RoomVisualizer>,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Visualizer {
     pub fn new() -> Visualizer {
         Visualizer {
@@ -437,6 +439,7 @@ pub struct VisualizerSystemData<'a> {
 
 pub struct VisualizerSystem;
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for VisualizerSystem {
     type SystemData = VisualizerSystemData<'a>;
 
