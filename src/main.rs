@@ -1,13 +1,7 @@
 #![recursion_limit = "128"]
 #![allow(dead_code)]
 #![warn(clippy::all)]
-//#[feature(proc_macro_hygiene)]
-
-#[macro_use]
-use log::*;
-
-#[cfg(feature = "profile")]
-extern crate timing;
+#![feature(proc_macro_hygiene)]
 
 #[cfg_attr(feature = "profile", timing)]
 mod creep;
@@ -48,6 +42,7 @@ mod ui;
 #[cfg_attr(feature = "profile", timing)]
 mod visualize;
 
+use log::*;
 use screeps::*;
 use specs::{
     error::NoError,
