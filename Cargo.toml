@@ -5,7 +5,7 @@ authors = []
 edition = "2018"
 
 [features]
-default = ["wee-alloc", "profile"]
+default = ["wee-alloc"]
 profile = ["screeps-timing", "screeps-timing-annotate"]
 wee-alloc = ["wee_alloc"]
 
@@ -17,15 +17,12 @@ fern = "0.5"
 screeps-game-api = { path = "C:\\Source\\screeps-game-api" }
 serde = "1.0"
 serde_json = "1.0"
-scopeguard = { version = "1.0", optional = true }
 specs = { version = "0.16", default-features = false, features = ["serde", "shred-derive"] }
 specs-derive = "0.4"
 itertools = "0.8"
 bitflags = "1.2.1"
 screeps-timing = { git = "https://github.com/Azaril/screeps-timing", optional = true }
-#screeps-timing = { path = "C:\\Source\\screeps-timing", optional = true }
-#screeps-timing-annotate = { git = "https://github.com/Azaril/screeps-timing-annotate", optional = true }
-screeps-timing-annotate = { path = "C:\\Source\\screeps-timing-annotate", optional = true }
+screeps-timing-annotate = { git = "https://github.com/Azaril/screeps-timing-annotate", optional = true }
 wee_alloc = { version = "0.4", optional = true }
 
 [profile.release]
