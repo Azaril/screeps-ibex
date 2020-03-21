@@ -10,6 +10,7 @@ pub mod js {
                     },
                     construction: {
                         plan: true,
+                        force_plan: false,
                         execute: true,
                         visualize: {
                             on: true,
@@ -38,6 +39,10 @@ pub mod visualize {
 pub mod construction {
     pub fn plan() -> bool {
         ::screeps::memory::root().path_bool("_features.construction.plan")
+    }
+
+    pub fn force_plan() -> bool {
+        ::screeps::memory::root().path_bool("_features.construction.force_plan")
     }
 
     pub fn execute() -> bool {
