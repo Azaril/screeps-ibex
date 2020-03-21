@@ -8,11 +8,13 @@ use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
 use crate::serialize::*;
+use log::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ConstructionMission {
     room_data: Entity,
-    last_update: Option<u32>,
+    next_update: Option<u32>,
+    planner_state: Option<PlanRunningStateData>,
     plan: Option<Plan>,
 }
 
@@ -32,7 +34,8 @@ impl ConstructionMission {
     pub fn new(room_data: Entity) -> ConstructionMission {
         ConstructionMission {
             room_data,
-            last_update: None,
+            next_update: None,
+            planner_state: None,
             plan: None,
         }
     }
@@ -56,28 +59,85 @@ impl Mission for ConstructionMission {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
-        if self.plan.is_none() && crate::features::construction::plan() {
-            let planner = Planner::new(&room);
+        let should_update = self.next_update.map(|next_time| game::time() >= next_time).unwrap_or(true);
 
-            self.plan = Some(planner.plan());
-        }
+        if should_update && crate::features::construction::plan() {
+            if self.plan.is_none() && self.planner_state.is_none() {
+                info!("Starting room planning: {}", room_data.name);
 
-        if let Some(plan) = &self.plan {
-            if let Some(visualizer) = &mut runtime_data.visualizer {
-                if crate::features::construction::visualize() {
-                    plan.visualize(visualizer.get_room(room_data.name));
+                let planner = Planner::new(&room);
+
+                match planner.seed() {
+                    Ok(PlanSeedResult::Complete(plan)) => {
+                        info!("Room planning complete: {}", room_data.name);
+
+                        self.plan = Some(plan);
+                    },
+                    Ok(PlanSeedResult::Running(state)) => {
+                        info!("Seeded room planning: {}", room_data.name);
+
+                        self.planner_state = Some(state);
+                    },
+                    Err(_) => {
+                        info!("Failed to seed room planning: {}", room_data.name);
+
+                        self.next_update = Some(game::time() + 100);
+                    }
                 }
             }
 
-            let should_execute = crate::features::construction::execute()
-                && self.last_update.map(|last_time| game::time() - last_time > 100).unwrap_or(true);
+            if let Some(mut planner_state) = self.planner_state.as_mut() {
+                let planner = Planner::new(&room);
 
-            if should_execute {
+                let bucket = game::cpu::bucket();
+                let ticket_limit = game::cpu::tick_limit();
+                let current_cpu = game::cpu::get_used();
+                let remaining_cpu = ticket_limit - current_cpu;
+                let max_cpu = remaining_cpu * 0.2;
+
+                info!("Planning check - Available cpu: {}", remaining_cpu);
+
+                if bucket >= ticket_limit && max_cpu >= 5.0 {
+                    info!("Planning - Budget: {}", max_cpu);
+
+                    match planner.evaluate(&mut planner_state, max_cpu) {
+                        Ok(PlanEvaluationResult::Complete(plan)) => {
+                            info!("Room planning complete: {}", room_data.name);
+
+                            self.plan = Some(plan);
+                            self.planner_state = None;
+                        },
+                        Ok(PlanEvaluationResult::Running()) => {
+                        },
+                        Err(_) => {
+                            info!("Failed room planning: {}", room_data.name);
+
+                            self.planner_state = None;
+                        }
+                    }
+                }
+            }
+        }
+        
+        if crate::features::construction::visualize() {
+            if  let Some(visualizer) = &mut runtime_data.visualizer {
+                if let Some(planner_state) = &self.planner_state {
+                    planner_state.visualize(visualizer.get_room(room_data.name));
+                }
+
+                if let Some(plan) = &self.plan {
+                    plan.visualize(visualizer.get_room(room_data.name));
+                }
+            }
+        }
+
+        if should_update && crate::features::construction::execute() {
+            if let Some(plan) = &self.plan {
                 plan.execute(&room);
 
                 //TODO: Finish when plan is complete?
 
-                self.last_update = Some(game::time());
+                self.next_update = Some(game::time() + 50);
             }
         }
 

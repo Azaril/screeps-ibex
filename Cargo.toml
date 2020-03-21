@@ -21,9 +21,10 @@ specs = { version = "0.16", default-features = false, features = ["serde", "shre
 specs-derive = "0.4"
 itertools = "0.8"
 bitflags = "1.2.1"
+uuid = { version = "0.8", features = ["serde"] }
+wee_alloc = { version = "0.4", optional = true }
 screeps-timing = { git = "https://github.com/Azaril/screeps-timing", optional = true }
 screeps-timing-annotate = { git = "https://github.com/Azaril/screeps-timing-annotate", optional = true }
-wee_alloc = { version = "0.4", optional = true }
 
 [profile.release]
 panic = "abort"

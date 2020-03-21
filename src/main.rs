@@ -2,8 +2,7 @@
 #![allow(dead_code)]
 #![warn(clippy::all)]
 
-#![cfg_attr(feature = "profile", feature(proc_macro_hygiene))]
-#![cfg_attr(feature = "profile", feature(custom_inner_attributes))]
+#![feature(const_fn)]
 
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
@@ -63,7 +62,7 @@ fn main() {
 fn main_loop() {
     #[cfg(feature = "profile")]
     {
-        screeps_timing::start_trace(|| screeps::game::cpu::get_used());
+        screeps_timing::start_trace(|| (screeps::game::cpu::get_used() * 1000.0) as u64);
     }
     
     game_loop::tick();
@@ -72,8 +71,14 @@ fn main_loop() {
     {
         let trace = screeps_timing::stop_trace();
 
-        if let Some(trace_output) = serde_json::to_string(&trace).ok() {
-            info!("{}", trace_output);
+        let used_cpu = screeps::game::cpu::get_used();
+
+        if used_cpu >= 50.0 {
+            warn!("Long tick: {}", used_cpu);
+
+            if let Some(trace_output) = serde_json::to_string(&trace).ok() {
+                info!("{}", trace_output);
+            }
         }
     }   
 }
