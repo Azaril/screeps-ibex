@@ -71,7 +71,12 @@ impl Mission for ConstructionMission {
                     Ok(PlanSeedResult::Complete(plan)) => {
                         info!("Room planning complete: {}", room_data.name);
 
-                        self.plan = Some(plan);
+                        self.plan = plan;
+
+                        if self.plan.is_none() {
+                            //TODO: If failure occured, abort?
+                            self.next_update = Some(game::time() + 100);
+                        }
                     },
                     Ok(PlanSeedResult::Running(state)) => {
                         info!("Seeded room planning: {}", room_data.name);
@@ -95,17 +100,20 @@ impl Mission for ConstructionMission {
                 let remaining_cpu = ticket_limit - current_cpu;
                 let max_cpu = (remaining_cpu * 0.2).min(50.0);
 
-                info!("Planning check - Available cpu: {}", remaining_cpu);
-
-                if bucket >= ticket_limit * 2.0 && max_cpu >= 10.0 {
+                if bucket >= ticket_limit * 2.0 && max_cpu >= 20.0 {
                     info!("Planning - Budget: {}", max_cpu);
 
                     match planner.evaluate(&mut planner_state, max_cpu) {
                         Ok(PlanEvaluationResult::Complete(plan)) => {
                             info!("Room planning complete: {}", room_data.name);
 
-                            self.plan = Some(plan);
+                            self.plan = plan;
                             self.planner_state = None;
+
+                            if self.plan.is_none() {
+                                //TODO: If failure occured, abort?
+                                self.next_update = Some(game::time() + 100);
+                            }
                         },
                         Ok(PlanEvaluationResult::Running()) => {
                         },
@@ -121,12 +129,22 @@ impl Mission for ConstructionMission {
         
         if crate::features::construction::visualize() {
             if  let Some(visualizer) = &mut runtime_data.visualizer {
+                let room_visualizer = visualizer.get_room(room_data.name);
+
                 if let Some(planner_state) = &self.planner_state {
-                    planner_state.visualize(visualizer.get_room(room_data.name));
+                    if crate::features::construction::visualize_planner() {
+                        planner_state.visualize(room_visualizer);
+                    }
+                    
+                    if crate::features::construction::visualize_planner_best() {
+                        planner_state.visualize_best(room_visualizer);
+                    }
                 }
 
                 if let Some(plan) = &self.plan {
-                    plan.visualize(visualizer.get_room(room_data.name));
+                    if crate::features::construction::visualize_plan() {
+                        plan.visualize(room_visualizer);
+                    }
                 }
             }
         }

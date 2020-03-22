@@ -89,7 +89,6 @@ pub struct SpawnBodyDefinition<'a> {
     pub post_body: &'a [Part],
 }
 
-#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub mod spawning {
     use super::*;
 
@@ -111,6 +110,7 @@ pub mod spawning {
         }
     }
 
+    #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
     pub fn create_body(definition: &SpawnBodyDefinition) -> Result<Vec<Part>, ()> {
         let pre_body_cost: u32 = definition.pre_body.iter().map(|p| p.cost()).sum();
         let post_body_cost: u32 = definition.post_body.iter().map(|p| p.cost()).sum();
