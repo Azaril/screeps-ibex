@@ -93,11 +93,11 @@ impl Mission for ConstructionMission {
                 let ticket_limit = game::cpu::tick_limit();
                 let current_cpu = game::cpu::get_used();
                 let remaining_cpu = ticket_limit - current_cpu;
-                let max_cpu = remaining_cpu * 0.2;
+                let max_cpu = (remaining_cpu * 0.2).min(50.0);
 
                 info!("Planning check - Available cpu: {}", remaining_cpu);
 
-                if bucket >= ticket_limit && max_cpu >= 5.0 {
+                if bucket >= ticket_limit * 2.0 && max_cpu >= 10.0 {
                     info!("Planning - Budget: {}", max_cpu);
 
                     match planner.evaluate(&mut planner_state, max_cpu) {
