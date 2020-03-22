@@ -14,6 +14,8 @@ pub mod js {
                         execute: true,
                         visualize: {
                             on: true,
+                            planner: false,
+                            planner_best: true,
                             plan: true,
                         },
                     },
@@ -51,6 +53,18 @@ pub mod construction {
 
     pub fn visualize() -> bool {
         ::screeps::memory::root().path_bool("_features.construction.visualize.on")
+    }
+
+    pub fn visualize_planner() -> bool {
+        ::screeps::memory::root().path_bool("_features.construction.visualize.planner") && visualize()
+    }
+
+    pub fn visualize_planner_best() -> bool {
+        ::screeps::memory::root().path_bool("_features.construction.visualize.planner_best") && visualize()
+    }
+
+    pub fn visualize_plan() -> bool {
+        ::screeps::memory::root().path_bool("_features.construction.visualize.plan") && visualize()
     }
 }
 

@@ -1,6 +1,7 @@
 use screeps::*;
 use specs::prelude::*;
 use std::collections::HashSet;
+use log::*;
 
 #[derive(Default)]
 pub struct MemoryArbiter {
@@ -25,6 +26,10 @@ impl MemoryArbiter {
     }
 
     pub fn set(&mut self, segment: u32, data: &str) {
+        if data.len() > 50 * 1024 {
+            error!("Memory segment too large: {}", data);
+        }
+
         raw_memory::set_segment(segment, data);
     }
 
