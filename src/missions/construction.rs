@@ -69,11 +69,13 @@ impl Mission for ConstructionMission {
 
                 match planner.seed() {
                     Ok(PlanSeedResult::Complete(plan)) => {
-                        info!("Room planning complete: {}", room_data.name);
+                        if plan.is_some() {
+                            info!("Room planning complete - Success - Room: {}", room_data.name);
 
-                        self.plan = plan;
+                            self.plan = plan;
+                        } else {
+                            info!("Room planning complete - Failure - Room: {}", room_data.name);
 
-                        if self.plan.is_none() {
                             //TODO: If failure occured, abort?
                             self.next_update = Some(game::time() + 100);
                         }
@@ -105,15 +107,18 @@ impl Mission for ConstructionMission {
 
                     match planner.evaluate(&mut planner_state, max_cpu) {
                         Ok(PlanEvaluationResult::Complete(plan)) => {
-                            info!("Room planning complete: {}", room_data.name);
-
-                            self.plan = plan;
-                            self.planner_state = None;
-
-                            if self.plan.is_none() {
+                            if plan.is_some() {
+                                info!("Room planning complete - Success - Room: {}", room_data.name);
+                                
+                                self.plan = plan;
+                            } else {
+                                info!("Room planning complete - Failure - Room: {}", room_data.name);
+    
                                 //TODO: If failure occured, abort?
                                 self.next_update = Some(game::time() + 100);
                             }
+
+                            self.planner_state = None;
                         },
                         Ok(PlanEvaluationResult::Running()) => {
                         },

@@ -14,8 +14,8 @@ pub mod js {
                         execute: true,
                         visualize: {
                             on: true,
-                            planner: false,
-                            planner_best: true,
+                            planner: true,
+                            planner_best: false,
                             plan: true,
                         },
                     },
