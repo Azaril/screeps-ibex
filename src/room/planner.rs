@@ -1264,8 +1264,6 @@ impl<'a> PlanNode for FloodFillPlanNode<'a> {
                         let mut node_locations = vec![*root_location];
                         let mut next_lod_locations = Vec::new();
 
-                        info!("Root location: {:?}", root_location);
-
                         for lod in self.levels.iter() {
                             let mut expanded_locations: Vec<_> = node_locations
                                 .iter()
@@ -1276,14 +1274,10 @@ impl<'a> PlanNode for FloodFillPlanNode<'a> {
                             expanded_locations.sort_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap());
 
                             for (node_location, _) in expanded_locations.iter().rev() {
-                                info!("Node location: {:?}", node_location);
-
                                 let mut current_gather_data = PlanGatherChildrenData::<'a>::new();
 
                                 if lod.node.desires_placement(terrain, state, &mut current_gather_data) && lod.node.desires_location(*node_location, terrain, state, &mut current_gather_data) && current_gather_data.insert(*node_location, lod.node) {
-                                    info!("Placing...");
                                     lod.node.place(*node_location, terrain, state)?;
-                                    info!("Placed!");
 
                                     current_nodes += lod.node_cost;
 
@@ -1401,7 +1395,6 @@ const EXTENSION_CROSS: &FixedPlanNode = &FixedPlanNode {
             .iter()
             .map(|storage| storage.distance_to_xy(location.x(), location.y()))
             .min()
-            .filter(|d| *d <= 8)
             .map(|d| {
                 1.0 - (d as f32 / ROOM_WIDTH.max(ROOM_HEIGHT) as f32)
             })
@@ -1427,7 +1420,6 @@ const EXTENSION: &FixedPlanNode = &FixedPlanNode {
             .iter()
             .map(|storage| storage.distance_to_xy(location.x(), location.y()))
             .min()
-            .filter(|d| *d <= 8)
             .map(|d| {
                 1.0 - (d as f32 / ROOM_WIDTH.max(ROOM_HEIGHT) as f32)
             })
@@ -1623,7 +1615,7 @@ const BUNKER_CORE: PlanNodeStorage = PlanNodeStorage::Node(&FixedPlanNode {
             id: uuid::Uuid::from_u128(0xeff2_1b89_0149_4bc9_b4f4_8138_5cd6_5232u128),
             start_offsets: &[(-3, -3), (3, 3)],
             expansion_offsets: &[(-4, 0), (-2, 2), (0, 4), (2, 2), (4, 0), (2, -2), (0, -4), (-2, -2)],
-            maximum_expansion: 10,
+            maximum_expansion: 20,
             maximum_nodes: 60,
             levels: &[FloodFillPlanNodeLevel {
                 offsets: &[(0, 0)],
@@ -1988,8 +1980,6 @@ impl<'a> Planner<'a> {
 
         let state_handler = |new_state: &PlannerState| {
             if let Some(score) = Self::score_state(new_state) {
-                info!("Got state score: {}", score);
-                
                 best_plan = Some(BestPlanData {
                     score,
                     state: new_state.snapshot()
@@ -2039,16 +2029,12 @@ impl<'a> Planner<'a> {
         let state_handler = |new_state: &PlannerState| {
             if let Some(score) = Self::score_state(new_state) {
                 if current_best.map(|s| score > s).unwrap_or(true) {
-                    info!("Got new best state score: {}", score);
-
                     new_best_plan = Some(BestPlanData {
                         score,
                         state: new_state.snapshot()
                     });
 
                     current_best = Some(score);
-                } else {
-                    info!("Got worse state score: {}", score);
                 }
             }
         };
