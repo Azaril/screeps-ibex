@@ -1055,68 +1055,67 @@ struct PlanPlacement {
     offset: PlanLocation
 }
 
-struct PlaceAwayFromWallsNode<'a> {
-    wall_distance: u32,
-    child: PlanNodeStorage<'a>
-}
+fn flood_fill_distance(initial_seeds: HashSet<PlanLocation>, terrain: &FastRoomTerrain, data: &mut RoomDataArray<Option<u32>>) {
+    let mut to_apply = initial_seeds;
+    let mut current_distance: u32 = 0;
 
-impl<'a> PlaceAwayFromWallsNode<'a> {
-    fn get_wall_min_distance_locations(terrain: &FastRoomTerrain, min_distance: u32) -> Vec<Location> {
-        let mut data: RoomDataArray<Option<u32>> = RoomDataArray::new(None);
+    while !to_apply.is_empty() {
+        let eval_locations = std::mem::replace(&mut to_apply, HashSet::new());
 
-        let mut to_apply: HashSet<(usize, usize)> = HashSet::new();
+        for pos in &eval_locations {
+            let current = data.get_mut(pos.x() as usize, pos.y() as usize);
 
-        for y in 0..ROOM_HEIGHT {
-            for x in 0..ROOM_WIDTH {
-                let terrain = terrain.get(&Location::from_coords(x as u32, y as u32));
+            if current.is_none() {
+                *current = Some(current_distance);
 
-                if terrain.contains(TerrainFlags::WALL) || !in_room_build_bounds(x, y) {
-                    to_apply.insert((x as usize, y as usize));
-                }
-            }
-        }
-
-        let mut current_distance: u32 = 0;
-
-        while !to_apply.is_empty() {
-            let eval_locations = std::mem::replace(&mut to_apply, HashSet::new());
-
-            for pos in &eval_locations {
-                let current = data.get_mut(pos.0, pos.1);
-
-                if current.is_none() {
-                    *current = Some(current_distance);
-
-                    for x_delta in -1i32..=1i32 {
-                        for y_delta in -1i32..=1i32 {
-                            if x_delta != 0 && y_delta != 0 {
-                                let next_x = pos.0 as i32 + x_delta;
-                                let next_y = pos.1 as i32 + y_delta;
-                                if in_room_bounds(next_x, next_y) {
-                                    to_apply.insert((next_x as usize, next_y as usize));
+                for x_delta in -1i8..=1i8 {
+                    for y_delta in -1i8..=1i8 {
+                        if x_delta != 0 && y_delta != 0 {
+                            let next_location = *pos + (x_delta, y_delta);
+                            if next_location.in_room_bounds() {
+                                let terrain = terrain.get_xy(next_location.x() as u8, next_location.y() as u8); 
+                                if !terrain.contains(TerrainFlags::WALL) {
+                                    to_apply.insert(next_location);
                                 }
                             }
                         }
                     }
                 }
             }
-
-            current_distance += 1;
         }
 
-        let mut locations: Vec<((usize, usize), u32)> = data
+        current_distance += 1;
+    }
+}
+
+struct PlaceAwayFromWallsNode<'a> {
+    wall_distance: u32,
+    child: PlanNodeStorage<'a>
+}
+
+impl<'a> PlaceAwayFromWallsNode<'a> {
+    fn get_wall_min_distance_locations(terrain: &FastRoomTerrain, min_distance: u32) -> Vec<PlanLocation> {
+        let mut data: RoomDataArray<Option<u32>> = RoomDataArray::new(None);
+
+        let mut to_apply: HashSet<PlanLocation> = HashSet::new();
+
+        for y in 0..ROOM_HEIGHT {
+            for x in 0..ROOM_WIDTH {
+                let terrain = terrain.get_xy(x, y);
+
+                if terrain.contains(TerrainFlags::WALL) || !in_room_build_bounds(x, y) {
+                    to_apply.insert(PlanLocation::new(x as i8, y as i8));
+                }
+            }
+        }
+
+        flood_fill_distance(to_apply, terrain, &mut data);
+
+        data
             .iter()
-            .filter_map(|(pos, e)| {
-                e.map(|distance| (pos, distance))
-            })
-            .filter(|(_, distance)| {
-                *distance >= min_distance
-            })
-            .collect();
-
-        locations.sort_by_key(|(_, distance)| *distance);
-
-        locations.iter().map(|(pos, _)| Location::from_coords(pos.0 as u32, pos.1 as u32)).collect()
+            .filter(|(_, distance)| distance.map(|d| d >= min_distance).unwrap_or(false))
+            .map(|((x, y), _)| PlanLocation::new(x as i8, y as i8))
+            .collect()
     }
 }
 
@@ -1146,7 +1145,7 @@ impl<'a> PlanGlobalNode for PlaceAwayFromWallsNode<'a> {
             gather_data.mark_visited_global(self);
 
             if self.child.desires_placement(terrain, state, gather_data) {
-                let locations: Vec<PlanLocation> = Self::get_wall_min_distance_locations(terrain, self.wall_distance).iter().map(|l| l.into()).collect();
+                let locations = Self::get_wall_min_distance_locations(terrain, self.wall_distance);
 
                 for location in &locations {
                     if self.child.desires_location(*location, terrain, state, gather_data) {
@@ -1920,8 +1919,12 @@ impl FastRoomTerrain {
         }
     }
 
-    pub fn get(&self, pos:&Location) -> TerrainFlags {
-        let index = (pos.y() as usize * ROOM_WIDTH as usize) + (pos.x() as usize);
+    pub fn get(&self, pos: &Location) -> TerrainFlags {
+        self.get_xy(pos.x(), pos.y())
+    }
+
+    pub fn get_xy(&self, x: u8, y: u8) -> TerrainFlags {
+        let index = (y as usize * ROOM_WIDTH as usize) + (x as usize);
 
         TerrainFlags::from_bits_truncate(self.buffer[index])
     }
