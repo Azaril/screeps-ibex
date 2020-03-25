@@ -13,6 +13,8 @@ pub struct RoomStaticVisibilityData {
     controller: Option<RemoteObjectId<StructureController>>,
     #[serde(default)]
     sources: Vec<RemoteObjectId<Source>>,
+    #[serde(default)]
+    minerals: Vec<RemoteObjectId<Mineral>>,
 }
 
 impl RoomStaticVisibilityData {
@@ -22,6 +24,10 @@ impl RoomStaticVisibilityData {
 
     pub fn sources(&self) -> &Vec<RemoteObjectId<Source>> {
         &self.sources
+    }
+
+    pub fn minerals(&self) -> &Vec<RemoteObjectId<Mineral>> {
+        &self.minerals
     }
 }
 
@@ -150,13 +156,14 @@ impl RoomData {
     }
 
     fn create_static_visibility_data(room: &Room) -> RoomStaticVisibilityData {
-        let source_ids = room.find(find::SOURCES).into_iter().map(|s| s.remote_id()).collect();
-
         let controller_id = room.controller().map(|c| c.remote_id());
-
+        let source_ids = room.find(find::SOURCES).into_iter().map(|s| s.remote_id()).collect();
+        let mineral_ids = room.find(find::MINERALS).into_iter().map(|s| s.remote_id()).collect();
+        
         RoomStaticVisibilityData {
             controller: controller_id,
             sources: source_ids,
+            minerals: mineral_ids
         }
     }
 

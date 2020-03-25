@@ -1,6 +1,7 @@
 use super::data::*;
 use super::missionsystem::*;
 use crate::room::planner::*;
+use crate::room::data::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
@@ -42,6 +43,72 @@ impl ConstructionMission {
     }
 }
 
+struct RoomDataPlannerDataSource<'a> {
+    room_name: RoomName,
+    static_visibility: &'a RoomStaticVisibilityData,
+    terrain: Option<FastRoomTerrain>,
+    sources: Option<Vec<PlanLocation>>,
+    minerals: Option<Vec<PlanLocation>>
+}
+
+impl<'a> RoomDataPlannerDataSource<'a> {
+    pub fn new(room_name: RoomName, static_visibility: &RoomStaticVisibilityData) -> RoomDataPlannerDataSource {
+        RoomDataPlannerDataSource {
+            room_name,
+            static_visibility,
+            terrain: None,
+            sources: None,
+            minerals: None
+        }
+    }
+}
+
+impl<'a> PlannerRoomDataSource for RoomDataPlannerDataSource<'a> {
+    fn get_terrain(&mut self) -> &FastRoomTerrain {
+        if self.terrain.is_none() {
+            let room_terrain = game::map::get_room_terrain(self.room_name);
+            let terrain_data = room_terrain.get_raw_buffer();
+
+            self.terrain = Some(FastRoomTerrain::new(terrain_data))
+        }
+
+        self.terrain.as_ref().unwrap()
+    }
+
+    fn get_sources(&mut self) -> &[PlanLocation] {
+        if self.sources.is_none() {
+            let sources = self.static_visibility
+                .sources()
+                .iter()
+                .map(|id| {
+                    let pos = id.pos();
+                    PlanLocation::new(pos.x() as i8, pos.y() as i8)
+                })
+                .collect();
+
+            self.sources = Some(sources);
+        }
+
+        self.sources.as_ref().unwrap()
+    }
+
+    fn get_minerals(&mut self) -> &[PlanLocation] {
+        if self.minerals.is_none() {
+            let minerals = self.static_visibility.minerals()
+                .iter()
+                .map(|id| {
+                    let pos = id.pos();
+                    PlanLocation::new(pos.x() as i8, pos.y() as i8)
+                })
+                .collect();
+
+            self.minerals = Some(minerals);
+        }
+
+        self.minerals.as_ref().unwrap()
+    }
+}
+
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for ConstructionMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
@@ -59,6 +126,7 @@ impl Mission for ConstructionMission {
     ) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
+        let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility")?;
 
         let should_update = self.next_update.map(|next_time| game::time() >= next_time).unwrap_or(true);
 
@@ -66,9 +134,11 @@ impl Mission for ConstructionMission {
             if self.plan.is_none() && self.planner_state.is_none() {
                 info!("Starting room planning: {}", room_data.name);
 
-                let planner = Planner::new(&room);
+                let mut data_source = RoomDataPlannerDataSource::new(room_data.name, static_visibility_data);
 
-                match planner.seed(ALL_ROOT_NODES) {
+                let planner = Planner::new();
+
+                match planner.seed(ALL_ROOT_NODES, &mut data_source) {
                     Ok(PlanSeedResult::Complete(plan)) => {
                         if plan.is_some() {
                             info!("Room planning complete - Success - Room: {}", room_data.name);
@@ -95,8 +165,6 @@ impl Mission for ConstructionMission {
             }
 
             if let Some(mut planner_state) = self.planner_state.as_mut() {
-                let planner = Planner::new(&room);
-
                 let bucket = game::cpu::bucket();
                 let ticket_limit = game::cpu::tick_limit();
                 let current_cpu = game::cpu::get_used();
@@ -106,7 +174,11 @@ impl Mission for ConstructionMission {
                 if bucket >= ticket_limit * 2.0 && max_cpu >= 20.0 {
                     info!("Planning - Budget: {}", max_cpu);
 
-                    match planner.evaluate(ALL_ROOT_NODES, &mut planner_state, max_cpu) {
+                    let mut data_source = RoomDataPlannerDataSource::new(room_data.name, static_visibility_data);
+
+                    let planner = Planner::new();
+
+                    match planner.evaluate(ALL_ROOT_NODES, &mut data_source, &mut planner_state, max_cpu) {
                         Ok(PlanEvaluationResult::Complete(plan)) => {
                             if plan.is_some() {
                                 info!("Room planning complete - Success - Room: {}", room_data.name);
