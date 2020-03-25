@@ -67,7 +67,7 @@ impl Mission for ConstructionMission {
 
                 let planner = Planner::new(&room);
 
-                match planner.seed() {
+                match planner.seed(ALL_ROOT_NODES) {
                     Ok(PlanSeedResult::Complete(plan)) => {
                         if plan.is_some() {
                             info!("Room planning complete - Success - Room: {}", room_data.name);
@@ -105,7 +105,7 @@ impl Mission for ConstructionMission {
                 if bucket >= ticket_limit * 2.0 && max_cpu >= 20.0 {
                     info!("Planning - Budget: {}", max_cpu);
 
-                    match planner.evaluate(&mut planner_state, max_cpu) {
+                    match planner.evaluate(ALL_ROOT_NODES, &mut planner_state, max_cpu) {
                         Ok(PlanEvaluationResult::Complete(plan)) => {
                             if plan.is_some() {
                                 info!("Room planning complete - Success - Room: {}", room_data.name);
