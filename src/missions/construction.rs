@@ -9,6 +9,7 @@ use specs::*;
 use specs_derive::*;
 use crate::serialize::*;
 use log::*;
+use crate::room::layout::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ConstructionMission {
