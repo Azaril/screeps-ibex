@@ -7,7 +7,6 @@ use std::collections::hash_map::*;
 use std::convert::*;
 use bitflags::*;
 use log::*;
-use itertools::*;
 
 pub const ROOM_WIDTH: u8 = 50;
 pub const ROOM_HEIGHT: u8 = 50;
@@ -1240,6 +1239,7 @@ pub struct FixedPlanNode<'a> {
     pub placements: &'a [PlanPlacement],
     pub child: PlanNodeStorage<'a>,
     pub desires_placement: fn(context: &mut NodeContext, state: &PlannerState) -> bool,
+    pub desires_location: fn(position: PlanLocation, context: &mut NodeContext, state: &PlannerState) -> bool,
     pub scorer: fn(position: PlanLocation, context: &mut NodeContext, state: &PlannerState) -> Option<f32>
 }
 
@@ -1267,27 +1267,33 @@ impl<'a> PlanLocationNode for FixedPlanNode<'a> {
     }
 
     fn desires_location<'s>(&'s self, position: PlanLocation, context: &mut NodeContext, state: &PlannerState, _gather_data: &mut PlanGatherChildrenData<'s>) -> bool {
-        let terrain = context.terrain();
-        
-        for placement in self.placements.iter() {
-            let plan_location = position + placement.offset;
+        if (self.desires_location)(position, context, state) {
+            for placement in self.placements.iter() {
+                let plan_location = position + placement.offset;
 
-            if let Some(placement_location) = plan_location.as_build_location() {
-                if terrain.get(&placement_location).contains(TerrainFlags::WALL) {
-                    return false;
-                }
-
-                if let Some(existing) = state.get(&placement_location) {
-                    if existing.structure_type != StructureType::Road || placement.structure_type != StructureType::Road {
+                if let Some(placement_location) = plan_location.as_build_location() {
+                    if placement.structure_type == StructureType::Extractor {
+                        if !context.minerals().contains(&placement_location.into()) {
+                            return false;
+                        }
+                    } else if context.terrain().get(&placement_location).contains(TerrainFlags::WALL) {
                         return false;
                     }
-                }
-            } else {
-                return false;
-            }
-        }
 
-        true
+                    if let Some(existing) = state.get(&placement_location) {
+                        if existing.structure_type != StructureType::Road || placement.structure_type != StructureType::Road {
+                            return false;
+                        }
+                    }
+                } else {
+                    return false;
+                }
+            }
+
+            true
+        } else {
+            false
+        }
     }
 
     fn get_children<'s>(&'s self, position: PlanLocation, context: &mut NodeContext, state: &PlannerState, gather_data: &mut PlanGatherChildrenData<'s>) {
@@ -1489,6 +1495,56 @@ impl<'a> PlanLocationNode for LazyPlanNode<'a> {
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> PlanPlacementExpansionNode for LazyPlanNode<'a> {
     fn as_location(&self) -> &dyn PlanLocationNode {
+        self
+    }
+}
+
+pub struct FixedLocationPlanNode<'a> {
+    pub locations: fn(context: &mut NodeContext) -> Vec<PlanLocation>,
+    pub child: PlanNodeStorage<'a>
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+impl<'a> PlanBaseNode for FixedLocationPlanNode<'a> {
+    fn name(&self) -> &str {
+        "Fixed Locations"
+    }
+
+    fn gather_nodes<'b>(&'b self, data: &mut PlanGatherNodesData<'b>) {
+        self.child.gather_nodes(data);
+    }
+
+    fn desires_placement<'s>(&'s self, context: &mut NodeContext, state: &PlannerState, gather_data: &mut PlanGatherChildrenData<'s>) -> bool {
+        self.child.desires_placement(context, state, gather_data)
+    }
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+impl<'a> PlanGlobalNode for FixedLocationPlanNode<'a> {
+    fn as_base(&self) -> &dyn PlanBaseNode {
+        self
+    }
+
+    fn get_children<'s>(&'s self, context: &mut NodeContext, state: &PlannerState, gather_data: &mut PlanGatherChildrenData<'s>) {
+        if !gather_data.has_visited_global(self) {
+            gather_data.mark_visited_global(self);
+
+            if self.child.desires_placement(context, state, gather_data) {
+                let locations = (self.locations)(context);
+
+                for location in locations {
+                    if self.child.desires_location(location, context, state, gather_data) {
+                        self.child.insert_or_expand(location, context, state, gather_data);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+impl<'a> PlanGlobalExpansionNode for FixedLocationPlanNode<'a> {
+    fn as_global(&self) -> &dyn PlanGlobalNode {
         self
     }
 }
@@ -1948,13 +2004,15 @@ pub trait PlannerRoomDataSource {
     fn get_minerals(&mut self) -> &[PlanLocation];
 }
 
-pub struct Planner {
+pub struct Planner<S> where S: Fn(&PlannerState, &mut NodeContext) -> Option<f32> {
+    scorer: S
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-impl Planner {
-    pub fn new() -> Planner {
+impl<S> Planner<S> where S: Fn(&PlannerState, &mut NodeContext) -> Option<f32> {
+    pub fn new(scorer: S) -> Planner<S> {
         Planner {
+            scorer
         }
     }
 
@@ -1964,7 +2022,7 @@ impl Planner {
         let mut best_plan = None;
 
         let mut state_handler = |new_state: &PlannerState, context: &mut NodeContext| {
-            if let Some(score) = Self::score_state(new_state, context) {
+            if let Some(score) = (self.scorer)(new_state, context) {
                 best_plan = Some(BestPlanData {
                     score,
                     state: new_state.snapshot()
@@ -1999,7 +2057,7 @@ impl Planner {
         let mut new_best_plan = None;
 
         let mut state_handler = |new_state: &PlannerState, context: &mut NodeContext| {
-            if let Some(score) = Self::score_state(new_state, context) {
+            if let Some(score) = (self.scorer)(new_state, context) {
                 if current_best.map(|s| score > s).unwrap_or(true) {
                     new_best_plan = Some(BestPlanData {
                         score,
@@ -2039,102 +2097,6 @@ impl Planner {
         };
 
         Ok(evaluate_result)
-    }
-    
-    fn score_state(eval_state: &PlannerState, context: &mut NodeContext) -> Option<f32> {
-        let is_complete = 
-            eval_state.get_count(StructureType::Spawn) >= 1 &&
-            eval_state.get_count(StructureType::Extension) >= 60 &&
-            eval_state.get_count(StructureType::Storage) >= 1 &&
-            eval_state.get_count(StructureType::Terminal) >= 1 &&
-            eval_state.get_count(StructureType::Link) >= 1;
-
-        if !is_complete {
-            return None;
-        }
-
-        //TODO: Split out evaluators.
-        let mut score = 1.0;
-        let mut total_weight = 0.0;
-
-        let storage_locations = eval_state.get_locations(StructureType::Storage);
-
-        //
-        // Source distance.
-        //
-
-        let source_distances: Vec<_> = context
-            .source_distances()
-            .iter()
-            .filter_map(|(data, max_distance)| {
-                let storage_distance = storage_locations
-                    .iter()
-                    .filter_map(|location| *data.get(location.x() as usize, location.y() as usize))
-                    .min();
-
-                storage_distance.map(|distance| (distance, *max_distance))
-            })
-            .collect();
-
-        for (storage_distance, max_distance) in source_distances.iter() {
-            let source_score = 1.0 - (*storage_distance as f32 / *max_distance as f32);
-
-            const WEIGHT: f32 = 3.0;
-
-            score *= source_score * WEIGHT;
-            total_weight += WEIGHT;
-        }
-
-        if source_distances.len() > 1 {
-            let source_delta_score: f32 = source_distances
-                .iter()
-                .map(|(storage_distance, _)| storage_distance)
-                .combinations(2)
-                .map(|items| {
-                    let delta = ((*items[0] as i32) - (*items[1] as i32)).abs();
-
-                    1.0 - ((delta as f32) / (ROOM_WIDTH.max(ROOM_HEIGHT) as f32))
-                })
-                .product();
-
-            const WEIGHT: f32 = 1.0;
-
-            score *= source_delta_score * WEIGHT;
-            total_weight += WEIGHT;
-        }
-
-        //
-        // Extension distance.
-        //
-
-        let storage_locations = eval_state.get_locations(StructureType::Storage);
-        let extension_locations = eval_state.get_locations(StructureType::Extension);
-
-        let total_extension_distance: f32 = extension_locations
-            .iter()
-            .map(|extension| storage_locations
-                .iter()
-                .map(|storage| storage.distance_to(*extension))
-                .min()
-                .unwrap() as f32
-            )
-            .sum();
-
-        {
-            let average_distance = total_extension_distance / (extension_locations.len() as f32);
-            let average_distance_score =  1.0 - (average_distance / ROOM_WIDTH.max(ROOM_HEIGHT) as f32);
-
-            const WEIGHT: f32 = 1.0;
-
-            score *= average_distance_score * WEIGHT;
-            total_weight += WEIGHT;
-        }
-
-        if total_weight > 0.0 {
-            Some(score / total_weight)
-        } else {
-            None
-        }
     }
 
     /*

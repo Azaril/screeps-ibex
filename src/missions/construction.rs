@@ -136,7 +136,7 @@ impl Mission for ConstructionMission {
 
                 let mut data_source = RoomDataPlannerDataSource::new(room_data.name, static_visibility_data);
 
-                let planner = Planner::new();
+                let planner = Planner::new(crate::room::scoring::score_state);
 
                 match planner.seed(ALL_ROOT_NODES, &mut data_source) {
                     Ok(PlanSeedResult::Complete(plan)) => {
@@ -176,7 +176,7 @@ impl Mission for ConstructionMission {
 
                     let mut data_source = RoomDataPlannerDataSource::new(room_data.name, static_visibility_data);
 
-                    let planner = Planner::new();
+                    let planner = Planner::new(crate::room::scoring::score_state);
 
                     match planner.evaluate(ALL_ROOT_NODES, &mut data_source, &mut planner_state, max_cpu) {
                         Ok(PlanEvaluationResult::Complete(plan)) => {
