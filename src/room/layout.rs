@@ -69,6 +69,7 @@ const EXTENSION_CROSS: &FixedPlanNode = &FixedPlanNode {
     ],
     child: PlanNodeStorage::Empty,
     desires_placement: |_, state| state.get_count(StructureType::Extension) <= 55 && state.get_count(StructureType::Storage) > 0,
+    desires_location: |_, _, _| true,
     scorer: |location, _, state| {
         let storage_locations = state.get_locations(StructureType::Storage);
 
@@ -94,6 +95,7 @@ const EXTENSION: &FixedPlanNode = &FixedPlanNode {
     ],
     child: PlanNodeStorage::Empty,
     desires_placement: |_, state| state.get_count(StructureType::Extension) < 60 && state.get_count(StructureType::Storage) > 0,
+    desires_location: |_, _, _| true,
     scorer: |location, _, state| {
         let storage_locations = state.get_locations(StructureType::Storage);
 
@@ -126,6 +128,7 @@ const STORAGE: PlanNodeStorage = PlanNodeStorage::LocationExpansion(&OffsetPlanN
             })
         }),
         desires_placement: |_, state| state.get_count(StructureType::Storage) == 0,
+        desires_location: |_, _, _| true,
         scorer: |location, _, state| {
             const MAX_DISTANCE: u8 = 2;
 
@@ -169,6 +172,7 @@ const TERMINAL: PlanNodeStorage = PlanNodeStorage::LocationExpansion(&OffsetPlan
         ],
         child: ALL_NODES_ONE_OFFSET_DIAMOND,
         desires_placement: |_, state| state.get_count(StructureType::Terminal) == 0,
+        desires_location: |_, _, _| true,
         scorer: |location, _, state| {
             const MAX_DISTANCE: u8 = 2;
 
@@ -207,6 +211,7 @@ const STORAGE_LINK: PlanNodeStorage = PlanNodeStorage::LocationExpansion(&Offset
         ],
         child: ALL_NODES_ONE_OFFSET_DIAMOND,
         desires_placement: |_, state| state.get_count(StructureType::Link) == 0,
+        desires_location: |_, _, _| true,
         scorer: |location, _, state| {
             const MAX_DISTANCE: u8 = 2;
 
@@ -243,6 +248,7 @@ const SPAWN: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&FixedPlanNode
     ],
     child: PlanNodeStorage::Empty,
     desires_placement: |_, state| state.get_count(StructureType::Spawn) == 0,
+    desires_location: |_, _, _| true,
     scorer: |_, _, _| Some(0.0),
 });
 
@@ -307,18 +313,107 @@ const BUNKER_CORE: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&FixedPl
         })]
     }),
     desires_placement: |_, state| state.get_count(StructureType::Spawn) == 0,
+    desires_location: |_, _, _| true,
     scorer: |_, _, _| Some(1.0),
 });
 
-const ROOT_BUNKER_NODE: PlanNodeStorage = PlanNodeStorage::LocationExpansion(&MultiPlanNode {
+const ROOT_BUNKER: PlanNodeStorage = PlanNodeStorage::LocationExpansion(&MultiPlanNode {
     children: &[
         BUNKER_CORE
     ]
 });
 
+const SOURCE_CONTAINER: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&FixedPlanNode {
+    id: uuid::Uuid::from_u128(0x865a_77b5_df18_418f_826f_e3d4_e934_4bd6u128),
+    placements: &[
+        placement(StructureType::Container, 0, 0),
+    ],
+    child: PlanNodeStorage::Empty,
+    desires_placement: |_context, state| state.get_count(StructureType::Container) < 5,
+    desires_location: |location, context, state| {
+        let mut source_locations = context.sources().to_vec();
+        let mut container_locations = state.get_locations(StructureType::Container);
+
+        let mut matched_sources = Vec::new();
+
+        for (source_index, source_location) in source_locations.iter().enumerate() {
+            if let Some(index) = container_locations.iter().position(|container_location| source_location.distance_to(container_location.into()) <= 1) {
+                container_locations.remove(index);
+                matched_sources.push(source_index)
+            }
+        }
+
+        for index in matched_sources.iter().rev() {
+            source_locations.remove(*index);
+        }
+
+        source_locations.iter().any(|source_location| location.distance_to(*source_location) <= 1)
+    },
+    scorer: |_, _, _| Some(1.0),
+});
+
+const EXTRACTOR_CONTAINER: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&FixedPlanNode {
+    id: uuid::Uuid::from_u128(0x414d_d6b4_93f8_4539_81c5_89b5_1311_2a4fu128),
+    placements: &[
+        placement(StructureType::Container, 0, 0),
+    ],
+    child: PlanNodeStorage::Empty,
+    desires_placement: |_context, state| state.get_count(StructureType::Container) < 5,
+    desires_location: |location, _context, state| {
+        let mut extractor_locations = state.get_locations(StructureType::Extractor);
+        let mut container_locations = state.get_locations(StructureType::Container);
+
+        let mut matched_extractors = Vec::new();
+
+        for (extractor_index, extractor_location) in extractor_locations.iter().enumerate() {
+            if let Some(index) = container_locations.iter().position(|container_location| extractor_location.distance_to(*container_location) <= 1) {
+                container_locations.remove(index);
+                matched_extractors.push(extractor_index)
+            }
+        }
+
+        for index in matched_extractors.iter().rev() {
+            extractor_locations.remove(*index);
+        }
+
+        extractor_locations.iter().any(|extractor_location| location.distance_to(extractor_location.into()) <= 1)
+    },
+    scorer: |_, _, _| Some(1.0),
+});
+
+const EXTRACTOR: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&FixedPlanNode {
+    id: uuid::Uuid::from_u128(0x3726_8895_d11a_4aa4_9898_12a9_efc8_b968u128),
+    placements: &[
+        placement(StructureType::Extractor, 0, 0),
+    ],
+    //TODO: Pick location based on path distance to storage.
+    child: PlanNodeStorage::LocationExpansion(&OffsetPlanNode {
+        offsets: ONE_OFFSET_SQUARE,
+        child: EXTRACTOR_CONTAINER
+    }),
+    desires_placement: |context, state| (state.get_count(StructureType::Extractor) as usize) < context.minerals().len(),
+    desires_location: |location, context, _| context.minerals().contains(&location),
+    scorer: |_, _, _| Some(1.0),
+});
+
 pub const ALL_ROOT_NODES: &[&dyn PlanGlobalExpansionNode] = &[
     &PlaceAwayFromWallsNode {
         wall_distance: 4,
-        child: ROOT_BUNKER_NODE
+        child: ROOT_BUNKER
+    },
+    &FixedLocationPlanNode {
+        locations: |context| {
+            context.sources().to_vec()
+        },
+        child: PlanNodeStorage::LocationExpansion(&OffsetPlanNode {
+            offsets: ONE_OFFSET_SQUARE,
+            child: SOURCE_CONTAINER
+        })
+    },
+    &FixedLocationPlanNode {
+        locations: |context| {
+            context.minerals().to_vec()
+        },
+        child: EXTRACTOR
     }
 ];
