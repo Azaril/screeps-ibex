@@ -609,6 +609,13 @@ fn visualize_room_items<'a, T: IntoIterator<Item = (&'a Location, &'a RoomItem)>
                     Some(CircleStyle::default().fill("black").opacity(1.0)),
                 );
             }
+            RoomItem { structure_type: StructureType::Lab, .. } => {
+                visualizer.circle(
+                    loc.x() as f32,
+                    loc.y() as f32,
+                    Some(CircleStyle::default().fill("aqua").opacity(1.0)),
+                );
+            }
             RoomItem { .. } => {
                 visualizer.circle(
                     loc.x() as f32,

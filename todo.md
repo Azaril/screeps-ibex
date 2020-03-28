@@ -28,3 +28,4 @@
 # Low priority
 
 - Add market statistics that can be used to drive buy/sell price.
+- Rename all serde serialized properties to minimize space/decode cost.
