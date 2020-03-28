@@ -131,7 +131,7 @@ impl Mission for ConstructionMission {
         let should_update = self.next_update.map(|next_time| game::time() >= next_time).unwrap_or(true);
 
         if should_update && crate::features::construction::plan() {
-            if self.plan.is_none() && self.planner_state.is_none() {
+            if (self.plan.is_none() || crate::features::construction::force_plan()) && self.planner_state.is_none() {
                 info!("Starting room planning: {}", room_data.name);
 
                 let mut data_source = RoomDataPlannerDataSource::new(room_data.name, static_visibility_data);
