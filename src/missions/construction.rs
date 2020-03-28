@@ -188,7 +188,7 @@ impl Mission for ConstructionMission {
                                 info!("Room planning complete - Failure - Room: {}", room_data.name);
     
                                 //TODO: If failure occured, abort?
-                                self.next_update = Some(game::time() + 100);
+                                self.next_update = Some(game::time() + 20);
                             }
 
                             self.planner_state = None;
