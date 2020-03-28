@@ -38,7 +38,42 @@ fn has_source_containers(state: &PlannerState, context: &mut NodeContext) -> boo
     source_locations.is_empty()
 }
 
-fn has_mineral_extractors(state: &PlannerState, _context: &mut NodeContext) -> bool {
+fn has_source_links(state: &PlannerState, context: &mut NodeContext) -> bool {
+    let source_locations = context.sources().to_vec();
+    let link_locations = state.get_locations(StructureType::Link);
+    let container_locations = state.get_locations(StructureType::Container);
+
+    let matching_containers = state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
+        if let Some(storage_distances) = storage_distances {
+            container_locations
+                .iter()
+                .filter(|&container_location| source_locations.iter().any(|source_location| source_location.distance_to(container_location.into()) <= 1))
+                .filter(|&container_location| storage_distances.get(container_location.x() as usize, container_location.y() as usize).map(|d| d >= 8).unwrap_or(false))
+                .collect()
+        } else {
+            Vec::new()
+        }
+    });
+
+    !matching_containers
+        .iter()
+        .any(|&container_location| !link_locations.iter().any(|link_location| link_location.distance_to(*container_location) <= 1))
+}
+
+fn has_mineral_extractors(state: &PlannerState, context: &mut NodeContext) -> bool {
+    let mineral_locations = context.minerals();
+    let extractor_locations = state.get_locations(StructureType::Extractor);
+    
+    mineral_locations.iter().all(|mineral_location| {
+        if let Ok(mineral_location) = mineral_location.try_into() {
+            extractor_locations.contains(&mineral_location)
+        } else {
+            false
+        }
+    })
+}
+
+fn has_mineral_containers(state: &PlannerState, _context: &mut NodeContext) -> bool {
     let mut extractor_locations = state.get_locations(StructureType::Extractor);
     let mut container_locations = state.get_locations(StructureType::Container);
 
@@ -56,21 +91,6 @@ fn has_mineral_extractors(state: &PlannerState, _context: &mut NodeContext) -> b
     }
 
     extractor_locations.is_empty()
-}
-
-fn has_mineral_containers(state: &PlannerState, context: &mut NodeContext) -> bool {
-    let mineral_locations = context.minerals();
-    let container_locations = state.get_locations(StructureType::Container);
-    
-    for mineral_location in mineral_locations {
-        let container_in_range = container_locations.iter().any(|container_location| mineral_location.distance_to(container_location.into()) <= 1);
-
-        if !container_in_range {
-            return false;
-        }
-    }
-
-    true
 }
 
 fn source_distance_score(state: &PlannerState, context: &mut NodeContext) -> Vec<StateScore> {
@@ -172,10 +192,6 @@ pub fn score_state(state: &PlannerState, context: &mut NodeContext) -> Option<f3
         - Pathing reachability.
         - Link is within pathable range 2 of storage.
         - Terminal is within pathable range 2 of storage.
-        - Each source has a container within range 1 of it.
-        - Each source beyond path range 10 of storage has a link within range range 1 of the container.
-        - Each mineral has an extractor
-        - Each mineral has a container within range 1 of it.
     */
 
     //
@@ -186,7 +202,8 @@ pub fn score_state(state: &PlannerState, context: &mut NodeContext) -> Option<f3
         has_mandatory_buildings,
         has_source_containers,
         has_mineral_extractors,
-        has_mineral_containers
+        has_mineral_containers,
+        has_source_links,
     ];
 
     let is_complete = validators.iter().all(|v| (v)(state, context));

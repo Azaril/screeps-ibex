@@ -7,6 +7,7 @@ use std::collections::hash_map::*;
 use std::convert::*;
 use bitflags::*;
 use log::*;
+use std::cell::RefCell;
 
 pub const ROOM_WIDTH: u8 = 50;
 pub const ROOM_HEIGHT: u8 = 50;
@@ -166,6 +167,18 @@ impl TryFrom<PlanLocation> for Location {
     }
 }
 
+impl TryFrom<&PlanLocation> for Location {
+    type Error = ();
+
+    fn try_from(value: &PlanLocation) -> Result<Self, Self::Error> {
+        if value.in_room_bounds() {
+            Ok(Location::from_coords(value.x() as u32, value.y() as u32))
+        } else {
+            Err(())
+        }
+    }
+}
+
 impl Serialize for Location {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -191,15 +204,22 @@ pub struct PlannerStateLayer {
     #[serde(rename = "d")]
     data: HashMap<Location, RoomItem>,
     #[serde(rename = "s")]
-    structure_counts: HashMap<StructureType, u8>
+    structure_counts: HashMap<StructureType, u8>,
+    #[serde(skip)]
+    structure_distances: RefCell<HashMap<StructureType, RoomDataArray<Option<u32>>>>
 }
 
 impl PlannerStateLayer {
     pub fn new() -> PlannerStateLayer {
         PlannerStateLayer {
             data: HashMap::new(),
-            structure_counts: HashMap::new()
+            structure_counts: HashMap::new(),
+            structure_distances: RefCell::new(HashMap::new())
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
     }
 
     pub fn insert(&mut self, location: Location, item: RoomItem) {
@@ -216,6 +236,8 @@ impl PlannerStateLayer {
             .or_insert(0);
 
         *current_count += 1;
+
+        self.structure_distances.borrow_mut().clear();
     }
 
     pub fn get(&self, location: &Location) -> Option<&RoomItem> {
@@ -244,6 +266,15 @@ impl PlannerStateLayer {
 
     pub fn visualize(&self, visualizer: &mut RoomVisualizer) {
         visualize_room_items(&self.data, visualizer);
+    }
+
+    pub fn with_structure_distances<G, F, R>(&self, structure_type: StructureType, generator: G, callback: F) -> R where F: FnOnce(&RoomDataArray<Option<u32>>) -> R, G: FnOnce() -> RoomDataArray<Option<u32>> {
+        let mut structure_data = self.structure_distances.borrow_mut();
+        let data = structure_data
+            .entry(structure_type)
+            .or_insert_with(generator);
+
+        callback(data)
     }
 }
 
@@ -286,6 +317,47 @@ impl PlannerState {
 
     pub fn get_locations(&self, structure_type: StructureType) -> Vec<Location> {
         self.layers.iter().flat_map(|l| l.get_locations(structure_type)).collect()
+    }
+
+    pub fn with_structure_distances<F, R>(&self, structure_type: StructureType, terrain: &FastRoomTerrain, callback: F) -> R where F: FnOnce(Option<&RoomDataArray<Option<u32>>>) -> R {
+        if let Some(top_non_empty) = self.layers.iter().rev().find(|l| !l.is_empty()) {
+            let generator = || {
+                let mut data: RoomDataArray<Option<u32>> = RoomDataArray::new(None);
+                let mut to_apply: HashSet<PlanLocation> = HashSet::new();
+
+                let structure_locations = self.get_locations(structure_type);
+
+                for location in &structure_locations {
+                    to_apply.insert(location.into());
+                }                
+
+                let is_passable = |location: PlanLocation| {
+                    if let Ok(location) = Location::try_from(location) {
+                        match self.get(&location) {
+                            Some(item) => {
+                                match item.structure_type {
+                                    StructureType::Road => true,
+                                    StructureType::Container => true,
+                                    StructureType::Rampart => true,
+                                    _ => false
+                                }
+                            },
+                            None => true
+                        }
+                    } else {
+                        false
+                    }
+                };
+        
+                flood_fill_distance(to_apply, terrain, &mut data, is_passable);
+
+                data
+            };
+
+            top_non_empty.with_structure_distances(structure_type, generator, |data| callback(Some(data)))
+        } else {
+            callback(None)
+        }
     }
 
     pub fn insert(&mut self, location: Location, item: RoomItem) {
@@ -587,6 +659,7 @@ impl<'a, T> Iterator for RoomDataArrayIterator<'a, T> where T: Copy {
     }
 }
 
+#[derive(Clone)]
 pub struct RoomDataArray<T> where T: Copy {
     data: [T; (ROOM_WIDTH as usize) * (ROOM_HEIGHT as usize)]
 }
@@ -629,7 +702,21 @@ pub enum PlanNodeChild<'a> {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> PlanNodeChild<'a> {
-    fn place(&self, context: &mut NodeContext, state: &mut PlannerState) -> Result<(), ()> {
+    fn name(&self) -> &str {
+        match self {
+            PlanNodeChild::GlobalPlacement(n) => n.name(),
+            PlanNodeChild::LocationPlacement(_, n) => n.name(),
+        }
+    }
+
+    fn must_place(&self) -> bool {
+        match self {
+            PlanNodeChild::GlobalPlacement(n) => n.must_place(),
+            PlanNodeChild::LocationPlacement(_, n) => n.must_place(),
+        }
+    }
+
+    fn place(&self, context: &mut NodeContext, state: &mut PlannerState) {
         match self {
             PlanNodeChild::GlobalPlacement(node) => node.place(context, state),
             PlanNodeChild::LocationPlacement(location, node) => node.place(*location, context, state)
@@ -953,7 +1040,7 @@ pub struct NodeContext<'d> {
     data_source: &'d mut dyn PlannerRoomDataSource,
 
     wall_distance: Option<RoomDataArray<Option<u32>>>,
-    source_distances: Option<Vec<(RoomDataArray<Option<u32>>, u32)>>
+    source_distances: Option<Vec<(RoomDataArray<Option<u32>>, u32)>>,
 }
 
 impl<'d> NodeContext<'d> {
@@ -994,7 +1081,7 @@ impl<'d> NodeContext<'d> {
                 }
             }
     
-            flood_fill_distance(to_apply, terrain, &mut data);
+            flood_fill_distance(to_apply, terrain, &mut data, |_| true);
 
             self.wall_distance = Some(data);
         }
@@ -1015,7 +1102,7 @@ impl<'d> NodeContext<'d> {
 
                 to_apply.insert(*source);
         
-                let max_distance = flood_fill_distance(to_apply, terrain, &mut data);
+                let max_distance = flood_fill_distance(to_apply, terrain, &mut data, |_| true);
 
                 sources_data.push((data, max_distance));
             }
@@ -1046,9 +1133,11 @@ pub trait PlanGlobalPlacementNode: PlanGlobalNode {
 
     fn id(&self) -> &uuid::Uuid;
 
+    fn must_place(&self) -> bool;
+
     fn get_score(&self, context: &mut NodeContext, state: &PlannerState) -> Option<f32>;
 
-    fn place(&self, context: &mut NodeContext, state: &mut PlannerState) -> Result<(), ()>;
+    fn place(&self, context: &mut NodeContext, state: &mut PlannerState);
 }
 
 pub trait PlanGlobalExpansionNode: PlanGlobalNode {
@@ -1068,9 +1157,11 @@ pub trait PlanLocationPlacementNode: PlanLocationNode {
 
     fn id(&self) -> &uuid::Uuid;
 
+    fn must_place(&self) -> bool;
+
     fn get_score(&self, position: PlanLocation, context: &mut NodeContext, state: &PlannerState) -> Option<f32>;
 
-    fn place(&self, position: PlanLocation, context: &mut NodeContext, state: &mut PlannerState) -> Result<(), ()>;
+    fn place(&self, position: PlanLocation, context: &mut NodeContext, state: &mut PlannerState);
 }
 
 pub trait PlanPlacementExpansionNode: PlanLocationNode {
@@ -1128,7 +1219,7 @@ impl<'a> PlanNodeStorage<'a> {
     }
 }
 
-fn flood_fill_distance(initial_seeds: HashSet<PlanLocation>, terrain: &FastRoomTerrain, data: &mut RoomDataArray<Option<u32>>) -> u32 {
+fn flood_fill_distance<F>(initial_seeds: HashSet<PlanLocation>, terrain: &FastRoomTerrain, data: &mut RoomDataArray<Option<u32>>, is_passable: F) -> u32 where F: Fn(PlanLocation) -> bool {
     let mut to_apply = initial_seeds;
     let mut current_distance: u32 = 0;
 
@@ -1140,17 +1231,15 @@ fn flood_fill_distance(initial_seeds: HashSet<PlanLocation>, terrain: &FastRoomT
 
             if current.is_none() {
                 *current = Some(current_distance);
+                    
+                const ONE_OFFSET_SQUARE: &[(i8, i8)] = &[(-1, -1), (-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1)];
 
-                for x_delta in -1i8..=1i8 {
-                    for y_delta in -1i8..=1i8 {
-                        if x_delta != 0 || y_delta != 0 {
-                            let next_location = *pos + (x_delta, y_delta);
-                            if next_location.in_room_bounds() {
-                                let terrain = terrain.get_xy(next_location.x() as u8, next_location.y() as u8); 
-                                if !terrain.contains(TerrainFlags::WALL) {
-                                    to_apply.insert(next_location);
-                                }
-                            }
+                for offset in ONE_OFFSET_SQUARE {
+                    let next_location = *pos + offset;
+                    if next_location.in_room_bounds() {
+                        let terrain = terrain.get_xy(next_location.x() as u8, next_location.y() as u8); 
+                        if !terrain.contains(TerrainFlags::WALL) && is_passable(next_location) {
+                            to_apply.insert(next_location);
                         }
                     }
                 }
@@ -1236,6 +1325,7 @@ pub const fn placement(structure_type: StructureType, x: i8, y: i8) -> PlanPlace
 
 pub struct FixedPlanNode<'a> {
     pub id: uuid::Uuid,
+    pub must_place: bool,
     pub placements: &'a [PlanPlacement],
     pub child: PlanNodeStorage<'a>,
     pub desires_placement: fn(context: &mut NodeContext, state: &PlannerState) -> bool,
@@ -1273,7 +1363,7 @@ impl<'a> PlanLocationNode for FixedPlanNode<'a> {
 
                 if let Some(placement_location) = plan_location.as_build_location() {
                     if placement.structure_type == StructureType::Extractor {
-                        if !context.minerals().contains(&placement_location.into()) {
+                        if !context.minerals().contains(&plan_location) {
                             return false;
                         }
                     } else if context.terrain().get(&placement_location).contains(TerrainFlags::WALL) {
@@ -1317,21 +1407,23 @@ impl<'a> PlanLocationPlacementNode for FixedPlanNode<'a> {
         &self.id
     }
 
+    fn must_place(&self) -> bool {
+        self.must_place
+    }
+
     fn get_score(&self, position: PlanLocation, context: &mut NodeContext, state: &PlannerState) -> Option<f32> {
         (self.scorer)(position, context, state)
     }
 
-    fn place(&self, position: PlanLocation, _context: &mut NodeContext, state: &mut PlannerState) -> Result<(), ()> {
+    fn place(&self, position: PlanLocation, _context: &mut NodeContext, state: &mut PlannerState) {
         for placement in self.placements.iter() {
-            let placement_location = (position + placement.offset).as_location().ok_or(())?;
+            let placement_location = (position + placement.offset).as_location().unwrap();
             
             //TODO: Compute correct RCL.
             let rcl = 0;
 
             state.insert(placement_location, RoomItem { structure_type: placement.structure_type, required_rcl: rcl });
         }
-
-        Ok(())
     }
 }
 
@@ -1393,14 +1485,14 @@ impl<'a> PlanPlacementExpansionNode for OffsetPlanNode<'a> {
     }
 }
 
-pub struct MultiPlanNode<'a> {
+pub struct MultiPlacementExpansionNode<'a> {
     pub children: &'a [PlanNodeStorage<'a>]
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-impl<'a> PlanBaseNode for MultiPlanNode<'a> {
+impl<'a> PlanBaseNode for MultiPlacementExpansionNode<'a> {
     fn name(&self) -> &str {
-        "Multi"
+        "Multi Placement Expansion"
     }
 
     fn gather_nodes<'b>(&'b self, data: &mut PlanGatherNodesData<'b>) {
@@ -1415,7 +1507,7 @@ impl<'a> PlanBaseNode for MultiPlanNode<'a> {
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-impl<'a> PlanLocationNode for MultiPlanNode<'a> {
+impl<'a> PlanLocationNode for MultiPlacementExpansionNode<'a> {
     fn as_base(&self) -> &dyn PlanBaseNode {
         self
     }
@@ -1438,7 +1530,7 @@ impl<'a> PlanLocationNode for MultiPlanNode<'a> {
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-impl<'a> PlanPlacementExpansionNode for MultiPlanNode<'a> {
+impl<'a> PlanPlacementExpansionNode for MultiPlacementExpansionNode<'a> {
     fn as_location(&self) -> &dyn PlanLocationNode {
         self
     }
@@ -1557,6 +1649,7 @@ pub struct FloodFillPlanNodeLevel<'a> {
 
 pub struct FloodFillPlanNode<'a> {
     pub id: uuid::Uuid,
+    pub must_place: bool,
     pub start_offsets: &'a [(i8, i8)],
     pub expansion_offsets: &'a [(i8, i8)],
     pub maximum_nodes: u32,
@@ -1619,6 +1712,10 @@ impl<'a> PlanLocationPlacementNode for FloodFillPlanNode<'a> {
         self
     }
 
+    fn must_place(&self) -> bool {
+        self.must_place
+    }
+
     fn id(&self) -> &uuid::Uuid {
         &self.id
     }
@@ -1627,7 +1724,7 @@ impl<'a> PlanLocationPlacementNode for FloodFillPlanNode<'a> {
         (self.scorer)(position, context, state)
     }
 
-    fn place(&self, position: PlanLocation, context: &mut NodeContext, state: &mut PlannerState) -> Result<(), ()> {
+    fn place(&self, position: PlanLocation, context: &mut NodeContext, state: &mut PlannerState) {
         let mut locations: HashSet<_> = self.start_offsets.into_iter().map(|o| position + o).collect();
         let mut next_locations: HashSet<_> = HashSet::new();
         let mut visited_locations: HashSet<_> = HashSet::new();
@@ -1662,8 +1759,8 @@ impl<'a> PlanLocationPlacementNode for FloodFillPlanNode<'a> {
                             for (node_location, _) in expanded_locations.iter().rev() {
                                 let mut current_gather_data = PlanGatherChildrenData::<'a>::new();
 
-                                if lod.node.desires_placement(context, state, &mut current_gather_data) && lod.node.desires_location(*node_location, context, state, &mut current_gather_data) && current_gather_data.insert_location_placement(*node_location, lod.node) {
-                                    lod.node.place(*node_location, context, state)?;
+                                if current_gather_data.desires_placement(lod.node.as_base(), context, state) && current_gather_data.desires_location(*node_location, lod.node.as_location(), context, state) && current_gather_data.insert_location_placement(*node_location, lod.node) {
+                                    lod.node.place(*node_location, context, state);
 
                                     current_nodes += lod.node_cost;
 
@@ -1691,8 +1788,85 @@ impl<'a> PlanLocationPlacementNode for FloodFillPlanNode<'a> {
                 current_expansion += 1;
             }
         }
+    }
+}
 
-        Ok(())
+pub struct NearestToStructureExpansionPlanNode<'a> {
+    pub structure_type: StructureType,
+    pub allowed_offsets: &'a [(i8, i8)],
+    pub child: PlanNodeStorage<'a>,
+    pub desires_placement: fn(context: &mut NodeContext, state: &PlannerState) -> bool,
+    pub desires_location: fn(position: PlanLocation, context: &mut NodeContext, state: &PlannerState) -> bool,
+    pub scorer: fn(position: PlanLocation, context: &mut NodeContext, state: &PlannerState) -> Option<f32>
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+impl<'a> PlanBaseNode for NearestToStructureExpansionPlanNode<'a> {
+    fn name(&self) -> &str {
+        "Nearest To Structure"
+    }
+
+    fn gather_nodes<'b>(&'b self, data: &mut PlanGatherNodesData<'b>) {
+        self.child.gather_nodes(data);
+    }
+
+    fn desires_placement<'s>(&'s self, context: &mut NodeContext, state: &PlannerState, gather_data: &mut PlanGatherChildrenData<'s>) -> bool {
+        (self.desires_placement)(context, state) && self.child.desires_placement(context, state, gather_data)
+    }
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+impl<'a> PlanLocationNode for NearestToStructureExpansionPlanNode<'a> {
+    fn as_base(&self) -> &dyn PlanBaseNode {
+        self
+    }
+
+    fn desires_location<'s>(&'s self, position: PlanLocation, context: &mut NodeContext, state: &PlannerState, gather_data: &mut PlanGatherChildrenData<'s>) -> bool {
+        self.allowed_offsets.iter().any(|offset| self.child.desires_location(position + *offset, context, state, gather_data))
+    }
+
+    fn get_children<'s>(&'s self, position: PlanLocation, context: &mut NodeContext, state: &PlannerState, gather_data: &mut PlanGatherChildrenData<'s>) {
+        if !gather_data.has_visited_location(position, self) {
+            gather_data.mark_visited_location(position, self);
+
+            if self.child.desires_placement(context, state, gather_data) {
+                let mut offset_locations = state.with_structure_distances(self.structure_type, context.terrain(), |storage_distance| {
+                    if let Some(storage_distance) = storage_distance {
+                        self.allowed_offsets.iter().filter_map(|offset| {
+                            let offset_location = position + *offset;
+        
+                            let distance = storage_distance.get(offset_location.x() as usize, offset_location.y() as usize);
+
+                            if let Some(distance) = distance {
+                                Some((offset_location, *distance))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                    } else {
+                        Vec::new()
+                    }
+                });
+
+                offset_locations.sort_by_key(|(_, distance)| *distance);
+    
+                for (offset_location, _) in offset_locations.iter() {
+                    if self.child.desires_location(*offset_location, context, state, gather_data) {
+                        self.child.insert_or_expand(*offset_location, context, state, gather_data);
+
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+impl<'a> PlanPlacementExpansionNode for NearestToStructureExpansionPlanNode<'a> {
+    fn as_location(&self) -> &dyn PlanLocationNode {
+        self
     }
 }
 
@@ -1849,7 +2023,10 @@ impl<'t, H> TreePlanner<'t, H> where H: FnMut(&PlannerState, &mut NodeContext) {
             .filter_map(|node| node.get_score(&mut context, state).map(|score| (node, score)))
             .collect();
 
-        ordered_children.sort_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap());
+        ordered_children.sort_by(|(node_a, score_a), (node_b, score_b)| {
+            node_a.must_place().cmp(&node_b.must_place())
+                .then_with(|| score_a.partial_cmp(score_b).unwrap())
+        });
 
         stack.push(EvaluationStackEntry {
             children: ordered_children.into_iter().map(|(node, _)| node).collect(),
@@ -1881,40 +2058,65 @@ impl<'t, H> TreePlanner<'t, H> where H: FnMut(&PlannerState, &mut NodeContext) {
         let mut stack = serialized_stack.to_stack(&gathered_nodes)?;
 
         while !stack.is_empty() && should_continue() {
-            let mut placed_node = None;
+            let mut placed_nodes = Vec::new();
 
-            let finished_entry = {
+            let (entry_failed, finished_entry) = {
                 let entry = stack.last_mut().unwrap();
+                let mut entry_failed = false;
 
-                while let Some(child) = entry.children.pop() {
-                    processed_entries += 1;
+                while !entry.children.is_empty() && placed_nodes.is_empty() {
+                    let mut to_place = Vec::new();
+
+                    while !entry.children.is_empty() {
+                        if entry.children.last().unwrap().must_place() {
+                            to_place.push(entry.children.pop().unwrap());
+                        } else if to_place.is_empty() {
+                            to_place.push(entry.children.pop().unwrap());
+    
+                            break;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    processed_entries += to_place.len();
 
                     state.push_layer();
 
-                    match child.place(&mut context, state) {
-                        Ok(_) => {
-                            (self.handler)(state, &mut context);
+                    let mut validate_location = false;
 
-                            placed_node = Some(child);
-
+                    while let Some(child) = to_place.pop() {
+                        if validate_location && !child.desires_location(&mut context, state, &mut PlanGatherChildrenData::new()) {
+                            entry_failed = true;
                             break;
-                        },
-                        Err(_) => {
-                            state.pop_layer();
-
-                            entry.visited.push(child);
                         }
+                        
+                        child.place(&mut context, state);
+
+                        placed_nodes.push(child);
+
+                        validate_location = true;
+                    }
+
+                    if !entry_failed {
+                        (self.handler)(state, &mut context);
+                    } else {
+                        state.pop_layer();
                     }
                     
-                    if !should_continue() {
+                    if entry_failed || !should_continue() {
                         break;
                     }
                 }
 
-                entry.children.is_empty()
+                (entry_failed, entry.children.is_empty())
             };
 
-            if let Some(child) = placed_node {
+            if entry_failed {
+                state.pop_layer();
+
+                stack.pop();
+            } else if !placed_nodes.is_empty() {
                 let mut gathered_children = PlanGatherChildrenData::<'s>::new();
 
                 for entry in stack.iter() {
@@ -1923,13 +2125,17 @@ impl<'t, H> TreePlanner<'t, H> where H: FnMut(&PlannerState, &mut NodeContext) {
                     }
                 }
 
-                child.get_children(&mut context, state, &mut gathered_children);
+                for child in placed_nodes.iter() {
+                    child.get_children(&mut context, state, &mut gathered_children);
+                }
 
                 for existing_child in stack.last().unwrap().children.iter() {
                     if existing_child.desires_placement(&mut context, state, &mut gathered_children) && existing_child.desires_location(&mut context, state, &mut gathered_children) {
                         existing_child.insert(&mut gathered_children);
                     }
                 }
+
+                stack.last_mut().unwrap().visited.append(&mut placed_nodes);
 
                 let children = gathered_children.collect();
 
@@ -1938,7 +2144,10 @@ impl<'t, H> TreePlanner<'t, H> where H: FnMut(&PlannerState, &mut NodeContext) {
                     .filter_map(|node| node.get_score(&mut context, state).map(|score| (node, score)))
                     .collect();
 
-                ordered_children.sort_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap());
+                ordered_children.sort_by(|(node_a, score_a), (node_b, score_b)| {
+                    node_a.must_place().cmp(&node_b.must_place())
+                        .then_with(|| score_a.partial_cmp(score_b).unwrap())
+                });
 
                 stack.push(EvaluationStackEntry {
                     children: ordered_children.into_iter().map(|(node, _)| node).collect(),
