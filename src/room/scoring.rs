@@ -93,6 +93,45 @@ fn has_mineral_containers(state: &PlannerState, _context: &mut NodeContext) -> b
     extractor_locations.is_empty()
 }
 
+fn has_reachable_structures(state: &PlannerState, context: &mut NodeContext) -> bool {
+    let placements: Vec<_> = state.get_all().collect();
+
+    state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
+        storage_distances.map(|distances| {
+            for (location, item) in placements.iter() {
+                let reachability_range: i8 = match item.structure_type() {
+                    StructureType::Wall => 3,
+                    _ => 1
+                };
+
+                let mut found_reach = false;
+
+                for x in -reachability_range..=reachability_range {
+                    for y in -reachability_range..=reachability_range {
+                        let position = (location.x() as i8 + x, location.y() as i8 + y);
+
+                        if position.in_room_bounds() && distances.get(position.0 as usize, position.1 as usize).is_some() {
+                            found_reach = true;
+
+                            break;
+                        }
+                    }
+
+                    if found_reach {
+                        break;
+                    }
+                }
+
+                if !found_reach {
+                    return false;
+                }
+            }
+
+            true
+        })
+    }).unwrap_or(false)
+}
+
 fn source_distance_score(state: &PlannerState, context: &mut NodeContext) -> Vec<StateScore> {
     let mut scores = Vec::new();
 
@@ -204,6 +243,7 @@ pub fn score_state(state: &PlannerState, context: &mut NodeContext) -> Option<f3
         has_mineral_extractors,
         has_mineral_containers,
         has_source_links,
+        has_reachable_structures
     ];
 
     let is_complete = validators.iter().all(|v| (v)(state, context));

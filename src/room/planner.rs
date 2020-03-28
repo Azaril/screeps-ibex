@@ -89,6 +89,16 @@ pub struct RoomItem {
     required_rcl: u32,
 }
 
+impl RoomItem {
+    pub fn structure_type(&self) -> StructureType {
+        self.structure_type
+    }
+
+    pub fn required_rcl(&self) -> u32 {
+        self.required_rcl
+    }
+}
+
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 #[repr(transparent)]
 pub struct Location {
@@ -376,6 +386,10 @@ impl PlannerState {
         }
 
         state
+    }
+
+    pub fn get_all(&self) -> impl Iterator<Item = (&Location, &RoomItem)> {
+        self.layers.iter().flat_map(|l| l.data.iter())
     }
 
     pub fn visualize(&self, visualizer: &mut RoomVisualizer) {
