@@ -15,6 +15,7 @@ fn has_mandatory_buildings(state: &PlannerState, context: &mut NodeContext) -> b
     state.get_count(StructureType::Extension) >= 60 &&
     state.get_count(StructureType::Storage) >= 1 &&
     state.get_count(StructureType::Terminal) >= 1 &&
+    state.get_count(StructureType::Lab) >= 10 &&
     (state.get_count(StructureType::Extractor) as usize) == context.minerals().len()
 }
 
