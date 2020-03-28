@@ -13,6 +13,13 @@ pub const ROOM_WIDTH: u8 = 50;
 pub const ROOM_HEIGHT: u8 = 50;
 pub const ROOM_BUILD_BORDER: u8 = 2;
 
+pub const ONE_OFFSET_SQUARE: &[(i8, i8)] = &[(-1, -1), (-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1)];
+pub const TWO_OFFSET_SQUARE: &[(i8, i8)] = &[(-2, -2), (-2, -1), (-2, 0), (-2, 1), (-2, 2), (-1, 2), (0, 2), (1, 2), (2, 2), (2, 1), (2, 0), (2, -1), (2, -2), (1, -2), (0, -2), (-1, -2)];
+
+pub const ONE_OFFSET_DIAMOND: &[(i8, i8)] = &[(-1, 0), (0, 1), (1, 0), (-1, 0)];
+pub const TWO_OFFSET_DIAMOND: &[(i8, i8)] = &[(0, -2), (-1, -1), (-2, 0), (-1, 1), (0, 2), (1, 1), (2, 0), (1, -1)];
+pub const TWO_OFFSET_DIAMOND_POINTS: &[(i8, i8)] = &[(0, -2), (-2, 0), (0, 2), (2, 0)];
+
 pub fn in_room_bounds<T>(x: T, y: T) -> bool where T: Into<i32> {
     let x = x.into();
     let y = y.into();
@@ -216,7 +223,7 @@ pub struct PlannerStateLayer {
     #[serde(rename = "s")]
     structure_counts: HashMap<StructureType, u8>,
     #[serde(skip)]
-    structure_distances: RefCell<HashMap<StructureType, RoomDataArray<Option<u32>>>>
+    structure_distances: RefCell<HashMap<StructureType, (RoomDataArray<Option<u32>>, u32)>>
 }
 
 impl PlannerStateLayer {
@@ -278,13 +285,13 @@ impl PlannerStateLayer {
         visualize_room_items(&self.data, visualizer);
     }
 
-    pub fn with_structure_distances<G, F, R>(&self, structure_type: StructureType, generator: G, callback: F) -> R where F: FnOnce(&RoomDataArray<Option<u32>>) -> R, G: FnOnce() -> RoomDataArray<Option<u32>> {
+    pub fn with_structure_distances<G, F, R>(&self, structure_type: StructureType, generator: G, callback: F) -> R where F: FnOnce((&RoomDataArray<Option<u32>>, u32)) -> R, G: FnOnce() -> (RoomDataArray<Option<u32>>, u32) {
         let mut structure_data = self.structure_distances.borrow_mut();
-        let data = structure_data
+        let (data, max_distance) = structure_data
             .entry(structure_type)
             .or_insert_with(generator);
 
-        callback(data)
+        callback((data, *max_distance))
     }
 }
 
@@ -329,7 +336,7 @@ impl PlannerState {
         self.layers.iter().flat_map(|l| l.get_locations(structure_type)).collect()
     }
 
-    pub fn with_structure_distances<F, R>(&self, structure_type: StructureType, terrain: &FastRoomTerrain, callback: F) -> R where F: FnOnce(Option<&RoomDataArray<Option<u32>>>) -> R {
+    pub fn with_structure_distances<F, R>(&self, structure_type: StructureType, terrain: &FastRoomTerrain, callback: F) -> R where F: FnOnce(Option<(&RoomDataArray<Option<u32>>, u32)>) -> R {
         if let Some(top_non_empty) = self.layers.iter().rev().find(|l| !l.is_empty()) {
             let generator = || {
                 let mut data: RoomDataArray<Option<u32>> = RoomDataArray::new(None);
@@ -359,12 +366,12 @@ impl PlannerState {
                     }
                 };
         
-                flood_fill_distance(to_apply, terrain, &mut data, is_passable);
+                let max_distance = flood_fill_distance(to_apply, terrain, &mut data, is_passable);
 
-                data
+                (data, max_distance)
             };
 
-            top_non_empty.with_structure_distances(structure_type, generator, |data| callback(Some(data)))
+            top_non_empty.with_structure_distances(structure_type, generator, |(data, max_distance)| callback(Some((data, max_distance))))
         } else {
             callback(None)
         }
@@ -1253,8 +1260,6 @@ fn flood_fill_distance<F>(initial_seeds: HashSet<PlanLocation>, terrain: &FastRo
             if current.is_none() {
                 *current = Some(current_distance);
                     
-                const ONE_OFFSET_SQUARE: &[(i8, i8)] = &[(-1, -1), (-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1)];
-
                 for offset in ONE_OFFSET_SQUARE {
                     let next_location = *pos + offset;
                     if next_location.in_room_bounds() {
@@ -1852,7 +1857,7 @@ impl<'a> PlanLocationNode for NearestToStructureExpansionPlanNode<'a> {
 
             if self.child.desires_placement(context, state, gather_data) {
                 let mut offset_locations = state.with_structure_distances(self.structure_type, context.terrain(), |storage_distance| {
-                    if let Some(storage_distance) = storage_distance {
+                    if let Some((storage_distance, _max_distance)) = storage_distance {
                         self.allowed_offsets.iter().filter_map(|offset| {
                             let offset_location = position + *offset;
         
