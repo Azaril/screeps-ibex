@@ -45,7 +45,7 @@ fn has_source_links(state: &PlannerState, context: &mut NodeContext) -> bool {
     let container_locations = state.get_locations(StructureType::Container);
 
     let matching_containers = state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
-        if let Some(storage_distances) = storage_distances {
+        if let Some((storage_distances, _max_distance)) = storage_distances {
             container_locations
                 .iter()
                 .filter(|&container_location| source_locations.iter().any(|source_location| source_location.distance_to(container_location.into()) <= 1))
@@ -98,7 +98,7 @@ fn has_reachable_structures(state: &PlannerState, context: &mut NodeContext) -> 
     let placements: Vec<_> = state.get_all().collect();
 
     state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
-        storage_distances.map(|distances| {
+        storage_distances.map(|(distances, _max_distance)| {
             for (location, item) in placements.iter() {
                 let reachability_range: i8 = match item.structure_type() {
                     StructureType::Wall => 3,
@@ -133,23 +133,61 @@ fn has_reachable_structures(state: &PlannerState, context: &mut NodeContext) -> 
     }).unwrap_or(false)
 }
 
-fn source_distance_score(state: &PlannerState, context: &mut NodeContext) -> Vec<StateScore> {
-    let mut scores = Vec::new();
+fn has_reachable_sources(state: &PlannerState, context: &mut NodeContext) -> bool {
+    let sources = context.sources().to_vec();
 
-    let storage_locations = state.get_locations(StructureType::Storage);
-
-    let source_distances: Vec<_> = context
-        .source_distances()
-        .iter()
-        .filter_map(|(data, max_distance)| {
-            let storage_distance = storage_locations
+    state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
+        if let Some((storage_distances, _max_distance)) = storage_distances {
+            sources
                 .iter()
-                .filter_map(|location| *data.get(location.x() as usize, location.y() as usize))
-                .min();
+                .any(|source_location| {
+                    !ONE_OFFSET_SQUARE
+                        .iter()
+                        .any(|offset| {
+                            let offset_location = *source_location + offset;
 
-            storage_distance.map(|distance| (distance, *max_distance))
-        })
-        .collect();
+                            if offset_location.in_room_bounds() {
+                                storage_distances.get(offset_location.x() as usize, offset_location.y() as usize).is_some()
+                            } else {
+                                false
+                            }
+                        })
+                })
+        } else {
+            false
+        }
+    })
+}
+
+fn source_distance_score(state: &PlannerState, context: &mut NodeContext) -> Vec<StateScore> {
+    let sources = context.sources().to_vec();
+
+    let source_distances = state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
+        if let Some((storage_distances, max_distance)) = storage_distances {
+            sources
+                .iter()
+                .filter_map(|source_location| {
+                    ONE_OFFSET_SQUARE
+                        .iter()
+                        .filter_map(|offset| {
+                            let offset_location = *source_location + offset;
+
+                            if offset_location.in_room_bounds() {
+                                *storage_distances.get(offset_location.x() as usize, offset_location.y() as usize)
+                            } else {
+                                None
+                            }
+                        })
+                        .min_by_key(|distance| *distance)
+                        .map(|distance| (distance, max_distance))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    });
+
+    let mut scores = Vec::new();
 
     for (storage_distance, max_distance) in source_distances.iter() {
         let source_score = 1.0 - (*storage_distance as f32 / *max_distance as f32);
@@ -244,7 +282,8 @@ pub fn score_state(state: &PlannerState, context: &mut NodeContext) -> Option<f3
         has_mineral_extractors,
         has_mineral_containers,
         has_source_links,
-        has_reachable_structures
+        has_reachable_structures,
+        has_reachable_sources
     ];
 
     let is_complete = validators.iter().all(|v| (v)(state, context));

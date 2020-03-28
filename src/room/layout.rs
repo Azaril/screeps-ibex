@@ -2,17 +2,6 @@ use screeps::*;
 use super::planner::*;
 
 //
-// Patterns
-//
-
-const ONE_OFFSET_SQUARE: &[(i8, i8)] = &[(-1, -1), (-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1)];
-const TWO_OFFSET_SQUARE: &[(i8, i8)] = &[(-2, -2), (-2, -1), (-2, 0), (-2, 1), (-2, 2), (-1, 2), (0, 2), (1, 2), (2, 2), (2, 1), (2, 0), (2, -1), (2, -2), (1, -2), (0, -2), (-1, -2)];
-
-const ONE_OFFSET_DIAMOND: &[(i8, i8)] = &[(-1, 0), (0, 1), (1, 0), (-1, 0)];
-const TWO_OFFSET_DIAMOND: &[(i8, i8)] = &[(0, -2), (-1, -1), (-2, 0), (-1, 1), (0, 2), (1, 1), (2, 0), (1, -1)];
-const TWO_OFFSET_DIAMOND_POINTS: &[(i8, i8)] = &[(0, -2), (-2, 0), (0, 2), (2, 0)];
-
-//
 // Nodes
 //
 
@@ -65,16 +54,16 @@ const EXTENSION_CROSS: &FixedPlanNode = &FixedPlanNode {
     child: PlanNodeStorage::Empty,
     desires_placement: |_, state| state.get_count(StructureType::Extension) <= 55 && state.get_count(StructureType::Storage) > 0,
     desires_location: |_, _, _| true,
-    scorer: |location, _, state| {
-        let storage_locations = state.get_locations(StructureType::Storage);
-
-        storage_locations
-            .iter()
-            .map(|storage| storage.distance_to_xy(location.x(), location.y()))
-            .min()
-            .map(|d| {
-                1.0 - (d as f32 / ROOM_WIDTH.max(ROOM_HEIGHT) as f32)
+    scorer: |location, context, state| {
+        if location.in_room_bounds() {
+            state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
+                storage_distances
+                    .and_then(|(distances, max_distance)| distances.get(location.x() as usize, location.y() as usize).map(|distance| (distance,  max_distance)))
+                    .map(|(distance, max_distance)| 1.0 - (distance as f32 / max_distance as f32))
             })
+        } else {
+            None
+        }
     }
 };
 
@@ -92,16 +81,16 @@ const EXTENSION: &FixedPlanNode = &FixedPlanNode {
     child: PlanNodeStorage::Empty,
     desires_placement: |_, state| state.get_count(StructureType::Extension) < 60 && state.get_count(StructureType::Storage) > 0,
     desires_location: |_, _, _| true,
-    scorer: |location, _, state| {
-        let storage_locations = state.get_locations(StructureType::Storage);
-
-        storage_locations
-            .iter()
-            .map(|storage| storage.distance_to_xy(location.x(), location.y()))
-            .min()
-            .map(|d| {
-                1.0 - (d as f32 / ROOM_WIDTH.max(ROOM_HEIGHT) as f32)
+    scorer: |location, context, state| {
+        if location.in_room_bounds() {
+            state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
+                storage_distances
+                    .and_then(|(distances, max_distance)| distances.get(location.x() as usize, location.y() as usize).map(|distance| (distance, max_distance)))
+                    .map(|(distance, max_distance)| 1.0 - (distance as f32 / max_distance as f32))
             })
+        } else {
+            None
+        }
     }
 };
 
@@ -303,9 +292,13 @@ const SOURCE_CONTAINER: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&Fi
         child: SOURCE_LINK,
         desires_placement: |_, _| true,
         desires_location: |location, context, state| {
-            state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
-                storage_distances.and_then(|distances| distances.get(location.x() as usize, location.y() as usize).map(|distance| distance >= 8)).unwrap_or(false)
-            })
+            if location.in_room_bounds() {
+                state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
+                    storage_distances.and_then(|(distances, _max_distance)| distances.get(location.x() as usize, location.y() as usize).map(|distance| distance >= 8)).unwrap_or(false)
+                })
+            } else {
+                false
+            }
         },
         scorer: |_, _, _| Some(1.0),
     }),
