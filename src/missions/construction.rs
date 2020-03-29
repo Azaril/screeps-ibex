@@ -47,6 +47,7 @@ struct RoomDataPlannerDataSource<'a> {
     room_name: RoomName,
     static_visibility: &'a RoomStaticVisibilityData,
     terrain: Option<FastRoomTerrain>,
+    controllers: Option<Vec<PlanLocation>>,
     sources: Option<Vec<PlanLocation>>,
     minerals: Option<Vec<PlanLocation>>
 }
@@ -57,6 +58,7 @@ impl<'a> RoomDataPlannerDataSource<'a> {
             room_name,
             static_visibility,
             terrain: None,
+            controllers: None,
             sources: None,
             minerals: None
         }
@@ -73,6 +75,23 @@ impl<'a> PlannerRoomDataSource for RoomDataPlannerDataSource<'a> {
         }
 
         self.terrain.as_ref().unwrap()
+    }
+
+    fn get_controllers(&mut self) -> &[PlanLocation] {
+        if self.controllers.is_none() {
+            let controllers = self.static_visibility
+                .controller()
+                .iter()
+                .map(|id| {
+                    let pos = id.pos();
+                    PlanLocation::new(pos.x() as i8, pos.y() as i8)
+                })
+                .collect();
+
+            self.controllers = Some(controllers);
+        }
+
+        self.controllers.as_ref().unwrap()
     }
 
     fn get_sources(&mut self) -> &[PlanLocation] {

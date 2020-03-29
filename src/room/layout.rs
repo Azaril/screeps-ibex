@@ -134,6 +134,132 @@ const UTILITY_CROSS: &FixedPlanNode = &FixedPlanNode {
     }
 };
 
+const CONTROLLER_LINK: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&FixedPlanNode {
+    id: uuid::Uuid::from_u128(0xc551_f09c_70d8_4148_a6a0_23af_6d95_e1bcu128),
+    must_place: true,
+    placements: &[
+        placement(StructureType::Link, 0, 0),
+    ],
+    child: PlanNodeStorage::Empty,
+    desires_placement: |_context, state| state.get_count(StructureType::Link) < 6,
+    desires_location: |location, _context, state| {
+        let link_locations = state.get_locations(StructureType::Link);
+        let container_locations = state.get_locations(StructureType::Container);
+
+        container_locations
+            .iter()
+            .filter(|&container_location| location.distance_to(container_location.into()) <= 1)
+            .any(|container_location| !link_locations.iter().any(|link_location| link_location.distance_to(*container_location) <= 1))
+    },
+    scorer: |_, _, _| Some(1.0),
+});
+
+const CONTROLLER_CONTAINER: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&FixedPlanNode {
+    id: uuid::Uuid::from_u128(0x865a_77b5_df18_418f_826f_e3d4_e934_4bd6u128),
+    must_place: true,
+    placements: &[
+        placement(StructureType::Container, 0, 0),
+    ],
+    child: PlanNodeStorage::LocationExpansion(&NearestToStructureExpansionPlanNode {
+        structure_type: StructureType::Storage,
+        allowed_offsets: ONE_OFFSET_SQUARE,
+        child: CONTROLLER_LINK,
+        desires_placement: |_, _| true,
+        desires_location: |_, _, _| true,
+        scorer: |_, _, _| Some(1.0),
+    }),
+    desires_placement: |_context, state| state.get_count(StructureType::Container) < 5,
+    desires_location: |location, context, state| {
+        let controller_locations = context.controllers().to_vec();
+        let container_locations = state.get_locations(StructureType::Container);
+
+        controller_locations
+            .iter()
+            .filter(|&controller_location| controller_location.distance_to(location.into()) <= 1)
+            .any(|controller_location| !container_locations.iter().any(|container_location| controller_location.distance_to(container_location.into()) <= 1))
+    },
+    scorer: |_, _, _| Some(1.0),
+});
+
+const CONTROLLERS: PlanNodeStorage = PlanNodeStorage::GlobalExpansion(&FixedLocationPlanNode {
+    locations: |context| {
+        context.controllers().to_vec()
+    },
+    child: PlanNodeStorage::LocationExpansion(&NearestToStructureExpansionPlanNode {
+        structure_type: StructureType::Storage,
+        allowed_offsets: ONE_OFFSET_SQUARE,
+        child: CONTROLLER_CONTAINER,
+        desires_placement: |_, _| true,
+        desires_location: |_, _, _| true,
+        scorer: |_, _, _| Some(1.0),
+    })
+});
+
+const SOURCE_LINK: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&FixedPlanNode {
+    id: uuid::Uuid::from_u128(0x319d_c67c_8230_4905_afc3_e9c8_196c_2bd3u128),
+    must_place: true,
+    placements: &[
+        placement(StructureType::Link, 0, 0),
+    ],
+    child: PlanNodeStorage::Empty,
+    desires_placement: |_context, state| state.get_count(StructureType::Link) < 6,
+    desires_location: |location, _context, state| {
+        let link_locations = state.get_locations(StructureType::Link);
+        let container_locations = state.get_locations(StructureType::Container);
+
+        container_locations
+            .iter()
+            .filter(|&container_location| location.distance_to(container_location.into()) <= 1)
+            .any(|container_location| !link_locations.iter().any(|link_location| link_location.distance_to(*container_location) <= 1))
+    },
+    scorer: |_, _, _| Some(1.0),
+});
+
+const SOURCE_CONTAINER: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&FixedPlanNode {
+    id: uuid::Uuid::from_u128(0xe2ba_7996_11a2_47d8_bb3d_57cc_2ade_bbf2u128),
+    must_place: true,
+    placements: &[
+        placement(StructureType::Container, 0, 0),
+    ],
+    child: PlanNodeStorage::LocationExpansion(&NearestToStructureExpansionPlanNode {
+        structure_type: StructureType::Storage,
+        allowed_offsets: ONE_OFFSET_SQUARE,
+        child: SOURCE_LINK,
+        desires_placement: |_, _| true,
+        desires_location: |location, context, state| {
+            if location.in_room_bounds() {
+                state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
+                    storage_distances.and_then(|(distances, _max_distance)| distances.get(location.x() as usize, location.y() as usize).map(|distance| distance >= 8)).unwrap_or(false)
+                })
+            } else {
+                false
+            }
+        },
+        scorer: |_, _, _| Some(1.0),
+    }),
+    desires_placement: |_context, state| state.get_count(StructureType::Container) < 5,
+    desires_location: |location, context, state| {
+        let mut source_locations = context.sources().to_vec();
+        let mut container_locations = state.get_locations(StructureType::Container);
+
+        let mut matched_sources = Vec::new();
+
+        for (source_index, source_location) in source_locations.iter().enumerate() {
+            if let Some(index) = container_locations.iter().position(|container_location| source_location.distance_to(container_location.into()) <= 1) {
+                container_locations.remove(index);
+                matched_sources.push(source_index)
+            }
+        }
+
+        for index in matched_sources.iter().rev() {
+            source_locations.remove(*index);
+        }
+
+        source_locations.iter().any(|source_location| location.distance_to(*source_location) <= 1)
+    },
+    scorer: |_, _, _| Some(1.0),
+});
+
 const SOURCES: PlanNodeStorage = PlanNodeStorage::GlobalExpansion(&FixedLocationPlanNode {
     locations: |context| {
         context.sources().to_vec()
@@ -209,7 +335,7 @@ const MINERALS_NODE: &FixedLocationPlanNode = &FixedLocationPlanNode {
 const MINERALS: PlanNodeStorage = PlanNodeStorage::GlobalExpansion(MINERALS_NODE);
 
 const POST_BUNKER_NODES: PlanNodeStorage = PlanNodeStorage::LocationExpansion(&MultiPlacementExpansionNode {
-    children: &[SOURCES, MINERALS]
+    children: &[CONTROLLERS, SOURCES, MINERALS]
 });
 
 const BUNKER_CORE: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&FixedPlanNode {
@@ -301,73 +427,6 @@ const ROOT_BUNKER: PlanNodeStorage = PlanNodeStorage::LocationExpansion(&MultiPl
     children: &[
         BUNKER_CORE
     ]
-});
-
-const SOURCE_LINK: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&FixedPlanNode {
-    id: uuid::Uuid::from_u128(0xc551_f09c_70d8_4148_a6a0_23af_6d95_e1bcu128),
-    must_place: true,
-    placements: &[
-        placement(StructureType::Link, 0, 0),
-    ],
-    child: PlanNodeStorage::Empty,
-    desires_placement: |_context, state| state.get_count(StructureType::Link) < 6,
-    desires_location: |location, _context, state| {
-        let link_locations = state.get_locations(StructureType::Link);
-        let container_locations = state.get_locations(StructureType::Container);
-
-        let matching_containers: Vec<_> = container_locations
-            .iter()
-            .filter(|&container_location| location.distance_to(container_location.into()) <= 1)
-            .collect();
-
-        matching_containers.iter().any(|container_location| !link_locations.iter().any(|link_location| link_location.distance_to(**container_location) <= 1))
-    },
-    scorer: |_, _, _| Some(1.0),
-});
-
-const SOURCE_CONTAINER: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&FixedPlanNode {
-    id: uuid::Uuid::from_u128(0x865a_77b5_df18_418f_826f_e3d4_e934_4bd6u128),
-    must_place: true,
-    placements: &[
-        placement(StructureType::Container, 0, 0),
-    ],
-    child: PlanNodeStorage::LocationExpansion(&NearestToStructureExpansionPlanNode {
-        structure_type: StructureType::Storage,
-        allowed_offsets: ONE_OFFSET_SQUARE,
-        child: SOURCE_LINK,
-        desires_placement: |_, _| true,
-        desires_location: |location, context, state| {
-            if location.in_room_bounds() {
-                state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
-                    storage_distances.and_then(|(distances, _max_distance)| distances.get(location.x() as usize, location.y() as usize).map(|distance| distance >= 8)).unwrap_or(false)
-                })
-            } else {
-                false
-            }
-        },
-        scorer: |_, _, _| Some(1.0),
-    }),
-    desires_placement: |_context, state| state.get_count(StructureType::Container) < 5,
-    desires_location: |location, context, state| {
-        let mut source_locations = context.sources().to_vec();
-        let mut container_locations = state.get_locations(StructureType::Container);
-
-        let mut matched_sources = Vec::new();
-
-        for (source_index, source_location) in source_locations.iter().enumerate() {
-            if let Some(index) = container_locations.iter().position(|container_location| source_location.distance_to(container_location.into()) <= 1) {
-                container_locations.remove(index);
-                matched_sources.push(source_index)
-            }
-        }
-
-        for index in matched_sources.iter().rev() {
-            source_locations.remove(*index);
-        }
-
-        source_locations.iter().any(|source_location| location.distance_to(*source_location) <= 1)
-    },
-    scorer: |_, _, _| Some(1.0),
 });
 
 pub const ALL_ROOT_NODES: &[&dyn PlanGlobalExpansionNode] = &[

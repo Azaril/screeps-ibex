@@ -1247,6 +1247,11 @@ impl<'d> NodeContext<'d> {
         self.data_source.get_terrain()
     }
 
+    
+    pub fn controllers(&mut self) -> &[PlanLocation] {
+        self.data_source.get_controllers()
+    }
+
     pub fn sources(&mut self) -> &[PlanLocation] {
         self.data_source.get_sources()
     }
@@ -2415,6 +2420,7 @@ pub enum PlanEvaluationResult {
 
 pub trait PlannerRoomDataSource {
     fn get_terrain(&mut self) -> &FastRoomTerrain;
+    fn get_controllers(&mut self) -> &[PlanLocation];
     fn get_sources(&mut self) -> &[PlanLocation];
     fn get_minerals(&mut self) -> &[PlanLocation];
 }
