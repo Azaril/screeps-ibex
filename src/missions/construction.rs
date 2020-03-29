@@ -166,12 +166,12 @@ impl Mission for ConstructionMission {
 
             if let Some(mut planner_state) = self.planner_state.as_mut() {
                 let bucket = game::cpu::bucket();
-                let ticket_limit = game::cpu::tick_limit();
+                let tick_limit = game::cpu::tick_limit();
                 let current_cpu = game::cpu::get_used();
-                let remaining_cpu = ticket_limit - current_cpu;
-                let max_cpu = (remaining_cpu * 0.2).min(50.0);
+                let remaining_cpu = tick_limit - current_cpu;
+                let max_cpu = (remaining_cpu * 0.25).min(tick_limit / 2.0);
 
-                if bucket >= ticket_limit * 2.0 && max_cpu >= 20.0 {
+                if bucket >= tick_limit * 2.0 && max_cpu >= 20.0 {
                     info!("Planning - Budget: {}", max_cpu);
 
                     let mut data_source = RoomDataPlannerDataSource::new(room_data.name, static_visibility_data);

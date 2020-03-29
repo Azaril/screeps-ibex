@@ -623,6 +623,27 @@ fn visualize_room_items<'a, T: IntoIterator<Item = (&'a Location, &'a RoomItem)>
                     Some(CircleStyle::default().fill("aqua").opacity(1.0)),
                 );
             }
+            RoomItem { structure_type: StructureType::PowerSpawn, .. } => {
+                visualizer.circle(
+                    loc.x() as f32,
+                    loc.y() as f32,
+                    Some(CircleStyle::default().fill("Fuschia").opacity(1.0)),
+                );
+            }
+            RoomItem { structure_type: StructureType::Observer, .. } => {
+                visualizer.circle(
+                    loc.x() as f32,
+                    loc.y() as f32,
+                    Some(CircleStyle::default().fill("Lime").opacity(1.0)),
+                );
+            }
+            RoomItem { structure_type: StructureType::Factory, .. } => {
+                visualizer.circle(
+                    loc.x() as f32,
+                    loc.y() as f32,
+                    Some(CircleStyle::default().fill("Brown").opacity(1.0)),
+                );
+            }
             RoomItem { .. } => {
                 visualizer.circle(
                     loc.x() as f32,
