@@ -1,4 +1,3 @@
-use crate::findnearest::*;
 use crate::visualize::*;
 use screeps::*;
 use serde::*;
@@ -93,7 +92,7 @@ pub struct RoomItem {
     #[serde(rename = "s")]
     structure_type: StructureType,
     #[serde(rename = "r")]
-    required_rcl: u32,
+    required_rcl: u8,
 }
 
 impl RoomItem {
@@ -101,7 +100,7 @@ impl RoomItem {
         self.structure_type
     }
 
-    pub fn required_rcl(&self) -> u32 {
+    pub fn required_rcl(&self) -> u8 {
         self.required_rcl
     }
 }
@@ -211,6 +210,125 @@ impl<'de> Deserialize<'de> for Location {
         D: Deserializer<'de>,
     {
         u16::deserialize(deserializer).map(Location::from_packed)
+    }
+}
+
+fn get_min_rcl_for_spawn(count: u8) -> Option<u8> {
+    match count {
+        0 => Some(0),
+        1 => Some(1),
+        2 => Some(7),
+        3 => Some(8),
+        _ => None
+    }
+}
+
+fn get_min_rcl_for_extension(count: u8) -> Option<u8> {
+    match count {
+        0 => Some(0),
+        1..=5 => Some(2),
+        6..=10 => Some(3),
+        11..=20 => Some(4),
+        21..=30 => Some(5),
+        31..=40 => Some(6),
+        41..=50 => Some(7),
+        51..=60 => Some(8),
+        _ => None,
+    }
+}
+
+fn get_min_rcl_for_link(count: u8) -> Option<u8> {
+    match count {
+        0 => Some(0),
+        1..=2 => Some(5),
+        3..=3 => Some(6),
+        4..=4 => Some(7),
+        5..=6 => Some(8),
+        _ => None,
+    }
+}
+
+fn get_min_rcl_for_storage(count: u8) -> Option<u8> {
+    match count {
+        0 => Some(0),
+        1..=1 => Some(4),
+        _ => None,
+    }
+}
+
+fn get_min_rcl_for_tower(count: u8) -> Option<u8> {
+    match count {
+        0 => Some(0),
+        1..=1 => Some(3),
+        2..=2 => Some(5),
+        3..=3 => Some(7),
+        4..=6 => Some(8),
+        _ => None,
+    }
+}
+
+fn get_min_rcl_for_observer(count: u8) -> Option<u8> {
+    match count {
+        0 => Some(0),
+        1..=1 => Some(8),
+        _ => None,
+    }
+}
+
+fn get_min_rcl_for_power_spawn(count: u8) -> Option<u8> {
+    match count {
+        0 => Some(0),
+        1..=1 => Some(8),
+        _ => None,
+    }
+}
+
+fn get_min_rcl_for_extractor(count: u8) -> Option<u8> {
+    match count {
+        0 => Some(0),
+        1..=1 => Some(6),
+        _ => None,
+    }
+}
+
+fn get_min_rcl_for_terminal(count: u8) -> Option<u8> {
+    match count {
+        0 => Some(0),
+        1..=1 => Some(6),
+        _ => None,
+    }
+}
+
+fn get_min_rcl_for_lab(count: u8) -> Option<u8> {
+    match count {
+        0 => Some(0),
+        1..=3 => Some(6),
+        4..=6 => Some(7),
+        7..=10 => Some(8),
+        _ => None,
+    }
+}
+
+fn get_min_rcl_for_container(count: u8) -> Option<u8> {
+    match count {
+        0..=5 => Some(0),
+        _ => None,
+    }
+}
+
+fn get_min_rcl_for_nuker(count: u8) -> Option<u8> {
+    match count {
+        0 => Some(0),
+        1..=1 => Some(8),
+        _ => None,
+    }
+}
+
+fn get_min_rcl_for_factory(count: u8) -> Option<u8> {
+    match count {
+        0 => Some(0),
+        1..=1 => Some(7),
+        _ => None,
     }
 }
 
@@ -402,6 +520,30 @@ impl PlannerState {
     pub fn visualize(&self, visualizer: &mut RoomVisualizer) {
         for layer in &self.layers {
             layer.visualize(visualizer);
+        }
+    }
+
+    pub fn get_rcl_for_next_structure(&self, structure_type: StructureType) -> Option<u8> {
+        let current_count = self.get_count(structure_type);
+
+        match structure_type {
+            StructureType::Spawn => get_min_rcl_for_spawn(current_count + 1),
+            StructureType::Extension => get_min_rcl_for_extension(current_count + 1),
+            StructureType::Road => Some(1),
+            StructureType::Wall => Some(2),
+            StructureType::Rampart => Some(2),
+            StructureType::Link => get_min_rcl_for_link(current_count + 1),
+            StructureType::Storage => get_min_rcl_for_storage(current_count + 1),
+            StructureType::Tower => get_min_rcl_for_tower(current_count + 1),
+            StructureType::Observer => get_min_rcl_for_observer(current_count + 1),
+            StructureType::PowerSpawn => get_min_rcl_for_power_spawn(current_count + 1),
+            StructureType::Extractor => get_min_rcl_for_extractor(current_count + 1),
+            StructureType::Lab => get_min_rcl_for_lab(current_count + 1),
+            StructureType::Terminal => get_min_rcl_for_terminal(current_count + 1),
+            StructureType::Container => get_min_rcl_for_container(current_count + 1),
+            StructureType::Nuker => get_min_rcl_for_nuker(current_count + 1),
+            StructureType::Factory => get_min_rcl_for_factory(current_count + 1),
+            _ => None
         }
     }
 }
@@ -669,7 +811,7 @@ impl Plan {
         let room_level = room.controller().map(|c| c.level()).unwrap_or(0);
 
         for (loc, entry) in self.state.iter() {
-            if room_level >= entry.required_rcl {
+            if room_level >= entry.required_rcl.into() {
                 room.create_construction_site(&RoomPosition::new(loc.x() as u32, loc.y() as u32, room_name), entry.structure_type);
             }
         }
@@ -1463,13 +1605,30 @@ impl<'a> PlanLocationPlacementNode for FixedPlanNode<'a> {
     }
 
     fn place(&self, position: PlanLocation, _context: &mut NodeContext, state: &mut PlannerState) {
-        for placement in self.placements.iter() {
+        let mut min_rcl = None;
+
+        for placement in self.placements.iter().filter(|p| p.structure_type != StructureType::Road) {
             let placement_location = (position + placement.offset).as_location().unwrap();
             
-            //TODO: Compute correct RCL.
-            let rcl = 0;
+            let rcl = state.get_rcl_for_next_structure(placement.structure_type).unwrap();
+
+            min_rcl = min_rcl.map(|r| if rcl < r { rcl } else { r }).or(Some(rcl));
 
             state.insert(placement_location, RoomItem { structure_type: placement.structure_type, required_rcl: rcl });
+        }
+
+        let road_rcl = min_rcl.unwrap_or(1);
+
+        for placement in self.placements.iter().filter(|p| p.structure_type == StructureType::Road) {
+            let placement_location = (position + placement.offset).as_location().unwrap();
+
+            if let Some(other_placement) = state.get(&placement_location) {
+                if other_placement.structure_type == StructureType::Road && other_placement.required_rcl < road_rcl {
+                    continue;
+                }
+            }
+
+            state.insert(placement_location, RoomItem { structure_type: placement.structure_type, required_rcl: road_rcl });
         }
     }
 }
@@ -2353,125 +2512,5 @@ impl<S> Planner<S> where S: Fn(&PlannerState, &mut NodeContext) -> Option<f32> {
         };
 
         Ok(evaluate_result)
-    }
-
-    /*
-    fn get_nearest_empty_terrain(terrain: &FastRoomTerrain, start_pos: (u32, u32)) -> Option<(u32, u32)> {
-        let expanded = &[(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)];
-        let center = &[(0, 0)];
-        let search_pattern = center.iter().chain(expanded.iter());
-
-        for pos in search_pattern {
-            let room_pos = ((start_pos.0 as i32 + pos.0), (start_pos.1 as i32 + pos.1));
-
-            if room_pos.in_room_build_bounds() {
-                let terrain_data = terrain.get(&Location::new(room_pos.0 as u32, room_pos.1 as u32));
-
-                if terrain_data.contains(TerrainFlags::Wall) {
-                    return Some((room_pos.0 as u32, room_pos.1 as u32));
-                }
-            }
-        }
-
-        None
-    }
-    */
-
-    fn spawn_count_to_rcl(count: u32) -> Option<u32> {
-        match count {
-            0 => Some(0),
-            1 => Some(1),
-            2 => Some(7),
-            3 => Some(8),
-            _ => None
-        }
-    }
-
-    fn extension_count_to_rcl(count: u32) -> Option<u32> {
-        match count {
-            0 => Some(0),
-            1..=5 => Some(2),
-            6..=10 => Some(3),
-            11..=20 => Some(4),
-            21..=30 => Some(5),
-            31..=40 => Some(6),
-            41..=50 => Some(7),
-            51..=60 => Some(8),
-            _ => None,
-        }
-    }
-
-    fn add_containers(room: &Room, _terrain: &FastRoomTerrain, spawns: &Vec<Location>, state: &mut PlannerState) -> Result<(), String> {
-        let spawn_positions: Vec<_> = spawns.iter().map(|l| RoomPosition::new(l.x() as u32, l.y() as u32, room.name())).collect();
-
-        for source in room.find(find::SOURCES) {
-            let nearest_spawn_path = spawn_positions
-                .iter()
-                .cloned()
-                .find_nearest_path_to(source.pos(), PathFinderHelpers::same_room_ignore_creeps_and_structures_range_1);
-
-            if let Some(Path::Vectorized(path)) = nearest_spawn_path {
-                if let Some(last_step) = path.last() {
-                    let pos_x = last_step.x as i32;
-                    let pos_y = last_step.y as i32;
-
-                    state.insert(
-                        Location::from_coords(pos_x as u32, pos_y as u32),
-                        RoomItem { structure_type: StructureType::Container, required_rcl: 2 }
-                    );
-                }
-            }
-        }
-
-        if let Some(controller) = room.controller() {
-            let nearest_spawn_path = spawn_positions
-                .iter()
-                .cloned()
-                .find_nearest_path_to(controller.pos(), PathFinderHelpers::same_room_ignore_creeps_and_structures_range_1);
-
-            if let Some(Path::Vectorized(path)) = nearest_spawn_path {
-                if let Some(last_step) = path.last() {
-                    let pos_x = last_step.x as i32;
-                    let pos_y = last_step.y as i32;
-
-                    state.insert(
-                        Location::from_coords(pos_x as u32, pos_y as u32),
-                        RoomItem { structure_type: StructureType::Container, required_rcl: 2 }
-                    );
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn add_extractors(room: &Room, _terrain: &FastRoomTerrain, spawns: &Vec<Location>, state: &mut PlannerState) -> Result<(), String> {
-        let spawn_positions: Vec<_> = spawns.iter().map(|l| RoomPosition::new(l.x() as u32, l.y() as u32, room.name())).collect();
-
-        for mineral in room.find(find::MINERALS) {
-            state.insert(
-                Location::from_pos(mineral.pos()),
-                RoomItem { structure_type: StructureType::Extractor, required_rcl: 6 }
-            );
-
-            let nearest_spawn_path = spawn_positions
-                .iter()
-                .cloned()
-                .find_nearest_path_to(mineral.pos(), PathFinderHelpers::same_room_ignore_creeps_and_structures_range_1);
-
-            if let Some(Path::Vectorized(path)) = nearest_spawn_path {
-                if let Some(last_step) = path.last() {
-                    let pos_x = last_step.x as i32;
-                    let pos_y = last_step.y as i32;
-
-                    state.insert(
-                        Location::from_coords(pos_x as u32, pos_y as u32),
-                        RoomItem { structure_type: StructureType::Container, required_rcl: 6 }
-                    );
-                }
-            }
-        }
-
-        Ok(())
     }
 }
