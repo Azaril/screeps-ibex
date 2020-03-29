@@ -28,6 +28,6 @@ screeps-timing-annotate = { git = "https://github.com/Azaril/screeps-timing-anno
 
 [profile.release]
 panic = "abort"
-opt-level = 3
+opt-level = "z"
 lto = true
 codegen-units = 1
