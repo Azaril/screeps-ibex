@@ -21,9 +21,18 @@ function wasm_initialize() {
     if (wasm_module == null) {
         const wasm_bytes = wasm_fetch_module_bytes();
         console.log("Reset! Code length: " + wasm_bytes.length);
-        wasm_module = new WebAssembly.Module(wasm_bytes);
+        
+        if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
+            return;
+        }
 
-        return;
+        if (WebAssembly.validate(wasm_bytes)) {
+            wasm_module = new WebAssembly.Module(wasm_bytes);
+        } else {
+            console.log("Invalid WASM loaded from require!");
+
+            return;
+        }
     }
 
     if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
