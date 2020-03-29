@@ -128,7 +128,8 @@ impl Mission for ConstructionMission {
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility")?;
 
-        let should_update = self.next_update.map(|next_time| game::time() >= next_time).unwrap_or(true);
+        let should_update = self.next_update.map(|next_time| game::time() >= next_time).unwrap_or(true) ||
+            (crate::features::construction::plan() && crate::features::construction::force_plan());
 
         if should_update && crate::features::construction::plan() {
             if (self.plan.is_none() || crate::features::construction::force_plan()) && self.planner_state.is_none() {
