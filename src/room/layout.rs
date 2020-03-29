@@ -94,6 +94,46 @@ const EXTENSION: &FixedPlanNode = &FixedPlanNode {
     }
 };
 
+const UTILITY_CROSS: &FixedPlanNode = &FixedPlanNode {
+    id: uuid::Uuid::from_u128(0x03e1_1bc4_e469_44b0_80dc_1b88_88c2_616eu128),
+    must_place: false,
+    placements: &[
+        placement(StructureType::Observer, 0, 0),
+        placement(StructureType::Spawn, 0, 1),
+        placement(StructureType::Factory, 1, 0),
+        placement(StructureType::PowerSpawn, -1, 0),
+        placement(StructureType::Spawn, 0, -1),
+
+        placement(StructureType::Road, 0, -2),
+        placement(StructureType::Road, -1, -1),
+        placement(StructureType::Road, -2, 0),
+        placement(StructureType::Road, -1, 1),
+        placement(StructureType::Road, 0, 2),
+        placement(StructureType::Road, 1, 1),
+        placement(StructureType::Road, 2, 0),
+        placement(StructureType::Road, 1, -1),
+    ],
+    child: PlanNodeStorage::Empty,
+    desires_placement: |_, state| { 
+        state.get_count(StructureType::Observer) == 0 && 
+        state.get_count(StructureType::Spawn) <= 1 &&
+        state.get_count(StructureType::Factory) == 0 &&
+        state.get_count(StructureType::PowerSpawn) == 0        
+    },
+    desires_location: |_, _, _| true,
+    scorer: |location, context, state| {
+        if location.in_room_bounds() {
+            state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
+                storage_distances
+                    .and_then(|(distances, max_distance)| distances.get(location.x() as usize, location.y() as usize).map(|distance| (distance,  max_distance)))
+                    .map(|(distance, max_distance)| 1.0 - (distance as f32 / max_distance as f32))
+            })
+        } else {
+            None
+        }
+    }
+};
+
 const SOURCES: PlanNodeStorage = PlanNodeStorage::GlobalExpansion(&FixedLocationPlanNode {
     locations: |context| {
         context.sources().to_vec()
@@ -187,6 +227,7 @@ const BUNKER_CORE: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&FixedPl
         placement(StructureType::Tower, -2, 1),
         placement(StructureType::Tower, -1, 2),
         placement(StructureType::Tower, -1, -2),
+        placement(StructureType::Tower, 0, -2),
         placement(StructureType::Tower, 2, 0),
         placement(StructureType::Tower, 2, 1),
 
@@ -204,7 +245,6 @@ const BUNKER_CORE: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&FixedPl
         placement(StructureType::Extension, 0, 3),
         placement(StructureType::Extension, 0, 2),
         placement(StructureType::Extension, 1, 2),
-        placement(StructureType::Extension, 0, -2),
         placement(StructureType::Extension, 0, -3),
         placement(StructureType::Extension, 1, -3),
         placement(StructureType::Extension, 1, -2),
@@ -232,8 +272,13 @@ const BUNKER_CORE: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&FixedPl
                 start_offsets: &[(-3, -3), (-1, -5), (-5, -1), (3, 3), (5, 1), (1, 5)],
                 expansion_offsets: &[(-4, 0), (-2, 2), (0, 4), (2, 2), (4, 0), (2, -2), (0, -4), (-2, -2)],
                 maximum_expansion: 20,
-                maximum_nodes: 60,
+                maximum_nodes: 100,
                 levels: &[FloodFillPlanNodeLevel {
+                    offsets: &[(0, 0)],
+                    node: UTILITY_CROSS,
+                    node_cost: 0,
+                },
+                FloodFillPlanNodeLevel {
                     offsets: &[(0, 0)],
                     node: EXTENSION_CROSS,
                     node_cost: 5

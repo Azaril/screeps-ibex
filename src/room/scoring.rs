@@ -9,13 +9,16 @@ struct StateScore {
 }
 
 fn has_mandatory_buildings(state: &PlannerState, context: &mut NodeContext) -> bool {
-    //TODO: Spawn count here should be 3.
-    //TODO: Add labs, factory, observer, nuker. Any others...
-    state.get_count(StructureType::Spawn) >= 1 &&
+    state.get_count(StructureType::Spawn) >= 3 &&
     state.get_count(StructureType::Extension) >= 60 &&
     state.get_count(StructureType::Storage) >= 1 &&
     state.get_count(StructureType::Terminal) >= 1 &&
     state.get_count(StructureType::Lab) >= 10 &&
+    state.get_count(StructureType::Factory) >= 1 &&
+    state.get_count(StructureType::Observer) >= 1 && 
+    state.get_count(StructureType::PowerSpawn) >= 1 &&
+    state.get_count(StructureType::Nuker) >= 1 &&
+    state.get_count(StructureType::Tower) >= 6 &&
     (state.get_count(StructureType::Extractor) as usize) == context.minerals().len()
 }
 
@@ -140,8 +143,8 @@ fn has_reachable_sources(state: &PlannerState, context: &mut NodeContext) -> boo
         if let Some((storage_distances, _max_distance)) = storage_distances {
             sources
                 .iter()
-                .any(|source_location| {
-                    !ONE_OFFSET_SQUARE
+                .all(|source_location| {
+                    ONE_OFFSET_SQUARE
                         .iter()
                         .any(|offset| {
                             let offset_location = *source_location + offset;
@@ -264,10 +267,9 @@ fn extension_distance_score(state: &PlannerState, _context: &mut NodeContext) ->
 }
 
 pub fn score_state(state: &PlannerState, context: &mut NodeContext) -> Option<f32> {
-    //TODO: Add more validatiors.
+    //TODO: Add more validators.
     /*
         Validators needed:
-        - Pathing reachability.
         - Link is within pathable range 2 of storage.
         - Terminal is within pathable range 2 of storage.
     */
@@ -286,9 +288,7 @@ pub fn score_state(state: &PlannerState, context: &mut NodeContext) -> Option<f3
         has_reachable_sources
     ];
 
-    let is_complete = validators.iter().all(|v| (v)(state, context));
-
-    if !is_complete {
+    if !validators.iter().all(|v| (v)(state, context)) {
         return None;
     }
 
@@ -296,6 +296,7 @@ pub fn score_state(state: &PlannerState, context: &mut NodeContext) -> Option<f3
     /*
         Scoring needed:
         - Mineral to storage length.
+        - Controller to storage length.
     */
 
     let scorers = [
@@ -313,7 +314,9 @@ pub fn score_state(state: &PlannerState, context: &mut NodeContext) -> Option<f3
     let total_weight: f32 = weights.iter().map(|s| s.weight).sum();
 
     if total_weight > 0.0 {
-        Some(total_score / total_weight)
+        let score = total_score / total_weight;
+
+        Some(score)
     } else {
         None
     }    
