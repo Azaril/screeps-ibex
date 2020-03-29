@@ -344,6 +344,7 @@ pub struct PlannerStateLayer {
     structure_distances: RefCell<HashMap<StructureType, (RoomDataArray<Option<u32>>, u32)>>
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl PlannerStateLayer {
     pub fn new() -> PlannerStateLayer {
         PlannerStateLayer {
@@ -419,6 +420,7 @@ pub struct PlannerState {
     layers: Vec<PlannerStateLayer>,
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl PlannerState {
     pub fn new() -> PlannerState {
         PlannerState {
