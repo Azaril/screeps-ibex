@@ -68,7 +68,13 @@ impl<'a> System<'a> for CleanupCreepsSystem {
 
     fn run(&mut self, (entities, creeps, _updater): Self::SystemData) {
         for (entity, creep) in (&entities, &creeps).join() {
-            if creep.owner.resolve().is_none() {
+            let delete = if let Some(creep) = creep.owner.resolve() {
+                creep.hits() == 0 
+            } else {
+                true
+            };
+
+            if delete {
                 if let Err(error) = entities.delete(entity) {
                     warn!(
                         "Failed to delete creep entity that had been deleted by the simulation. Error: {}",

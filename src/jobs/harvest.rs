@@ -20,7 +20,6 @@ use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
 
-
 #[derive(Clone, Serialize, Deserialize)]
 pub enum HarvestState {
     Idle(),

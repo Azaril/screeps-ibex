@@ -10,6 +10,8 @@ use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
 use crate::jobs::upgrade::*;
+use crate::transfer::transfersystem::*;
+use crate::remoteobjectid::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct UpgradeMission {
@@ -97,11 +99,56 @@ impl Mission for UpgradeMission {
             return Err("Room not owned by user".to_string());
         }
 
+        let room_transfer_data = runtime_data
+            .transfer_queue
+            .try_get_room(room_data.name);
+
+        let has_excess_energy = {
+            if let Some(room_transfer_data) = runtime_data.transfer_queue.try_get_room(room_data.name) {
+                if let Some(storage) = room.storage() {
+                    if let Some(storage_node) = room_transfer_data.try_get_node(&TransferTarget::Storage(storage.remote_id())) {
+                        if storage_node.get_available_withdrawl_by_resource(TransferType::Haul, ResourceType::Energy) >= 250_000 {
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    let structures = room.find(find::STRUCTURES);                       
+                    structures
+                        .iter()
+                        .filter_map(|structure| {
+                            if let Structure::Container(container) = structure { 
+                                Some(container) 
+                            } else { 
+                                None 
+                            }
+                        })
+                        .filter_map(|container| room_transfer_data.try_get_node(&TransferTarget::Container(container.remote_id())))
+                        .any(|container_node| container_node.get_available_withdrawl_by_resource(TransferType::Haul, ResourceType::Energy) as f32 / CONTAINER_CAPACITY as f32 > 0.75)
+                }
+            } else {
+                false
+            }
+        };  
+
+        let are_hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
+
         //TODO: Need better calculation for maximum number of upgraders.
-        let max_upgraders = if controller.level() <= 4 || (controller.level() < 8 && room.storage().map(|s| s.store_used_capacity(Some(ResourceType::Energy)) > 250_000).unwrap_or(false)) {
-            3
-        } else { 
-            1 
+        let max_upgraders = if are_hostile_creeps {
+            1
+        } else if controller.level() >= 8 {
+            1
+        } else if has_excess_energy {
+            if controller.level() <= 3 {
+                5
+            } else {
+                3
+            }
+        } else {
+            1
         };
 
         if self.upgraders.0.len() < max_upgraders {

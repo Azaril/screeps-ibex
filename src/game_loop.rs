@@ -29,6 +29,7 @@ use crate::operations::managersystem::*;
 use crate::operations::operationsystem::*;
 use crate::room::visibilitysystem::*;
 use crate::transfer::ordersystem::*;
+use crate::room::roomplansystem::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 fn serialize_world(world: &World, segment: u32) {
@@ -232,6 +233,7 @@ pub fn tick() {
         .with(TransferQueueSystem, "transfer_queue", &[])
         .with(OrderQueueSystem, "order_queue", &[])
         .with_barrier()
+        .with(RoomPlanSystem, "room_plan", &[])
         .with(VisualizerSystem, "visualizer", &[])
         .with(StatsSystem, "stats", &[])
         .with(MemoryArbiterSystem, "memory", &[])

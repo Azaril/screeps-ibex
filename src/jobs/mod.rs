@@ -11,3 +11,4 @@ pub mod staticmine;
 pub mod upgrade;
 pub mod utility;
 pub mod linkmine;
+pub mod defend;

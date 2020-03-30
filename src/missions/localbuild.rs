@@ -116,12 +116,14 @@ impl Mission for LocalBuildMission {
     ) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
+        let controller = room.controller().ok_or("Expected controller")?;
 
-        let max_count = 2;
+        let high_priority_count = if controller.level() <= 3 { 4 } else { 2 };
+        let low_priority_count = if controller.level() <= 3 { 3 } else { 1 };
 
-        if self.builders.0.len() < max_count {
+        if self.builders.0.len() < low_priority_count.max(high_priority_count) {
             if let Some(priority) = self.get_builder_priority(&room) {
-                let desired_count = if priority >= SPAWN_PRIORITY_HIGH { max_count } else { 1 };
+                let desired_count = if priority >= SPAWN_PRIORITY_HIGH { high_priority_count } else { low_priority_count };
                 if self.builders.0.len() < desired_count {
                     let use_energy_max = if self.builders.0.is_empty() && priority >= SPAWN_PRIORITY_HIGH {
                         room.energy_available()

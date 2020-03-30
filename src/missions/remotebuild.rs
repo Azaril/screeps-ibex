@@ -100,15 +100,28 @@ impl Mission for RemoteBuildMission {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
         if let Some(room) = game::rooms::get(room_data.name) {
-            if room.find(find::MY_CONSTRUCTION_SITES).is_empty() {
+            let construction_sites = room.find(find::MY_CONSTRUCTION_SITES);
+
+            if construction_sites.is_empty() {
+                return Ok(MissionResult::Success);
+            }
+
+            if !construction_sites.iter().any(|c| c.structure_type() == StructureType::Spawn) {
                 return Ok(MissionResult::Success);
             }
         }
 
         let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
         let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+        let home_room_controller = home_room.controller().ok_or("Expected controller")?;
 
-        if self.builders.0.len() < 2 {
+        let desired_builders = if home_room_controller.level() <= 3 {
+            4
+        } else {
+            2
+        };
+
+        if self.builders.0.len() < desired_builders {
             let priority = if self.builders.0.is_empty() {
                 SPAWN_PRIORITY_MEDIUM
             } else {

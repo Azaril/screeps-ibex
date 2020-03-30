@@ -331,6 +331,16 @@ impl TransferNode {
         available_resources
     }
 
+    pub fn get_available_withdrawl_by_resource(&self, transfer_type: TransferType, resource: ResourceType) -> u32 {
+        let mut available_resources: u32 = 0;
+
+        for key in self.withdrawls.keys().filter(|key| key.allowed_type == transfer_type && key.resource == resource) {
+            available_resources += self.get_available_withdrawl(key);
+        }
+
+        available_resources
+    }
+
     pub fn get_available_withdrawl_totals_by_priority(&self, transfer_type: TransferType, allowed_priorities: TransferPriorityFlags) -> HashMap<ResourceType, u32> {
         let mut available_resources: HashMap<ResourceType, u32> = HashMap::new();
 

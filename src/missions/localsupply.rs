@@ -444,7 +444,6 @@ impl LocalSupplyMission {
                 .flat_map(|m| m)
                 .collect_vec();
 
-            
             //
             // Spawn harvesters
             //

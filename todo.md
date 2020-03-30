@@ -1,5 +1,6 @@
 # High Priority
 
+- Remote upgrade mission/role.
 - Lazy evaluation of transfer data. (Register callback to materialize when requested.)
 - Add stuck detection and response for creeps.
 - Use 'local supply' mission for both local supply and remote mine.
