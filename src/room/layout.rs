@@ -56,11 +56,8 @@ const EXTENSION_CROSS: &FixedPlanNode = &FixedPlanNode {
     desires_location: |_, _, _| true,
     scorer: |location, context, state| {
         if location.in_room_bounds() {
-            state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
-                storage_distances
-                    .and_then(|(distances, max_distance)| distances.get(location.x() as usize, location.y() as usize).map(|distance| (distance,  max_distance)))
-                    .map(|(distance, max_distance)| 1.0 - (distance as f32 / max_distance as f32))
-            })
+            state.get_distance_to_structure(location, StructureType::Storage, 1, context.terrain())
+                .map(|distance| 1.0 - (distance as f32 / ROOM_WIDTH.max(ROOM_HEIGHT) as f32))
         } else {
             None
         }
@@ -83,11 +80,8 @@ const EXTENSION: &FixedPlanNode = &FixedPlanNode {
     desires_location: |_, _, _| true,
     scorer: |location, context, state| {
         if location.in_room_bounds() {
-            state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
-                storage_distances
-                    .and_then(|(distances, max_distance)| distances.get(location.x() as usize, location.y() as usize).map(|distance| (distance, max_distance)))
-                    .map(|(distance, max_distance)| 1.0 - (distance as f32 / max_distance as f32))
-            })
+            state.get_distance_to_structure(location, StructureType::Storage, 1, context.terrain())
+                .map(|distance| 1.0 - (distance as f32 / ROOM_WIDTH.max(ROOM_HEIGHT) as f32))
         } else {
             None
         }
@@ -123,11 +117,8 @@ const UTILITY_CROSS: &FixedPlanNode = &FixedPlanNode {
     desires_location: |_, _, _| true,
     scorer: |location, context, state| {
         if location.in_room_bounds() {
-            state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
-                storage_distances
-                    .and_then(|(distances, max_distance)| distances.get(location.x() as usize, location.y() as usize).map(|distance| (distance,  max_distance)))
-                    .map(|(distance, max_distance)| 1.0 - (distance as f32 / max_distance as f32))
-            })
+            state.get_distance_to_structure(location, StructureType::Storage, 1, context.terrain())
+                .map(|distance| 1.0 - (distance as f32 / ROOM_WIDTH.max(ROOM_HEIGHT) as f32))
         } else {
             None
         }
@@ -228,9 +219,9 @@ const SOURCE_CONTAINER: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&Fi
         desires_placement: |_, _| true,
         desires_location: |location, context, state| {
             if location.in_room_bounds() {
-                state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
-                    storage_distances.and_then(|(distances, _max_distance)| distances.get(location.x() as usize, location.y() as usize).map(|distance| distance >= 8)).unwrap_or(false)
-                })
+                state.get_distance_to_structure(location, StructureType::Storage, 1, context.terrain())
+                    .map(|distance| distance >= 8)
+                    .unwrap_or(false)
             } else {
                 false
             }

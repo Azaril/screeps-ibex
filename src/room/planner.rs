@@ -7,6 +7,7 @@ use std::convert::*;
 use bitflags::*;
 use log::*;
 use std::cell::RefCell;
+use pathfinding::directed::astar::*;
 
 pub const ROOM_WIDTH: u8 = 50;
 pub const ROOM_HEIGHT: u8 = 50;
@@ -454,6 +455,55 @@ impl PlannerState {
 
     pub fn get_locations(&self, structure_type: StructureType) -> Vec<Location> {
         self.layers.iter().flat_map(|l| l.get_locations(structure_type)).collect()
+    }
+
+    pub fn get_distance_to_structure(&self, position: PlanLocation, structure_type: StructureType, range: u32, terrain: &FastRoomTerrain) -> Option<u32> {
+        let is_passable = |location: PlanLocation| {
+            if let Ok(location) = Location::try_from(location) {
+                if terrain.get(&location).contains(TerrainFlags::WALL) {
+                    return false;
+                }
+
+                match self.get(&location) {
+                    Some(item) => {
+                        match item.structure_type {
+                            StructureType::Road => true,
+                            StructureType::Container => true,
+                            StructureType::Rampart => true,
+                            _ => false
+                        }
+                    },
+                    None => true
+                }
+            } else {
+                false
+            }
+        };
+        
+        let get_neighbours = |location: &PlanLocation| {
+            let start_location = *location;
+
+            ONE_OFFSET_SQUARE
+                .iter()
+                .map(move |offset| start_location + *offset)
+                .filter(|location| is_passable(*location))
+                .map(|location| (location, 1))
+        };
+        
+        self.get_locations(structure_type)
+            .iter()
+            .filter_map(|goal_location| {
+                let goal_location = goal_location.into();
+
+                astar(
+                    &position, 
+                    get_neighbours, 
+                    |p| p.distance_to(goal_location) as u32,
+                    |p| p.distance_to(goal_location) as u32 <= range
+                )
+            })
+            .min_by_key(|(_, cost)| *cost)
+            .map(|(_, cost)| cost)
     }
 
     pub fn with_structure_distances<F, R>(&self, structure_type: StructureType, terrain: &FastRoomTerrain, callback: F) -> R where F: FnOnce(Option<(&RoomDataArray<Option<u32>>, u32)>) -> R {
