@@ -94,6 +94,7 @@ impl Mission for HaulMission {
     ) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
+        let controller = room.controller().ok_or("Expected controller")?;
 
         let unfufilled = runtime_data
             .transfer_queue
@@ -103,11 +104,20 @@ impl Mission for HaulMission {
 
         let total_unfufilled = unfufilled.values().sum();
 
-        let desired_haulers = match total_unfufilled {
-            0 => 0,
-            1..=5000 => 1,
-            5001..=15000 => 2,
-            _ => 3,
+        let desired_haulers = if controller.level() <= 3 {
+            match total_unfufilled {
+                0 => 0,
+                1..=2000 => 1,
+                2001..=5000 => 2,
+                _ => 3,
+            }
+         } else { 
+            match total_unfufilled {
+                0 => 0,
+                1..=5000 => 1,
+                5001..=15000 => 2,
+                _ => 3,
+            }
         };
 
         let should_spawn = self.haulers.0.len() < desired_haulers;

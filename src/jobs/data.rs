@@ -16,6 +16,7 @@ pub enum JobData {
     Scout(super::scout::ScoutJob),
     Reserve(super::reserve::ReserveJob),
     Claim(super::claim::ClaimJob),
+    Defend(super::defend::DefendJob),
 }
 
 impl JobData {
@@ -30,6 +31,7 @@ impl JobData {
             JobData::Scout(ref mut data) => data,
             JobData::Reserve(ref mut data) => data,
             JobData::Claim(ref mut data) => data,
+            JobData::Defend(ref mut data) => data,
         }
     }
 }

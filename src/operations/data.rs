@@ -16,6 +16,7 @@ pub enum OperationData {
     Claim(super::claim::ClaimOperation),
     Haul(super::haul::HaulOperation),
     Terminal(super::terminal::TerminalOperation),
+    Defend(super::defend::DefendOperation),
 }
 
 impl OperationData {
@@ -30,6 +31,7 @@ impl OperationData {
             OperationData::Claim(ref mut data) => data,
             OperationData::Haul(ref mut data) => data,
             OperationData::Terminal(ref mut data) => data,
+            OperationData::Defend(ref mut data) => data
         }
     }
 }
