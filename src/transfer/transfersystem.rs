@@ -1018,6 +1018,19 @@ impl TransferQueueRoomStatsData {
             }
         }
 
+        for (resource, withdrawl_stats) in &mut withdrawls {
+            for (other_resource, deposit_stats) in &mut deposits {
+                if let None = other_resource {
+                    let consume = withdrawl_stats.active.min(deposit_stats.inactive);
+
+                    withdrawl_stats.active -= consume;
+                    deposit_stats.inactive -= consume;
+
+                    add_resource(*resource, consume);
+                }
+            }
+        }
+
         total_pickup.retain(|_, amount| *amount > 0);
 
         total_pickup

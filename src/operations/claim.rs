@@ -85,6 +85,11 @@ impl Operation for ClaimOperation {
             return Ok(OperationResult::Running);
         }
 
+        //TODO: Make this not a hard cap!
+        if currently_owned_rooms + current_claim_missions >= 3 {
+            return Ok(OperationResult::Running);
+        }
+
         //TODO: Do this in a single pass and use closest room to be the home room.
 
         let mut desired_missions = vec![];

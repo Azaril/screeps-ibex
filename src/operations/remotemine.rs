@@ -48,6 +48,10 @@ impl Operation for RemoteMineOperation {
         system_data: &OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
+        if !crate::features::remote_mine::harvest() {
+            return Ok(OperationResult::Running);
+        }
+
         let mut desired_missions = vec![];
 
         //TODO: Do this in a single pass and use closest room to be the home room.
@@ -215,7 +219,7 @@ impl Operation for RemoteMineOperation {
                 // Spawn a new mission to fill the reservation role if missing.
                 //
 
-                if !has_reservation_mission {
+                if !has_reservation_mission && crate::features::remote_mine::reserve() {
                     info!("Starting reservation for room. Room: {}", room_data.name);
 
                     let room_entity = room_data_entity;
