@@ -16,6 +16,9 @@
 - Add heuristics for which rooms to claim next. (Number of sources, source proximity, amount of swamp, etc.)
 - Factory usage.
 - Lab usage.
+- Add dismantle to claim/reserve so they can try and reach blocked off controllers.
+- Add CPU analysis.
+1. Prevent additional remote mining, reserving or claiming of new rooms without sufficient CPU.
 
 # Medium Priority
 

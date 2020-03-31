@@ -113,6 +113,14 @@ impl Mission for RemoteMineMission {
         let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
         let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
 
+        //TODO: Add better dynamic cpu adaptation.
+        let bucket = game::cpu::bucket();
+        let can_spawn = bucket > 5000.0 &&  crate::features::remote_mine::harvest();
+
+        if !can_spawn {
+            return Ok(MissionResult::Running);
+        }
+
         //TODO: Store this mapping data as part of the mission. (Blocked on specs collection serialization.)
         let mut sources_to_harvesters = self
             .harvesters

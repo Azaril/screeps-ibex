@@ -25,6 +25,10 @@ pub mod js {
                             haul: true,
                             demand: false
                         }
+                    },
+                    remote_mine: {
+                        harvest: true,
+                        reserve: true
                     }
                 }
             });
@@ -83,5 +87,15 @@ pub mod transfer {
 
     pub fn visualize_orders() -> bool {
         ::screeps::memory::root().path_bool("_features.transfer.visualize.orders") && visualize()
+    }
+}
+
+pub mod remote_mine {
+    pub fn harvest() -> bool {
+        ::screeps::memory::root().path_bool("_features.remote_mine.harvest")
+    }
+
+    pub fn reserve() -> bool {
+        ::screeps::memory::root().path_bool("_features.remote_mine.reserve")
     }
 }
