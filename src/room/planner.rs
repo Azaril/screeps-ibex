@@ -863,7 +863,22 @@ impl Plan {
         let room_level = room.controller().map(|c| c.level()).unwrap_or(0);
 
         for (loc, entry) in self.state.iter() {
-            if room_level >= entry.required_rcl.into() {
+            let required_rcl = entry.required_rcl.into();
+
+            if entry.structure_type == StructureType::Storage && room_level < required_rcl {
+                room.create_construction_site(&RoomPosition::new(loc.x() as u32, loc.y() as u32, room_name), StructureType::Container);
+            } else if room_level >= required_rcl {
+                if entry.structure_type == StructureType::Storage {
+                    let structures = room.look_for_at(look::STRUCTURES, &RoomPosition::new(loc.x() as u32, loc.y() as u32, room_name));
+
+                    for structure in &structures {
+                        match structure {
+                            Structure::Container(container) => { container.destroy(); },
+                            _ => {}
+                        }
+                    }
+                }
+
                 room.create_construction_site(&RoomPosition::new(loc.x() as u32, loc.y() as u32, room_name), entry.structure_type);
             }
         }
