@@ -107,15 +107,25 @@ impl Mission for HaulMission {
         let desired_haulers = if controller.level() <= 3 {
             match total_unfufilled {
                 0 => 0,
+                1..=1000 => 1,
+                1001..=2000 => 2,
+                2001..=3000 => 3,
+                3001..=4000 => 4,
+                _ => 5,
+            }
+         } else if controller.level() <= 6 {
+            match total_unfufilled {
+                0 => 0,
                 1..=2000 => 1,
-                2001..=5000 => 2,
+                2001..=4000 => 2,
+                4001..=6000 => 2,
                 _ => 3,
             }
          } else { 
             match total_unfufilled {
                 0 => 0,
                 1..=5000 => 1,
-                5001..=15000 => 2,
+                5001..=10000 => 2,
                 _ => 3,
             }
         };
