@@ -1,5 +1,6 @@
 use super::actions::*;
 use super::jobsystem::*;
+use super::utility::repair::*;
 use super::utility::buildbehavior::*;
 use super::utility::harvestbehavior::*;
 use super::utility::haulbehavior::*;
@@ -50,7 +51,8 @@ impl BuildJob {
     }
 
     fn run_idle_state(creep: &Creep, build_room_data: &RoomData, transfer_queue: &mut TransferQueue, allow_harvest: bool) -> Option<BuildState> {
-        get_new_build_state(creep, build_room_data, BuildState::Build)
+        get_new_repair_state(creep, build_room_data, Some(RepairPriority::High), BuildState::Repair)
+            .or_else(|| get_new_build_state(creep, build_room_data, BuildState::Build))
             .or_else(|| get_new_repair_state(creep, build_room_data, None, BuildState::Repair))
             .or_else(|| {
                 get_new_pickup_state_fill_resource(
