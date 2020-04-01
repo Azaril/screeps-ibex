@@ -40,11 +40,19 @@ impl LocalBuildMission {
     }
 
     fn get_builder_priority(&self, room: &Room) -> Option<f32> {
-        if !room.find(find::MY_CONSTRUCTION_SITES).is_empty() {
+        let construction_sites = room.find(find::MY_CONSTRUCTION_SITES);
+
+        if !construction_sites.is_empty() {
             if self.builders.0.is_empty() {
                 Some(SPAWN_PRIORITY_HIGH)
             } else {
-                Some(SPAWN_PRIORITY_MEDIUM)
+                construction_sites.iter().map(|construction_site| {
+                    match construction_site.structure_type() {
+                        StructureType::Spawn => SPAWN_PRIORITY_HIGH,
+                        StructureType::Storage => SPAWN_PRIORITY_HIGH,
+                        _ => SPAWN_PRIORITY_MEDIUM
+                    }
+                }).max_by(|a, b| a.partial_cmp(b).unwrap())
             }
         } else {
             //TODO: Not requiring full hashmap just to check for presence would be cheaper. Lazy iterator would be sufficient.

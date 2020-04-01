@@ -99,10 +99,6 @@ impl Mission for UpgradeMission {
             return Err("Room not owned by user".to_string());
         }
 
-        let room_transfer_data = runtime_data
-            .transfer_queue
-            .try_get_room(room_data.name);
-
         let has_excess_energy = {
             if let Some(room_transfer_data) = runtime_data.transfer_queue.try_get_room(room_data.name) {
                 if let Some(storage) = room.storage() {
