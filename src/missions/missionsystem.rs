@@ -7,6 +7,7 @@ use crate::transfer::transfersystem::*;
 use crate::transfer::ordersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
+use crate::room::roomplansystem::*;
 use specs::prelude::*;
 use log::*;
 
@@ -15,6 +16,8 @@ pub struct MissionSystemData<'a> {
     updater: Read<'a, LazyUpdate>,
     missions: WriteStorage<'a, MissionData>,
     room_data: WriteStorage<'a, RoomData>,
+    room_plan_data: ReadStorage<'a, RoomPlanData>,
+    room_plan_queue: Write<'a, RoomPlanQueue>,
     entities: Entities<'a>,
     spawn_queue: Write<'a, SpawnQueue>,
     creep_owner: ReadStorage<'a, CreepOwner>,
@@ -29,6 +32,7 @@ pub struct MissionSystemData<'a> {
 pub struct MissionExecutionSystemData<'a> {
     pub updater: &'a Read<'a, LazyUpdate>,
     pub room_data: &'a WriteStorage<'a, RoomData>,
+    pub room_plan_data: &'a ReadStorage<'a, RoomPlanData>,
     pub entities: &'a Entities<'a>,
     pub creep_owner: &'a ReadStorage<'a, CreepOwner>,
     pub creep_spawning: &'a ReadStorage<'a, CreepSpawning>,
@@ -38,6 +42,7 @@ pub struct MissionExecutionSystemData<'a> {
 pub struct MissionExecutionRuntimeData<'a> {
     pub entity: &'a Entity,
     pub spawn_queue: &'a mut SpawnQueue,
+    pub room_plan_queue: &'a mut RoomPlanQueue,
     pub visualizer: Option<&'a mut Visualizer>,
     pub transfer_queue: &'a mut TransferQueue,
     pub order_queue: &'a mut OrderQueue
@@ -84,6 +89,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
             updater: &data.updater,
             entities: &data.entities,
             room_data: &data.room_data,
+            room_plan_data: &data.room_plan_data,
             creep_owner: &data.creep_owner,
             creep_spawning: &data.creep_spawning,
             job_data: &data.job_data,
@@ -93,6 +99,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
             let mut runtime_data = MissionExecutionRuntimeData {
                 entity: &entity,
                 spawn_queue: &mut data.spawn_queue,
+                room_plan_queue: &mut data.room_plan_queue,
                 visualizer: data.visualizer.as_deref_mut(),
                 transfer_queue: &mut data.transfer_queue,
                 order_queue: &mut data.order_queue,
@@ -147,6 +154,7 @@ impl<'a> System<'a> for RunMissionSystem {
             updater: &data.updater,
             entities: &data.entities,
             room_data: &data.room_data,
+            room_plan_data: &data.room_plan_data,
             creep_owner: &data.creep_owner,
             creep_spawning: &data.creep_spawning,
             job_data: &data.job_data,
@@ -156,6 +164,7 @@ impl<'a> System<'a> for RunMissionSystem {
             let mut runtime_data = MissionExecutionRuntimeData {
                 entity: &entity,
                 spawn_queue: &mut data.spawn_queue,
+                room_plan_queue: &mut data.room_plan_queue,
                 visualizer: data.visualizer.as_deref_mut(),
                 transfer_queue: &mut data.transfer_queue,
                 order_queue: &mut data.order_queue,
