@@ -46,6 +46,7 @@ fn serialize_world(world: &World, segment: u32) {
         creep_spawnings: ReadStorage<'a, CreepSpawning>,
         creep_owners: ReadStorage<'a, CreepOwner>,
         room_data: ReadStorage<'a, RoomData>,
+        room_plan_data: ReadStorage<'a, RoomPlanData>,
         job_data: ReadStorage<'a, JobData>,
         operation_data: ReadStorage<'a, OperationData>,
         mission_data: ReadStorage<'a, MissionData>,
@@ -64,6 +65,7 @@ fn serialize_world(world: &World, segment: u32) {
                     &data.creep_spawnings,
                     &data.creep_owners,
                     &data.room_data,
+                    &data.room_plan_data,
                     &data.job_data,
                     &data.operation_data,
                     &data.mission_data,
@@ -126,6 +128,7 @@ fn deserialize_world(world: &World, segment: u32) {
         creep_spawnings: WriteStorage<'a, CreepSpawning>,
         creep_owners: WriteStorage<'a, CreepOwner>,
         room_data: WriteStorage<'a, RoomData>,
+        room_plan_data: WriteStorage<'a, RoomPlanData>,
         job_data: WriteStorage<'a, JobData>,
         operation_data: WriteStorage<'a, OperationData>,
         mission_data: WriteStorage<'a, MissionData>,
@@ -149,6 +152,7 @@ fn deserialize_world(world: &World, segment: u32) {
                         data.creep_spawnings,
                         data.creep_owners,
                         data.room_data,
+                        data.room_plan_data,
                         data.job_data,
                         data.operation_data,
                         data.mission_data,
@@ -234,6 +238,7 @@ pub fn tick() {
         .with(OrderQueueSystem, "order_queue", &[])
         .with_barrier()
         .with(RoomPlanSystem, "room_plan", &[])
+        .with_barrier()
         .with(VisualizerSystem, "visualizer", &[])
         .with(StatsSystem, "stats", &[])
         .with(MemoryArbiterSystem, "memory", &[])

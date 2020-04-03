@@ -1066,27 +1066,27 @@ struct SerializedPlanNodeChild {
 }
 
 impl SerializedPlanNodeChild {
-    pub fn as_entry<'b>(&self, nodes: &PlanGatherNodesData<'b>, index_lookup: &Vec<uuid::Uuid>) -> Result<PlanNodeChild<'b>, ()> {
+    pub fn as_entry<'b>(&self, nodes: &PlanGatherNodesData<'b>, index_lookup: &Vec<uuid::Uuid>) -> Result<PlanNodeChild<'b>, String> {
         let node_type = self.packed & 0x1;
 
         match node_type {
             0 => {
                 let node_index = (self.packed >> 1) & 0x7F;
-                let node_id = index_lookup.get(node_index as usize).ok_or(())?;
-                let node = nodes.global_placement_nodes.get(node_id).ok_or(())?;
+                let node_id = index_lookup.get(node_index as usize).ok_or("Invalid node id")?;
+                let node = nodes.global_placement_nodes.get(node_id).ok_or("Invalid node")?;
         
                 Ok(PlanNodeChild::GlobalPlacement(*node))
             }
             1 => {
                 let node_index = (self.packed >> 1) & 0x7F;
-                let node_id = index_lookup.get(node_index as usize).ok_or(())?;
-                let node = nodes.location_placement_nodes.get(node_id).ok_or(())?;
+                let node_id = index_lookup.get(node_index as usize).ok_or("Invalid node id")?;
+                let node = nodes.location_placement_nodes.get(node_id).ok_or("Invalid node")?;
 
                 let location = PlanLocation::from_packed((self.packed >> 16) as u16);
         
                 Ok(PlanNodeChild::LocationPlacement(location, *node))
             }
-            _ => Err(())
+            _ => Err("Unknown node type".to_string())
         }
     }
 }
@@ -2203,7 +2203,7 @@ struct SerializedEvaluationStackEntry {
 }
 
 impl SerializedEvaluationStackEntry {
-    pub fn as_entry<'b>(&self, nodes: &PlanGatherNodesData<'b>, index_lookup: &Vec<uuid::Uuid>) -> Result<EvaluationStackEntry<'b>, ()> {
+    pub fn as_entry<'b>(&self, nodes: &PlanGatherNodesData<'b>, index_lookup: &Vec<uuid::Uuid>) -> Result<EvaluationStackEntry<'b>, String> {
         let mut children = Vec::new();
 
         for serialized_child in &self.children {
@@ -2249,7 +2249,7 @@ impl SerializedEvaluationStack {
         }
     }
 
-    pub fn to_stack<'b>(&self, gathered_nodes: &PlanGatherNodesData<'b>) -> Result<Vec<EvaluationStackEntry<'b>>, ()> {
+    pub fn to_stack<'b>(&self, gathered_nodes: &PlanGatherNodesData<'b>) -> Result<Vec<EvaluationStackEntry<'b>>, String> {
         let mut stack = Vec::new();
 
         for serialized_entry in self.entries.iter() {
@@ -2281,7 +2281,7 @@ impl<'t, H> TreePlanner<'t, H> where H: FnMut(&PlannerState, &mut NodeContext) {
         }
     }
 
-    pub fn seed<'r, 's>(&mut self, root_nodes: &[&'r dyn PlanGlobalExpansionNode], state: &'s mut PlannerState) -> Result<TreePlannerResult, ()> {
+    pub fn seed<'r, 's>(&mut self, root_nodes: &[&'r dyn PlanGlobalExpansionNode], state: &'s mut PlannerState) -> Result<TreePlannerResult, String> {
         let mut context = NodeContext::new(self.data_source);
 
         let mut stack = Vec::new();
@@ -2322,7 +2322,7 @@ impl<'t, H> TreePlanner<'t, H> where H: FnMut(&PlannerState, &mut NodeContext) {
         Ok(TreePlannerResult::Running(serialized))
     }
 
-    pub fn process<'r, 's, F>(&mut self, root_nodes: &[&'r dyn PlanGlobalExpansionNode], state: &'s mut PlannerState, serialized_stack: &SerializedEvaluationStack, should_continue: F) -> Result<TreePlannerResult, ()> where F: Fn() -> bool {
+    pub fn process<'r, 's, F>(&mut self, root_nodes: &[&'r dyn PlanGlobalExpansionNode], state: &'s mut PlannerState, serialized_stack: &SerializedEvaluationStack, should_continue: F) -> Result<TreePlannerResult, String> where F: Fn() -> bool {
         let mut context = NodeContext::new(self.data_source);
 
         let mut processed_entries = 0;
@@ -2504,7 +2504,7 @@ impl<S> Planner<S> where S: Fn(&PlannerState, &mut NodeContext) -> Option<f32> {
         }
     }
 
-    pub fn seed(&self, root_nodes: &[&dyn PlanGlobalExpansionNode], data_source: &mut dyn PlannerRoomDataSource) -> Result<PlanSeedResult, ()> {
+    pub fn seed(&self, root_nodes: &[&dyn PlanGlobalExpansionNode], data_source: &mut dyn PlannerRoomDataSource) -> Result<PlanSeedResult, String> {
         let mut planner_state = PlannerState::new();
 
         let mut best_plan = None;
@@ -2540,7 +2540,7 @@ impl<S> Planner<S> where S: Fn(&PlannerState, &mut NodeContext) -> Option<f32> {
         Ok(seed_result)
     }
 
-    pub fn evaluate(&self, root_nodes: &[&dyn PlanGlobalExpansionNode], data_source: &mut dyn PlannerRoomDataSource, evaluation_state: &mut PlanRunningStateData, allowed_cpu: f64) -> Result<PlanEvaluationResult, ()> {
+    pub fn evaluate(&self, root_nodes: &[&dyn PlanGlobalExpansionNode], data_source: &mut dyn PlannerRoomDataSource, evaluation_state: &mut PlanRunningStateData, allowed_cpu: f64) -> Result<PlanEvaluationResult, String> {
         let mut current_best = evaluation_state.best_plan.as_ref().map(|p| p.score);
         let mut new_best_plan = None;
 
