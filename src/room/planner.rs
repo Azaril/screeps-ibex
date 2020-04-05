@@ -16,7 +16,7 @@ pub const ROOM_BUILD_BORDER: u8 = 2;
 pub const ONE_OFFSET_SQUARE: &[(i8, i8)] = &[(-1, -1), (-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1)];
 pub const TWO_OFFSET_SQUARE: &[(i8, i8)] = &[(-2, -2), (-2, -1), (-2, 0), (-2, 1), (-2, 2), (-1, 2), (0, 2), (1, 2), (2, 2), (2, 1), (2, 0), (2, -1), (2, -2), (1, -2), (0, -2), (-1, -2)];
 
-pub const ONE_OFFSET_DIAMOND: &[(i8, i8)] = &[(-1, 0), (0, 1), (1, 0), (-1, 0)];
+pub const ONE_OFFSET_DIAMOND: &[(i8, i8)] = &[(-1, 0), (0, 1), (1, 0), (0, -1)];
 pub const TWO_OFFSET_DIAMOND: &[(i8, i8)] = &[(0, -2), (-1, -1), (-2, 0), (-1, 1), (0, 2), (1, 1), (2, 0), (1, -1)];
 pub const TWO_OFFSET_DIAMOND_POINTS: &[(i8, i8)] = &[(0, -2), (-2, 0), (0, 2), (2, 0)];
 
@@ -1922,7 +1922,7 @@ impl<'a> PlanGlobalExpansionNode for FixedLocationPlanNode<'a> {
 pub struct FloodFillPlanNodeLevel<'a> {
     pub offsets: &'a [(i8, i8)],
     pub node: &'a dyn PlanLocationPlacementNode,
-    pub node_cost: u32
+    pub scorer: fn(position: PlanLocation, context: &mut NodeContext, state: &PlannerState) -> Option<f32>
 }
 
 pub struct FloodFillPlanNode<'a> {
@@ -1930,7 +1930,6 @@ pub struct FloodFillPlanNode<'a> {
     pub must_place: bool,
     pub start_offsets: &'a [(i8, i8)],
     pub expansion_offsets: &'a [(i8, i8)],
-    pub maximum_nodes: u32,
     pub maximum_expansion: u32,
     pub levels: &'a [FloodFillPlanNodeLevel<'a>],
     pub desires_placement: fn(context: &mut NodeContext, state: &PlannerState) -> bool,
@@ -2008,62 +2007,149 @@ impl<'a> PlanLocationPlacementNode for FloodFillPlanNode<'a> {
         let mut visited_locations: HashSet<_> = HashSet::new();
         
         let mut current_expansion = 0;
-        let mut current_nodes = 0;
 
-        if let Some(top_lod) = self.levels.first() {
-            while current_nodes < self.maximum_nodes && current_expansion < self.maximum_expansion && !locations.is_empty() {
-                let mut scored_locations: Vec<_> = locations.into_iter().filter_map(|location| {
-                    top_lod.node.get_score(location, context, state).map(|s| (location, s))
-                }).collect();
+        let mut candidates = Vec::new();
 
-                scored_locations.sort_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap());
+        const MINIMUM_CANDIDATES: usize = 10;
 
-                for (root_location, _) in scored_locations.iter().rev() {
+        while current_expansion < self.maximum_expansion && !locations.is_empty() {
+            while current_expansion < self.maximum_expansion && !locations.is_empty() && candidates.len() < MINIMUM_CANDIDATES {
+                let mut current_gather_data = PlanGatherChildrenData::<'a>::new();
+
+                for root_location in locations.iter() {
                     if !visited_locations.contains(root_location) {
                         visited_locations.insert(*root_location);
 
-                        let mut node_locations = vec![*root_location];
-                        let mut next_lod_locations = Vec::new();
+                        let mut lod_locations = vec![*root_location];
 
                         for lod in self.levels.iter() {
-                            let mut expanded_locations: Vec<_> = node_locations
+                            let expanded_locations = lod_locations
                                 .iter()
-                                .flat_map(|&location| lod.offsets.iter().map(move |offset| location + *offset))
-                                .filter_map(|location| lod.node.get_score(location, context, state).map(|s| (location, s)))
-                                .collect();    
-                            
-                            expanded_locations.sort_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap());
+                                .flat_map(|&location| lod.offsets.iter().map(move |offset| location + *offset));
 
-                            for (node_location, _) in expanded_locations.iter().rev() {
-                                let mut current_gather_data = PlanGatherChildrenData::<'a>::new();
+                            let mut next_lod_locations = Vec::new();
 
-                                if current_gather_data.desires_placement(lod.node.as_base(), context, state) && current_gather_data.desires_location(*node_location, lod.node.as_location(), context, state) && current_gather_data.insert_location_placement(*node_location, lod.node) {
-                                    lod.node.place(*node_location, context, state);
+                            for lod_location in expanded_locations {
+                                let got_candidate = if current_gather_data.desires_placement(lod.node.as_base(), context, state) && current_gather_data.desires_location(lod_location, lod.node.as_location(), context, state) {
+                                    if let Some(score) = lod.node.get_score(lod_location, context, state) {
+                                        candidates.push((lod_location, lod.node, score));
 
-                                    current_nodes += lod.node_cost;
-
-                                    if current_nodes >= self.maximum_nodes {
-                                        break;
+                                        true
+                                    } else {
+                                        false
                                     }
+                                } else {
+                                    false
+                                };
 
+                                if got_candidate {
                                     for offset in self.expansion_offsets.into_iter() {
                                         let next_location = *root_location + *offset;
                                         
                                         next_locations.insert(next_location);
                                     }
                                 } else {
-                                    next_lod_locations.push(*node_location);
+                                    next_lod_locations.push(lod_location);
                                 }
                             }
 
-                            node_locations = std::mem::replace(&mut next_lod_locations, Vec::new());
+                            if next_lod_locations.is_empty() {
+                                break;
+                            }
+
+                            lod_locations = next_lod_locations;
                         }
                     }
                 }
 
-                locations = std::mem::replace(&mut next_locations, HashSet::new());
-
                 current_expansion += 1;
+
+                locations = std::mem::replace(&mut next_locations, HashSet::new());
+            }
+
+            candidates.sort_by(|(_, _, score_a), (_, _, score_b)| score_a.partial_cmp(score_b).unwrap());
+            
+            while candidates.len() >= MINIMUM_CANDIDATES || locations.is_empty() || current_expansion >= self.maximum_expansion {
+                if let Some((location, node, _)) = candidates.pop() {
+                    let mut current_gather_data = PlanGatherChildrenData::<'a>::new();
+
+                    if current_gather_data.desires_placement(node.as_base(), context, state) && current_gather_data.desires_location(location, node.as_location(), context, state) {
+                        node.place(location, context, state);
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+pub struct FirstPossiblePlanNode<'a> {
+    pub id: uuid::Uuid,
+    pub must_place: bool,
+    pub options: &'a [&'a dyn PlanLocationPlacementNode],
+    pub scorer: fn(position: PlanLocation, context: &mut NodeContext, state: &PlannerState) -> Option<f32>
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+impl<'a> PlanBaseNode for FirstPossiblePlanNode<'a> {
+    fn name(&self) -> &str {
+        "First Possible"
+    }
+
+    fn gather_nodes<'b>(&'b self, data: &mut PlanGatherNodesData<'b>) {
+        if data.insert_location_placement(*self.id(), self) {
+            for option in self.options.iter() {
+                option.gather_nodes(data);
+            }
+        }
+    }
+
+    fn desires_placement<'s>(&'s self, context: &mut NodeContext, state: &PlannerState, gather_data: &mut PlanGatherChildrenData<'s>) -> bool {
+        self.options.iter().any(|option| option.desires_placement(context, state, gather_data))
+    }
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+impl<'a> PlanLocationNode for FirstPossiblePlanNode<'a> {
+    fn as_base(&self) -> &dyn PlanBaseNode {
+        self
+    }
+
+    fn desires_location<'s>(&'s self, position: PlanLocation, context: &mut NodeContext, state: &PlannerState, gather_data: &mut PlanGatherChildrenData<'s>) -> bool {
+        self.options.iter().any(|option| option.desires_location(position, context, state, gather_data))
+    }
+
+    fn get_children<'s>(&'s self, _position: PlanLocation, _context: &mut NodeContext, _state: &PlannerState, _gather_data: &mut PlanGatherChildrenData<'s>) {
+    }
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+impl<'a> PlanLocationPlacementNode for FirstPossiblePlanNode<'a> {
+    fn as_location(&self) -> &dyn PlanLocationNode {
+        self
+    }
+
+    fn must_place(&self) -> bool {
+        self.must_place
+    }
+
+    fn id(&self) -> &uuid::Uuid {
+        &self.id
+    }
+
+    fn get_score(&self, position: PlanLocation, context: &mut NodeContext, state: &PlannerState) -> Option<f32> {
+        (self.scorer)(position, context, state)
+    }
+
+    fn place(&self, position: PlanLocation, context: &mut NodeContext, state: &mut PlannerState) {
+        let mut current_gather_data = PlanGatherChildrenData::<'a>::new();
+
+        for option in self.options.iter() {
+            if current_gather_data.desires_placement(option.as_base(), context, state) && current_gather_data.desires_location(position, option.as_location(), context, state) && current_gather_data.insert_location_placement(position, *option) {
+                option.place(position, context, state);
+
+                break;
             }
         }
     }

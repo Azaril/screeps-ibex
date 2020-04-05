@@ -238,7 +238,7 @@ impl<'a> System<'a> for RoomPlanSystem {
             if planner_state.running_state.is_none() {
                 let request = data.room_plan_queue.requests
                     .iter()
-                    .filter(|request| planner_state.last_planned.get(&request.room_name).map(|last_completion| game::time() >= last_completion + 2000).unwrap_or(true))
+                    .filter(|request| crate::features::construction::force_plan() || planner_state.last_planned.get(&request.room_name).map(|last_completion| game::time() >= last_completion + 2000).unwrap_or(true))
                     .max_by(|a, b| a.priority.partial_cmp(&b.priority).unwrap())
                     .cloned();
 

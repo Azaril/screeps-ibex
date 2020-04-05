@@ -247,6 +247,8 @@ fn extension_distance_score(state: &PlannerState, _context: &mut NodeContext) ->
     let storage_locations = state.get_locations(StructureType::Storage);
     let extension_locations = state.get_locations(StructureType::Extension);
 
+    //TODO: Use storage distance flood fill for accurate extension distance.
+
     let total_extension_distance: f32 = extension_locations
         .iter()
         .map(|extension| storage_locations
