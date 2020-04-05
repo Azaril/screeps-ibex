@@ -5,6 +5,30 @@ use super::planner::*;
 // Nodes
 //
 
+fn distance_to_storage_score_pathfind(position: PlanLocation, context: &mut NodeContext, state: &PlannerState) -> Option<f32> {
+    if position.in_room_bounds() {
+        state.get_distance_to_structure(position, StructureType::Storage, 1, context.terrain())
+            .map(|distance| 1.0 - (distance as f32 / ROOM_WIDTH.max(ROOM_HEIGHT) as f32))
+    } else {
+        None
+    }
+}
+
+fn distance_to_storage_score_flood_fill(position: PlanLocation, context: &mut NodeContext, state: &PlannerState) -> Option<f32> {
+    if position.in_room_bounds() {
+        state.with_structure_distances(StructureType::Storage, context.terrain(), |storage_distances| {
+            if let Some((storage_distances, max_distance)) = storage_distances {
+                storage_distances.get(position.x() as usize, position.y() as usize).map(|distance| (distance, max_distance))
+            } else {
+                None
+            }
+        })
+        .map(|(distance, max_distance)| 1.0 - (distance as f32 / max_distance as f32))
+    } else {
+        None
+    }
+}
+
 const LABS: &FixedPlanNode = &FixedPlanNode {
     id: uuid::Uuid::from_u128(0xd2d0_407f_9f30_4f98_9f40_8d1d_4c05_5981u128),
     must_place: false,
@@ -54,14 +78,7 @@ const EXTENSION_CROSS: &FixedPlanNode = &FixedPlanNode {
     child: PlanNodeStorage::Empty,
     desires_placement: |_, state| state.get_count(StructureType::Extension) <= 55 && state.get_count(StructureType::Storage) > 0,
     desires_location: |_, _, _| true,
-    scorer: |location, context, state| {
-        if location.in_room_bounds() {
-            state.get_distance_to_structure(location, StructureType::Storage, 1, context.terrain())
-                .map(|distance| 1.0 - (distance as f32 / ROOM_WIDTH.max(ROOM_HEIGHT) as f32))
-        } else {
-            None
-        }
-    }
+    scorer: distance_to_storage_score_pathfind
 };
 
 const EXTENSION: &FixedPlanNode = &FixedPlanNode {
@@ -78,14 +95,7 @@ const EXTENSION: &FixedPlanNode = &FixedPlanNode {
     child: PlanNodeStorage::Empty,
     desires_placement: |_, state| state.get_count(StructureType::Extension) < 60 && state.get_count(StructureType::Storage) > 0,
     desires_location: |_, _, _| true,
-    scorer: |location, context, state| {
-        if location.in_room_bounds() {
-            state.get_distance_to_structure(location, StructureType::Storage, 1, context.terrain())
-                .map(|distance| 1.0 - (distance as f32 / ROOM_WIDTH.max(ROOM_HEIGHT) as f32))
-        } else {
-            None
-        }
-    }
+    scorer: distance_to_storage_score_pathfind
 };
 
 const UTILITY_CROSS: &FixedPlanNode = &FixedPlanNode {
@@ -115,14 +125,7 @@ const UTILITY_CROSS: &FixedPlanNode = &FixedPlanNode {
         state.get_count(StructureType::PowerSpawn) == 0        
     },
     desires_location: |_, _, _| true,
-    scorer: |location, context, state| {
-        if location.in_room_bounds() {
-            state.get_distance_to_structure(location, StructureType::Storage, 1, context.terrain())
-                .map(|distance| 1.0 - (distance as f32 / ROOM_WIDTH.max(ROOM_HEIGHT) as f32))
-        } else {
-            None
-        }
-    }
+    scorer: distance_to_storage_score_pathfind
 };
 
 const CONTROLLER_LINK: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&FixedPlanNode {
@@ -386,24 +389,26 @@ const BUNKER_CORE: PlanNodeStorage = PlanNodeStorage::LocationPlacement(&FixedPl
             PlanNodeStorage::LocationPlacement(&FloodFillPlanNode {
                 id: uuid::Uuid::from_u128(0xeff2_1b89_0149_4bc9_b4f4_8138_5cd6_5232u128),
                 must_place: false,
-                start_offsets: &[(-3, -3), (-1, -5), (-5, -1), (3, 3), (5, 1), (1, 5)],
+                start_offsets: &[(-3, -3), (-1, -5), (-5, -1), (3, 3), (5, 1), (1, 5), (4, -3), (2, -5), (-3, 5), (-5, 3)],
                 expansion_offsets: &[(-4, 0), (-2, 2), (0, 4), (2, 2), (4, 0), (2, -2), (0, -4), (-2, -2)],
                 maximum_expansion: 20,
-                maximum_nodes: 100,
-                levels: &[FloodFillPlanNodeLevel {
-                    offsets: &[(0, 0)],
-                    node: UTILITY_CROSS,
-                    node_cost: 0,
-                },
-                FloodFillPlanNodeLevel {
-                    offsets: &[(0, 0)],
-                    node: EXTENSION_CROSS,
-                    node_cost: 5
-                }, FloodFillPlanNodeLevel {
-                    offsets: ONE_OFFSET_DIAMOND,
-                    node: EXTENSION,
-                    node_cost: 1
-                }],
+                levels: &[
+                    FloodFillPlanNodeLevel {
+                        offsets: &[(0, 0)],
+                        node: &FirstPossiblePlanNode {
+                            id: uuid::Uuid::from_u128(0x6172_a491_955b_4029_b835_bd54_3c15_5e14u128),
+                            must_place: true,
+                            options: &[UTILITY_CROSS, EXTENSION_CROSS],
+                            scorer: distance_to_storage_score_pathfind
+                        },
+                        scorer: distance_to_storage_score_flood_fill
+                    },
+                    FloodFillPlanNodeLevel {
+                        offsets: ONE_OFFSET_DIAMOND,
+                        node: EXTENSION,
+                        scorer: distance_to_storage_score_flood_fill
+                    }
+                ],
                 desires_placement: |_, _| true,
                 scorer: |_, _, _| Some(0.5)
             })
