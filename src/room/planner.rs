@@ -36,41 +36,55 @@ pub fn in_room_bounds_unsigned<T>(x: T, y: T) -> bool where T: Into<u32> {
     y < (ROOM_HEIGHT as u32)
 }
 
-pub fn in_room_build_bounds<T>(x: T, y: T) -> bool where T: Into<i32> {
+pub fn in_room_from_edge<T, E>(x: T, y: T, edge: E) -> bool where T: Into<i32>, E: Into<u32> {
     let x = x.into();
     let y = y.into();
+    let edge = edge.into() as i32;
 
-    (x >= (0 + ROOM_BUILD_BORDER) as i32) && 
-    (x < (ROOM_WIDTH - ROOM_BUILD_BORDER) as i32) && 
-    (y >= 0 + (ROOM_BUILD_BORDER) as i32) && 
-    (y < (ROOM_HEIGHT - ROOM_BUILD_BORDER) as i32)
+    (x >= edge) && 
+    (x < ROOM_WIDTH as i32 - edge) && 
+    (y >= edge) &&
+    (y < ROOM_HEIGHT as i32 - edge)
+}
+
+pub fn in_room_from_edge_unsigned<T, E>(x: T, y: T, edge: E) -> bool where T: Into<u32>, E: Into<u32> {
+    let x = x.into();
+    let y = y.into();
+    let edge = edge.into();
+
+    (x >= edge) && 
+    (x < ROOM_WIDTH as u32 - edge) && 
+    (y >= edge) &&
+    (y < ROOM_HEIGHT as u32 - edge)
+}
+
+pub fn in_room_build_bounds<T>(x: T, y: T) -> bool where T: Into<i32> {
+    in_room_from_edge(x, y, ROOM_BUILD_BORDER)
 }
 
 pub fn in_room_build_bounds_unsigned<T>(x: T, y: T) -> bool where T: Into<u32> {
-    let x = x.into();
-    let y = y.into();
-
-    (x >= (0 + ROOM_BUILD_BORDER) as u32) && 
-    (x < (ROOM_WIDTH - ROOM_BUILD_BORDER) as u32) && 
-    (y >= 0 + (ROOM_BUILD_BORDER) as u32) && 
-    (y < (ROOM_HEIGHT - ROOM_BUILD_BORDER) as u32)
+    in_room_from_edge_unsigned(x, y, ROOM_BUILD_BORDER)
 }
 
 pub trait InBounds {
     fn in_room_bounds(&self) -> bool;
-
+    fn in_room_from_edge(&self, edge: u32) -> bool;
     fn in_room_build_bounds(&self) -> bool;
 }
 
 pub trait InBoundsUnsigned {
     fn in_room_bounds(&self) -> bool;
-
+    fn in_room_from_edge(&self, edge: u32) -> bool;
     fn in_room_build_bounds(&self) -> bool;
 }
 
 impl<T> InBounds for (T, T) where T: Into<i32> + Copy {
     fn in_room_bounds(&self) -> bool {
         in_room_bounds(self.0, self.1)
+    }
+
+    fn in_room_from_edge(&self, edge: u32) -> bool {
+        in_room_from_edge(self.0, self.1, edge)
     }
 
     fn in_room_build_bounds(&self) -> bool {
@@ -81,6 +95,10 @@ impl<T> InBounds for (T, T) where T: Into<i32> + Copy {
 impl<T> InBoundsUnsigned for (T, T) where T: Into<u32> + Copy {
     fn in_room_bounds(&self) -> bool {
         in_room_bounds_unsigned(self.0, self.1)
+    }
+
+    fn in_room_from_edge(&self, edge: u32) -> bool {
+        in_room_from_edge_unsigned(self.0, self.1, edge)
     }
 
     fn in_room_build_bounds(&self) -> bool {
@@ -165,6 +183,10 @@ impl Location {
 impl InBoundsUnsigned for Location {
     fn in_room_bounds(&self) -> bool {
         in_room_bounds_unsigned(self.x(), self.y())
+    }
+
+    fn in_room_from_edge(&self, edge: u32) -> bool {
+        in_room_from_edge_unsigned(self.x(), self.y(), edge)
     }
 
     fn in_room_build_bounds(&self) -> bool {
@@ -706,6 +728,10 @@ impl From<&Location> for PlanLocation {
 impl InBounds for PlanLocation {
     fn in_room_bounds(&self) -> bool {
         in_room_bounds(self.x(), self.y())
+    }
+
+    fn in_room_from_edge(&self, edge: u32) -> bool {
+        in_room_from_edge(self.x(), self.y(), edge)
     }
 
     fn in_room_build_bounds(&self) -> bool {
@@ -1628,6 +1654,8 @@ impl<'a> PlanLocationNode for FixedPlanNode<'a> {
                             return false;
                         }
                     } else if context.terrain().get(&placement_location).contains(TerrainFlags::WALL) {
+                        return false;
+                    } else if !placement_location.in_room_from_edge(ROOM_BUILD_BORDER as u32 + 1) {
                         return false;
                     }
 

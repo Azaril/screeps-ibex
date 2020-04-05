@@ -319,7 +319,7 @@ impl<'a> System<'a> for RoomPlanSystem {
                     }
                 }
             }
-
+            
             if crate::features::construction::visualize_plan() {
                 if  let Some(visualizer) = &mut data.visualizer {
                     for (_, room_data, room_plan_data) in (&data.entities, &data.room_data, &data.room_plan_data).join() {
