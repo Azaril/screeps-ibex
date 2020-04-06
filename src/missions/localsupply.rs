@@ -35,6 +35,7 @@ struct StructureData {
     storage_links: Vec<RemoteObjectId<StructureLink>>,
     mineral_extractors_to_containers: HashMap<MineralExtractorPair, Vec<RemoteObjectId<StructureContainer>>>,
     controllers_to_containers: HashMap<RemoteObjectId<StructureController>, Vec<RemoteObjectId<StructureContainer>>>,
+    controller_links: Vec<RemoteObjectId<StructureLink>>,
     containers: Vec<RemoteObjectId<StructureContainer>>,
 }
 
@@ -147,6 +148,14 @@ impl LocalSupplyMission {
 
         let structures = room.find(find::STRUCTURES);
 
+        let room_links = structures
+            .iter()
+            .filter_map(|structure| match structure {
+                Structure::Link(link) => Some(link),
+                _ => None,
+            })
+            .collect_vec();
+
         let containers = structures
             .iter()
             .filter_map(|structure| match structure {
@@ -187,6 +196,18 @@ impl LocalSupplyMission {
             })
             .into_group_map();
 
+        //TODO: This may need more validate that the link is reachable - or assume it is and bad placemented is filtered out 
+        //      during room planning.
+        //TODO: May need additional work to make sure link is not used by a controller or storage.
+        let controller_links = controller
+            .iter()
+            .filter_map(|controller| {
+                let nearby_link = room_links.iter().find(|link| link.pos().in_range_to(&controller.pos(), 2));
+
+                nearby_link.map(|link| link.remote_id())
+            })
+            .collect();
+
         let minerals = room.find(find::MINERALS);
 
         let mineral_extractors_to_containers = room_extractors
@@ -205,16 +226,9 @@ impl LocalSupplyMission {
             })
             .into_group_map();
 
-        let room_links = structures
-            .iter()
-            .filter_map(|structure| match structure {
-                Structure::Link(link) => Some(link),
-                _ => None,
-            })
-            .collect_vec();
-
         //TODO: This may need more validate that the link is reachable - or assume it is and bad placemented is filtered out 
         //      during room planning.
+        //TODO: May need additional work to make sure link is not used by a controller or storage.
         let sources_to_links = sources
             .iter()
             .filter_map(|source| {
@@ -238,6 +252,7 @@ impl LocalSupplyMission {
             storage_links,
             mineral_extractors_to_containers,
             controllers_to_containers,
+            controller_links,
             containers,
         };
 
@@ -903,6 +918,38 @@ impl LocalSupplyMission {
         }
     }
 
+    fn request_transfer_for_controller_links(transfer_queue: &mut TransferQueue, structure_data: &StructureData) {
+        for link_id in &structure_data.controller_links {
+            if let Some(link) = link_id.resolve() {
+                let free_capacity = link.store_free_capacity(Some(ResourceType::Energy));
+
+                if free_capacity > 1 {
+                    let transfer_request = TransferDepositRequest::new(
+                        TransferTarget::Link(link.remote_id()),
+                        Some(ResourceType::Energy),
+                        TransferPriority::Low,
+                        free_capacity,
+                        TransferType::Link
+                    );
+
+                    transfer_queue.request_deposit(transfer_request);
+                }
+
+                let used_capacity = link.store_used_capacity(Some(ResourceType::Energy));
+
+                let transfer_request = TransferWithdrawRequest::new(
+                    TransferTarget::Link(link.remote_id()),
+                    ResourceType::Energy,
+                    TransferPriority::None,
+                    used_capacity,
+                    TransferType::Haul
+                );
+
+                transfer_queue.request_withdraw(transfer_request);
+            }
+        }
+    }
+
     fn request_transfer_for_ruins(transfer_queue: &mut TransferQueue, room: &Room) {
         for ruin in room.find(find::RUINS) {
             let ruin_id = ruin.remote_id();
@@ -1014,6 +1061,7 @@ impl Mission for LocalSupplyMission {
         Self::request_transfer_for_dropped_resources(&mut runtime_data.transfer_queue, &room);
         Self::request_transfer_for_source_links(&mut runtime_data.transfer_queue, &structure_data);
         Self::request_transfer_for_storage_links(&mut runtime_data.transfer_queue, &structure_data);
+        Self::request_transfer_for_controller_links(&mut runtime_data.transfer_queue, &structure_data);
 
         Ok(())
     }

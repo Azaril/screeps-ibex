@@ -2104,6 +2104,8 @@ impl<'a> PlanLocationPlacementNode for FloodFillPlanNode<'a> {
                     if current_gather_data.desires_placement(node.as_base(), context, state) && current_gather_data.desires_location(location, node.as_location(), context, state) {
                         node.place(location, context, state);
                     }
+
+                    //TODO: Evaluate LOD options?
                 } else {
                     break;
                 }

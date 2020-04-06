@@ -128,7 +128,7 @@ impl Mission for UpgradeMission {
             } else {
                 false
             }
-        };  
+        };
 
         let are_hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
 

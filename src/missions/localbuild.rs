@@ -12,6 +12,8 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
+use crate::transfer::transfersystem::*;
+use crate::remoteobjectid::*;
 
 #[derive(Clone, Debug, ConvertSaveload)]
 pub struct LocalBuildMission {
@@ -126,46 +128,109 @@ impl Mission for LocalBuildMission {
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
         let controller = room.controller().ok_or("Expected controller")?;
 
-        let high_priority_count = if controller.level() <= 3 { 4 } else { 2 };
-        let low_priority_count = if controller.level() <= 3 { 3 } else { 1 };
+        let construction_sites = room.find(find::MY_CONSTRUCTION_SITES);
+        let required_progress: u32 = construction_sites.iter().map(|construction_site| construction_site.progress_total() - construction_site.progress()).sum();
+        
+        let desired_builders_for_progress = if controller.level() <= 3 {
+            match required_progress {
+                0 => 0,
+                1..=1000 => 1,
+                1001..=2000 => 2,
+                2001..=3000 => 3,
+                3001..=4000 => 4,
+                _ => 5,
+            }
+         } else if controller.level() <= 6 {
+            match required_progress {
+                0 => 0,
+                1..=2000 => 1,
+                2001..=4000 => 2,
+                4001..=6000 => 3,
+                _ => 4,
+            }
+         } else { 
+            match required_progress {
+                0 => 0,
+                1..=3000 => 1,
+                3001..=6000 => 2,
+                6001..=9000 => 3,
+                _ => 4,
+            }
+        };
 
-        if self.builders.0.len() < low_priority_count.max(high_priority_count) {
-            if let Some(priority) = self.get_builder_priority(&room) {
-                let desired_count = if priority >= SPAWN_PRIORITY_HIGH { high_priority_count } else { low_priority_count };
-                if self.builders.0.len() < desired_count {
-                    let use_energy_max = if self.builders.0.is_empty() && priority >= SPAWN_PRIORITY_HIGH {
-                        room.energy_available()
+        let has_sufficient_energy = {
+            if let Some(room_transfer_data) = runtime_data.transfer_queue.try_get_room(room_data.name) {
+                if let Some(storage) = room.storage() {
+                    if let Some(storage_node) = room_transfer_data.try_get_node(&TransferTarget::Storage(storage.remote_id())) {
+                        if storage_node.get_available_withdrawl_by_resource(TransferType::Haul, ResourceType::Energy) >= 50_000 {
+                            true
+                        } else {
+                            false
+                        }
                     } else {
-                        room.energy_capacity_available()
-                    };
-
-                    let max_body = if priority >= SPAWN_PRIORITY_HIGH { 
-                        None
-                    } else {
-                        Some(5)
-                    };
-
-                    let body_definition = SpawnBodyDefinition {
-                        maximum_energy: use_energy_max,
-                        minimum_repeat: Some(1),
-                        maximum_repeat: max_body,
-                        pre_body: &[],
-                        repeat_body: &[Part::Carry, Part::Work, Part::Move, Part::Move],
-                        post_body: &[],
-                    };
-
-                    if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                        let allow_harvest = room.controller().map(|c| c.level() <= 3).unwrap_or(false);
-
-                        let spawn_request = SpawnRequest::new(
-                            "Local Builder".to_string(),
-                            &body,
-                            priority,
-                            Self::create_handle_builder_spawn(*runtime_data.entity, self.room_data, allow_harvest),
-                        );
-
-                        runtime_data.spawn_queue.request(room_data.name, spawn_request);
+                        false
                     }
+                } else {
+                    let structures = room.find(find::STRUCTURES);                       
+                    let containers: Vec<_> = structures
+                        .iter()
+                        .filter_map(|structure| {
+                            if let Structure::Container(container) = structure { 
+                                Some(container) 
+                            } else { 
+                                None 
+                            }
+                        })
+                        .filter_map(|container| room_transfer_data.try_get_node(&TransferTarget::Container(container.remote_id())))
+                        .collect();
+
+                    if !containers.is_empty() {
+                        containers.iter().any(|container_node| container_node.get_available_withdrawl_by_resource(TransferType::Haul, ResourceType::Energy) as f32 / CONTAINER_CAPACITY as f32 > 0.50)
+                    } else {
+                        true
+                    }
+                }
+            } else {
+                false
+            }
+        };
+
+        let desired_builders = if has_sufficient_energy { desired_builders_for_progress } else { 1 };
+
+        if self.builders.0.len() < desired_builders {
+            if let Some(priority) = self.get_builder_priority(&room) {
+                let use_energy_max = if self.builders.0.is_empty() && priority >= SPAWN_PRIORITY_HIGH {
+                    room.energy_available()
+                } else {
+                    room.energy_capacity_available()
+                };
+
+                let max_body = if priority >= SPAWN_PRIORITY_HIGH { 
+                    None
+                } else {
+                    Some(5)
+                };
+
+                let body_definition = SpawnBodyDefinition {
+                    maximum_energy: use_energy_max,
+                    minimum_repeat: Some(1),
+                    maximum_repeat: max_body,
+                    pre_body: &[],
+                    repeat_body: &[Part::Carry, Part::Work, Part::Move, Part::Move],
+                    post_body: &[],
+                };
+
+                if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
+                    let allow_harvest = room.controller().map(|c| c.level() <= 3).unwrap_or(false);
+
+                    let spawn_request = SpawnRequest::new(
+                        "Local Builder".to_string(),
+                        &body,
+                        priority,
+                        Self::create_handle_builder_spawn(*runtime_data.entity, self.room_data, allow_harvest),
+                    );
+
+                    runtime_data.spawn_queue.request(room_data.name, spawn_request);
                 }
             }
         }
