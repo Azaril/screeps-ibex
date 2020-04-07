@@ -45,23 +45,31 @@ impl Job for StaticMineJob {
         //
 
         //TODO: Validate container still exists? Recyle or reuse miner if it doesn't?
-
+        
         if creep.pos().is_equal_to(&self.container_target.pos()) {
-            match self.mine_target {
-                StaticMineTarget::Source(source_id) => {
-                    if let Some(source) = source_id.resolve() {
-                        creep.harvest(&source);
-                    } else {
-                        error!("Harvester has no assigned harvesting source! Name: {}", creep.name());
-                    }
-                }
-                StaticMineTarget::Mineral(mineral_id, extractor_id) => {
-                    if let Some(extractor) = extractor_id.resolve() {
-                        if extractor.cooldown() == 0 {
-                            if let Some(mineral) = mineral_id.resolve() {
-                                creep.harvest(&mineral);
+            if let Some(container) = self.container_target.resolve() {
+                let body = creep.body();
+                let work_parts = body.iter().filter(|b| b.part == Part::Work).count();
+                let harvest_amount = work_parts as u32 * HARVEST_POWER;
+
+                if container.store_free_capacity(None) >= harvest_amount {
+                    match self.mine_target {
+                        StaticMineTarget::Source(source_id) => {
+                            if let Some(source) = source_id.resolve() {
+                                creep.harvest(&source);
                             } else {
-                                error!("Harvester has no assigned harvesting extractor! Name: {}", creep.name());
+                                error!("Harvester has no assigned harvesting source! Name: {}", creep.name());
+                            }
+                        }
+                        StaticMineTarget::Mineral(mineral_id, extractor_id) => {
+                            if let Some(extractor) = extractor_id.resolve() {
+                                if extractor.cooldown() == 0 {
+                                    if let Some(mineral) = mineral_id.resolve() {
+                                        creep.harvest(&mineral);
+                                    } else {
+                                        error!("Harvester has no assigned harvesting extractor! Name: {}", creep.name());
+                                    }
+                                }
                             }
                         }
                     }
