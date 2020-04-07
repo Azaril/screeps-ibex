@@ -98,12 +98,13 @@ impl LocalSupplyMission {
         mission_entity: Entity,
         source_id: RemoteObjectId<Source>,
         link_id: RemoteObjectId<StructureLink>,
+        container_id: Option<RemoteObjectId<StructureContainer>>
     ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::LinkMine(LinkMineJob::new(source_id, link_id));
+                let creep_job = JobData::LinkMine(LinkMineJob::new(source_id, link_id, container_id));
 
                 let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
@@ -285,6 +286,12 @@ impl LocalSupplyMission {
             .filter_map(|miner_entity| {
                 if let Some(JobData::StaticMine(miner_data)) = system_data.job_data.get(*miner_entity) {
                     Some((miner_data.container_target, *miner_entity))
+                } else if let Some(JobData::LinkMine(miner_data)) = system_data.job_data.get(*miner_entity) {
+                    if let Some(container_target) = miner_data.container_target {
+                        Some((container_target, *miner_entity))
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
@@ -518,6 +525,14 @@ impl LocalSupplyMission {
                     // Spawn link miners.
                     //
 
+                    let mut available_containers_for_source_miners = source_containers.iter().filter(|container| {
+                        creep_data
+                            .containers_to_source_miners
+                            .get(container)
+                            .map(|miners| !miners.iter().any(|miner| alive_source_miners.contains(miner)))
+                            .unwrap_or(true)
+                    });
+
                     let available_links_for_source_miners = source_links.iter().filter(|link| {
                         creep_data
                             .links_to_source_miners
@@ -546,11 +561,14 @@ impl LocalSupplyMission {
                         };
 
                         if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
+                            //TODO: Should the container be removed from the available ones?
+                            let target_container = available_containers_for_source_miners.next();
+
                             let spawn_request = SpawnRequest::new(
                                 format!("Link Miner - Source: {}", source_id.id()),
                                 &body,
                                 SPAWN_PRIORITY_HIGH,
-                                Self::create_handle_link_miner_spawn(*runtime_data.entity, *source_id, *link),
+                                Self::create_handle_link_miner_spawn(*runtime_data.entity, *source_id, *link, target_container.cloned()),
                             );
 
                             runtime_data.spawn_queue.request(room_data.name, spawn_request);

@@ -81,7 +81,7 @@ impl HarvestJob {
             }
         }
 
-        if let Some(state) = get_new_harvest_target_state(creep, harvest_target, |id| HarvestState::Harvest(id, 0)) {
+        if let Some(state) = get_new_harvest_target_state(creep, harvest_target, false, |id| HarvestState::Harvest(id, 0)) {
             return Some(state);
         };
 

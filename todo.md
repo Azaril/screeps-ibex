@@ -19,6 +19,9 @@
 - Add dismantle to claim/reserve so they can try and reach blocked off controllers.
 - Add CPU analysis.
 1. Prevent additional remote mining, reserving or claiming of new rooms without sufficient CPU.
+- Post-process for room planner. (Remove roads not needed, fix RCL for links etc. based on distance, prioritize storage.)
+1. Apply RCL as post-process with constraints. (i.e. do extensions by distance, don't spawn extractor container till RCL 6 etc.)
+- Spawn body calculation using current available energy needs to use at least min body cost, otherwise never ends up in queue. (Will not block lower priority spawns!)
 
 # Medium Priority
 

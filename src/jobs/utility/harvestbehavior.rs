@@ -25,12 +25,12 @@ where
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn get_new_harvest_target_state<F, R>(creep: &Creep, source_id: &RemoteObjectId<Source>, state_map: F) -> Option<R>
+pub fn get_new_harvest_target_state<F, R>(creep: &Creep, source_id: &RemoteObjectId<Source>, ignore_free_capacity: bool, state_map: F) -> Option<R>
 where
     F: Fn(RemoteObjectId<Source>) -> R,
 {
     //TODO: Does it make sense to actually check for energy being available here? Reduces locomotion time towards it. Look at distance vs regen ticks?
-    if creep.store_free_capacity(Some(ResourceType::Energy)) > 0 && source_id.resolve().map(|s| s.energy() > 0).unwrap_or(true) {
+    if (ignore_free_capacity || creep.store_free_capacity(Some(ResourceType::Energy)) > 0) && source_id.resolve().map(|s| s.energy() > 0).unwrap_or(true) {
         return Some(state_map(*source_id));
     }
 
@@ -47,12 +47,8 @@ where
 
     //TODO: Check visibility cache and cancel if not reachable etc.?
 
-    if creep.store_free_capacity(Some(ResourceType::Energy)) == 0 {
-        if action_flags.contains(SimultaneousActionFlags::TRANSFER) {
-            return None;
-        } else {
-            return Some(next_state());
-        }
+    if creep.store_free_capacity(Some(ResourceType::Energy)) == 0 && !action_flags.contains(SimultaneousActionFlags::TRANSFER) {
+        return Some(next_state());
     }
 
     if creep_pos.room_name() != target_position.room_name() {
