@@ -200,7 +200,7 @@ impl LocalSupplyMission {
         //TODO: This may need more validate that the link is reachable - or assume it is and bad placemented is filtered out 
         //      during room planning.
         //TODO: May need additional work to make sure link is not used by a controller or storage.
-        let controller_links = controller
+        let controller_links: Vec<_> = controller
             .iter()
             .filter_map(|controller| {
                 let nearby_link = room_links.iter().find(|link| link.pos().in_range_to(&controller.pos(), 2));
@@ -232,10 +232,13 @@ impl LocalSupplyMission {
         //TODO: May need additional work to make sure link is not used by a controller or storage.
         let sources_to_links = sources
             .iter()
-            .filter_map(|source| {
-                let nearby_link = room_links.iter().find(|link| link.pos().in_range_to(&source.pos(), 2));
-
-                nearby_link.map(|link| (*source, link.remote_id()))
+            .flat_map(|&source| {
+                room_links
+                    .iter()
+                    .filter(move |link| link.pos().in_range_to(&source.pos(), 2))
+                    .map(|link| link.remote_id())
+                    .filter(|id| !controller_links.contains(id))
+                    .map(move |id| (source, id))
             })
             .into_group_map();
 
@@ -731,12 +734,19 @@ impl LocalSupplyMission {
         for containers in structure_data.controllers_to_containers.values() {
             for container_id in containers {
                 if let Some(container) = container_id.resolve() {
-                    let container_free_capacity = container.store_free_capacity(Some(ResourceType::Energy));
+                    let container_used_capacity = container.store_used_capacity(Some(ResourceType::Energy));
+                    let container_available_capacity = container.store_capacity(Some(ResourceType::Energy));
+                    let container_free_capacity = container_available_capacity - container_used_capacity;
+
+                    let storage_fraction = container_used_capacity as f32 / container_available_capacity as f32;
+
                     if container_free_capacity > 0 {
+                        let priority = if storage_fraction < 0.75 { TransferPriority::Low } else { TransferPriority::None };
+
                         let transfer_request = TransferDepositRequest::new(
                             TransferTarget::Container(*container_id),
                             Some(ResourceType::Energy),
-                            TransferPriority::Low,
+                            priority,
                             container_free_capacity,
                             TransferType::Haul
                         );

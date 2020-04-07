@@ -102,36 +102,13 @@ impl Mission for HaulMission {
             .map(|r| r.stats().total_unfufilled_resources(TransferType::Haul))
             .unwrap_or_else(HashMap::new);
 
-        let total_unfufilled = unfufilled.values().sum();
+        let total_unfufilled: u32 = unfufilled.values().sum();
 
-        let desired_haulers = if controller.level() <= 3 {
-            match total_unfufilled {
-                0 => 0,
-                1..=1000 => 1,
-                1001..=2000 => 2,
-                2001..=3000 => 3,
-                3001..=4000 => 4,
-                _ => 5,
-            }
-         } else if controller.level() <= 6 {
-            match total_unfufilled {
-                0 => 0,
-                1..=1500 => 1,
-                1501..=3000 => 2,
-                3001..=4500 => 3,
-                _ => 4,
-            }
-         } else { 
-            match total_unfufilled {
-                0 => 0,
-                1..=3000 => 1,
-                3001..=6000 => 2,
-                6001..=9000 => 3,
-                _ => 4,
-            }
-        };
+        let base_amount = controller.level() * 500;
 
-        let should_spawn = self.haulers.0.len() < desired_haulers;
+        let desired_haulers = (total_unfufilled / base_amount).min(3);
+
+        let should_spawn = self.haulers.0.len() < desired_haulers as usize;
 
         if should_spawn {
             let energy_to_use = if self.haulers.0.is_empty() {
