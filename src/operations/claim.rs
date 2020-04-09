@@ -63,6 +63,103 @@ impl Operation for ClaimOperation {
         system_data: &OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
+
+        //
+        // Ensure remote builders occur.
+        //
+
+        for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
+            //TODO: The construction operation will trigger construction sites - this is brittle to rely on.
+
+            //
+            // Spawn remote build for rooms that are owned and have a spawn construction site.
+            //
+
+            if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
+                if dynamic_visibility_data.visible() && dynamic_visibility_data.owner().mine() {
+                    if let Some(room) = game::rooms::get(room_data.name) {
+                        let spawns = room.find(find::MY_SPAWNS);
+
+                        if spawns.is_empty() {
+                            let construction_sites = room.find(find::CONSTRUCTION_SITES);
+
+                            let spawn_construction_site = construction_sites
+                                .into_iter()
+                                .find(|construction_site| construction_site.structure_type() == StructureType::Spawn);
+
+                            if let Some(spawn_construction_site) = spawn_construction_site {
+                                //TODO: wiarchbe: Use trait instead of match.
+                                let has_remote_build_mission =
+                                    room_data
+                                        .missions
+                                        .0
+                                        .iter()
+                                        .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
+                                            Some(MissionData::RemoteBuild(_)) => true,
+                                            _ => false,
+                                        });
+
+                                //
+                                // Spawn a new mission to fill the remote build role if missing.
+                                //
+
+                                if !has_remote_build_mission {
+                                    info!("Starting remote build for room. Room: {}", room_data.name);
+
+                                    let room_entity = entity;
+
+                                    let construction_site_pos = spawn_construction_site.pos();
+                                    let mut nearest_spawn = None;
+
+                                    //TOODO: Replace this hack that finds the nearest room. (Need state machine to drive operation. Blocked on specs vec serialization.)
+                                    for (other_entity, other_room_data) in (system_data.entities, system_data.room_data).join() {
+                                        if let Some(other_dynamic_visibility_data) = other_room_data.get_dynamic_visibility_data() {
+                                            if other_dynamic_visibility_data.visible() && other_dynamic_visibility_data.owner().mine() {
+                                                if let Some(other_room) = game::rooms::get(other_room_data.name) {
+                                                    let spawns = other_room.find(find::MY_SPAWNS);
+
+                                                    for spawn in spawns {
+                                                        let distance = construction_site_pos.get_range_to(&spawn.pos());
+                                                        if let Some((nearest_distance, _)) = nearest_spawn {
+                                                            if distance < nearest_distance {
+                                                                nearest_spawn = Some((distance, other_entity));
+                                                            }
+                                                        } else {
+                                                            nearest_spawn = Some((distance, other_entity));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if let Some((_, nearest_spawn_room_entity)) = nearest_spawn {
+                                        let home_room_data_entity = nearest_spawn_room_entity;
+
+                                        system_data.updater.exec_mut(move |world| {
+                                            let mission_entity =
+                                                RemoteBuildMission::build(world.create_entity(), room_entity, home_room_data_entity)
+                                                    .build();
+
+                                            let room_data_storage = &mut world.write_storage::<RoomData>();
+
+                                            if let Some(room_data) = room_data_storage.get_mut(room_entity) {
+                                                room_data.missions.0.push(mission_entity);
+                                            }
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        //
+        // Trigger new claim missions.
+        //
+
         let current_gcl = game::gcl::level();
         let current_claim_missions = self.claim_missions.0.len();
         let mut currently_owned_rooms = 0;
@@ -255,94 +352,6 @@ impl Operation for ClaimOperation {
                             operation_data.claim_missions.0.push(mission_entity);
                         }
                     });
-                }
-            }
-        }
-
-        for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
-            //TODO: The construction operation will trigger construction sites - this is brittle to rely on.
-
-            //
-            // Spawn remote build for rooms that are owned and have a spawn construction site.
-            //
-
-            if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
-                if dynamic_visibility_data.visible() && dynamic_visibility_data.owner().mine() {
-                    if let Some(room) = game::rooms::get(room_data.name) {
-                        let spawns = room.find(find::MY_SPAWNS);
-
-                        if spawns.is_empty() {
-                            let construction_sites = room.find(find::CONSTRUCTION_SITES);
-
-                            let spawn_construction_site = construction_sites
-                                .into_iter()
-                                .find(|construction_site| construction_site.structure_type() == StructureType::Spawn);
-
-                            if let Some(spawn_construction_site) = spawn_construction_site {
-                                //TODO: wiarchbe: Use trait instead of match.
-                                let has_remote_build_mission =
-                                    room_data
-                                        .missions
-                                        .0
-                                        .iter()
-                                        .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
-                                            Some(MissionData::RemoteBuild(_)) => true,
-                                            _ => false,
-                                        });
-
-                                //
-                                // Spawn a new mission to fill the remote build role if missing.
-                                //
-
-                                if !has_remote_build_mission {
-                                    info!("Starting remote build for room. Room: {}", room_data.name);
-
-                                    let room_entity = entity;
-
-                                    let construction_site_pos = spawn_construction_site.pos();
-                                    let mut nearest_spawn = None;
-
-                                    //TOODO: Replace this hack that finds the nearest room. (Need state machine to drive operation. Blocked on specs vec serialization.)
-                                    for (other_entity, other_room_data) in (system_data.entities, system_data.room_data).join() {
-                                        if let Some(other_dynamic_visibility_data) = other_room_data.get_dynamic_visibility_data() {
-                                            if other_dynamic_visibility_data.visible() && other_dynamic_visibility_data.owner().mine() {
-                                                if let Some(other_room) = game::rooms::get(other_room_data.name) {
-                                                    let spawns = other_room.find(find::MY_SPAWNS);
-
-                                                    for spawn in spawns {
-                                                        let distance = construction_site_pos.get_range_to(&spawn.pos());
-                                                        if let Some((nearest_distance, _)) = nearest_spawn {
-                                                            if distance < nearest_distance {
-                                                                nearest_spawn = Some((distance, other_entity));
-                                                            }
-                                                        } else {
-                                                            nearest_spawn = Some((distance, other_entity));
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    if let Some((_, nearest_spawn_room_entity)) = nearest_spawn {
-                                        let home_room_data_entity = nearest_spawn_room_entity;
-
-                                        system_data.updater.exec_mut(move |world| {
-                                            let mission_entity =
-                                                RemoteBuildMission::build(world.create_entity(), room_entity, home_room_data_entity)
-                                                    .build();
-
-                                            let room_data_storage = &mut world.write_storage::<RoomData>();
-
-                                            if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                                                room_data.missions.0.push(mission_entity);
-                                            }
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
