@@ -72,7 +72,7 @@ fn map_defense_priority(hits: u32, hits_max: u32, available_energy: u32, under_a
         Some(RepairPriority::Medium)
     } else if health_fraction < 0.1 {
         Some(RepairPriority::Low)
-    } else if available_energy > 500_000 {
+    } else if available_energy > 250_000 {
         Some(RepairPriority::VeryLow)
     } else {
         None

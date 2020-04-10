@@ -60,8 +60,9 @@ impl Mission for TerminalMission {
             //
             // Transfer energy needed for purchase/sale to the terminal.
             //
-            let energy_reserve = runtime_data.order_queue.maximum_transfer_cost();
+            let energy_reserve = runtime_data.order_queue.maximum_transfer_energy();
             let current_terminal_energy = terminal.store_used_capacity(Some(ResourceType::Energy));
+            let available_transfer_energy = energy_reserve.min(current_terminal_energy);
 
             if current_terminal_energy < energy_reserve {
                 let transfer_amount = energy_reserve - current_terminal_energy;
@@ -90,12 +91,12 @@ impl Mission for TerminalMission {
                 }
 
                 let desired_storage_amount = match resource_type {
-                    ResourceType::Energy => 500_000,
+                    ResourceType::Energy => 150_000,
                     _ => 10_000,
                 };
 
                 let desired_passive_terminal_amount = match resource_type {
-                    ResourceType::Energy => 50_000,
+                    ResourceType::Energy => 10_000,
                     _ => 10_000,
                 };
 
@@ -190,7 +191,7 @@ impl Mission for TerminalMission {
                     let active_amount = current_terminal_amount - passive_amount;
 
                     if active_amount > 0 {
-                        runtime_data.order_queue.request_active_sale(room_data.name, *resource_type, active_amount);
+                        runtime_data.order_queue.request_active_sale(room_data.name, *resource_type, active_amount, available_transfer_energy);
                     }
                 }
             }
