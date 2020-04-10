@@ -103,7 +103,7 @@ impl Mission for UpgradeMission {
             if let Some(room_transfer_data) = runtime_data.transfer_queue.try_get_room(room_data.name) {
                 if let Some(storage) = room.storage() {
                     if let Some(storage_node) = room_transfer_data.try_get_node(&TransferTarget::Storage(storage.remote_id())) {
-                        if storage_node.get_available_withdrawl_by_resource(TransferType::Haul, ResourceType::Energy) >= 250_000 {
+                        if storage_node.get_available_withdrawl_by_resource(TransferType::Haul, ResourceType::Energy) >= 100_000 {
                             true
                         } else {
                             false
@@ -133,7 +133,9 @@ impl Mission for UpgradeMission {
         let are_hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
 
         //TODO: Need better calculation for maximum number of upgraders.
-        let max_upgraders = if are_hostile_creeps {
+        let max_upgraders = if game::cpu::bucket() < game::cpu::tick_limit() * 10.0 {
+            1
+        } else if are_hostile_creeps {
             1
         } else if controller.level() >= 8 {
             1
