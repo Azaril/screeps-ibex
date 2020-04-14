@@ -15,6 +15,10 @@ impl CreepOwner {
     pub fn new(creep_id: ObjectId<Creep>) -> CreepOwner {
         CreepOwner { owner: creep_id }
     }
+
+    pub fn id(&self) -> ObjectId<Creep> {
+        self.owner
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize, Component)]

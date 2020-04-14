@@ -43,7 +43,7 @@ impl Job for ReserveJob {
                 error!("Reserver has no assigned controller! Name: {}", creep.name());
             }
         } else {
-            creep.move_to(&self.reserve_target.pos());
+            runtime_data.movement.move_to_range(runtime_data.creep_entity, self.reserve_target.pos(), 1);
         }
     }
 }

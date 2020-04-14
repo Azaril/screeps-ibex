@@ -27,6 +27,7 @@ mod transfer;
 mod ui;
 mod visualize;
 mod game_loop;
+mod pathing;
 
 use log::*;
 use stdweb::*;

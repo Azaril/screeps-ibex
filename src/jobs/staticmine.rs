@@ -76,7 +76,7 @@ impl Job for StaticMineJob {
                 }
             }
         } else {
-            creep.move_to(&self.container_target.pos());
+            runtime_data.movement.move_to(runtime_data.creep_entity, self.container_target.pos());
         }
     }
 }
