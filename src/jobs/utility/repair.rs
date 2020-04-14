@@ -51,7 +51,7 @@ fn map_high_value_priority(hits: u32, hits_max: u32) -> Option<RepairPriority> {
     Some(priority)
 }
 
-fn map_defense_priority(hits: u32, hits_max: u32, available_energy: u32, under_attack: bool) -> Option<RepairPriority> {
+fn map_defense_priority(structure_type: StructureType, hits: u32, hits_max: u32, available_energy: u32, under_attack: bool) -> Option<RepairPriority> {
     let health_fraction = (hits as f32) / (hits_max as f32);
 
     if under_attack {
@@ -66,13 +66,17 @@ fn map_defense_priority(hits: u32, hits_max: u32, available_energy: u32, under_a
         } else {
             Some(RepairPriority::VeryLow)
         }
+    } else if structure_type == StructureType::Rampart && hits <= RAMPART_DECAY_AMOUNT {
+        Some(RepairPriority::Critical)
+    } else if structure_type == StructureType::Rampart && hits <= RAMPART_DECAY_AMOUNT * 5 {
+        Some(RepairPriority::High)
     } else if health_fraction < 0.0001 {
         Some(RepairPriority::High)
     } else if health_fraction < 0.001 {
         Some(RepairPriority::Medium)
     } else if health_fraction < 0.1 {
         Some(RepairPriority::Low)
-    } else if available_energy > 250_000 {
+    } else if available_energy > 10_000 {
         Some(RepairPriority::VeryLow)
     } else {
         None
@@ -90,8 +94,8 @@ fn map_structure_repair_priority(
         Structure::Spawn(_) => map_high_value_priority(hits, hits_max),
         Structure::Tower(_) => map_high_value_priority(hits, hits_max),
         Structure::Container(_) => map_high_value_priority(hits, hits_max),
-        Structure::Wall(_) => map_defense_priority(hits, hits_max, available_energy, under_attack),
-        Structure::Rampart(_) => map_defense_priority(hits, hits_max, available_energy, under_attack),
+        Structure::Wall(_) => map_defense_priority(StructureType::Wall, hits, hits_max, available_energy, under_attack),
+        Structure::Rampart(_) => map_defense_priority(StructureType::Rampart, hits, hits_max, available_energy, under_attack),
         _ => map_normal_priority(hits, hits_max),
     }
 }

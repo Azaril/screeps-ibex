@@ -25,9 +25,7 @@ pub enum BuildState {
     FinishedPickup(),
     Harvest(RemoteObjectId<Source>, u8),
     Build(RemoteObjectId<ConstructionSite>),
-    FinishedBuild(),
     Repair(RemoteStructureIdentifier),
-    FinishedRepair(),
     Wait(u32)
 }
 
@@ -126,14 +124,8 @@ impl Job for BuildJob {
                     BuildState::Build(_) => {
                         room_ui.jobs().add_text(format!("Build - {} - Build", name), None);
                     }
-                    BuildState::FinishedBuild() => {
-                        room_ui.jobs().add_text(format!("Build - {} - FinishedBuild", name), None);
-                    }
                     BuildState::Repair(_) => {
                         room_ui.jobs().add_text(format!("Build - {} - Repair", name), None);
-                    }
-                    BuildState::FinishedRepair() => {
-                        room_ui.jobs().add_text(format!("Build - {} - FinishedRepair", name), None);
                     }
                     BuildState::Wait(_) => {
                         room_ui.jobs().add_text(format!("Build - {} - Wait", name), None);
@@ -150,9 +142,7 @@ impl Job for BuildJob {
             BuildState::FinishedPickup() => {}
             BuildState::Harvest(_, _) => {}
             BuildState::Build(_) => {}
-            BuildState::FinishedBuild() => {}
             BuildState::Repair(_) => {}
-            BuildState::FinishedRepair() => {}
             BuildState::Wait(_) => {}
         };
     }
@@ -169,10 +159,8 @@ impl Job for BuildJob {
                     BuildState::Pickup(ticket) => run_pickup_state(creep, &mut action_flags, ticket, runtime_data.transfer_queue, BuildState::FinishedPickup),
                     BuildState::FinishedPickup() => Self::run_finished_pickup_state(creep, &[build_room_data], runtime_data.transfer_queue),
                     BuildState::Harvest(source_id, stuck_count) => run_harvest_state(creep, &mut action_flags, source_id, false, stuck_count, BuildState::Idle),
-                    BuildState::Build(construction_site_id) => run_build_state(creep, &mut action_flags, construction_site_id, BuildState::FinishedBuild),
-                    BuildState::FinishedBuild() => Self::run_finished_build_state(creep, build_room_data),
-                    BuildState::Repair(structure_id) => run_repair_state(creep, &mut action_flags, structure_id, BuildState::FinishedRepair),
-                    BuildState::FinishedRepair() => Self::run_finished_repair_state(creep, build_room_data),
+                    BuildState::Build(construction_site_id) => run_build_state(creep, &mut action_flags, construction_site_id, BuildState::Idle),
+                    BuildState::Repair(structure_id) => run_repair_state(creep, &mut action_flags, structure_id, BuildState::Idle),
                     BuildState::Wait(time) => run_wait_state(time, BuildState::Idle)
                 };
 
