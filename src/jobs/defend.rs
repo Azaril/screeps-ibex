@@ -48,7 +48,7 @@ impl Job for DefendJob {
                 } 
                 
                 if range > 2 {
-                    creep.move_to(&target_creep);
+                    runtime_data.movement.move_to_range(runtime_data.creep_entity, target_creep.pos(), 2);
                 }
             }
         }

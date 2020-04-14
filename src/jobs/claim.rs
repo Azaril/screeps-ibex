@@ -39,7 +39,7 @@ impl Job for ClaimJob {
                 error!("Claim has no assigned controller! Name: {}", creep.name());
             }
         } else {
-            creep.move_to(&self.claim_target.pos());
+            runtime_data.movement.move_to_range(runtime_data.creep_entity, self.claim_target.pos(), 1);
         }
     }
 }

@@ -48,7 +48,7 @@ impl Job for ScoutJob {
         }
 
         if creep_pos.get_range_to(&target_pos) > 20 {
-            creep.move_to(&target_pos);
+            runtime_data.movement.move_to_range(runtime_data.creep_entity, target_pos, 20);
         }
     }
 }

@@ -4,6 +4,7 @@ use crate::transfer::transfersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
 use crate::creep::CreepOwner;
+use crate::pathing::movementsystem::*;
 use screeps::*;
 use specs::prelude::*;
 
@@ -17,6 +18,7 @@ pub struct JobSystemData<'a> {
     ui: Option<Write<'a, UISystem>>,
     transfer_queue: Write<'a, TransferQueue>,
     room_data: ReadStorage<'a, RoomData>,
+    movement: Write<'a, MovementData>,
 }
 
 pub struct JobExecutionSystemData<'a> {
@@ -26,8 +28,10 @@ pub struct JobExecutionSystemData<'a> {
 }
 
 pub struct JobExecutionRuntimeData<'a> {
+    pub creep_entity: Entity,
     pub owner: &'a Creep,
     pub transfer_queue: &'a mut TransferQueue,
+    pub movement: &'a mut MovementData,
 }
 
 pub struct JobDescribeData<'a> {
@@ -58,11 +62,13 @@ impl<'a> System<'a> for PreRunJobSystem {
             room_data: &data.room_data,
         };
 
-        for (creep, job_data) in (&data.creep_owners, &mut data.jobs).join() {
+        for (creep_entity, creep, job_data) in (&data.entities, &data.creep_owners, &mut data.jobs).join() {
             if let Some(owner) = creep.owner.resolve() {
                 let mut runtime_data = JobExecutionRuntimeData {
+                    creep_entity,
                     owner: &owner,
                     transfer_queue: &mut data.transfer_queue,
+                    movement: &mut data.movement,
                 };
 
                 job_data.as_job().pre_run_job(&system_data, &mut runtime_data);
@@ -101,11 +107,13 @@ impl<'a> System<'a> for RunJobSystem {
             room_data: &data.room_data,
         };
 
-        for (creep, job_data) in (&data.creep_owners, &mut data.jobs).join() {
+        for (creep_entity, creep, job_data) in (&data.entities, &data.creep_owners, &mut data.jobs).join() {
             if let Some(owner) = creep.owner.resolve() {
                 let mut runtime_data = JobExecutionRuntimeData {
+                    creep_entity,
                     owner: &owner,
                     transfer_queue: &mut data.transfer_queue,
+                    movement: &mut data.movement,
                 };
 
                 job_data.as_job().run_job(&system_data, &mut runtime_data);

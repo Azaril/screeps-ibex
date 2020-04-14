@@ -171,13 +171,15 @@ impl Operation for ClaimOperation {
         }
 
         //
-        // Only allow as many missions in progress as would reach GCL cap.
+        // Only allow as many missions in progress as would reach GCL/CPU cap.
         //
 
         //TODO: Need better dynamic estimation of room cost.
-        const ESTIMATED_ROOM_CPU_COST: f32 = 10.0;
+        const ESTIMATED_ROOM_CPU_COST: f64 = 10.0;
+        let cpu_limit = game::cpu::limit();
+
         let current_gcl = game::gcl::level();
-        let maximum_rooms = ((current_gcl as f32 / ESTIMATED_ROOM_CPU_COST) as u32).min(current_gcl);
+        let maximum_rooms = ((cpu_limit / ESTIMATED_ROOM_CPU_COST) as u32).min(current_gcl);
 
         //TODO: Make this not a hard cap!
         if currently_owned_rooms + current_claim_missions >= maximum_rooms as usize {
