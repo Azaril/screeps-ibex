@@ -16,7 +16,7 @@ use log::*;
 pub struct ScoutMission {
     room_data: Entity,
     home_room_data: Entity,
-    scouts: EntityVec,
+    scouts: EntityVec<Entity>,
     next_spawn: Option<u32>,
     spawned_scouts: u32,
 }
@@ -54,7 +54,7 @@ impl ScoutMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::Scout(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.scouts.0.push(creep_entity);
+                    mission_data.scouts.push(creep_entity);
 
                     mission_data.spawned_scouts += 1;
                     mission_data.next_spawn = Some(std::cmp::min(mission_data.spawned_scouts * 2000, 10000));
@@ -71,7 +71,7 @@ impl Mission for ScoutMission {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
                 room_ui
                     .missions()
-                    .add_text(format!("Scout - Scouts: {}", self.scouts.0.len()), None);
+                    .add_text(format!("Scout - Scouts: {}", self.scouts.len()), None);
             });
         }
     }
@@ -86,7 +86,6 @@ impl Mission for ScoutMission {
         //
 
         self.scouts
-            .0
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
@@ -105,7 +104,7 @@ impl Mission for ScoutMission {
             .map(|v| v.updated_within(10))
             .unwrap_or(false);
 
-        if data_is_fresh && self.scouts.0.is_empty() {
+        if data_is_fresh && self.scouts.is_empty() {
             info!(
                 "Completing scout mission - room is visible and no active scouts. Room: {}",
                 room_data.name
@@ -119,7 +118,7 @@ impl Mission for ScoutMission {
 
         let should_spawn = self.next_spawn.map(|t| t >= game::time()).unwrap_or(true);
 
-        if self.scouts.0.is_empty() && should_spawn {
+        if self.scouts.is_empty() && should_spawn {
             //TODO: Compute best body parts to use.
             let body_definition = crate::creep::SpawnBodyDefinition {
                 maximum_energy: home_room.energy_capacity_available(),

@@ -17,7 +17,7 @@ use crate::jobs::harvest::*;
 pub struct RemoteMineMission {
     room_data: Entity,
     home_room_data: Entity,
-    harvesters: EntityVec,
+    harvesters: EntityVec<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -57,7 +57,7 @@ impl RemoteMineMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::RemoteMine(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.harvesters.0.push(creep_entity);
+                    mission_data.harvesters.push(creep_entity);
                 }
             });
         })
@@ -71,7 +71,7 @@ impl Mission for RemoteMineMission {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
                 room_ui
                     .missions()
-                    .add_text(format!("Remote Mine - Harvesters: {}", self.harvesters.0.len()), None);
+                    .add_text(format!("Remote Mine - Harvesters: {}", self.harvesters.len()), None);
             });
         }
     }
@@ -86,7 +86,6 @@ impl Mission for RemoteMineMission {
         //
 
         self.harvesters
-            .0
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
@@ -124,7 +123,6 @@ impl Mission for RemoteMineMission {
         //TODO: Store this mapping data as part of the mission. (Blocked on specs collection serialization.)
         let mut sources_to_harvesters = self
             .harvesters
-            .0
             .iter()
             .filter_map(|harvester_entity| {
                 if let Some(JobData::Harvest(harvester_data)) = system_data.job_data.get(*harvester_entity) {

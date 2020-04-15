@@ -15,7 +15,7 @@ use specs_derive::*;
 #[derive(Clone, Debug, ConvertSaveload)]
 pub struct DefendMission {
     room_data: Entity,
-    defenders: EntityVec,
+    defenders: EntityVec<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -50,7 +50,7 @@ impl DefendMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::Defend(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.defenders.0.push(creep_entity);
+                    mission_data.defenders.push(creep_entity);
                 }
             });
         })
@@ -64,7 +64,7 @@ impl Mission for DefendMission {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
                 room_ui
                     .missions()
-                    .add_text(format!("Defend - Archers: {}", self.defenders.0.len()), None);
+                    .add_text(format!("Defend - Archers: {}", self.defenders.len()), None);
             })
         }
     }
@@ -79,7 +79,6 @@ impl Mission for DefendMission {
         //
 
         self.defenders
-            .0
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
@@ -95,12 +94,12 @@ impl Mission for DefendMission {
 
         let max_count = 2;
 
-        if self.defenders.0.len() < max_count {
+        if self.defenders.len() < max_count {
             let are_hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
             let desired_count = if are_hostile_creeps { 2 } else { 0 };
 
-            if self.defenders.0.len() < desired_count {
-                let use_energy_max = if self.defenders.0.is_empty() {
+            if self.defenders.len() < desired_count {
+                let use_energy_max = if self.defenders.is_empty() {
                     room.energy_available()
                 } else {
                     room.energy_capacity_available()

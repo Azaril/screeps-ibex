@@ -16,7 +16,7 @@ use crate::jobs::haul::*;
 #[derive(Clone, ConvertSaveload)]
 pub struct HaulMission {
     room_data: Entity,
-    haulers: EntityVec,
+    haulers: EntityVec<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -52,7 +52,7 @@ impl HaulMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::Haul(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.haulers.0.push(creep_entity);
+                    mission_data.haulers.push(creep_entity);
                 }
             });
         })
@@ -66,7 +66,7 @@ impl Mission for HaulMission {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
                 room_ui
                     .missions()
-                    .add_text(format!("Hauler - Haulers: {}", self.haulers.0.len()), None);
+                    .add_text(format!("Hauler - Haulers: {}", self.haulers.len()), None);
             })
         }
     }
@@ -81,7 +81,6 @@ impl Mission for HaulMission {
         //
 
         self.haulers
-            .0
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
@@ -131,10 +130,10 @@ impl Mission for HaulMission {
             }
         }
 
-        let should_spawn = self.haulers.0.len() < desired_haulers;
+        let should_spawn = self.haulers.len() < desired_haulers;
 
         if should_spawn {
-            let energy_to_use = if self.haulers.0.is_empty() {
+            let energy_to_use = if self.haulers.is_empty() {
                 room.energy_available()
             } else {
                 room.energy_capacity_available()
@@ -153,7 +152,7 @@ impl Mission for HaulMission {
             if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                 let haul_rooms = &[self.room_data];
 
-                let priority = if self.haulers.0.is_empty() {
+                let priority = if self.haulers.is_empty() {
                     SPAWN_PRIORITY_HIGH
                 } else {
                     SPAWN_PRIORITY_MEDIUM

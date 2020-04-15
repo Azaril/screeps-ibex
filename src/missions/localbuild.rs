@@ -18,7 +18,7 @@ use crate::remoteobjectid::*;
 #[derive(Clone, Debug, ConvertSaveload)]
 pub struct LocalBuildMission {
     room_data: Entity,
-    builders: EntityVec,
+    builders: EntityVec<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -45,7 +45,7 @@ impl LocalBuildMission {
         let construction_sites = room.find(find::MY_CONSTRUCTION_SITES);
 
         if !construction_sites.is_empty() {
-            if self.builders.0.is_empty() {
+            if self.builders.is_empty() {
                 Some(SPAWN_PRIORITY_HIGH)
             } else {
                 construction_sites.iter().map(|construction_site| {
@@ -84,7 +84,7 @@ impl LocalBuildMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::LocalBuild(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.builders.0.push(creep_entity);
+                    mission_data.builders.push(creep_entity);
                 }
             });
         })
@@ -98,7 +98,7 @@ impl Mission for LocalBuildMission {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
                 room_ui
                     .missions()
-                    .add_text(format!("Local Build - Builders: {}", self.builders.0.len()), None);
+                    .add_text(format!("Local Build - Builders: {}", self.builders.len()), None);
             })
         }
     }
@@ -113,7 +113,6 @@ impl Mission for LocalBuildMission {
         //
 
         self.builders
-            .0
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
@@ -197,9 +196,9 @@ impl Mission for LocalBuildMission {
 
         let desired_builders = if has_sufficient_energy { desired_builders_for_progress } else { 1 };
 
-        if self.builders.0.len() < desired_builders {
+        if self.builders.len() < desired_builders {
             if let Some(priority) = self.get_builder_priority(&room) {
-                let use_energy_max = if self.builders.0.is_empty() && priority >= SPAWN_PRIORITY_HIGH {
+                let use_energy_max = if self.builders.is_empty() && priority >= SPAWN_PRIORITY_HIGH {
                     room.energy_available()
                 } else {
                     room.energy_capacity_available()

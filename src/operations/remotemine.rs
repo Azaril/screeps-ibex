@@ -127,7 +127,6 @@ impl Operation for RemoteMineOperation {
                 let has_scout_mission =
                     room_data
                         .missions
-                        .0
                         .iter()
                         .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
                             Some(MissionData::Scout(_)) => true,
@@ -150,7 +149,7 @@ impl Operation for RemoteMineOperation {
                         let room_data_storage = &mut world.write_storage::<RoomData>();
 
                         if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                            room_data.missions.0.push(mission_entity);
+                            room_data.missions.push(mission_entity);
                         }
                     });
                 }
@@ -176,7 +175,6 @@ impl Operation for RemoteMineOperation {
                 let has_remote_mine_mission =
                     room_data
                         .missions
-                        .0
                         .iter()
                         .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
                             Some(MissionData::RemoteMine(_)) => true,
@@ -199,7 +197,7 @@ impl Operation for RemoteMineOperation {
                         let room_data_storage = &mut world.write_storage::<RoomData>();
 
                         if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                            room_data.missions.0.push(mission_entity);
+                            room_data.missions.push(mission_entity);
                         }
                     });
                 }
@@ -208,7 +206,6 @@ impl Operation for RemoteMineOperation {
                 let has_reservation_mission =
                     room_data
                         .missions
-                        .0
                         .iter()
                         .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
                             Some(MissionData::Reserve(_)) => true,
@@ -231,7 +228,7 @@ impl Operation for RemoteMineOperation {
                         let room_data_storage = &mut world.write_storage::<RoomData>();
 
                         if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                            room_data.missions.0.push(mission_entity);
+                            room_data.missions.push(mission_entity);
                         }
                     });
                 }

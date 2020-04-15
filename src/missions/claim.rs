@@ -17,7 +17,7 @@ use specs_derive::*;
 pub struct ClaimMission {
     room_data: Entity,
     home_room_data: Entity,
-    claimers: EntityVec,
+    claimers: EntityVec<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -54,7 +54,7 @@ impl ClaimMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::Claim(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.claimers.0.push(creep_entity);
+                    mission_data.claimers.push(creep_entity);
                 }
             });
         })
@@ -68,7 +68,7 @@ impl Mission for ClaimMission {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
                 room_ui
                     .missions()
-                    .add_text(format!("Claim - Claimers: {}", self.claimers.0.len()), None);
+                    .add_text(format!("Claim - Claimers: {}", self.claimers.len()), None);
             })
         }
     }
@@ -83,7 +83,6 @@ impl Mission for ClaimMission {
         //
 
         self.claimers
-            .0
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
@@ -121,7 +120,7 @@ impl Mission for ClaimMission {
         let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
         let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
 
-        if self.claimers.0.is_empty() {
+        if self.claimers.is_empty() {
             let body_definition = crate::creep::SpawnBodyDefinition {
                 maximum_energy: home_room.energy_capacity_available(),
                 minimum_repeat: None,
