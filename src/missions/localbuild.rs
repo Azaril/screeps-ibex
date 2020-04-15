@@ -41,34 +41,78 @@ impl LocalBuildMission {
         }
     }
 
-    fn get_builder_priority(&self, room: &Room) -> Option<f32> {
+    fn get_builder_priority(&self, room: &Room, has_sufficient_energy: bool) -> Option<(u32, f32)> {
+        let controller = room.controller()?;
         let construction_sites = room.find(find::MY_CONSTRUCTION_SITES);
 
         if !construction_sites.is_empty() {
-            if self.builders.is_empty() {
-                Some(SPAWN_PRIORITY_HIGH)
-            } else {
-                construction_sites.iter().map(|construction_site| {
-                    match construction_site.structure_type() {
-                        StructureType::Spawn => SPAWN_PRIORITY_HIGH,
-                        StructureType::Storage => SPAWN_PRIORITY_HIGH,
-                        _ => SPAWN_PRIORITY_MEDIUM
-                    }
-                }).max_by(|a, b| a.partial_cmp(b).unwrap())
-            }
-        } else {
-            //TODO: Not requiring full hashmap just to check for presence would be cheaper. Lazy iterator would be sufficient.
-            let repair_targets = get_prioritized_repair_targets(&room, Some(RepairPriority::Medium), true);
+            let required_progress: u32 = construction_sites.iter().map(|construction_site| construction_site.progress_total() - construction_site.progress()).sum();
+            
+            let desired_builders_for_progress: u32 = if controller.level() <= 3 {
+                match required_progress {
+                    0 => 0,
+                    1..=1000 => 1,
+                    1001..=2000 => 2,
+                    2001..=3000 => 3,
+                    3001..=4000 => 4,
+                    _ => 5,
+                }
+             } else if controller.level() <= 6 {
+                match required_progress {
+                    0 => 0,
+                    1..=2000 => 1,
+                    2001..=4000 => 2,
+                    4001..=6000 => 3,
+                    _ => 4,
+                }
+             } else { 
+                match required_progress {
+                    0 => 0,
+                    1..=3000 => 1,
+                    3001..=6000 => 2,
+                    6001..=9000 => 3,
+                    _ => 4,
+                }
+            };  
+    
+            let desired_builders = if has_sufficient_energy { desired_builders_for_progress } else { 1 };
 
-            let has_priority = |priority| repair_targets.get(&priority).map(|s| !s.is_empty()).unwrap_or(false);
+            if desired_builders > 0 {
+                let priority = if self.builders.is_empty() {
+                    SPAWN_PRIORITY_HIGH
+                } else {
+                    construction_sites.iter().map(|construction_site| {
+                        match construction_site.structure_type() {
+                            StructureType::Spawn => SPAWN_PRIORITY_HIGH,
+                            StructureType::Storage => SPAWN_PRIORITY_HIGH,
+                            _ => SPAWN_PRIORITY_MEDIUM
+                        }
+                    })
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(SPAWN_PRIORITY_LOW)
+                };
 
-            if has_priority(RepairPriority::Critical) || has_priority(RepairPriority::High) {
-                Some(SPAWN_PRIORITY_HIGH)
-            } else if has_priority(RepairPriority::Medium) {
-                Some(SPAWN_PRIORITY_MEDIUM)
+                Some((desired_builders, priority))
             } else {
                 None
             }
+        } else {
+            None
+        }
+    }
+
+    fn get_repairer_priority(&self, room: &Room) -> Option<(u32, f32)> {
+        //TODO: Not requiring full hashmap just to check for presence would be cheaper. Lazy iterator would be sufficient.
+        let repair_targets = get_prioritized_repair_targets(&room, Some(RepairPriority::Medium), true);
+
+        let has_priority = |priority| repair_targets.get(&priority).map(|s| !s.is_empty()).unwrap_or(false);
+
+        if has_priority(RepairPriority::Critical) || has_priority(RepairPriority::High) {
+            Some((1, SPAWN_PRIORITY_HIGH))
+        } else if has_priority(RepairPriority::Medium) {
+            Some((1, SPAWN_PRIORITY_MEDIUM))
+        } else {
+            None
         }
     }
 
@@ -125,37 +169,6 @@ impl Mission for LocalBuildMission {
     ) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
-        let controller = room.controller().ok_or("Expected controller")?;
-
-        let construction_sites = room.find(find::MY_CONSTRUCTION_SITES);
-        let required_progress: u32 = construction_sites.iter().map(|construction_site| construction_site.progress_total() - construction_site.progress()).sum();
-        
-        let desired_builders_for_progress = if controller.level() <= 3 {
-            match required_progress {
-                0 => 0,
-                1..=1000 => 1,
-                1001..=2000 => 2,
-                2001..=3000 => 3,
-                3001..=4000 => 4,
-                _ => 5,
-            }
-         } else if controller.level() <= 6 {
-            match required_progress {
-                0 => 0,
-                1..=2000 => 1,
-                2001..=4000 => 2,
-                4001..=6000 => 3,
-                _ => 4,
-            }
-         } else { 
-            match required_progress {
-                0 => 0,
-                1..=3000 => 1,
-                3001..=6000 => 2,
-                6001..=9000 => 3,
-                _ => 4,
-            }
-        };
 
         let has_sufficient_energy = {
             if let Some(room_transfer_data) = runtime_data.transfer_queue.try_get_room(room_data.name) {
@@ -194,43 +207,52 @@ impl Mission for LocalBuildMission {
             }
         };
 
-        let desired_builders = if has_sufficient_energy { desired_builders_for_progress } else { 1 };
+        let mut spawn_count = 0;
+        let mut spawn_priority = SPAWN_PRIORITY_NONE;
 
-        if self.builders.len() < desired_builders {
-            if let Some(priority) = self.get_builder_priority(&room) {
-                let use_energy_max = if self.builders.is_empty() && priority >= SPAWN_PRIORITY_HIGH {
-                    room.energy_available()
-                } else {
-                    room.energy_capacity_available()
-                };
+        if let Some((desired_builders, build_priority)) = self.get_builder_priority(&room, has_sufficient_energy) {
+            spawn_count = spawn_count.max(desired_builders);
+            spawn_priority = spawn_priority.max(build_priority);
+        }
+        
+        if let Some((desired_repairers, repair_priority)) = self.get_repairer_priority(&room) {
+            spawn_count = spawn_count.max(desired_repairers);
+            spawn_priority = spawn_priority.max(repair_priority);
+        }
 
-                let max_body = if priority >= SPAWN_PRIORITY_HIGH { 
-                    None
-                } else {
-                    Some(5)
-                };
+        if self.builders.len() < spawn_count as usize {
+            let use_energy_max = if self.builders.is_empty() && spawn_priority >= SPAWN_PRIORITY_HIGH {
+                room.energy_available()
+            } else {
+                room.energy_capacity_available()
+            };
 
-                let body_definition = SpawnBodyDefinition {
-                    maximum_energy: use_energy_max,
-                    minimum_repeat: Some(1),
-                    maximum_repeat: max_body,
-                    pre_body: &[],
-                    repeat_body: &[Part::Carry, Part::Work, Part::Move, Part::Move],
-                    post_body: &[],
-                };
+            let max_body = if spawn_priority >= SPAWN_PRIORITY_HIGH { 
+                None
+            } else {
+                Some(5)
+            };
 
-                if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                    let allow_harvest = room.controller().map(|c| c.level() <= 3).unwrap_or(false);
+            let body_definition = SpawnBodyDefinition {
+                maximum_energy: use_energy_max,
+                minimum_repeat: Some(1),
+                maximum_repeat: max_body,
+                pre_body: &[],
+                repeat_body: &[Part::Carry, Part::Work, Part::Move, Part::Move],
+                post_body: &[],
+            };
 
-                    let spawn_request = SpawnRequest::new(
-                        "Local Builder".to_string(),
-                        &body,
-                        priority,
-                        Self::create_handle_builder_spawn(*runtime_data.entity, self.room_data, allow_harvest),
-                    );
+            if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
+                let allow_harvest = room.controller().map(|c| c.level() <= 3).unwrap_or(false);
 
-                    runtime_data.spawn_queue.request(room_data.name, spawn_request);
-                }
+                let spawn_request = SpawnRequest::new(
+                    "Local Builder".to_string(),
+                    &body,
+                    spawn_priority,
+                    Self::create_handle_builder_spawn(*runtime_data.entity, self.room_data, allow_harvest),
+                );
+
+                runtime_data.spawn_queue.request(room_data.name, spawn_request);
             }
         }
 
