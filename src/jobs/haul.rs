@@ -24,7 +24,7 @@ pub enum HaulState {
 
 #[derive(Clone, ConvertSaveload)]
 pub struct HaulJob {
-    pub haul_rooms: EntityVec,
+    pub haul_rooms: EntityVec<Entity>,
     pub state: HaulState,
 }
 
@@ -150,7 +150,7 @@ impl Job for HaulJob {
         fn run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         let creep = runtime_data.owner;
 
-        let haul_rooms = self.haul_rooms.0.iter().filter_map(|e| system_data.room_data.get(*e)).collect_vec();
+        let haul_rooms = self.haul_rooms.iter().filter_map(|e| system_data.room_data.get(*e)).collect_vec();
 
         let mut action_flags = SimultaneousActionFlags::UNSET;
 

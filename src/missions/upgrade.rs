@@ -16,7 +16,7 @@ use crate::remoteobjectid::*;
 #[derive(Clone, ConvertSaveload)]
 pub struct UpgradeMission {
     room_data: Entity,
-    upgraders: EntityVec,
+    upgraders: EntityVec<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -49,7 +49,7 @@ impl UpgradeMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::Upgrade(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.upgraders.0.push(creep_entity);
+                    mission_data.upgraders.push(creep_entity);
                 }
             });
         })
@@ -63,7 +63,7 @@ impl Mission for UpgradeMission {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
                 room_ui
                     .missions()
-                    .add_text(format!("Upgrade - Upgraders: {}", self.upgraders.0.len()), None);
+                    .add_text(format!("Upgrade - Upgraders: {}", self.upgraders.len()), None);
             })
         }
     }
@@ -78,7 +78,6 @@ impl Mission for UpgradeMission {
         //
 
         self.upgraders
-            .0
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
@@ -149,7 +148,7 @@ impl Mission for UpgradeMission {
             1
         };
 
-        if self.upgraders.0.len() < max_upgraders {
+        if self.upgraders.len() < max_upgraders {
             let storage_sufficient = room.storage().map(|s| s.store_used_capacity(Some(ResourceType::Energy)) > 50_000).unwrap_or(true);
 
             let work_parts_per_upgrader = if !storage_sufficient {
@@ -168,7 +167,7 @@ impl Mission for UpgradeMission {
                 .map(|ticks| controller.ticks_to_downgrade() < ticks / 2)
                 .unwrap_or(false);
 
-            let maximum_energy = if self.upgraders.0.is_empty() && downgrade_risk {
+            let maximum_energy = if self.upgraders.is_empty() && downgrade_risk {
                 room.energy_available()
             } else {
                 room.energy_capacity_available()
@@ -184,7 +183,7 @@ impl Mission for UpgradeMission {
             };
 
             if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                let priority = if self.upgraders.0.is_empty() && downgrade_risk {
+                let priority = if self.upgraders.is_empty() && downgrade_risk {
                     SPAWN_PRIORITY_HIGH
                 } else {
                     SPAWN_PRIORITY_LOW

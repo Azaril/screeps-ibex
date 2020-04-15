@@ -56,7 +56,6 @@ impl Operation for UpgradeOperation {
                         let has_upgrade_mission =
                             room_data
                                 .missions
-                                .0
                                 .iter()
                                 .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
                                     Some(MissionData::Upgrade(_)) => true,
@@ -82,7 +81,7 @@ impl Operation for UpgradeOperation {
                                 let room_data_storage = &mut world.write_storage::<RoomData>();
 
                                 if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                                    room_data.missions.0.push(mission_entity);
+                                    room_data.missions.push(mission_entity);
                                 }
                             });
                         }

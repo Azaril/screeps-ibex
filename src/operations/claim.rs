@@ -18,7 +18,7 @@ use log::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ClaimOperation {
-    claim_missions: EntityVec,
+    claim_missions: EntityVec<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -55,7 +55,7 @@ impl Operation for ClaimOperation {
         // Cleanup missions that no longer exist.
         //
 
-        self.claim_missions.0.retain(|entity| system_data.entities.is_alive(*entity));
+        self.claim_missions.retain(|entity| system_data.entities.is_alive(*entity));
     }
 
     fn run_operation(
@@ -92,7 +92,6 @@ impl Operation for ClaimOperation {
                                 let has_remote_build_mission =
                                     room_data
                                         .missions
-                                        .0
                                         .iter()
                                         .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
                                             Some(MissionData::RemoteBuild(_)) => true,
@@ -144,7 +143,7 @@ impl Operation for ClaimOperation {
                                             let room_data_storage = &mut world.write_storage::<RoomData>();
 
                                             if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                                                room_data.missions.0.push(mission_entity);
+                                                room_data.missions.push(mission_entity);
                                             }
                                         });
                                     }
@@ -159,7 +158,7 @@ impl Operation for ClaimOperation {
         //
         // Trigger new claim missions.
         //
-        let current_claim_missions = self.claim_missions.0.len();
+        let current_claim_missions = self.claim_missions.len();
         let mut currently_owned_rooms = 0;
 
         for (_, room_data) in (system_data.entities, system_data.room_data).join() {
@@ -268,7 +267,6 @@ impl Operation for ClaimOperation {
                 let has_scout_mission =
                     room_data
                         .missions
-                        .0
                         .iter()
                         .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
                             Some(MissionData::Scout(_)) => true,
@@ -291,7 +289,7 @@ impl Operation for ClaimOperation {
                         let room_data_storage = &mut world.write_storage::<RoomData>();
 
                         if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                            room_data.missions.0.push(mission_entity);
+                            room_data.missions.push(mission_entity);
                         }
                     });
                 }
@@ -318,7 +316,6 @@ impl Operation for ClaimOperation {
                 let has_claim_mission =
                     room_data
                         .missions
-                        .0
                         .iter()
                         .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
                             Some(MissionData::Claim(_)) => true,
@@ -342,13 +339,13 @@ impl Operation for ClaimOperation {
                         let room_data_storage = &mut world.write_storage::<RoomData>();
 
                         if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                            room_data.missions.0.push(mission_entity);
+                            room_data.missions.push(mission_entity);
                         }
 
                         let operation_data_storage = &mut world.write_storage::<OperationData>();
 
                         if let Some(OperationData::Claim(operation_data)) = operation_data_storage.get_mut(operation_entity) {
-                            operation_data.claim_missions.0.push(mission_entity);
+                            operation_data.claim_missions.push(mission_entity);
                         }
                     });
                 }

@@ -16,7 +16,7 @@ use crate::jobs::build::*;
 pub struct RemoteBuildMission {
     room_data: Entity,
     home_room_data: Entity,
-    builders: EntityVec,
+    builders: EntityVec<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -57,7 +57,7 @@ impl RemoteBuildMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::RemoteBuild(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.builders.0.push(creep_entity);
+                    mission_data.builders.push(creep_entity);
                 }
             });
         })
@@ -71,7 +71,7 @@ impl Mission for RemoteBuildMission {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
                 room_ui
                     .missions()
-                    .add_text(format!("Remote Build - Builders: {}", self.builders.0.len()), None);
+                    .add_text(format!("Remote Build - Builders: {}", self.builders.len()), None);
             })
         }
     }
@@ -86,7 +86,6 @@ impl Mission for RemoteBuildMission {
         //
 
         self.builders
-            .0
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
@@ -121,8 +120,8 @@ impl Mission for RemoteBuildMission {
             2
         };
 
-        if self.builders.0.len() < desired_builders {
-            let priority = if self.builders.0.is_empty() {
+        if self.builders.len() < desired_builders {
+            let priority = if self.builders.is_empty() {
                 SPAWN_PRIORITY_MEDIUM
             } else {
                 SPAWN_PRIORITY_LOW

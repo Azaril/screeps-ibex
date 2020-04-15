@@ -16,7 +16,7 @@ use crate::jobs::reserve::*;
 pub struct ReserveMission {
     room_data: Entity,
     home_room_data: Entity,
-    reservers: EntityVec,
+    reservers: EntityVec<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -53,7 +53,7 @@ impl ReserveMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::Reserve(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.reservers.0.push(creep_entity);
+                    mission_data.reservers.push(creep_entity);
                 }
             });
         })
@@ -67,7 +67,7 @@ impl Mission for ReserveMission {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
                 room_ui
                     .missions()
-                    .add_text(format!("Reserve - Reservers: {}", self.reservers.0.len()), None);
+                    .add_text(format!("Reserve - Reservers: {}", self.reservers.len()), None);
             })
         }
     }
@@ -82,7 +82,6 @@ impl Mission for ReserveMission {
         //
 
         self.reservers
-            .0
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         Ok(())
@@ -117,7 +116,7 @@ impl Mission for ReserveMission {
 
         let alive_reservers = self
             .reservers
-            .0
+            
             .iter()
             .filter(|reserver_entity| {
                 if let Some(creep_owner) = system_data.creep_owner.get(**reserver_entity) {

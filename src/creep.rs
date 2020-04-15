@@ -1,12 +1,12 @@
 use screeps::*;
-use serde::*;
+use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use crate::serialize::*;
 use log::*;
+use crate::serialize::*;
 
-#[derive(Clone, Copy, Deserialize, Serialize, Component)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 pub struct CreepOwner {
     pub owner: ObjectId<Creep>,
 }
@@ -21,7 +21,7 @@ impl CreepOwner {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize, Component)]
+#[derive(Clone, Component, Serialize, Deserialize)]
 pub struct CreepSpawning {
     pub name: String,
 }

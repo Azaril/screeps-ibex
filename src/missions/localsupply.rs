@@ -21,10 +21,10 @@ use crate::jobs::harvest::*;
 #[derive(Clone, ConvertSaveload)]
 pub struct LocalSupplyMission {
     room_data: Entity,
-    harvesters: EntityVec,
-    source_container_miners: EntityVec,
-    source_link_miners: EntityVec,
-    mineral_container_miners: EntityVec,
+    harvesters: EntityVec<Entity>,
+    source_container_miners: EntityVec<Entity>,
+    source_link_miners: EntityVec<Entity>,
+    mineral_container_miners: EntityVec<Entity>,
 }
 
 type MineralExtractorPair = (RemoteObjectId<Mineral>, RemoteObjectId<StructureExtractor>);
@@ -86,8 +86,8 @@ impl LocalSupplyMission {
 
                 if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
                     match target {
-                        StaticMineTarget::Source(_) => mission_data.source_container_miners.0.push(creep_entity),
-                        StaticMineTarget::Mineral(_, _) => mission_data.mineral_container_miners.0.push(creep_entity),
+                        StaticMineTarget::Source(_) => mission_data.source_container_miners.push(creep_entity),
+                        StaticMineTarget::Mineral(_, _) => mission_data.mineral_container_miners.push(creep_entity),
                     }
                 }
             });
@@ -111,7 +111,7 @@ impl LocalSupplyMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.source_link_miners.0.push(creep_entity);
+                    mission_data.source_link_miners.push(creep_entity);
                 }
             });
         })
@@ -133,7 +133,7 @@ impl LocalSupplyMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.harvesters.0.push(creep_entity);
+                    mission_data.harvesters.push(creep_entity);
                 }
             });
         })
@@ -271,7 +271,6 @@ impl LocalSupplyMission {
         //TODO: Store this mapping data as part of the mission. (Blocked on specs collection serialization.)
         let sources_to_harvesters = self
             .harvesters
-            .0
             .iter()
             .filter_map(|harvester_entity| {
                 if let Some(JobData::Harvest(harvester_data)) = system_data.job_data.get(*harvester_entity) {
@@ -284,7 +283,6 @@ impl LocalSupplyMission {
 
         let containers_to_source_miners = self
             .source_container_miners
-            .0
             .iter()
             .filter_map(|miner_entity| {
                 if let Some(JobData::StaticMine(miner_data)) = system_data.job_data.get(*miner_entity) {
@@ -303,7 +301,6 @@ impl LocalSupplyMission {
 
         let links_to_source_miners = self
             .source_link_miners
-            .0
             .iter()
             .filter_map(|miner_entity| {
                 if let Some(JobData::LinkMine(miner_data)) = system_data.job_data.get(*miner_entity) {
@@ -316,7 +313,6 @@ impl LocalSupplyMission {
 
         let containers_to_mineral_miners = self
             .mineral_container_miners
-            .0
             .iter()
             .filter_map(|miner_entity| {
                 if let Some(JobData::StaticMine(miner_data)) = system_data.job_data.get(*miner_entity) {
@@ -400,9 +396,9 @@ impl LocalSupplyMission {
         // Sort sources so requests with equal priority go to the source with the least activity.
         //
 
-        let total_harvesters = self.harvesters.0.len();
-        let total_source_container_miners = self.source_container_miners.0.len();
-        let total_source_link_miners = self.source_link_miners.0.len();
+        let total_harvesters = self.harvesters.len();
+        let total_source_container_miners = self.source_container_miners.len();
+        let total_source_link_miners = self.source_link_miners.len();
         let total_harvesting_creeps = total_harvesters + total_source_container_miners + total_source_link_miners;
 
         let mut prioritized_sources = sources.clone();
@@ -1044,9 +1040,9 @@ impl Mission for LocalSupplyMission {
                 room_ui.missions().add_text(
                     format!(
                         "Local Supply - Miners: {} Harvesters: {} Minerals: {}",
-                        self.source_container_miners.0.len() + self.source_link_miners.0.len(),
-                        self.harvesters.0.len(),
-                        self.mineral_container_miners.0.len()
+                        self.source_container_miners.len() + self.source_link_miners.len(),
+                        self.harvesters.len(),
+                        self.mineral_container_miners.len()
                     ),
                     None,
                 );
@@ -1064,16 +1060,12 @@ impl Mission for LocalSupplyMission {
         //
 
         self.harvesters
-            .0
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
         self.source_container_miners
-            .0
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
         self.source_link_miners
-            .0
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
         self.mineral_container_miners
-            .0
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         //TODO: Cache structure + creep data.

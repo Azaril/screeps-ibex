@@ -58,7 +58,6 @@ impl Operation for LocalBuildOperation {
                     let has_local_build_mission =
                         room_data
                             .missions
-                            .0
                             .iter()
                             .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
                                 Some(MissionData::LocalBuild(_)) => true,
@@ -80,7 +79,7 @@ impl Operation for LocalBuildOperation {
                             let room_data_storage = &mut world.write_storage::<RoomData>();
 
                             if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                                room_data.missions.0.push(mission_entity);
+                                room_data.missions.push(mission_entity);
                             }
                         });
                     }

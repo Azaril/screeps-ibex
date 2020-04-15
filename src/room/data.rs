@@ -123,7 +123,7 @@ pub struct RoomData {
     pub name: RoomName,
     visible: bool,
     has_been_visible: bool,
-    pub missions: EntityVec,
+    pub missions: EntityVec<Entity>,
     static_visibility_data: Option<RoomStaticVisibilityData>,
     dynamic_visibility_data: Option<RoomDynamicVisibilityData>,
 }
