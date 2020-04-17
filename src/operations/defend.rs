@@ -47,7 +47,7 @@ impl Operation for DefendOperation {
             if let Some(dynamic_room_visiblity) = room_data.get_dynamic_visibility_data() {
                 if dynamic_room_visiblity.visible() && dynamic_room_visiblity.owner().mine() {
                     //
-                    // Query if any missions running on the room currently fufil the local supply role.
+                    // Query if any missions running on the room currently fufil the defend role.
                     //
 
                     //TODO: wiarchbe: Use trait instead of match.

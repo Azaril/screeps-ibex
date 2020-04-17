@@ -24,6 +24,8 @@ bitflags = "1.2.1"
 uuid = { version = "0.8", features = ["serde"] }
 wee_alloc = { version = "0.4", optional = true }
 pathfinding = { version= "2.0" }
+screeps-machine = { git = "https://github.com/Azaril/screeps-machine" }
+#screeps-machine = { path = "C:\\Source\\screeps-machine" }
 screeps-timing = { git = "https://github.com/Azaril/screeps-timing", optional = true }
 screeps-timing-annotate = { git = "https://github.com/Azaril/screeps-timing-annotate", optional = true }
 
