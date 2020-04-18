@@ -41,20 +41,14 @@ bitflags! {
     }
 }
 
-impl From<TransferPriority> for TransferPriorityFlags {
-    fn from(priority: TransferPriority) -> TransferPriorityFlags {
-        match priority {
+impl<T> From<T> for TransferPriorityFlags where T: std::borrow::Borrow<TransferPriority> {
+    fn from(priority: T) -> TransferPriorityFlags {
+        match priority.borrow() {
             TransferPriority::High => TransferPriorityFlags::HIGH,
             TransferPriority::Medium => TransferPriorityFlags::MEDIUM,
             TransferPriority::Low => TransferPriorityFlags::LOW,
             TransferPriority::None => TransferPriorityFlags::NONE,
         }
-    }
-}
-
-impl From<&TransferPriority> for TransferPriorityFlags {
-    fn from(priority: &TransferPriority) -> TransferPriorityFlags {
-        TransferPriorityFlags::from(*priority)
     }
 }
 
@@ -78,20 +72,14 @@ bitflags! {
     }
 }
 
-impl From<TransferType> for TransferTypeFlags {
-    fn from(transfer_type: TransferType) -> TransferTypeFlags {
-        match transfer_type {
+impl<T> From<T> for TransferTypeFlags where T: std::borrow::Borrow<TransferType> {
+    fn from(transfer_type: T) -> TransferTypeFlags {
+        match transfer_type.borrow() {
             TransferType::Haul => TransferTypeFlags::HAUL,
             TransferType::Link => TransferTypeFlags::LINK,
             TransferType::Terminal => TransferTypeFlags::TERMINAL,
             TransferType::Use => TransferTypeFlags::USE,
         }
-    }
-}
-
-impl From<&TransferType> for TransferTypeFlags {
-    fn from(transfer_type: &TransferType) -> TransferTypeFlags {
-        TransferTypeFlags::from(*transfer_type)
     }
 }
 

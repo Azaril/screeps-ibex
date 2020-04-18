@@ -1,5 +1,6 @@
 use super::actions::*;
 use super::jobsystem::*;
+use super::context::*;
 use super::utility::repair::*;
 use super::utility::buildbehavior::*;
 use super::utility::harvestbehavior::*;
@@ -7,51 +8,73 @@ use super::utility::haulbehavior::*;
 use super::utility::repairbehavior::*;
 use super::utility::waitbehavior::*;
 use crate::remoteobjectid::*;
-use crate::room::data::*;
 use crate::structureidentifier::*;
 use crate::transfer::transfersystem::*;
-use crate::visualize::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-
-#[derive(Clone, Serialize, Deserialize)]
-pub enum BuildState {
-    Idle(),
-    Pickup(TransferWithdrawTicket),
-    FinishedPickup(),
-    Harvest(RemoteObjectId<Source>, u8),
-    Build(RemoteObjectId<ConstructionSite>),
-    Repair(RemoteStructureIdentifier),
-    Wait(u32)
-}
+use screeps_machine::*;
 
 #[derive(Clone, ConvertSaveload)]
-pub struct BuildJob {
+pub struct BuildJobContext {
     home_room: Entity,
     build_room: Entity,
-    state: BuildState,
     allow_harvest: bool,
 }
 
-#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-impl BuildJob {
-    pub fn new(home_room: Entity, build_room: Entity, allow_harvest: bool) -> BuildJob {
-        BuildJob {
-            home_room,
-            build_room,
-            state: BuildState::Idle(),
-            allow_harvest
-        }
+machine!(
+    #[derive(Clone, Serialize, Deserialize)]
+    enum BuildState {
+        Idle,
+        Pickup { ticket: TransferWithdrawTicket },
+        FinishedPickup,
+        Harvest { target: RemoteObjectId<Source> },
+        Build { target: RemoteObjectId<ConstructionSite> },
+        Repair { target: RemoteStructureIdentifier },
+        Wait { ticks: u32 }
     }
 
-    fn run_idle_state(creep: &Creep, build_room_data: &RoomData, transfer_queue: &mut TransferQueue, allow_harvest: bool) -> Option<BuildState> {
-        get_new_repair_state(creep, build_room_data, Some(RepairPriority::High), BuildState::Repair)
-            .or_else(|| get_new_build_state(creep, build_room_data, BuildState::Build))
-            .or_else(|| get_new_repair_state(creep, build_room_data, None, BuildState::Repair))
+    impl {
+        * => fn describe(&self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
+            let room = { describe_data.owner.room() };
+
+            if let Some(room) = room {
+                let name = describe_data.owner.name();
+                let room_name = room.name();
+
+                describe_data
+                    .ui
+                    .with_room(room_name, &mut describe_data.visualizer, |room_ui| {
+                        let description = self.status_description();
+
+                        room_ui.jobs().add_text(format!("{} - {}", name, description), None);
+                    });
+            }
+        }
+
+        * => fn status_description(&self) -> String {
+            std::any::type_name::<Self>().to_string()
+        }
+
+        Idle, FinishedPickup, Harvest, Build, Repair, Wait => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
+        
+        Idle, FinishedPickup, Harvest, Build, Repair, Wait => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
+        
+        _ => fn tick(&mut self, state_context: &mut BuildJobContext, tick_context: &mut JobTickContext) -> Option<BuildState>;
+    }
+);
+
+impl Idle {
+    pub fn tick(&mut self, state_context: &BuildJobContext, tick_context: &mut JobTickContext) -> Option<BuildState> {
+        let creep = tick_context.runtime_data.owner;
+        let build_room_data = tick_context.system_data.room_data.get(state_context.build_room)?;
+
+        get_new_repair_state(creep, build_room_data, Some(RepairPriority::High), BuildState::repair)
+            .or_else(|| get_new_build_state(creep, build_room_data, BuildState::build))
+            .or_else(|| get_new_repair_state(creep, build_room_data, None, BuildState::repair))
             .or_else(|| {
                 get_new_pickup_state_fill_resource(
                     creep,
@@ -59,117 +82,114 @@ impl BuildJob {
                     TransferPriorityFlags::ALL,
                     TransferTypeFlags::HAUL | TransferTypeFlags::USE,
                     ResourceType::Energy,
-                    transfer_queue,
-                    BuildState::Pickup,
+                    tick_context.runtime_data.transfer_queue,
+                    BuildState::pickup,
                 )
             })
-            .or_else(|| if allow_harvest {
-                get_new_harvest_state(creep, build_room_data, |id| BuildState::Harvest(id, 0))
+            .or_else(|| if state_context.allow_harvest {
+                get_new_harvest_state(creep, build_room_data, BuildState::harvest)
             } else {
                 None
             })
-            .or_else(|| Some(BuildState::Wait(5)))
+            .or_else(|| Some(BuildState::wait(5)))
+    }
+}
+
+impl Pickup {
+    fn gather_data(&self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) { 
+        runtime_data.transfer_queue.register_pickup(&self.ticket, TransferType::Haul);
+    }
+    
+    pub fn tick(&mut self, _state_context: &BuildJobContext, tick_context: &mut JobTickContext) -> Option<BuildState> {
+        tick_pickup(tick_context, &mut self.ticket, BuildState::finished_pickup)
     }
 
-    fn run_finished_pickup_state(creep: &Creep, pickup_rooms: &[&RoomData], transfer_queue: &mut TransferQueue) -> Option<BuildState> {
+    pub fn visualize(&self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
+        visualize_pickup(describe_data, &self.ticket);
+    }
+}
+
+impl FinishedPickup {
+    pub fn tick(&self, state_context: &BuildJobContext, tick_context: &mut JobTickContext) -> Option<BuildState> {
+        let build_room_data = tick_context.system_data.room_data.get(state_context.build_room)?;
+
         get_new_pickup_state_fill_resource(
-            creep,
-            pickup_rooms,
+            &tick_context.runtime_data.owner,
+            &[build_room_data],
             TransferPriorityFlags::ALL,
             TransferTypeFlags::HAUL | TransferTypeFlags::USE,
             ResourceType::Energy,
-            transfer_queue,
-            BuildState::Pickup,
+            tick_context.runtime_data.transfer_queue,
+            BuildState::pickup,
         )
-        .or(Some(BuildState::Idle()))
+        .or_else(|| Some(BuildState::idle()))
     }
+}
 
-    fn run_finished_build_state(creep: &Creep, build_room: &RoomData) -> Option<BuildState> {
-        get_new_build_state(&creep, build_room, BuildState::Build).or(Some(BuildState::Idle()))
+impl Harvest {
+    pub fn tick(&mut self, _state_context: &mut BuildJobContext, tick_context: &mut JobTickContext) -> Option<BuildState> {
+        tick_harvest(tick_context, self.target, false, false, BuildState::idle)
     }
+}
 
-    fn run_finished_repair_state(creep: &Creep, repair_room: &RoomData) -> Option<BuildState> {
-        get_new_repair_state(&creep, repair_room, None, BuildState::Repair).or(Some(BuildState::Idle()))
+impl Build {
+    pub fn tick(&mut self, _state_context: &mut BuildJobContext, tick_context: &mut JobTickContext) -> Option<BuildState> {
+        tick_build(tick_context, self.target, BuildState::idle)
+    }
+}
+
+impl Repair {
+    pub fn tick(&mut self, _state_context: &mut BuildJobContext, tick_context: &mut JobTickContext) -> Option<BuildState> {
+        tick_repair(tick_context, self.target, BuildState::idle)
+    }
+}
+
+impl Wait {
+    pub fn tick(&mut self, _state_context: &BuildJobContext, _tick_context: &mut JobTickContext) -> Option<BuildState> {
+       tick_wait(&mut self.ticks, BuildState::idle)
+    }
+}
+
+#[derive(Clone, ConvertSaveload)]
+pub struct BuildJob {
+    context: BuildJobContext,
+    state: BuildState,
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+impl BuildJob {
+    pub fn new(home_room: Entity, build_room: Entity, allow_harvest: bool) -> BuildJob {
+        BuildJob {
+            context: BuildJobContext {
+                home_room,
+                build_room,
+                allow_harvest
+            },
+            state: BuildState::idle(),
+        }
     }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Job for BuildJob {
-    fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
-        let name = describe_data.owner.name();
-        let pos = describe_data.owner.pos();
-
-        if let Some(room) = describe_data.owner.room() {
-            describe_data.ui.with_room(room.name(), &mut describe_data.visualizer, |room_ui| {
-                match &self.state {
-                    BuildState::Idle() => {
-                        room_ui.jobs().add_text(format!("Build - {} - Idle", name), None);
-                    }
-                    BuildState::Pickup(ticket) => {
-                        room_ui.jobs().add_text(format!("Build - {} - Pickup", name), None);
-
-                        let to = ticket.target().pos();
-                        room_ui.visualizer().line(
-                            (pos.x() as f32, pos.y() as f32),
-                            (to.x() as f32, to.y() as f32),
-                            Some(LineStyle::default().color("blue")),
-                        );
-                    }
-                    BuildState::FinishedPickup() => {
-                        room_ui.jobs().add_text(format!("Build - {} - FinishedPickup", name), None);
-                    }
-                    BuildState::Harvest(_, _) => {
-                        room_ui.jobs().add_text(format!("Build - {} - Harvest", name), None);
-                    }
-                    BuildState::Build(_) => {
-                        room_ui.jobs().add_text(format!("Build - {} - Build", name), None);
-                    }
-                    BuildState::Repair(_) => {
-                        room_ui.jobs().add_text(format!("Build - {} - Repair", name), None);
-                    }
-                    BuildState::Wait(_) => {
-                        room_ui.jobs().add_text(format!("Build - {} - Wait", name), None);
-                    }
-                };
-            })
-        }
+    fn describe(&mut self, system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
+        self.state.describe(system_data, describe_data);
+        self.state.visualize(system_data, describe_data);
     }
 
-    fn pre_run_job(&mut self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
-        match &self.state {
-            BuildState::Idle() => {}
-            BuildState::Pickup(ticket) => runtime_data.transfer_queue.register_pickup(&ticket, TransferType::Haul),
-            BuildState::FinishedPickup() => {}
-            BuildState::Harvest(_, _) => {}
-            BuildState::Build(_) => {}
-            BuildState::Repair(_) => {}
-            BuildState::Wait(_) => {}
-        };
+    fn pre_run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
+        self.state.gather_data(system_data, runtime_data);
     }
 
     fn run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
-        let creep = runtime_data.owner;
+        let mut tick_context = JobTickContext {
+            system_data,
+            runtime_data,
+            action_flags: SimultaneousActionFlags::UNSET
+        };
 
-        let mut action_flags = SimultaneousActionFlags::UNSET;
-
-        if let Some(build_room_data) = system_data.room_data.get(self.build_room) {
-            loop {
-                let state_result = match &mut self.state {
-                    BuildState::Idle() => Self::run_idle_state(creep, build_room_data, runtime_data.transfer_queue, self.allow_harvest),
-                    BuildState::Pickup(ticket) => run_pickup_state(creep, &mut action_flags, ticket, runtime_data.transfer_queue, BuildState::FinishedPickup),
-                    BuildState::FinishedPickup() => Self::run_finished_pickup_state(creep, &[build_room_data], runtime_data.transfer_queue),
-                    BuildState::Harvest(source_id, stuck_count) => run_harvest_state(creep, &mut action_flags, source_id, false, stuck_count, BuildState::Idle),
-                    BuildState::Build(construction_site_id) => run_build_state(creep, &mut action_flags, construction_site_id, BuildState::Idle),
-                    BuildState::Repair(structure_id) => run_repair_state(creep, &mut action_flags, structure_id, BuildState::Idle),
-                    BuildState::Wait(time) => run_wait_state(time, BuildState::Idle)
-                };
-
-                if let Some(next_state) = state_result {
-                    self.state = next_state;
-                } else {
-                    break;
-                }
-            }
+        while let Some(tick_result) = self.state.tick(&mut self.context, &mut tick_context) {
+            self.state = tick_result
         }
     }
 }

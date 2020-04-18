@@ -1,82 +1,126 @@
 use super::jobsystem::*;
 use crate::remoteobjectid::*;
+use super::context::*;
+use super::actions::*;
+use super::utility::movebehavior::*;
+use super::utility::waitbehavior::*;
+use super::utility::harvestbehavior::*;
 use screeps::*;
 use serde::*;
-use log::*;
+use screeps_machine::*;
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub enum StaticMineTarget {
+    #[serde(rename = "s")]
     Source(RemoteObjectId<Source>),
+    #[serde(rename = "m")]
     Mineral(RemoteObjectId<Mineral>, RemoteObjectId<StructureExtractor>),
 }
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
-pub struct StaticMineJob {
+#[derive(Clone, Serialize, Deserialize)]
+pub struct StaticMineJobContext {
     pub mine_target: StaticMineTarget,
     pub container_target: RemoteObjectId<StructureContainer>,
+}
+
+machine!(
+    #[derive(Clone, Serialize, Deserialize)]
+    enum StaticMineState {
+        MoveToContainer,
+        Harvest,
+        Wait { ticks: u32 }
+    }
+
+    impl {
+        * => fn describe(&self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
+            let room = { describe_data.owner.room() };
+
+            if let Some(room) = room {
+                let name = describe_data.owner.name();
+                let room_name = room.name();
+
+                describe_data
+                    .ui
+                    .with_room(room_name, &mut describe_data.visualizer, |room_ui| {
+                        let description = self.status_description();
+
+                        room_ui.jobs().add_text(format!("{} - {}", name, description), None);
+                    });
+            }
+        }
+
+        * => fn status_description(&self) -> String {
+            std::any::type_name::<Self>().to_string()
+        }
+
+        * => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
+        
+        * => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
+        
+        _ => fn tick(&mut self, state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState>;
+    }
+);
+
+impl MoveToContainer {
+    fn tick(&mut self, state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
+        tick_move_to_position(tick_context, state_context.container_target.pos(), 0, StaticMineState::harvest)
+    }
+}
+
+impl Harvest {
+    fn tick(&mut self, state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
+        match state_context.mine_target {
+            StaticMineTarget::Source(source_id) => tick_harvest(tick_context, source_id, true, false, || StaticMineState::wait(1)),
+            StaticMineTarget::Mineral(mineral_id, _) => tick_harvest(tick_context, mineral_id, true, false, || StaticMineState::wait(1)), 
+        }
+    }
+}
+
+impl Wait {
+    fn tick(&mut self, _state_context: &mut StaticMineJobContext, _tick_context: &mut JobTickContext) -> Option<StaticMineState> {
+        tick_wait(&mut self.ticks, StaticMineState::harvest)
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct StaticMineJob {
+    pub context: StaticMineJobContext,
+    pub state: StaticMineState,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl StaticMineJob {
     pub fn new(mine_target: StaticMineTarget, container_id: RemoteObjectId<StructureContainer>) -> StaticMineJob {
         StaticMineJob {
-            mine_target,
-            container_target: container_id,
+            context: StaticMineJobContext {
+                mine_target,
+                container_target: container_id,
+            },
+            state: StaticMineState::move_to_container()
         }
     }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Job for StaticMineJob {
-    fn describe(&mut self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
-        let name = describe_data.owner.name();
-        if let Some(room) = describe_data.owner.room() {
-            describe_data.ui.with_room(room.name(), &mut describe_data.visualizer, |room_ui| {
-                room_ui.jobs().add_text(format!("Static Mine - {}", name), None);
-            })
-        }
+    fn describe(&mut self, system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
+        self.state.describe(system_data, describe_data);
+        self.state.visualize(system_data, describe_data);
     }
 
-    fn run_job(&mut self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
-        let creep = runtime_data.owner;
+    fn pre_run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
+        self.state.gather_data(system_data, runtime_data);
+    }
 
-        //
-        // Harvest energy from source.
-        //
+    fn run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
+        let mut tick_context = JobTickContext {
+            system_data,
+            runtime_data,
+            action_flags: SimultaneousActionFlags::UNSET
+        };
 
-        //TODO: Validate container still exists? Recyle or reuse miner if it doesn't?
-        
-        if creep.pos().is_equal_to(&self.container_target.pos()) {
-            if let Some(container) = self.container_target.resolve() {
-                let body = creep.body();
-                let work_parts = body.iter().filter(|b| b.part == Part::Work).count();
-                let harvest_amount = work_parts as u32 * HARVEST_POWER;
-
-                if container.store_free_capacity(None) >= harvest_amount {
-                    match self.mine_target {
-                        StaticMineTarget::Source(source_id) => {
-                            if let Some(source) = source_id.resolve() {
-                                creep.harvest(&source);
-                            } else {
-                                error!("Harvester has no assigned harvesting source! Name: {}", creep.name());
-                            }
-                        }
-                        StaticMineTarget::Mineral(mineral_id, extractor_id) => {
-                            if let Some(extractor) = extractor_id.resolve() {
-                                if extractor.cooldown() == 0 {
-                                    if let Some(mineral) = mineral_id.resolve() {
-                                        creep.harvest(&mineral);
-                                    } else {
-                                        error!("Harvester has no assigned harvesting extractor! Name: {}", creep.name());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            runtime_data.movement.move_to(runtime_data.creep_entity, self.container_target.pos());
+        while let Some(tick_result) = self.state.tick(&mut self.context, &mut tick_context) {
+            self.state = tick_result
         }
     }
 }

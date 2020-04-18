@@ -143,27 +143,31 @@ fn deserialize_world(world: &World, segment: u32) {
             // NOTE: System assumes that segment is available and will panic if data is not accesible.
             //
 
-            let world_data = data.memory_arbiter.get(self.segment).unwrap();
+            let world_data = data.memory_arbiter.get(self.segment);
 
-            if !world_data.is_empty() {
-                let mut de = serde_json::de::Deserializer::from_str(&world_data);
+            if let Some(world_data) = world_data {
+                if !world_data.is_empty() {
+                    let mut de = serde_json::de::Deserializer::from_str(&world_data);
 
-                DeserializeComponents::<CombinedSerialiationError, SerializeMarker>::deserialize(
-                    &mut (
-                        data.creep_spawnings,
-                        data.creep_owners,
-                        data.room_data,
-                        data.room_plan_data,
-                        data.job_data,
-                        data.operation_data,
-                        data.mission_data,
-                    ),
-                    &data.entities,
-                    &mut data.markers,
-                    &mut data.marker_alloc,
-                    &mut de,
-                )
-                .unwrap_or_else(|e| error!("Error: {}", e));
+                    DeserializeComponents::<CombinedSerialiationError, SerializeMarker>::deserialize(
+                        &mut (
+                            data.creep_spawnings,
+                            data.creep_owners,
+                            data.room_data,
+                            data.room_plan_data,
+                            data.job_data,
+                            data.operation_data,
+                            data.mission_data,
+                        ),
+                        &data.entities,
+                        &mut data.markers,
+                        &mut data.marker_alloc,
+                        &mut de,
+                    )
+                    .unwrap_or_else(|e| error!("Error: {}", e));
+                }
+            } else {
+                panic!("Failed to get world data from segment that was expected to be active.");
             }
         }
     }

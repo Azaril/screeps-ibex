@@ -10,4 +10,3 @@ pub mod remotemine;
 pub mod terminal;
 pub mod tower;
 pub mod upgrade;
-pub mod defend;

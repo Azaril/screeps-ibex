@@ -1,4 +1,5 @@
 use crate::visualize::*;
+use crate::constants::*;
 use screeps::*;
 use serde::*;
 use std::collections::*;
@@ -8,10 +9,6 @@ use bitflags::*;
 use log::*;
 use std::cell::RefCell;
 use pathfinding::directed::astar::*;
-
-pub const ROOM_WIDTH: u8 = 50;
-pub const ROOM_HEIGHT: u8 = 50;
-pub const ROOM_BUILD_BORDER: u8 = 2;
 
 pub const ONE_OFFSET_SQUARE: &[(i8, i8)] = &[(-1, -1), (-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1)];
 pub const TWO_OFFSET_SQUARE: &[(i8, i8)] = &[(-2, -2), (-2, -1), (-2, 0), (-2, 1), (-2, 2), (-1, 2), (0, 2), (1, 2), (2, 2), (2, 1), (2, 0), (2, -1), (2, -2), (1, -2), (0, -2), (-1, -2)];
@@ -709,18 +706,14 @@ impl<'de> Deserialize<'de> for PlanLocation {
     }
 }
 
-impl From<Location> for PlanLocation {
-    fn from(value: Location) -> PlanLocation {
+impl<T> From<T> for PlanLocation where T: std::borrow::Borrow<Location> {
+    fn from(value: T) -> PlanLocation {
+        let value = value.borrow();
+
         PlanLocation {
             x: value.x() as i8,
             y: value.y() as i8
         }
-    }
-}
-
-impl From<&Location> for PlanLocation {
-    fn from(value: &Location) -> PlanLocation {
-        PlanLocation::from(*value)
     }
 }
 

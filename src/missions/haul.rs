@@ -105,30 +105,7 @@ impl Mission for HaulMission {
 
         let base_amount = controller.level() * 500;
 
-        let mut desired_haulers = (total_unfufilled as f32 / base_amount as f32).ceil().min(3.0) as usize;
-
-        if let Some(storage) = room.storage() {
-            let storage_pos = storage.pos();
-            let structures = room.find(find::STRUCTURES);
-
-            let room_links: Vec<_> = structures
-                .iter()
-                .filter_map(|structure| match structure {
-                    Structure::Link(link) => Some(link),
-                    _ => None,
-                })
-                .collect();
-
-            let storage_link_full = room_links
-                .into_iter()
-                .filter(|link| link.pos().in_range_to(&storage_pos, 2))
-                .map(|link| link.store_used_capacity(Some(ResourceType::Energy)) as f32 / link.store_capacity(Some(ResourceType::Energy)) as f32)
-                .any(|store_ratio| store_ratio > 0.9);
-
-            if storage_link_full {
-                desired_haulers += 1;
-            }
-        }
+        let desired_haulers = (total_unfufilled as f32 / base_amount as f32).ceil().min(3.0) as usize;
 
         let should_spawn = self.haulers.len() < desired_haulers;
 
