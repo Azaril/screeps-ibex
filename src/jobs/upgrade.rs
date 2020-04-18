@@ -6,7 +6,7 @@ use super::utility::haulbehavior::*;
 use super::utility::waitbehavior::*;
 use crate::remoteobjectid::*;
 use crate::transfer::transfersystem::*;
-use crate::visualize::*;
+use super::context::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
@@ -14,12 +14,6 @@ use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
 use screeps_machine::*;
-
-pub struct JobTickContext<'a, 'b, 'c> {
-    system_data: &'a JobExecutionSystemData<'b>,
-    runtime_data: &'a mut JobExecutionRuntimeData<'c>,
-    action_flags: SimultaneousActionFlags
-}
 
 #[derive(Clone, ConvertSaveload)]
 pub struct UpgradeJobContext {
@@ -31,7 +25,7 @@ machine!(
     #[derive(Clone, Serialize, Deserialize)]
     enum UpgradeState {
         Idle,
-        Harvest { target: RemoteObjectId<Source>, stuck_count: u8 },
+        Harvest { target: RemoteObjectId<Source> },
         Pickup { ticket: TransferWithdrawTicket },
         FinishedPickup,
         Upgrade { target: RemoteObjectId<StructureController> },
@@ -82,7 +76,7 @@ impl Idle {
             UpgradeState::pickup,
         )
         .or_else(|| if state_context.allow_harvest {
-            get_new_harvest_state(&tick_context.runtime_data.owner, home_room_data, |id| UpgradeState::harvest(id, 0))
+            get_new_harvest_state(&tick_context.runtime_data.owner, home_room_data, UpgradeState::harvest)
         } else {
             None
         })
@@ -93,7 +87,7 @@ impl Idle {
 
 impl Harvest {
     pub fn tick(&mut self, _state_context: &mut UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState> {
-        run_harvest_state(tick_context.runtime_data.owner, &mut tick_context.action_flags, &self.target, false, &mut self.stuck_count, UpgradeState::idle)
+        tick_harvest(tick_context, self.target, false, false, UpgradeState::idle)
     }
 }
 
@@ -103,20 +97,11 @@ impl Pickup {
     }
     
     pub fn tick(&mut self, _state_context: &UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState> {
-        run_pickup_state(tick_context.runtime_data.owner, &mut tick_context.action_flags, &mut self.ticket, tick_context.runtime_data.transfer_queue, UpgradeState::finished_pickup)
+        tick_pickup(tick_context, &mut self.ticket, UpgradeState::finished_pickup)
     }
 
     pub fn visualize(&self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
-        let pos = describe_data.owner.pos();
-        let to = self.ticket.target().pos();
-
-        if pos.room_name() == to.room_name() {
-            describe_data.visualizer.get_room(pos.room_name()).line(
-                (pos.x() as f32, pos.y() as f32),
-                (to.x() as f32, to.y() as f32),
-                Some(LineStyle::default().color("blue")),
-            );
-        }
+        visualize_pickup(describe_data, &self.ticket);
     }
 }
 
@@ -138,14 +123,14 @@ impl FinishedPickup {
 }
 
 impl Upgrade {
-    pub fn tick(&self, _state_context: &UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState> {
-        run_upgrade_state(&tick_context.runtime_data.owner, &self.target, UpgradeState::idle)
+    pub fn tick(&mut self, _state_context: &UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState> {
+        tick_upgrade(tick_context, self.target, UpgradeState::idle)
     }
 }
 
 impl Wait {
     pub fn tick(&mut self, _state_context: &UpgradeJobContext, _tick_context: &mut JobTickContext) -> Option<UpgradeState> {
-        run_wait_state(&mut self.ticks, UpgradeState::idle)
+        tick_wait(&mut self.ticks, UpgradeState::idle)
     }
 }
 
@@ -181,8 +166,8 @@ impl Job for UpgradeJob {
 
     fn run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         let mut tick_context = JobTickContext {
-            system_data: system_data,
-            runtime_data: runtime_data,
+            system_data,
+            runtime_data,
             action_flags: SimultaneousActionFlags::UNSET
         };
 

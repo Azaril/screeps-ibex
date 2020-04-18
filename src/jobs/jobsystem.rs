@@ -5,6 +5,7 @@ use crate::ui::*;
 use crate::visualize::*;
 use crate::creep::CreepOwner;
 use crate::pathing::movementsystem::*;
+use crate::entitymappingsystem::*;
 use screeps::*;
 use specs::prelude::*;
 
@@ -19,6 +20,7 @@ pub struct JobSystemData<'a> {
     transfer_queue: Write<'a, TransferQueue>,
     room_data: ReadStorage<'a, RoomData>,
     movement: Write<'a, MovementData>,
+    mapping: Read<'a, EntityMappingData>,
 }
 
 pub struct JobExecutionSystemData<'a> {
@@ -30,6 +32,7 @@ pub struct JobExecutionSystemData<'a> {
 pub struct JobExecutionRuntimeData<'a> {
     pub creep_entity: Entity,
     pub owner: &'a Creep,
+    pub mapping: &'a EntityMappingData,
     pub transfer_queue: &'a mut TransferQueue,
     pub movement: &'a mut MovementData,
 }
@@ -67,6 +70,7 @@ impl<'a> System<'a> for PreRunJobSystem {
                 let mut runtime_data = JobExecutionRuntimeData {
                     creep_entity,
                     owner: &owner,
+                    mapping: &mut data.mapping,
                     transfer_queue: &mut data.transfer_queue,
                     movement: &mut data.movement,
                 };
@@ -112,6 +116,7 @@ impl<'a> System<'a> for RunJobSystem {
                 let mut runtime_data = JobExecutionRuntimeData {
                     creep_entity,
                     owner: &owner,
+                    mapping: &mut data.mapping,
                     transfer_queue: &mut data.transfer_queue,
                     movement: &mut data.movement,
                 };

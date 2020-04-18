@@ -1,5 +1,7 @@
 use crate::remoteobjectid::*;
 use crate::room::data::*;
+use crate::jobs::context::*;
+use crate::jobs::actions::*;
 use screeps::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -19,6 +21,36 @@ where
     }
 
     None
+}
+
+pub fn tick_upgrade<F, R>(tick_context: &mut JobTickContext, controller_id: RemoteObjectId<StructureController>, next_state: F) -> Option<R> where
+    F: Fn() -> R {
+    let creep = tick_context.runtime_data.owner;
+    let action_flags = &mut tick_context.action_flags;
+
+    let creep_pos = creep.pos();
+    let target_position = controller_id.pos();
+
+    //TODO: Check visibility cache and cancel if controller doesn't exist or isn't owned?
+
+    if !creep_pos.in_range_to(&target_position, 3) {
+        if !action_flags.contains(SimultaneousActionFlags::MOVE) {
+            action_flags.insert(SimultaneousActionFlags::MOVE);
+
+            tick_context.runtime_data.movement.move_to_range(tick_context.runtime_data.creep_entity, target_position, 3);
+        }
+
+        return None;
+    }
+
+    if let Some(controller) = controller_id.resolve() {
+        match creep.upgrade_controller(&controller) {
+            ReturnCode::Ok => None,
+            _ => Some(next_state()),
+        }
+    } else {
+        Some(next_state())
+    }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -45,6 +77,76 @@ where
         }
 
         match creep.upgrade_controller(&controller) {
+            ReturnCode::Ok => None,
+            _ => Some(next_state()),
+        }
+    } else {
+        Some(next_state())
+    }
+}
+
+pub fn tick_claim<F, R>(tick_context: &mut JobTickContext, controller_id: RemoteObjectId<StructureController>, next_state: F) -> Option<R> where
+    F: Fn() -> R {
+    let creep = tick_context.runtime_data.owner;
+    let action_flags = &mut tick_context.action_flags;
+
+    let creep_pos = creep.pos();
+    let target_position = controller_id.pos();
+
+    //TODO: Check visibility cache and cancel if controller doesn't exist or is owned?
+
+    if !creep_pos.is_near_to(&target_position) {
+        if !action_flags.contains(SimultaneousActionFlags::MOVE) {
+            action_flags.insert(SimultaneousActionFlags::MOVE);
+
+            tick_context.runtime_data.movement.move_to_range(tick_context.runtime_data.creep_entity, target_position, 1);
+        }
+
+        return None;
+    }
+
+    if let Some(controller) = controller_id.resolve() {
+        match creep.claim_controller(&controller) {
+            ReturnCode::Ok => None,
+            _ => Some(next_state()),
+        }
+    } else {
+        Some(next_state())
+    }
+}
+
+pub fn tick_reserve<F, R>(tick_context: &mut JobTickContext, controller_id: RemoteObjectId<StructureController>, next_state: F) -> Option<R> where
+    F: Fn() -> R {
+    let creep = tick_context.runtime_data.owner;
+    let action_flags = &mut tick_context.action_flags;
+
+    let creep_pos = creep.pos();
+    let target_position = controller_id.pos();
+
+    //TODO: Check visibility cache and cancel if controller doesn't exist or is owned?
+
+    if !creep_pos.is_near_to(&target_position) {
+        if !action_flags.contains(SimultaneousActionFlags::MOVE) {
+            action_flags.insert(SimultaneousActionFlags::MOVE);
+
+            tick_context.runtime_data.movement.move_to_range(tick_context.runtime_data.creep_entity, target_position, 1);
+        }
+
+        return None;
+    }
+
+    if let Some(controller) = controller_id.resolve() {
+        if let Some(reservation) = controller.reservation() {
+            let body = creep.body();
+            let claim_parts = body.iter().filter(|b| b.part == Part::Claim).count();
+            let claim_amount = claim_parts as u32 * CONTROLLER_RESERVE;
+
+            if reservation.ticks_to_end + claim_amount > CONTROLLER_RESERVE_MAX {
+                return Some(next_state());
+            }
+        }
+
+        match creep.reserve_controller(&controller) {
             ReturnCode::Ok => None,
             _ => Some(next_state()),
         }

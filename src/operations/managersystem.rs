@@ -8,7 +8,6 @@ use super::remotemine::*;
 use super::terminal::*;
 use super::tower::*;
 use super::upgrade::*;
-use super::defend::*;
 use specs::*;
 use log::*;
 
@@ -29,7 +28,6 @@ impl<'a> System<'a> for OperationManagerSystem {
         let mut has_claim = false;
         let mut has_haul = false;
         let mut has_terminal = false;
-        let mut has_defend = false;
 
         for (_, operation) in (&entities, &operations).join() {
             match operation {
@@ -42,7 +40,6 @@ impl<'a> System<'a> for OperationManagerSystem {
                 OperationData::Claim(_) => has_claim = true,
                 OperationData::Haul(_) => has_haul = true,
                 OperationData::Terminal(_) => has_terminal = true,
-                OperationData::Defend(_) => has_defend = true,
             }
         }
 
@@ -98,12 +95,6 @@ impl<'a> System<'a> for OperationManagerSystem {
             info!("Terminal operation does not exist, creating.");
 
             TerminalOperation::build(updater.create_entity(&entities)).build();
-        }
-
-        if !has_defend {
-            info!("Defend operation does not exist, creating.");
-
-            DefendOperation::build(updater.create_entity(&entities)).build();
         }
     }
 }

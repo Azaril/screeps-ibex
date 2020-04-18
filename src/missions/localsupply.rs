@@ -286,10 +286,10 @@ impl LocalSupplyMission {
             .iter()
             .filter_map(|miner_entity| {
                 if let Some(JobData::StaticMine(miner_data)) = system_data.job_data.get(*miner_entity) {
-                    Some((miner_data.container_target, *miner_entity))
+                    Some((miner_data.context.container_target, *miner_entity))
                 } else if let Some(JobData::LinkMine(miner_data)) = system_data.job_data.get(*miner_entity) {
-                    if let Some(container_target) = miner_data.container_target {
-                        Some((container_target, *miner_entity))
+                    if let Some(container_target) = miner_data.get_container_target() {
+                        Some((*container_target, *miner_entity))
                     } else {
                         None
                     }
@@ -304,7 +304,7 @@ impl LocalSupplyMission {
             .iter()
             .filter_map(|miner_entity| {
                 if let Some(JobData::LinkMine(miner_data)) = system_data.job_data.get(*miner_entity) {
-                    Some((miner_data.link_target, *miner_entity))
+                    Some((*miner_data.get_link_target(), *miner_entity))
                 } else {
                     None
                 }
@@ -316,7 +316,7 @@ impl LocalSupplyMission {
             .iter()
             .filter_map(|miner_entity| {
                 if let Some(JobData::StaticMine(miner_data)) = system_data.job_data.get(*miner_entity) {
-                    Some((miner_data.container_target, *miner_entity))
+                    Some((miner_data.context.container_target, *miner_entity))
                 } else {
                     None
                 }
