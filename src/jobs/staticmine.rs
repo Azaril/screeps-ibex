@@ -1,13 +1,13 @@
-use super::jobsystem::*;
-use crate::remoteobjectid::*;
-use super::context::*;
 use super::actions::*;
+use super::context::*;
+use super::jobsystem::*;
+use super::utility::harvestbehavior::*;
 use super::utility::movebehavior::*;
 use super::utility::waitbehavior::*;
-use super::utility::harvestbehavior::*;
+use crate::remoteobjectid::*;
 use screeps::*;
-use serde::*;
 use screeps_machine::*;
+use serde::*;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub enum StaticMineTarget {
@@ -71,7 +71,7 @@ impl Harvest {
     fn tick(&mut self, state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
         match state_context.mine_target {
             StaticMineTarget::Source(source_id) => tick_harvest(tick_context, source_id, true, false, || StaticMineState::wait(1)),
-            StaticMineTarget::Mineral(mineral_id, _) => tick_harvest(tick_context, mineral_id, true, false, || StaticMineState::wait(1)), 
+            StaticMineTarget::Mineral(mineral_id, _) => tick_harvest(tick_context, mineral_id, true, false, || StaticMineState::wait(1)),
         }
     }
 }
@@ -96,7 +96,7 @@ impl StaticMineJob {
                 mine_target,
                 container_target: container_id,
             },
-            state: StaticMineState::move_to_container()
+            state: StaticMineState::move_to_container(),
         }
     }
 }
@@ -116,7 +116,7 @@ impl Job for StaticMineJob {
         let mut tick_context = JobTickContext {
             system_data,
             runtime_data,
-            action_flags: SimultaneousActionFlags::UNSET
+            action_flags: SimultaneousActionFlags::UNSET,
         };
 
         while let Some(tick_result) = self.state.tick(&mut self.context, &mut tick_context) {

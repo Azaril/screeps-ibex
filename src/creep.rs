@@ -1,10 +1,10 @@
+use crate::serialize::*;
+use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use log::*;
-use crate::serialize::*;
 
 #[derive(Clone, Component, Serialize, Deserialize)]
 pub struct CreepOwner {
@@ -73,7 +73,7 @@ impl<'a> System<'a> for CleanupCreepsSystem {
     fn run(&mut self, (entities, creeps, _updater): Self::SystemData) {
         for (entity, creep) in (&entities, &creeps).join() {
             let delete = if let Some(creep) = creep.owner.resolve() {
-                creep.hits() == 0 
+                creep.hits() == 0
             } else {
                 true
             };

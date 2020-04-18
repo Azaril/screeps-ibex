@@ -1,6 +1,7 @@
 use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
+use crate::jobs::reserve::*;
 use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
@@ -10,7 +11,6 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use crate::jobs::reserve::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ReserveMission {
@@ -116,7 +116,6 @@ impl Mission for ReserveMission {
 
         let alive_reservers = self
             .reservers
-            
             .iter()
             .filter(|reserver_entity| {
                 if let Some(creep_owner) = system_data.creep_owner.get(**reserver_entity) {

@@ -2,12 +2,12 @@ use super::data::*;
 use super::operationsystem::*;
 use crate::missions::construction::*;
 use crate::missions::data::*;
+use crate::room::data::*;
+use crate::serialize::*;
+use log::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use crate::serialize::*;
-use crate::room::data::*;
-use log::*;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct ConstructionOperation {}
@@ -20,9 +20,7 @@ impl ConstructionOperation {
     {
         let operation = ConstructionOperation::new();
 
-        builder
-            .with(OperationData::Construction(operation))
-            .marked::<SerializeMarker>()
+        builder.with(OperationData::Construction(operation)).marked::<SerializeMarker>()
     }
 
     pub fn new() -> ConstructionOperation {

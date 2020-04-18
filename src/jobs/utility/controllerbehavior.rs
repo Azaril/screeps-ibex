@@ -1,7 +1,7 @@
+use crate::jobs::actions::*;
+use crate::jobs::context::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
-use crate::jobs::context::*;
-use crate::jobs::actions::*;
 use screeps::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -23,8 +23,11 @@ where
     None
 }
 
-pub fn tick_upgrade<F, R>(tick_context: &mut JobTickContext, controller_id: RemoteObjectId<StructureController>, next_state: F) -> Option<R> where
-    F: Fn() -> R {
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn tick_upgrade<F, R>(tick_context: &mut JobTickContext, controller_id: RemoteObjectId<StructureController>, next_state: F) -> Option<R>
+where
+    F: Fn() -> R,
+{
     let creep = tick_context.runtime_data.owner;
     let action_flags = &mut tick_context.action_flags;
 
@@ -37,7 +40,10 @@ pub fn tick_upgrade<F, R>(tick_context: &mut JobTickContext, controller_id: Remo
         if !action_flags.contains(SimultaneousActionFlags::MOVE) {
             action_flags.insert(SimultaneousActionFlags::MOVE);
 
-            tick_context.runtime_data.movement.move_to_range(tick_context.runtime_data.creep_entity, target_position, 3);
+            tick_context
+                .runtime_data
+                .movement
+                .move_to_range(tick_context.runtime_data.creep_entity, target_position, 3);
         }
 
         return None;
@@ -54,39 +60,10 @@ pub fn tick_upgrade<F, R>(tick_context: &mut JobTickContext, controller_id: Remo
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn run_upgrade_state<F, R>(creep: &Creep, controller_id: &RemoteObjectId<StructureController>, next_state: F) -> Option<R>
+pub fn tick_claim<F, R>(tick_context: &mut JobTickContext, controller_id: RemoteObjectId<StructureController>, next_state: F) -> Option<R>
 where
     F: Fn() -> R,
 {
-    let creep_pos = creep.pos();
-    let target_position = controller_id.pos();
-
-    //TODO: Check visibility cache and cancel if controller doesn't exist or isn't owned?
-
-    if creep_pos.room_name() != target_position.room_name() {
-        creep.move_to(&target_position);
-
-        return None;
-    }
-
-    if let Some(controller) = controller_id.resolve() {
-        if !creep_pos.in_range_to(&controller, 3) {
-            creep.move_to(&target_position);
-
-            return None;
-        }
-
-        match creep.upgrade_controller(&controller) {
-            ReturnCode::Ok => None,
-            _ => Some(next_state()),
-        }
-    } else {
-        Some(next_state())
-    }
-}
-
-pub fn tick_claim<F, R>(tick_context: &mut JobTickContext, controller_id: RemoteObjectId<StructureController>, next_state: F) -> Option<R> where
-    F: Fn() -> R {
     let creep = tick_context.runtime_data.owner;
     let action_flags = &mut tick_context.action_flags;
 
@@ -99,7 +76,10 @@ pub fn tick_claim<F, R>(tick_context: &mut JobTickContext, controller_id: Remote
         if !action_flags.contains(SimultaneousActionFlags::MOVE) {
             action_flags.insert(SimultaneousActionFlags::MOVE);
 
-            tick_context.runtime_data.movement.move_to_range(tick_context.runtime_data.creep_entity, target_position, 1);
+            tick_context
+                .runtime_data
+                .movement
+                .move_to_range(tick_context.runtime_data.creep_entity, target_position, 1);
         }
 
         return None;
@@ -115,8 +95,11 @@ pub fn tick_claim<F, R>(tick_context: &mut JobTickContext, controller_id: Remote
     }
 }
 
-pub fn tick_reserve<F, R>(tick_context: &mut JobTickContext, controller_id: RemoteObjectId<StructureController>, next_state: F) -> Option<R> where
-    F: Fn() -> R {
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn tick_reserve<F, R>(tick_context: &mut JobTickContext, controller_id: RemoteObjectId<StructureController>, next_state: F) -> Option<R>
+where
+    F: Fn() -> R,
+{
     let creep = tick_context.runtime_data.owner;
     let action_flags = &mut tick_context.action_flags;
 
@@ -129,7 +112,10 @@ pub fn tick_reserve<F, R>(tick_context: &mut JobTickContext, controller_id: Remo
         if !action_flags.contains(SimultaneousActionFlags::MOVE) {
             action_flags.insert(SimultaneousActionFlags::MOVE);
 
-            tick_context.runtime_data.movement.move_to_range(tick_context.runtime_data.creep_entity, target_position, 1);
+            tick_context
+                .runtime_data
+                .movement
+                .move_to_range(tick_context.runtime_data.creep_entity, target_position, 1);
         }
 
         return None;

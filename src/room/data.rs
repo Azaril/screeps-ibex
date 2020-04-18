@@ -159,11 +159,11 @@ impl RoomData {
         let controller_id = room.controller().map(|c| c.remote_id());
         let source_ids = room.find(find::SOURCES).into_iter().map(|s| s.remote_id()).collect();
         let mineral_ids = room.find(find::MINERALS).into_iter().map(|s| s.remote_id()).collect();
-        
+
         RoomStaticVisibilityData {
             controller: controller_id,
             sources: source_ids,
-            minerals: mineral_ids
+            minerals: mineral_ids,
         }
     }
 

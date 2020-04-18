@@ -1,17 +1,17 @@
+use super::data::*;
+use super::missionsystem::*;
+use crate::jobs::data::*;
+use crate::jobs::haul::*;
+use crate::serialize::*;
+use crate::spawnsystem::*;
+use crate::transfer::transfersystem::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use super::data::*;
-use super::missionsystem::*;
-use crate::jobs::data::*;
-use crate::serialize::*;
-use crate::spawnsystem::*;
-use crate::transfer::transfersystem::*;
 use std::collections::HashMap;
-use crate::jobs::haul::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct HaulMission {

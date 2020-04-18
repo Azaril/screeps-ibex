@@ -1,17 +1,17 @@
 use super::data::*;
 use super::missionsystem::*;
 use crate::room::roomplansystem::*;
+use crate::serialize::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use crate::serialize::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ConstructionMission {
-    room_data: Entity
+    room_data: Entity,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -22,15 +22,11 @@ impl ConstructionMission {
     {
         let mission = ConstructionMission::new(room_data);
 
-        builder
-            .with(MissionData::Construction(mission))
-            .marked::<SerializeMarker>()
+        builder.with(MissionData::Construction(mission)).marked::<SerializeMarker>()
     }
 
     pub fn new(room_data: Entity) -> ConstructionMission {
-        ConstructionMission {
-            room_data
-        }
+        ConstructionMission { room_data }
     }
 }
 

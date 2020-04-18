@@ -2,13 +2,13 @@ use super::data::*;
 use super::operationsystem::*;
 use crate::missions::data::*;
 use crate::missions::haul::*;
+use crate::room::data::*;
+use crate::serialize::*;
+use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use crate::room::data::*;
-use crate::serialize::*;
-use log::*;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct HaulOperation {}
@@ -21,9 +21,7 @@ impl HaulOperation {
     {
         let operation = HaulOperation::new();
 
-        builder
-            .with(OperationData::Haul(operation))
-            .marked::<SerializeMarker>()
+        builder.with(OperationData::Haul(operation)).marked::<SerializeMarker>()
     }
 
     pub fn new() -> HaulOperation {

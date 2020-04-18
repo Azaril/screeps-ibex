@@ -1,9 +1,9 @@
+use crate::room::data::*;
 use crate::ui::*;
 use crate::visualize::*;
 use screeps::*;
 use specs::prelude::*;
 use std::collections::HashMap;
-use crate::room::data::*;
 
 pub const SPAWN_PRIORITY_CRITICAL: f32 = 100.0;
 pub const SPAWN_PRIORITY_HIGH: f32 = 75.0;

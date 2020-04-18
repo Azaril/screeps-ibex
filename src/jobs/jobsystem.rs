@@ -1,11 +1,11 @@
 use super::data::JobData;
+use crate::creep::CreepOwner;
+use crate::entitymappingsystem::*;
+use crate::pathing::movementsystem::*;
 use crate::room::data::*;
 use crate::transfer::transfersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
-use crate::creep::CreepOwner;
-use crate::pathing::movementsystem::*;
-use crate::entitymappingsystem::*;
 use screeps::*;
 use specs::prelude::*;
 
@@ -58,7 +58,7 @@ pub struct PreRunJobSystem;
 impl<'a> System<'a> for PreRunJobSystem {
     type SystemData = JobSystemData<'a>;
 
-        fn run(&mut self, mut data: Self::SystemData) {
+    fn run(&mut self, mut data: Self::SystemData) {
         let system_data = JobExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
@@ -104,7 +104,7 @@ pub struct RunJobSystem;
 impl<'a> System<'a> for RunJobSystem {
     type SystemData = JobSystemData<'a>;
 
-        fn run(&mut self, mut data: Self::SystemData) {
+    fn run(&mut self, mut data: Self::SystemData) {
         let system_data = JobExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,

@@ -1,22 +1,22 @@
 use super::data::*;
 use super::missionsystem::*;
+use crate::jobs::data::*;
+use crate::jobs::harvest::*;
+use crate::jobs::linkmine::*;
 use crate::jobs::staticmine::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use crate::serialize::*;
+use crate::spawnsystem::*;
 use crate::transfer::transfersystem::*;
 use itertools::*;
-use crate::jobs::data::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
-use crate::spawnsystem::*;
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
 use std::collections::HashMap;
-use crate::jobs::linkmine::*;
-use crate::jobs::harvest::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct LocalSupplyMission {
@@ -54,9 +54,7 @@ impl LocalSupplyMission {
     {
         let mission = LocalSupplyMission::new(room_data);
 
-        builder
-            .with(MissionData::LocalSupply(mission))
-            .marked::<SerializeMarker>()
+        builder.with(MissionData::LocalSupply(mission)).marked::<SerializeMarker>()
     }
 
     pub fn new(room_data: Entity) -> LocalSupplyMission {
@@ -98,7 +96,7 @@ impl LocalSupplyMission {
         mission_entity: Entity,
         source_id: RemoteObjectId<Source>,
         link_id: RemoteObjectId<StructureLink>,
-        container_id: Option<RemoteObjectId<StructureContainer>>
+        container_id: Option<RemoteObjectId<StructureContainer>>,
     ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
@@ -197,7 +195,7 @@ impl LocalSupplyMission {
             })
             .into_group_map();
 
-        //TODO: This may need more validate that the link is reachable - or assume it is and bad placemented is filtered out 
+        //TODO: This may need more validate that the link is reachable - or assume it is and bad placemented is filtered out
         //      during room planning.
         //TODO: May need additional work to make sure link is not used by a controller or storage.
         let controller_links: Vec<_> = controller
@@ -227,7 +225,7 @@ impl LocalSupplyMission {
             })
             .into_group_map();
 
-        //TODO: This may need more validate that the link is reachable - or assume it is and bad placemented is filtered out 
+        //TODO: This may need more validate that the link is reachable - or assume it is and bad placemented is filtered out
         //      during room planning.
         //TODO: May need additional work to make sure link is not used by a controller or storage.
         let sources_to_links = sources
@@ -245,7 +243,10 @@ impl LocalSupplyMission {
         let storage_links = room_links
             .into_iter()
             .filter(|link| {
-                storage.as_ref().map(|storage| link.pos().in_range_to(&storage.pos(), 2)).unwrap_or(false)
+                storage
+                    .as_ref()
+                    .map(|storage| link.pos().in_range_to(&storage.pos(), 2))
+                    .unwrap_or(false)
             })
             .map(|link| link.remote_id())
             .collect();
@@ -333,12 +334,12 @@ impl LocalSupplyMission {
         Ok(creep_data)
     }
 
-    fn link_transfer(
-        &mut self,
-        structure_data: &StructureData,
-        transfer_queue: &mut TransferQueue
-    ) -> Result<(), String> {
-        let all_links = structure_data.sources_to_links.values().flatten().chain(structure_data.storage_links.iter());
+    fn link_transfer(&mut self, structure_data: &StructureData, transfer_queue: &mut TransferQueue) -> Result<(), String> {
+        let all_links = structure_data
+            .sources_to_links
+            .values()
+            .flatten()
+            .chain(structure_data.storage_links.iter());
 
         for link_id in all_links {
             if let Some(link) = link_id.resolve() {
@@ -348,15 +349,17 @@ impl LocalSupplyMission {
 
                     let best_transfer = ALL_TRANSFER_PRIORITIES
                         .iter()
-                        .filter_map(|priority| transfer_queue.get_delivery_from_target(
-                            &[room_name],
-                            &TransferTarget::Link(*link_id),
-                            TransferPriorityFlags::ACTIVE,
-                            priority.into(),
-                            TransferType::Link,
-                            TransferCapacity::Infinite,
-                            link_pos
-                        ))
+                        .filter_map(|priority| {
+                            transfer_queue.get_delivery_from_target(
+                                &[room_name],
+                                &TransferTarget::Link(*link_id),
+                                TransferPriorityFlags::ACTIVE,
+                                priority.into(),
+                                TransferType::Link,
+                                TransferCapacity::Infinite,
+                                link_pos,
+                            )
+                        })
                         .next();
 
                     if let Some((pickup, delivery)) = best_transfer {
@@ -364,7 +367,11 @@ impl LocalSupplyMission {
                         transfer_queue.register_delivery(&delivery, TransferType::Link);
 
                         //TODO: Validate there isn't non-energy in here?
-                        let transfer_amount = delivery.resources().get(&ResourceType::Energy).map(|entries| entries.iter().map(|entry| entry.amount()).sum()).unwrap_or(0);
+                        let transfer_amount = delivery
+                            .resources()
+                            .get(&ResourceType::Energy)
+                            .map(|entries| entries.iter().map(|entry| entry.amount()).sum())
+                            .unwrap_or(0);
 
                         delivery.target().link_transfer_energy_amount(&link, transfer_amount);
                     }
@@ -435,11 +442,7 @@ impl LocalSupplyMission {
         //
 
         for source_id in prioritized_sources.iter().rev() {
-            let source_harvesters = creep_data
-                .sources_to_harvesters
-                .get(source_id)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]);
+            let source_harvesters = creep_data.sources_to_harvesters.get(source_id).map(Vec::as_slice).unwrap_or(&[]);
 
             let source_containers = structure_data
                 .sources_to_containers
@@ -447,11 +450,7 @@ impl LocalSupplyMission {
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
 
-            let source_links = structure_data
-                .sources_to_links
-                .get(source_id)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]);
+            let source_links = structure_data.sources_to_links.get(source_id).map(Vec::as_slice).unwrap_or(&[]);
 
             let source_container_miners = source_containers
                 .iter()
@@ -572,7 +571,7 @@ impl LocalSupplyMission {
 
                             runtime_data.spawn_queue.request(room_data.name, spawn_request);
                         }
-                    }                
+                    }
                 } else if !source_containers.is_empty() {
                     //
                     // Spawn container miners.
@@ -610,14 +609,18 @@ impl LocalSupplyMission {
                                 format!("Container Miner - Source: {}", source_id.id()),
                                 &body,
                                 SPAWN_PRIORITY_HIGH,
-                                Self::create_handle_container_miner_spawn(*runtime_data.entity, StaticMineTarget::Source(*source_id), *container),
+                                Self::create_handle_container_miner_spawn(
+                                    *runtime_data.entity,
+                                    StaticMineTarget::Source(*source_id),
+                                    *container,
+                                ),
                             );
 
                             runtime_data.spawn_queue.request(room_data.name, spawn_request);
                         }
                     }
                 }
-            }             
+            }
         }
 
         for ((mineral_id, extractor_id), container_ids) in structure_data.mineral_extractors_to_containers.iter() {
@@ -717,8 +720,13 @@ impl LocalSupplyMission {
 
                         for resource in container.store_types() {
                             let resource_amount = container.store_used_capacity(Some(resource));
-                            let transfer_request =
-                                TransferWithdrawRequest::new(TransferTarget::Container(*container_id), resource, priority, resource_amount, TransferType::Haul);
+                            let transfer_request = TransferWithdrawRequest::new(
+                                TransferTarget::Container(*container_id),
+                                resource,
+                                priority,
+                                resource_amount,
+                                TransferType::Haul,
+                            );
 
                             transfer_queue.request_withdraw(transfer_request);
                         }
@@ -737,14 +745,18 @@ impl LocalSupplyMission {
                     let storage_fraction = container_used_capacity as f32 / container_available_capacity as f32;
 
                     if container_free_capacity > 0 {
-                        let priority = if storage_fraction < 0.75 { TransferPriority::Low } else { TransferPriority::None };
+                        let priority = if storage_fraction < 0.75 {
+                            TransferPriority::Low
+                        } else {
+                            TransferPriority::None
+                        };
 
                         let transfer_request = TransferDepositRequest::new(
                             TransferTarget::Container(*container_id),
                             Some(ResourceType::Energy),
                             priority,
                             container_free_capacity,
-                            TransferType::Haul
+                            TransferType::Haul,
                         );
 
                         transfer_queue.request_deposit(transfer_request);
@@ -757,7 +769,7 @@ impl LocalSupplyMission {
                             ResourceType::Energy,
                             TransferPriority::None,
                             container_used_capacity,
-                            TransferType::Use
+                            TransferType::Use,
                         );
 
                         transfer_queue.request_withdraw(transfer_request);
@@ -789,7 +801,7 @@ impl LocalSupplyMission {
                         None,
                         TransferPriority::None,
                         container_free_capacity,
-                        TransferType::Haul
+                        TransferType::Haul,
                     );
 
                     transfer_queue.request_deposit(transfer_request);
@@ -812,7 +824,7 @@ impl LocalSupplyMission {
                             Some(ResourceType::Energy),
                             TransferPriority::High,
                             free_capacity,
-                            TransferType::Haul
+                            TransferType::Haul,
                         );
 
                         transfer_queue.request_deposit(transfer_request);
@@ -826,7 +838,7 @@ impl LocalSupplyMission {
                             Some(ResourceType::Energy),
                             TransferPriority::High,
                             free_capacity,
-                            TransferType::Haul
+                            TransferType::Haul,
                         );
 
                         transfer_queue.request_deposit(transfer_request);
@@ -844,7 +856,7 @@ impl LocalSupplyMission {
                             resource,
                             TransferPriority::None,
                             resource_amount,
-                            TransferType::Haul
+                            TransferType::Haul,
                         );
 
                         transfer_queue.request_withdraw(transfer_request);
@@ -855,8 +867,13 @@ impl LocalSupplyMission {
                     let free_capacity = storage.store_capacity(None) - used_capacity;
 
                     if free_capacity > 0 {
-                        let transfer_request =
-                            TransferDepositRequest::new(TransferTarget::Storage(storage_id), None, TransferPriority::None, free_capacity, TransferType::Haul);
+                        let transfer_request = TransferDepositRequest::new(
+                            TransferTarget::Storage(storage_id),
+                            None,
+                            TransferPriority::None,
+                            free_capacity,
+                            TransferType::Haul,
+                        );
 
                         transfer_queue.request_deposit(transfer_request);
                     }
@@ -877,7 +894,7 @@ impl LocalSupplyMission {
                         Some(ResourceType::Energy),
                         TransferPriority::None,
                         free_capacity,
-                        TransferType::Link
+                        TransferType::Link,
                     );
 
                     transfer_queue.request_deposit(transfer_request);
@@ -902,7 +919,7 @@ impl LocalSupplyMission {
                         ResourceType::Energy,
                         priority,
                         used_capacity,
-                        TransferType::Haul
+                        TransferType::Haul,
                     );
 
                     transfer_queue.request_withdraw(transfer_request);
@@ -933,7 +950,7 @@ impl LocalSupplyMission {
                         ResourceType::Energy,
                         priority,
                         used_capacity,
-                        TransferType::Link
+                        TransferType::Link,
                     );
 
                     transfer_queue.request_withdraw(transfer_request);
@@ -953,7 +970,7 @@ impl LocalSupplyMission {
                         Some(ResourceType::Energy),
                         TransferPriority::Low,
                         free_capacity,
-                        TransferType::Link
+                        TransferType::Link,
                     );
 
                     transfer_queue.request_deposit(transfer_request);
@@ -966,7 +983,7 @@ impl LocalSupplyMission {
                     ResourceType::Energy,
                     TransferPriority::None,
                     used_capacity,
-                    TransferType::Haul
+                    TransferType::Haul,
                 );
 
                 transfer_queue.request_withdraw(transfer_request);
@@ -980,8 +997,13 @@ impl LocalSupplyMission {
 
             for resource in ruin.store_types() {
                 let resource_amount = ruin.store_used_capacity(Some(resource));
-                let transfer_request =
-                    TransferWithdrawRequest::new(TransferTarget::Ruin(ruin_id), resource, TransferPriority::Medium, resource_amount, TransferType::Haul);
+                let transfer_request = TransferWithdrawRequest::new(
+                    TransferTarget::Ruin(ruin_id),
+                    resource,
+                    TransferPriority::Medium,
+                    resource_amount,
+                    TransferType::Haul,
+                );
 
                 transfer_queue.request_withdraw(transfer_request);
             }
@@ -1002,8 +1024,13 @@ impl LocalSupplyMission {
                     TransferPriority::Medium
                 };
 
-                let transfer_request =
-                    TransferWithdrawRequest::new(TransferTarget::Tombstone(tombstone_id), resource, priority, resource_amount, TransferType::Haul);
+                let transfer_request = TransferWithdrawRequest::new(
+                    TransferTarget::Tombstone(tombstone_id),
+                    resource,
+                    priority,
+                    resource_amount,
+                    TransferType::Haul,
+                );
 
                 transfer_queue.request_withdraw(transfer_request);
             }
@@ -1024,8 +1051,13 @@ impl LocalSupplyMission {
                 TransferPriority::Medium
             };
 
-            let transfer_request =
-                TransferWithdrawRequest::new(TransferTarget::Resource(dropped_resource_id), resource, priority, resource_amount, TransferType::Haul);
+            let transfer_request = TransferWithdrawRequest::new(
+                TransferTarget::Resource(dropped_resource_id),
+                resource,
+                priority,
+                resource_amount,
+                TransferType::Haul,
+            );
 
             transfer_queue.request_withdraw(transfer_request);
         }

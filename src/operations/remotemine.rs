@@ -4,15 +4,15 @@ use crate::missions::data::*;
 use crate::missions::remotemine::*;
 use crate::missions::reserve::*;
 use crate::missions::scout::*;
+use crate::room::data::*;
 use crate::room::visibilitysystem::*;
+use crate::serialize::*;
 use itertools::*;
+use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use crate::room::data::*;
-use crate::serialize::*;
-use log::*;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct RemoteMineOperation {}
@@ -25,9 +25,7 @@ impl RemoteMineOperation {
     {
         let operation = RemoteMineOperation::new();
 
-        builder
-            .with(OperationData::RemoteMine(operation))
-            .marked::<SerializeMarker>()
+        builder.with(OperationData::RemoteMine(operation)).marked::<SerializeMarker>()
     }
 
     pub fn new() -> RemoteMineOperation {

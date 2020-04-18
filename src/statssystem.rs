@@ -1,9 +1,9 @@
 use super::memorysystem::*;
+use crate::room::data::*;
 use screeps::*;
 use serde::*;
 use specs::prelude::*;
 use std::collections::HashMap;
-use crate::room::data::*;
 
 #[derive(Serialize)]
 pub struct CpuStats {
@@ -112,7 +112,7 @@ impl StatsSystem {
 
     fn get_market_stats() -> MarketStats {
         MarketStats {
-            credits: game::market::credits()
+            credits: game::market::credits(),
         }
     }
 
@@ -122,7 +122,7 @@ impl StatsSystem {
             gcl: Self::get_gcl_stats(),
             cpu: Self::get_cpu_stats(),
             room: Self::get_room_stats(data),
-            market: Self::get_market_stats()
+            market: Self::get_market_stats(),
         }
     }
 

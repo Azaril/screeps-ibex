@@ -2,6 +2,7 @@ use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::utility::repair::*;
 use crate::remoteobjectid::*;
+use crate::serialize::*;
 use crate::transfer::transfersystem::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -9,7 +10,6 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use crate::serialize::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct TowerMission {
@@ -74,8 +74,13 @@ impl Mission for TowerMission {
         for tower in towers {
             let tower_free_capacity = tower.store_free_capacity(Some(ResourceType::Energy));
             if tower_free_capacity > 0 {
-                let transfer_request =
-                    TransferDepositRequest::new(TransferTarget::Tower(tower.remote_id()), Some(ResourceType::Energy), priority, tower_free_capacity, TransferType::Haul);
+                let transfer_request = TransferDepositRequest::new(
+                    TransferTarget::Tower(tower.remote_id()),
+                    Some(ResourceType::Energy),
+                    priority,
+                    tower_free_capacity,
+                    TransferType::Haul,
+                );
 
                 runtime_data.transfer_queue.request_deposit(transfer_request);
             }

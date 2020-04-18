@@ -1,22 +1,24 @@
 #![recursion_limit = "128"]
 #![allow(dead_code)]
 #![warn(clippy::all)]
-
 #![feature(const_fn)]
 
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
+mod constants;
 mod creep;
+mod entitymappingsystem;
 mod features;
 mod findnearest;
+mod game_loop;
 mod globals;
 mod jobs;
 mod logging;
-mod entitymappingsystem;
 mod memorysystem;
 mod missions;
 mod operations;
+mod pathing;
 mod remoteobjectid;
 mod room;
 mod serialize;
@@ -26,9 +28,6 @@ mod structureidentifier;
 mod transfer;
 mod ui;
 mod visualize;
-mod game_loop;
-mod pathing;
-mod constants;
 
 use log::*;
 use stdweb::*;
@@ -66,7 +65,7 @@ fn main_loop() {
     {
         screeps_timing::start_trace(|| (screeps::game::cpu::get_used() * 1000.0) as u64);
     }
-    
+
     game_loop::tick();
 
     #[cfg(feature = "profile")]
@@ -82,5 +81,5 @@ fn main_loop() {
                 info!("{}", trace_output);
             }
         }
-    }   
+    }
 }

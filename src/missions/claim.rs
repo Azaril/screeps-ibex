@@ -1,11 +1,11 @@
 use super::data::*;
 use super::missionsystem::*;
+use crate::jobs::claim::*;
 use crate::jobs::data::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
-use crate::jobs::claim::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;

@@ -51,7 +51,13 @@ fn map_high_value_priority(hits: u32, hits_max: u32) -> Option<RepairPriority> {
     Some(priority)
 }
 
-fn map_defense_priority(structure_type: StructureType, hits: u32, hits_max: u32, available_energy: u32, under_attack: bool) -> Option<RepairPriority> {
+fn map_defense_priority(
+    structure_type: StructureType,
+    hits: u32,
+    hits_max: u32,
+    available_energy: u32,
+    under_attack: bool,
+) -> Option<RepairPriority> {
     let health_fraction = (hits as f32) / (hits_max as f32);
 
     if under_attack {
@@ -103,12 +109,10 @@ fn map_structure_repair_priority(
 pub fn get_repair_targets(room: &Room, allow_walls: bool) -> Vec<(Structure, u32, u32)> {
     room.find(find::STRUCTURES)
         .into_iter()
-        .filter(|structure| {
-            match structure {
-                Structure::Wall(_) => allow_walls,
-                Structure::Rampart(_) => allow_walls,
-                _ => true 
-            }
+        .filter(|structure| match structure {
+            Structure::Wall(_) => allow_walls,
+            Structure::Rampart(_) => allow_walls,
+            _ => true,
         })
         .filter(|structure| {
             if let Some(owned_structure) = structure.as_owned() {
@@ -138,7 +142,11 @@ pub fn get_repair_targets(room: &Room, allow_walls: bool) -> Vec<(Structure, u32
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn get_prioritized_repair_targets(room: &Room, minimum_priority: Option<RepairPriority>, allow_walls: bool) -> HashMap<RepairPriority, Vec<Structure>> {
+pub fn get_prioritized_repair_targets(
+    room: &Room,
+    minimum_priority: Option<RepairPriority>,
+    allow_walls: bool,
+) -> HashMap<RepairPriority, Vec<Structure>> {
     let are_hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
 
     let available_energy = room
@@ -162,9 +170,11 @@ pub fn select_repair_structure(room: &Room, minimum_priority: Option<RepairPrior
 
     ORDERED_REPAIR_PRIORITIES
         .iter()
-        .filter_map(|priority| {
-            repair_targets.remove(priority)
+        .filter_map(|priority| repair_targets.remove(priority))
+        .filter_map(|targets| {
+            targets
+                .into_iter()
+                .min_by_key(|structure| structure.as_attackable().unwrap().hits())
         })
-        .filter_map(|targets| targets.into_iter().min_by_key(|structure| structure.as_attackable().unwrap().hits()))
         .next()
 }

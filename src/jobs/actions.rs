@@ -1,4 +1,3 @@
-
 use bitflags::*;
 
 //TODO: This needs a better API. It also needs to correctly represent pipelines.
@@ -20,7 +19,7 @@ bitflags! {
 
         const RANGED_ATTACK = 1u8 << 1;
         const RANGED_MASS_ATTACK = 1u8 << 1;
-        
+
         const WITHDRAW = 1u8 << 2;
         const TRANSFER = 1u8 << 2;
         const DROP = 1u8 << 2;

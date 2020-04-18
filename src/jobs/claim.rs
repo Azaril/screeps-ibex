@@ -1,13 +1,13 @@
-use super::jobsystem::*;
-use crate::remoteobjectid::*;
-use super::context::*;
 use super::actions::*;
+use super::context::*;
+use super::jobsystem::*;
+use super::utility::controllerbehavior::*;
 use super::utility::movebehavior::*;
 use super::utility::waitbehavior::*;
-use super::utility::controllerbehavior::*;
+use crate::remoteobjectid::*;
 use screeps::*;
-use serde::*;
 use screeps_machine::*;
+use serde::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ClaimJobContext {
@@ -81,9 +81,9 @@ impl ClaimJob {
     pub fn new(controller_id: RemoteObjectId<StructureController>) -> ClaimJob {
         ClaimJob {
             context: ClaimJobContext {
-                claim_target: controller_id
+                claim_target: controller_id,
             },
-            state: ClaimState::move_to_controller()
+            state: ClaimState::move_to_controller(),
         }
     }
 }
@@ -103,7 +103,7 @@ impl Job for ClaimJob {
         let mut tick_context = JobTickContext {
             system_data,
             runtime_data,
-            action_flags: SimultaneousActionFlags::UNSET
+            action_flags: SimultaneousActionFlags::UNSET,
         };
 
         while let Some(tick_result) = self.state.tick(&mut self.context, &mut tick_context) {

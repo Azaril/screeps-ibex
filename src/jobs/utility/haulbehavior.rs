@@ -1,9 +1,9 @@
-use crate::jobs::actions::*;
-use crate::room::data::*;
-use crate::transfer::transfersystem::*;
 use crate::findnearest::*;
+use crate::jobs::actions::*;
 use crate::jobs::context::*;
 use crate::jobs::jobsystem::*;
+use crate::room::data::*;
+use crate::transfer::transfersystem::*;
 use crate::visualize::*;
 use itertools::*;
 use screeps::*;
@@ -75,8 +75,13 @@ where
     if !available_capacity.empty() {
         let delivery_room_names = delivery_rooms.iter().map(|r| r.name).collect_vec();
 
-        let deliveries =
-            transfer_queue.select_deliveries(&delivery_room_names, allowed_priorities, transfer_types, &available_resources, available_capacity);
+        let deliveries = transfer_queue.select_deliveries(
+            &delivery_room_names,
+            allowed_priorities,
+            transfer_types,
+            &available_resources,
+            available_capacity,
+        );
 
         if let Some(delivery) = deliveries
             .into_iter()
@@ -111,9 +116,13 @@ where
     if !available_capacity.empty() {
         let pickup_room_names = pickup_rooms.iter().map(|r| r.name).collect_vec();
 
-        if let Some((mut pickup, delivery)) =
-            transfer_queue.select_pickup_and_delivery(&pickup_room_names, allowed_priorities, transfer_type, creep.pos(), available_capacity)
-        {
+        if let Some((mut pickup, delivery)) = transfer_queue.select_pickup_and_delivery(
+            &pickup_room_names,
+            allowed_priorities,
+            transfer_type,
+            creep.pos(),
+            available_capacity,
+        ) {
             transfer_queue.register_pickup(&pickup, TransferType::Haul);
             transfer_queue.register_delivery(&delivery, TransferType::Haul);
 
@@ -199,7 +208,10 @@ where
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn tick_pickup<F, R>(tick_context: &mut JobTickContext, ticket: &mut TransferWithdrawTicket, next_state: F) -> Option<R> where F: FnOnce() -> R {
+pub fn tick_pickup<F, R>(tick_context: &mut JobTickContext, ticket: &mut TransferWithdrawTicket, next_state: F) -> Option<R>
+where
+    F: FnOnce() -> R,
+{
     if !ticket.target().is_valid() || ticket.get_next_withdrawl().is_none() {
         return Some(next_state());
     }
@@ -250,7 +262,10 @@ pub fn visualize_pickup(describe_data: &mut JobDescribeData, ticket: &TransferWi
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn tick_delivery<F, R>(tick_context: &mut JobTickContext, tickets: &mut Vec<TransferDepositTicket>, next_state: F) -> Option<R> where F: Fn() -> R {
+pub fn tick_delivery<F, R>(tick_context: &mut JobTickContext, tickets: &mut Vec<TransferDepositTicket>, next_state: F) -> Option<R>
+where
+    F: Fn() -> R,
+{
     let creep = tick_context.runtime_data.owner;
     let creep_pos = creep.pos();
 
@@ -262,7 +277,10 @@ pub fn tick_delivery<F, R>(tick_context: &mut JobTickContext, tickets: &mut Vec<
                 if !tick_context.action_flags.contains(SimultaneousActionFlags::MOVE) {
                     tick_context.action_flags.insert(SimultaneousActionFlags::MOVE);
 
-                    tick_context.runtime_data.movement.move_to_range(tick_context.runtime_data.creep_entity, pos, 1);
+                    tick_context
+                        .runtime_data
+                        .movement
+                        .move_to_range(tick_context.runtime_data.creep_entity, pos, 1);
                 }
 
                 return None;
@@ -316,7 +334,10 @@ pub fn visualize_delivery_from(describe_data: &mut JobDescribeData, tickets: &Ve
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn tick_deposit_all_resources_state<F, R>(tick_context: &mut JobTickContext, target: TransferTarget, next_state: F) -> Option<R> where F: FnOnce() -> R {
+pub fn tick_deposit_all_resources_state<F, R>(tick_context: &mut JobTickContext, target: TransferTarget, next_state: F) -> Option<R>
+where
+    F: FnOnce() -> R,
+{
     if target.is_valid() {
         let creep = tick_context.runtime_data.owner;
         let creep_pos = creep.pos();
@@ -327,7 +348,10 @@ pub fn tick_deposit_all_resources_state<F, R>(tick_context: &mut JobTickContext,
             if !tick_context.action_flags.contains(SimultaneousActionFlags::MOVE) {
                 tick_context.action_flags.insert(SimultaneousActionFlags::MOVE);
 
-                tick_context.runtime_data.movement.move_to_range(tick_context.runtime_data.creep_entity, pos, 1);
+                tick_context
+                    .runtime_data
+                    .movement
+                    .move_to_range(tick_context.runtime_data.creep_entity, pos, 1);
             }
 
             return None;
@@ -343,150 +367,9 @@ pub fn tick_deposit_all_resources_state<F, R>(tick_context: &mut JobTickContext,
 
                 if target.creep_transfer_resource_amount(creep, *resource, amount) == ReturnCode::Ok {
                     if store_types.len() == 1 {
-                        return Some(next_state())
+                        return Some(next_state());
                     } else {
-                        return None
-                    }
-                }
-            } else {
-                return None;
-            }
-        }
-    }
-
-    Some(next_state())
-}
-
-
-
-
-
-
-
-#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn run_pickup_state<F, R>(
-    creep: &Creep,
-    action_flags: &mut SimultaneousActionFlags,
-    ticket: &mut TransferWithdrawTicket,
-    _transfer_queue: &mut TransferQueue,
-    next_state: F,
-) -> Option<R>
-where
-    F: Fn() -> R,
-{
-    if !ticket.target().is_valid() || ticket.get_next_withdrawl().is_none() {
-        return Some(next_state());
-    }
-
-    let pos = ticket.target().pos();
-
-    if !creep.pos().is_near_to(&pos) {
-        if !action_flags.contains(SimultaneousActionFlags::MOVE) {
-            action_flags.insert(SimultaneousActionFlags::MOVE);
-            creep.move_to(&pos);
-        }
-
-        return None;
-    }
-
-    loop {
-        if let Some((resource, amount)) = ticket.get_next_withdrawl() {
-            if !action_flags.contains(SimultaneousActionFlags::TRANSFER) {
-                action_flags.insert(SimultaneousActionFlags::TRANSFER);
-
-                ticket.consume_withdrawl(resource, amount);
-
-                if ticket.target().withdraw_resource_amount(creep, resource, amount) == ReturnCode::Ok {
-                    break None;
-                }
-            } else {
-                break None;
-            }
-        } else {
-            break Some(next_state());
-        }
-    }
-}
-
-#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn run_delivery_state<F, R>(
-    creep: &Creep,
-    action_flags: &mut SimultaneousActionFlags,
-    tickets: &mut Vec<TransferDepositTicket>,
-    _transfer_queue: &mut TransferQueue,
-    next_state: F,
-) -> Option<R>
-where
-    F: Fn() -> R,
-{
-    while let Some(ticket) = tickets.first_mut() {
-        if ticket.target().is_valid() && ticket.get_next_deposit().is_some() {
-            let pos = ticket.target().pos();
-
-            if !creep.pos().is_near_to(&pos) {
-                if !action_flags.contains(SimultaneousActionFlags::MOVE) {
-                    action_flags.insert(SimultaneousActionFlags::MOVE);
-                    creep.move_to(&pos);
-                }
-
-                return None;
-            }
-
-            while let Some((resource, amount)) = ticket.get_next_deposit() {
-                if !action_flags.contains(SimultaneousActionFlags::TRANSFER) {
-                    action_flags.insert(SimultaneousActionFlags::TRANSFER);
-
-                    ticket.consume_deposit(resource, amount);
-
-                    if ticket.target().creep_transfer_resource_amount(creep, resource, amount) == ReturnCode::Ok {
-                        break;
-                    }
-                } else {
-                    return None;
-                }
-            }
-        } else {
-            tickets.remove(0);
-        }
-    }
-
-    Some(next_state())
-}
-
-#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn run_deposit_all_resources_state<F, R>(
-    creep: &Creep,
-    action_flags: &mut SimultaneousActionFlags,
-    target: TransferTarget,
-    next_state: F,
-) -> Option<R>
-where
-    F: Fn() -> R,
-{
-    if target.is_valid() {
-        let pos = target.pos();
-
-        if !creep.pos().is_near_to(&pos) {
-            if !action_flags.contains(SimultaneousActionFlags::MOVE) {
-                action_flags.insert(SimultaneousActionFlags::MOVE);
-                creep.move_to(&pos);
-            }
-
-            return None;
-        }
-
-        let store_types = creep.store_types();
-        if let Some(resource) = store_types.first() {
-            if !action_flags.contains(SimultaneousActionFlags::TRANSFER) {
-                action_flags.insert(SimultaneousActionFlags::TRANSFER);
-
-                let amount = creep.store_used_capacity(Some(*resource));
-
-                if target.creep_transfer_resource_amount(creep, *resource, amount) == ReturnCode::Ok {
-                    if store_types.len() == 1 {
-                        return Some(next_state())
-                    } else {
-                        return None
+                        return None;
                     }
                 }
             } else {
