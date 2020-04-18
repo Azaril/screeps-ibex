@@ -1,14 +1,14 @@
+use crate::remoteobjectid::*;
+use crate::room::data::*;
 use crate::ui::*;
 use crate::visualize::*;
+use bitflags::*;
 use itertools::*;
-use crate::remoteobjectid::*;
 use screeps::*;
 use serde::*;
 use specs::prelude::{Entities, LazyUpdate, Read, ResourceId, System, SystemData, World, Write, WriteStorage};
 use std::collections::hash_map::*;
 use std::collections::HashMap;
-use crate::room::data::*;
-use bitflags::*;
 
 #[derive(Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Clone, Copy, Serialize, Deserialize)]
 #[repr(u8)]
@@ -41,7 +41,10 @@ bitflags! {
     }
 }
 
-impl<T> From<T> for TransferPriorityFlags where T: std::borrow::Borrow<TransferPriority> {
+impl<T> From<T> for TransferPriorityFlags
+where
+    T: std::borrow::Borrow<TransferPriority>,
+{
     fn from(priority: T) -> TransferPriorityFlags {
         match priority.borrow() {
             TransferPriority::High => TransferPriorityFlags::HIGH,
@@ -72,7 +75,10 @@ bitflags! {
     }
 }
 
-impl<T> From<T> for TransferTypeFlags where T: std::borrow::Borrow<TransferType> {
+impl<T> From<T> for TransferTypeFlags
+where
+    T: std::borrow::Borrow<TransferType>,
+{
     fn from(transfer_type: T) -> TransferTypeFlags {
         match transfer_type.borrow() {
             TransferType::Haul => TransferTypeFlags::HAUL,
@@ -205,8 +211,7 @@ impl TransferTarget {
         }
     }
 
-    fn link_transfer_energy_amount_to_id(target: &RemoteObjectId<StructureLink>, link: &StructureLink, amount: u32) -> ReturnCode
-    {
+    fn link_transfer_energy_amount_to_id(target: &RemoteObjectId<StructureLink>, link: &StructureLink, amount: u32) -> ReturnCode {
         if let Some(obj) = target.resolve() {
             let transfer_amount = obj.store_free_capacity(Some(ResourceType::Energy)).min(amount);
 
@@ -254,7 +259,12 @@ pub struct TransferDepositKey {
 }
 
 impl TransferDepositKey {
-    pub fn matches(&self, resource: Option<ResourceType>, allowed_priorities: TransferPriorityFlags, allowed_types: TransferTypeFlags) -> bool {
+    pub fn matches(
+        &self,
+        resource: Option<ResourceType>,
+        allowed_priorities: TransferPriorityFlags,
+        allowed_types: TransferTypeFlags,
+    ) -> bool {
         self.resource == resource && allowed_priorities.contains(self.priority.into()) && allowed_types.contains(self.allowed_type.into())
     }
 }
@@ -276,7 +286,7 @@ impl TransferNode {
             pending_deposits: HashMap::new(),
         }
     }
-    
+
     pub fn get_withdrawl(&self, key: &TransferWithdrawlKey) -> u32 {
         self.withdrawls.get(key).copied().unwrap_or(0)
     }
@@ -308,10 +318,8 @@ impl TransferNode {
             let available = self.get_available_withdrawl(key);
 
             if available > 0 {
-                let current = available_resources
-                    .entry(key.resource)
-                    .or_insert(0);
-                    
+                let current = available_resources.entry(key.resource).or_insert(0);
+
                 *current += available;
             }
         }
@@ -322,77 +330,87 @@ impl TransferNode {
     pub fn get_available_withdrawl_by_resource(&self, transfer_type: TransferType, resource: ResourceType) -> u32 {
         let mut available_resources: u32 = 0;
 
-        for key in self.withdrawls.keys().filter(|key| key.allowed_type == transfer_type && key.resource == resource) {
+        for key in self
+            .withdrawls
+            .keys()
+            .filter(|key| key.allowed_type == transfer_type && key.resource == resource)
+        {
             available_resources += self.get_available_withdrawl(key);
         }
 
         available_resources
     }
 
-    pub fn get_available_withdrawl_totals_by_priority(&self, transfer_type: TransferType, allowed_priorities: TransferPriorityFlags) -> HashMap<ResourceType, u32> {
+    pub fn get_available_withdrawl_totals_by_priority(
+        &self,
+        transfer_type: TransferType,
+        allowed_priorities: TransferPriorityFlags,
+    ) -> HashMap<ResourceType, u32> {
         let mut available_resources: HashMap<ResourceType, u32> = HashMap::new();
 
-        for key in self.withdrawls.keys().filter(|key| allowed_priorities.contains(key.priority.into()) && key.allowed_type == transfer_type) {
+        for key in self
+            .withdrawls
+            .keys()
+            .filter(|key| allowed_priorities.contains(key.priority.into()) && key.allowed_type == transfer_type)
+        {
             let available = self.get_available_withdrawl(key);
 
             if available > 0 {
-                let current = available_resources
-                    .entry(key.resource)
-                    .or_insert(0);
-                    
+                let current = available_resources.entry(key.resource).or_insert(0);
+
                 *current += available;
             }
         }
 
         available_resources
-    }    
+    }
 
     pub fn request_withdraw(&mut self, key: TransferWithdrawlKey, amount: u32) {
-        let current = self.withdrawls
-            .entry(key)
-            .or_insert(0);
+        let current = self.withdrawls.entry(key).or_insert(0);
 
         *current += amount;
     }
 
     pub fn request_deposit(&mut self, key: TransferDepositKey, amount: u32) {
-        let current = self.deposits
-            .entry(key)
-            .or_insert(0);
+        let current = self.deposits.entry(key).or_insert(0);
 
         *current += amount;
     }
 
-    pub fn register_pickup(&mut self, withdrawls: &HashMap<ResourceType, Vec<TransferWithdrawlTicketResourceEntry>>, pickup_type: TransferType) {
+    pub fn register_pickup(
+        &mut self,
+        withdrawls: &HashMap<ResourceType, Vec<TransferWithdrawlTicketResourceEntry>>,
+        pickup_type: TransferType,
+    ) {
         for (resource, resource_entries) in withdrawls {
             for resource_entry in resource_entries {
                 let key = TransferWithdrawlKey {
                     resource: *resource,
                     priority: resource_entry.priority,
-                    allowed_type: pickup_type
+                    allowed_type: pickup_type,
                 };
 
-                let current = self.pending_withdrawls
-                    .entry(key)
-                    .or_insert(0);
+                let current = self.pending_withdrawls.entry(key).or_insert(0);
 
                 *current += resource_entry.amount;
             }
         }
     }
 
-    pub fn register_delivery(&mut self, deposits: &HashMap<ResourceType, Vec<TransferDepositTicketResourceEntry>>, delivery_type: TransferType) {
+    pub fn register_delivery(
+        &mut self,
+        deposits: &HashMap<ResourceType, Vec<TransferDepositTicketResourceEntry>>,
+        delivery_type: TransferType,
+    ) {
         for resource_entries in deposits.values() {
             for resource_entry in resource_entries {
                 let key = TransferDepositKey {
                     resource: resource_entry.target_resource,
                     priority: resource_entry.priority,
-                    allowed_type: delivery_type
+                    allowed_type: delivery_type,
                 };
 
-                let current = self.pending_deposits
-                    .entry(key)
-                    .or_insert(0);
+                let current = self.pending_deposits.entry(key).or_insert(0);
 
                 *current += resource_entry.amount;
             }
@@ -463,8 +481,7 @@ impl TransferNode {
                         let unconsumed_remaining_amount = remaining_amount - pickedup_resources;
 
                         if unconsumed_remaining_amount > 0 {
-                            let pickup_amount =
-                                remaining_none_amount.clamp(remaining_capacity.clamp(unconsumed_remaining_amount as u32));
+                            let pickup_amount = remaining_none_amount.clamp(remaining_capacity.clamp(unconsumed_remaining_amount as u32));
 
                             pickup_resources
                                 .entry(key.resource)
@@ -530,9 +547,9 @@ impl TransferNode {
             }
         }
 
-        let none_deposits = self.deposits
-            .keys()
-            .filter(|key| key.resource == None && delivery_types.contains(key.allowed_type.into()) && allowed_priorities.contains(key.priority.into()));
+        let none_deposits = self.deposits.keys().filter(|key| {
+            key.resource == None && delivery_types.contains(key.allowed_type.into()) && allowed_priorities.contains(key.priority.into())
+        });
 
         for key in none_deposits {
             let mut remaining_none_amount = TransferCapacity::Finite(self.get_available_deposit(key));
@@ -547,8 +564,7 @@ impl TransferNode {
                     let unconsumed_remaining_amount = amount - deposited_resources;
 
                     if unconsumed_remaining_amount > 0 {
-                        let delivery_amount =
-                            remaining_none_amount.clamp(remaining_capacity.clamp(unconsumed_remaining_amount as u32));
+                        let delivery_amount = remaining_none_amount.clamp(remaining_capacity.clamp(unconsumed_remaining_amount as u32));
 
                         delivery_resources
                             .entry(*resource)
@@ -578,21 +594,25 @@ impl TransferNode {
     }
 
     pub fn visualize(&self, visualizer: &mut RoomVisualizer, pos: RoomPosition) {
-        let withdraw_text = self.withdrawls.iter().map(|(key, amount)| {
-            format!("{:?} {:?} {:?} {:?}", key.resource, key.priority, key.allowed_type, amount)
-        });
+        let withdraw_text = self
+            .withdrawls
+            .iter()
+            .map(|(key, amount)| format!("{:?} {:?} {:?} {:?}", key.resource, key.priority, key.allowed_type, amount));
 
-        let pending_withdraw_text = self.pending_withdrawls.iter().map(|(key, amount)| {
-            format!("{:?} {:?} {:?} {:?}", key.resource, key.priority, key.allowed_type, amount)
-        });
+        let pending_withdraw_text = self
+            .pending_withdrawls
+            .iter()
+            .map(|(key, amount)| format!("{:?} {:?} {:?} {:?}", key.resource, key.priority, key.allowed_type, amount));
 
-        let deposit_text = self.deposits.iter().map(|(key, amount)| {
-            format!("{:?} {:?} {:?} {:?}", key.resource, key.priority, key.allowed_type, amount)
-        });
+        let deposit_text = self
+            .deposits
+            .iter()
+            .map(|(key, amount)| format!("{:?} {:?} {:?} {:?}", key.resource, key.priority, key.allowed_type, amount));
 
-        let pending_deposit_text = self.pending_deposits.iter().map(|(key, amount)| {
-            format!("{:?} {:?} {:?} {:?}", key.resource, key.priority, key.allowed_type, amount)
-        });
+        let pending_deposit_text = self
+            .pending_deposits
+            .iter()
+            .map(|(key, amount)| format!("{:?} {:?} {:?} {:?}", key.resource, key.priority, key.allowed_type, amount));
 
         let full_text = withdraw_text
             .chain(pending_withdraw_text)
@@ -614,13 +634,19 @@ pub struct TransferWithdrawRequest {
 }
 
 impl TransferWithdrawRequest {
-    pub fn new(target: TransferTarget, resource: ResourceType, priority: TransferPriority, amount: u32, allowed_type: TransferType) -> TransferWithdrawRequest {
+    pub fn new(
+        target: TransferTarget,
+        resource: ResourceType,
+        priority: TransferPriority,
+        amount: u32,
+        allowed_type: TransferType,
+    ) -> TransferWithdrawRequest {
         TransferWithdrawRequest {
             target,
             resource,
             priority,
             amount,
-            allowed_type
+            allowed_type,
         }
     }
 }
@@ -715,7 +741,13 @@ pub struct TransferDepositRequest {
 }
 
 impl TransferDepositRequest {
-    pub fn new(target: TransferTarget, resource: Option<ResourceType>, priority: TransferPriority, amount: u32, allowed_type: TransferType) -> TransferDepositRequest {
+    pub fn new(
+        target: TransferTarget,
+        resource: Option<ResourceType>,
+        priority: TransferPriority,
+        amount: u32,
+        allowed_type: TransferType,
+    ) -> TransferDepositRequest {
         TransferDepositRequest {
             target,
             resource,
@@ -883,18 +915,16 @@ impl TransferQueueRoomStatsData {
     pub fn total_unfufilled_resources(&self, transfer_type: TransferType) -> HashMap<ResourceType, u32> {
         struct StatsEntry {
             active: u32,
-            inactive: u32
+            inactive: u32,
         };
 
         let mut withdrawls: HashMap<ResourceType, StatsEntry> = HashMap::new();
-        let mut deposits: HashMap<Option<ResourceType>, StatsEntry> = HashMap::new(); 
+        let mut deposits: HashMap<Option<ResourceType>, StatsEntry> = HashMap::new();
 
         let mut total_pickup: HashMap<ResourceType, u32> = HashMap::new();
 
         let mut add_resource = |resource: ResourceType, amount: u32| {
-            let current = total_pickup
-                .entry(resource)
-                .or_insert(0);
+            let current = total_pickup.entry(resource).or_insert(0);
 
             *current += amount;
         };
@@ -905,9 +935,7 @@ impl TransferQueueRoomStatsData {
 
         for (key, stats) in &self.withdrawl_resource_stats {
             if key.allowed_type == transfer_type {
-                let resource_entry = withdrawls
-                    .entry(key.resource)
-                    .or_insert(StatsEntry{ active: 0, inactive: 0 });
+                let resource_entry = withdrawls.entry(key.resource).or_insert(StatsEntry { active: 0, inactive: 0 });
 
                 if TransferPriorityFlags::ACTIVE.contains(key.priority.into()) {
                     resource_entry.active += stats.unfufilled_amount().max(0) as u32;
@@ -919,9 +947,7 @@ impl TransferQueueRoomStatsData {
 
         for (key, stats) in &self.deposit_resource_stats {
             if key.allowed_type == transfer_type {
-                let resource_entry = deposits
-                    .entry(key.resource)
-                    .or_insert(StatsEntry{ active: 0, inactive: 0 });
+                let resource_entry = deposits.entry(key.resource).or_insert(StatsEntry { active: 0, inactive: 0 });
 
                 if TransferPriorityFlags::ACTIVE.contains(key.priority.into()) {
                     resource_entry.active += stats.unfufilled_amount().max(0) as u32;
@@ -1000,7 +1026,7 @@ impl TransferQueueRoomStatsData {
                 let consume = withdrawl_stats.active.min(deposit_stats.inactive);
 
                 withdrawl_stats.active -= consume;
-                deposit_stats.inactive -= consume;                
+                deposit_stats.inactive -= consume;
 
                 add_resource(*resource, consume);
             }
@@ -1054,16 +1080,14 @@ impl TransferQueueRoomData {
     }
 
     fn get_mut_withdrawl_stats(&mut self, key: TransferWithdrawlKey) -> &mut TransferQueueResourceStatsData {
-        self
-            .stats
+        self.stats
             .withdrawl_resource_stats
             .entry(key)
             .or_insert_with(TransferQueueResourceStatsData::new)
     }
-    
-    fn get_mut_deposit_stats(&mut self,  key: TransferDepositKey) -> &mut TransferQueueResourceStatsData {
-        self
-            .stats
+
+    fn get_mut_deposit_stats(&mut self, key: TransferDepositKey) -> &mut TransferQueueResourceStatsData {
+        self.stats
             .deposit_resource_stats
             .entry(key)
             .or_insert_with(TransferQueueResourceStatsData::new)
@@ -1130,7 +1154,7 @@ impl TransferQueue {
         let key = TransferWithdrawlKey {
             resource: withdraw_request.resource,
             priority: withdraw_request.priority,
-            allowed_type: withdraw_request.allowed_type
+            allowed_type: withdraw_request.allowed_type,
         };
 
         let resource_stats = room.get_mut_withdrawl_stats(key);
@@ -1155,7 +1179,7 @@ impl TransferQueue {
         let key = TransferDepositKey {
             resource: deposit_request.resource,
             priority: deposit_request.priority,
-            allowed_type: deposit_request.allowed_type
+            allowed_type: deposit_request.allowed_type,
         };
 
         let resource_stats = room.get_mut_deposit_stats(key);
@@ -1172,9 +1196,9 @@ impl TransferQueue {
                 let key = TransferWithdrawlKey {
                     resource: *resource,
                     priority: entry.priority,
-                    allowed_type: pickup_type
+                    allowed_type: pickup_type,
                 };
-                
+
                 let resource_stats = room.get_mut_withdrawl_stats(key);
                 resource_stats.amount += entry.amount;
             }
@@ -1192,7 +1216,7 @@ impl TransferQueue {
                 let key = TransferDepositKey {
                     resource: entry.target_resource,
                     priority: entry.priority,
-                    allowed_type: delivery_type
+                    allowed_type: delivery_type,
                 };
 
                 let resource_stats = room.get_mut_deposit_stats(key);
@@ -1282,7 +1306,12 @@ impl TransferQueue {
         available_resources
     }
 
-    pub fn get_available_withdrawl_totals_by_priority(&self, rooms: &[RoomName], transfer_type: TransferType, withdrawl_priority: TransferPriority) -> HashMap<ResourceType, u32> {
+    pub fn get_available_withdrawl_totals_by_priority(
+        &self,
+        rooms: &[RoomName],
+        transfer_type: TransferType,
+        withdrawl_priority: TransferPriority,
+    ) -> HashMap<ResourceType, u32> {
         let mut available_resources: HashMap<_, u32> = HashMap::new();
 
         for room_name in rooms {
@@ -1308,7 +1337,7 @@ impl TransferQueue {
         &self,
         rooms: &[RoomName],
         deposit_priority: TransferPriority,
-        transfer_type: TransferType
+        transfer_type: TransferType,
     ) -> HashMap<Option<ResourceType>, u32> {
         let mut available_resources: HashMap<_, u32> = HashMap::new();
 
@@ -1350,45 +1379,57 @@ impl TransferQueue {
             return None;
         }
 
-        self.select_deliveries(rooms, delivery_priority.into(), transfer_type.into(), &global_available_resources, available_capacity)
-            .iter()
-            .map(|delivery| {
-                let mut delivery_resources = HashMap::new();
+        self.select_deliveries(
+            rooms,
+            delivery_priority.into(),
+            transfer_type.into(),
+            &global_available_resources,
+            available_capacity,
+        )
+        .iter()
+        .map(|delivery| {
+            let mut delivery_resources = HashMap::new();
 
-                for entries in delivery.resources.values() {
-                    for entry in entries.iter() {
-                        delivery_resources
-                            .entry(entry.target_resource)
-                            .and_modify(|e| *e += entry.amount)
-                            .or_insert(entry.amount);
-                    }
+            for entries in delivery.resources.values() {
+                for entry in entries.iter() {
+                    delivery_resources
+                        .entry(entry.target_resource)
+                        .and_modify(|e| *e += entry.amount)
+                        .or_insert(entry.amount);
                 }
+            }
 
-                let pickups = self.select_pickups(rooms, pickup_priority.into(), transfer_type.into(), &delivery_resources, available_capacity);
+            let pickups = self.select_pickups(
+                rooms,
+                pickup_priority.into(),
+                transfer_type.into(),
+                &delivery_resources,
+                available_capacity,
+            );
 
-                (pickups, delivery)
+            (pickups, delivery)
+        })
+        .flat_map(|(pickups, delivery)| {
+            let delivery_pos = delivery.target().pos();
+
+            pickups.into_iter().map(move |pickup| {
+                let pickup_pos = pickup.target.pos();
+                let pickup_length = current_position.get_range_to(&pickup_pos);
+
+                let delivery_length = pickup_pos.get_range_to(&delivery_pos);
+
+                let resources = pickup
+                    .resources
+                    .iter()
+                    .flat_map(|(_, entries)| entries.iter().map(|e| e.amount))
+                    .sum::<u32>();
+                let value = (resources as f32) / (pickup_length as f32 + delivery_length as f32);
+
+                (pickup, delivery, value)
             })
-            .flat_map(|(pickups, delivery)| {
-                let delivery_pos = delivery.target().pos();
-
-                pickups.into_iter().map(move |pickup| {
-                    let pickup_pos = pickup.target.pos();
-                    let pickup_length = current_position.get_range_to(&pickup_pos);
-
-                    let delivery_length = pickup_pos.get_range_to(&delivery_pos);
-
-                    let resources = pickup
-                        .resources
-                        .iter()
-                        .flat_map(|(_, entries)| entries.iter().map(|e| e.amount))
-                        .sum::<u32>();
-                    let value = (resources as f32) / (pickup_length as f32 + delivery_length as f32);
-
-                    (pickup, delivery, value)
-                })
-            })
-            .max_by(|(_, _, a), (_, _, b)| a.partial_cmp(b).unwrap())
-            .map(|(pickup, delivery, _)| (pickup, delivery.clone()))
+        })
+        .max_by(|(_, _, a), (_, _, b)| a.partial_cmp(b).unwrap())
+        .map(|(pickup, delivery, _)| (pickup, delivery.clone()))
     }
 
     pub fn get_delivery_from_target(
@@ -1414,8 +1455,14 @@ impl TransferQueue {
             return None;
         }
 
-        let delivery =
-            self.get_delivery(rooms, allowed_delivery_priorities, delivery_type.into(), &available_resources, available_capacity, anchor_location)?;
+        let delivery = self.get_delivery(
+            rooms,
+            allowed_delivery_priorities,
+            delivery_type.into(),
+            &available_resources,
+            available_capacity,
+            anchor_location,
+        )?;
 
         let delivery_resources = delivery
             .resources()
@@ -1431,7 +1478,12 @@ impl TransferQueue {
 
         let pickup = TransferWithdrawTicket {
             target: *target,
-            resources: node.select_pickup(allowed_pickup_priorities, delivery_type.into(), &delivery_resources, available_capacity),
+            resources: node.select_pickup(
+                allowed_pickup_priorities,
+                delivery_type.into(),
+                &delivery_resources,
+                available_capacity,
+            ),
         };
 
         Some((pickup, delivery))
@@ -1485,9 +1537,14 @@ impl TransferQueue {
         priorities.sort_by(|(a_1, a_2), (b_1, b_2)| a_1.max(a_2).cmp(b_1.max(b_2)).then_with(|| a_1.cmp(b_1)).then_with(|| a_2.cmp(b_2)));
 
         for (pickup_priority, delivery_priority) in priorities {
-            if let Some((pickup_ticket, delivery_ticket)) =
-                self.select_best_delivery(rooms, *pickup_priority, *delivery_priority, transfer_type, current_position, available_capacity)
-            {
+            if let Some((pickup_ticket, delivery_ticket)) = self.select_best_delivery(
+                rooms,
+                *pickup_priority,
+                *delivery_priority,
+                transfer_type,
+                current_position,
+                available_capacity,
+            ) {
                 return Some((pickup_ticket, delivery_ticket));
             }
         }

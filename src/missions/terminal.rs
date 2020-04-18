@@ -1,6 +1,7 @@
 use super::data::*;
 use super::missionsystem::*;
 use crate::remoteobjectid::*;
+use crate::serialize::*;
 use crate::transfer::transfersystem::*;
 use itertools::*;
 use screeps::*;
@@ -9,7 +10,6 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use crate::serialize::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct TerminalMission {
@@ -24,9 +24,7 @@ impl TerminalMission {
     {
         let mission = TerminalMission::new(room_data);
 
-        builder
-            .with(MissionData::Terminal(mission))
-            .marked::<SerializeMarker>()
+        builder.with(MissionData::Terminal(mission)).marked::<SerializeMarker>()
     }
 
     pub fn new(room_data: Entity) -> TerminalMission {
@@ -72,7 +70,7 @@ impl Mission for TerminalMission {
                     Some(ResourceType::Energy),
                     TransferPriority::Medium,
                     transfer_amount,
-                    TransferType::Haul
+                    TransferType::Haul,
                 );
 
                 runtime_data.transfer_queue.request_deposit(transfer_request);
@@ -102,7 +100,7 @@ impl Mission for TerminalMission {
 
                 let desired_active_terminal_amount = match resource_type {
                     ResourceType::Energy => 10_000,
-                    _ => 5_000
+                    _ => 5_000,
                 };
 
                 let desired_terminal_amount = desired_passive_terminal_amount + desired_active_terminal_amount;
@@ -124,7 +122,7 @@ impl Mission for TerminalMission {
                             Some(*resource_type),
                             TransferPriority::Medium,
                             transfer_amount,
-                            TransferType::Haul
+                            TransferType::Haul,
                         );
 
                         runtime_data.transfer_queue.request_deposit(transfer_request);
@@ -144,7 +142,7 @@ impl Mission for TerminalMission {
                             *resource_type,
                             TransferPriority::None,
                             transfer_amount,
-                            TransferType::Haul
+                            TransferType::Haul,
                         );
 
                         runtime_data.transfer_queue.request_withdraw(transfer_request);
@@ -156,7 +154,7 @@ impl Mission for TerminalMission {
                 };
 
                 //
-                // Actively transfer any resources that are in excess of the desired terminal amount (active and passive) 
+                // Actively transfer any resources that are in excess of the desired terminal amount (active and passive)
                 // and are not already being made avaiable due to storage shortage.
                 //
 
@@ -170,7 +168,7 @@ impl Mission for TerminalMission {
                             *resource_type,
                             TransferPriority::Medium,
                             transfer_amount as u32,
-                            TransferType::Haul
+                            TransferType::Haul,
                         );
 
                         runtime_data.transfer_queue.request_withdraw(transfer_request);
@@ -185,13 +183,20 @@ impl Mission for TerminalMission {
                     let passive_amount = current_terminal_amount.min(desired_passive_terminal_amount);
 
                     if passive_amount > 0 {
-                        runtime_data.order_queue.request_passive_sale(room_data.name, *resource_type, passive_amount);
+                        runtime_data
+                            .order_queue
+                            .request_passive_sale(room_data.name, *resource_type, passive_amount);
                     }
 
                     let active_amount = current_terminal_amount - passive_amount;
 
                     if active_amount > 0 {
-                        runtime_data.order_queue.request_active_sale(room_data.name, *resource_type, active_amount, available_transfer_energy);
+                        runtime_data.order_queue.request_active_sale(
+                            room_data.name,
+                            *resource_type,
+                            active_amount,
+                            available_transfer_energy,
+                        );
                     }
                 }
             }

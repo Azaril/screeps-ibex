@@ -1,9 +1,9 @@
 use super::repair::*;
+use crate::jobs::actions::*;
+use crate::jobs::context::*;
 use crate::room::data::*;
 use crate::structureidentifier::*;
 use screeps::*;
-use crate::jobs::actions::*;
-use crate::jobs::context::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_repair_state<F, R>(creep: &Creep, build_room: &RoomData, minimum_priority: Option<RepairPriority>, state_map: F) -> Option<R>
@@ -23,47 +23,12 @@ where
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn run_repair_state<F, R>(creep: &Creep, action_flags: &mut SimultaneousActionFlags, repair_structure_id: &RemoteStructureIdentifier, next_state: F) -> Option<R>
+pub fn tick_repair<F, R>(tick_context: &mut JobTickContext, repair_structure_id: RemoteStructureIdentifier, next_state: F) -> Option<R>
 where
     F: Fn() -> R,
 {
-    //TODO: Check visibility cache.
-
-    if let Some(structure) = repair_structure_id.resolve() {
-        if let Some(attackable) = structure.as_attackable() {
-            if attackable.hits() >= attackable.hits_max() {
-                return Some(next_state());
-            }
-        }
-
-        if !creep.pos().in_range_to(&structure, 3) {
-            if !action_flags.contains(SimultaneousActionFlags::MOVE) {
-                action_flags.insert(SimultaneousActionFlags::MOVE);
-
-                creep.move_to(&structure);
-            }
-
-            return None;
-        }
-
-        if !action_flags.contains(SimultaneousActionFlags::REPAIR) {
-            action_flags.insert(SimultaneousActionFlags::REPAIR);
-            match creep.repair(&structure) {
-                ReturnCode::Ok => None,
-                _ => Some(next_state()),
-            }
-        } else {
-            None
-        }
-    } else {
-        Some(next_state())
-    }
-}
-
-#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn tick_repair<F, R>(tick_context: &mut JobTickContext, repair_structure_id: RemoteStructureIdentifier, next_state: F) -> Option<R> where F: Fn() -> R {
     let target_position = repair_structure_id.pos();
-    
+
     let creep = tick_context.runtime_data.owner;
     let creep_pos = creep.pos();
 
@@ -92,7 +57,10 @@ pub fn tick_repair<F, R>(tick_context: &mut JobTickContext, repair_structure_id:
         if !tick_context.action_flags.contains(SimultaneousActionFlags::MOVE) {
             tick_context.action_flags.insert(SimultaneousActionFlags::MOVE);
 
-            tick_context.runtime_data.movement.move_to_range(tick_context.runtime_data.creep_entity, target_position, 3);
+            tick_context
+                .runtime_data
+                .movement
+                .move_to_range(tick_context.runtime_data.creep_entity, target_position, 3);
         }
 
         return None;

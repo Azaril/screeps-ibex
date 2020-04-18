@@ -2,13 +2,13 @@ use super::data::*;
 use super::operationsystem::*;
 use crate::missions::data::*;
 use crate::missions::upgrade::*;
+use crate::room::data::*;
+use crate::serialize::*;
+use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use crate::room::data::*;
-use crate::serialize::*;
-use log::*;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct UpgradeOperation {}
@@ -21,9 +21,7 @@ impl UpgradeOperation {
     {
         let operation = UpgradeOperation::new();
 
-        builder
-            .with(OperationData::Upgrade(operation))
-            .marked::<SerializeMarker>()
+        builder.with(OperationData::Upgrade(operation)).marked::<SerializeMarker>()
     }
 
     pub fn new() -> UpgradeOperation {

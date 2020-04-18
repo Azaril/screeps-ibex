@@ -8,8 +8,8 @@ use super::remotemine::*;
 use super::terminal::*;
 use super::tower::*;
 use super::upgrade::*;
-use specs::*;
 use log::*;
+use specs::*;
 
 pub struct OperationManagerSystem;
 

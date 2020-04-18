@@ -2,14 +2,14 @@ use super::data::*;
 use crate::creep::*;
 use crate::jobs::data::*;
 use crate::room::data::*;
+use crate::room::roomplansystem::*;
 use crate::spawnsystem::*;
-use crate::transfer::transfersystem::*;
 use crate::transfer::ordersystem::*;
+use crate::transfer::transfersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
-use crate::room::roomplansystem::*;
-use specs::prelude::*;
 use log::*;
+use specs::prelude::*;
 
 #[derive(SystemData)]
 pub struct MissionSystemData<'a> {
@@ -45,7 +45,7 @@ pub struct MissionExecutionRuntimeData<'a> {
     pub room_plan_queue: &'a mut RoomPlanQueue,
     pub visualizer: Option<&'a mut Visualizer>,
     pub transfer_queue: &'a mut TransferQueue,
-    pub order_queue: &'a mut OrderQueue
+    pub order_queue: &'a mut OrderQueue,
 }
 
 pub struct MissionDescribeData<'a> {

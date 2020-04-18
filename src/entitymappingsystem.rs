@@ -1,8 +1,8 @@
-use screeps::*;
-use specs::*;
-use specs::prelude::*;
-use std::collections::HashMap;
 use crate::room::data::*;
+use screeps::*;
+use specs::prelude::*;
+use specs::*;
+use std::collections::HashMap;
 
 #[derive(Default)]
 pub struct EntityMappingData {

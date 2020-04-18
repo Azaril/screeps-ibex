@@ -13,12 +13,12 @@ use crate::remoteobjectid::*;
 use crate::structureidentifier::*;
 use crate::transfer::transfersystem::*;
 use screeps::*;
+use screeps_machine::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use screeps_machine::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct HarvestJobContext {
@@ -139,10 +139,12 @@ impl Idle {
                     .next()
             })
             .or_else(|| get_new_upgrade_state(creep, delivery_room_data, HarvestState::upgrade))
-            .or_else(|| if creep.store_used_capacity(None) == 0 {
-                get_new_move_to_room_state(creep, state_context.harvest_target.pos().room_name(), HarvestState::move_to_room)
-            } else {
-                None
+            .or_else(|| {
+                if creep.store_used_capacity(None) == 0 {
+                    get_new_move_to_room_state(creep, state_context.harvest_target.pos().room_name(), HarvestState::move_to_room)
+                } else {
+                    None
+                }
             })
             .or_else(|| Some(HarvestState::wait(5)))
         } else {
@@ -227,9 +229,9 @@ impl Build {
 impl FinishedBuild {
     fn tick(&mut self, state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
         let delivery_room_data = tick_context.system_data.room_data.get(state_context.delivery_room)?;
-        
+
         let creep = tick_context.runtime_data.owner;
-        
+
         get_new_build_state(creep, delivery_room_data, HarvestState::build).or(Some(HarvestState::idle()))
     }
 }
@@ -243,7 +245,7 @@ impl Repair {
 impl FinishedRepair {
     fn tick(&mut self, state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
         let delivery_room_data = tick_context.system_data.room_data.get(state_context.delivery_room)?;
-        
+
         let creep = tick_context.runtime_data.owner;
 
         get_new_repair_state(creep, delivery_room_data, Some(RepairPriority::Medium), HarvestState::repair).or(Some(HarvestState::idle()))
@@ -307,7 +309,7 @@ impl Job for HarvestJob {
         let mut tick_context = JobTickContext {
             system_data,
             runtime_data,
-            action_flags: SimultaneousActionFlags::UNSET
+            action_flags: SimultaneousActionFlags::UNSET,
         };
 
         while let Some(tick_result) = self.state.tick(&mut self.context, &mut tick_context) {

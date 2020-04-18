@@ -1,19 +1,19 @@
 use super::data::*;
 use super::missionsystem::*;
 use crate::creep::*;
-use crate::jobs::utility::repair::*;
-use crate::serialize::*;
-use crate::jobs::data::*;
 use crate::jobs::build::*;
+use crate::jobs::data::*;
+use crate::jobs::utility::repair::*;
+use crate::remoteobjectid::*;
+use crate::serialize::*;
+use crate::spawnsystem::*;
+use crate::transfer::transfersystem::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
-use crate::spawnsystem::*;
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use crate::transfer::transfersystem::*;
-use crate::remoteobjectid::*;
 
 #[derive(Clone, Debug, ConvertSaveload)]
 pub struct LocalBuildMission {
@@ -29,9 +29,7 @@ impl LocalBuildMission {
     {
         let mission = LocalBuildMission::new(room_data);
 
-        builder
-            .with(MissionData::LocalBuild(mission))
-            .marked::<SerializeMarker>()
+        builder.with(MissionData::LocalBuild(mission)).marked::<SerializeMarker>()
     }
 
     pub fn new(room_data: Entity) -> LocalBuildMission {
@@ -46,8 +44,11 @@ impl LocalBuildMission {
         let construction_sites = room.find(find::MY_CONSTRUCTION_SITES);
 
         if !construction_sites.is_empty() {
-            let required_progress: u32 = construction_sites.iter().map(|construction_site| construction_site.progress_total() - construction_site.progress()).sum();
-            
+            let required_progress: u32 = construction_sites
+                .iter()
+                .map(|construction_site| construction_site.progress_total() - construction_site.progress())
+                .sum();
+
             let desired_builders_for_progress: u32 = if controller.level() <= 3 {
                 match required_progress {
                     0 => 0,
@@ -57,7 +58,7 @@ impl LocalBuildMission {
                     3001..=4000 => 4,
                     _ => 5,
                 }
-             } else if controller.level() <= 6 {
+            } else if controller.level() <= 6 {
                 match required_progress {
                     0 => 0,
                     1..=2000 => 1,
@@ -65,7 +66,7 @@ impl LocalBuildMission {
                     4001..=6000 => 3,
                     _ => 4,
                 }
-             } else { 
+            } else {
                 match required_progress {
                     0 => 0,
                     1..=3000 => 1,
@@ -73,23 +74,23 @@ impl LocalBuildMission {
                     6001..=9000 => 3,
                     _ => 4,
                 }
-            };  
-    
+            };
+
             let desired_builders = if has_sufficient_energy { desired_builders_for_progress } else { 1 };
 
             if desired_builders > 0 {
                 let priority = if self.builders.is_empty() {
                     SPAWN_PRIORITY_HIGH
                 } else {
-                    construction_sites.iter().map(|construction_site| {
-                        match construction_site.structure_type() {
+                    construction_sites
+                        .iter()
+                        .map(|construction_site| match construction_site.structure_type() {
                             StructureType::Spawn => SPAWN_PRIORITY_HIGH,
                             StructureType::Storage => SPAWN_PRIORITY_HIGH,
-                            _ => SPAWN_PRIORITY_MEDIUM
-                        }
-                    })
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(SPAWN_PRIORITY_LOW)
+                            _ => SPAWN_PRIORITY_MEDIUM,
+                        })
+                        .max_by(|a, b| a.partial_cmp(b).unwrap())
+                        .unwrap_or(SPAWN_PRIORITY_LOW)
                 };
 
                 Some((desired_builders, priority))
@@ -116,7 +117,11 @@ impl LocalBuildMission {
         }
     }
 
-    fn create_handle_builder_spawn(mission_entity: Entity, room_entity: Entity, allow_harvest: bool) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    fn create_handle_builder_spawn(
+        mission_entity: Entity,
+        room_entity: Entity,
+        allow_harvest: bool,
+    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
@@ -183,21 +188,25 @@ impl Mission for LocalBuildMission {
                         false
                     }
                 } else {
-                    let structures = room.find(find::STRUCTURES);                       
+                    let structures = room.find(find::STRUCTURES);
                     let containers: Vec<_> = structures
                         .iter()
                         .filter_map(|structure| {
-                            if let Structure::Container(container) = structure { 
-                                Some(container) 
-                            } else { 
-                                None 
+                            if let Structure::Container(container) = structure {
+                                Some(container)
+                            } else {
+                                None
                             }
                         })
                         .filter_map(|container| room_transfer_data.try_get_node(&TransferTarget::Container(container.remote_id())))
                         .collect();
 
                     if !containers.is_empty() {
-                        containers.iter().any(|container_node| container_node.get_available_withdrawl_by_resource(TransferType::Haul, ResourceType::Energy) as f32 / CONTAINER_CAPACITY as f32 > 0.50)
+                        containers.iter().any(|container_node| {
+                            container_node.get_available_withdrawl_by_resource(TransferType::Haul, ResourceType::Energy) as f32
+                                / CONTAINER_CAPACITY as f32
+                                > 0.50
+                        })
                     } else {
                         true
                     }
@@ -214,7 +223,7 @@ impl Mission for LocalBuildMission {
             spawn_count = spawn_count.max(desired_builders);
             spawn_priority = spawn_priority.max(build_priority);
         }
-        
+
         if let Some((desired_repairers, repair_priority)) = self.get_repairer_priority(&room) {
             spawn_count = spawn_count.max(desired_repairers);
             spawn_priority = spawn_priority.max(repair_priority);
@@ -227,11 +236,7 @@ impl Mission for LocalBuildMission {
                 room.energy_capacity_available()
             };
 
-            let max_body = if spawn_priority >= SPAWN_PRIORITY_HIGH { 
-                None
-            } else {
-                Some(5)
-            };
+            let max_body = if spawn_priority >= SPAWN_PRIORITY_HIGH { None } else { Some(5) };
 
             let body_definition = SpawnBodyDefinition {
                 maximum_energy: use_energy_max,

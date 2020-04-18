@@ -1,10 +1,10 @@
-use super::jobsystem::*;
-use super::context::*;
-use super::utility::movebehavior::*;
 use super::actions::*;
+use super::context::*;
+use super::jobsystem::*;
+use super::utility::movebehavior::*;
 use screeps::*;
-use serde::*;
 use screeps_machine::*;
+use serde::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ScoutJobContext {
@@ -74,10 +74,8 @@ pub struct ScoutJob {
 impl ScoutJob {
     pub fn new(room_target: RoomName) -> ScoutJob {
         ScoutJob {
-            context: ScoutJobContext {
-                room_target
-            },
-            state: ScoutState::move_to_room()
+            context: ScoutJobContext { room_target },
+            state: ScoutState::move_to_room(),
         }
     }
 }
@@ -97,7 +95,7 @@ impl Job for ScoutJob {
         let mut tick_context = JobTickContext {
             system_data,
             runtime_data,
-            action_flags: SimultaneousActionFlags::UNSET
+            action_flags: SimultaneousActionFlags::UNSET,
         };
 
         while let Some(tick_result) = self.state.tick(&mut self.context, &mut tick_context) {

@@ -1,13 +1,13 @@
-use super::jobsystem::*;
-use crate::remoteobjectid::*;
-use super::context::*;
 use super::actions::*;
+use super::context::*;
+use super::jobsystem::*;
+use super::utility::controllerbehavior::*;
 use super::utility::movebehavior::*;
 use super::utility::waitbehavior::*;
-use super::utility::controllerbehavior::*;
+use crate::remoteobjectid::*;
 use screeps::*;
-use serde::*;
 use screeps_machine::*;
+use serde::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ReserveJobContext {
@@ -54,7 +54,12 @@ machine!(
 
 impl MoveToController {
     fn tick(&mut self, state_context: &mut ReserveJobContext, tick_context: &mut JobTickContext) -> Option<ReserveState> {
-        tick_move_to_position(tick_context, state_context.reserve_target.pos(), 1, ReserveState::reserve_controller)
+        tick_move_to_position(
+            tick_context,
+            state_context.reserve_target.pos(),
+            1,
+            ReserveState::reserve_controller,
+        )
     }
 }
 
@@ -81,9 +86,9 @@ impl ReserveJob {
     pub fn new(controller_id: RemoteObjectId<StructureController>) -> ReserveJob {
         ReserveJob {
             context: ReserveJobContext {
-                reserve_target: controller_id
+                reserve_target: controller_id,
             },
-            state: ReserveState::move_to_controller()
+            state: ReserveState::move_to_controller(),
         }
     }
 }
@@ -103,7 +108,7 @@ impl Job for ReserveJob {
         let mut tick_context = JobTickContext {
             system_data,
             runtime_data,
-            action_flags: SimultaneousActionFlags::UNSET
+            action_flags: SimultaneousActionFlags::UNSET,
         };
 
         while let Some(tick_result) = self.state.tick(&mut self.context, &mut tick_context) {

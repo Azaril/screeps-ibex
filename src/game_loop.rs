@@ -1,3 +1,27 @@
+use crate::creep::*;
+use crate::entitymappingsystem::*;
+use crate::globals::*;
+use crate::jobs::data::*;
+use crate::jobs::jobsystem::*;
+use crate::memorysystem::*;
+use crate::missions::data::*;
+use crate::missions::missionsystem::*;
+use crate::operations::data::*;
+use crate::operations::managersystem::*;
+use crate::operations::operationsystem::*;
+use crate::pathing::movementsystem::*;
+use crate::room::createroomsystem::*;
+use crate::room::data::*;
+use crate::room::roomplansystem::*;
+use crate::room::updateroomsystem::*;
+use crate::room::visibilitysystem::*;
+use crate::serialize::*;
+use crate::spawnsystem::*;
+use crate::statssystem::*;
+use crate::transfer::ordersystem::*;
+use crate::transfer::transfersystem::*;
+use crate::ui::*;
+use crate::visualize::*;
 use log::*;
 use screeps::*;
 use specs::{
@@ -7,30 +31,6 @@ use specs::{
 };
 use std::collections::HashSet;
 use std::fmt;
-use crate::memorysystem::*;
-use crate::serialize::*;
-use crate::creep::*;
-use crate::room::data::*;
-use crate::jobs::data::*;
-use crate::operations::data::*;
-use crate::missions::data::*;
-use crate::ui::*;
-use crate::visualize::*;
-use crate::spawnsystem::*;
-use crate::statssystem::*;
-use crate::entitymappingsystem::*;
-use crate::jobs::jobsystem::*;
-use crate::missions::missionsystem::*;
-use crate::transfer::transfersystem::*;
-use crate::globals::*;
-use crate::room::createroomsystem::*;
-use crate::room::updateroomsystem::*;
-use crate::operations::managersystem::*;
-use crate::operations::operationsystem::*;
-use crate::room::visibilitysystem::*;
-use crate::transfer::ordersystem::*;
-use crate::room::roomplansystem::*;
-use crate::pathing::movementsystem::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 fn serialize_world(world: &World, segment: u32) {
@@ -134,7 +134,7 @@ fn deserialize_world(world: &World, segment: u32) {
         operation_data: WriteStorage<'a, OperationData>,
         mission_data: WriteStorage<'a, MissionData>,
     }
-    
+
     impl<'a> System<'a> for Deserialize {
         type SystemData = DeserializeSystemData<'a>;
 

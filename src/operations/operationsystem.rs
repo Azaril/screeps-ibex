@@ -1,12 +1,12 @@
 use super::data::*;
 use crate::entitymappingsystem::EntityMappingData;
+use crate::missions::data::*;
+use crate::room::data::*;
 use crate::room::visibilitysystem::*;
 use crate::ui::*;
 use crate::visualize::*;
-use specs::prelude::*;
-use crate::missions::data::*;
-use crate::room::data::*;
 use log::*;
+use specs::prelude::*;
 
 #[derive(SystemData)]
 pub struct OperationSystemData<'a> {

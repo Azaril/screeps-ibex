@@ -1,6 +1,7 @@
 use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
+use crate::jobs::harvest::*;
 use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
@@ -11,7 +12,6 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use crate::jobs::harvest::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct RemoteMineMission {
@@ -28,9 +28,7 @@ impl RemoteMineMission {
     {
         let mission = RemoteMineMission::new(room_data, home_room_data);
 
-        builder
-            .with(MissionData::RemoteMine(mission))
-            .marked::<SerializeMarker>()
+        builder.with(MissionData::RemoteMine(mission)).marked::<SerializeMarker>()
     }
 
     pub fn new(room_data: Entity, home_room_data: Entity) -> RemoteMineMission {
@@ -114,7 +112,7 @@ impl Mission for RemoteMineMission {
 
         //TODO: Add better dynamic cpu adaptation.
         let bucket = game::cpu::bucket();
-        let can_spawn = bucket > 5000.0 &&  crate::features::remote_mine::harvest();
+        let can_spawn = bucket > 5000.0 && crate::features::remote_mine::harvest();
 
         if !can_spawn {
             return Ok(MissionResult::Running);

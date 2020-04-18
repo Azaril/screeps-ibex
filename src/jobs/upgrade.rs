@@ -1,4 +1,5 @@
 use super::actions::*;
+use super::context::*;
 use super::jobsystem::*;
 use super::utility::controllerbehavior::*;
 use super::utility::harvestbehavior::*;
@@ -6,14 +7,13 @@ use super::utility::haulbehavior::*;
 use super::utility::waitbehavior::*;
 use crate::remoteobjectid::*;
 use crate::transfer::transfersystem::*;
-use super::context::*;
 use screeps::*;
+use screeps_machine::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use screeps_machine::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct UpgradeJobContext {
@@ -75,10 +75,12 @@ impl Idle {
             tick_context.runtime_data.transfer_queue,
             UpgradeState::pickup,
         )
-        .or_else(|| if state_context.allow_harvest {
-            get_new_harvest_state(&tick_context.runtime_data.owner, home_room_data, UpgradeState::harvest)
-        } else {
-            None
+        .or_else(|| {
+            if state_context.allow_harvest {
+                get_new_harvest_state(&tick_context.runtime_data.owner, home_room_data, UpgradeState::harvest)
+            } else {
+                None
+            }
         })
         .or_else(|| get_new_upgrade_state(&tick_context.runtime_data.owner, home_room_data, UpgradeState::upgrade))
         .or_else(|| Some(UpgradeState::wait(5)))
@@ -92,10 +94,10 @@ impl Harvest {
 }
 
 impl Pickup {
-    fn gather_data(&self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) { 
+    fn gather_data(&self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         runtime_data.transfer_queue.register_pickup(&self.ticket, TransferType::Haul);
     }
-    
+
     pub fn tick(&mut self, _state_context: &UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState> {
         tick_pickup(tick_context, &mut self.ticket, UpgradeState::finished_pickup)
     }
@@ -137,18 +139,15 @@ impl Wait {
 #[derive(Clone, ConvertSaveload)]
 pub struct UpgradeJob {
     context: UpgradeJobContext,
-    state: UpgradeState,    
+    state: UpgradeState,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl UpgradeJob {
     pub fn new(home_room: Entity, allow_harvest: bool) -> UpgradeJob {
         UpgradeJob {
-            context: UpgradeJobContext { 
-                home_room,
-                allow_harvest,
-            },
-            state: UpgradeState::idle()
+            context: UpgradeJobContext { home_room, allow_harvest },
+            state: UpgradeState::idle(),
         }
     }
 }
@@ -168,7 +167,7 @@ impl Job for UpgradeJob {
         let mut tick_context = JobTickContext {
             system_data,
             runtime_data,
-            action_flags: SimultaneousActionFlags::UNSET
+            action_flags: SimultaneousActionFlags::UNSET,
         };
 
         while let Some(tick_result) = self.state.tick(&mut self.context, &mut tick_context) {

@@ -1,16 +1,16 @@
 use super::data::*;
 use super::missionsystem::*;
 use crate::creep::*;
-use crate::serialize::*;
+use crate::jobs::build::*;
 use crate::jobs::data::*;
+use crate::serialize::*;
+use crate::spawnsystem::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
-use crate::spawnsystem::*;
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use crate::jobs::build::*;
 
 #[derive(Clone, Debug, ConvertSaveload)]
 pub struct RemoteBuildMission {
@@ -27,9 +27,7 @@ impl RemoteBuildMission {
     {
         let mission = RemoteBuildMission::new(room_data, home_room_data);
 
-        builder
-            .with(MissionData::RemoteBuild(mission))
-            .marked::<SerializeMarker>()
+        builder.with(MissionData::RemoteBuild(mission)).marked::<SerializeMarker>()
     }
 
     pub fn new(room_data: Entity, home_room_data: Entity) -> RemoteBuildMission {
@@ -40,7 +38,11 @@ impl RemoteBuildMission {
         }
     }
 
-    fn create_handle_builder_spawn(mission_entity: Entity, build_room_entity: Entity, allow_harvest: bool) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    fn create_handle_builder_spawn(
+        mission_entity: Entity,
+        build_room_entity: Entity,
+        allow_harvest: bool,
+    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
@@ -49,7 +51,7 @@ impl RemoteBuildMission {
                     //TODO: Pass an array of home rooms - allow for hauling energy if harvesting is not possible.
                     build_room_entity,
                     build_room_entity,
-                    allow_harvest
+                    allow_harvest,
                 ));
 
                 let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
@@ -114,11 +116,7 @@ impl Mission for RemoteBuildMission {
         let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
         let home_room_controller = home_room.controller().ok_or("Expected controller")?;
 
-        let desired_builders = if home_room_controller.level() <= 3 {
-            4
-        } else {
-            2
-        };
+        let desired_builders = if home_room_controller.level() <= 3 { 4 } else { 2 };
 
         if self.builders.len() < desired_builders {
             let priority = if self.builders.is_empty() {

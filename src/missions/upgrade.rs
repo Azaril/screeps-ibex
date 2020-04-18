@@ -1,17 +1,17 @@
 use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
+use crate::jobs::upgrade::*;
+use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use crate::transfer::transfersystem::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use crate::jobs::upgrade::*;
-use crate::transfer::transfersystem::*;
-use crate::remoteobjectid::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct UpgradeMission {
@@ -37,7 +37,11 @@ impl UpgradeMission {
         }
     }
 
-    fn create_handle_upgrader_spawn(mission_entity: Entity, home_room: Entity, allow_harvest: bool) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    fn create_handle_upgrader_spawn(
+        mission_entity: Entity,
+        home_room: Entity,
+        allow_harvest: bool,
+    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
@@ -111,18 +115,22 @@ impl Mission for UpgradeMission {
                         false
                     }
                 } else {
-                    let structures = room.find(find::STRUCTURES);                       
+                    let structures = room.find(find::STRUCTURES);
                     structures
                         .iter()
                         .filter_map(|structure| {
-                            if let Structure::Container(container) = structure { 
-                                Some(container) 
-                            } else { 
-                                None 
+                            if let Structure::Container(container) = structure {
+                                Some(container)
+                            } else {
+                                None
                             }
                         })
                         .filter_map(|container| room_transfer_data.try_get_node(&TransferTarget::Container(container.remote_id())))
-                        .any(|container_node| container_node.get_available_withdrawl_by_resource(TransferType::Haul, ResourceType::Energy) as f32 / CONTAINER_CAPACITY as f32 > 0.75)
+                        .any(|container_node| {
+                            container_node.get_available_withdrawl_by_resource(TransferType::Haul, ResourceType::Energy) as f32
+                                / CONTAINER_CAPACITY as f32
+                                > 0.75
+                        })
                 }
             } else {
                 false
@@ -149,7 +157,10 @@ impl Mission for UpgradeMission {
         };
 
         if self.upgraders.len() < max_upgraders {
-            let storage_sufficient = room.storage().map(|s| s.store_used_capacity(Some(ResourceType::Energy)) > 50_000).unwrap_or(true);
+            let storage_sufficient = room
+                .storage()
+                .map(|s| s.store_used_capacity(Some(ResourceType::Energy)) > 50_000)
+                .unwrap_or(true);
 
             let work_parts_per_upgrader = if !storage_sufficient {
                 Some(1)

@@ -4,24 +4,25 @@ use screeps::*;
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn select_construction_site(creep: &Creep, room: &Room) -> Option<ConstructionSite> {
     let construction_sites = room.find(find::MY_CONSTRUCTION_SITES);
-    
+
     let spawn_construction_site_id = construction_sites
         .iter()
         .cloned()
         .filter(|site| site.structure_type() == StructureType::Spawn)
         .max_by_key(|site| site.progress());
 
-    spawn_construction_site_id.or_else(|| {
-        construction_sites
-        .iter()
-        .cloned()
-        .filter(|site| site.progress() > 0)
-        .max_by_key(|site| site.progress())
-    })
-    .or_else(|| {
-        construction_sites
-            .iter()
-            .cloned()
-            .find_nearest_from(creep.pos(), PathFinderHelpers::same_room_ignore_creeps_range_3)
-    })
+    spawn_construction_site_id
+        .or_else(|| {
+            construction_sites
+                .iter()
+                .cloned()
+                .filter(|site| site.progress() > 0)
+                .max_by_key(|site| site.progress())
+        })
+        .or_else(|| {
+            construction_sites
+                .iter()
+                .cloned()
+                .find_nearest_from(creep.pos(), PathFinderHelpers::same_room_ignore_creeps_range_3)
+        })
 }

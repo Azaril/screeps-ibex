@@ -1,16 +1,16 @@
 use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
+use crate::jobs::scout::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use crate::jobs::scout::*;
-use log::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ScoutMission {
@@ -69,9 +69,7 @@ impl Mission for ScoutMission {
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui
-                    .missions()
-                    .add_text(format!("Scout - Scouts: {}", self.scouts.len()), None);
+                room_ui.missions().add_text(format!("Scout - Scouts: {}", self.scouts.len()), None);
             });
         }
     }

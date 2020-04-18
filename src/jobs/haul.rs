@@ -1,18 +1,18 @@
 use super::actions::*;
+use super::context::*;
 use super::jobsystem::*;
 use super::utility::haulbehavior::*;
 use super::utility::waitbehavior::*;
-use super::context::*;
 use crate::serialize::*;
 use crate::transfer::transfersystem::*;
 use itertools::*;
 use screeps::*;
+use screeps_machine::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use screeps_machine::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct HaulJobContext {
@@ -61,7 +61,11 @@ machine!(
 impl Idle {
     fn tick(&mut self, state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
         let creep = tick_context.runtime_data.owner;
-        let haul_rooms = state_context.haul_rooms.iter().filter_map(|e| tick_context.system_data.room_data.get(*e)).collect_vec();
+        let haul_rooms = state_context
+            .haul_rooms
+            .iter()
+            .filter_map(|e| tick_context.system_data.room_data.get(*e))
+            .collect_vec();
 
         get_new_delivery_current_resources_state(
             creep,
@@ -72,7 +76,14 @@ impl Idle {
             HaulState::delivery,
         )
         .or_else(|| {
-            get_new_delivery_current_resources_state(creep, &haul_rooms, TransferPriorityFlags::NONE, TransferTypeFlags::HAUL, tick_context.runtime_data.transfer_queue, HaulState::delivery)
+            get_new_delivery_current_resources_state(
+                creep,
+                &haul_rooms,
+                TransferPriorityFlags::NONE,
+                TransferTypeFlags::HAUL,
+                tick_context.runtime_data.transfer_queue,
+                HaulState::delivery,
+            )
         })
         .or_else(|| {
             ACTIVE_TRANSFER_PRIORITIES
@@ -89,9 +100,7 @@ impl Idle {
                 })
                 .next()
         })
-        .or_else(|| {
-            Some(HaulState::wait(5))
-        })
+        .or_else(|| Some(HaulState::wait(5)))
     }
 }
 
@@ -100,7 +109,7 @@ impl Pickup {
         visualize_pickup(describe_data, &self.withdrawl);
         visualize_delivery_from(describe_data, &self.deposits, self.withdrawl.target().pos());
     }
-        
+
     fn gather_data(&self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         runtime_data.transfer_queue.register_pickup(&self.withdrawl, TransferType::Haul);
 
@@ -108,7 +117,7 @@ impl Pickup {
             runtime_data.transfer_queue.register_delivery(&delivery_ticket, TransferType::Haul);
         }
     }
-        
+
     fn tick(&mut self, _state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
         //TODO: This needs fixing as it's causing a clone every tick even if a copy isn't needed.
         let deposits = self.deposits.clone();
@@ -121,13 +130,13 @@ impl Delivery {
     fn visualize(&self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         visualize_delivery(describe_data, &self.deposits);
     }
-        
+
     fn gather_data(&self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         for delivery_ticket in self.deposits.iter() {
             runtime_data.transfer_queue.register_delivery(&delivery_ticket, TransferType::Haul);
         }
     }
-        
+
     fn tick(&mut self, _state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
         tick_delivery(tick_context, &mut self.deposits, HaulState::idle)
     }
@@ -135,7 +144,7 @@ impl Delivery {
 
 impl Wait {
     pub fn tick(&mut self, _state_context: &HaulJobContext, _tick_context: &mut JobTickContext) -> Option<HaulState> {
-       tick_wait(&mut self.ticks, HaulState::idle)
+        tick_wait(&mut self.ticks, HaulState::idle)
     }
 }
 
@@ -151,7 +160,7 @@ impl HaulJob {
         HaulJob {
             context: HaulJobContext {
                 haul_rooms: haul_rooms.into(),
-            },            
+            },
             state: HaulState::idle(),
         }
     }
@@ -172,7 +181,7 @@ impl Job for HaulJob {
         let mut tick_context = JobTickContext {
             system_data,
             runtime_data,
-            action_flags: SimultaneousActionFlags::UNSET
+            action_flags: SimultaneousActionFlags::UNSET,
         };
 
         while let Some(tick_result) = self.state.tick(&mut self.context, &mut tick_context) {

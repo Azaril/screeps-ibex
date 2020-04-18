@@ -2,13 +2,13 @@ use super::data::*;
 use super::operationsystem::*;
 use crate::missions::data::*;
 use crate::missions::localbuild::*;
+use crate::room::data::*;
+use crate::serialize::*;
+use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use crate::serialize::*;
-use crate::room::data::*;
-use log::*;
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct LocalBuildOperation {}
@@ -21,9 +21,7 @@ impl LocalBuildOperation {
     {
         let operation = LocalBuildOperation::new();
 
-        builder
-            .with(OperationData::LocalBuild(operation))
-            .marked::<SerializeMarker>()
+        builder.with(OperationData::LocalBuild(operation)).marked::<SerializeMarker>()
     }
 
     pub fn new() -> LocalBuildOperation {

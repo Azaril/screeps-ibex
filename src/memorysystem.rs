@@ -1,7 +1,7 @@
+use log::*;
 use screeps::*;
 use specs::prelude::*;
 use std::collections::HashSet;
-use log::*;
 
 #[derive(Default)]
 pub struct MemoryArbiter {

@@ -4,17 +4,17 @@ use crate::missions::claim::*;
 use crate::missions::data::*;
 use crate::missions::remotebuild::*;
 use crate::missions::scout::*;
+use crate::room::data::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use itertools::*;
+use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
-use crate::room::data::*;
-use log::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ClaimOperation {
@@ -29,9 +29,7 @@ impl ClaimOperation {
     {
         let operation = ClaimOperation::new();
 
-        builder
-            .with(OperationData::Claim(operation))
-            .marked::<SerializeMarker>()
+        builder.with(OperationData::Claim(operation)).marked::<SerializeMarker>()
     }
 
     pub fn new() -> ClaimOperation {
@@ -63,7 +61,6 @@ impl Operation for ClaimOperation {
         system_data: &OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
-
         //
         // Ensure remote builders occur.
         //

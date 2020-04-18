@@ -1,16 +1,16 @@
 use super::data::*;
+use super::layout::*;
+use super::planner::*;
+use crate::entitymappingsystem::*;
+use crate::memorysystem::*;
+use crate::ui::*;
+use crate::visualize::*;
+use log::*;
 use screeps::*;
-use specs::*;
 use serde::{Deserialize, Serialize};
 use specs::prelude::{Entities, ResourceId, System, SystemData, World, Write, WriteStorage};
+use specs::*;
 use specs_derive::*;
-use super::planner::*;
-use super::layout::*;
-use crate::ui::*;
-use crate::memorysystem::*;
-use crate::visualize::*;
-use crate::entitymappingsystem::*;
-use log::*;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy)]
@@ -53,7 +53,7 @@ struct RoomDataPlannerDataSource<'a> {
     terrain: Option<FastRoomTerrain>,
     controllers: Option<Vec<PlanLocation>>,
     sources: Option<Vec<PlanLocation>>,
-    minerals: Option<Vec<PlanLocation>>
+    minerals: Option<Vec<PlanLocation>>,
 }
 
 impl<'a> RoomDataPlannerDataSource<'a> {
@@ -64,7 +64,7 @@ impl<'a> RoomDataPlannerDataSource<'a> {
             terrain: None,
             controllers: None,
             sources: None,
-            minerals: None
+            minerals: None,
         }
     }
 }
@@ -83,7 +83,8 @@ impl<'a> PlannerRoomDataSource for RoomDataPlannerDataSource<'a> {
 
     fn get_controllers(&mut self) -> &[PlanLocation] {
         if self.controllers.is_none() {
-            let controllers = self.static_visibility
+            let controllers = self
+                .static_visibility
                 .controller()
                 .iter()
                 .map(|id| {
@@ -100,7 +101,8 @@ impl<'a> PlannerRoomDataSource for RoomDataPlannerDataSource<'a> {
 
     fn get_sources(&mut self) -> &[PlanLocation] {
         if self.sources.is_none() {
-            let sources = self.static_visibility
+            let sources = self
+                .static_visibility
                 .sources()
                 .iter()
                 .map(|id| {
@@ -117,7 +119,9 @@ impl<'a> PlannerRoomDataSource for RoomDataPlannerDataSource<'a> {
 
     fn get_minerals(&mut self) -> &[PlanLocation] {
         if self.minerals.is_none() {
-            let minerals = self.static_visibility.minerals()
+            let minerals = self
+                .static_visibility
+                .minerals()
                 .iter()
                 .map(|id| {
                     let pos = id.pos();
@@ -162,7 +166,7 @@ impl RoomPlannerRunningData {
 #[derive(Clone, Deserialize, Serialize, Default)]
 pub struct RoomPlannerData {
     running_state: Option<RoomPlannerRunningData>,
-    last_planned: HashMap<RoomName, u32>
+    last_planned: HashMap<RoomName, u32>,
 }
 
 #[derive(SystemData)]
@@ -187,7 +191,11 @@ impl RoomPlanSystem {
         RoomPlannerRunningData::seed(&room_data)
     }
 
-    fn process(data: &mut RoomPlanSystemData, room_name: RoomName, planner_state: &mut RoomPlannerRunningData) -> Result<PlanEvaluationResult, String> {
+    fn process(
+        data: &mut RoomPlanSystemData,
+        room_name: RoomName,
+        planner_state: &mut RoomPlannerRunningData,
+    ) -> Result<PlanEvaluationResult, String> {
         let room_entity = data.mapping.rooms.get(&room_name).ok_or("Expected room entity")?;
         let room_data = data.room_data.get(*room_entity).ok_or("Expected room data")?;
 
@@ -210,7 +218,9 @@ impl RoomPlanSystem {
         if let Some(room_plan_data) = data.room_plan_data.get_mut(*room_entity) {
             room_plan_data.plan = plan;
         } else {
-            data.room_plan_data.insert(*room_entity, RoomPlanData { plan }).map_err(|err| err.to_string())?;
+            data.room_plan_data
+                .insert(*room_entity, RoomPlanData { plan })
+                .map_err(|err| err.to_string())?;
         }
 
         Ok(())
@@ -236,9 +246,18 @@ impl<'a> System<'a> for RoomPlanSystem {
             };
 
             if planner_state.running_state.is_none() {
-                let request = data.room_plan_queue.requests
+                let request = data
+                    .room_plan_queue
+                    .requests
                     .iter()
-                    .filter(|request| crate::features::construction::force_plan() || planner_state.last_planned.get(&request.room_name).map(|last_completion| game::time() >= last_completion + 2000).unwrap_or(true))
+                    .filter(|request| {
+                        crate::features::construction::force_plan()
+                            || planner_state
+                                .last_planned
+                                .get(&request.room_name)
+                                .map(|last_completion| game::time() >= last_completion + 2000)
+                                .unwrap_or(true)
+                    })
                     .max_by(|a, b| a.priority.partial_cmp(&b.priority).unwrap())
                     .cloned();
 
@@ -251,7 +270,7 @@ impl<'a> System<'a> for RoomPlanSystem {
 
                             planner_state.running_state = Some(RoomPlannerRunningData {
                                 room_name: request.room_name,
-                                planner_state: state
+                                planner_state: state,
                             });
                         }
                         Ok(PlanSeedResult::Complete(Some(plan))) => {
@@ -300,28 +319,28 @@ impl<'a> System<'a> for RoomPlanSystem {
                 false
             };
 
-            if is_complete {        
+            if is_complete {
                 planner_state.running_state = None;
             }
 
             if crate::features::construction::visualize() {
                 if let Some(running_state) = &planner_state.running_state {
-                    if  let Some(visualizer) = &mut data.visualizer {
+                    if let Some(visualizer) = &mut data.visualizer {
                         let room_visualizer = visualizer.get_room(running_state.room_name);
-        
+
                         if crate::features::construction::visualize_planner() {
                             running_state.planner_state.visualize(room_visualizer);
                         }
-                        
+
                         if crate::features::construction::visualize_planner_best() {
                             running_state.planner_state.visualize_best(room_visualizer);
                         }
                     }
                 }
             }
-            
+
             if crate::features::construction::visualize_plan() {
-                if  let Some(visualizer) = &mut data.visualizer {
+                if let Some(visualizer) = &mut data.visualizer {
                     for (_, room_data, room_plan_data) in (&data.entities, &data.room_data, &data.room_plan_data).join() {
                         let room_visualizer = visualizer.get_room(room_data.name);
 

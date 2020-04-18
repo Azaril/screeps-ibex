@@ -1,9 +1,9 @@
 use super::build::*;
+use crate::jobs::actions::*;
+use crate::jobs::context::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use screeps::*;
-use crate::jobs::actions::*;
-use crate::jobs::context::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_build_state<F, R>(creep: &Creep, build_room: &RoomData, state_map: F) -> Option<R>
@@ -23,53 +23,16 @@ where
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn run_build_state<F, R>(creep: &Creep, action_flags: &mut SimultaneousActionFlags, construction_site_id: &RemoteObjectId<ConstructionSite>, next_state: F) -> Option<R>
+pub fn tick_build<F, R>(
+    tick_context: &mut JobTickContext,
+    construction_site_id: RemoteObjectId<ConstructionSite>,
+    next_state: F,
+) -> Option<R>
 where
     F: Fn() -> R,
 {
-    let creep_pos = creep.pos();
     let target_position = construction_site_id.pos();
 
-    //TODO: Check visibility cache and cancel if construction site doesn't exist?
-
-    if creep_pos.room_name() != target_position.room_name() {
-        if !action_flags.contains(SimultaneousActionFlags::MOVE) {
-            action_flags.insert(SimultaneousActionFlags::MOVE);
-            creep.move_to(&target_position);
-        }
-
-        return None;
-    }
-
-    if let Some(construction_site) = construction_site_id.resolve() {
-        if !creep_pos.in_range_to(&construction_site, 3) {
-            if !action_flags.contains(SimultaneousActionFlags::MOVE) {
-                action_flags.insert(SimultaneousActionFlags::MOVE);
-                creep.move_to(&target_position);
-            }
-
-            return None;
-        }
-
-        if !action_flags.contains(SimultaneousActionFlags::BUILD) {
-            action_flags.insert(SimultaneousActionFlags::BUILD);
-
-            match creep.build(&construction_site) {
-                ReturnCode::Ok => None,
-                _ => Some(next_state()),
-            }
-        } else {
-            None
-        }
-    } else {
-        Some(next_state())
-    }
-}
-
-#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn tick_build<F, R>(tick_context: &mut JobTickContext, construction_site_id: RemoteObjectId<ConstructionSite>, next_state: F) -> Option<R> where F: Fn() -> R {
-    let target_position = construction_site_id.pos();
-    
     let creep = tick_context.runtime_data.owner;
     let creep_pos = creep.pos();
 
@@ -92,7 +55,10 @@ pub fn tick_build<F, R>(tick_context: &mut JobTickContext, construction_site_id:
         if !tick_context.action_flags.contains(SimultaneousActionFlags::MOVE) {
             tick_context.action_flags.insert(SimultaneousActionFlags::MOVE);
 
-            tick_context.runtime_data.movement.move_to_range(tick_context.runtime_data.creep_entity, target_position, 3);
+            tick_context
+                .runtime_data
+                .movement
+                .move_to_range(tick_context.runtime_data.creep_entity, target_position, 3);
         }
 
         return None;
