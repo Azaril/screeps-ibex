@@ -4,6 +4,7 @@ use crate::missions::data::*;
 use crate::missions::remotemine::*;
 use crate::missions::reserve::*;
 use crate::missions::scout::*;
+use crate::ownership::*;
 use crate::room::data::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
@@ -11,30 +12,38 @@ use itertools::*;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
+use specs_derive::*;
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
-pub struct RemoteMineOperation {}
+#[derive(Clone, ConvertSaveload)]
+pub struct RemoteMineOperation {
+    owner: EntityOption<OperationOrMissionEntity>,
+}
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl RemoteMineOperation {
-    pub fn build<B>(builder: B) -> B
+    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let operation = RemoteMineOperation::new();
+        let operation = RemoteMineOperation::new(owner);
 
         builder.with(OperationData::RemoteMine(operation)).marked::<SerializeMarker>()
     }
 
-    pub fn new() -> RemoteMineOperation {
-        RemoteMineOperation {}
+    pub fn new(owner: Option<OperationOrMissionEntity>) -> RemoteMineOperation {
+        RemoteMineOperation { owner: owner.into() }
     }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Operation for RemoteMineOperation {
+    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+        &self.owner
+    }
+
     fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
             global_ui.operations().add_text("Remote Mine".to_string(), None);
@@ -124,7 +133,7 @@ impl Operation for RemoteMineOperation {
                 //TODO: wiarchbe: Use trait instead of match.
                 let has_scout_mission =
                     room_data
-                        .missions
+                        .get_missions()
                         .iter()
                         .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
                             Some(MissionData::Scout(_)) => true,
@@ -138,16 +147,23 @@ impl Operation for RemoteMineOperation {
                 if !has_scout_mission {
                     info!("Starting scout for room. Room: {}", room_data.name);
 
+                    let owner_entity = *runtime_data.entity;
                     let room_entity = room_data_entity;
                     let home_room_entity = home_room_data_entity;
 
                     system_data.updater.exec_mut(move |world| {
-                        let mission_entity = ScoutMission::build(world.create_entity(), room_entity, home_room_entity).build();
+                        let mission_entity = ScoutMission::build(
+                            world.create_entity(),
+                            Some(OperationOrMissionEntity::Operation(owner_entity)),
+                            room_entity,
+                            home_room_entity,
+                        )
+                        .build();
 
                         let room_data_storage = &mut world.write_storage::<RoomData>();
 
                         if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                            room_data.missions.push(mission_entity);
+                            room_data.add_mission(mission_entity);
                         }
                     });
                 }
@@ -172,7 +188,7 @@ impl Operation for RemoteMineOperation {
                 //TODO: wiarchbe: Use trait instead of match.
                 let has_remote_mine_mission =
                     room_data
-                        .missions
+                        .get_missions()
                         .iter()
                         .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
                             Some(MissionData::RemoteMine(_)) => true,
@@ -186,16 +202,23 @@ impl Operation for RemoteMineOperation {
                 if !has_remote_mine_mission {
                     info!("Starting remote mine for room. Room: {}", room_data.name);
 
+                    let owner_entity = *runtime_data.entity;
                     let room_entity = room_data_entity;
                     let home_room_entity = home_room_data_entity;
 
                     system_data.updater.exec_mut(move |world| {
-                        let mission_entity = RemoteMineMission::build(world.create_entity(), room_entity, home_room_entity).build();
+                        let mission_entity = RemoteMineMission::build(
+                            world.create_entity(),
+                            Some(OperationOrMissionEntity::Operation(owner_entity)),
+                            room_entity,
+                            home_room_entity,
+                        )
+                        .build();
 
                         let room_data_storage = &mut world.write_storage::<RoomData>();
 
                         if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                            room_data.missions.push(mission_entity);
+                            room_data.add_mission(mission_entity);
                         }
                     });
                 }
@@ -203,7 +226,7 @@ impl Operation for RemoteMineOperation {
                 //TODO: wiarchbe: Use trait instead of match.
                 let has_reservation_mission =
                     room_data
-                        .missions
+                        .get_missions()
                         .iter()
                         .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
                             Some(MissionData::Reserve(_)) => true,
@@ -217,16 +240,23 @@ impl Operation for RemoteMineOperation {
                 if !has_reservation_mission && crate::features::remote_mine::reserve() {
                     info!("Starting reservation for room. Room: {}", room_data.name);
 
+                    let owner_entity = *runtime_data.entity;
                     let room_entity = room_data_entity;
                     let home_room_entity = home_room_data_entity;
 
                     system_data.updater.exec_mut(move |world| {
-                        let mission_entity = ReserveMission::build(world.create_entity(), room_entity, home_room_entity).build();
+                        let mission_entity = ReserveMission::build(
+                            world.create_entity(),
+                            Some(OperationOrMissionEntity::Operation(owner_entity)),
+                            room_entity,
+                            home_room_entity,
+                        )
+                        .build();
 
                         let room_data_storage = &mut world.write_storage::<RoomData>();
 
                         if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                            room_data.missions.push(mission_entity);
+                            room_data.add_mission(mission_entity);
                         }
                     });
                 }

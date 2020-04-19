@@ -3,6 +3,7 @@ use super::missionsystem::*;
 use crate::creep::*;
 use crate::jobs::build::*;
 use crate::jobs::data::*;
+use crate::ownership::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use screeps::*;
@@ -12,8 +13,9 @@ use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
 
-#[derive(Clone, Debug, ConvertSaveload)]
+#[derive(Clone, ConvertSaveload)]
 pub struct RemoteBuildMission {
+    owner: EntityOption<OperationOrMissionEntity>,
     room_data: Entity,
     home_room_data: Entity,
     builders: EntityVec<Entity>,
@@ -21,17 +23,18 @@ pub struct RemoteBuildMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl RemoteBuildMission {
-    pub fn build<B>(builder: B, room_data: Entity, home_room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>, room_data: Entity, home_room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = RemoteBuildMission::new(room_data, home_room_data);
+        let mission = RemoteBuildMission::new(owner, room_data, home_room_data);
 
         builder.with(MissionData::RemoteBuild(mission)).marked::<SerializeMarker>()
     }
 
-    pub fn new(room_data: Entity, home_room_data: Entity) -> RemoteBuildMission {
+    pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity, home_room_data: Entity) -> RemoteBuildMission {
         RemoteBuildMission {
+            owner: owner.into(),
             room_data,
             home_room_data,
             builders: EntityVec::new(),
@@ -68,6 +71,14 @@ impl RemoteBuildMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for RemoteBuildMission {
+    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+        &self.owner
+    }
+
+    fn get_room(&self) -> Entity {
+        self.room_data
+    }
+
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {

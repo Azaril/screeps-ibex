@@ -1,5 +1,6 @@
 use super::data::*;
 use super::missionsystem::*;
+use crate::ownership::*;
 use crate::room::roomplansystem::*;
 use crate::serialize::*;
 use screeps::*;
@@ -11,27 +12,39 @@ use specs_derive::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ConstructionMission {
+    owner: EntityOption<OperationOrMissionEntity>,
     room_data: Entity,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl ConstructionMission {
-    pub fn build<B>(builder: B, room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>, room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = ConstructionMission::new(room_data);
+        let mission = ConstructionMission::new(owner, room_data);
 
         builder.with(MissionData::Construction(mission)).marked::<SerializeMarker>()
     }
 
-    pub fn new(room_data: Entity) -> ConstructionMission {
-        ConstructionMission { room_data }
+    pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity) -> ConstructionMission {
+        ConstructionMission {
+            owner: owner.into(),
+            room_data,
+        }
     }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for ConstructionMission {
+    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+        &self.owner
+    }
+
+    fn get_room(&self) -> Entity {
+        self.room_data
+    }
+
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {

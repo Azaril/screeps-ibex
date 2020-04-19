@@ -1,6 +1,7 @@
 use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::utility::repair::*;
+use crate::ownership::*;
 use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::transfer::transfersystem::*;
@@ -13,27 +14,39 @@ use specs_derive::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct TowerMission {
+    owner: EntityOption<OperationOrMissionEntity>,
     room_data: Entity,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl TowerMission {
-    pub fn build<B>(builder: B, room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>, room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = TowerMission::new(room_data);
+        let mission = TowerMission::new(owner, room_data);
 
         builder.with(MissionData::Tower(mission)).marked::<SerializeMarker>()
     }
 
-    pub fn new(room_data: Entity) -> TowerMission {
-        TowerMission { room_data }
+    pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity) -> TowerMission {
+        TowerMission {
+            owner: owner.into(),
+            room_data,
+        }
     }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for TowerMission {
+    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+        &self.owner
+    }
+
+    fn get_room(&self) -> Entity {
+        self.room_data
+    }
+
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {

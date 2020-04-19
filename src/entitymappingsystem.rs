@@ -1,7 +1,6 @@
 use crate::room::data::*;
 use screeps::*;
 use specs::prelude::*;
-use specs::*;
 use std::collections::HashMap;
 
 #[derive(Default)]

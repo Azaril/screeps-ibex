@@ -2,6 +2,7 @@ use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
 use crate::jobs::scout::*;
+use crate::ownership::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use log::*;
@@ -14,6 +15,7 @@ use specs_derive::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ScoutMission {
+    owner: EntityOption<OperationOrMissionEntity>,
     room_data: Entity,
     home_room_data: Entity,
     scouts: EntityVec<Entity>,
@@ -23,17 +25,18 @@ pub struct ScoutMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl ScoutMission {
-    pub fn build<B>(builder: B, room_data: Entity, home_room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>, room_data: Entity, home_room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = ScoutMission::new(room_data, home_room_data);
+        let mission = ScoutMission::new(owner, room_data, home_room_data);
 
         builder.with(MissionData::Scout(mission)).marked::<SerializeMarker>()
     }
 
-    pub fn new(room_data: Entity, home_room_data: Entity) -> ScoutMission {
+    pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity, home_room_data: Entity) -> ScoutMission {
         ScoutMission {
+            owner: owner.into(),
             room_data,
             home_room_data,
             scouts: EntityVec::new(),
@@ -66,6 +69,14 @@ impl ScoutMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for ScoutMission {
+    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+        &self.owner
+    }
+
+    fn get_room(&self) -> Entity {
+        self.room_data
+    }
+
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {

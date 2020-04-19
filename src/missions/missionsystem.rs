@@ -1,6 +1,8 @@
 use super::data::*;
 use crate::creep::*;
 use crate::jobs::data::*;
+use crate::operations::data::*;
+use crate::ownership::*;
 use crate::room::data::*;
 use crate::room::roomplansystem::*;
 use crate::spawnsystem::*;
@@ -61,6 +63,12 @@ pub enum MissionResult {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub trait Mission {
+    fn get_owner(&self) -> &Option<OperationOrMissionEntity>;
+
+    fn get_room(&self) -> Entity;
+
+    fn child_complete(&mut self, _child: Entity) {}
+
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData);
 
     fn pre_run_mission(
@@ -76,6 +84,49 @@ pub trait Mission {
         system_data: &MissionExecutionSystemData,
         runtime_data: &mut MissionExecutionRuntimeData,
     ) -> Result<MissionResult, String>;
+}
+
+fn queue_cleanup_mission(updater: &LazyUpdate, mission_entity: Entity) {
+    updater.exec_mut(move |world| {
+        {
+            let mission_data_storage = &mut world.write_storage::<MissionData>();
+
+            let owner = if let Some(mission_data) = mission_data_storage.get_mut(mission_entity) {
+                let mission = mission_data.as_mission();
+
+                let room_data_entity = mission.get_room();
+
+                let room_data_storage = &mut world.write_storage::<RoomData>();
+
+                if let Some(room_data) = room_data_storage.get_mut(room_data_entity) {
+                    room_data.remove_mission(mission_entity);
+                }
+
+                mission.get_owner().clone()
+            } else {
+                None
+            };
+
+            match owner {
+                Some(OperationOrMissionEntity::Operation(operation_entity)) => {
+                    let operation_data_storage = &mut world.write_storage::<OperationData>();
+                    if let Some(operation_data) = operation_data_storage.get_mut(operation_entity) {
+                        operation_data.as_operation().child_complete(mission_entity);
+                    }
+                }
+                Some(OperationOrMissionEntity::Mission(mission_entity)) => {
+                    if let Some(mission_data) = mission_data_storage.get_mut(mission_entity) {
+                        mission_data.as_mission().child_complete(mission_entity);
+                    }
+                }
+                None => {}
+            }
+        }
+
+        if let Err(err) = world.delete_entity(mission_entity) {
+            warn!("Trying to clean up mission entity that no longer exists. Error: {}", err);
+        }
+    });
 }
 
 pub struct PreRunMissionSystem;
@@ -116,11 +167,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
             };
 
             if cleanup_mission {
-                data.updater.exec_mut(move |world| {
-                    if let Err(err) = world.delete_entity(entity) {
-                        warn!("Trying to clean up mission entity that no longer exists. Error: {}", err);
-                    }
-                });
+                queue_cleanup_mission(&data.updater, entity);
             }
         }
 
@@ -185,11 +232,7 @@ impl<'a> System<'a> for RunMissionSystem {
             };
 
             if cleanup_mission {
-                data.updater.exec_mut(move |world| {
-                    if let Err(err) = world.delete_entity(entity) {
-                        warn!("Trying to clean up mission entity that no longer exists. Error: {}", err);
-                    }
-                });
+                queue_cleanup_mission(&data.updater, entity);
             }
         }
     }

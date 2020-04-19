@@ -4,6 +4,7 @@ use crate::missions::claim::*;
 use crate::missions::data::*;
 use crate::missions::remotebuild::*;
 use crate::missions::scout::*;
+use crate::ownership::*;
 use crate::room::data::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
@@ -18,22 +19,24 @@ use specs_derive::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ClaimOperation {
+    owner: EntityOption<OperationOrMissionEntity>,
     claim_missions: EntityVec<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl ClaimOperation {
-    pub fn build<B>(builder: B) -> B
+    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let operation = ClaimOperation::new();
+        let operation = ClaimOperation::new(owner);
 
         builder.with(OperationData::Claim(operation)).marked::<SerializeMarker>()
     }
 
-    pub fn new() -> ClaimOperation {
+    pub fn new(owner: Option<OperationOrMissionEntity>) -> ClaimOperation {
         ClaimOperation {
+            owner: owner.into(),
             claim_missions: EntityVec::new(),
         }
     }
@@ -42,18 +45,21 @@ impl ClaimOperation {
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 #[allow(clippy::cognitive_complexity)]
 impl Operation for ClaimOperation {
+    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+        &self.owner
+    }
+
+    fn child_complete(&mut self, child: Entity) {
+        self.claim_missions.retain(|e| *e != child);
+    }
+
     fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
             global_ui.operations().add_text("Claim".to_string(), None);
         })
     }
 
-    fn pre_run_operation(&mut self, system_data: &OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {
-        //
-        // Cleanup missions that no longer exist.
-        //
-
-        self.claim_missions.retain(|entity| system_data.entities.is_alive(*entity));
+    fn pre_run_operation(&mut self, _system_data: &OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {
     }
 
     fn run_operation(
@@ -86,14 +92,12 @@ impl Operation for ClaimOperation {
 
                             if let Some(spawn_construction_site) = spawn_construction_site {
                                 //TODO: wiarchbe: Use trait instead of match.
-                                let has_remote_build_mission =
-                                    room_data
-                                        .missions
-                                        .iter()
-                                        .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
-                                            Some(MissionData::RemoteBuild(_)) => true,
-                                            _ => false,
-                                        });
+                                let has_remote_build_mission = room_data.get_missions().iter().any(|mission_entity| {
+                                    match system_data.mission_data.get(*mission_entity) {
+                                        Some(MissionData::RemoteBuild(_)) => true,
+                                        _ => false,
+                                    }
+                                });
 
                                 //
                                 // Spawn a new mission to fill the remote build role if missing.
@@ -130,17 +134,22 @@ impl Operation for ClaimOperation {
                                     }
 
                                     if let Some((_, nearest_spawn_room_entity)) = nearest_spawn {
+                                        let owner_entity = *runtime_data.entity;
                                         let home_room_data_entity = nearest_spawn_room_entity;
 
                                         system_data.updater.exec_mut(move |world| {
-                                            let mission_entity =
-                                                RemoteBuildMission::build(world.create_entity(), room_entity, home_room_data_entity)
-                                                    .build();
+                                            let mission_entity = RemoteBuildMission::build(
+                                                world.create_entity(),
+                                                Some(OperationOrMissionEntity::Operation(owner_entity)),
+                                                room_entity,
+                                                home_room_data_entity,
+                                            )
+                                            .build();
 
                                             let room_data_storage = &mut world.write_storage::<RoomData>();
 
                                             if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                                                room_data.missions.push(mission_entity);
+                                                room_data.add_mission(mission_entity);
                                             }
                                         });
                                     }
@@ -263,7 +272,7 @@ impl Operation for ClaimOperation {
                 //TODO: wiarchbe: Use trait instead of match.
                 let has_scout_mission =
                     room_data
-                        .missions
+                        .get_missions()
                         .iter()
                         .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
                             Some(MissionData::Scout(_)) => true,
@@ -277,16 +286,23 @@ impl Operation for ClaimOperation {
                 if !has_scout_mission {
                     info!("Starting scout for room. Room: {}", room_data.name);
 
+                    let owner_entity = *runtime_data.entity;
                     let room_entity = room_data_entity;
                     let home_room_entity = home_room_data_entity;
 
                     system_data.updater.exec_mut(move |world| {
-                        let mission_entity = ScoutMission::build(world.create_entity(), room_entity, home_room_entity).build();
+                        let mission_entity = ScoutMission::build(
+                            world.create_entity(),
+                            Some(OperationOrMissionEntity::Operation(owner_entity)),
+                            room_entity,
+                            home_room_entity,
+                        )
+                        .build();
 
                         let room_data_storage = &mut world.write_storage::<RoomData>();
 
                         if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                            room_data.missions.push(mission_entity);
+                            room_data.add_mission(mission_entity);
                         }
                     });
                 }
@@ -312,7 +328,7 @@ impl Operation for ClaimOperation {
                 //TODO: wiarchbe: Use trait instead of match.
                 let has_claim_mission =
                     room_data
-                        .missions
+                        .get_missions()
                         .iter()
                         .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
                             Some(MissionData::Claim(_)) => true,
@@ -331,12 +347,18 @@ impl Operation for ClaimOperation {
                     let home_room_entity = home_room_data_entity;
 
                     system_data.updater.exec_mut(move |world| {
-                        let mission_entity = ClaimMission::build(world.create_entity(), room_entity, home_room_entity).build();
+                        let mission_entity = ClaimMission::build(
+                            world.create_entity(),
+                            Some(OperationOrMissionEntity::Operation(operation_entity)),
+                            room_entity,
+                            home_room_entity,
+                        )
+                        .build();
 
                         let room_data_storage = &mut world.write_storage::<RoomData>();
 
                         if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                            room_data.missions.push(mission_entity);
+                            room_data.add_mission(mission_entity);
                         }
 
                         let operation_data_storage = &mut world.write_storage::<OperationData>();

@@ -16,7 +16,7 @@ use specs_derive::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct HaulJobContext {
-    pub haul_rooms: EntityVec<Entity>,
+    haul_rooms: EntityVec<Entity>,
 }
 
 machine!(
