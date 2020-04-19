@@ -1,6 +1,7 @@
 use super::data::*;
 use crate::entitymappingsystem::EntityMappingData;
 use crate::missions::data::*;
+use crate::ownership::*;
 use crate::room::data::*;
 use crate::room::visibilitysystem::*;
 use crate::ui::*;
@@ -47,6 +48,10 @@ pub enum OperationResult {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub trait Operation {
+    fn get_owner(&self) -> &Option<OperationOrMissionEntity>;
+
+    fn child_complete(&mut self, _child: Entity) {}
+
     fn describe(&mut self, system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData);
 
     fn pre_run_operation(&mut self, _system_data: &OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {}
@@ -103,6 +108,30 @@ impl<'a> System<'a> for PreRunOperationSystem {
     }
 }
 
+fn queue_cleanup_operation(updater: &LazyUpdate, entity: Entity, owner: Option<OperationOrMissionEntity>) {
+    updater.exec_mut(move |world| {
+        match owner {
+            Some(OperationOrMissionEntity::Operation(operation_entity)) => {
+                let operation_data_storage = &mut world.write_storage::<OperationData>();
+                if let Some(operation_data) = operation_data_storage.get_mut(operation_entity) {
+                    operation_data.as_operation().child_complete(entity);
+                }
+            }
+            Some(OperationOrMissionEntity::Mission(mission_entity)) => {
+                let mission_data_storage = &mut world.write_storage::<MissionData>();
+                if let Some(mission_data) = mission_data_storage.get_mut(mission_entity) {
+                    mission_data.as_mission().child_complete(entity);
+                }
+            }
+            None => {}
+        }
+
+        if let Err(err) = world.delete_entity(entity) {
+            warn!("Trying to clean up operation entity that no longer exists. Error: {}", err);
+        }
+    });
+}
+
 pub struct RunOperationSystem;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -141,11 +170,7 @@ impl<'a> System<'a> for RunOperationSystem {
             };
 
             if cleanup_operation {
-                data.updater.exec_mut(move |world| {
-                    if let Err(err) = world.delete_entity(entity) {
-                        warn!("Trying to clean up operation entity that no longer exists. Error: {}", err);
-                    }
-                });
+                queue_cleanup_operation(&data.updater, entity, operation.get_owner().clone());
             }
         }
     }

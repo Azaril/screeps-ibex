@@ -4,6 +4,7 @@ use crate::creep::*;
 use crate::jobs::build::*;
 use crate::jobs::data::*;
 use crate::jobs::utility::repair::*;
+use crate::ownership::*;
 use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
@@ -15,25 +16,27 @@ use specs::saveload::*;
 use specs::*;
 use specs_derive::*;
 
-#[derive(Clone, Debug, ConvertSaveload)]
+#[derive(Clone, ConvertSaveload)]
 pub struct LocalBuildMission {
+    owner: EntityOption<OperationOrMissionEntity>,
     room_data: Entity,
     builders: EntityVec<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl LocalBuildMission {
-    pub fn build<B>(builder: B, room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>, room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = LocalBuildMission::new(room_data);
+        let mission = LocalBuildMission::new(owner, room_data);
 
         builder.with(MissionData::LocalBuild(mission)).marked::<SerializeMarker>()
     }
 
-    pub fn new(room_data: Entity) -> LocalBuildMission {
+    pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity) -> LocalBuildMission {
         LocalBuildMission {
+            owner: owner.into(),
             room_data,
             builders: EntityVec::new(),
         }
@@ -142,6 +145,14 @@ impl LocalBuildMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for LocalBuildMission {
+    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+        &self.owner
+    }
+
+    fn get_room(&self) -> Entity {
+        self.room_data
+    }
+
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {

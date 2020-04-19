@@ -123,7 +123,7 @@ pub struct RoomData {
     pub name: RoomName,
     visible: bool,
     has_been_visible: bool,
-    pub missions: EntityVec<Entity>,
+    missions: EntityVec<Entity>,
     static_visibility_data: Option<RoomStaticVisibilityData>,
     dynamic_visibility_data: Option<RoomDynamicVisibilityData>,
 }
@@ -138,6 +138,18 @@ impl RoomData {
             static_visibility_data: None,
             dynamic_visibility_data: None,
         }
+    }
+
+    pub fn get_missions(&self) -> &EntityVec<Entity> {
+        &self.missions
+    }
+
+    pub fn add_mission(&mut self, mission: Entity) {
+        self.missions.push(mission);
+    }
+
+    pub fn remove_mission(&mut self, mission: Entity) {
+        self.missions.retain(|other| *other != mission);
     }
 
     pub fn clear_visible(&mut self) {

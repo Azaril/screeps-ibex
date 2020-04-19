@@ -2,6 +2,7 @@ use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
 use crate::jobs::upgrade::*;
+use crate::ownership::*;
 use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
@@ -15,23 +16,25 @@ use specs_derive::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct UpgradeMission {
+    owner: EntityOption<OperationOrMissionEntity>,
     room_data: Entity,
     upgraders: EntityVec<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl UpgradeMission {
-    pub fn build<B>(builder: B, room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>, room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = UpgradeMission::new(room_data);
+        let mission = UpgradeMission::new(owner, room_data);
 
         builder.with(MissionData::Upgrade(mission)).marked::<SerializeMarker>()
     }
 
-    pub fn new(room_data: Entity) -> UpgradeMission {
+    pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity) -> UpgradeMission {
         UpgradeMission {
+            owner: owner.into(),
             room_data,
             upgraders: EntityVec::new(),
         }
@@ -62,6 +65,14 @@ impl UpgradeMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for UpgradeMission {
+    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+        &self.owner
+    }
+
+    fn get_room(&self) -> Entity {
+        self.room_data
+    }
+
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {

@@ -3,7 +3,6 @@ use log::*;
 use screeps::*;
 use serde::*;
 use specs::prelude::*;
-use specs::*;
 use specs_derive::*;
 use std::collections::HashMap;
 

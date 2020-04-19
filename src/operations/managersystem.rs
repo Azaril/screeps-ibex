@@ -46,55 +46,55 @@ impl<'a> System<'a> for OperationManagerSystem {
         if !has_local_supply {
             info!("Local supply operation does not exist, creating.");
 
-            LocalSupplyOperation::build(updater.create_entity(&entities)).build();
+            LocalSupplyOperation::build(updater.create_entity(&entities), None).build();
         }
 
         if !has_upgrade {
             info!("Upgrade operation does not exist, creating.");
 
-            UpgradeOperation::build(updater.create_entity(&entities)).build();
+            UpgradeOperation::build(updater.create_entity(&entities), None).build();
         }
 
         if !has_local_build {
             info!("Local build operation does not exist, creating.");
 
-            LocalBuildOperation::build(updater.create_entity(&entities)).build();
+            LocalBuildOperation::build(updater.create_entity(&entities), None).build();
         }
 
         if !has_tower {
             info!("Tower operation does not exist, creating.");
 
-            TowerOperation::build(updater.create_entity(&entities)).build();
+            TowerOperation::build(updater.create_entity(&entities), None).build();
         }
 
         if !has_remote_mine {
             info!("Remote mine operation does not exist, creating.");
 
-            RemoteMineOperation::build(updater.create_entity(&entities)).build();
+            RemoteMineOperation::build(updater.create_entity(&entities), None).build();
         }
 
         if !has_construction {
             info!("Construction operation does not exist, creating.");
 
-            ConstructionOperation::build(updater.create_entity(&entities)).build();
+            ConstructionOperation::build(updater.create_entity(&entities), None).build();
         }
 
         if !has_claim {
             info!("Claim operation does not exist, creating.");
 
-            ClaimOperation::build(updater.create_entity(&entities)).build();
+            ClaimOperation::build(updater.create_entity(&entities), None).build();
         }
 
         if !has_haul {
             info!("Haul operation does not exist, creating.");
 
-            HaulOperation::build(updater.create_entity(&entities)).build();
+            HaulOperation::build(updater.create_entity(&entities), None).build();
         }
 
         if !has_terminal {
             info!("Terminal operation does not exist, creating.");
 
-            TerminalOperation::build(updater.create_entity(&entities)).build();
+            TerminalOperation::build(updater.create_entity(&entities), None).build();
         }
     }
 }

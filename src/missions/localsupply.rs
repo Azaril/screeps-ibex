@@ -4,6 +4,7 @@ use crate::jobs::data::*;
 use crate::jobs::harvest::*;
 use crate::jobs::linkmine::*;
 use crate::jobs::staticmine::*;
+use crate::ownership::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use crate::serialize::*;
@@ -20,6 +21,7 @@ use std::collections::HashMap;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct LocalSupplyMission {
+    owner: EntityOption<OperationOrMissionEntity>,
     room_data: Entity,
     harvesters: EntityVec<Entity>,
     source_container_miners: EntityVec<Entity>,
@@ -48,17 +50,18 @@ struct CreepData {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl LocalSupplyMission {
-    pub fn build<B>(builder: B, room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>, room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = LocalSupplyMission::new(room_data);
+        let mission = LocalSupplyMission::new(owner, room_data);
 
         builder.with(MissionData::LocalSupply(mission)).marked::<SerializeMarker>()
     }
 
-    pub fn new(room_data: Entity) -> LocalSupplyMission {
+    pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity) -> LocalSupplyMission {
         LocalSupplyMission {
+            owner: owner.into(),
             room_data,
             harvesters: EntityVec::new(),
             source_container_miners: EntityVec::new(),
@@ -1066,6 +1069,14 @@ impl LocalSupplyMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for LocalSupplyMission {
+    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+        &self.owner
+    }
+
+    fn get_room(&self) -> Entity {
+        self.room_data
+    }
+
     fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {

@@ -90,3 +90,61 @@ where
         Ok(output)
     }
 }
+
+#[derive(Clone, Debug)]
+pub struct EntityOption<T>(Option<T>);
+
+impl<T> std::ops::Deref for EntityOption<T> {
+    type Target = Option<T>;
+
+    fn deref(&self) -> &Option<T> {
+        &self.0
+    }
+}
+
+impl<T> std::ops::DerefMut for EntityOption<T> {
+    fn deref_mut(&mut self) -> &mut Option<T> {
+        &mut self.0
+    }
+}
+
+impl<T> From<Option<T>> for EntityOption<T> {
+    fn from(value: Option<T>) -> EntityOption<T> {
+        EntityOption(value)
+    }
+}
+
+impl<C, M: Serialize + Marker> ConvertSaveload<M> for EntityOption<C>
+where
+    for<'de> M: Deserialize<'de>,
+    C: ConvertSaveload<M>,
+{
+    type Data = Option<<C as ConvertSaveload<M>>::Data>;
+    type Error = <C as ConvertSaveload<M>>::Error;
+
+    fn convert_into<F>(&self, mut ids: F) -> Result<Self::Data, Self::Error>
+    where
+        F: FnMut(Entity) -> Option<M>,
+    {
+        if let Some(item) = &self.0 {
+            let converted_item = item.convert_into(|entity| ids(entity))?;
+
+            Ok(Some(converted_item))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn convert_from<F>(data: Self::Data, mut ids: F) -> Result<Self, Self::Error>
+    where
+        F: FnMut(M) -> Option<Entity>,
+    {
+        if let Some(item) = data {
+            let converted_item = ConvertSaveload::convert_from(item, |marker| ids(marker))?;
+
+            Ok(EntityOption(Some(converted_item)))
+        } else {
+            Ok(EntityOption(None))
+        }
+    }
+}
