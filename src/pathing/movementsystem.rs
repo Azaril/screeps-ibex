@@ -65,8 +65,14 @@ impl MovementSystem {
         let creep_owner = system_data.creep_owner.get(creep_entity).ok_or("Expected creep owner")?;
         let creep = creep_owner.id().resolve().ok_or("Expected creep")?;
 
-        match creep.move_to(&request.destination) {
+        let move_options = MoveToOptions::new()
+            .range(request.range)
+            .reuse_path(10);
+
+        match creep.move_to_with_options(&request.destination, move_options) {
             ReturnCode::Ok => Ok(()),
+            //TODO: Replace with own pathfinding.
+            ReturnCode::NoPath => Ok(()),
             //TODO: Don't run move to if tired?
             ReturnCode::Tired => Ok(()),
             err => Err(format!("Move error: {:?}", err)),
