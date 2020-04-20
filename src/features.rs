@@ -19,6 +19,10 @@ pub mod js {
                             plan: true,
                         },
                     },
+                    market: {
+                        buy: true,
+                        sell: true,
+                    },
                     transfer: {
                         visualize: {
                             on: true,
@@ -69,6 +73,16 @@ pub mod construction {
 
     pub fn visualize_plan() -> bool {
         ::screeps::memory::root().path_bool("_features.construction.visualize.plan") && visualize()
+    }
+}
+
+pub mod market {
+    pub fn buy() -> bool {
+        ::screeps::memory::root().path_bool("_features.market.buy")
+    }
+
+    pub fn sell() -> bool {
+        ::screeps::memory::root().path_bool("_features.market.sell")
     }
 }
 
