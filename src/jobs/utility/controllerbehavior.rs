@@ -3,6 +3,7 @@ use crate::jobs::context::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use screeps::*;
+use log::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_upgrade_state<F, R>(creep: &Creep, upgrade_room: &RoomData, state_map: F) -> Option<R>
@@ -18,6 +19,24 @@ where
 
             return Some(state_map(*controller));
         }
+    }
+
+    None
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn get_new_sign_state<F, R>(sign_room: &RoomData, state_map: F) -> Option<R>
+where
+    F: Fn(RemoteObjectId<StructureController>) -> R,
+{
+    let dynamic_visibility_data = sign_room.get_dynamic_visibility_data()?;
+
+    if dynamic_visibility_data.updated_within(1000) && dynamic_visibility_data.sign().as_ref().map(|s| !s.user().mine()).unwrap_or(true) {
+        info!("Room needs signing. {} {:?}", sign_room.name, dynamic_visibility_data.reservation());
+        let static_visibility_data = sign_room.get_static_visibility_data()?;
+        let controller = static_visibility_data.controller()?;
+
+        return Some(state_map(*controller));
     }
 
     None
@@ -139,4 +158,43 @@ where
     } else {
         Some(next_state())
     }
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn tick_sign<F, R>(tick_context: &mut JobTickContext, controller_id: RemoteObjectId<StructureController>, message: &str, next_state: F) -> Option<R>
+where
+    F: Fn() -> R,
+{
+    let creep = tick_context.runtime_data.owner;
+    let action_flags = &mut tick_context.action_flags;
+
+    let creep_pos = creep.pos();
+    let target_position = controller_id.pos();
+
+    //TODO: Check visibility cache and cancel if controller doesn't exist or is owned?
+
+    if !creep_pos.is_near_to(&target_position) {
+        if !action_flags.contains(SimultaneousActionFlags::MOVE) {
+            action_flags.insert(SimultaneousActionFlags::MOVE);
+
+            tick_context
+                .runtime_data
+                .movement
+                .move_to_range(tick_context.runtime_data.creep_entity, target_position, 1);
+        }
+
+        return None;
+    }
+
+    if let Some(controller) = controller_id.resolve() {
+        info!("Signing controller!");
+
+        if !action_flags.contains(SimultaneousActionFlags::SIGN) {
+            action_flags.insert(SimultaneousActionFlags::SIGN);
+
+            creep.sign_controller(&controller, message);
+        }
+    }
+
+    Some(next_state())
 }

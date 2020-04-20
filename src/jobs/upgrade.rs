@@ -28,6 +28,7 @@ machine!(
         Harvest { target: RemoteObjectId<Source> },
         Pickup { ticket: TransferWithdrawTicket },
         FinishedPickup,
+        Sign { target: RemoteObjectId<StructureController> },
         Upgrade { target: RemoteObjectId<StructureController> },
         Wait { ticks: u32 }
     }
@@ -54,9 +55,9 @@ machine!(
             std::any::type_name::<Self>().to_string()
         }
 
-        Idle, Harvest, FinishedPickup, Upgrade, Wait => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
+        Idle, Harvest, FinishedPickup, Sign, Upgrade, Wait => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
         
-        Idle, Harvest, FinishedPickup, Upgrade, Wait => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
+        Idle, Harvest, FinishedPickup, Sign, Upgrade, Wait => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
         
         _ => fn tick(&mut self, state_context: &mut UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState>;
     }
@@ -82,6 +83,7 @@ impl Idle {
                 None
             }
         })
+        .or_else(|| get_new_sign_state(home_room_data, UpgradeState::sign))
         .or_else(|| get_new_upgrade_state(&tick_context.runtime_data.owner, home_room_data, UpgradeState::upgrade))
         .or_else(|| Some(UpgradeState::wait(5)))
     }
@@ -121,6 +123,12 @@ impl FinishedPickup {
             UpgradeState::pickup,
         )
         .or_else(|| Some(UpgradeState::idle()))
+    }
+}
+
+impl Sign {
+    pub fn tick(&mut self, _state_context: &UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState> {
+        tick_sign(tick_context, self.target, &"Rusty robots!", UpgradeState::idle)
     }
 }
 
