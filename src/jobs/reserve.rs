@@ -5,6 +5,7 @@ use super::utility::controllerbehavior::*;
 use super::utility::movebehavior::*;
 use super::utility::waitbehavior::*;
 use crate::remoteobjectid::*;
+use crate::constants::*;
 use screeps::*;
 use screeps_machine::*;
 use serde::*;
@@ -72,7 +73,7 @@ impl ReserveController {
 
 impl SignController {
     pub fn tick(&mut self, state_context: &mut ReserveJobContext, tick_context: &mut JobTickContext) -> Option<ReserveState> {
-        tick_sign(tick_context, state_context.reserve_target, &"Rusty robots!", ReserveState::reserve_controller)
+        tick_sign(tick_context, state_context.reserve_target, ROOM_SIGN, ReserveState::reserve_controller)
     }
 }
 
