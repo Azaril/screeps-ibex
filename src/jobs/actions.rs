@@ -24,6 +24,8 @@ bitflags! {
         const TRANSFER = 1u8 << 2;
         const DROP = 1u8 << 2;
 
+        const SIGN = 1u8 << 3;
+
         //TODO: Handle overlapping priorities.
     }
 }

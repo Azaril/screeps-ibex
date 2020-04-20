@@ -221,29 +221,4 @@ impl Job for LinkMineJob {
             self.state = tick_result
         }
     }
-
-    /*
-    fn run_job(&mut self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
-        let creep = runtime_data.owner;
-
-        let mut action_flags = SimultaneousActionFlags::UNSET;
-
-        loop {
-            let state_result = match &mut self.state {
-                LinkMineState::MoveToPosition(position) => run_move_to_position_state(creep, &mut action_flags, *position, LinkMineState::Idle),
-                LinkMineState::Idle() => Self::run_idle_state(creep, &mut action_flags, &self.mine_target, &self.link_target, &self.container_target),
-                LinkMineState::Harvest(stuck_count) => run_harvest_state(creep, &mut action_flags, &self.mine_target, true, stuck_count, LinkMineState::Idle),
-                LinkMineState::DepositLink() => run_deposit_all_resources_state(creep, &mut action_flags, TransferTarget::Link(self.link_target), LinkMineState::Idle),
-                LinkMineState::DepositContainer() => run_deposit_all_resources_state(creep, &mut action_flags, TransferTarget::Container(self.container_target.unwrap()), LinkMineState::Idle),
-                LinkMineState::Wait(time) => run_wait_state(time, LinkMineState::Idle)
-            };
-
-            if let Some(next_state) = state_result {
-                self.state = next_state;
-            } else {
-                break;
-            }
-        }
-    }
-    */
 }

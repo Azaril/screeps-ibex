@@ -18,6 +18,7 @@ machine!(
     #[derive(Clone, Serialize, Deserialize)]
     enum ReserveState {
         MoveToController,
+        SignController,
         ReserveController,
         Wait { ticks: u32 }
     }
@@ -58,7 +59,7 @@ impl MoveToController {
             tick_context,
             state_context.reserve_target.pos(),
             1,
-            ReserveState::reserve_controller,
+            ReserveState::sign_controller,
         )
     }
 }
@@ -66,6 +67,12 @@ impl MoveToController {
 impl ReserveController {
     fn tick(&mut self, state_context: &mut ReserveJobContext, tick_context: &mut JobTickContext) -> Option<ReserveState> {
         tick_reserve(tick_context, state_context.reserve_target, || ReserveState::wait(5))
+    }
+}
+
+impl SignController {
+    pub fn tick(&mut self, state_context: &mut ReserveJobContext, tick_context: &mut JobTickContext) -> Option<ReserveState> {
+        tick_sign(tick_context, state_context.reserve_target, &"Rusty robots!", ReserveState::reserve_controller)
     }
 }
 
