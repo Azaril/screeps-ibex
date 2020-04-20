@@ -7,6 +7,7 @@ use super::utility::haulbehavior::*;
 use super::utility::waitbehavior::*;
 use crate::remoteobjectid::*;
 use crate::transfer::transfersystem::*;
+use crate::constants::*;
 use screeps::*;
 use screeps_machine::*;
 use serde::{Deserialize, Serialize};
@@ -128,7 +129,7 @@ impl FinishedPickup {
 
 impl Sign {
     pub fn tick(&mut self, _state_context: &UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState> {
-        tick_sign(tick_context, self.target, &"Rusty robots!", UpgradeState::idle)
+        tick_sign(tick_context, self.target, ROOM_SIGN, UpgradeState::idle)
     }
 }
 
