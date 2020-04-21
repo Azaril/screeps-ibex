@@ -125,20 +125,26 @@ impl Mission for ReserveMission {
         let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
         let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
 
+        //TODO: Add better dynamic cpu adaptation.
+        let bucket = game::cpu::bucket();
+        let can_spawn = bucket > 9000.0 && crate::features::remote_mine::reserve();
+
+        if !can_spawn {
+            return Ok(MissionResult::Running);
+        }
+
         let alive_reservers = self
             .reservers
             .iter()
-            .filter(|reserver_entity| {
-                if let Some(creep_owner) = system_data.creep_owner.get(**reserver_entity) {
-                    creep_owner
-                        .owner
-                        .resolve()
-                        .and_then(|creep| creep.ticks_to_live().ok())
-                        .unwrap_or(0)
-                        > 100
-                } else {
-                    false
-                }
+            .filter(|entity| {
+                system_data.creep_spawning.get(**entity).is_some()
+                        || system_data
+                            .creep_owner
+                            .get(**entity)
+                            .and_then(|creep_owner| creep_owner.owner.resolve())
+                            .and_then(|creep| creep.ticks_to_live().ok())
+                            .map(|count| count > 100)
+                            .unwrap_or(false)
             })
             .count();
 

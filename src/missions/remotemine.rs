@@ -111,7 +111,8 @@ impl Mission for RemoteMineMission {
         if dynamic_visibility_data.updated_within(1000)
             && (!dynamic_visibility_data.owner().neutral()
                 || dynamic_visibility_data.reservation().hostile()
-                || dynamic_visibility_data.reservation().friendly())
+                || dynamic_visibility_data.reservation().friendly()
+                || dynamic_visibility_data.source_keeper())
         {
             return Err("Room is owned or reserved".to_string());
         }
@@ -123,7 +124,7 @@ impl Mission for RemoteMineMission {
 
         //TODO: Add better dynamic cpu adaptation.
         let bucket = game::cpu::bucket();
-        let can_spawn = bucket > 5000.0 && crate::features::remote_mine::harvest();
+        let can_spawn = bucket > 9000.0 && crate::features::remote_mine::harvest();
 
         if !can_spawn {
             return Ok(MissionResult::Running);
@@ -160,7 +161,7 @@ impl Mission for RemoteMineMission {
                 let body_definition = crate::creep::SpawnBodyDefinition {
                     maximum_energy: home_room.energy_capacity_available(),
                     minimum_repeat: Some(1),
-                    maximum_repeat: Some(8),
+                    maximum_repeat: None,
                     pre_body: &[],
                     repeat_body: &[Part::Move, Part::Move, Part::Carry, Part::Work],
                     post_body: &[],

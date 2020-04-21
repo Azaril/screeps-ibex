@@ -187,8 +187,6 @@ where
     }
 
     if let Some(controller) = controller_id.resolve() {
-        info!("Signing controller!");
-
         if !action_flags.contains(SimultaneousActionFlags::SIGN) {
             action_flags.insert(SimultaneousActionFlags::SIGN);
 
