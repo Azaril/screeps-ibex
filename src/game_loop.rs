@@ -247,6 +247,7 @@ pub fn tick() {
         .with_barrier()
         .with(VisualizerSystem, "visualizer", &[])
         .with(StatsSystem, "stats", &[])
+        .with_barrier()
         .with(MemoryArbiterSystem, "memory", &[])
         .build();
 
