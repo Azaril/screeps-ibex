@@ -218,7 +218,8 @@ pub fn tick() {
         .with(CleanupCreepsSystem, "cleanup_creeps", &[])
         .with(CreateRoomDataSystem, "create_room_data", &[])
         .with(UpdateRoomDataSystem, "update_room_data", &["create_room_data"])
-        .with(EntityMappingSystem, "entity_mapping", &["create_room_data"])
+        .with_barrier()
+        .with(EntityMappingSystem, "entity_mapping", &[])
         .build();
 
     pre_pass_dispatcher.setup(&mut world);

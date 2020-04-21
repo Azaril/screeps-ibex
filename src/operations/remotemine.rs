@@ -8,7 +8,7 @@ use crate::ownership::*;
 use crate::room::data::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
-use itertools::*;
+use std::collections::HashMap;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,27 @@ use specs_derive::*;
 #[derive(Clone, ConvertSaveload)]
 pub struct RemoteMineOperation {
     owner: EntityOption<OperationOrMissionEntity>,
+}
+
+struct CandidateRoomData {
+    room_data_entity: Entity,
+    viable: bool,
+    can_expand: bool
+}
+
+struct CandidateRoom {
+    room_data_entity: Entity,
+    home_room_data_entity: Entity
+}
+
+struct UnknownRoom {
+    room_name: RoomName,
+    home_room_data_entity: Entity,
+}
+
+struct GatherRoomData {
+    candidate_rooms: Vec<CandidateRoom>,
+    unknown_rooms: Vec<UnknownRoom>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -35,6 +56,160 @@ impl RemoteMineOperation {
 
     pub fn new(owner: Option<OperationOrMissionEntity>) -> RemoteMineOperation {
         RemoteMineOperation { owner: owner.into() }
+    }
+
+    fn gather_candidate_room_data(system_data: &OperationExecutionSystemData, room_name: RoomName) -> Option<CandidateRoomData> {
+        let search_room_entity = system_data.mapping.rooms.get(&room_name)?;
+        let search_room_data = system_data.room_data.get(*search_room_entity)?;
+        
+        let static_visibility_data = search_room_data.get_static_visibility_data()?;
+        let dynamic_visibility_data = search_room_data.get_dynamic_visibility_data()?;
+
+        //TODO: Look at update time?
+
+        let has_sources = !static_visibility_data.sources().is_empty();
+
+        let can_reserve = dynamic_visibility_data.owner().neutral() && dynamic_visibility_data.reservation().neutral();
+        let hostile = dynamic_visibility_data.owner().hostile() || dynamic_visibility_data.source_keeper();
+
+        let candidate_room_data = CandidateRoomData {
+            room_data_entity: *search_room_entity,
+            viable: has_sources && can_reserve,
+            can_expand: !hostile
+        };
+
+        Some(candidate_room_data)
+    }
+
+    fn gather_candidate_rooms(system_data: &OperationExecutionSystemData, max_distance: u32) -> GatherRoomData {
+        let mut unknown_rooms = HashMap::new();
+
+        struct VisitedRoomData {
+            room_data_entity: Entity,
+            home_room_data_entity: Entity,
+            distance: u32,
+            viable: bool,
+            can_expand: bool
+        };
+
+        let mut visited_rooms: HashMap<RoomName, VisitedRoomData> = HashMap::new();
+        let mut expansion_rooms: HashMap<RoomName, Entity> = HashMap::new();
+
+        for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
+            if let Some(room) = game::rooms::get(room_data.name) {
+                let seed_room = room.controller()
+                    .map(|controller| controller.my() && controller.level() >= 2)
+                    .unwrap_or(false);
+
+                if seed_room {
+                    let visited_room = VisitedRoomData {
+                        room_data_entity: entity,
+                        home_room_data_entity: entity,
+                        distance: 0,
+                        viable: false,
+                        can_expand: true
+                    };
+
+                    if visited_room.can_expand {
+                        let room_exits = game::map::describe_exits(room_data.name);
+
+                        //let source_room_status = game::map::get_room_status(*source_room_name);
+
+                        for expansion_room in room_exits.values() {
+                            //TODO: Make room status public...
+                            /*
+                            let expansion_room_status = game::map::get_room_status(*expansion_room);
+
+                            let can_expand = match expansion_room_status.status {
+                                game::map::RoomStatus::Normal => source_room_status.status == game::map::RoomStatus::Normal,
+                                game::map::RoomStatus::Closed => false,
+                                game::map::RoomStatus::Novice => source_room_status.status == game::map::RoomStatus::Novice,
+                                game::map::RoomStatus::Respawn => source_room_status.status == game::map::RoomStatus::Respawn,
+                            };
+                            */
+
+                            let can_expand = true;
+
+                            if can_expand {
+                                expansion_rooms.insert(*expansion_room, entity);
+                            }
+                        }
+                    }  
+                    
+                    visited_rooms.insert(room_data.name, visited_room);
+                }
+            }
+        }
+
+        let mut distance = 1;
+
+        while !expansion_rooms.is_empty() && distance <= max_distance {
+            let next_rooms: HashMap<RoomName, Entity> = std::mem::replace(&mut expansion_rooms, HashMap::new());
+
+            for (source_room_name, home_room_entity) in next_rooms.iter() {
+                if !visited_rooms.contains_key(source_room_name) {
+                    let candiate_room_data = Self::gather_candidate_room_data(system_data, *source_room_name);
+
+                    if let Some(candidate_room_data) = candiate_room_data {
+                        let visited_room = VisitedRoomData {
+                            room_data_entity: candidate_room_data.room_data_entity,
+                            home_room_data_entity: *home_room_entity,
+                            distance,
+                            viable: candidate_room_data.viable,
+                            can_expand: candidate_room_data.can_expand
+                        };
+
+                        if visited_room.can_expand {
+                            let room_exits = game::map::describe_exits(*source_room_name);
+
+                            //let source_room_status = game::map::get_room_status(*source_room_name);
+    
+                            for expansion_room in room_exits.values() {
+                                //TODO: Make room status public...
+                                /*
+                                let expansion_room_status = game::map::get_room_status(*expansion_room);
+
+                                let can_expand = match expansion_room_status.status {
+                                    game::map::RoomStatus::Normal => source_room_status.status == game::map::RoomStatus::Normal,
+                                    game::map::RoomStatus::Closed => false,
+                                    game::map::RoomStatus::Novice => source_room_status.status == game::map::RoomStatus::Novice,
+                                    game::map::RoomStatus::Respawn => source_room_status.status == game::map::RoomStatus::Respawn,
+                                };
+                                */
+
+                                let can_expand = true;
+
+                                if can_expand {
+                                    expansion_rooms.insert(*expansion_room, *home_room_entity);
+                                }
+                            }
+                        }
+                        
+                        visited_rooms.insert(*source_room_name, visited_room);
+                    } else {
+                        unknown_rooms.insert(*source_room_name, *home_room_entity);
+                    }
+                }
+            }
+
+            distance += 1;
+        }
+
+        let candidate_rooms = visited_rooms
+            .values()
+            .filter(|v| v.viable)
+            .map(|v| CandidateRoom { room_data_entity: v.room_data_entity, home_room_data_entity: v.home_room_data_entity })
+            .collect();
+
+        let returned_unknown_rooms = unknown_rooms
+            .into_iter()
+            .map(|(room_name, home_room_data_entity)| UnknownRoom { room_name, home_room_data_entity })
+            .collect();
+
+        GatherRoomData {
+            candidate_rooms,
+            unknown_rooms: returned_unknown_rooms
+        }
     }
 }
 
@@ -59,115 +234,70 @@ impl Operation for RemoteMineOperation {
             return Ok(OperationResult::Running);
         }
 
-        let mut desired_missions = vec![];
+        let gathered_data = Self::gather_candidate_rooms(system_data, 1);
 
-        //TODO: Do this in a single pass and use closest room to be the home room.
+        for unknown_room in gathered_data.unknown_rooms.iter() {
+            runtime_data
+                .visibility
+                .request(VisibilityRequest::new(unknown_room.room_name, VISIBILITY_PRIORITY_MEDIUM));
+        }  
+        
+        //TODO: Move this to visibility system.
+        for unknown_room in gathered_data.unknown_rooms.iter() {
+            if let Some(room_entity) = system_data.mapping.rooms.get(&unknown_room.room_name) {
+                if let Some(room_data) = system_data.room_data.get(*room_entity) {
+                    let dynamic_visibility_data = room_data.get_dynamic_visibility_data();
 
-        for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
-            if let Some(room) = game::rooms::get(room_data.name) {
-                let controller = room.controller();
+                    //
+                    // Spawn scout missions for remote mine rooms that have not had visibility updated in a long time.
+                    //
 
-                let (my_room, room_level) = controller
-                    .map(|controller| (controller.my(), controller.level()))
-                    .unwrap_or((false, 0));
+                    if dynamic_visibility_data.as_ref().map(|v| !v.updated_within(1000)).unwrap_or(true) {
+                        //TODO: wiarchbe: Use trait instead of match.
+                        let has_scout_mission =
+                            room_data
+                                .get_missions()
+                                .iter()
+                                .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
+                                    Some(MissionData::Scout(_)) => true,
+                                    _ => false,
+                                });
 
-                if my_room && room_level >= 2 {
-                    let mut candidate_rooms = vec![room_data.name];
+                        //
+                        // Spawn a new mission to fill the scout role if missing.
+                        //
 
-                    //TODO: Configure how far to expand room search.
-                    for _ in 0..1 {
-                        candidate_rooms = candidate_rooms
-                            .into_iter()
-                            .flat_map(|room_name| game::map::describe_exits(room_name).values().cloned().collect::<Vec<RoomName>>())
-                            .filter(|room_name| {
-                                if let Some(search_room_entity) = system_data.mapping.rooms.get(&room_name) {
-                                    if let Some(search_room_data) = system_data.room_data.get(*search_room_entity) {
-                                        if let Some(search_room_data) = search_room_data.get_dynamic_visibility_data() {
-                                            if search_room_data.updated_within(5000)
-                                                && (search_room_data.owner().hostile() || search_room_data.source_keeper())
-                                            {
-                                                return false;
-                                            }
-                                        }
-                                    }
+                        if !has_scout_mission {
+                            info!("Starting scout for room. Room: {}", room_data.name);
+
+                            let owner_entity = *runtime_data.entity;
+                            let room_entity = *room_entity;
+                            let home_room_entity = unknown_room.home_room_data_entity;
+
+                            system_data.updater.exec_mut(move |world| {
+                                let mission_entity = ScoutMission::build(
+                                    world.create_entity(),
+                                    Some(OperationOrMissionEntity::Operation(owner_entity)),
+                                    room_entity,
+                                    home_room_entity,
+                                )
+                                .build();
+
+                                let room_data_storage = &mut world.write_storage::<RoomData>();
+
+                                if let Some(room_data) = room_data_storage.get_mut(room_entity) {
+                                    room_data.add_mission(mission_entity);
                                 }
-                                true
-                            })
-                            .unique()
-                            .collect();
-                    }
-
-                    for offset_room_name in candidate_rooms {
-                        if let Some(offset_room_entity) = system_data.mapping.rooms.get(&offset_room_name) {
-                            desired_missions.push((*offset_room_entity, entity));
-                        } else {
-                            runtime_data
-                                .visibility
-                                .request(VisibilityRequest::new(offset_room_name, VISIBILITY_PRIORITY_MEDIUM));
+                            });
                         }
                     }
                 }
             }
         }
 
-        for (room_data_entity, home_room_data_entity) in desired_missions {
-            let room_data = system_data.room_data.get(room_data_entity).unwrap();
-
-            //
-            // Skip rooms that are known to have no sources. (If it is not known yet if they do, at least scout.)
-            //
-
-            if let Some(static_visibility_data) = room_data.get_static_visibility_data() {
-                if static_visibility_data.sources().is_empty() {
-                    continue;
-                }
-            }
-
+        for candidate_room in gathered_data.candidate_rooms.iter() {
+            let room_data = system_data.room_data.get(candidate_room.room_data_entity).unwrap();
             let dynamic_visibility_data = room_data.get_dynamic_visibility_data();
-
-            //
-            // Spawn scout missions for remote mine rooms that have not had visibility updated in a long time.
-            //
-
-            if dynamic_visibility_data.as_ref().map(|v| !v.updated_within(1000)).unwrap_or(true) {
-                //TODO: wiarchbe: Use trait instead of match.
-                let has_scout_mission =
-                    room_data
-                        .get_missions()
-                        .iter()
-                        .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
-                            Some(MissionData::Scout(_)) => true,
-                            _ => false,
-                        });
-
-                //
-                // Spawn a new mission to fill the scout role if missing.
-                //
-
-                if !has_scout_mission {
-                    info!("Starting scout for room. Room: {}", room_data.name);
-
-                    let owner_entity = *runtime_data.entity;
-                    let room_entity = room_data_entity;
-                    let home_room_entity = home_room_data_entity;
-
-                    system_data.updater.exec_mut(move |world| {
-                        let mission_entity = ScoutMission::build(
-                            world.create_entity(),
-                            Some(OperationOrMissionEntity::Operation(owner_entity)),
-                            room_entity,
-                            home_room_entity,
-                        )
-                        .build();
-
-                        let room_data_storage = &mut world.write_storage::<RoomData>();
-
-                        if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                            room_data.add_mission(mission_entity);
-                        }
-                    });
-                }
-            }
 
             //
             // Spawn remote mine missions for rooms that are not hostile and have recent visibility.
@@ -203,8 +333,8 @@ impl Operation for RemoteMineOperation {
                     info!("Starting remote mine for room. Room: {}", room_data.name);
 
                     let owner_entity = *runtime_data.entity;
-                    let room_entity = room_data_entity;
-                    let home_room_entity = home_room_data_entity;
+                    let room_entity = candidate_room.room_data_entity;
+                    let home_room_entity = candidate_room.home_room_data_entity;
 
                     system_data.updater.exec_mut(move |world| {
                         let mission_entity = RemoteMineMission::build(
@@ -241,8 +371,8 @@ impl Operation for RemoteMineOperation {
                     info!("Starting reservation for room. Room: {}", room_data.name);
 
                     let owner_entity = *runtime_data.entity;
-                    let room_entity = room_data_entity;
-                    let home_room_entity = home_room_data_entity;
+                    let room_entity = candidate_room.room_data_entity;
+                    let home_room_entity = candidate_room.home_room_data_entity;
 
                     system_data.updater.exec_mut(move |world| {
                         let mission_entity = ReserveMission::build(
