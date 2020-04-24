@@ -105,7 +105,7 @@ impl Scout {
 
                 let mission_entity = ScoutMission::build(
                     tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                    Some(OperationOrMissionEntity::Operation(tick_context.runtime_data.entity)),
+                    Some(OperationOrMissionEntity::Mission(tick_context.runtime_data.entity)),
                     state_context.outpost_room_data,
                     state_context.home_room_data,
                 ).build();
@@ -197,7 +197,7 @@ impl Cleanup {
 
             let mission_entity = ScoutMission::build(
                 tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                Some(OperationOrMissionEntity::Operation(tick_context.runtime_data.entity)),
+                Some(OperationOrMissionEntity::Mission(tick_context.runtime_data.entity)),
                 state_context.outpost_room_data,
                 state_context.home_room_data,
             ).build();
@@ -229,7 +229,7 @@ impl Cleanup {
 
                 let mission_entity = RaidMission::build(
                     tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                    Some(OperationOrMissionEntity::Operation(tick_context.runtime_data.entity)),
+                    Some(OperationOrMissionEntity::Mission(tick_context.runtime_data.entity)),
                     state_context.outpost_room_data,
                     state_context.home_room_data,
                 ).build();
@@ -278,7 +278,7 @@ impl Cleanup {
 
                 let mission_entity = DismantleMission::build(
                     tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                    Some(OperationOrMissionEntity::Operation(tick_context.runtime_data.entity)),
+                    Some(OperationOrMissionEntity::Mission(tick_context.runtime_data.entity)),
                     state_context.outpost_room_data,
                     state_context.home_room_data,
                     false,
@@ -343,7 +343,7 @@ impl Mine {
 
             let mission_entity = RemoteMineMission::build(
                 tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                Some(OperationOrMissionEntity::Operation(tick_context.runtime_data.entity)),
+                Some(OperationOrMissionEntity::Mission(tick_context.runtime_data.entity)),
                 state_context.outpost_room_data,
                 state_context.home_room_data,
             ).build();
@@ -360,7 +360,7 @@ impl Mine {
 
             let mission_entity = ReserveMission::build(
                 tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                Some(OperationOrMissionEntity::Operation(tick_context.runtime_data.entity)),
+                Some(OperationOrMissionEntity::Mission(tick_context.runtime_data.entity)),
                 state_context.outpost_room_data,
                 state_context.home_room_data,
             ).build();

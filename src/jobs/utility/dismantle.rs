@@ -14,9 +14,9 @@ pub fn get_dismantle_structures(room: Room, ignore_storage: bool) -> impl Iterat
             if let Some(store) = structure.as_has_store() {
                 let store_types = store.store_types();
 
-                return store_types.iter().any(|t| store.store_used_capacity(Some(*t)) > 0);
+                return !store_types.iter().any(|t| store.store_used_capacity(Some(*t)) > 0);
             }
 
-            false
+            true
         })
 }

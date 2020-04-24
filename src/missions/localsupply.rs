@@ -32,6 +32,7 @@ pub struct LocalSupplyMission {
 
 type MineralExtractorPair = (RemoteObjectId<Mineral>, RemoteObjectId<StructureExtractor>);
 
+#[derive(Serialize, Deserialize)]
 struct StructureData {
     sources_to_containers: HashMap<RemoteObjectId<Source>, Vec<RemoteObjectId<StructureContainer>>>,
     sources_to_links: HashMap<RemoteObjectId<Source>, Vec<RemoteObjectId<StructureLink>>>,
@@ -42,6 +43,7 @@ struct StructureData {
     containers: Vec<RemoteObjectId<StructureContainer>>,
 }
 
+#[derive(Clone)]
 struct CreepData {
     sources_to_harvesters: HashMap<RemoteObjectId<Source>, Vec<Entity>>,
     containers_to_source_miners: HashMap<RemoteObjectId<StructureContainer>, Vec<Entity>>,
