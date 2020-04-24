@@ -127,10 +127,20 @@ impl Mission for DismantleMission {
             }
         }
 
+        //TODO: Add better dynamic cpu adaptation.
+        let bucket = game::cpu::bucket();
+        let can_spawn = bucket > 9000.0 && crate::features::dismantle();
+
+        if !can_spawn {
+            return Ok(MissionResult::Running);
+        }
+
         let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
         let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
 
-        if self.dismantlers.is_empty() {
+        let desired_dismantlers = 1;
+
+        if self.dismantlers.len() < desired_dismantlers {
             let body_definition = crate::creep::SpawnBodyDefinition {
                 maximum_energy: home_room.energy_capacity_available(),
                 minimum_repeat: None,
