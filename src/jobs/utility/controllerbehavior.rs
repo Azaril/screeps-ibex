@@ -3,7 +3,6 @@ use crate::jobs::context::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use screeps::*;
-use log::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_upgrade_state<F, R>(creep: &Creep, upgrade_room: &RoomData, state_map: F) -> Option<R>
@@ -32,7 +31,6 @@ where
     let dynamic_visibility_data = sign_room.get_dynamic_visibility_data()?;
 
     if dynamic_visibility_data.updated_within(1000) && dynamic_visibility_data.sign().as_ref().map(|s| !s.user().mine()).unwrap_or(true) {
-        info!("Room needs signing. {} {:?}", sign_room.name, dynamic_visibility_data.reservation());
         let static_visibility_data = sign_room.get_static_visibility_data()?;
         let controller = static_visibility_data.controller()?;
 

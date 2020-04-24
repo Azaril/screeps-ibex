@@ -9,6 +9,7 @@ use serde::*;
 use specs::prelude::{Entities, LazyUpdate, Read, ResourceId, System, SystemData, World, Write, WriteStorage};
 use std::collections::hash_map::*;
 use std::collections::HashMap;
+use std::borrow::*;
 
 #[derive(Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Clone, Copy, Serialize, Deserialize)]
 #[repr(u8)]
@@ -43,7 +44,7 @@ bitflags! {
 
 impl<T> From<T> for TransferPriorityFlags
 where
-    T: std::borrow::Borrow<TransferPriority>,
+    T: Borrow<TransferPriority>,
 {
     fn from(priority: T) -> TransferPriorityFlags {
         match priority.borrow() {
@@ -77,7 +78,7 @@ bitflags! {
 
 impl<T> From<T> for TransferTypeFlags
 where
-    T: std::borrow::Borrow<TransferType>,
+    T: Borrow<TransferType>,
 {
     fn from(transfer_type: T) -> TransferTypeFlags {
         match transfer_type.borrow() {
@@ -235,6 +236,83 @@ impl TransferTarget {
             TransferTarget::Tombstone(_) => panic!("Attempting to link transfer resources to a tombstone!"),
             TransferTarget::Resource(_) => panic!("Attempting to link transfer resources to a resource!"),
         }
+    }
+}
+
+impl std::convert::TryFrom<&Structure> for TransferTarget {
+    type Error = ();
+    
+    fn try_from(val: &Structure) -> Result<TransferTarget, ()> {
+        match val {
+            Structure::Container(s) => Ok(s.into()),
+            Structure::Spawn(s) => Ok(s.into()),
+            Structure::Extension(s) => Ok(s.into()),
+            Structure::Storage(s) => Ok(s.into()),
+            Structure::Tower(s) => Ok(s.into()),
+            Structure::Link(s) => Ok(s.into()),
+            Structure::Terminal(s) => Ok(s.into()),
+            _ => Err(())
+        }
+    }
+}
+
+impl From<&StructureContainer> for TransferTarget {
+    fn from(val: &StructureContainer) -> TransferTarget {
+        TransferTarget::Container(val.remote_id())
+    }
+}
+
+impl From<&StructureSpawn> for TransferTarget {
+    fn from(val: &StructureSpawn) -> TransferTarget {
+        TransferTarget::Spawn(val.remote_id())
+    }
+}
+
+impl From<&StructureExtension> for TransferTarget {
+    fn from(val: &StructureExtension) -> TransferTarget {
+        TransferTarget::Extension(val.remote_id())
+    }
+}
+
+impl From<&StructureStorage> for TransferTarget {
+    fn from(val: &StructureStorage) -> TransferTarget {
+        TransferTarget::Storage(val.remote_id())
+    }
+}
+
+impl From<&StructureTower> for TransferTarget {
+    fn from(val: &StructureTower) -> TransferTarget {
+        TransferTarget::Tower(val.remote_id())
+    }
+}
+
+impl From<&StructureLink> for TransferTarget {
+    fn from(val: &StructureLink) -> TransferTarget {
+        TransferTarget::Link(val.remote_id())
+    }
+}
+
+impl From<&StructureTerminal> for TransferTarget {
+    fn from(val: &StructureTerminal) -> TransferTarget {
+        TransferTarget::Terminal(val.remote_id())
+    }
+}
+
+impl From<&Ruin> for TransferTarget {
+    fn from(val: &Ruin) -> TransferTarget {
+        TransferTarget::Ruin(val.remote_id())
+    }
+}
+
+impl From<&Tombstone> for TransferTarget {
+    fn from(val: &Tombstone) -> TransferTarget {
+        TransferTarget::Tombstone(val.remote_id())
+    }
+}
+
+impl From<&Resource> for TransferTarget {
+    fn from(val: &Resource) -> TransferTarget {
+        TransferTarget::Resource(val.remote_id())
     }
 }
 
@@ -1230,13 +1308,13 @@ impl TransferQueue {
 
     pub fn select_pickups(
         &mut self,
-        rooms: &[RoomName],
+        pickup_rooms: &[RoomName],
         allowed_priorities: TransferPriorityFlags,
         pickup_types: TransferTypeFlags,
         desired_resources: &HashMap<Option<ResourceType>, u32>,
         available_capacity: TransferCapacity,
     ) -> Vec<TransferWithdrawTicket> {
-        rooms
+        pickup_rooms
             .iter()
             .filter_map(|room_name| self.rooms.get(room_name))
             .filter(|room| room.stats.withdrawl_priorities.intersects(allowed_priorities))
@@ -1258,13 +1336,13 @@ impl TransferQueue {
 
     pub fn select_deliveries(
         &mut self,
-        rooms: &[RoomName],
+        delivery_rooms: &[RoomName],
         allowed_priorities: TransferPriorityFlags,
         delivery_types: TransferTypeFlags,
         available_resources: &HashMap<ResourceType, u32>,
         available_capacity: TransferCapacity,
     ) -> Vec<TransferDepositTicket> {
-        rooms
+        delivery_rooms
             .iter()
             .filter_map(|room_name| self.rooms.get(room_name))
             .filter(|room| room.stats.deposit_priorities.intersects(allowed_priorities))
@@ -1362,7 +1440,8 @@ impl TransferQueue {
 
     pub fn select_best_delivery(
         &mut self,
-        rooms: &[RoomName],
+        pickup_rooms_temp: &[RoomName],
+        delivery_rooms: &[RoomName],
         pickup_priority: TransferPriority,
         delivery_priority: TransferPriority,
         transfer_type: TransferType,
@@ -1373,14 +1452,14 @@ impl TransferQueue {
             return None;
         }
 
-        let global_available_resources = self.get_available_withdrawl_totals_by_priority(rooms, transfer_type, pickup_priority);
+        let global_available_resources = self.get_available_withdrawl_totals_by_priority(pickup_rooms_temp, transfer_type, pickup_priority);
 
         if global_available_resources.is_empty() {
             return None;
         }
 
         self.select_deliveries(
-            rooms,
+            delivery_rooms,
             delivery_priority.into(),
             transfer_type.into(),
             &global_available_resources,
@@ -1400,7 +1479,7 @@ impl TransferQueue {
             }
 
             let pickups = self.select_pickups(
-                rooms,
+                pickup_rooms_temp,
                 pickup_priority.into(),
                 transfer_type.into(),
                 &delivery_resources,
@@ -1522,7 +1601,8 @@ impl TransferQueue {
 
     pub fn select_pickup_and_delivery(
         &mut self,
-        rooms: &[RoomName],
+        pickup_rooms: &[RoomName],
+        delivery_rooms: &[RoomName],
         allowed_priorities: TransferPriorityFlags,
         transfer_type: TransferType,
         current_position: RoomPosition,
@@ -1538,7 +1618,8 @@ impl TransferQueue {
 
         for (pickup_priority, delivery_priority) in priorities {
             if let Some((pickup_ticket, delivery_ticket)) = self.select_best_delivery(
-                rooms,
+                pickup_rooms,
+                delivery_rooms,
                 *pickup_priority,
                 *delivery_priority,
                 transfer_type,

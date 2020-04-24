@@ -86,6 +86,7 @@ impl Idle {
             if let Some(state) = get_new_pickup_and_delivery_full_capacity_state(
                 creep,
                 &[delivery_room_data],
+                &[delivery_room_data],
                 TransferPriorityFlags::HIGH,
                 TransferType::Haul,
                 tick_context.runtime_data.transfer_queue,
@@ -103,6 +104,7 @@ impl Idle {
             if state_context.allow_haul {
                 if let Some(state) = get_new_pickup_and_delivery_full_capacity_state(
                     creep,
+                    &[delivery_room_data],
                     &[delivery_room_data],
                     TransferPriorityFlags::MEDIUM | TransferPriorityFlags::LOW,
                     TransferType::Haul,
@@ -174,10 +176,9 @@ impl Pickup {
     }
 
     fn tick(&mut self, _state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
-        //TODO: This needs fixing as it's causing a clone every tick even if a copy isn't needed.
-        let deposits = self.deposits.clone();
+        let deposits = &self.deposits;
 
-        tick_pickup(tick_context, &mut self.withdrawl, move || HarvestState::delivery(deposits))
+        tick_pickup(tick_context, &mut self.withdrawl, move || HarvestState::delivery(deposits.clone()))
     }
 }
 

@@ -50,6 +50,8 @@ pub enum OperationResult {
 pub trait Operation {
     fn get_owner(&self) -> &Option<OperationOrMissionEntity>;
 
+    fn owner_complete(&mut self, owner: OperationOrMissionEntity);
+
     fn child_complete(&mut self, _child: Entity) {}
 
     fn describe(&mut self, system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData);

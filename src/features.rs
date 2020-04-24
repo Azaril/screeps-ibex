@@ -33,7 +33,8 @@ pub mod js {
                     remote_mine: {
                         harvest: true,
                         reserve: true
-                    }
+                    },
+                    raid: true
                 }
             });
         }
@@ -112,4 +113,8 @@ pub mod remote_mine {
     pub fn reserve() -> bool {
         ::screeps::memory::root().path_bool("_features.remote_mine.reserve")
     }
+}
+
+pub fn raid() -> bool {
+    ::screeps::memory::root().path_bool("_features.raid")
 }

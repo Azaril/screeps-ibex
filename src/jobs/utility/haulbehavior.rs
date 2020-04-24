@@ -103,7 +103,8 @@ where
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_pickup_and_delivery_state<F, R>(
     creep: &Creep,
-    pickup_rooms: &[&RoomData],
+    pickup_rooms_temp: &[&RoomData],
+    delivery_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
     transfer_type: TransferType,
     available_capacity: TransferCapacity,
@@ -114,10 +115,12 @@ where
     F: Fn(TransferWithdrawTicket, Vec<TransferDepositTicket>) -> R,
 {
     if !available_capacity.empty() {
-        let pickup_room_names = pickup_rooms.iter().map(|r| r.name).collect_vec();
+        let pickup_room_names = pickup_rooms_temp.iter().map(|r| r.name).collect_vec();
+        let delivery_room_names = delivery_rooms.iter().map(|r| r.name).collect_vec();
 
         if let Some((mut pickup, delivery)) = transfer_queue.select_pickup_and_delivery(
             &pickup_room_names,
+            &delivery_room_names,
             allowed_priorities,
             transfer_type,
             creep.pos(),
@@ -182,6 +185,7 @@ where
 pub fn get_new_pickup_and_delivery_full_capacity_state<F, R>(
     creep: &Creep,
     pickup_rooms: &[&RoomData],
+    delivery_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
     transfer_type: TransferType,
     transfer_queue: &mut TransferQueue,
@@ -199,6 +203,7 @@ where
     get_new_pickup_and_delivery_state(
         creep,
         pickup_rooms,
+        delivery_rooms,
         allowed_priorities,
         transfer_type,
         TransferCapacity::Finite(available_capacity),
@@ -288,11 +293,10 @@ where
 
             while let Some((resource, amount)) = ticket.get_next_deposit() {
                 if !tick_context.action_flags.contains(SimultaneousActionFlags::TRANSFER) {
-                    tick_context.action_flags.insert(SimultaneousActionFlags::TRANSFER);
-
                     ticket.consume_deposit(resource, amount);
 
                     if ticket.target().creep_transfer_resource_amount(creep, resource, amount) == ReturnCode::Ok {
+                        tick_context.action_flags.insert(SimultaneousActionFlags::TRANSFER);
                         break;
                     }
                 } else {

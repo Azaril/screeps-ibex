@@ -7,3 +7,5 @@ pub mod movebehavior;
 pub mod repair;
 pub mod repairbehavior;
 pub mod waitbehavior;
+pub mod dismantlebehavior;
+pub mod dismantle;

@@ -6,7 +6,7 @@ pub mod localbuild;
 pub mod localsupply;
 pub mod managersystem;
 pub mod operationsystem;
-pub mod remotemine;
+pub mod miningoutpost;
 pub mod terminal;
 pub mod tower;
 pub mod upgrade;

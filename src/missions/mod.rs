@@ -12,3 +12,7 @@ pub mod scout;
 pub mod terminal;
 pub mod tower;
 pub mod upgrade;
+pub mod miningoutpost;
+pub mod context;
+pub mod raid;
+pub mod dismantle;

@@ -15,7 +15,7 @@ machine!(
     #[derive(Clone, Serialize, Deserialize)]
     enum ScoutState {
         MoveToRoom,
-        Suicide,
+        Idle,
     }
 
     impl {
@@ -52,14 +52,12 @@ impl MoveToRoom {
     pub fn tick(&mut self, state_context: &mut ScoutJobContext, tick_context: &mut JobTickContext) -> Option<ScoutState> {
         //TODO: Scout multiple rooms instead of just suiciding.
         //TODO: Handle navigation failure.
-        tick_move_to_room(tick_context, state_context.room_target, ScoutState::suicide)
+        tick_move_to_room(tick_context, state_context.room_target, ScoutState::idle)
     }
 }
 
-impl Suicide {
-    pub fn tick(&mut self, _state_context: &mut ScoutJobContext, tick_context: &mut JobTickContext) -> Option<ScoutState> {
-        tick_context.runtime_data.owner.suicide();
-
+impl Idle {
+    pub fn tick(&mut self, _state_context: &mut ScoutJobContext, _tick_context: &mut JobTickContext) -> Option<ScoutState> {
         None
     }
 }

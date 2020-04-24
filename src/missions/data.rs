@@ -19,6 +19,9 @@ pub enum MissionData {
     RemoteBuild(super::remotebuild::RemoteBuildMission),
     Haul(super::haul::HaulMission),
     Terminal(super::terminal::TerminalMission),
+    MiningOutpost(super::miningoutpost::MiningOutpostMission),
+    Raid(super::raid::RaidMission),
+    Dismantle(super::dismantle::DismantleMission),
 }
 
 impl MissionData {
@@ -36,6 +39,9 @@ impl MissionData {
             MissionData::RemoteBuild(ref mut data) => data,
             MissionData::Haul(ref mut data) => data,
             MissionData::Terminal(ref mut data) => data,
+            MissionData::MiningOutpost(ref mut data) => data,
+            MissionData::Raid(ref mut data) => data,
+            MissionData::Dismantle(ref mut data) => data,
         }
     }
 }

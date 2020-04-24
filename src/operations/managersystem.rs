@@ -4,7 +4,7 @@ use super::data::*;
 use super::haul::*;
 use super::localbuild::*;
 use super::localsupply::*;
-use super::remotemine::*;
+use super::miningoutpost::*;
 use super::terminal::*;
 use super::tower::*;
 use super::upgrade::*;
@@ -23,7 +23,7 @@ impl<'a> System<'a> for OperationManagerSystem {
         let mut has_upgrade = false;
         let mut has_local_build = false;
         let mut has_tower = false;
-        let mut has_remote_mine = false;
+        let mut has_mining_outpost = false;
         let mut has_construction = false;
         let mut has_claim = false;
         let mut has_haul = false;
@@ -35,7 +35,7 @@ impl<'a> System<'a> for OperationManagerSystem {
                 OperationData::Upgrade(_) => has_upgrade = true,
                 OperationData::LocalBuild(_) => has_local_build = true,
                 OperationData::Tower(_) => has_tower = true,
-                OperationData::RemoteMine(_) => has_remote_mine = true,
+                OperationData::MiningOutpost(_) => has_mining_outpost = true,
                 OperationData::Construction(_) => has_construction = true,
                 OperationData::Claim(_) => has_claim = true,
                 OperationData::Haul(_) => has_haul = true,
@@ -67,10 +67,10 @@ impl<'a> System<'a> for OperationManagerSystem {
             TowerOperation::build(updater.create_entity(&entities), None).build();
         }
 
-        if !has_remote_mine {
-            info!("Remote mine operation does not exist, creating.");
+        if !has_mining_outpost {
+            info!("Mining outpost operation does not exist, creating.");
 
-            RemoteMineOperation::build(updater.create_entity(&entities), None).build();
+            MiningOutpostOperation::build(updater.create_entity(&entities), None).build();
         }
 
         if !has_construction {

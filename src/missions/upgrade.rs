@@ -69,6 +69,12 @@ impl Mission for UpgradeMission {
         &self.owner
     }
 
+    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+        assert!(Some(owner) == *self.owner);
+
+        self.owner.take();
+    }
+
     fn get_room(&self) -> Entity {
         self.room_data
     }
@@ -85,7 +91,7 @@ impl Mission for UpgradeMission {
 
     fn pre_run_mission(
         &mut self,
-        system_data: &MissionExecutionSystemData,
+        system_data: &mut MissionExecutionSystemData,
         _runtime_data: &mut MissionExecutionRuntimeData,
     ) -> Result<(), String> {
         //
@@ -100,7 +106,7 @@ impl Mission for UpgradeMission {
 
     fn run_mission(
         &mut self,
-        system_data: &MissionExecutionSystemData,
+        system_data: &mut MissionExecutionSystemData,
         runtime_data: &mut MissionExecutionRuntimeData,
     ) -> Result<MissionResult, String> {
         //TODO: Limit upgraders to 15 total work parts upgrading across all creeps.
