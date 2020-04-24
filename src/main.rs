@@ -76,7 +76,7 @@ fn main_loop() {
 
         let used_cpu = screeps::game::cpu::get_used();
 
-        if used_cpu >= 50.0 {
+        if used_cpu >= 18.0 {
             warn!("Long tick: {}", used_cpu);
 
             if let Some(trace_output) = serde_json::to_string(&trace).ok() {

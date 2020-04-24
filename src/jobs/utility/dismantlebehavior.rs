@@ -12,7 +12,7 @@ where
     F: Fn(RemoteStructureIdentifier) -> R,
 {
     //TODO: Add bypass for energy check.
-    if creep.store_used_capacity(Some(ResourceType::Energy)) > 0 {
+    if creep.store_capacity(Some(ResourceType::Energy)) == 0 || creep.store_free_capacity(Some(ResourceType::Energy)) > 0 {
         //TODO: This requires visibility and could fail?
         if let Some(room) = game::rooms::get(dismantle_room.name) {
             let best_structure = get_dismantle_structures(room, ignore_storage)
