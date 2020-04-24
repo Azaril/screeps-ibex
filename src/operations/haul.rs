@@ -46,7 +46,7 @@ impl Operation for HaulOperation {
         self.owner.take();
     }
 
-    fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
+    fn describe(&mut self, _system_data: &mut OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
             global_ui.operations().add_text("Haul".to_string(), None);
         })
@@ -54,8 +54,8 @@ impl Operation for HaulOperation {
 
     fn run_operation(
         &mut self,
-        system_data: &OperationExecutionSystemData,
-        _runtime_data: &mut OperationExecutionRuntimeData,
+        system_data: &mut OperationExecutionSystemData,
+        runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
         for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
             if let Some(room) = game::rooms::get(room_data.name) {
@@ -82,7 +82,7 @@ impl Operation for HaulOperation {
                         if !has_haul_mission {
                             info!("Starting haul mission for spawning room. Room: {}", room_data.name);
 
-                            let owner_entity = *_runtime_data.entity;
+                            let owner_entity = runtime_data.entity;
                             let room_entity = entity;
 
                             system_data.updater.exec_mut(move |world| {

@@ -83,14 +83,8 @@ impl Mission for DismantleMission {
         self.room_data
     }
 
-    fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
-        if let Some(room_data) = system_data.room_data.get(self.room_data) {
-            describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui
-                    .missions()
-                    .add_text(format!("Dismantle - Dismantlers: {}", self.dismantlers.len()), None);
-            })
-        }
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+        format!("Dismantle - Dismantlers: {}", self.dismantlers.len())
     }
 
     fn pre_run_mission(
@@ -151,10 +145,10 @@ impl Mission for DismantleMission {
                     "Dismantler".to_string(),
                     &body,
                     SPAWN_PRIORITY_LOW,
-                    Self::create_handle_dismantler_spawn(*runtime_data.entity, self.room_data, self.home_room_data, self.ignore_storage),
+                    Self::create_handle_dismantler_spawn(runtime_data.entity, self.room_data, self.home_room_data, self.ignore_storage),
                 );
 
-                runtime_data.spawn_queue.request(home_room_data.name, spawn_request);
+                system_data.spawn_queue.request(home_room_data.name, spawn_request);
             }
         }
 

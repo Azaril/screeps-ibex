@@ -159,14 +159,8 @@ impl Mission for LocalBuildMission {
         self.room_data
     }
 
-    fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
-        if let Some(room_data) = system_data.room_data.get(self.room_data) {
-            describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui
-                    .missions()
-                    .add_text(format!("Local Build - Builders: {}", self.builders.len()), None);
-            })
-        }
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+        format!("Local Build - Builders: {}", self.builders.len())
     }
 
     fn pre_run_mission(
@@ -193,7 +187,7 @@ impl Mission for LocalBuildMission {
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
         let has_sufficient_energy = {
-            if let Some(room_transfer_data) = runtime_data.transfer_queue.try_get_room(room_data.name) {
+            if let Some(room_transfer_data) = system_data.transfer_queue.try_get_room(room_data.name) {
                 if let Some(storage) = room.storage() {
                     if let Some(storage_node) = room_transfer_data.try_get_node(&TransferTarget::Storage(storage.remote_id())) {
                         if storage_node.get_available_withdrawl_by_resource(TransferType::Haul, ResourceType::Energy) >= 50_000 {
@@ -265,16 +259,16 @@ impl Mission for LocalBuildMission {
             };
 
             if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                let allow_harvest = room.controller().map(|c| c.level() <= 3).unwrap_or(false);
+                let allow_harvest = room.storage().is_none();
 
                 let spawn_request = SpawnRequest::new(
                     "Local Builder".to_string(),
                     &body,
                     spawn_priority,
-                    Self::create_handle_builder_spawn(*runtime_data.entity, self.room_data, allow_harvest),
+                    Self::create_handle_builder_spawn(runtime_data.entity, self.room_data, allow_harvest),
                 );
 
-                runtime_data.spawn_queue.request(room_data.name, spawn_request);
+                system_data.spawn_queue.request(room_data.name, spawn_request);
             }
         }
 

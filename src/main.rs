@@ -29,6 +29,7 @@ mod structureidentifier;
 mod transfer;
 mod ui;
 mod visualize;
+mod store;
 
 use log::*;
 use stdweb::*;

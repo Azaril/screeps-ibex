@@ -46,7 +46,7 @@ impl Operation for UpgradeOperation {
         self.owner.take();
     }
 
-    fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
+    fn describe(&mut self, _system_data: &mut OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
             global_ui.operations().add_text("Upgrade".to_string(), None);
         })
@@ -54,7 +54,7 @@ impl Operation for UpgradeOperation {
 
     fn run_operation(
         &mut self,
-        system_data: &OperationExecutionSystemData,
+        system_data: &mut OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
         for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
@@ -82,7 +82,7 @@ impl Operation for UpgradeOperation {
                         if !has_upgrade_mission {
                             info!("Starting upgrade mission for spawning room. Room: {}", room_data.name);
 
-                            let owner_entity = *runtime_data.entity;
+                            let owner_entity = runtime_data.entity;
                             let room_entity = entity;
 
                             system_data.updater.exec_mut(move |world| {

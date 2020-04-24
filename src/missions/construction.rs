@@ -51,18 +51,14 @@ impl Mission for ConstructionMission {
         self.room_data
     }
 
-    fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
-        if let Some(room_data) = system_data.room_data.get(self.room_data) {
-            describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui.missions().add_text("Construction".to_string(), None);
-            })
-        }
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+        "Construction".to_string()
     }
 
     fn run_mission(
         &mut self,
         system_data: &mut MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
+        _runtime_data: &mut MissionExecutionRuntimeData,
     ) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
@@ -80,7 +76,7 @@ impl Mission for ConstructionMission {
         };
 
         if request_plan {
-            runtime_data.room_plan_queue.request(RoomPlanRequest::new(room_data.name, 1.0));
+            system_data.room_plan_queue.request(RoomPlanRequest::new(room_data.name, 1.0));
         }
 
         Ok(MissionResult::Running)

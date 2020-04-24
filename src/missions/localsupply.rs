@@ -10,6 +10,7 @@ use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use crate::transfer::transfersystem::*;
+use crate::store::*;
 use itertools::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -387,7 +388,7 @@ impl LocalSupplyMission {
 
     fn spawn_creeps(
         &mut self,
-        system_data: &MissionExecutionSystemData,
+        system_data: &mut MissionExecutionSystemData,
         runtime_data: &mut MissionExecutionRuntimeData,
         structure_data: &StructureData,
         creep_data: &CreepData,
@@ -499,10 +500,10 @@ impl LocalSupplyMission {
                         format!("Harvester - Source: {}", source_id.id()),
                         &body,
                         priority,
-                        Self::create_handle_harvester_spawn(*runtime_data.entity, *source_id, self.room_data),
+                        Self::create_handle_harvester_spawn(runtime_data.entity, *source_id, self.room_data),
                     );
 
-                    runtime_data.spawn_queue.request(room_data.name, spawn_request);
+                    system_data.spawn_queue.request(room_data.name, spawn_request);
                 }
             } else {
                 let alive_source_miners = source_container_miners
@@ -569,10 +570,10 @@ impl LocalSupplyMission {
                                 format!("Link Miner - Source: {}", source_id.id()),
                                 &body,
                                 SPAWN_PRIORITY_HIGH,
-                                Self::create_handle_link_miner_spawn(*runtime_data.entity, *source_id, *link, target_container.cloned()),
+                                Self::create_handle_link_miner_spawn(runtime_data.entity, *source_id, *link, target_container.cloned()),
                             );
 
-                            runtime_data.spawn_queue.request(room_data.name, spawn_request);
+                            system_data.spawn_queue.request(room_data.name, spawn_request);
                         }
                     }
                 } else if !source_containers.is_empty() {
@@ -613,13 +614,13 @@ impl LocalSupplyMission {
                                 &body,
                                 SPAWN_PRIORITY_HIGH,
                                 Self::create_handle_container_miner_spawn(
-                                    *runtime_data.entity,
+                                    runtime_data.entity,
                                     StaticMineTarget::Source(*source_id),
                                     *container,
                                 ),
                             );
 
-                            runtime_data.spawn_queue.request(room_data.name, spawn_request);
+                            system_data.spawn_queue.request(room_data.name, spawn_request);
                         }
                     }
                 }
@@ -683,13 +684,13 @@ impl LocalSupplyMission {
                         &body,
                         SPAWN_PRIORITY_LOW,
                         Self::create_handle_container_miner_spawn(
-                            *runtime_data.entity,
+                            runtime_data.entity,
                             StaticMineTarget::Mineral(*mineral_id, *extractor_id),
                             *container,
                         ),
                     );
 
-                    runtime_data.spawn_queue.request(room_data.name, spawn_request);
+                    system_data.spawn_queue.request(room_data.name, spawn_request);
                 }
             }
         }
@@ -792,12 +793,7 @@ impl LocalSupplyMission {
 
         for container_id in storage_containers {
             if let Some(container) = container_id.resolve() {
-                let capacity = container.store_capacity(None);
-                let store_types = container.store_types();
-                let used_capacity = store_types.iter().map(|r| container.store_used_capacity(Some(*r))).sum::<u32>();
-                //TODO: Fix this when _sum double count bug is fixed.
-                //let container_free_capacity = container.store_free_capacity(None);
-                let container_free_capacity = capacity - used_capacity;
+                let container_free_capacity = container.expensive_store_free_capacity();
                 if container_free_capacity > 0 {
                     let transfer_request = TransferDepositRequest::new(
                         TransferTarget::Container(*container_id),
@@ -1083,26 +1079,19 @@ impl Mission for LocalSupplyMission {
         self.room_data
     }
 
-    fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
-        if let Some(room_data) = system_data.room_data.get(self.room_data) {
-            describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui.missions().add_text(
-                    format!(
-                        "Local Supply - Miners: {} Harvesters: {} Minerals: {}",
-                        self.source_container_miners.len() + self.source_link_miners.len(),
-                        self.harvesters.len(),
-                        self.mineral_container_miners.len()
-                    ),
-                    None,
-                );
-            })
-        }
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+        format!(
+            "Local Supply - Miners: {} Harvesters: {} Minerals: {}",
+            self.source_container_miners.len() + self.source_link_miners.len(),
+            self.harvesters.len(),
+            self.mineral_container_miners.len()
+        )
     }
 
     fn pre_run_mission(
         &mut self,
         system_data: &mut MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
+        _runtime_data: &mut MissionExecutionRuntimeData,
     ) -> Result<(), String> {
         //
         // Cleanup creeps that no longer exist.
@@ -1123,14 +1112,14 @@ impl Mission for LocalSupplyMission {
 
         let structure_data = Self::create_structure_data(room_data, &room)?;
 
-        Self::request_transfer_for_containers(&mut runtime_data.transfer_queue, &structure_data);
-        Self::request_transfer_for_structures(&mut runtime_data.transfer_queue, &room);
-        Self::request_transfer_for_ruins(&mut runtime_data.transfer_queue, &room);
-        Self::request_transfer_for_tombstones(&mut runtime_data.transfer_queue, &room);
-        Self::request_transfer_for_dropped_resources(&mut runtime_data.transfer_queue, &room);
-        Self::request_transfer_for_source_links(&mut runtime_data.transfer_queue, &structure_data);
-        Self::request_transfer_for_storage_links(&mut runtime_data.transfer_queue, &structure_data);
-        Self::request_transfer_for_controller_links(&mut runtime_data.transfer_queue, &structure_data);
+        Self::request_transfer_for_containers(&mut system_data.transfer_queue, &structure_data);
+        Self::request_transfer_for_structures(&mut system_data.transfer_queue, &room);
+        Self::request_transfer_for_ruins(&mut system_data.transfer_queue, &room);
+        Self::request_transfer_for_tombstones(&mut system_data.transfer_queue, &room);
+        Self::request_transfer_for_dropped_resources(&mut system_data.transfer_queue, &room);
+        Self::request_transfer_for_source_links(&mut system_data.transfer_queue, &structure_data);
+        Self::request_transfer_for_storage_links(&mut system_data.transfer_queue, &structure_data);
+        Self::request_transfer_for_controller_links(&mut system_data.transfer_queue, &structure_data);
 
         Ok(())
     }
@@ -1148,7 +1137,7 @@ impl Mission for LocalSupplyMission {
 
         self.spawn_creeps(system_data, runtime_data, &structure_data, &creep_data)?;
 
-        self.link_transfer(&structure_data, runtime_data.transfer_queue)?;
+        self.link_transfer(&structure_data, system_data.transfer_queue)?;
 
         Ok(MissionResult::Running)
     }

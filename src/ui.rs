@@ -124,7 +124,7 @@ impl UISystem {
 
     pub fn with_room<T>(&mut self, room: RoomName, visualizer: &mut Visualizer, callback: T)
     where
-        T: Fn(&mut RoomUI),
+        T: FnOnce(&mut RoomUI),
     {
         let mut room_visualizer = visualizer.get_room(room);
         let room_state_entry = self.room_states.entry(room);
