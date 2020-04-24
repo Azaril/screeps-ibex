@@ -49,6 +49,12 @@ impl Operation for ClaimOperation {
         &self.owner
     }
 
+    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+        assert!(Some(owner) == *self.owner);
+
+        self.owner.take();
+    }
+
     fn child_complete(&mut self, child: Entity) {
         self.claim_missions.retain(|e| *e != child);
     }

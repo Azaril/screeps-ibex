@@ -40,6 +40,12 @@ impl Operation for HaulOperation {
         &self.owner
     }
 
+    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+        assert!(Some(owner) == *self.owner);
+
+        self.owner.take();
+    }
+
     fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
             global_ui.operations().add_text("Haul".to_string(), None);

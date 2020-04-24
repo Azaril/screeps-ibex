@@ -1,7 +1,7 @@
 use super::data::*;
 use super::operationsystem::*;
 use crate::missions::data::*;
-use crate::missions::remotemine::*;
+use crate::missions::miningoutpost::*;
 use crate::missions::reserve::*;
 use crate::missions::scout::*;
 use crate::ownership::*;
@@ -18,7 +18,7 @@ use specs::*;
 use specs_derive::*;
 
 #[derive(Clone, ConvertSaveload)]
-pub struct RemoteMineOperation {
+pub struct MiningOutpostOperation {
     owner: EntityOption<OperationOrMissionEntity>,
 }
 
@@ -44,18 +44,18 @@ struct GatherRoomData {
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-impl RemoteMineOperation {
+impl MiningOutpostOperation {
     pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let operation = RemoteMineOperation::new(owner);
+        let operation = MiningOutpostOperation::new(owner);
 
-        builder.with(OperationData::RemoteMine(operation)).marked::<SerializeMarker>()
+        builder.with(OperationData::MiningOutpost(operation)).marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<OperationOrMissionEntity>) -> RemoteMineOperation {
-        RemoteMineOperation { owner: owner.into() }
+    pub fn new(owner: Option<OperationOrMissionEntity>) -> MiningOutpostOperation {
+        MiningOutpostOperation { owner: owner.into() }
     }
 
     fn gather_candidate_room_data(system_data: &OperationExecutionSystemData, room_name: RoomName) -> Option<CandidateRoomData> {
@@ -214,9 +214,15 @@ impl RemoteMineOperation {
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-impl Operation for RemoteMineOperation {
+impl Operation for MiningOutpostOperation {
     fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
         &self.owner
+    }
+
+    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+        assert!(Some(owner) == *self.owner);
+
+        self.owner.take();
     }
 
     fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
@@ -321,7 +327,7 @@ impl Operation for RemoteMineOperation {
                         .get_missions()
                         .iter()
                         .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
-                            Some(MissionData::RemoteMine(_)) => true,
+                            Some(MissionData::MiningOutpost(_)) => true,
                             _ => false,
                         });
 
@@ -337,7 +343,7 @@ impl Operation for RemoteMineOperation {
                     let home_room_entity = candidate_room.home_room_data_entity;
 
                     system_data.updater.exec_mut(move |world| {
-                        let mission_entity = RemoteMineMission::build(
+                        let mission_entity = MiningOutpostMission::build(
                             world.create_entity(),
                             Some(OperationOrMissionEntity::Operation(owner_entity)),
                             room_entity,

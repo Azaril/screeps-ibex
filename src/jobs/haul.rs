@@ -16,7 +16,8 @@ use specs_derive::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct HaulJobContext {
-    haul_rooms: EntityVec<Entity>,
+    pickup_rooms: EntityVec<Entity>,
+    delivery_rooms: EntityVec<Entity>,
 }
 
 machine!(
@@ -61,15 +62,21 @@ machine!(
 impl Idle {
     fn tick(&mut self, state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
         let creep = tick_context.runtime_data.owner;
-        let haul_rooms = state_context
-            .haul_rooms
+        let pickup_rooms = state_context
+            .pickup_rooms
+            .iter()
+            .filter_map(|e| tick_context.system_data.room_data.get(*e))
+            .collect_vec();
+
+        let delivery_rooms = state_context
+            .delivery_rooms
             .iter()
             .filter_map(|e| tick_context.system_data.room_data.get(*e))
             .collect_vec();
 
         get_new_delivery_current_resources_state(
             creep,
-            &haul_rooms,
+            &delivery_rooms,
             TransferPriorityFlags::ACTIVE,
             TransferTypeFlags::HAUL,
             tick_context.runtime_data.transfer_queue,
@@ -78,7 +85,7 @@ impl Idle {
         .or_else(|| {
             get_new_delivery_current_resources_state(
                 creep,
-                &haul_rooms,
+                &delivery_rooms,
                 TransferPriorityFlags::NONE,
                 TransferTypeFlags::HAUL,
                 tick_context.runtime_data.transfer_queue,
@@ -91,7 +98,8 @@ impl Idle {
                 .filter_map(|priority| {
                     get_new_pickup_and_delivery_full_capacity_state(
                         creep,
-                        &haul_rooms,
+                        &pickup_rooms,
+                        &delivery_rooms,
                         TransferPriorityFlags::from(priority),
                         TransferType::Haul,
                         tick_context.runtime_data.transfer_queue,
@@ -119,10 +127,9 @@ impl Pickup {
     }
 
     fn tick(&mut self, _state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
-        //TODO: This needs fixing as it's causing a clone every tick even if a copy isn't needed.
-        let deposits = self.deposits.clone();
+        let deposits = &self.deposits;
 
-        tick_pickup(tick_context, &mut self.withdrawl, move || HaulState::delivery(deposits))
+        tick_pickup(tick_context, &mut self.withdrawl, move || HaulState::delivery(deposits.clone()))
     }
 }
 
@@ -156,10 +163,11 @@ pub struct HaulJob {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl HaulJob {
-    pub fn new(haul_rooms: &[Entity]) -> HaulJob {
+    pub fn new(pickup_rooms: &[Entity], delivery_rooms: &[Entity]) -> HaulJob {
         HaulJob {
             context: HaulJobContext {
-                haul_rooms: haul_rooms.into(),
+                pickup_rooms: pickup_rooms.into(),
+                delivery_rooms: delivery_rooms.into()
             },
             state: HaulState::idle(),
         }
