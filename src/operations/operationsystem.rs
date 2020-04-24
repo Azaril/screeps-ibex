@@ -113,15 +113,13 @@ impl<'a> System<'a> for PreRunOperationSystem {
 fn queue_cleanup_operation(updater: &LazyUpdate, entity: Entity, owner: Option<OperationOrMissionEntity>) {
     updater.exec_mut(move |world| {
         match owner {
-            Some(OperationOrMissionEntity::Operation(operation_entity)) => {
-                let operation_data_storage = &mut world.write_storage::<OperationData>();
-                if let Some(operation_data) = operation_data_storage.get_mut(operation_entity) {
+            Some(OperationOrMissionEntity::Operation(owner_operation_entity)) => {
+                if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(owner_operation_entity) {
                     operation_data.as_operation().child_complete(entity);
                 }
             }
-            Some(OperationOrMissionEntity::Mission(mission_entity)) => {
-                let mission_data_storage = &mut world.write_storage::<MissionData>();
-                if let Some(mission_data) = mission_data_storage.get_mut(mission_entity) {
+            Some(OperationOrMissionEntity::Mission(owner_mission_entity)) => {
+                if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(owner_mission_entity) {
                     mission_data.as_mission().child_complete(entity);
                 }
             }

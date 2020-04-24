@@ -34,7 +34,8 @@ pub mod js {
                         harvest: true,
                         reserve: true
                     },
-                    raid: true
+                    raid: true,
+                    dismantle: true
                 }
             });
         }
@@ -117,4 +118,8 @@ pub mod remote_mine {
 
 pub fn raid() -> bool {
     ::screeps::memory::root().path_bool("_features.raid")
+}
+
+pub fn dismantle() -> bool {
+    ::screeps::memory::root().path_bool("_features.dismantle")
 }

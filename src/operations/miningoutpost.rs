@@ -235,10 +235,6 @@ impl Operation for MiningOutpostOperation {
         system_data: &mut OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
-        if !crate::features::remote_mine::harvest() {
-            return Ok(OperationResult::Running);
-        }
-
         let gathered_data = Self::gather_candidate_rooms(system_data, 1);
 
         for unknown_room in gathered_data.unknown_rooms.iter() {

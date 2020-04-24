@@ -111,13 +111,13 @@ impl MissionRequests {
                 }
         
                 match owner {
-                    Some(OperationOrMissionEntity::Operation(operation_entity)) => {
-                        if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(operation_entity) {
+                    Some(OperationOrMissionEntity::Operation(owner_operation_entity)) => {
+                        if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(owner_operation_entity) {
                             operation_data.as_operation().child_complete(mission_entity);
                         }
                     }
-                    Some(OperationOrMissionEntity::Mission(mission_entity)) => {
-                        if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(mission_entity) {
+                    Some(OperationOrMissionEntity::Mission(owner_mission_entity)) => {
+                        if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(owner_mission_entity) {
                             mission_data.as_mission().child_complete(mission_entity);
                         }
                     }
