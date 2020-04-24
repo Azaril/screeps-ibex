@@ -2,7 +2,6 @@ use super::data::*;
 use super::operationsystem::*;
 use crate::missions::data::*;
 use crate::missions::miningoutpost::*;
-use crate::missions::reserve::*;
 use crate::missions::scout::*;
 use crate::ownership::*;
 use crate::room::data::*;
@@ -306,7 +305,7 @@ impl Operation for MiningOutpostOperation {
             let dynamic_visibility_data = room_data.get_dynamic_visibility_data();
 
             //
-            // Spawn remote mine missions for rooms that are not hostile and have recent visibility.
+            // Spawn mining outpost missions for rooms that are not hostile and have recent visibility.
             //
 
             if let Some(dynamic_visibility_data) = dynamic_visibility_data {
@@ -322,7 +321,7 @@ impl Operation for MiningOutpostOperation {
                 //TODO: Check path finding and accessibility to room.
 
                 //TODO: wiarchbe: Use trait instead of match.
-                let has_remote_mine_mission =
+                let has_mining_outpost_mission =
                     room_data
                         .get_missions()
                         .iter()
@@ -332,11 +331,11 @@ impl Operation for MiningOutpostOperation {
                         });
 
                 //
-                // Spawn a new mission to fill the remote mine role if missing.
+                // Spawn a new mission to fill the mining outpost role if missing.
                 //
 
-                if !has_remote_mine_mission {
-                    info!("Starting remote mine for room. Room: {}", room_data.name);
+                if !has_mining_outpost_mission {
+                    info!("Starting mining outpost mission for room. Room: {}", room_data.name);
 
                     let owner_entity = runtime_data.entity;
                     let room_entity = candidate_room.room_data_entity;
@@ -344,44 +343,6 @@ impl Operation for MiningOutpostOperation {
 
                     system_data.updater.exec_mut(move |world| {
                         let mission_entity = MiningOutpostMission::build(
-                            world.create_entity(),
-                            Some(OperationOrMissionEntity::Operation(owner_entity)),
-                            room_entity,
-                            home_room_entity,
-                        )
-                        .build();
-
-                        let room_data_storage = &mut world.write_storage::<RoomData>();
-
-                        if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                            room_data.add_mission(mission_entity);
-                        }
-                    });
-                }
-
-                //TODO: wiarchbe: Use trait instead of match.
-                let has_reservation_mission =
-                    room_data
-                        .get_missions()
-                        .iter()
-                        .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
-                            Some(MissionData::Reserve(_)) => true,
-                            _ => false,
-                        });
-
-                //
-                // Spawn a new mission to fill the reservation role if missing.
-                //
-
-                if !has_reservation_mission && crate::features::remote_mine::reserve() {
-                    info!("Starting reservation for room. Room: {}", room_data.name);
-
-                    let owner_entity = runtime_data.entity;
-                    let room_entity = candidate_room.room_data_entity;
-                    let home_room_entity = candidate_room.home_room_data_entity;
-
-                    system_data.updater.exec_mut(move |world| {
-                        let mission_entity = ReserveMission::build(
                             world.create_entity(),
                             Some(OperationOrMissionEntity::Operation(owner_entity)),
                             room_entity,

@@ -86,6 +86,14 @@ impl Scout {
         if !can_run_mission(state_context, tick_context)? {
             return Err("Mission cannot run in current room state".to_string());
         }
+
+        let outpost_room_data = tick_context.system_data.room_data.get_mut(state_context.outpost_room_data).ok_or("Expected outpost room data")?;
+
+        if let Some(static_visibility_data) = outpost_room_data.get_static_visibility_data() {
+            if static_visibility_data.sources().is_empty() {
+                return Err("No sources available for mining outpost, aborting mission.".to_string());
+            }
+        }
         
         let needs_scout = self.requires_scouting(state_context, tick_context)?;
 
