@@ -33,25 +33,15 @@ machine!(
     }
 
     impl {
-        * => fn describe(&self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData, state_context: &MiningOutpostMissionContext) {
-            if let Some(outpost_room_data) = system_data.room_data.get(state_context.outpost_room_data) {
-                let name = &"Mining Outpost";
-
-                describe_data
-                    .ui
-                    .with_room(outpost_room_data.name, &mut describe_data.visualizer, |room_ui| {
-                        let description = self.status_description();
-
-                        room_ui.missions().add_text(format!("{} - {}", name, description), None);
-                    });
-            }
+        * => fn describe_state(&self, _system_data: &MissionExecutionSystemData, _describe_data: &mut MissionDescribeData, _state_context: &MiningOutpostMissionContext) -> String {
+            format!("Mining Outpost - {}", self.status_description())
         }
 
         * => fn status_description(&self) -> String {
             std::any::type_name::<Self>().to_string()
         }
 
-        * => fn visualize(&self, _system_data: &MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) {}
+        * => fn visualize(&self, _system_data: &MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {}
 
         _ => fn get_children(&self) -> Vec<Entity>;
 
@@ -61,7 +51,7 @@ machine!(
         
         _ => fn tick(&mut self, state_context: &mut MiningOutpostMissionContext, tick_context: &mut MissionTickContext) -> Result<Option<MiningOutpostState>, String>;
 
-        _ => fn complete(&mut self, _system_data: &MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData);
+        _ => fn complete(&mut self, _system_data: &mut MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData);
     }
 );
 
@@ -107,7 +97,7 @@ impl Scout {
 
                 let mission_entity = ScoutMission::build(
                     tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                    Some(OperationOrMissionEntity::Operation(*tick_context.runtime_data.entity)),
+                    Some(OperationOrMissionEntity::Operation(tick_context.runtime_data.entity)),
                     state_context.outpost_room_data,
                     state_context.home_room_data,
                 ).build();
@@ -133,8 +123,8 @@ impl Scout {
         Ok(needs_scouting)
     }
 
-    fn complete(&mut self, _system_data: &MissionExecutionSystemData, runtime_data: &mut MissionExecutionRuntimeData) {
-        self.scout_mission.take().map(|e| runtime_data.mission_requests.abort(e));
+    fn complete(&mut self, system_data: &mut MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {
+        self.scout_mission.take().map(|e| system_data.mission_requests.abort(e));
     }
 }
 
@@ -173,7 +163,7 @@ impl Cleanup {
         if self.raid_mission.is_none() && self.dismantle_mission.is_none() {
             info!("No active raiding or dismantling - transitioning to mining");
             
-            self.scout_mission.take().map(|e| tick_context.runtime_data.mission_requests.abort(e));
+            self.scout_mission.take().map(|e| tick_context.system_data.mission_requests.abort(e));
             
             Ok(Some(MiningOutpostState::mine(None.into(), None.into())))
         } else {
@@ -199,7 +189,7 @@ impl Cleanup {
 
             let mission_entity = ScoutMission::build(
                 tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                Some(OperationOrMissionEntity::Operation(*tick_context.runtime_data.entity)),
+                Some(OperationOrMissionEntity::Operation(tick_context.runtime_data.entity)),
                 state_context.outpost_room_data,
                 state_context.home_room_data,
             ).build();
@@ -231,7 +221,7 @@ impl Cleanup {
 
                 let mission_entity = RaidMission::build(
                     tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                    Some(OperationOrMissionEntity::Operation(*tick_context.runtime_data.entity)),
+                    Some(OperationOrMissionEntity::Operation(tick_context.runtime_data.entity)),
                     state_context.outpost_room_data,
                     state_context.home_room_data,
                 ).build();
@@ -257,7 +247,7 @@ impl Cleanup {
                     if let Some(store) = structure.as_has_store() {
                         let store_types = store.store_types();
 
-                        return store_types.iter().any(|t| store.store_of(*t) > 0);
+                        return store_types.iter().any(|t| store.store_used_capacity(Some(*t)) > 0);
                     }
 
                     false
@@ -280,7 +270,7 @@ impl Cleanup {
 
                 let mission_entity = DismantleMission::build(
                     tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                    Some(OperationOrMissionEntity::Operation(*tick_context.runtime_data.entity)),
+                    Some(OperationOrMissionEntity::Operation(tick_context.runtime_data.entity)),
                     state_context.outpost_room_data,
                     state_context.home_room_data,
                     false,
@@ -307,10 +297,10 @@ impl Cleanup {
         Ok(None)
     }
 
-    fn complete(&mut self, _system_data: &MissionExecutionSystemData, runtime_data: &mut MissionExecutionRuntimeData) {
-        self.scout_mission.take().map(|e| runtime_data.mission_requests.abort(e));
-        self.raid_mission.take().map(|e| runtime_data.mission_requests.abort(e));
-        self.dismantle_mission.take().map(|e| runtime_data.mission_requests.abort(e));
+    fn complete(&mut self, system_data: &mut MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {
+        self.scout_mission.take().map(|e| system_data.mission_requests.abort(e));
+        self.raid_mission.take().map(|e| system_data.mission_requests.abort(e));
+        self.dismantle_mission.take().map(|e| system_data.mission_requests.abort(e));
     }
 }
 
@@ -345,7 +335,7 @@ impl Mine {
 
             let mission_entity = RemoteMineMission::build(
                 tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                Some(OperationOrMissionEntity::Operation(*tick_context.runtime_data.entity)),
+                Some(OperationOrMissionEntity::Operation(tick_context.runtime_data.entity)),
                 state_context.outpost_room_data,
                 state_context.home_room_data,
             ).build();
@@ -362,7 +352,7 @@ impl Mine {
 
             let mission_entity = ReserveMission::build(
                 tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                Some(OperationOrMissionEntity::Operation(*tick_context.runtime_data.entity)),
+                Some(OperationOrMissionEntity::Operation(tick_context.runtime_data.entity)),
                 state_context.outpost_room_data,
                 state_context.home_room_data,
             ).build();
@@ -375,8 +365,8 @@ impl Mine {
         Ok(None)
     }
 
-    fn complete(&mut self, _system_data: &MissionExecutionSystemData, runtime_data: &mut MissionExecutionRuntimeData) {
-        self.remote_mine_mission.take().map(|e| runtime_data.mission_requests.abort(e));
+    fn complete(&mut self, system_data: &mut MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {
+        self.remote_mine_mission.take().map(|e| system_data.mission_requests.abort(e));
     }
 }
 
@@ -434,9 +424,8 @@ impl Mission for MiningOutpostMission {
         self.state.child_complete(child);
     }
 
-    fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
-        self.state.describe(system_data, describe_data, &self.context);
-        self.state.visualize(system_data, describe_data);
+    fn describe_state(&self, system_data: &mut MissionExecutionSystemData, describe_data: &mut MissionDescribeData) -> String {
+        self.state.describe_state(system_data, describe_data, &self.context)
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, runtime_data: &mut MissionExecutionRuntimeData) -> Result<(), String> {
@@ -458,6 +447,8 @@ impl Mission for MiningOutpostMission {
         while let Some(tick_result) = self.state.tick(&mut self.context, &mut tick_context)? {
             self.state = tick_result
         }
+
+        self.state.visualize(system_data, runtime_data);
 
         Ok(MissionResult::Running)
     }

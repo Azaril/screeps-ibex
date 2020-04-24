@@ -69,7 +69,7 @@ pub fn get_new_delivery_current_resources_state<F, R>(
 where
     F: Fn(Vec<TransferDepositTicket>) -> R,
 {
-    let available_resources: HashMap<ResourceType, u32> = creep.store_types().into_iter().map(|r| (r, creep.store_of(r))).collect();
+    let available_resources: HashMap<ResourceType, u32> = creep.store_types().into_iter().map(|r| (r, creep.store_used_capacity(Some(r)))).collect();
     let available_capacity = TransferCapacity::Finite(available_resources.values().sum());
 
     if !available_capacity.empty() {

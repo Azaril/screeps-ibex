@@ -79,14 +79,8 @@ impl Mission for ReserveMission {
         self.room_data
     }
 
-    fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
-        if let Some(room_data) = system_data.room_data.get(self.room_data) {
-            describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui
-                    .missions()
-                    .add_text(format!("Reserve - Reservers: {}", self.reservers.len()), None);
-            })
-        }
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+        format!("Reserve - Reservers: {}", self.reservers.len())
     }
 
     fn pre_run_mission(
@@ -177,10 +171,10 @@ impl Mission for ReserveMission {
                     format!("Reserver - Target Room: {}", room_data.name),
                     &body,
                     SPAWN_PRIORITY_LOW,
-                    Self::create_handle_reserver_spawn(*runtime_data.entity, *controller_id),
+                    Self::create_handle_reserver_spawn(runtime_data.entity, *controller_id),
                 );
 
-                runtime_data.spawn_queue.request(home_room_data.name, spawn_request);
+                system_data.spawn_queue.request(home_room_data.name, spawn_request);
             }
         }
 

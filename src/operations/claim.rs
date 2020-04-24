@@ -59,18 +59,18 @@ impl Operation for ClaimOperation {
         self.claim_missions.retain(|e| *e != child);
     }
 
-    fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
+    fn describe(&mut self, _system_data: &mut OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
             global_ui.operations().add_text("Claim".to_string(), None);
         })
     }
 
-    fn pre_run_operation(&mut self, _system_data: &OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {
+    fn pre_run_operation(&mut self, _system_data: &mut OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {
     }
 
     fn run_operation(
         &mut self,
-        system_data: &OperationExecutionSystemData,
+        system_data: &mut OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
         //
@@ -140,7 +140,7 @@ impl Operation for ClaimOperation {
                                     }
 
                                     if let Some((_, nearest_spawn_room_entity)) = nearest_spawn {
-                                        let owner_entity = *runtime_data.entity;
+                                        let owner_entity = runtime_data.entity;
                                         let home_room_data_entity = nearest_spawn_room_entity;
 
                                         system_data.updater.exec_mut(move |world| {
@@ -246,7 +246,7 @@ impl Operation for ClaimOperation {
                         if let Some(offset_room_entity) = system_data.mapping.rooms.get(&offset_room_name) {
                             desired_missions.push((*offset_room_entity, entity));
                         } else {
-                            runtime_data
+                            system_data
                                 .visibility
                                 .request(VisibilityRequest::new(offset_room_name, VISIBILITY_PRIORITY_MEDIUM));
                         }
@@ -292,7 +292,7 @@ impl Operation for ClaimOperation {
                 if !has_scout_mission {
                     info!("Starting scout for room. Room: {}", room_data.name);
 
-                    let owner_entity = *runtime_data.entity;
+                    let owner_entity = runtime_data.entity;
                     let room_entity = room_data_entity;
                     let home_room_entity = home_room_data_entity;
 
@@ -348,7 +348,7 @@ impl Operation for ClaimOperation {
                 if !has_claim_mission {
                     info!("Starting claim for room. Room: {}", room_data.name);
 
-                    let operation_entity = *runtime_data.entity;
+                    let operation_entity = runtime_data.entity;
                     let room_entity = room_data_entity;
                     let home_room_entity = home_room_data_entity;
 

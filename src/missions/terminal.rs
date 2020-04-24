@@ -53,18 +53,14 @@ impl Mission for TerminalMission {
         self.room_data
     }
 
-    fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
-        if let Some(room_data) = system_data.room_data.get(self.room_data) {
-            describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui.missions().add_text("Terminal".to_string(), None);
-            })
-        }
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+        "Terminal".to_string()
     }
 
     fn pre_run_mission(
         &mut self,
         system_data: &mut MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
+        _runtime_data: &mut MissionExecutionRuntimeData,
     ) -> Result<(), String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
@@ -77,7 +73,7 @@ impl Mission for TerminalMission {
             //
             // Transfer energy needed for purchase/sale to the terminal.
             //
-            let energy_reserve = runtime_data.order_queue.maximum_transfer_energy();
+            let energy_reserve = system_data.order_queue.maximum_transfer_energy();
             let current_terminal_energy = terminal.store_used_capacity(Some(ResourceType::Energy));
             let available_transfer_energy = energy_reserve.min(current_terminal_energy);
 
@@ -92,7 +88,7 @@ impl Mission for TerminalMission {
                     TransferType::Haul,
                 );
 
-                runtime_data.transfer_queue.request_deposit(transfer_request);
+                system_data.transfer_queue.request_deposit(transfer_request);
             }
 
             let storage_resource_types = storage.store_types();
@@ -144,7 +140,7 @@ impl Mission for TerminalMission {
                             TransferType::Haul,
                         );
 
-                        runtime_data.transfer_queue.request_deposit(transfer_request);
+                        system_data.transfer_queue.request_deposit(transfer_request);
                     }
                 }
 
@@ -164,7 +160,7 @@ impl Mission for TerminalMission {
                             TransferType::Haul,
                         );
 
-                        runtime_data.transfer_queue.request_withdraw(transfer_request);
+                        system_data.transfer_queue.request_withdraw(transfer_request);
                     }
 
                     transfer_amount
@@ -190,7 +186,7 @@ impl Mission for TerminalMission {
                             TransferType::Haul,
                         );
 
-                        runtime_data.transfer_queue.request_withdraw(transfer_request);
+                        system_data.transfer_queue.request_withdraw(transfer_request);
                     }
                 }
 
@@ -202,7 +198,7 @@ impl Mission for TerminalMission {
                     let passive_amount = current_terminal_amount.min(desired_passive_terminal_amount);
 
                     if passive_amount > 0 {
-                        runtime_data
+                        system_data
                             .order_queue
                             .request_passive_sale(room_data.name, *resource_type, passive_amount);
                     }
@@ -210,7 +206,7 @@ impl Mission for TerminalMission {
                     let active_amount = current_terminal_amount - passive_amount;
 
                     if active_amount > 0 {
-                        runtime_data.order_queue.request_active_sale(
+                        system_data.order_queue.request_active_sale(
                             room_data.name,
                             *resource_type,
                             active_amount,

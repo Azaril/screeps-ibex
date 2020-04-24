@@ -93,12 +93,8 @@ impl Mission for ScoutMission {
         self.room_data
     }
 
-    fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
-        if let Some(room_data) = system_data.room_data.get(self.room_data) {
-            describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui.missions().add_text(format!("Scout - Scouts: {}", self.scouts.len()), None);
-            });
-        }
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+        format!("Scout - Scouts: {}", self.scouts.len())
     }
 
     fn pre_run_mission(
@@ -159,10 +155,10 @@ impl Mission for ScoutMission {
                     format!("Scout - Target Room: {}", room_data.name),
                     &body,
                     SPAWN_PRIORITY_LOW,
-                    Self::create_handle_scout_spawn(*runtime_data.entity, room_data.name),
+                    Self::create_handle_scout_spawn(runtime_data.entity, room_data.name),
                 );
 
-                runtime_data.spawn_queue.request(home_room_data.name, spawn_request);
+                system_data.spawn_queue.request(home_room_data.name, spawn_request);
             }
         }
 

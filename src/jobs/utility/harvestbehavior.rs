@@ -3,6 +3,7 @@ use crate::jobs::actions::*;
 use crate::jobs::context::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
+use crate::store::*;
 use screeps::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -79,7 +80,7 @@ where
     //TODO: Check visibility cache and cancel if not reachable etc.?
 
     if !ignore_creep_capacity {
-        if creep.store_free_capacity(None) == 0 && !action_flags.contains(SimultaneousActionFlags::TRANSFER) {
+        if creep.expensive_store_free_capacity() == 0 && !action_flags.contains(SimultaneousActionFlags::TRANSFER) {
             return Some(next_state());
         }
     }
@@ -110,7 +111,7 @@ where
                         let work_parts = body.iter().filter(|b| b.part == Part::Work).count();
                         let harvest_amount = (work_parts as u32 * HARVEST_POWER).min(harvest_target.get_harvestable_amount());
 
-                        if harvest_amount >= creep.store_free_capacity(None) {
+                        if harvest_amount >= creep.store_free_capacity(Some(ResourceType::Energy)) {
                             Some(next_state())
                         } else {
                             None

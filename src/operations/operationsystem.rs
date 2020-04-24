@@ -28,15 +28,15 @@ pub struct OperationExecutionSystemData<'a> {
     pub room_data: &'a WriteStorage<'a, RoomData>,
     pub mission_data: &'a ReadStorage<'a, MissionData>,
     pub mapping: &'a Read<'a, EntityMappingData>,
-}
-
-pub struct OperationExecutionRuntimeData<'a> {
-    pub entity: &'a Entity,
     pub visibility: &'a mut VisibilityQueue,
 }
 
+pub struct OperationExecutionRuntimeData {
+    pub entity: Entity,
+}
+
 pub struct OperationDescribeData<'a> {
-    pub entity: &'a Entity,
+    pub entity: Entity,
     pub visualizer: &'a mut Visualizer,
     pub ui: &'a mut UISystem,
 }
@@ -54,13 +54,13 @@ pub trait Operation {
 
     fn child_complete(&mut self, _child: Entity) {}
 
-    fn describe(&mut self, system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData);
+    fn describe(&mut self, system_data: &mut OperationExecutionSystemData, describe_data: &mut OperationDescribeData);
 
-    fn pre_run_operation(&mut self, _system_data: &OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {}
+    fn pre_run_operation(&mut self, _system_data: &mut OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {}
 
     fn run_operation(
         &mut self,
-        system_data: &OperationExecutionSystemData,
+        system_data: &mut OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()>;
 }
@@ -72,23 +72,23 @@ impl<'a> System<'a> for PreRunOperationSystem {
     type SystemData = OperationSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        let system_data = OperationExecutionSystemData {
+        let mut system_data = OperationExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
             room_data: &data.room_data,
             mission_data: &data.mission_data,
             mapping: &data.mapping,
+            visibility: &mut data.visibility,
         };
 
         for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
             let mut runtime_data = OperationExecutionRuntimeData {
-                entity: &entity,
-                visibility: &mut data.visibility,
+                entity: entity,
             };
 
             let operation = operation_data.as_operation();
 
-            operation.pre_run_operation(&system_data, &mut runtime_data);
+            operation.pre_run_operation(&mut system_data, &mut runtime_data);
         }
 
         //TODO: Is this the right phase for visualization? Potentially better at the end of tick?
@@ -96,14 +96,14 @@ impl<'a> System<'a> for PreRunOperationSystem {
             if let Some(ui) = &mut data.ui {
                 for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
                     let mut describe_data = OperationDescribeData {
-                        entity: &entity,
+                        entity: entity,
                         visualizer,
                         ui,
                     };
 
                     let operation = operation_data.as_operation();
 
-                    operation.describe(&system_data, &mut describe_data);
+                    operation.describe(&mut system_data, &mut describe_data);
                 }
             }
         }
@@ -141,23 +141,23 @@ impl<'a> System<'a> for RunOperationSystem {
     type SystemData = OperationSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        let system_data = OperationExecutionSystemData {
+        let mut system_data = OperationExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
             room_data: &data.room_data,
             mission_data: &data.mission_data,
             mapping: &data.mapping,
+            visibility: &mut data.visibility,
         };
 
         for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
             let mut runtime_data = OperationExecutionRuntimeData {
-                entity: &entity,
-                visibility: &mut data.visibility,
+                entity: entity,
             };
 
             let operation = operation_data.as_operation();
 
-            let cleanup_operation = match operation.run_operation(&system_data, &mut runtime_data) {
+            let cleanup_operation = match operation.run_operation(&mut system_data, &mut runtime_data) {
                 Ok(OperationResult::Running) => false,
                 Ok(OperationResult::Success) => {
                     info!("Operation complete, cleaning up.");

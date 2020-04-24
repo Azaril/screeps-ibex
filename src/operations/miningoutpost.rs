@@ -225,7 +225,7 @@ impl Operation for MiningOutpostOperation {
         self.owner.take();
     }
 
-    fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
+    fn describe(&mut self, _system_data: &mut OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
             global_ui.operations().add_text("Remote Mine".to_string(), None);
         })
@@ -233,7 +233,7 @@ impl Operation for MiningOutpostOperation {
 
     fn run_operation(
         &mut self,
-        system_data: &OperationExecutionSystemData,
+        system_data: &mut OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
         if !crate::features::remote_mine::harvest() {
@@ -243,7 +243,7 @@ impl Operation for MiningOutpostOperation {
         let gathered_data = Self::gather_candidate_rooms(system_data, 1);
 
         for unknown_room in gathered_data.unknown_rooms.iter() {
-            runtime_data
+            system_data
                 .visibility
                 .request(VisibilityRequest::new(unknown_room.room_name, VISIBILITY_PRIORITY_MEDIUM));
         }  
@@ -276,7 +276,7 @@ impl Operation for MiningOutpostOperation {
                         if !has_scout_mission {
                             info!("Starting scout for room. Room: {}", room_data.name);
 
-                            let owner_entity = *runtime_data.entity;
+                            let owner_entity = runtime_data.entity;
                             let room_entity = *room_entity;
                             let home_room_entity = unknown_room.home_room_data_entity;
 
@@ -338,7 +338,7 @@ impl Operation for MiningOutpostOperation {
                 if !has_remote_mine_mission {
                     info!("Starting remote mine for room. Room: {}", room_data.name);
 
-                    let owner_entity = *runtime_data.entity;
+                    let owner_entity = runtime_data.entity;
                     let room_entity = candidate_room.room_data_entity;
                     let home_room_entity = candidate_room.home_room_data_entity;
 
@@ -376,7 +376,7 @@ impl Operation for MiningOutpostOperation {
                 if !has_reservation_mission && crate::features::remote_mine::reserve() {
                     info!("Starting reservation for room. Room: {}", room_data.name);
 
-                    let owner_entity = *runtime_data.entity;
+                    let owner_entity = runtime_data.entity;
                     let room_entity = candidate_room.room_data_entity;
                     let home_room_entity = candidate_room.home_room_data_entity;
 

@@ -79,14 +79,8 @@ impl Mission for UpgradeMission {
         self.room_data
     }
 
-    fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
-        if let Some(room_data) = system_data.room_data.get(self.room_data) {
-            describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui
-                    .missions()
-                    .add_text(format!("Upgrade - Upgraders: {}", self.upgraders.len()), None);
-            })
-        }
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+        format!("Upgrade - Upgraders: {}", self.upgraders.len())
     }
 
     fn pre_run_mission(
@@ -120,7 +114,7 @@ impl Mission for UpgradeMission {
         }
 
         let has_excess_energy = {
-            if let Some(room_transfer_data) = runtime_data.transfer_queue.try_get_room(room_data.name) {
+            if let Some(room_transfer_data) = system_data.transfer_queue.try_get_room(room_data.name) {
                 if let Some(storage) = room.storage() {
                     if let Some(storage_node) = room_transfer_data.try_get_node(&TransferTarget::Storage(storage.remote_id())) {
                         if storage_node.get_available_withdrawl_by_resource(TransferType::Haul, ResourceType::Energy) >= 100_000 {
@@ -223,10 +217,10 @@ impl Mission for UpgradeMission {
                     "Upgrader".to_string(),
                     &body,
                     priority,
-                    Self::create_handle_upgrader_spawn(*runtime_data.entity, self.room_data, allow_harvest),
+                    Self::create_handle_upgrader_spawn(runtime_data.entity, self.room_data, allow_harvest),
                 );
 
-                runtime_data.spawn_queue.request(room_data.name, spawn_request);
+                system_data.spawn_queue.request(room_data.name, spawn_request);
             }
         }
 

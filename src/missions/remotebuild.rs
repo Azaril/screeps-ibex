@@ -85,14 +85,8 @@ impl Mission for RemoteBuildMission {
         self.room_data
     }
 
-    fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
-        if let Some(room_data) = system_data.room_data.get(self.room_data) {
-            describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui
-                    .missions()
-                    .add_text(format!("Remote Build - Builders: {}", self.builders.len()), None);
-            })
-        }
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+        format!("Remote Build - Builders: {}", self.builders.len())
     }
 
     fn pre_run_mission(
@@ -157,10 +151,10 @@ impl Mission for RemoteBuildMission {
                     format!("Remote Builder - Target Room: {}", room_data.name),
                     &body,
                     priority,
-                    Self::create_handle_builder_spawn(*runtime_data.entity, self.room_data, true),
+                    Self::create_handle_builder_spawn(runtime_data.entity, self.room_data, true),
                 );
 
-                runtime_data.spawn_queue.request(home_room_data.name, spawn_request);
+                system_data.spawn_queue.request(home_room_data.name, spawn_request);
             }
         }
 

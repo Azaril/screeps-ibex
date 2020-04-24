@@ -46,7 +46,7 @@ impl Operation for LocalSupplyOperation {
         self.owner.take();
     }
 
-    fn describe(&mut self, _system_data: &OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
+    fn describe(&mut self, _system_data: &mut OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
             global_ui.operations().add_text("Local Supply".to_string(), None);
         })
@@ -54,7 +54,7 @@ impl Operation for LocalSupplyOperation {
 
     fn run_operation(
         &mut self,
-        system_data: &OperationExecutionSystemData,
+        system_data: &mut OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
         for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
@@ -84,7 +84,7 @@ impl Operation for LocalSupplyOperation {
                     if !has_local_supply_mission {
                         info!("Starting local supply for spawning room. Room: {}", room_data.name);
 
-                        let owner_entity = *runtime_data.entity;
+                        let owner_entity = runtime_data.entity;
                         let room_entity = entity;
 
                         system_data.updater.exec_mut(move |world| {

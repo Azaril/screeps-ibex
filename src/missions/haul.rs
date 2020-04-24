@@ -78,14 +78,8 @@ impl Mission for HaulMission {
         self.room_data
     }
 
-    fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
-        if let Some(room_data) = system_data.room_data.get(self.room_data) {
-            describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui
-                    .missions()
-                    .add_text(format!("Hauler - Haulers: {}", self.haulers.len()), None);
-            })
-        }
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+        format!("Hauler - Haulers: {}", self.haulers.len())
     }
 
     fn pre_run_mission(
@@ -112,7 +106,7 @@ impl Mission for HaulMission {
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
         let controller = room.controller().ok_or("Expected controller")?;
 
-        let unfufilled = runtime_data
+        let unfufilled = system_data
             .transfer_queue
             .try_get_room(room_data.name)
             .map(|r| r.stats().total_unfufilled_resources(TransferType::Haul))
@@ -158,10 +152,10 @@ impl Mission for HaulMission {
                     format!("Haul - Target Room: {}", room_data.name),
                     &body,
                     priority,
-                    Self::create_handle_hauler_spawn(*runtime_data.entity, haul_rooms),
+                    Self::create_handle_hauler_spawn(runtime_data.entity, haul_rooms),
                 );
 
-                runtime_data.spawn_queue.request(room_data.name, spawn_request);
+                system_data.spawn_queue.request(room_data.name, spawn_request);
             }
         }
 

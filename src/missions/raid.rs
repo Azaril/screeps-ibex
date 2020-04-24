@@ -111,14 +111,8 @@ impl Mission for RaidMission {
         self.room_data
     }
 
-    fn describe(&mut self, system_data: &MissionExecutionSystemData, describe_data: &mut MissionDescribeData) {
-        if let Some(room_data) = system_data.room_data.get(self.room_data) {
-            describe_data.ui.with_room(room_data.name, describe_data.visualizer, |room_ui| {
-                room_ui
-                    .missions()
-                    .add_text(format!("Raid - Raiders: {}", self.raiders.len()), None);
-            });
-        }
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+        format!("Raid - Raiders: {}", self.raiders.len())
     }
 
     fn pre_run_mission(
@@ -161,7 +155,7 @@ impl Mission for RaidMission {
                     if let Some(store) = structure.as_has_store() {
                         let store_types = store.store_types();
 
-                        return store_types.iter().any(|t| store.store_of(*t) > 0);
+                        return store_types.iter().any(|t| store.store_used_capacity(Some(*t)) > 0);
                     }
 
                     false
@@ -202,10 +196,10 @@ impl Mission for RaidMission {
                     format!("Raider - Target Room: {}", room_data.name),
                     &body,
                     priority,
-                    Self::create_handle_raider_spawn(*runtime_data.entity, self.room_data, self.home_room_data),
+                    Self::create_handle_raider_spawn(runtime_data.entity, self.room_data, self.home_room_data),
                 );
 
-                runtime_data.spawn_queue.request(home_room_data.name, spawn_request);
+                system_data.spawn_queue.request(home_room_data.name, spawn_request);
             }
         }
 
