@@ -169,6 +169,8 @@ impl<'a> System<'a> for RunOperationSystem {
                 }
             };
 
+            //TODO: Copy over cleanup semantics from mission code.
+
             if cleanup_operation {
                 queue_cleanup_operation(&data.updater, entity, operation.get_owner().clone());
             }

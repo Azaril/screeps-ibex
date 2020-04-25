@@ -228,7 +228,11 @@ where
     if !creep.pos().is_near_to(&pos) {
         if !action_flags.contains(SimultaneousActionFlags::MOVE) {
             action_flags.insert(SimultaneousActionFlags::MOVE);
-            creep.move_to(&pos);
+
+            tick_context
+                .runtime_data
+                .movement
+                .move_to_range(tick_context.runtime_data.creep_entity, pos, 1);
         }
 
         return None;

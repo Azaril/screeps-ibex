@@ -43,12 +43,12 @@ struct StructureData {
     containers: Vec<RemoteObjectId<StructureContainer>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, ConvertSaveload)]
 struct CreepData {
-    sources_to_harvesters: HashMap<RemoteObjectId<Source>, Vec<Entity>>,
-    containers_to_source_miners: HashMap<RemoteObjectId<StructureContainer>, Vec<Entity>>,
-    links_to_source_miners: HashMap<RemoteObjectId<StructureLink>, Vec<Entity>>,
-    containers_to_mineral_miners: HashMap<RemoteObjectId<StructureContainer>, Vec<Entity>>,
+    sources_to_harvesters: EntityHashMap<RemoteObjectId<Source>, EntityVec<Entity>>,
+    containers_to_source_miners: EntityHashMap<RemoteObjectId<StructureContainer>, EntityVec<Entity>>,
+    links_to_source_miners: EntityHashMap<RemoteObjectId<StructureLink>, EntityVec<Entity>>,
+    containers_to_mineral_miners: EntityHashMap<RemoteObjectId<StructureContainer>, EntityVec<Entity>>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -286,7 +286,7 @@ impl LocalSupplyMission {
                     None
                 }
             })
-            .into_group_map();
+            .into_entity_group_map();
 
         let containers_to_source_miners = self
             .source_container_miners
@@ -304,7 +304,7 @@ impl LocalSupplyMission {
                     None
                 }
             })
-            .into_group_map();
+            .into_entity_group_map();
 
         let links_to_source_miners = self
             .source_link_miners
@@ -316,7 +316,7 @@ impl LocalSupplyMission {
                     None
                 }
             })
-            .into_group_map();
+            .into_entity_group_map();
 
         let containers_to_mineral_miners = self
             .mineral_container_miners
@@ -328,7 +328,7 @@ impl LocalSupplyMission {
                     None
                 }
             })
-            .into_group_map();
+            .into_entity_group_map();
 
         let creep_data = CreepData {
             sources_to_harvesters,
@@ -448,26 +448,26 @@ impl LocalSupplyMission {
         //
 
         for source_id in prioritized_sources.iter().rev() {
-            let source_harvesters = creep_data.sources_to_harvesters.get(source_id).map(Vec::as_slice).unwrap_or(&[]);
+            let source_harvesters = &creep_data.sources_to_harvesters.get(source_id).map(|c| c.as_slice()).unwrap_or(&[]);
 
             let source_containers = structure_data
                 .sources_to_containers
                 .get(source_id)
-                .map(Vec::as_slice)
+                .map(|c| c.as_slice())
                 .unwrap_or(&[]);
 
-            let source_links = structure_data.sources_to_links.get(source_id).map(Vec::as_slice).unwrap_or(&[]);
+            let source_links = structure_data.sources_to_links.get(source_id).map(|c| c.as_slice()).unwrap_or(&[]);
 
             let source_container_miners = source_containers
                 .iter()
                 .filter_map(|container| creep_data.containers_to_source_miners.get(container))
-                .flat_map(|m| m)
+                .flat_map(|m| m.iter())
                 .collect_vec();
 
             let source_link_miners = source_links
                 .iter()
                 .filter_map(|link| creep_data.links_to_source_miners.get(link))
-                .flat_map(|m| m)
+                .flat_map(|m| m.iter())
                 .collect_vec();
 
             //
@@ -639,7 +639,7 @@ impl LocalSupplyMission {
             let mineral_miners = container_ids
                 .iter()
                 .filter_map(|container| creep_data.containers_to_mineral_miners.get(container))
-                .flat_map(|m| m)
+                .flat_map(|m| m.iter())
                 .collect_vec();
 
             let alive_mineral_miners = mineral_miners
