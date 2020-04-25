@@ -102,21 +102,36 @@ impl MissionRequests {
                     (None, Vec::new())
                 };
 
-                for child_mission_entity in children {
-                    if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(child_mission_entity) {
+                for child_entity in children {
+                    if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(child_entity) {
+                        let operation = operation_data.as_operation();
+
+                        operation.owner_complete(OperationOrMissionEntity::Mission(mission_entity));
+                    }
+
+                    if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(child_entity) {
                         let mission = mission_data.as_mission();
 
                         mission.owner_complete(OperationOrMissionEntity::Mission(mission_entity));
                     }
                 }
         
+                //TODO: Remove hacks for data cleanup. Or move to single entity type?
                 match owner {
                     Some(OperationOrMissionEntity::Operation(owner_operation_entity)) => {
                         if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(owner_operation_entity) {
                             operation_data.as_operation().child_complete(mission_entity);
                         }
+
+                        if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(owner_operation_entity) {
+                            mission_data.as_mission().child_complete(mission_entity);
+                        }
                     }
                     Some(OperationOrMissionEntity::Mission(owner_mission_entity)) => {
+                        if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(owner_mission_entity) {
+                            operation_data.as_operation().child_complete(mission_entity);
+                        }
+
                         if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(owner_mission_entity) {
                             mission_data.as_mission().child_complete(mission_entity);
                         }

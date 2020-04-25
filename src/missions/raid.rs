@@ -127,6 +127,12 @@ impl Mission for RaidMission {
         self.raiders
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
+        let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
+        
+        if let Some(room) = game::rooms::get(room_data.name) {
+            Self::request_transfer_for_structures(system_data.transfer_queue, &room);
+        }
+
         Ok(())
     }
 

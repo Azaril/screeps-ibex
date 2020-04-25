@@ -32,9 +32,15 @@ pub fn tick_dismantle<F, R>(tick_context: &mut JobTickContext, dismantle_structu
 where
     F: Fn() -> R,
 {
+    let creep = tick_context.runtime_data.owner;
+
+    if creep.store_capacity(Some(ResourceType::Energy)) > 0 && creep.store_free_capacity(Some(ResourceType::Energy)) == 0 {
+        return Some(next_state());
+    }
+
     let target_position = dismantle_structure_id.pos();
 
-    let creep = tick_context.runtime_data.owner;
+    
     let creep_pos = creep.pos();
 
     let expect_resolve = if creep_pos.room_name() == target_position.room_name() {
