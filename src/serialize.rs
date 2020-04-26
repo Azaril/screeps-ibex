@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::iter::Iterator;
 
-
 pub struct SerializeMarkerTag;
 
 pub type SerializeMarker = SimpleMarker<SerializeMarkerTag>;
@@ -231,3 +230,19 @@ pub trait EntityItertools : Iterator {
 }
 
 impl<T: ?Sized> EntityItertools for T where T: Iterator { }
+
+pub fn encode_to_string<T>(data: T) -> Result<String, String> where T: Serialize {
+    let serialized_data = bincode::serialize(&data).map_err(|e| e.to_string())?;
+
+    let encoded_data = base64::encode(&serialized_data);
+
+    Ok(encoded_data)
+}
+
+pub fn decode_from_string<T>(data: &str) -> Result<T, String> where for<'de> T: Deserialize<'de> {
+    let decoded_data = base64::decode(data).map_err(|e| e.to_string())?;
+
+    let data = bincode::deserialize_from(decoded_data.as_slice()).map_err(|e| e.to_string())?;
+
+    Ok(data)
+}

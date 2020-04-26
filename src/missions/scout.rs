@@ -8,10 +8,8 @@ use crate::spawnsystem::*;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
-use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
-use specs_derive::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ScoutMission {
@@ -137,7 +135,7 @@ impl Mission for ScoutMission {
         let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
         let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
 
-        let should_spawn = self.next_spawn.map(|t| t >= game::time()).unwrap_or(true) && self.allow_spawning;
+        let should_spawn = self.next_spawn.map(|t| t >= game::time()).unwrap_or(true) && self.allow_spawning && game::cpu::bucket() > 5000.0;
 
         if self.scouts.is_empty() && should_spawn {
             //TODO: Compute best body parts to use.

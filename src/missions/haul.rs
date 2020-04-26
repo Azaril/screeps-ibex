@@ -8,10 +8,8 @@ use crate::spawnsystem::*;
 use crate::transfer::transfersystem::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
-use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
-use specs_derive::*;
 use std::collections::HashMap;
 
 #[derive(Clone, ConvertSaveload)]

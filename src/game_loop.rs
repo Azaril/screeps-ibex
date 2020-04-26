@@ -25,12 +25,10 @@ use crate::visualize::*;
 use log::*;
 use screeps::*;
 use specs::{
-    error::NoError,
     prelude::*,
     saveload::{DeserializeComponents, SerializeComponents},
 };
 use std::collections::HashSet;
-use std::fmt;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 fn serialize_world(world: &World, segment: u32) {
@@ -43,7 +41,7 @@ fn serialize_world(world: &World, segment: u32) {
         memory_arbiter: Write<'a, MemoryArbiter>,
         entities: Entities<'a>,
         marker_allocator: Write<'a, SerializeMarkerAllocator>,
-        markers: WriteStorage<'a, SerializeMarker>,
+        markers: ReadStorage<'a, SerializeMarker>,
         creep_spawnings: ReadStorage<'a, CreepSpawning>,
         creep_owners: ReadStorage<'a, CreepOwner>,
         room_data: ReadStorage<'a, RoomData>,
@@ -57,61 +55,47 @@ fn serialize_world(world: &World, segment: u32) {
         type SystemData = SerializeSystemData<'a>;
 
         fn run(&mut self, mut data: Self::SystemData) {
-            let mut writer = Vec::<u8>::with_capacity(1024 * 100);
+            struct BinCodeSerializerAcceptor<'a, 'b> {
+                data: &'b mut SerializeSystemData<'a>
+            }
 
-            let mut ser = serde_json::ser::Serializer::new(&mut writer);
+            impl<'a, 'b> bincode::SerializerAcceptor for BinCodeSerializerAcceptor<'a, 'b> {
+                type Output = Result<(), String>;
 
-            SerializeComponents::<NoError, SerializeMarker>::serialize_recursive(
-                &(
-                    &data.creep_spawnings,
-                    &data.creep_owners,
-                    &data.room_data,
-                    &data.room_plan_data,
-                    &data.job_data,
-                    &data.operation_data,
-                    &data.mission_data,
-                ),
-                &data.entities,
-                &mut data.markers,
-                &mut data.marker_allocator,
-                &mut ser,
-            )
-            .unwrap_or_else(|e| error!("Error: {}", e));
+                fn accept<T: serde::Serializer>(self, ser: T) -> Self::Output {
+                    SerializeComponents::<std::convert::Infallible, SerializeMarker>::serialize(
+                        &(
+                            &self.data.creep_spawnings,
+                            &self.data.creep_owners,
+                            &self.data.room_data,
+                            &self.data.room_plan_data,
+                            &self.data.job_data,
+                            &self.data.operation_data,
+                            &self.data.mission_data,
+                        ),
+                        &self.data.entities,
+                        &self.data.markers,
+                        ser,
+                    )
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+                }
+            }
 
-            let world_data = unsafe { std::str::from_utf8_unchecked(&writer) };
+            let mut serialized_data = Vec::<u8>::with_capacity(1024 * 100);
 
-            data.memory_arbiter.set(self.segment, world_data);
+            bincode::with_serializer(&mut serialized_data, BinCodeSerializerAcceptor { data: &mut data })
+                .unwrap_or_else(|e| error!("Failed serialization: {}", e));
+
+            let encoded_data = base64::encode(&serialized_data);
+
+            data.memory_arbiter.set(self.segment, &encoded_data);
         }
     }
 
     let mut sys = Serialize { segment };
 
     sys.run_now(&world);
-}
-
-#[derive(Debug)]
-enum CombinedSerialiationError {
-    SerdeJson(serde_json::error::Error),
-}
-
-impl fmt::Display for CombinedSerialiationError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            CombinedSerialiationError::SerdeJson(ref e) => write!(f, "{}", e),
-        }
-    }
-}
-
-impl From<serde_json::error::Error> for CombinedSerialiationError {
-    fn from(x: serde_json::error::Error) -> Self {
-        CombinedSerialiationError::SerdeJson(x)
-    }
-}
-
-impl From<NoError> for CombinedSerialiationError {
-    fn from(e: NoError) -> Self {
-        match e {}
-    }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -143,28 +127,45 @@ fn deserialize_world(world: &World, segment: u32) {
             // NOTE: System assumes that segment is available and will panic if data is not accesible.
             //
 
-            let world_data = data.memory_arbiter.get(self.segment);
+            let encoded_data = data.memory_arbiter.get(self.segment);
 
-            if let Some(world_data) = world_data {
-                if !world_data.is_empty() {
-                    let mut de = serde_json::de::Deserializer::from_str(&world_data);
+            if let Some(encoded_data) = encoded_data {
+                if !encoded_data.is_empty() {
+                    let decoded_data = base64::decode(&encoded_data)
+                        .unwrap_or_else(|_| Vec::new());
 
-                    DeserializeComponents::<CombinedSerialiationError, SerializeMarker>::deserialize(
-                        &mut (
-                            data.creep_spawnings,
-                            data.creep_owners,
-                            data.room_data,
-                            data.room_plan_data,
-                            data.job_data,
-                            data.operation_data,
-                            data.mission_data,
-                        ),
-                        &data.entities,
-                        &mut data.markers,
-                        &mut data.marker_alloc,
-                        &mut de,
-                    )
-                    .unwrap_or_else(|e| error!("Error: {}", e));
+                    struct BinCodeDeserializerAcceptor<'a, 'b> {
+                        data: &'b mut DeserializeSystemData<'a>
+                    }
+
+                    impl<'a, 'b, 'c> bincode::DeserializerAcceptor<'c> for BinCodeDeserializerAcceptor<'a, 'b> {
+                        type Output = Result<(), String>;
+        
+                        fn accept<T: serde::Deserializer<'c>>(self, de: T) -> Self::Output {
+                            DeserializeComponents::<std::convert::Infallible, SerializeMarker>::deserialize(
+                                &mut (
+                                    &mut self.data.creep_spawnings,
+                                    &mut self.data.creep_owners,
+                                    &mut self.data.room_data,
+                                    &mut self.data.room_plan_data,
+                                    &mut self.data.job_data,
+                                    &mut self.data.operation_data,
+                                    &mut self.data.mission_data,
+                                ),
+                                &self.data.entities,
+                                &mut self.data.markers,
+                                &mut self.data.marker_alloc,
+                                de,
+                            )
+                            .map(|_| ())
+                            .map_err(|e| e.to_string())
+                        }
+                    }
+
+                    let reader = bincode::SliceReader::new(&decoded_data);
+        
+                    bincode::with_deserializer(reader, BinCodeDeserializerAcceptor { data: &mut data })
+                        .unwrap_or_else(|e| error!("Failed deserialization: {}", e));
                 }
             } else {
                 panic!("Failed to get world data from segment that was expected to be active.");

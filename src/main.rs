@@ -30,6 +30,7 @@ mod transfer;
 mod ui;
 mod visualize;
 mod store;
+mod cache;
 
 use log::*;
 use stdweb::*;

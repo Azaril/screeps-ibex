@@ -1,11 +1,9 @@
 use super::missionsystem::*;
 use serde::*;
-use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
-use specs_derive::*;
 
-#[derive(Clone, Component, ConvertSaveload)]
+#[derive(Component, ConvertSaveload)]
 pub enum MissionData {
     LocalSupply(super::localsupply::LocalSupplyMission),
     Upgrade(super::upgrade::UpgradeMission),

@@ -4,7 +4,6 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use specs_derive::*;
 
 #[derive(Clone, Component, Serialize, Deserialize)]
 pub struct CreepOwner {
