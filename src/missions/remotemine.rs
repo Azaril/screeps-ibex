@@ -9,10 +9,8 @@ use crate::spawnsystem::*;
 use itertools::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
-use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
-use specs_derive::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct RemoteMineMission {

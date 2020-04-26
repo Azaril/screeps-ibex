@@ -11,10 +11,8 @@ use crate::constants::*;
 use screeps::*;
 use screeps_machine::*;
 use serde::{Deserialize, Serialize};
-use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
-use specs_derive::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct UpgradeJobContext {

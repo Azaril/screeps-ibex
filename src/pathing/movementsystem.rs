@@ -2,8 +2,8 @@ use crate::creep::*;
 use log::*;
 use screeps::*;
 use serde::*;
+use specs::*;
 use specs::prelude::*;
-use specs_derive::*;
 use std::collections::HashMap;
 
 struct MovementRequest {

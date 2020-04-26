@@ -10,7 +10,6 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::prelude::{Entities, ResourceId, System, SystemData, World, Write, WriteStorage};
 use specs::*;
-use specs_derive::*;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy)]
@@ -240,7 +239,7 @@ impl<'a> System<'a> for RoomPlanSystem {
             let planner_data = data.memory_arbiter.get(MEMORY_SEGMENT).unwrap();
 
             let mut planner_state = if !planner_data.is_empty() {
-                serde_json::from_str(&planner_data).unwrap_or_default()
+                crate::serialize::decode_from_string(&planner_data).unwrap_or_default()
             } else {
                 RoomPlannerData::default()
             };
@@ -349,7 +348,7 @@ impl<'a> System<'a> for RoomPlanSystem {
                 }
             }
 
-            if let Ok(output_planner_data) = serde_json::to_string(&planner_state) {
+            if let Ok(output_planner_data) = crate::serialize::encode_to_string(&planner_state) {
                 data.memory_arbiter.set(MEMORY_SEGMENT, &output_planner_data);
             }
         }

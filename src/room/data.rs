@@ -2,10 +2,8 @@ use crate::remoteobjectid::*;
 use crate::serialize::EntityVec;
 use screeps::*;
 use serde::{Deserialize, Serialize};
-use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
-use specs_derive::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RoomStaticVisibilityData {
