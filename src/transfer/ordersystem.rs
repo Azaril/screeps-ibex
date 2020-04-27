@@ -255,7 +255,7 @@ impl<'a> System<'a> for OrderQueueSystem {
             return;
         }
 
-        if game::time() % 50 != 0 && game::cpu::bucket() > 50.0 {
+        if game::time() % 100 != 0 || game::cpu::bucket() <= game::cpu::tick_limit() {
             return;
         }
 

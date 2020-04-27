@@ -144,7 +144,7 @@ impl Mission for DismantleMission {
                 minimum_repeat: None,
                 maximum_repeat: None,
                 pre_body: &[],
-                repeat_body: &[Part::Work, Part::Work, Part::Work, Part::Work, Part::Move, Part::Move, Part::Move, Part::Move, Part::Carry, Part::Carry, Part::Move, Part::Move],
+                repeat_body: &[Part::Work, Part::Work, Part::Work, Part::Work, Part::Move, Part::Move, Part::Move, Part::Move, Part::Carry, Part::Carry, Part::Move, Part::Move, Part::Carry, Part::Carry, Part::Move, Part::Move],
                 post_body: &[],
             };
 
