@@ -50,7 +50,7 @@ impl RaidMission {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Haul(HaulJob::new( &[delivery_room], &[raid_room]));
+                let creep_job = JobData::Haul(HaulJob::new( &[raid_room], &[delivery_room]));
 
                 let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
