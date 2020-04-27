@@ -1,22 +1,32 @@
-use serde::{Deserialize, Serialize};
-use specs::saveload::*;
-use specs::*;
-pub struct FastCache<T> {
-    data: Option<T>
+pub trait FastCache<T> {
+    fn expire(&mut self);
+
+    fn has_expired<X>(&self, expiration: X) -> bool where X: FnOnce(&T) -> bool;
+
+    fn get_or_insert_with<F: FnOnce() -> T>(&mut self, f: F) -> &mut T;
 }
 
-impl<T> FastCache<T> {
-    pub fn new() -> FastCache<T> {
-        FastCache {
-            data: None
-        }
+impl<T> FastCache<T> for Option<T> {
+    fn expire(&mut self) {
+        self.take();
     }
 
-    pub fn expire(&mut self) {
-        self.data.take();
+    fn has_expired<X>(&self, expiration: X) -> bool
+    where X: FnOnce(&T) -> bool {
+        self.as_ref().map(expiration).unwrap_or(true)
     }
 
-    pub fn with_access<X, F>(&mut self, expiration: X, filler: F) -> CacheAccesor<T, X, F> where F: FnOnce() -> T, X: FnOnce(&T) -> bool {
+    fn get_or_insert_with<F: FnOnce() -> T>(&mut self, f: F) -> &mut T {
+        self.get_or_insert_with(f)
+    }
+}
+
+pub trait FastCacheAccessor<T>: FastCache<T> where Self: Sized {
+    fn with_access<X, F>(&mut self, expiration: X, filler: F) -> CacheAccesor<T, Self, X, F> where F: FnOnce() -> T, X: FnOnce(&T) -> bool;
+}
+
+impl<C, T> FastCacheAccessor<T> for C where C: FastCache<T> {
+    fn with_access<X, F>(&mut self, expiration: X, filler: F) -> CacheAccesor<T, Self, X, F> where F: FnOnce() -> T, X: FnOnce(&T) -> bool {
         CacheAccesor {
             state: std::cell::RefCell::new(CacheState::Unknown(CacheStateUnknown {
                 cache: self,
@@ -26,13 +36,14 @@ impl<T> FastCache<T> {
         }
     }
 }
-pub struct CacheAccesor<'c, T, X, F> where F: FnOnce() -> T, X: FnOnce(&T) -> bool {
-    state: std::cell::RefCell<CacheState<'c, T, X, F>>
+
+pub struct CacheAccesor<'c, T, C, X, F> where F: FnOnce() -> T, X: FnOnce(&T) -> bool, C: FastCache<T> {
+    state: std::cell::RefCell<CacheState<'c, T, C, X, F>>
 }
 
 use std::ops::*;
 
-impl<'c, T, X, F> CacheAccesor<'c, T, X, F> where F: FnOnce() -> T, X: FnOnce(&T) -> bool {
+impl<'c, T, C, X, F> CacheAccesor<'c, T, C, X, F> where F: FnOnce() -> T, X: FnOnce(&T) -> bool, C: FastCache<T> {
     pub fn get(&self) -> std::cell::Ref<T> {
         take_mut::take(&mut *self.state.borrow_mut(), |v| v.into_known());
 
@@ -45,22 +56,22 @@ impl<'c, T, X, F> CacheAccesor<'c, T, X, F> where F: FnOnce() -> T, X: FnOnce(&T
     }
 }
 
-pub enum CacheState<'c, T, X, F> where F: FnOnce() -> T, X: FnOnce(&T) -> bool {
-    Unknown(CacheStateUnknown<'c, T, X, F>),
+pub enum CacheState<'c, T, C, X, F> where F: FnOnce() -> T, X: FnOnce(&T) -> bool, C: FastCache<T> {
+    Unknown(CacheStateUnknown<'c, T, C, X, F>),
     Known(CacheStateKnown<'c, T>)
 }
 
-impl<'c, T, X, F> CacheState<'c, T, X, F> where F: FnOnce() -> T, X: FnOnce(&T) -> bool {
+impl<'c, T, C, X, F> CacheState<'c, T, C, X, F> where F: FnOnce() -> T, X: FnOnce(&T) -> bool, C: FastCache<T> {
     pub fn into_known(self) -> Self {
         match self {
             CacheState::Unknown(state) => {
                 let cache = &mut *state.cache;
 
-                if cache.data.as_ref().map(state.expiration).unwrap_or(true) {
-                    cache.data = None;
+                if cache.has_expired(state.expiration) {
+                    cache.expire();
                 }
         
-                let ref_val = cache.data.get_or_insert_with(state.fill);
+                let ref_val = cache.get_or_insert_with(state.fill);
         
                 let new_state = CacheStateKnown {
                     data: ref_val
@@ -73,45 +84,12 @@ impl<'c, T, X, F> CacheState<'c, T, X, F> where F: FnOnce() -> T, X: FnOnce(&T) 
     }
 }
 
-pub struct CacheStateUnknown<'c, T, X, F> where X: FnOnce(&T) -> bool, F: FnOnce() -> T {
-    cache: &'c mut FastCache<T>,
+pub struct CacheStateUnknown<'c, T, C, X, F> where X: FnOnce(&T) -> bool, F: FnOnce() -> T, C: FastCache<T> {
+    cache: &'c mut C,
     expiration: X,
     fill: F
 }
 
 pub struct CacheStateKnown<'c, T> {
     data: &'c mut T,
-}
-
-impl<C, M: Serialize + Marker> ConvertSaveload<M> for FastCache<C>
-where
-    for<'de> M: Deserialize<'de>,
-    C: ConvertSaveload<M>,
-{
-    type Data = Option<<C as ConvertSaveload<M>>::Data>;
-    type Error = <C as ConvertSaveload<M>>::Error;
-
-    fn convert_into<F>(&self, ids: F) -> Result<Self::Data, Self::Error>
-    where
-        F: FnMut(Entity) -> Option<M>,
-    {
-        let val = match &self.data {
-            Some(v) => Some(v.convert_into(ids)?),
-            None => None
-        };
-
-        Ok(val)
-    }
-
-    fn convert_from<F>(data: Self::Data, ids: F) -> Result<Self, Self::Error>
-    where
-        F: FnMut(M) -> Option<Entity>,
-    {
-        let val = match data {
-            Some(v) => Some(<C as ConvertSaveload<M>>::convert_from(v, ids)?),
-            None => None
-        };
-
-        Ok(FastCache { data: val })
-    }
 }

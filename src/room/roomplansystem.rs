@@ -184,8 +184,8 @@ pub struct RoomPlanSystem;
 
 impl RoomPlanSystem {
     fn seed(data: &mut RoomPlanSystemData, room_name: RoomName) -> Result<PlanSeedResult, String> {
-        let room_entity = data.mapping.rooms.get(&room_name).ok_or("Expected room entity")?;
-        let room_data = data.room_data.get(*room_entity).ok_or("Expected room data")?;
+        let room_entity = data.mapping.get_room(&room_name).ok_or("Expected room entity")?;
+        let room_data = data.room_data.get(room_entity).ok_or("Expected room data")?;
 
         RoomPlannerRunningData::seed(&room_data)
     }
@@ -195,8 +195,8 @@ impl RoomPlanSystem {
         room_name: RoomName,
         planner_state: &mut RoomPlannerRunningData,
     ) -> Result<PlanEvaluationResult, String> {
-        let room_entity = data.mapping.rooms.get(&room_name).ok_or("Expected room entity")?;
-        let room_data = data.room_data.get(*room_entity).ok_or("Expected room data")?;
+        let room_entity = data.mapping.get_room(&room_name).ok_or("Expected room entity")?;
+        let room_data = data.room_data.get(room_entity).ok_or("Expected room data")?;
 
         let bucket = game::cpu::bucket();
         let tick_limit = game::cpu::tick_limit();
@@ -212,13 +212,13 @@ impl RoomPlanSystem {
     }
 
     fn attach_plan(data: &mut RoomPlanSystemData, room_name: RoomName, plan: Plan) -> Result<(), String> {
-        let room_entity = data.mapping.rooms.get(&room_name).ok_or("Expected room entity")?;
+        let room_entity = data.mapping.get_room(&room_name).ok_or("Expected room entity")?;
 
-        if let Some(room_plan_data) = data.room_plan_data.get_mut(*room_entity) {
+        if let Some(room_plan_data) = data.room_plan_data.get_mut(room_entity) {
             room_plan_data.plan = plan;
         } else {
             data.room_plan_data
-                .insert(*room_entity, RoomPlanData { plan })
+                .insert(room_entity, RoomPlanData { plan })
                 .map_err(|err| err.to_string())?;
         }
 

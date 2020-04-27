@@ -46,8 +46,8 @@ where
     let expect_resolve = if creep_pos.room_name() == target_position.room_name() {
         true
     } else {
-        let target_room_entity = tick_context.runtime_data.mapping.rooms.get(&target_position.room_name())?;
-        let target_room_data = tick_context.system_data.room_data.get(*target_room_entity)?;
+        let target_room_entity = tick_context.runtime_data.mapping.get_room(&target_position.room_name())?;
+        let target_room_data = tick_context.system_data.room_data.get(target_room_entity)?;
 
         target_room_data.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false)
     };

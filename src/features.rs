@@ -35,7 +35,10 @@ pub mod js {
                         reserve: true
                     },
                     raid: true,
-                    dismantle: true
+                    dismantle: true,
+                    pathing: {
+                        custom: false
+                    }
                 }
             });
         }
@@ -122,4 +125,10 @@ pub fn raid() -> bool {
 
 pub fn dismantle() -> bool {
     ::screeps::memory::root().path_bool("_features.dismantle")
+}
+
+pub mod pathing {
+    pub fn custom() -> bool {
+        ::screeps::memory::root().path_bool("_features.pathing.custom")
+    }
 }
