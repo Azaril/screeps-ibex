@@ -7,6 +7,7 @@ use crate::ownership::*;
 use crate::room::data::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
+use crate::room::utility::*;
 use std::collections::HashMap;
 use log::*;
 use screeps::*;
@@ -56,8 +57,8 @@ impl MiningOutpostOperation {
     }
 
     fn gather_candidate_room_data(system_data: &OperationExecutionSystemData, room_name: RoomName) -> Option<CandidateRoomData> {
-        let search_room_entity = system_data.mapping.rooms.get(&room_name)?;
-        let search_room_data = system_data.room_data.get(*search_room_entity)?;
+        let search_room_entity = system_data.mapping.get_room(&room_name)?;
+        let search_room_data = system_data.room_data.get(search_room_entity)?;
         
         let static_visibility_data = search_room_data.get_static_visibility_data()?;
         let dynamic_visibility_data = search_room_data.get_dynamic_visibility_data()?;
@@ -70,7 +71,7 @@ impl MiningOutpostOperation {
         let hostile = dynamic_visibility_data.owner().hostile() || dynamic_visibility_data.source_keeper();
 
         let candidate_room_data = CandidateRoomData {
-            room_data_entity: *search_room_entity,
+            room_data_entity: search_room_entity,
             viable: has_sources && can_reserve,
             can_expand: !hostile
         };
@@ -110,24 +111,12 @@ impl MiningOutpostOperation {
                     if visited_room.can_expand {
                         let room_exits = game::map::describe_exits(room_data.name);
 
-                        //let source_room_status = game::map::get_room_status(*source_room_name);
+                        let source_room_status = game::map::get_room_status(room_data.name);
 
                         for expansion_room in room_exits.values() {
-                            //TODO: Make room status public...
-                            /*
                             let expansion_room_status = game::map::get_room_status(*expansion_room);
 
-                            let can_expand = match expansion_room_status.status {
-                                game::map::RoomStatus::Normal => source_room_status.status == game::map::RoomStatus::Normal,
-                                game::map::RoomStatus::Closed => false,
-                                game::map::RoomStatus::Novice => source_room_status.status == game::map::RoomStatus::Novice,
-                                game::map::RoomStatus::Respawn => source_room_status.status == game::map::RoomStatus::Respawn,
-                            };
-                            */
-
-                            let can_expand = true;
-
-                            if can_expand {
+                            if can_traverse_between_room_status(&source_room_status, &expansion_room_status) {
                                 expansion_rooms.insert(*expansion_room, entity);
                             }
                         }
@@ -159,24 +148,12 @@ impl MiningOutpostOperation {
                         if visited_room.can_expand {
                             let room_exits = game::map::describe_exits(*source_room_name);
 
-                            //let source_room_status = game::map::get_room_status(*source_room_name);
+                            let source_room_status = game::map::get_room_status(*source_room_name);
     
                             for expansion_room in room_exits.values() {
-                                //TODO: Make room status public...
-                                /*
                                 let expansion_room_status = game::map::get_room_status(*expansion_room);
 
-                                let can_expand = match expansion_room_status.status {
-                                    game::map::RoomStatus::Normal => source_room_status.status == game::map::RoomStatus::Normal,
-                                    game::map::RoomStatus::Closed => false,
-                                    game::map::RoomStatus::Novice => source_room_status.status == game::map::RoomStatus::Novice,
-                                    game::map::RoomStatus::Respawn => source_room_status.status == game::map::RoomStatus::Respawn,
-                                };
-                                */
-
-                                let can_expand = true;
-
-                                if can_expand {
+                                if can_traverse_between_room_status(&source_room_status, &expansion_room_status) {
                                     expansion_rooms.insert(*expansion_room, *home_room_entity);
                                 }
                             }
@@ -243,8 +220,8 @@ impl Operation for MiningOutpostOperation {
         
         //TODO: Move this to visibility system.
         for unknown_room in gathered_data.unknown_rooms.iter() {
-            if let Some(room_entity) = system_data.mapping.rooms.get(&unknown_room.room_name) {
-                if let Some(room_data) = system_data.room_data.get(*room_entity) {
+            if let Some(room_entity) = system_data.mapping.get_room(&unknown_room.room_name) {
+                if let Some(room_data) = system_data.room_data.get(room_entity) {
                     let dynamic_visibility_data = room_data.get_dynamic_visibility_data();
 
                     //
@@ -270,7 +247,7 @@ impl Operation for MiningOutpostOperation {
                             info!("Starting scout for room. Room: {}", room_data.name);
 
                             let owner_entity = runtime_data.entity;
-                            let room_entity = *room_entity;
+                            let room_entity = room_entity;
                             let home_room_entity = unknown_room.home_room_data_entity;
 
                             system_data.updater.exec_mut(move |world| {

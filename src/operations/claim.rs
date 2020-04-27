@@ -222,8 +222,8 @@ impl Operation for ClaimOperation {
                                     .collect::<Vec<RoomName>>()
                             })
                             .filter(|room_name| {
-                                if let Some(search_room_entity) = system_data.mapping.rooms.get(&room_name) {
-                                    if let Some(search_room_data) = system_data.room_data.get(*search_room_entity) {
+                                if let Some(search_room_entity) = system_data.mapping.get_room(&room_name) {
+                                    if let Some(search_room_data) = system_data.room_data.get(search_room_entity) {
                                         if let Some(search_room_visibility_data) = search_room_data.get_dynamic_visibility_data() {
                                             if search_room_visibility_data.updated_within(5000)
                                                 && (search_room_visibility_data.owner().hostile()
@@ -241,8 +241,8 @@ impl Operation for ClaimOperation {
                     }
 
                     for offset_room_name in candidate_rooms {
-                        if let Some(offset_room_entity) = system_data.mapping.rooms.get(&offset_room_name) {
-                            desired_missions.push((*offset_room_entity, entity));
+                        if let Some(offset_room_entity) = system_data.mapping.get_room(&offset_room_name) {
+                            desired_missions.push((offset_room_entity, entity));
                         } else {
                             system_data
                                 .visibility

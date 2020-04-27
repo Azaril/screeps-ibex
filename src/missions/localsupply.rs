@@ -27,7 +27,7 @@ pub struct LocalSupplyMission {
     source_container_miners: EntityVec<Entity>,
     source_link_miners: EntityVec<Entity>,
     mineral_container_miners: EntityVec<Entity>,
-    structure_data: FastCache<StructureData>,
+    structure_data: Option<StructureData>,
 }
 
 type MineralExtractorPair = (RemoteObjectId<Mineral>, RemoteObjectId<StructureExtractor>);
@@ -74,7 +74,7 @@ impl LocalSupplyMission {
             source_container_miners: EntityVec::new(),
             source_link_miners: EntityVec::new(),
             mineral_container_miners: EntityVec::new(),
-            structure_data: FastCache::new(),
+            structure_data: None,
         }
     }
 
