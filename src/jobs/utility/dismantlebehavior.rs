@@ -54,8 +54,8 @@ where
 
     let dismantle_target = dismantle_structure_id.resolve();
 
-    if let Some(repair_target) = dismantle_target.as_ref() {
-        if let Some(attackable) = repair_target.as_attackable() {
+    if let Some(dismantle_target) = dismantle_target.as_ref() {
+        if let Some(attackable) = dismantle_target.as_attackable() {
             if attackable.hits() == 0 {
                 return Some(next_state());
             }
