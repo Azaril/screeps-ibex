@@ -211,7 +211,7 @@ impl Cleanup {
     fn requires_scouting(&mut self, state_context: &MiningOutpostMissionContext, tick_context: &MissionTickContext) -> Result<bool, String> {
         let outpost_room_data = tick_context.system_data.room_data.get(state_context.outpost_room_data).ok_or("Expected outpost room")?;
 
-        let requires_scouting = outpost_room_data.get_dynamic_visibility_data().map(|v| !v.visible() || !v.updated_within(1000)).unwrap_or(true);
+        let requires_scouting = outpost_room_data.get_dynamic_visibility_data().map(|v| !v.updated_within(1000)).unwrap_or(true);
 
         Ok(requires_scouting)
     }
