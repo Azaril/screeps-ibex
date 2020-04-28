@@ -138,13 +138,19 @@ impl MovementSystem {
             err => return Err(format!("Move error: {:?}", err)),
         }
 
+        let creep_pos = creep.pos();
+        let creep_room_name = creep_pos.room_name();
+
         let room_path = game::map::find_route_with_callback(
-            creep.pos().room_name(), 
+            creep_room_name, 
             request.destination.room_name(),
-            |to_room_name, from_room_name| Self::get_room_weight(system_data, from_room_name, to_room_name, &request.room_options).unwrap_or(f64::INFINITY)
+            |to_room_name, from_room_name| Self::get_room_weight(system_data, from_room_name, to_room_name, creep_room_name, &request.room_options).unwrap_or(f64::INFINITY)
         ).map_err(|e| format!("Could not find path between rooms: {:?}", e))?;
 
-        let room_names: HashSet<_> = room_path.iter().map(|step| RoomName::from_str(&step.room).unwrap()).collect();
+        let room_names: HashSet<_> = room_path
+            .iter()
+            .map(|step| RoomName::from_str(&step.room).unwrap())
+            .collect();
 
         let cost_callback = |room_name: RoomName, _cost_matrix: CostMatrix| -> MultiRoomCostResult {
             if room_names.contains(&room_name) {
@@ -170,7 +176,7 @@ impl MovementSystem {
         }
     }
 
-    fn get_room_weight(system_data: &MovementSystemData, from_room_name: RoomName, to_room_name: RoomName, room_options: &RoomOptions) -> Option<f64> {
+    fn get_room_weight(system_data: &MovementSystemData, from_room_name: RoomName, to_room_name: RoomName, current_room_name: RoomName, room_options: &RoomOptions) -> Option<f64> {
         if !can_traverse_between_rooms(from_room_name, to_room_name) {
             return Some(f64::INFINITY);
         }
@@ -181,12 +187,16 @@ impl MovementSystem {
         // let from_room_entity = system_data.mapping.get_room(&from_room_name)?;
         // let from_room_data = system_data.room_data.get(from_room_entity)?;
 
+        let is_current_room = to_room_name == current_room_name;
+
         if let Some(dynamic_visibility_data) = target_room_data.get_dynamic_visibility_data() {
-            if !room_options.allow_hostile {
-                if dynamic_visibility_data.source_keeper() || dynamic_visibility_data.owner().hostile() {
-                    return Some(f64::INFINITY);
-                }
-            } 
+            if !is_current_room {
+                if !room_options.allow_hostile {
+                    if dynamic_visibility_data.source_keeper() || dynamic_visibility_data.owner().hostile() {
+                        return Some(f64::INFINITY);
+                    }
+                } 
+            }
             
             if dynamic_visibility_data.owner().mine() || dynamic_visibility_data.owner().friendly() {
                 Some(3.0)

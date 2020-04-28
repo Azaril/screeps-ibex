@@ -15,8 +15,19 @@ where
     if creep.store_capacity(Some(ResourceType::Energy)) == 0 || creep.store_free_capacity(Some(ResourceType::Energy)) > 0 {
         //TODO: This requires visibility and could fail?
         if let Some(room) = game::rooms::get(dismantle_room.name) {
-            let best_structure = get_dismantle_structures(room, ignore_storage)
-                .find_nearest_from(creep.pos(), PathFinderHelpers::same_room_ignore_creeps_range_1);
+            //TODO: Don't collect here when range check is fixed.
+            let structures: Vec<Structure> = get_dismantle_structures(room, ignore_storage).collect();
+
+            let creep_pos = creep.pos();
+
+            //TODO: Fix this hack which is a workaround for range of 1 pathfinding returning empty path.
+            let mut best_structure = structures.iter().find(|s| s.pos().get_range_to(&creep_pos) <= 1).cloned();
+
+            if best_structure.is_none() {
+                best_structure = structures
+                    .into_iter()
+                    .find_nearest_from(creep_pos, PathFinderHelpers::same_room_ignore_creeps_range_1);
+            }
 
             if let Some(structure) = best_structure {
                 return Some(state_map(RemoteStructureIdentifier::new(&structure)));
@@ -38,10 +49,8 @@ where
         return Some(next_state());
     }
 
-    let target_position = dismantle_structure_id.pos();
-
-    
     let creep_pos = creep.pos();
+    let target_position = dismantle_structure_id.pos();
 
     let expect_resolve = if creep_pos.room_name() == target_position.room_name() {
         true

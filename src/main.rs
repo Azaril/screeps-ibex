@@ -31,6 +31,7 @@ mod ui;
 mod visualize;
 mod store;
 mod cache;
+mod location;
 
 use log::*;
 use stdweb::*;
