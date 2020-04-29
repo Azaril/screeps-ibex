@@ -170,19 +170,20 @@ impl OrderQueueSystem {
     fn sell_active_orders(
         source_room_name: RoomName,
         terminal: &StructureTerminal,
-        orders: &[Order],
+        order_cache: &mut OrderCache,
         active_orders: &[ActiveSellOrderParameters],
-    ) {
+    )
+     {
         if terminal.cooldown() > 0 || terminal.store_used_capacity(Some(ResourceType::Energy)) == 0 {
             return;
         }
 
-        let best_order = active_orders
-            .into_iter()
-            .flat_map(|params| {
-                orders
-                    .into_iter()
-                    .filter(|o| o.order_type == OrderType::Buy && o.resource_type == MarketResourceType::Resource(params.resource))
+        active_orders
+            .iter()
+            .flat_map(move |params| {
+                order_cache.get_orders(MarketResourceType::Resource(params.resource))
+                    .iter()
+                    .filter(|o| o.order_type == OrderType::Buy)
                     .filter(|o| o.remaining_amount > params.minimum_sale_amount && o.price >= params.minimum_price)
                     .filter_map(|o| {
                         o.room_name.and_then(|order_room_name| {
@@ -203,7 +204,7 @@ impl OrderQueueSystem {
                                     if transferable_units >= params.minimum_sale_amount {
                                         let transfer_cost = (energy_transfer_cost_per_unit * transferable_units as f64).ceil();
 
-                                        return Some((o, params.resource, transfer_amount, transfer_cost, effective_price_per_unit));
+                                        return Some((o.id.to_owned(), o.price, params.resource, transfer_amount, transfer_cost, effective_price_per_unit));
                                     }
                                 }
                             }
@@ -213,27 +214,43 @@ impl OrderQueueSystem {
                     })
                     .collect::<Vec<_>>()
             })
-            .max_by(|a, b| a.4.partial_cmp(&b.4).unwrap());
+            .max_by(|a, b| a.4.partial_cmp(&b.4).unwrap())
+            .map(|(order_id, order_price, resource, transfer_amount, transfer_cost, effective_price_per_unit)| {
+                match deal(&order_id, transfer_amount, Some(source_room_name)) {
+                    ReturnCode::Ok => {
+                        info!(
+                            "Completed deal! Room: {} Resource: {:?} Amount: {} Transfer Cost: {} Price: {} Effective Price: {} Id: {}",
+                            source_room_name,
+                            resource,
+                            transfer_amount,
+                            transfer_cost,
+                            order_price,
+                            effective_price_per_unit,
+                            order_id
+                        );
+                    }
+                    err => {
+                        info!("Failed to complete deal! Error: {:?} Room: {}Resource: {:?} Amount: {} Transfer Cost: {} Price: {} Effectice Price: {} Id: {}", err, source_room_name, resource, transfer_amount, transfer_cost, order_price, effective_price_per_unit, order_id);
+                    }
+                }
+            });
+    }
+}
 
-        if let Some((best_order, resource, transfer_amount, transfer_cost, effective_price_per_unit)) = best_order {
-            match deal(&best_order.id, transfer_amount, Some(source_room_name)) {
-                ReturnCode::Ok => {
-                    info!(
-                        "Completed deal! Room: {} Resource: {:?} Amount: {} Transfer Cost: {} Price: {} Effective Price: {} Id: {}",
-                        source_room_name,
-                        resource,
-                        transfer_amount,
-                        transfer_cost,
-                        best_order.price,
-                        effective_price_per_unit,
-                        best_order.id
-                    );
-                }
-                err => {
-                    info!("Failed to complete deal! Error: {:?} Room: {}Resource: {:?} Amount: {} Transfer Cost: {} Price: {} Effectice Price: {} Id: {}", err, source_room_name, resource, transfer_amount, transfer_cost, best_order.price, effective_price_per_unit, best_order.id);
-                }
-            }
+struct OrderCache {
+    orders: HashMap<MarketResourceType, Vec<Order>>
+}
+
+impl OrderCache {
+    fn new() -> OrderCache {
+        OrderCache {
+            orders: HashMap::new()
         }
+    }
+
+    fn get_orders(&mut self, resource_type: MarketResourceType) -> &Vec<Order> {
+        self.orders.entry(resource_type)
+            .or_insert_with(|| game::market::get_all_orders(Some(resource_type)))
     }
 }
 
@@ -255,11 +272,12 @@ impl<'a> System<'a> for OrderQueueSystem {
             return;
         }
 
-        if game::time() % 100 != 0 || game::cpu::bucket() <= game::cpu::tick_limit() {
+        if game::time() % 50 != 0 || game::cpu::bucket() <= game::cpu::tick_limit() {
             return;
         }
 
-        let orders = game::market::get_all_orders();
+        let mut order_cache = OrderCache::new();
+
         let my_orders = game::market::orders();
 
         let complete_orders = my_orders.values().filter(|order| order.remaining_amount == 0);
@@ -338,9 +356,9 @@ impl<'a> System<'a> for OrderQueueSystem {
 
                                 None
                             })
-                            .collect();
+                            .collect();                       
 
-                        Self::sell_active_orders(*room_name, &terminal, &orders, &active_orders);
+                        Self::sell_active_orders(*room_name, &terminal, &mut order_cache, &active_orders);
                     }
                 }
             }

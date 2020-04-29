@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::str::FromStr;
 use crate::room::utility::*;
 use screeps::pathfinder::*;
+use super::costmatrixsystem::*;
 
 struct RoomOptions {
     allow_hostile: bool,
@@ -100,12 +101,13 @@ pub struct MovementSystemData<'a> {
     creep_owner: ReadStorage<'a, CreepOwner>,
     room_data: ReadStorage<'a, RoomData>,
     mapping: Read<'a, EntityMappingData>,
+    cost_matrix: WriteExpect<'a, CostMatrixSystem>,
 }
 
 pub struct MovementSystem;
 
 impl MovementSystem {
-    fn process_request_inbuilt(system_data: &MovementSystemData, creep_entity: Entity, request: &MovementRequest) -> Result<(), String> {
+    fn process_request_inbuilt(system_data: &mut MovementSystemData, creep_entity: Entity, request: &MovementRequest) -> Result<(), String> {
         let creep_owner = system_data.creep_owner.get(creep_entity).ok_or("Expected creep owner")?;
         let creep = creep_owner.id().resolve().ok_or("Expected creep")?;
 
@@ -121,7 +123,7 @@ impl MovementSystem {
         }
     }
 
-    fn process_request_custom(system_data: &MovementSystemData, creep_entity: Entity, request: &MovementRequest) -> Result<(), String> {
+    fn process_request_custom(system_data: &mut MovementSystemData, creep_entity: Entity, request: &MovementRequest) -> Result<(), String> {
         let creep_owner = system_data.creep_owner.get(creep_entity).ok_or("Expected creep owner")?;
         let creep = creep_owner.id().resolve().ok_or("Expected creep")?;
 
@@ -152,19 +154,27 @@ impl MovementSystem {
             .map(|step| RoomName::from_str(&step.room).unwrap())
             .collect();
 
-        let cost_callback = |room_name: RoomName, _cost_matrix: CostMatrix| -> MultiRoomCostResult {
-            if room_names.contains(&room_name) {
-                //TODO: Get or generate cost matrix!
-                MultiRoomCostResult::Default
-            } else {
-                MultiRoomCostResult::Impassable
-            }
+        let cost_matrix_cache = &mut *system_data.cost_matrix;
+
+        let configration = CostMatrixConfiguration {
+            structures: true,
+            friendly_creeps: true,
+            hostile_creeps: true
         };
 
         let move_options = MoveToOptions::new()
             .range(request.range)
             .reuse_path(REUSE_PATH_LENGTH)
-            .cost_callback(cost_callback);
+            .cost_callback(|room_name: RoomName, mut cost_matrix: CostMatrix| -> MultiRoomCostResult {
+                if room_names.contains(&room_name) {
+                    match cost_matrix_cache.apply_cost_matrix(room_name, &mut cost_matrix, & configration) {
+                        Ok(()) => cost_matrix.into(),
+                        Err(_err) => MultiRoomCostResult::Impassable
+                    }
+                } else {
+                    MultiRoomCostResult::Impassable
+                }
+            });
 
         match creep.move_to_with_options(&request.destination, move_options) {
             ReturnCode::Ok => Ok(()),
@@ -216,16 +226,18 @@ impl<'a> System<'a> for MovementSystem {
     type SystemData = MovementSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
+        let requests = std::mem::replace(&mut data.movement.requests, HashMap::new());
+
         if crate::features::pathing::custom() {
-            for (entity, request) in data.movement.requests.iter() {
-                match Self::process_request_inbuilt(&data, *entity, &request) {
+            for (entity, request) in requests.iter() {
+                match Self::process_request_custom(&mut data, *entity, &request) {
                     Ok(()) => {}
                     Err(_err) => {}/* debug!("Failed move: {}", err) */,
                 }
             }
         } else {
-            for (entity, request) in data.movement.requests.iter() {
-                match Self::process_request_inbuilt(&data, *entity, &request) {
+            for (entity, request) in requests.iter() {
+                match Self::process_request_inbuilt(&mut data, *entity, &request) {
                     Ok(()) => {}
                     Err(_err) => {}/* debug!("Failed move: {}", err) */,
                 }

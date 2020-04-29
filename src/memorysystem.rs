@@ -3,7 +3,6 @@ use screeps::*;
 use specs::prelude::*;
 use std::collections::HashSet;
 
-#[derive(Default)]
 pub struct MemoryArbiter {
     active: Option<HashSet<u32>>,
     requests: HashSet<u32>,
@@ -11,6 +10,13 @@ pub struct MemoryArbiter {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl MemoryArbiter {
+    pub fn new() -> MemoryArbiter {
+        MemoryArbiter {
+            active: None,
+            requests: HashSet::new()
+        }
+    }
+
     pub fn request(&mut self, segment: u32) {
         self.requests.insert(segment);
     }
@@ -40,7 +46,7 @@ impl MemoryArbiter {
 
 #[derive(SystemData)]
 pub struct MemoryArbiterSystemData<'a> {
-    memory_arbiter: Write<'a, MemoryArbiter>,
+    memory_arbiter: WriteExpect<'a, MemoryArbiter>,
 }
 
 pub struct MemoryArbiterSystem;

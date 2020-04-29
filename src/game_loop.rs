@@ -22,6 +22,7 @@ use crate::transfer::ordersystem::*;
 use crate::transfer::transfersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
+use crate::pathing::costmatrixsystem::*;
 use log::*;
 use screeps::*;
 use specs::{
@@ -38,7 +39,7 @@ fn serialize_world(world: &World, segment: u32) {
 
     #[derive(SystemData)]
     struct SerializeSystemData<'a> {
-        memory_arbiter: Write<'a, MemoryArbiter>,
+        memory_arbiter: WriteExpect<'a, MemoryArbiter>,
         entities: Entities<'a>,
         marker_allocator: Write<'a, SerializeMarkerAllocator>,
         markers: ReadStorage<'a, SerializeMarker>,
@@ -106,7 +107,7 @@ fn deserialize_world(world: &World, segment: u32) {
 
     #[derive(SystemData)]
     struct DeserializeSystemData<'a> {
-        memory_arbiter: Write<'a, MemoryArbiter>,
+        memory_arbiter: WriteExpect<'a, MemoryArbiter>,
         entities: Entities<'a>,
         marker_alloc: Write<'a, SerializeMarkerAllocator>,
         markers: WriteStorage<'a, SerializeMarker>,
@@ -178,19 +179,44 @@ fn deserialize_world(world: &World, segment: u32) {
     sys.run_now(&world);
 }
 
+struct CostMatrixStorageInterface;
+
+impl CostMatrixStorage for CostMatrixStorageInterface {
+    fn get_cache(&self, segment: u32) -> Result<CostMatrixCache, String> {
+        info!("Loading cache");
+        let raw_data = raw_memory::get_segment(segment).ok_or("Memory segment not active")?;
+
+        info!("Got raw data");
+        let res = crate::serialize::decode_from_string(&raw_data)?;
+        info!("Loaded cache from data");
+        
+        Ok(res)
+    }
+
+    fn set_cache(&mut self, segment:u32, data: &CostMatrixCache) -> Result<(), String> {
+        let encoded = crate::serialize::encode_to_string(data)?;
+
+        raw_memory::set_segment(segment, &encoded);
+
+        Ok(())
+    }
+}
+
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn tick() {
     crate::features::js::prepare();
 
     let mut world = World::new();
 
-    let mut memory_arbiter = MemoryArbiter::default();
+    let mut memory_arbiter = MemoryArbiter::new();
 
-    let component_segment = 50;
+    const COMPONENT_SEGMENT: u32 = 50;
+    const COST_MATRIX_SYSTEM_SEGMENT: u32 = 55;
 
-    memory_arbiter.request(component_segment);
+    memory_arbiter.request(COMPONENT_SEGMENT);
+    memory_arbiter.request(COST_MATRIX_SYSTEM_SEGMENT);
 
-    if !memory_arbiter.is_active(component_segment) {
+    if !memory_arbiter.is_active(COMPONENT_SEGMENT) {
         world.insert(memory_arbiter);
 
         let mut memory_system = MemoryArbiterSystem {};
@@ -209,6 +235,11 @@ pub fn tick() {
         world.insert(Visualizer::new());
         world.insert(UISystem::new());
     }
+
+    let cost_matrix_storage = Box::new(CostMatrixStorageInterface);
+    let cost_matrix_system = CostMatrixSystem::new(cost_matrix_storage, COST_MATRIX_SYSTEM_SEGMENT);
+
+    world.insert(cost_matrix_system);
 
     //
     // Pre-pass update
@@ -250,6 +281,8 @@ pub fn tick() {
         .with(VisualizerSystem, "visualizer", &[])
         .with(StatsSystem, "stats", &[])
         .with_barrier()
+        .with(CostMatrixStoreSystem, "cost_matrix_store", &[])
+        .with_barrier()
         .with(MemoryArbiterSystem, "memory", &[])
         .build();
 
@@ -259,7 +292,7 @@ pub fn tick() {
     // Deserialize world state.
     //
 
-    deserialize_world(&world, component_segment);
+    deserialize_world(&world, COMPONENT_SEGMENT);
 
     //
     // Prepare globals
@@ -301,7 +334,7 @@ pub fn tick() {
     // Serialize world state.
     //
 
-    serialize_world(&world, component_segment);
+    serialize_world(&world, COMPONENT_SEGMENT);
 }
 
 fn cleanup_memory() -> Result<(), Box<dyn (::std::error::Error)>> {
