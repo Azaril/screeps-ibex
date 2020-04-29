@@ -366,7 +366,7 @@ impl LocalSupplyMission {
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility")?;
 
-        let structure_data = self.structure_data.with_access(
+        let structure_data = self.structure_data.access(
             |d| game::time() - d.last_updated >= 10,
             || Self::create_structure_data(&static_visibility_data, &room)
         );
@@ -438,7 +438,7 @@ impl LocalSupplyMission {
         let likely_owned_room = dynamic_visibility_data.updated_within(2000)
             && (dynamic_visibility_data.owner().mine() || dynamic_visibility_data.reservation().mine());
 
-        let structure_data = self.structure_data.with_access(
+        let structure_data = self.structure_data.access(
             |d| game::time() - d.last_updated >= 10,
             || Self::create_structure_data(&static_visibility_data, &room)
         );
@@ -1155,7 +1155,7 @@ impl Mission for LocalSupplyMission {
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
-        let structure_data = self.structure_data.with_access(
+        let structure_data = self.structure_data.access(
             |d| game::time() - d.last_updated >= 10,
             || Self::create_structure_data(&static_visibility_data, &room)
         );

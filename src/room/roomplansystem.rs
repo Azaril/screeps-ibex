@@ -170,7 +170,7 @@ pub struct RoomPlannerData {
 
 #[derive(SystemData)]
 pub struct RoomPlanSystemData<'a> {
-    memory_arbiter: Write<'a, MemoryArbiter>,
+    memory_arbiter: WriteExpect<'a, MemoryArbiter>,
     entities: Entities<'a>,
     mapping: Read<'a, EntityMappingData>,
     room_data: WriteStorage<'a, RoomData>,

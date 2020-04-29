@@ -1,4 +1,5 @@
 use screeps::*;
+use screeps::pathfinder::*;
 use serde::*;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
@@ -54,6 +55,26 @@ impl Location {
         let dy = (self.y() as i8) - y;
 
         dx.abs().max(dy.abs()) as u8
+    }
+}
+
+impl HasLocalPosition for Location {
+    fn x(&self) -> u8 {
+        Self::x(*self)
+    }
+
+    fn y(&self) -> u8 {
+        Self::y(*self)
+    }
+}
+
+impl HasLocalPosition for &Location {
+    fn x(&self) -> u8 {
+        (*self).x()
+    }
+
+    fn y(&self) -> u8 {
+        (*self).y()
     }
 }
 

@@ -139,7 +139,7 @@ impl StatsSystem {
 pub struct StatsSystemData<'a> {
     entities: Entities<'a>,
     room_data: ReadStorage<'a, RoomData>,
-    memory_arbiter: Write<'a, MemoryArbiter>,
+    memory_arbiter: WriteExpect<'a, MemoryArbiter>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]

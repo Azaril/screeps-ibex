@@ -57,7 +57,11 @@ fn can_run_mission(state_context: &mut MiningOutpostMissionContext, tick_context
     let outpost_room_data = tick_context.system_data.room_data.get(state_context.outpost_room_data).ok_or("Expected outpost room data")?;
 
     if let Some(dynamic_visibility_data) = outpost_room_data.get_dynamic_visibility_data() {
-        if dynamic_visibility_data.updated_within(1000) && !dynamic_visibility_data.owner().neutral() {
+        if dynamic_visibility_data.updated_within(1000) && 
+            (!dynamic_visibility_data.owner().neutral() || 
+            dynamic_visibility_data.reservation().hostile() || 
+            dynamic_visibility_data.reservation().friendly()) {
+                
             return Ok(false);
         }
     }
