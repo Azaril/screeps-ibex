@@ -1,6 +1,6 @@
 use crate::constants::*;
 use crate::visualize::*;
-use crate::location::*;
+use screeps_rover::*;
 use bitflags::*;
 use log::*;
 use pathfinding::directed::astar::*;

@@ -7,13 +7,13 @@ use crate::ownership::*;
 use crate::room::data::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
-use crate::room::utility::*;
 use std::collections::HashMap;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+use screeps_rover::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct MiningOutpostOperation {
@@ -63,9 +63,17 @@ impl MiningOutpostOperation {
         let static_visibility_data = search_room_data.get_static_visibility_data()?;
         let dynamic_visibility_data = search_room_data.get_dynamic_visibility_data()?;
 
-        //TODO: Look at update time?
-
         let has_sources = !static_visibility_data.sources().is_empty();
+
+        let visibility_timeout = if has_sources {
+            3000
+        } else {
+            10000
+        };
+
+        if !dynamic_visibility_data.updated_within(visibility_timeout) {
+            return None;
+        }
 
         let can_reserve = dynamic_visibility_data.owner().neutral() && dynamic_visibility_data.reservation().neutral();
         let hostile = dynamic_visibility_data.owner().hostile() || dynamic_visibility_data.source_keeper();

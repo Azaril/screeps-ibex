@@ -9,7 +9,6 @@ use crate::missions::missionsystem::*;
 use crate::operations::data::*;
 use crate::operations::managersystem::*;
 use crate::operations::operationsystem::*;
-use crate::pathing::movementsystem::*;
 use crate::room::createroomsystem::*;
 use crate::room::data::*;
 use crate::room::roomplansystem::*;
@@ -22,7 +21,6 @@ use crate::transfer::ordersystem::*;
 use crate::transfer::transfersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
-use crate::pathing::costmatrixsystem::*;
 use log::*;
 use screeps::*;
 use specs::{
@@ -30,6 +28,9 @@ use specs::{
     saveload::{DeserializeComponents, SerializeComponents},
 };
 use std::collections::HashSet;
+use screeps_rover::*;
+use crate::pathing::movementsystem::*;
+use crate::pathing::costmatrixsystem::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 fn serialize_world(world: &World, segment: u32) {
@@ -238,6 +239,10 @@ pub fn tick() {
 
     world.insert(cost_matrix_system);
 
+    let movement_data = MovementData::<Entity>::new();
+
+    world.insert(movement_data);
+
     //
     // Pre-pass update
     //
@@ -266,7 +271,7 @@ pub fn tick() {
         .with(RunOperationSystem, "run_operations", &[])
         .with(RunMissionSystem, "run_missions", &[])
         .with(RunJobSystem, "run_jobs", &[])
-        .with(MovementSystem, "movement", &["run_jobs"])
+        .with(MovementUpdateSystem, "movement", &["run_jobs"])
         .with_barrier()
         .with(VisibilityQueueSystem, "visibility_queue", &[])
         .with(SpawnQueueSystem, "spawn_queue", &[])

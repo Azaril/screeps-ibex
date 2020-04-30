@@ -1,13 +1,13 @@
 use super::data::JobData;
 use crate::creep::CreepOwner;
 use crate::entitymappingsystem::*;
-use crate::pathing::movementsystem::*;
 use crate::room::data::*;
 use crate::transfer::transfersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
 use screeps::*;
 use specs::prelude::*;
+use screeps_rover::*;
 
 #[derive(specs::SystemData)]
 pub struct JobSystemData<'a> {
@@ -19,7 +19,7 @@ pub struct JobSystemData<'a> {
     ui: Option<Write<'a, UISystem>>,
     transfer_queue: Write<'a, TransferQueue>,
     room_data: ReadStorage<'a, RoomData>,
-    movement: Write<'a, MovementData>,
+    movement: WriteExpect<'a, MovementData<Entity>>,
     mapping: Read<'a, EntityMappingData>,
 }
 
@@ -34,7 +34,7 @@ pub struct JobExecutionRuntimeData<'a> {
     pub owner: &'a Creep,
     pub mapping: &'a EntityMappingData,
     pub transfer_queue: &'a mut TransferQueue,
-    pub movement: &'a mut MovementData,
+    pub movement: &'a mut MovementData<Entity>,
 }
 
 pub struct JobDescribeData<'a> {

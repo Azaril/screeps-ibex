@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 use std::collections::HashMap;
-use crate::cache::*;
+use screeps_cache::*;
 
 #[derive(ConvertSaveload)]
 pub struct LocalSupplyMission {
