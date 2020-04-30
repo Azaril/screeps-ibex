@@ -183,13 +183,10 @@ struct CostMatrixStorageInterface;
 
 impl CostMatrixStorage for CostMatrixStorageInterface {
     fn get_cache(&self, segment: u32) -> Result<CostMatrixCache, String> {
-        info!("Loading cache");
         let raw_data = raw_memory::get_segment(segment).ok_or("Memory segment not active")?;
 
-        info!("Got raw data");
         let res = crate::serialize::decode_from_string(&raw_data)?;
-        info!("Loaded cache from data");
-        
+
         Ok(res)
     }
 
