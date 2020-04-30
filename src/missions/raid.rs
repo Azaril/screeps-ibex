@@ -181,7 +181,7 @@ impl Mission for RaidMission {
             return Ok(MissionResult::Running);
         }
 
-        let desired_raiders = 1;
+        let desired_raiders = 2;
 
         if self.raiders.len() < desired_raiders {
             let priority = SPAWN_PRIORITY_LOW;
