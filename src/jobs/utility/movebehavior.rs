@@ -47,7 +47,8 @@ where
         tick_context
             .runtime_data
             .movement
-            .move_to_range(tick_context.runtime_data.creep_entity, position, range);
+            .move_to(tick_context.runtime_data.creep_entity, position)
+            .range(range);
     }
 
     None
