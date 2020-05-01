@@ -4,7 +4,6 @@ use crate::jobs::context::*;
 use crate::jobs::jobsystem::*;
 use crate::room::data::*;
 use crate::transfer::transfersystem::*;
-use crate::visualize::*;
 use itertools::*;
 use screeps::*;
 use std::collections::HashMap;
