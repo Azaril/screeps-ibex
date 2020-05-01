@@ -21,7 +21,13 @@ pub struct MovementUpdateSystemData<'a> {
     cost_matrix: WriteExpect<'a, CostMatrixSystem>,
 }
 
-impl<'a> MovementSystemExternal<Entity> for MovementUpdateSystemData<'a> {
+struct MovementSystemExternalProvider<'a, 'b> {
+    creep_owner: &'b ReadStorage<'a, CreepOwner>,
+    room_data: &'b ReadStorage<'a, RoomData>,
+    mapping: &'b Read<'a, EntityMappingData>,
+}
+
+impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'a, 'b> {
     fn get_creep(&self, entity: Entity) -> Result<Creep, MovementError> {
         let creep_owner = self.creep_owner.get(entity).ok_or("Expected creep owner")?;
         let creep = creep_owner.id().resolve().ok_or("Expected creep")?;
@@ -70,6 +76,17 @@ impl<'a> System<'a> for MovementUpdateSystem {
     fn run(&mut self, mut data: Self::SystemData) {
         let movement_data = std::mem::replace(&mut *data.movement, MovementData::new());
 
-        MovementSystem::process_inbuilt(&mut data, movement_data);
+        let mut external = MovementSystemExternalProvider {
+            creep_owner: &data.creep_owner,
+            room_data: &data.room_data,
+            mapping: &data.mapping
+        };
+
+        if crate::features::pathing::custom() {
+            MovementSystem::process(&mut external, &mut *data.cost_matrix, movement_data);
+            
+        } else {
+            MovementSystem::process_inbuilt(&mut external, movement_data);
+        }        
     }
 }
