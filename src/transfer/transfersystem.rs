@@ -102,6 +102,10 @@ pub enum TransferTarget {
     Tombstone(RemoteObjectId<Tombstone>),
     Resource(RemoteObjectId<Resource>),
     Terminal(RemoteObjectId<StructureTerminal>),
+    Lab(RemoteObjectId<StructureLab>),
+    Factory(RemoteObjectId<StructureFactory>),
+    Nuker(RemoteObjectId<StructureNuker>),
+    PowerSpawn(RemoteObjectId<StructurePowerSpawn>),
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -129,6 +133,10 @@ impl TransferTarget {
             TransferTarget::Tombstone(id) => Self::is_valid_from_id(id),
             TransferTarget::Resource(id) => Self::is_valid_from_id(id),
             TransferTarget::Terminal(id) => Self::is_valid_from_id(id),
+            TransferTarget::Lab(id) => Self::is_valid_from_id(id),
+            TransferTarget::Factory(id) => Self::is_valid_from_id(id),
+            TransferTarget::Nuker(id) => Self::is_valid_from_id(id),
+            TransferTarget::PowerSpawn(id) => Self::is_valid_from_id(id),
         }
     }
 
@@ -144,6 +152,10 @@ impl TransferTarget {
             TransferTarget::Tombstone(id) => id.pos(),
             TransferTarget::Resource(id) => id.pos(),
             TransferTarget::Terminal(id) => id.pos(),
+            TransferTarget::Lab(id) => id.pos(),
+            TransferTarget::Factory(id) => id.pos(),
+            TransferTarget::Nuker(id) => id.pos(),
+            TransferTarget::PowerSpawn(id) => id.pos(),
         }
     }
 
@@ -180,6 +192,11 @@ impl TransferTarget {
             TransferTarget::Tombstone(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
             TransferTarget::Resource(id) => Self::pickup_resource_from_id(id, creep),
             TransferTarget::Terminal(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
+            TransferTarget::Lab(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
+            TransferTarget::Factory(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
+            //TODO: Split pickup and deposit targets.
+            TransferTarget::Nuker(_id) => panic!("Attempting to withdraw resources from a nuker."),
+            TransferTarget::PowerSpawn(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
         }
     }
 
@@ -205,6 +222,10 @@ impl TransferTarget {
             TransferTarget::Tower(id) => Self::creep_transfer_resource_amount_to_id(id, creep, resource, amount),
             TransferTarget::Link(id) => Self::creep_transfer_resource_amount_to_id(id, creep, resource, amount),
             TransferTarget::Terminal(id) => Self::creep_transfer_resource_amount_to_id(id, creep, resource, amount),
+            TransferTarget::Lab(id) => Self::creep_transfer_resource_amount_to_id(id, creep, resource, amount),
+            TransferTarget::Factory(id) => Self::creep_transfer_resource_amount_to_id(id, creep, resource, amount),
+            TransferTarget::Nuker(id) => Self::creep_transfer_resource_amount_to_id(id, creep, resource, amount),
+            TransferTarget::PowerSpawn(id) => Self::creep_transfer_resource_amount_to_id(id, creep, resource, amount),
             //TODO: Split pickup and deposit targets.
             TransferTarget::Ruin(_) => panic!("Attempting to transfer resources to a ruin."),
             TransferTarget::Tombstone(_) => panic!("Attempting to transfer resources to a tombstone."),
@@ -232,6 +253,10 @@ impl TransferTarget {
             TransferTarget::Tower(_) => panic!("Attempting to link transfer resources to a tower!"),
             TransferTarget::Link(id) => Self::link_transfer_energy_amount_to_id(id, link, amount),
             TransferTarget::Terminal(_) => panic!("Attempting to link transfer resources to a container!"),
+            TransferTarget::Lab(_) => panic!("Attempting to link transfer resources to a container!"),
+            TransferTarget::Factory(_) => panic!("Attempting to link transfer resources to a factory!"),
+            TransferTarget::Nuker(_) => panic!("Attempting to link transfer resources to a nuker!"),
+            TransferTarget::PowerSpawn(_) => panic!("Attempting to link transfer resources to a power spawn!"),
             TransferTarget::Ruin(_) => panic!("Attempting to link transfer resources to a ruin!"),
             TransferTarget::Tombstone(_) => panic!("Attempting to link transfer resources to a tombstone!"),
             TransferTarget::Resource(_) => panic!("Attempting to link transfer resources to a resource!"),
@@ -251,6 +276,10 @@ impl std::convert::TryFrom<&Structure> for TransferTarget {
             Structure::Tower(s) => Ok(s.into()),
             Structure::Link(s) => Ok(s.into()),
             Structure::Terminal(s) => Ok(s.into()),
+            Structure::Lab(s) => Ok(s.into()),
+            Structure::Factory(s) => Ok(s.into()),
+            Structure::Nuker(s) => Ok(s.into()),
+            Structure::PowerSpawn(s) => Ok(s.into()),
             _ => Err(())
         }
     }
@@ -313,6 +342,30 @@ impl From<&Tombstone> for TransferTarget {
 impl From<&Resource> for TransferTarget {
     fn from(val: &Resource) -> TransferTarget {
         TransferTarget::Resource(val.remote_id())
+    }
+}
+
+impl From<&StructureLab> for TransferTarget {
+    fn from(val: &StructureLab) -> TransferTarget {
+        TransferTarget::Lab(val.remote_id())
+    }
+}
+
+impl From<&StructureFactory> for TransferTarget {
+    fn from(val: &StructureFactory) -> TransferTarget {
+        TransferTarget::Factory(val.remote_id())
+    }
+}
+
+impl From<&StructureNuker> for TransferTarget {
+    fn from(val: &StructureNuker) -> TransferTarget {
+        TransferTarget::Nuker(val.remote_id())
+    }
+}
+
+impl From<&StructurePowerSpawn> for TransferTarget {
+    fn from(val: &StructurePowerSpawn) -> TransferTarget {
+        TransferTarget::PowerSpawn(val.remote_id())
     }
 }
 
