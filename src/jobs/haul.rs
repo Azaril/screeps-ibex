@@ -3,6 +3,7 @@ use super::context::*;
 use super::jobsystem::*;
 use super::utility::haulbehavior::*;
 use super::utility::waitbehavior::*;
+use super::utility::movebehavior::*;
 use crate::serialize::*;
 use crate::transfer::transfersystem::*;
 use itertools::*;
@@ -24,7 +25,8 @@ machine!(
         Idle,
         Pickup { withdrawl: TransferWithdrawTicket, deposits: Vec<TransferDepositTicket> },
         Delivery { deposits: Vec<TransferDepositTicket> },
-        Wait { ticks: u32 }
+        Wait { ticks: u32 },
+        MoveToRoom { room_name: RoomName },
     }
 
     impl {
@@ -49,9 +51,9 @@ machine!(
             std::any::type_name::<Self>().to_string()
         }
 
-        Idle, Wait => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
+        Idle, MoveToRoom, Wait => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
         
-        Idle, Wait => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
+        Idle, MoveToRoom, Wait => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
         
         _ => fn tick(&mut self, state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState>;
     }
@@ -106,6 +108,17 @@ impl Idle {
                 })
                 .next()
         })
+        .or_else(|| {
+            for room in &pickup_rooms {
+                if room.get_dynamic_visibility_data().map(|v| !v.visible()).unwrap_or(true) {
+                    if let Some(state) = get_new_move_to_room_state(creep, room.name, HaulState::move_to_room) {
+                        return Some(state);
+                    }
+                }
+            }
+
+            None
+        })
         .or_else(|| Some(HaulState::wait(5)))
     }
 }
@@ -147,6 +160,12 @@ impl Delivery {
     }
 }
 
+impl MoveToRoom {
+    fn tick(&mut self, _state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
+        tick_move_to_room(tick_context, self.room_name, HaulState::idle)
+    }
+}
+
 impl Wait {
     pub fn tick(&mut self, _state_context: &HaulJobContext, _tick_context: &mut JobTickContext) -> Option<HaulState> {
         tick_wait(&mut self.ticks, HaulState::idle)
@@ -165,7 +184,7 @@ impl HaulJob {
         HaulJob {
             context: HaulJobContext {
                 pickup_rooms: pickup_rooms.into(),
-                delivery_rooms: delivery_rooms.into()
+                delivery_rooms: delivery_rooms.into(),
             },
             state: HaulState::idle(),
         }

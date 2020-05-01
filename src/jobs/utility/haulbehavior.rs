@@ -216,6 +216,7 @@ pub fn tick_pickup<F, R>(tick_context: &mut JobTickContext, ticket: &mut Transfe
 where
     F: FnOnce() -> R,
 {
+    //TODO: Use visibility to query if target should be visible.
     if !ticket.target().is_valid() || ticket.get_next_withdrawl().is_none() {
         return Some(next_state());
     }
@@ -231,7 +232,8 @@ where
             tick_context
                 .runtime_data
                 .movement
-                .move_to_range(tick_context.runtime_data.creep_entity, pos, 1);
+                .move_to(tick_context.runtime_data.creep_entity, pos)
+                .range(1);
         }
 
         return None;
@@ -240,11 +242,10 @@ where
     loop {
         if let Some((resource, amount)) = ticket.get_next_withdrawl() {
             if !action_flags.contains(SimultaneousActionFlags::TRANSFER) {
-                action_flags.insert(SimultaneousActionFlags::TRANSFER);
-
                 ticket.consume_withdrawl(resource, amount);
 
                 if ticket.target().withdraw_resource_amount(creep, resource, amount) == ReturnCode::Ok {
+                    action_flags.insert(SimultaneousActionFlags::TRANSFER);
                     break None;
                 }
             } else {
@@ -278,6 +279,7 @@ where
     let creep_pos = creep.pos();
 
     while let Some(ticket) = tickets.first_mut() {
+        //TODO: Use visibility to query if target should be visible.
         if ticket.target().is_valid() && ticket.get_next_deposit().is_some() {
             let pos = ticket.target().pos();
 
@@ -288,7 +290,8 @@ where
                     tick_context
                         .runtime_data
                         .movement
-                        .move_to_range(tick_context.runtime_data.creep_entity, pos, 1);
+                        .move_to(tick_context.runtime_data.creep_entity, pos)
+                        .range(1);
                 }
 
                 return None;
@@ -358,7 +361,8 @@ where
                 tick_context
                     .runtime_data
                     .movement
-                    .move_to_range(tick_context.runtime_data.creep_entity, pos, 1);
+                    .move_to(tick_context.runtime_data.creep_entity, pos)
+                    .range(1);
             }
 
             return None;

@@ -60,7 +60,8 @@ where
             tick_context
                 .runtime_data
                 .movement
-                .move_to_range(tick_context.runtime_data.creep_entity, target_position, 3);
+                .move_to(tick_context.runtime_data.creep_entity, target_position)
+                .range(3);
         }
 
         return None;
@@ -96,7 +97,8 @@ where
             tick_context
                 .runtime_data
                 .movement
-                .move_to_range(tick_context.runtime_data.creep_entity, target_position, 1);
+                .move_to(tick_context.runtime_data.creep_entity, target_position)
+                .range(1);
         }
 
         return None;
@@ -132,7 +134,8 @@ where
             tick_context
                 .runtime_data
                 .movement
-                .move_to_range(tick_context.runtime_data.creep_entity, target_position, 1);
+                .move_to(tick_context.runtime_data.creep_entity, target_position)
+                .range(1);
         }
 
         return None;
@@ -178,7 +181,8 @@ where
             tick_context
                 .runtime_data
                 .movement
-                .move_to_range(tick_context.runtime_data.creep_entity, target_position, 1);
+                .move_to(tick_context.runtime_data.creep_entity, target_position)
+                .range(1);
         }
 
         return None;
