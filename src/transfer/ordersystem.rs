@@ -39,7 +39,7 @@ pub struct OrderQueue {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl OrderQueue {
-    pub fn maximum_transfer_energy(&self) -> u32 {
+    pub fn maximum_transfer_energy() -> u32 {
         5000
     }
 
@@ -348,7 +348,7 @@ impl<'a> System<'a> for OrderQueueSystem {
                                             minimum_sale_amount: 2000,
                                             minimum_price: latest_resource_history.avg_price - (latest_resource_history.stddev_price * 0.2),
                                             available_transfer_energy: entry.available_transfer_energy,
-                                            maximum_transfer_energy: data.order_queue.maximum_transfer_energy(),
+                                            maximum_transfer_energy: OrderQueue::maximum_transfer_energy(),
                                             energy_cost: latest_energy_history.avg_price - (latest_energy_history.stddev_price * 0.2),
                                         });
                                     }

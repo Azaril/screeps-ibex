@@ -81,8 +81,14 @@ impl Idle {
         let in_delivery_room = creep.room().map(|r| r.name() == delivery_room_data.name).unwrap_or(false);
 
         if in_delivery_room && state_context.allow_haul {
+            let transfer_queue_data = TransferQueueGeneratorData {
+                cause: "Harvest Idle",
+                room_data: &*tick_context.system_data.room_data
+            };
+
             if let Some(state) = get_new_pickup_and_delivery_full_capacity_state(
                 creep,
+                &transfer_queue_data,
                 &[delivery_room_data],
                 &[delivery_room_data],
                 TransferPriorityFlags::HIGH,
@@ -100,8 +106,14 @@ impl Idle {
 
         if in_delivery_room {
             if state_context.allow_haul {
+                let transfer_queue_data = TransferQueueGeneratorData {
+                    cause: "Harvest Idle",
+                    room_data: &*tick_context.system_data.room_data
+                };
+
                 if let Some(state) = get_new_pickup_and_delivery_full_capacity_state(
                     creep,
+                    &transfer_queue_data,
                     &[delivery_room_data],
                     &[delivery_room_data],
                     TransferPriorityFlags::MEDIUM | TransferPriorityFlags::LOW,
@@ -113,8 +125,14 @@ impl Idle {
                 }
             }
 
+            let transfer_queue_data = TransferQueueGeneratorData {
+                cause: "Harvest Idle",
+                room_data: &*tick_context.system_data.room_data
+            };
+
             get_new_delivery_current_resources_state(
                 creep,
+                &transfer_queue_data,
                 &[delivery_room_data],
                 TransferPriorityFlags::HIGH,
                 TransferTypeFlags::HAUL,
@@ -129,6 +147,7 @@ impl Idle {
                     .filter_map(|priority| {
                         get_new_delivery_current_resources_state(
                             creep,
+                            &transfer_queue_data,
                             &[delivery_room_data],
                             TransferPriorityFlags::from(priority),
                             TransferTypeFlags::HAUL,
@@ -205,8 +224,14 @@ impl FinishedDelivery {
         ALL_TRANSFER_PRIORITIES
             .iter()
             .filter_map(|priority| {
+                let transfer_queue_data = TransferQueueGeneratorData {
+                    cause: "Harvest Finished Delivery",
+                    room_data: &*tick_context.system_data.room_data
+                };
+
                 get_new_delivery_current_resources_state(
                     creep,
+                    &transfer_queue_data,
                     &[delivery_room_data],
                     priority.into(),
                     TransferTypeFlags::HAUL,

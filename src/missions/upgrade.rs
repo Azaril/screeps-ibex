@@ -3,10 +3,8 @@ use super::missionsystem::*;
 use crate::jobs::data::*;
 use crate::jobs::upgrade::*;
 use crate::ownership::*;
-use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
-use crate::transfer::transfersystem::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
@@ -112,37 +110,22 @@ impl Mission for UpgradeMission {
         }
 
         let has_excess_energy = {
-            if let Some(room_transfer_data) = system_data.transfer_queue.try_get_room(room_data.name) {
-                if let Some(storage) = room.storage() {
-                    if let Some(storage_node) = room_transfer_data.try_get_node(&TransferTarget::Storage(storage.remote_id())) {
-                        if storage_node.get_available_withdrawl_by_resource(TransferType::Haul, ResourceType::Energy) >= 100_000 {
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                } else {
-                    let structures = room.find(find::STRUCTURES);
-                    structures
-                        .iter()
-                        .filter_map(|structure| {
-                            if let Structure::Container(container) = structure {
-                                Some(container)
-                            } else {
-                                None
-                            }
-                        })
-                        .filter_map(|container| room_transfer_data.try_get_node(&TransferTarget::Container(container.remote_id())))
-                        .any(|container_node| {
-                            container_node.get_available_withdrawl_by_resource(TransferType::Haul, ResourceType::Energy) as f32
-                                / CONTAINER_CAPACITY as f32
-                                > 0.75
-                        })
-                }
+            if let Some(storage) = room.storage() {
+                storage.store_of(ResourceType::Energy) >= 100_000
             } else {
-                false
+                let structures = room.find(find::STRUCTURES);
+                structures
+                    .iter()
+                    .filter_map(|structure| {
+                        if let Structure::Container(container) = structure {
+                            Some(container)
+                        } else {
+                            None
+                        }
+                    })
+                    .any(|container| {
+                        container.store_of(ResourceType::Energy) as f32 / CONTAINER_CAPACITY as f32 > 0.75
+                    })
             }
         };
 

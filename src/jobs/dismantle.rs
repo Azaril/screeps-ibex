@@ -77,8 +77,14 @@ impl Idle {
             }
         }
 
+        let transfer_queue_data = TransferQueueGeneratorData {
+            cause: "Dismantle Idle",
+            room_data: &*tick_context.system_data.room_data
+        };
+
         get_new_delivery_current_resources_state(
             creep,
+            &transfer_queue_data,
             &[delivery_room_data],
             TransferPriorityFlags::ALL,
             TransferTypeFlags::HAUL,
@@ -136,8 +142,14 @@ impl FinishedDelivery {
         ALL_TRANSFER_PRIORITIES
             .iter()
             .filter_map(|priority| {
+                let transfer_queue_data = TransferQueueGeneratorData {
+                    cause: "Dismantle Finished Delivery",
+                    room_data: &*tick_context.system_data.room_data
+                };
+
                 get_new_delivery_current_resources_state(
                     creep,
+                    &transfer_queue_data,
                     &[delivery_room_data],
                     priority.into(),
                     TransferTypeFlags::HAUL,

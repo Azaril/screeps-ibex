@@ -11,6 +11,7 @@ use std::collections::HashMap;
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_pickup_state_fill_resource<F, R>(
     creep: &Creep,
+    data: &dyn TransferRequestSystemData,
     pickup_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
     transfer_types: TransferTypeFlags,
@@ -36,6 +37,7 @@ where
         let pickup_room_names = pickup_rooms.iter().map(|r| r.name).collect_vec();
 
         let pickups = transfer_queue.select_pickups(
+            data,
             &pickup_room_names,
             allowed_priorities,
             transfer_types,
@@ -59,6 +61,7 @@ where
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_delivery_current_resources_state<F, R>(
     creep: &Creep,
+    data: &dyn TransferRequestSystemData,
     delivery_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
     transfer_types: TransferTypeFlags,
@@ -75,6 +78,7 @@ where
         let delivery_room_names = delivery_rooms.iter().map(|r| r.name).collect_vec();
 
         let deliveries = transfer_queue.select_deliveries(
+            data,
             &delivery_room_names,
             allowed_priorities,
             transfer_types,
@@ -102,6 +106,7 @@ where
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_pickup_and_delivery_state<F, R>(
     creep: &Creep,
+    data: &dyn TransferRequestSystemData,
     pickup_rooms_temp: &[&RoomData],
     delivery_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
@@ -118,6 +123,7 @@ where
         let delivery_room_names = delivery_rooms.iter().map(|r| r.name).collect_vec();
 
         if let Some((mut pickup, delivery)) = transfer_queue.select_pickup_and_delivery(
+            data,
             &pickup_room_names,
             &delivery_room_names,
             allowed_priorities,
@@ -146,8 +152,9 @@ where
                 //       the node is already being visited so it's worthwhile picking up any resource that can be transfered
                 //       on the route.
                 //
-
+                
                 if let Some((additional_pickup, additional_delivery)) = transfer_queue.get_delivery_from_target(
+                    data,
                     &pickup_room_names,
                     pickup.target(),
                     TransferPriorityFlags::ALL,
@@ -183,6 +190,7 @@ where
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_pickup_and_delivery_full_capacity_state<F, R>(
     creep: &Creep,
+    data: &dyn TransferRequestSystemData,
     pickup_rooms: &[&RoomData],
     delivery_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
@@ -201,6 +209,7 @@ where
 
     get_new_pickup_and_delivery_state(
         creep,
+        data,
         pickup_rooms,
         delivery_rooms,
         allowed_priorities,

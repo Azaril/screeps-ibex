@@ -11,12 +11,22 @@ use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 use std::collections::HashMap;
+use screeps_cache::*;
+use crate::room::data::*;
+
+#[derive(Clone, Serialize, Deserialize)]
+struct HaulingStats {
+    last_updated: u32,
+    unfufilled_hauling: u32
+}
 
 #[derive(Clone, ConvertSaveload)]
 pub struct HaulMission {
     owner: EntityOption<OperationOrMissionEntity>,
     room_data: Entity,
     haulers: EntityVec<Entity>,
+    //TODO: Create a room stats component?
+    stats: Option<HaulingStats>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -35,6 +45,7 @@ impl HaulMission {
             owner: owner.into(),
             room_data,
             haulers: EntityVec::new(),
+            stats: None
         }
     }
 
@@ -57,6 +68,22 @@ impl HaulMission {
                 }
             });
         })
+    }
+
+    fn update_stats<'a, 's, RD>(transfer_queue: &mut TransferQueue, transfer_queue_data: &TransferQueueGeneratorData<'a, 's, RD>, room_name: RoomName) -> HaulingStats where RD: std::ops::Deref<Target = specs::storage::MaskedStorage<RoomData>> {
+        const UPDATE_RATE: u32 = 20;
+
+        let unfufilled = transfer_queue
+            .try_get_room(transfer_queue_data, room_name)
+            .map(|r| r.stats().total_unfufilled_resources(TransferType::Haul))
+            .unwrap_or_else(HashMap::new);
+
+        let total_unfufilled: u32 = unfufilled.values().sum();
+
+        HaulingStats {
+            last_updated: game::time(),
+            unfufilled_hauling: total_unfufilled
+        }
     }
 }
 
@@ -100,21 +127,26 @@ impl Mission for HaulMission {
         system_data: &mut MissionExecutionSystemData,
         runtime_data: &mut MissionExecutionRuntimeData,
     ) -> Result<MissionResult, String> {
-        let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
+        let room_data_storage = &*system_data.room_data;
+        let room_data = room_data_storage.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
         let controller = room.controller().ok_or("Expected controller")?;
 
-        let unfufilled = system_data
-            .transfer_queue
-            .try_get_room(room_data.name)
-            .map(|r| r.stats().total_unfufilled_resources(TransferType::Haul))
-            .unwrap_or_else(HashMap::new);
+        let transfer_queue = &mut *system_data.transfer_queue;
+        let mut transfer_queue_data = TransferQueueGeneratorData {
+            cause: "Haul Run Mission",
+            room_data: &*room_data_storage
+        };
 
-        let total_unfufilled: u32 = unfufilled.values().sum();
+        let stats = self.stats.access(
+            |s| game::time() - s.last_updated >= 20,
+            || Self::update_stats(transfer_queue, &mut transfer_queue_data, room_data.name)
+        );
+        let stats = stats.get();
 
         let base_amount = controller.level() * 500;
 
-        let desired_haulers = (total_unfufilled as f32 / base_amount as f32).ceil().min(3.0) as usize;
+        let desired_haulers = (stats.unfufilled_hauling as f32 / base_amount as f32).ceil().min(3.0) as usize;
 
         let should_spawn = self.haulers.len() < desired_haulers;
 
