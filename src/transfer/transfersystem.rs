@@ -1304,7 +1304,6 @@ struct LazyTransferQueueRooms {
 }
 
 //TODO: Return a 'resolved' interface once the initial flush has happened. Right now the 'data' propagates to many objects.
-// !!! THIS IS CRITICAL SO SPLIT HAUL AND LINK RESOLVES!
 impl LazyTransferQueueRooms {
     fn register_generator(&mut self, room: RoomName, transfer_types: TransferTypeFlags, generator: TransferQueueGenerator) {
         self.generators.entry(room).or_insert_with(Vec::new).push(GeneratorEntry {
@@ -1315,7 +1314,6 @@ impl LazyTransferQueueRooms {
 
     fn flush_generators(&mut self, data: &dyn TransferRequestSystemData, room: RoomName, transfer_types: TransferTypeFlags) {
         while let Some(entry) = self.get_next_generator(room, transfer_types) {
-            info!("Flushing generator for room: {} - Cause: {} - Time: {}", room, data.get_cause(), game::time());
             match (entry.generator)(data, self, room) {
                 Ok(_) => {},
                 Err(err) => info!("Transfer information generator error: {}", err),
