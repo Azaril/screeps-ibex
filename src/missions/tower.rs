@@ -61,43 +61,48 @@ impl Mission for TowerMission {
         _runtime_data: &mut MissionExecutionRuntimeData,
     ) -> Result<(), String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
-        let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
-        let towers = room
-            .find(find::MY_STRUCTURES)
-            .into_iter()
-            .map(|owned_structure| owned_structure.as_structure())
-            .filter_map(|structure| {
-                if let Structure::Tower(tower) = structure {
-                    Some(tower)
-                } else {
-                    None
+        system_data.transfer_queue.register_generator(room_data.name, TransferTypeFlags::HAUL, Box::new(|_system, transfer, room_name| {
+            let room = game::rooms::get(room_name).ok_or("Expected room")?;
+
+            let towers = room
+                .find(find::MY_STRUCTURES)
+                .into_iter()
+                .map(|owned_structure| owned_structure.as_structure())
+                .filter_map(|structure| {
+                    if let Structure::Tower(tower) = structure {
+                        Some(tower)
+                    } else {
+                        None
+                    }
+                });
+
+            let hostile_creeps = room.find(find::HOSTILE_CREEPS);
+            let are_hostile_creeps = !hostile_creeps.is_empty();
+
+            let priority = if are_hostile_creeps {
+                TransferPriority::High
+            } else {
+                TransferPriority::Low
+            };
+
+            for tower in towers {
+                let tower_free_capacity = tower.store_free_capacity(Some(ResourceType::Energy));
+                if tower_free_capacity > 0 {
+                    let transfer_request = TransferDepositRequest::new(
+                        TransferTarget::Tower(tower.remote_id()),
+                        Some(ResourceType::Energy),
+                        priority,
+                        tower_free_capacity,
+                        TransferType::Haul,
+                    );
+
+                    transfer.request_deposit(transfer_request);
                 }
-            });
-
-        let hostile_creeps = room.find(find::HOSTILE_CREEPS);
-        let are_hostile_creeps = !hostile_creeps.is_empty();
-
-        let priority = if are_hostile_creeps {
-            TransferPriority::High
-        } else {
-            TransferPriority::Low
-        };
-
-        for tower in towers {
-            let tower_free_capacity = tower.store_free_capacity(Some(ResourceType::Energy));
-            if tower_free_capacity > 0 {
-                let transfer_request = TransferDepositRequest::new(
-                    TransferTarget::Tower(tower.remote_id()),
-                    Some(ResourceType::Energy),
-                    priority,
-                    tower_free_capacity,
-                    TransferType::Haul,
-                );
-
-                system_data.transfer_queue.request_deposit(transfer_request);
             }
-        }
+
+            Ok(())
+        }));
 
         Ok(())
     }
