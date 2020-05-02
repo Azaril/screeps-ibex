@@ -275,7 +275,7 @@ pub fn tick() {
         .with_barrier()
         .with(VisibilityQueueSystem, "visibility_queue", &[])
         .with(SpawnQueueSystem, "spawn_queue", &[])
-        .with(TransferQueueSystem, "transfer_queue", &[])
+        .with(TransferQueueUpdateSystem, "transfer_queue", &[])
         .with(OrderQueueSystem, "order_queue", &[])
         .with_barrier()
         .with(RoomPlanSystem, "room_plan", &[])

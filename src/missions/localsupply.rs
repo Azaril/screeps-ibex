@@ -18,6 +18,8 @@ use specs::saveload::*;
 use specs::*;
 use std::collections::HashMap;
 use screeps_cache::*;
+use std::rc::*;
+use std::cell::*;
 
 #[derive(ConvertSaveload)]
 pub struct LocalSupplyMission {
@@ -27,7 +29,7 @@ pub struct LocalSupplyMission {
     source_container_miners: EntityVec<Entity>,
     source_link_miners: EntityVec<Entity>,
     mineral_container_miners: EntityVec<Entity>,
-    structure_data: Option<StructureData>,
+    structure_data: Rc<RefCell<Option<StructureData>>>,
 }
 
 type MineralExtractorPair = (RemoteObjectId<Mineral>, RemoteObjectId<StructureExtractor>);
@@ -74,7 +76,7 @@ impl LocalSupplyMission {
             source_container_miners: EntityVec::new(),
             source_link_miners: EntityVec::new(),
             mineral_container_miners: EntityVec::new(),
-            structure_data: None,
+            structure_data: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -361,29 +363,42 @@ impl LocalSupplyMission {
         Ok(creep_data)
     }
 
-    fn link_transfer(&mut self, system_data: &mut MissionExecutionSystemData) -> Result<(), String> {
+    fn get_all_links(&mut self, system_data: &mut MissionExecutionSystemData) -> Result<Vec<RemoteObjectId<StructureLink>>, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility")?;
 
-        let structure_data = self.structure_data.access(
+        let mut structure_data = self.structure_data.borrow_mut();
+        let structure_data = structure_data.access(
             |d| game::time() - d.last_updated >= 10,
             || Self::create_structure_data(&static_visibility_data, &room)
         );
-
         let structure_data = structure_data.get();
 
         let all_links = structure_data
             .sources_to_links
             .values()
             .flatten()
-            .chain(structure_data.storage_links.iter());
+            .chain(structure_data.storage_links.iter())
+            .cloned()
+            .collect();
+
+        Ok(all_links)
+    }
+
+    fn link_transfer(&mut self, system_data: &mut MissionExecutionSystemData) -> Result<(), String> {
+        let all_links = self.get_all_links(system_data)?;
 
         let transfer_queue = &mut system_data.transfer_queue;
 
+        let transfer_queue_data = TransferQueueGeneratorData {
+            cause: "Link Transfer",
+            room_data: &*system_data.room_data
+        };
+
         for link_id in all_links {
             if let Some(link) = link_id.resolve() {
-                if link.cooldown() == 0 {
+                if link.cooldown() == 0 && link.store_of(ResourceType::Energy) > 0 {
                     let link_pos = link.pos();
                     let room_name = link_pos.room_name();
 
@@ -391,8 +406,9 @@ impl LocalSupplyMission {
                         .iter()
                         .filter_map(|priority| {
                             transfer_queue.get_delivery_from_target(
+                                &transfer_queue_data,
                                 &[room_name],
-                                &TransferTarget::Link(*link_id),
+                                &TransferTarget::Link(link_id),
                                 TransferPriorityFlags::ACTIVE,
                                 priority.into(),
                                 TransferType::Link,
@@ -438,11 +454,11 @@ impl LocalSupplyMission {
         let likely_owned_room = dynamic_visibility_data.updated_within(2000)
             && (dynamic_visibility_data.owner().mine() || dynamic_visibility_data.reservation().mine());
 
-        let structure_data = self.structure_data.access(
+        let mut structure_data = self.structure_data.borrow_mut();
+        let structure_data = structure_data.access(
             |d| game::time() - d.last_updated >= 10,
             || Self::create_structure_data(&static_visibility_data, &room)
         );
-
         let structure_data = structure_data.get();
 
         //
@@ -740,7 +756,7 @@ impl LocalSupplyMission {
         Ok(())
     }
 
-    fn request_transfer_for_containers(transfer_queue: &mut TransferQueue, structure_data: &StructureData) {
+    fn request_transfer_for_containers(transfer: &mut dyn TransferRequestSystem, structure_data: &StructureData) {
         let provider_containers = structure_data
             .sources_to_containers
             .values()
@@ -774,7 +790,7 @@ impl LocalSupplyMission {
                                 TransferType::Haul,
                             );
 
-                            transfer_queue.request_withdraw(transfer_request);
+                            transfer.request_withdraw(transfer_request);
                         }
                     }
                 }
@@ -805,7 +821,7 @@ impl LocalSupplyMission {
                             TransferType::Haul,
                         );
 
-                        transfer_queue.request_deposit(transfer_request);
+                        transfer.request_deposit(transfer_request);
                     }
 
                     let container_used_capacity = container.store_used_capacity(Some(ResourceType::Energy));
@@ -818,7 +834,7 @@ impl LocalSupplyMission {
                             TransferType::Use,
                         );
 
-                        transfer_queue.request_withdraw(transfer_request);
+                        transfer.request_withdraw(transfer_request);
                     }
                 }
             }
@@ -845,13 +861,13 @@ impl LocalSupplyMission {
                         TransferType::Haul,
                     );
 
-                    transfer_queue.request_deposit(transfer_request);
+                    transfer.request_deposit(transfer_request);
                 }
             }
         }
     }
 
-    fn request_transfer_for_spawns(transfer_queue: &mut TransferQueue, spawns: &[RemoteObjectId<StructureSpawn>]) {
+    fn request_transfer_for_spawns(transfer: &mut dyn TransferRequestSystem, spawns: &[RemoteObjectId<StructureSpawn>]) {
         for spawn_id in spawns.iter() {
             if let Some(spawn) = spawn_id.resolve() {
                 let free_capacity = spawn.store_free_capacity(Some(ResourceType::Energy));
@@ -864,13 +880,13 @@ impl LocalSupplyMission {
                         TransferType::Haul,
                     );
 
-                    transfer_queue.request_deposit(transfer_request);
+                    transfer.request_deposit(transfer_request);
                 }
             }
         }
     }
 
-    fn request_transfer_for_extension(transfer_queue: &mut TransferQueue, extensions: &[RemoteObjectId<StructureExtension>]) {
+    fn request_transfer_for_extension(transfer: &mut dyn TransferRequestSystem, extensions: &[RemoteObjectId<StructureExtension>]) {
         for extension_id in extensions.iter() {
             if let Some(extension) = extension_id.resolve() {
                 let free_capacity = extension.store_free_capacity(Some(ResourceType::Energy));
@@ -883,13 +899,13 @@ impl LocalSupplyMission {
                         TransferType::Haul,
                     );
 
-                    transfer_queue.request_deposit(transfer_request);
+                    transfer.request_deposit(transfer_request);
                 }
             }
         }
     }
 
-    fn request_transfer_for_storage(transfer_queue: &mut TransferQueue, stores: &[RemoteObjectId<StructureStorage>]) {
+    fn request_transfer_for_storage(transfer: &mut dyn TransferRequestSystem, stores: &[RemoteObjectId<StructureStorage>]) {
         for storage_id in stores.iter() {
             if let Some(storage) = storage_id.resolve() {
                 let mut used_capacity = 0;
@@ -904,7 +920,7 @@ impl LocalSupplyMission {
                         TransferType::Haul,
                     );
 
-                    transfer_queue.request_withdraw(transfer_request);
+                    transfer.request_withdraw(transfer_request);
 
                     used_capacity += resource_amount;
                 }
@@ -920,13 +936,13 @@ impl LocalSupplyMission {
                         TransferType::Haul,
                     );
 
-                    transfer_queue.request_deposit(transfer_request);
+                    transfer.request_deposit(transfer_request);
                 }
             }
         }
     }
 
-    fn request_transfer_for_storage_links(transfer_queue: &mut TransferQueue, structure_data: &StructureData) {
+    fn request_transfer_for_storage_links(transfer: &mut dyn TransferRequestSystem, structure_data: &StructureData) {
         for link_id in &structure_data.storage_links {
             if let Some(link) = link_id.resolve() {
                 let free_capacity = link.store_free_capacity(Some(ResourceType::Energy));
@@ -940,7 +956,7 @@ impl LocalSupplyMission {
                         TransferType::Link,
                     );
 
-                    transfer_queue.request_deposit(transfer_request);
+                    transfer.request_deposit(transfer_request);
                 }
 
                 let used_capacity = link.store_used_capacity(Some(ResourceType::Energy));
@@ -965,13 +981,13 @@ impl LocalSupplyMission {
                         TransferType::Haul,
                     );
 
-                    transfer_queue.request_withdraw(transfer_request);
+                    transfer.request_withdraw(transfer_request);
                 }
             }
         }
     }
 
-    fn request_transfer_for_source_links(transfer_queue: &mut TransferQueue, structure_data: &StructureData) {
+    fn request_transfer_for_source_links(transfer: &mut dyn TransferRequestSystem, structure_data: &StructureData) {
         for link_id in structure_data.sources_to_links.values().flatten() {
             if let Some(link) = link_id.resolve() {
                 let used_capacity = link.store_used_capacity(Some(ResourceType::Energy));
@@ -996,13 +1012,13 @@ impl LocalSupplyMission {
                         TransferType::Link,
                     );
 
-                    transfer_queue.request_withdraw(transfer_request);
+                    transfer.request_withdraw(transfer_request);
                 }
             }
         }
     }
 
-    fn request_transfer_for_controller_links(transfer_queue: &mut TransferQueue, structure_data: &StructureData) {
+    fn request_transfer_for_controller_links(transfer: &mut dyn TransferRequestSystem, structure_data: &StructureData) {
         for link_id in &structure_data.controller_links {
             if let Some(link) = link_id.resolve() {
                 let free_capacity = link.store_free_capacity(Some(ResourceType::Energy));
@@ -1016,7 +1032,7 @@ impl LocalSupplyMission {
                         TransferType::Link,
                     );
 
-                    transfer_queue.request_deposit(transfer_request);
+                    transfer.request_deposit(transfer_request);
                 }
 
                 let used_capacity = link.store_used_capacity(Some(ResourceType::Energy));
@@ -1029,12 +1045,12 @@ impl LocalSupplyMission {
                     TransferType::Haul,
                 );
 
-                transfer_queue.request_withdraw(transfer_request);
+                transfer.request_withdraw(transfer_request);
             }
         }
     }
 
-    fn request_transfer_for_ruins(transfer_queue: &mut TransferQueue, room: &Room) {
+    fn request_transfer_for_ruins(transfer: &mut dyn TransferRequestSystem, room: &Room) {
         for ruin in room.find(find::RUINS) {
             let ruin_id = ruin.remote_id();
 
@@ -1048,12 +1064,12 @@ impl LocalSupplyMission {
                     TransferType::Haul,
                 );
 
-                transfer_queue.request_withdraw(transfer_request);
+                transfer.request_withdraw(transfer_request);
             }
         }
     }
 
-    fn request_transfer_for_tombstones(transfer_queue: &mut TransferQueue, room: &Room) {
+    fn request_transfer_for_tombstones(transfer: &mut dyn TransferRequestSystem, room: &Room) {
         for tombstone in room.find(find::TOMBSTONES) {
             let tombstone_id = tombstone.remote_id();
 
@@ -1075,12 +1091,12 @@ impl LocalSupplyMission {
                     TransferType::Haul,
                 );
 
-                transfer_queue.request_withdraw(transfer_request);
+                transfer.request_withdraw(transfer_request);
             }
         }
     }
 
-    fn request_transfer_for_dropped_resources(transfer_queue: &mut TransferQueue, room: &Room) {
+    fn request_transfer_for_dropped_resources(transfer: &mut dyn TransferRequestSystem, room: &Room) {
         for dropped_resource in room.find(find::DROPPED_RESOURCES) {
             let dropped_resource_id = dropped_resource.remote_id();
 
@@ -1102,8 +1118,38 @@ impl LocalSupplyMission {
                 TransferType::Haul,
             );
 
-            transfer_queue.request_withdraw(transfer_request);
+            transfer.request_withdraw(transfer_request);
         }
+    }
+
+    fn transfer_request_generator(room_entity: Entity, structure_data: Rc<RefCell<Option<StructureData>>>) -> TransferQueueGenerator {
+        Box::new(move |system, transfer, _room_name| {
+            let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
+            let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
+            let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
+    
+            let mut structure_data = structure_data.borrow_mut();
+            let structure_data = structure_data.access(
+                |d| game::time() - d.last_updated >= 10,
+                || Self::create_structure_data(&static_visibility_data, &room)
+            );
+            let structure_data = structure_data.get();
+    
+            Self::request_transfer_for_spawns(transfer, &structure_data.spawns);
+            Self::request_transfer_for_extension(transfer, &structure_data.extensions);
+            Self::request_transfer_for_storage(transfer, &structure_data.storage);
+            Self::request_transfer_for_containers(transfer, &structure_data);
+            
+            Self::request_transfer_for_source_links(transfer, &structure_data);
+            Self::request_transfer_for_storage_links(transfer, &structure_data);
+            Self::request_transfer_for_controller_links(transfer, &structure_data);
+    
+            Self::request_transfer_for_ruins(transfer, &room);
+            Self::request_transfer_for_tombstones(transfer, &room);
+            Self::request_transfer_for_dropped_resources(transfer, &room);
+
+            Ok(())
+        })
     }
 }
 
@@ -1150,28 +1196,9 @@ impl Mission for LocalSupplyMission {
         self.mineral_container_miners
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
-        //TODO: Cache structure + creep data.
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
-        let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
-        let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
-        let structure_data = self.structure_data.access(
-            |d| game::time() - d.last_updated >= 10,
-            || Self::create_structure_data(&static_visibility_data, &room)
-        );
-
-        Self::request_transfer_for_spawns(&mut system_data.transfer_queue, &structure_data.get().spawns);
-        Self::request_transfer_for_extension(&mut system_data.transfer_queue, &structure_data.get().extensions);
-        Self::request_transfer_for_storage(&mut system_data.transfer_queue, &structure_data.get().storage);
-        Self::request_transfer_for_containers(&mut system_data.transfer_queue, &structure_data.get());
-        
-        Self::request_transfer_for_source_links(&mut system_data.transfer_queue, &structure_data.get());
-        Self::request_transfer_for_storage_links(&mut system_data.transfer_queue, &structure_data.get());
-        Self::request_transfer_for_controller_links(&mut system_data.transfer_queue, &structure_data.get());
-
-        Self::request_transfer_for_ruins(&mut system_data.transfer_queue, &room);
-        Self::request_transfer_for_tombstones(&mut system_data.transfer_queue, &room);
-        Self::request_transfer_for_dropped_resources(&mut system_data.transfer_queue, &room);
+        system_data.transfer_queue.register_generator(room_data.name, Self::transfer_request_generator(self.room_data, self.structure_data.clone()));        
 
         Ok(())
     }

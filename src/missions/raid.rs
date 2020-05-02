@@ -63,7 +63,7 @@ impl RaidMission {
         })
     }
 
-    fn request_transfer_for_structures(transfer_queue: &mut TransferQueue, room: &Room) {
+    fn request_transfer_for_structures(transfer: &mut dyn TransferRequestSystem, room: &Room) {
         //TODO: Fill out remaining types?
         //Structure::Ruin(s) => Ok(s.into()),
         //Structure::Tombstone(s) => Ok(s.into()),
@@ -84,7 +84,7 @@ impl RaidMission {
                                 TransferType::Haul,
                             );
 
-                            transfer_queue.request_withdraw(transfer_request);
+                            transfer.request_withdraw(transfer_request);
                         }
                     }
                 }
@@ -127,9 +127,13 @@ impl Mission for RaidMission {
 
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         
-        if let Some(room) = game::rooms::get(room_data.name) {
-            Self::request_transfer_for_structures(system_data.transfer_queue, &room);
-        }
+        system_data.transfer_queue.register_generator(room_data.name, Box::new(|_system, transfer, room_name| {
+            let room = game::rooms::get(room_name).ok_or("Expected room")?;
+
+            Self::request_transfer_for_structures(transfer, &room);
+
+            Ok(())
+        }));
 
         Ok(())
     }

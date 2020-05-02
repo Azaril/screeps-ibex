@@ -66,8 +66,14 @@ impl Idle {
     pub fn tick(&mut self, state_context: &UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState> {
         let home_room_data = tick_context.system_data.room_data.get(state_context.home_room)?;
 
+        let transfer_queue_data = TransferQueueGeneratorData {
+            cause: "Upgrade Idle",
+            room_data: &*tick_context.system_data.room_data
+        };
+
         get_new_pickup_state_fill_resource(
             &tick_context.runtime_data.owner,
+            &transfer_queue_data,
             &[home_room_data],
             TransferPriorityFlags::ALL,
             TransferTypeFlags::HAUL | TransferTypeFlags::USE,
@@ -111,9 +117,15 @@ impl Pickup {
 impl FinishedPickup {
     pub fn tick(&self, state_context: &UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState> {
         let home_room_data = tick_context.system_data.room_data.get(state_context.home_room)?;
+        
+        let transfer_queue_data = TransferQueueGeneratorData {
+            cause: "Upgrade Finished Pickup",
+            room_data: &*tick_context.system_data.room_data
+        };
 
         get_new_pickup_state_fill_resource(
             &tick_context.runtime_data.owner,
+            &transfer_queue_data,
             &[home_room_data],
             TransferPriorityFlags::ALL,
             TransferTypeFlags::HAUL | TransferTypeFlags::USE,

@@ -74,8 +74,14 @@ impl Idle {
             .or_else(|| get_new_build_state(creep, build_room_data, BuildState::build))
             .or_else(|| get_new_repair_state(creep, build_room_data, None, BuildState::repair))
             .or_else(|| {
+                let transfer_queue_data = TransferQueueGeneratorData {
+                    cause: "Build Idle",
+                    room_data: &*tick_context.system_data.room_data
+                };
+
                 get_new_pickup_state_fill_resource(
                     creep,
+                    &transfer_queue_data,
                     &[build_room_data],
                     TransferPriorityFlags::ALL,
                     TransferTypeFlags::HAUL | TransferTypeFlags::USE,
@@ -113,8 +119,14 @@ impl FinishedPickup {
     pub fn tick(&self, state_context: &BuildJobContext, tick_context: &mut JobTickContext) -> Option<BuildState> {
         let build_room_data = tick_context.system_data.room_data.get(state_context.build_room)?;
 
+        let transfer_queue_data = TransferQueueGeneratorData {
+            cause: "Build Finished Pickup",
+            room_data: &*tick_context.system_data.room_data
+        };
+
         get_new_pickup_state_fill_resource(
             &tick_context.runtime_data.owner,
+            &transfer_queue_data,
             &[build_room_data],
             TransferPriorityFlags::ALL,
             TransferTypeFlags::HAUL | TransferTypeFlags::USE,

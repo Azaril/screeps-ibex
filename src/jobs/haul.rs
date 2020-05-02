@@ -74,8 +74,14 @@ impl Idle {
             .filter_map(|e| tick_context.system_data.room_data.get(*e))
             .collect_vec();
 
+        let transfer_queue_data = TransferQueueGeneratorData {
+            cause: "Haul Idle",
+            room_data: &*tick_context.system_data.room_data
+        };
+        
         get_new_delivery_current_resources_state(
             creep,
+            &transfer_queue_data,
             &delivery_rooms,
             TransferPriorityFlags::ACTIVE,
             TransferTypeFlags::HAUL,
@@ -85,6 +91,7 @@ impl Idle {
         .or_else(|| {
             get_new_delivery_current_resources_state(
                 creep,
+                &transfer_queue_data,
                 &delivery_rooms,
                 TransferPriorityFlags::NONE,
                 TransferTypeFlags::HAUL,
@@ -96,8 +103,14 @@ impl Idle {
             ACTIVE_TRANSFER_PRIORITIES
                 .iter()
                 .filter_map(|priority| {
+                    let transfer_queue_data = TransferQueueGeneratorData {
+                        cause: "Haul Idle",
+                        room_data: &*tick_context.system_data.room_data
+                    };
+
                     get_new_pickup_and_delivery_full_capacity_state(
                         creep,
+                        &transfer_queue_data,
                         &pickup_rooms,
                         &delivery_rooms,
                         TransferPriorityFlags::from(priority),

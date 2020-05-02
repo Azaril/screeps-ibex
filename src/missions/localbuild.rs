@@ -5,10 +5,8 @@ use crate::jobs::build::*;
 use crate::jobs::data::*;
 use crate::jobs::utility::repair::*;
 use crate::ownership::*;
-use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
-use crate::transfer::transfersystem::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
@@ -181,47 +179,27 @@ impl Mission for LocalBuildMission {
         system_data: &mut MissionExecutionSystemData,
         runtime_data: &mut MissionExecutionRuntimeData,
     ) -> Result<MissionResult, String> {
-        let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
+        let room_data_storage = &*system_data.room_data;
+        let room_data = room_data_storage.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
         let has_sufficient_energy = {
-            if let Some(room_transfer_data) = system_data.transfer_queue.try_get_room(room_data.name) {
-                if let Some(storage) = room.storage() {
-                    if let Some(storage_node) = room_transfer_data.try_get_node(&TransferTarget::Storage(storage.remote_id())) {
-                        if storage_node.get_available_withdrawl_by_resource(TransferType::Haul, ResourceType::Energy) >= 50_000 {
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                } else {
-                    let structures = room.find(find::STRUCTURES);
-                    let containers: Vec<_> = structures
-                        .iter()
-                        .filter_map(|structure| {
-                            if let Structure::Container(container) = structure {
-                                Some(container)
-                            } else {
-                                None
-                            }
-                        })
-                        .filter_map(|container| room_transfer_data.try_get_node(&TransferTarget::Container(container.remote_id())))
-                        .collect();
-
-                    if !containers.is_empty() {
-                        containers.iter().any(|container_node| {
-                            container_node.get_available_withdrawl_by_resource(TransferType::Haul, ResourceType::Energy) as f32
-                                / CONTAINER_CAPACITY as f32
-                                > 0.50
-                        })
-                    } else {
-                        true
-                    }
-                }
+            if let Some(storage) = room.storage() {
+                storage.store_of(ResourceType::Energy) >= 50_000
             } else {
-                false
+                let structures = room.find(find::STRUCTURES);
+                structures
+                    .iter()
+                    .filter_map(|structure| {
+                        if let Structure::Container(container) = structure {
+                            Some(container)
+                        } else {
+                            None
+                        }
+                    })
+                    .any(|container| {
+                        container.store_of(ResourceType::Energy) as f32 / CONTAINER_CAPACITY as f32 > 0.50
+                    })
             }
         };
 
