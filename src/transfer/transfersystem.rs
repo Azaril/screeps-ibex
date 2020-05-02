@@ -1292,33 +1292,49 @@ pub trait TransferRequestSystemData {
 
 pub type TransferQueueGenerator = Box<dyn Fn(&dyn TransferRequestSystemData, &mut dyn TransferRequestSystem, RoomName) -> Result<(), String>>;
 
+struct GeneratorEntry {
+    transfer_types: TransferTypeFlags,
+    generator: TransferQueueGenerator
+}
+
 #[derive(Default)]
 struct LazyTransferQueueRooms {
-    generators: HashMap<RoomName, Vec<TransferQueueGenerator>>,
+    generators: HashMap<RoomName, Vec<GeneratorEntry>>,
     rooms: HashMap<RoomName, TransferQueueRoomData>,
 }
 
 //TODO: Return a 'resolved' interface once the initial flush has happened. Right now the 'data' propagates to many objects.
 // !!! THIS IS CRITICAL SO SPLIT HAUL AND LINK RESOLVES!
 impl LazyTransferQueueRooms {
-    fn register_generator(&mut self, room: RoomName, generator: TransferQueueGenerator) {
-        self.generators.entry(room).or_insert_with(Vec::new).push(generator)
+    fn register_generator(&mut self, room: RoomName, transfer_types: TransferTypeFlags, generator: TransferQueueGenerator) {
+        self.generators.entry(room).or_insert_with(Vec::new).push(GeneratorEntry {
+            transfer_types,
+            generator
+        });
     }
 
-    fn flush_generators(&mut self, data: &dyn TransferRequestSystemData, room: RoomName) {
-        while let Some(mut generators) = self.generators.remove(&room) {
-            //info!("Flushing generators for room: {} - Cause: {}", room, data.get_cause());
-            while let Some(generator) = generators.pop() {
-                match (generator)(data, self, room) {
-                    Ok(_) => {},
-                    Err(err) => info!("Transfer information generator error: {}", err),
-                }
+    fn flush_generators(&mut self, data: &dyn TransferRequestSystemData, room: RoomName, transfer_types: TransferTypeFlags) {
+        while let Some(entry) = self.get_next_generator(room, transfer_types) {
+            info!("Flushing generator for room: {} - Cause: {} - Time: {}", room, data.get_cause(), game::time());
+            match (entry.generator)(data, self, room) {
+                Ok(_) => {},
+                Err(err) => info!("Transfer information generator error: {}", err),
             }
         }
     }
 
-    pub fn get_room(&mut self, data: &dyn TransferRequestSystemData, room: RoomName) -> &mut TransferQueueRoomData {
-        self.flush_generators(data, room);
+    fn get_next_generator(&mut self, room: RoomName, transfer_types: TransferTypeFlags) -> Option<GeneratorEntry> {
+        if let Some(generators) = self.generators.get_mut(&room) {
+            if let Some((index, _)) = generators.iter().find_position(|d| d.transfer_types.intersects(transfer_types)) {
+                return Some(generators.swap_remove(index));
+            }
+        }
+
+        None
+    }
+
+    pub fn get_room(&mut self, data: &dyn TransferRequestSystemData, room: RoomName, transfer_types: TransferTypeFlags) -> &mut TransferQueueRoomData {
+        self.flush_generators(data, room, transfer_types);
 
         self.get_room_no_flush(room)
     }
@@ -1327,8 +1343,8 @@ impl LazyTransferQueueRooms {
         self.rooms.entry(room).or_insert_with(TransferQueueRoomData::new)
     }
 
-    pub fn try_get_room(&mut self, data: &dyn TransferRequestSystemData, room: RoomName) -> Option<&TransferQueueRoomData> {
-        self.flush_generators(data, room);
+    pub fn try_get_room(&mut self, data: &dyn TransferRequestSystemData, room: RoomName, transfer_types: TransferTypeFlags) -> Option<&TransferQueueRoomData> {
+        self.flush_generators(data, room, transfer_types);
 
         self.try_get_room_no_flush(room)
     }
@@ -1461,16 +1477,16 @@ impl TransferRequestSystem for TransferQueue {
 }
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl TransferQueue {
-    pub fn register_generator(&mut self, room: RoomName, generator: TransferQueueGenerator) {
-        self._rooms.register_generator(room, generator)
+    pub fn register_generator(&mut self, room: RoomName, transfer_types: TransferTypeFlags, generator: TransferQueueGenerator) {
+        self._rooms.register_generator(room, transfer_types, generator)
     }
 
-    pub fn get_room(&mut self, data: &dyn TransferRequestSystemData, room: RoomName) -> &mut TransferQueueRoomData {
-        self._rooms.get_room(data, room)
+    pub fn get_room(&mut self, data: &dyn TransferRequestSystemData, room: RoomName, transfer_types: TransferTypeFlags) -> &mut TransferQueueRoomData {
+        self._rooms.get_room(data, room, transfer_types)
     }
 
-    pub fn try_get_room(&mut self, data: &dyn TransferRequestSystemData, room: RoomName) -> Option<&TransferQueueRoomData> {
-        self._rooms.try_get_room(data, room)
+    pub fn try_get_room(&mut self, data: &dyn TransferRequestSystemData, room: RoomName, transfer_types: TransferTypeFlags) -> Option<&TransferQueueRoomData> {
+        self._rooms.try_get_room(data, room, transfer_types)
     }
 
     pub fn select_pickups(
@@ -1485,7 +1501,7 @@ impl TransferQueue {
         let mut tickets = Vec::new();
 
         for pickup_room in pickup_rooms.iter() {
-            if let Some(room) = self.try_get_room(data, *pickup_room) {
+            if let Some(room) = self.try_get_room(data, *pickup_room, pickup_types) {
                 if room.stats.withdrawl_priorities.intersects(allowed_priorities) {
                     for (target, node) in room.nodes.iter() {
                         let pickup_resources = node.select_pickup(allowed_priorities, pickup_types, desired_resources, available_capacity);
@@ -1516,7 +1532,7 @@ impl TransferQueue {
         let mut tickets = Vec::new();
 
         for delivery_room in delivery_rooms.iter() {
-            if let Some(room) = self.try_get_room(data, *delivery_room) {
+            if let Some(room) = self.try_get_room(data, *delivery_room, delivery_types) {
                 if room.stats.deposit_priorities.intersects(allowed_priorities) {
                     for (target, node) in room.nodes.iter() {
                         let delivery_resources = node.select_delivery(allowed_priorities, delivery_types, available_resources, available_capacity);
@@ -1539,7 +1555,7 @@ impl TransferQueue {
         let mut available_resources: HashMap<_, u32> = HashMap::new();
 
         for room_name in rooms {
-            if let Some(room) = self.try_get_room(data, *room_name) {
+            if let Some(room) = self.try_get_room(data, *room_name, transfer_type.into()) {
                 for (key, stats) in &room.stats().withdrawl_resource_stats {
                     if key.allowed_type == transfer_type {
                         let unfufilled_amount = stats.unfufilled_amount();
@@ -1567,7 +1583,7 @@ impl TransferQueue {
         let mut available_resources: HashMap<_, u32> = HashMap::new();
 
         for room_name in rooms {
-            if let Some(room) = self.try_get_room(data, *room_name) {
+            if let Some(room) = self.try_get_room(data, *room_name, transfer_type.into()) {
                 for (key, stats) in &room.stats().withdrawl_resource_stats {
                     if key.priority == withdrawl_priority && key.allowed_type == transfer_type {
                         let unfufilled_amount = stats.unfufilled_amount();
@@ -1595,7 +1611,7 @@ impl TransferQueue {
         let mut available_resources: HashMap<_, u32> = HashMap::new();
 
         for room_name in rooms {
-            if let Some(room) = self.try_get_room(data, *room_name) {
+            if let Some(room) = self.try_get_room(data, *room_name, transfer_type.into()) {
                 for (key, stats) in &room.stats().deposit_resource_stats {
                     if key.priority == deposit_priority && key.allowed_type == transfer_type {
                         let unfufilled_amount = stats.unfufilled_amount();
@@ -1705,7 +1721,7 @@ impl TransferQueue {
         }
 
         let available_resources = self
-            .try_get_room(data, target.pos().room_name())
+            .try_get_room(data, target.pos().room_name(), delivery_type.into())
             .and_then(|room| room.try_get_node(target))
             .map(|node| node.get_available_withdrawl_totals_by_priority(delivery_type, allowed_pickup_priorities))?;
 
@@ -1733,7 +1749,7 @@ impl TransferQueue {
             })
             .collect();
 
-        let node = self.try_get_room(data, target.pos().room_name()).and_then(|r| r.try_get_node(target))?;
+        let node = self.try_get_room(data, target.pos().room_name(), delivery_type.into()).and_then(|r| r.try_get_node(target))?;
 
         let pickup = TransferWithdrawTicket {
             target: *target,
@@ -1825,7 +1841,7 @@ impl TransferQueue {
             let room_names = self._rooms.get_all_rooms();
 
             for room_name in room_names.iter() {
-                let room = self.get_room(data, *room_name);
+                let room = self.get_room(data, *room_name, TransferTypeFlags::all());
                 ui.with_room(*room_name, visualizer, |room_ui| {
                     for (target, node) in &room.nodes {
                         node.visualize(room_ui.visualizer(), target.pos());

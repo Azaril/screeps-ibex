@@ -74,7 +74,7 @@ impl HaulMission {
         const UPDATE_RATE: u32 = 20;
 
         let unfufilled = transfer_queue
-            .try_get_room(transfer_queue_data, room_name)
+            .try_get_room(transfer_queue_data, room_name, TransferType::Haul.into())
             .map(|r| r.stats().total_unfufilled_resources(TransferType::Haul))
             .unwrap_or_else(HashMap::new);
 
