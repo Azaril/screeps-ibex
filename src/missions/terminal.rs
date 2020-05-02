@@ -178,7 +178,7 @@ impl Mission for TerminalMission {
             }
         }
 
-        system_data.transfer_queue.register_generator(room_data.name, Box::new(move |_system, transfer, room_name| {
+        system_data.transfer_queue.register_generator(room_data.name, TransferTypeFlags::HAUL, Box::new(move |_system, transfer, room_name| {
             let room = game::rooms::get(room_name).ok_or("Expected room")?;
             let terminal = room.terminal().ok_or("Expected terminal")?;
 
@@ -298,6 +298,8 @@ impl Mission for TerminalMission {
 
             Ok(())
         }));
+
+        //TODO: Add room-to-room transfer.
 
         Ok(())
     }

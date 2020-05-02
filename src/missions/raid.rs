@@ -127,7 +127,7 @@ impl Mission for RaidMission {
 
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         
-        system_data.transfer_queue.register_generator(room_data.name, Box::new(|_system, transfer, room_name| {
+        system_data.transfer_queue.register_generator(room_data.name, TransferTypeFlags::HAUL, Box::new(|_system, transfer, room_name| {
             let room = game::rooms::get(room_name).ok_or("Expected room")?;
 
             Self::request_transfer_for_structures(transfer, &room);

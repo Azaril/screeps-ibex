@@ -1122,7 +1122,7 @@ impl LocalSupplyMission {
         }
     }
 
-    fn transfer_request_generator(room_entity: Entity, structure_data: Rc<RefCell<Option<StructureData>>>) -> TransferQueueGenerator {
+    fn transfer_request_haul_generator(room_entity: Entity, structure_data: Rc<RefCell<Option<StructureData>>>) -> TransferQueueGenerator {
         Box::new(move |system, transfer, _room_name| {
             let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
             let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
@@ -1140,14 +1140,31 @@ impl LocalSupplyMission {
             Self::request_transfer_for_storage(transfer, &structure_data.storage);
             Self::request_transfer_for_containers(transfer, &structure_data);
             
-            Self::request_transfer_for_source_links(transfer, &structure_data);
-            Self::request_transfer_for_storage_links(transfer, &structure_data);
-            Self::request_transfer_for_controller_links(transfer, &structure_data);
-    
             Self::request_transfer_for_ruins(transfer, &room);
             Self::request_transfer_for_tombstones(transfer, &room);
             Self::request_transfer_for_dropped_resources(transfer, &room);
 
+            Ok(())
+        })
+    }
+
+    fn transfer_request_link_generator(room_entity: Entity, structure_data: Rc<RefCell<Option<StructureData>>>) -> TransferQueueGenerator {
+        Box::new(move |system, transfer, _room_name| {
+            let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
+            let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
+            let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
+    
+            let mut structure_data = structure_data.borrow_mut();
+            let structure_data = structure_data.access(
+                |d| game::time() - d.last_updated >= 10,
+                || Self::create_structure_data(&static_visibility_data, &room)
+            );
+            let structure_data = structure_data.get();
+    
+            Self::request_transfer_for_source_links(transfer, &structure_data);
+            Self::request_transfer_for_storage_links(transfer, &structure_data);
+            Self::request_transfer_for_controller_links(transfer, &structure_data);
+    
             Ok(())
         })
     }
@@ -1198,7 +1215,8 @@ impl Mission for LocalSupplyMission {
 
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
-        system_data.transfer_queue.register_generator(room_data.name, Self::transfer_request_generator(self.room_data, self.structure_data.clone()));        
+        system_data.transfer_queue.register_generator(room_data.name, TransferTypeFlags::HAUL, Self::transfer_request_haul_generator(self.room_data, self.structure_data.clone()));        
+        system_data.transfer_queue.register_generator(room_data.name, TransferTypeFlags::LINK, Self::transfer_request_link_generator(self.room_data, self.structure_data.clone()));        
 
         Ok(())
     }
