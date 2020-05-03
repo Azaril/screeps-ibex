@@ -14,6 +14,7 @@ pub struct CreepMovementData {
 
 #[derive(SystemData)]
 pub struct MovementUpdateSystemData<'a> {
+    entities: Entities<'a>,
     movement: WriteExpect<'a, MovementData<Entity>>,
     creep_owner: ReadStorage<'a, CreepOwner>,
     room_data: ReadStorage<'a, RoomData>,
@@ -22,6 +23,7 @@ pub struct MovementUpdateSystemData<'a> {
 }
 
 struct MovementSystemExternalProvider<'a, 'b> {
+    entities: &'b Entities<'a>,
     creep_owner: &'b ReadStorage<'a, CreepOwner>,
     room_data: &'b ReadStorage<'a, RoomData>,
     mapping: &'b Read<'a, EntityMappingData>,
@@ -77,16 +79,24 @@ impl<'a> System<'a> for MovementUpdateSystem {
         let movement_data = std::mem::replace(&mut *data.movement, MovementData::new());
 
         let mut external = MovementSystemExternalProvider {
+            entities: &data.entities,
             creep_owner: &data.creep_owner,
             room_data: &data.room_data,
             mapping: &data.mapping
         };
 
+        let mut system = MovementSystem::new(&mut *data.cost_matrix);
+
+        if crate::features::pathing::visualize() {
+            system.set_default_visualization_style(PolyStyle::default());
+        }
+
+        system.set_reuse_path_length(10);
+
         if crate::features::pathing::custom() {
-            MovementSystem::process(&mut external, &mut *data.cost_matrix, movement_data);
-            
+            system.process(&mut external, movement_data);            
         } else {
-            MovementSystem::process_inbuilt(&mut external, movement_data);
+            system.process_inbuilt(&mut external, movement_data);
         }        
     }
 }
