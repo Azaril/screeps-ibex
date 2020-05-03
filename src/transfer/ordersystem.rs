@@ -40,7 +40,7 @@ pub struct OrderQueue {
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl OrderQueue {
     pub fn maximum_transfer_energy() -> u32 {
-        5000
+        10000
     }
 
     pub fn get_room(&mut self, room: RoomName) -> &mut OrderQueueRoomData {
