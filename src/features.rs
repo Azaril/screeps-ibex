@@ -128,6 +128,10 @@ pub fn dismantle() -> bool {
 }
 
 pub mod pathing {
+    pub fn visualize() -> bool {
+        ::screeps::memory::root().path_bool("_features.pathing.visualize.on") && crate::features::visualize::on()
+    }
+
     pub fn custom() -> bool {
         ::screeps::memory::root().path_bool("_features.pathing.custom")
     }
