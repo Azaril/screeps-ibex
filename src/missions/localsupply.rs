@@ -876,7 +876,7 @@ impl LocalSupplyMission {
                         TransferTarget::Spawn(*spawn_id),
                         Some(ResourceType::Energy),
                         TransferPriority::High,
-                        free_capacity,
+                        free_capacity as u32,
                         TransferType::Haul,
                     );
 
@@ -895,7 +895,7 @@ impl LocalSupplyMission {
                         TransferTarget::Extension(*extension_id),
                         Some(ResourceType::Energy),
                         TransferPriority::High,
-                        free_capacity,
+                        free_capacity as u32,
                         TransferType::Haul,
                     );
 
@@ -952,7 +952,7 @@ impl LocalSupplyMission {
                         TransferTarget::Link(link.remote_id()),
                         Some(ResourceType::Energy),
                         TransferPriority::None,
-                        free_capacity,
+                        free_capacity as u32,
                         TransferType::Link,
                     );
 
@@ -1028,7 +1028,7 @@ impl LocalSupplyMission {
                         TransferTarget::Link(link.remote_id()),
                         Some(ResourceType::Energy),
                         TransferPriority::Low,
-                        free_capacity,
+                        free_capacity as u32,
                         TransferType::Link,
                     );
 

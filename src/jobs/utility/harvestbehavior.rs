@@ -112,7 +112,7 @@ where
                         let work_parts = body.iter().filter(|b| b.part == Part::Work).count();
                         let harvest_amount = (work_parts as u32 * HARVEST_POWER).min(harvest_target.get_harvestable_amount());
 
-                        if harvest_amount >= creep.store_free_capacity(Some(ResourceType::Energy)) {
+                        if harvest_amount as i32 >= creep.store_free_capacity(Some(ResourceType::Energy)) {
                             Some(next_state())
                         } else {
                             None

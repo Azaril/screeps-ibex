@@ -93,7 +93,7 @@ impl Mission for TowerMission {
                         TransferTarget::Tower(tower.remote_id()),
                         Some(ResourceType::Energy),
                         priority,
-                        tower_free_capacity,
+                        tower_free_capacity as u32,
                         TransferType::Haul,
                     );
 
