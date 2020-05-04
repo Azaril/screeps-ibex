@@ -207,9 +207,13 @@ impl TransferTarget {
         T: Transferable + HasStore + HasId + SizedRoomObject,
     {
         if let Some(obj) = target.resolve() {
-            let transfer_amount = obj.store_free_capacity(Some(resource)).min(amount);
+            let transfer_amount = obj.store_free_capacity(Some(resource)).min(amount as i32);
 
-            creep.transfer_amount(&obj, resource, transfer_amount)
+            if transfer_amount > 0 {
+                creep.transfer_amount(&obj, resource, transfer_amount as u32)
+            } else {
+                ReturnCode::InvalidArgs
+            }
         } else {
             ReturnCode::NotFound
         }
@@ -237,9 +241,13 @@ impl TransferTarget {
 
     fn link_transfer_energy_amount_to_id(target: &RemoteObjectId<StructureLink>, link: &StructureLink, amount: u32) -> ReturnCode {
         if let Some(obj) = target.resolve() {
-            let transfer_amount = obj.store_free_capacity(Some(ResourceType::Energy)).min(amount);
+            let transfer_amount = obj.store_free_capacity(Some(ResourceType::Energy)).min(amount as i32);
 
-            link.transfer_energy(&obj, Some(transfer_amount))
+            if transfer_amount > 0 {
+                link.transfer_energy(&obj, Some(transfer_amount as u32))
+            } else {
+                ReturnCode::InvalidArgs
+            }
         } else {
             ReturnCode::NotFound
         }
