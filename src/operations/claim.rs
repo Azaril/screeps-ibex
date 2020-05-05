@@ -275,43 +275,7 @@ impl Operation for ClaimOperation {
             //
 
             if dynamic_visibility_data.as_ref().map(|v| !v.updated_within(1000)).unwrap_or(true) {
-                //TODO: wiarchbe: Use trait instead of match.
-                let has_scout_mission =
-                    room_data
-                        .get_missions()
-                        .iter()
-                        .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
-                            Some(MissionData::Scout(_)) => true,
-                            _ => false,
-                        });
-
-                //
-                // Spawn a new mission to fill the scout role if missing.
-                //
-
-                if !has_scout_mission {
-                    info!("Starting scout for room. Room: {}", room_data.name);
-
-                    let owner_entity = runtime_data.entity;
-                    let room_entity = room_data_entity;
-                    let home_room_entity = home_room_data_entity;
-
-                    system_data.updater.exec_mut(move |world| {
-                        let mission_entity = ScoutMission::build(
-                            world.create_entity(),
-                            Some(OperationOrMissionEntity::Operation(owner_entity)),
-                            room_entity,
-                            home_room_entity,
-                        )
-                        .build();
-
-                        let room_data_storage = &mut world.write_storage::<RoomData>();
-
-                        if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                            room_data.add_mission(mission_entity);
-                        }
-                    });
-                }
+                system_data.visibility.request(VisibilityRequest::new(room_data.name, VISIBILITY_PRIORITY_MEDIUM));
             }
 
             //
