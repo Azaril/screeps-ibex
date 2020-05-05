@@ -2,9 +2,7 @@ use super::data::*;
 use super::operationsystem::*;
 use crate::missions::data::*;
 use crate::missions::miningoutpost::*;
-use crate::missions::scout::*;
 use crate::ownership::*;
-use crate::room::data::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use std::collections::HashMap;
@@ -229,62 +227,10 @@ impl Operation for MiningOutpostOperation {
                 .visibility
                 .request(VisibilityRequest::new(unknown_room.room_name, VISIBILITY_PRIORITY_MEDIUM));
         }
-        
-        //TODO: Move this to visibility system.
-        for unknown_room in gathered_data.unknown_rooms.iter() {
-            if let Some(room_entity) = system_data.mapping.get_room(&unknown_room.room_name) {
-                if let Some(room_data) = system_data.room_data.get(room_entity) {
-                    let dynamic_visibility_data = room_data.get_dynamic_visibility_data();
-
-                    //
-                    // Spawn scout missions for remote mine rooms that have not had visibility updated in a long time.
-                    //
-
-                    if dynamic_visibility_data.as_ref().map(|v| !v.updated_within(1000)).unwrap_or(true) {
-                        //TODO: wiarchbe: Use trait instead of match.
-                        let has_scout_mission =
-                            room_data
-                                .get_missions()
-                                .iter()
-                                .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
-                                    Some(MissionData::Scout(_)) => true,
-                                    _ => false,
-                                });
-
-                        //
-                        // Spawn a new mission to fill the scout role if missing.
-                        //
-
-                        if !has_scout_mission {
-                            info!("Starting scout for room. Room: {}", room_data.name);
-
-                            let owner_entity = runtime_data.entity;
-                            let room_entity = room_entity;
-                            let home_room_entity = unknown_room.home_room_data_entity;
-
-                            system_data.updater.exec_mut(move |world| {
-                                let mission_entity = ScoutMission::build(
-                                    world.create_entity(),
-                                    Some(OperationOrMissionEntity::Operation(owner_entity)),
-                                    room_entity,
-                                    home_room_entity,
-                                )
-                                .build();
-
-                                let room_data_storage = &mut world.write_storage::<RoomData>();
-
-                                if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                                    room_data.add_mission(mission_entity);
-                                }
-                            });
-                        }
-                    }
-                }
-            }
-        }
 
         for candidate_room in gathered_data.candidate_rooms.iter() {
-            let room_data = system_data.room_data.get(candidate_room.room_data_entity).unwrap();
+            let room_data_storage = &mut *system_data.room_data;
+            let room_data = room_data_storage.get_mut(candidate_room.room_data_entity).unwrap();
             let dynamic_visibility_data = room_data.get_dynamic_visibility_data();
 
             //
@@ -304,11 +250,13 @@ impl Operation for MiningOutpostOperation {
                 //TODO: Check path finding and accessibility to room.
 
                 //TODO: wiarchbe: Use trait instead of match.
+                let mission_data = system_data.mission_data;
+
                 let has_mining_outpost_mission =
                     room_data
                         .get_missions()
                         .iter()
-                        .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
+                        .any(|mission_entity| match mission_data.get(*mission_entity) {
                             Some(MissionData::MiningOutpost(_)) => true,
                             _ => false,
                         });
@@ -324,21 +272,15 @@ impl Operation for MiningOutpostOperation {
                     let room_entity = candidate_room.room_data_entity;
                     let home_room_entity = candidate_room.home_room_data_entity;
 
-                    system_data.updater.exec_mut(move |world| {
-                        let mission_entity = MiningOutpostMission::build(
-                            world.create_entity(),
-                            Some(OperationOrMissionEntity::Operation(owner_entity)),
-                            room_entity,
-                            home_room_entity,
-                        )
-                        .build();
+                    let mission_entity = MiningOutpostMission::build(
+                        system_data.updater.create_entity(system_data.entities),
+                        Some(OperationOrMissionEntity::Operation(owner_entity)),
+                        room_entity,
+                        home_room_entity,
+                    )
+                    .build();
 
-                        let room_data_storage = &mut world.write_storage::<RoomData>();
-
-                        if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                            room_data.add_mission(mission_entity);
-                        }
-                    });
+                    room_data.add_mission(mission_entity);
                 }
             }
         }
