@@ -22,13 +22,13 @@ pub struct OperationSystemData<'a> {
     ui: Option<Write<'a, UISystem>>,
 }
 
-pub struct OperationExecutionSystemData<'a> {
-    pub updater: &'a Read<'a, LazyUpdate>,
-    pub entities: &'a Entities<'a>,
-    pub room_data: &'a WriteStorage<'a, RoomData>,
-    pub mission_data: &'a ReadStorage<'a, MissionData>,
-    pub mapping: &'a Read<'a, EntityMappingData>,
-    pub visibility: &'a mut VisibilityQueue,
+pub struct OperationExecutionSystemData<'a, 'b> {
+    pub updater: &'b Read<'a, LazyUpdate>,
+    pub entities: &'b Entities<'a>,
+    pub room_data: &'b mut WriteStorage<'a, RoomData>,
+    pub mission_data: &'b ReadStorage<'a, MissionData>,
+    pub mapping: &'b Read<'a, EntityMappingData>,
+    pub visibility: &'b mut VisibilityQueue,
 }
 
 pub struct OperationExecutionRuntimeData {
@@ -75,7 +75,7 @@ impl<'a> System<'a> for PreRunOperationSystem {
         let mut system_data = OperationExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
-            room_data: &data.room_data,
+            room_data: &mut data.room_data,
             mission_data: &data.mission_data,
             mapping: &data.mapping,
             visibility: &mut data.visibility,
@@ -142,7 +142,7 @@ impl<'a> System<'a> for RunOperationSystem {
         let mut system_data = OperationExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
-            room_data: &data.room_data,
+            room_data: &mut data.room_data,
             mission_data: &data.mission_data,
             mapping: &data.mapping,
             visibility: &mut data.visibility,

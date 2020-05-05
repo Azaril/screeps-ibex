@@ -20,6 +20,7 @@ pub enum MissionData {
     MiningOutpost(super::miningoutpost::MiningOutpostMission),
     Raid(super::raid::RaidMission),
     Dismantle(super::dismantle::DismantleMission),
+    Colony(super::colony::ColonyMission),
 }
 
 impl MissionData {
@@ -40,6 +41,7 @@ impl MissionData {
             MissionData::MiningOutpost(ref mut data) => data,
             MissionData::Raid(ref mut data) => data,
             MissionData::Dismantle(ref mut data) => data,
+            MissionData::Colony(ref mut data) => data,
         }
     }
 }

@@ -101,7 +101,7 @@ impl MiningOutpostOperation {
         let mut visited_rooms: HashMap<RoomName, VisitedRoomData> = HashMap::new();
         let mut expansion_rooms: HashMap<RoomName, Entity> = HashMap::new();
 
-        for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
+        for (entity, room_data) in (&*system_data.entities, &*system_data.room_data).join() {
             if let Some(room) = game::rooms::get(room_data.name) {
                 let seed_room = room.controller()
                     .map(|controller| controller.my() && controller.level() >= 2)

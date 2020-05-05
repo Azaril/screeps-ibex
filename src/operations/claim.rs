@@ -75,7 +75,7 @@ impl Operation for ClaimOperation {
         // Ensure remote builders occur.
         //
 
-        for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
+        for (entity, room_data) in (&*system_data.entities, &*system_data.room_data).join() {
             //TODO: The construction operation will trigger construction sites - this is brittle to rely on.
 
             //
@@ -96,8 +96,10 @@ impl Operation for ClaimOperation {
 
                             if let Some(spawn_construction_site) = spawn_construction_site {
                                 //TODO: wiarchbe: Use trait instead of match.
+                                let mission_data = system_data.mission_data;
+
                                 let has_remote_build_mission = room_data.get_missions().iter().any(|mission_entity| {
-                                    match system_data.mission_data.get(*mission_entity) {
+                                    match mission_data.get(*mission_entity) {
                                         Some(MissionData::RemoteBuild(_)) => true,
                                         _ => false,
                                     }
@@ -115,8 +117,8 @@ impl Operation for ClaimOperation {
                                     let construction_site_pos = spawn_construction_site.pos();
                                     let mut nearest_spawn = None;
 
-                                    //TOODO: Replace this hack that finds the nearest room. (Need state machine to drive operation. Blocked on specs vec serialization.)
-                                    for (other_entity, other_room_data) in (system_data.entities, system_data.room_data).join() {
+                                    //TODO: Replace this hack that finds the nearest room. (Need state machine to drive operation. Blocked on specs vec serialization.)
+                                    for (other_entity, other_room_data) in (&*system_data.entities, &*system_data.room_data).join() {
                                         if let Some(other_dynamic_visibility_data) = other_room_data.get_dynamic_visibility_data() {
                                             if other_dynamic_visibility_data.visible() && other_dynamic_visibility_data.owner().mine() {
                                                 if let Some(other_room) = game::rooms::get(other_room_data.name) {
@@ -171,7 +173,7 @@ impl Operation for ClaimOperation {
         let current_claim_missions = self.claim_missions.len();
         let mut currently_owned_rooms = 0;
 
-        for (_, room_data) in (system_data.entities, system_data.room_data).join() {
+        for (_, room_data) in (&*system_data.entities, &*system_data.room_data).join() {
             if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
                 if dynamic_visibility_data.visible() && dynamic_visibility_data.owner().mine() {
                     currently_owned_rooms += 1;
@@ -199,7 +201,7 @@ impl Operation for ClaimOperation {
 
         let mut desired_missions = vec![];
 
-        for (entity, room_data) in (system_data.entities, system_data.room_data).join() {
+        for (entity, room_data) in (&*system_data.entities, &*system_data.room_data).join() {
             if let Some(room) = game::rooms::get(room_data.name) {
                 let controller = room.controller();
 

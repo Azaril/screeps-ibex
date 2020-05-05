@@ -16,3 +16,4 @@ pub mod miningoutpost;
 pub mod context;
 pub mod raid;
 pub mod dismantle;
+pub mod colony;

@@ -13,7 +13,7 @@ wee-alloc = ["wee_alloc"]
 stdweb = "0.4"
 log = "0.4"
 fern = "0.5"
-serde = "1.0"
+serde = { version = "1.0", features = ["rc"] }
 serde_json = "1.0"
 #specs = { version = "0.16", default-features = false, features = ["serde", "shred-derive"] }
 itertools = "0.8"
@@ -23,10 +23,12 @@ wee_alloc = { version = "0.4", optional = true }
 pathfinding = { version = "2.0" }
 bincode = "1.2"
 base64 = "0.12"
-screeps-game-api = { git = "https://github.com/Azaril/screeps-game-api", branch = "pathfinding" }
+#screeps-game-api = { git = "https://github.com/Azaril/screeps-game-api", branch = "pathfinding" }
+screeps-game-api = { path = "C:\\source\\screeps-game-api" }
 screeps-machine = { git = "https://github.com/Azaril/screeps-machine" }
 screeps-cache = { git = "https://github.com/Azaril/screeps-cache" }
-screeps-rover = { git = "https://github.com/Azaril/screeps-rover" }
+#screeps-rover = { git = "https://github.com/Azaril/screeps-rover" }
+screeps-rover = { path = "C:\\source\\screeps-rover" }
 screeps-timing = { git = "https://github.com/Azaril/screeps-timing", optional = true }
 screeps-timing-annotate = { git = "https://github.com/Azaril/screeps-timing-annotate", optional = true }
 specs = { git = "https://github.com/Azaril/specs", default-features = false, features = ["serde", "derive"] }

@@ -1,12 +1,6 @@
 pub mod claim;
-pub mod construction;
 pub mod data;
-pub mod haul;
-pub mod localbuild;
-pub mod localsupply;
 pub mod managersystem;
 pub mod operationsystem;
 pub mod miningoutpost;
-pub mod terminal;
-pub mod tower;
-pub mod upgrade;
+pub mod colony;
