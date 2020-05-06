@@ -10,6 +10,7 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+use std::collections::HashSet;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct TerminalMission {
@@ -60,6 +61,13 @@ impl TerminalMission {
         match resource {
             ResourceType::Energy => 10_000,
             _ => 5_000,
+        }
+    }
+
+    fn can_purchase_resource(resource: ResourceType) -> bool {
+        match resource {
+            ResourceType::Energy => true,
+            _ => false
         }
     }
 
@@ -136,17 +144,19 @@ impl Mission for TerminalMission {
             let storage_resource_types = storage.store_types();
             let terminal_storage_types = terminal.store_types();
 
-            let all_resource_types = storage_resource_types
+            let sell_resource_types: HashSet<ResourceType> = storage_resource_types
                     .into_iter()
                     .chain(terminal_storage_types.into_iter())
                     .chain(std::iter::once(ResourceType::Energy))
-                    .unique();
+                    .collect();
+
+            //TODO: Include resources that are requested by transport system but don't exist in the room.
 
             //
             // If there are sufficient resources in the terminal and storage, request selling them.
             //
 
-            for resource_type in all_resource_types {
+            for resource_type in sell_resource_types {
                 let current_storage_amount = storage.store_used_capacity(Some(resource_type));
                 let current_terminal_amount = terminal.store_used_capacity(Some(resource_type));
 
@@ -172,6 +182,19 @@ impl Mission for TerminalMission {
                             system_data
                                 .order_queue
                                 .request_active_sale(room_data.name, resource_type, active_amount, available_transfer_energy);
+                        }
+                    }
+                } else if Self::can_purchase_resource(resource_type) {
+                    let available_terminal_amount = (current_terminal_amount as i32 - *thresholds.terminal_reserve_threshold.end() as i32).max(0) as u32;
+                    let storage_shortage_amount = thresholds.desired_storage_amount - current_storage_amount;
+
+                    if available_terminal_amount < storage_shortage_amount {
+                        let purchase_amount = (storage_shortage_amount - available_terminal_amount) / 4;
+
+                        if purchase_amount > 0 {
+                            system_data
+                                .order_queue
+                                .request_passive_purchase(room_data.name, resource_type, purchase_amount);
                         }
                     }
                 }
