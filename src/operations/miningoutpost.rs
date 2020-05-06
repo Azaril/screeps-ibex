@@ -51,7 +51,7 @@ impl MiningOutpostOperation {
             return None;
         }
 
-        let can_reserve = dynamic_visibility_data.owner().neutral() && dynamic_visibility_data.reservation().neutral();
+        let can_reserve = dynamic_visibility_data.owner().neutral() && (dynamic_visibility_data.reservation().neutral() || dynamic_visibility_data.reservation().mine());
         let hostile = dynamic_visibility_data.owner().hostile() || dynamic_visibility_data.source_keeper();
 
         let viable = has_sources && can_reserve;
