@@ -3,17 +3,16 @@ use super::operationsystem::*;
 use crate::missions::claim::*;
 use crate::missions::data::*;
 use crate::missions::remotebuild::*;
-use crate::missions::scout::*;
 use crate::ownership::*;
 use crate::room::data::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
-use itertools::*;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+use crate::room::gather::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ClaimOperation {
@@ -38,39 +37,42 @@ impl ClaimOperation {
             claim_missions: EntityVec::new(),
         }
     }
-}
 
-#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-#[allow(clippy::cognitive_complexity)]
-impl Operation for ClaimOperation {
-    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
-        &self.owner
+    fn gather_candidate_room_data(gather_system_data: &GatherSystemData, room_name: RoomName) -> Option<CandidateRoomData> {
+        let search_room_entity = gather_system_data.mapping.get_room(&room_name)?;
+        let search_room_data = gather_system_data.room_data.get(search_room_entity)?;
+        
+        let static_visibility_data = search_room_data.get_static_visibility_data()?;
+        let dynamic_visibility_data = search_room_data.get_dynamic_visibility_data()?;
+
+        let has_controller = static_visibility_data.controller().is_some();
+        let has_sources = !static_visibility_data.sources().is_empty();
+
+        let visibility_timeout = if has_sources {
+            5000
+        } else {
+            10000
+        };
+
+        if !dynamic_visibility_data.updated_within(visibility_timeout) {
+            return None;
+        }
+
+        let can_claim = dynamic_visibility_data.owner().neutral() && (dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().neutral());
+        let hostile = dynamic_visibility_data.owner().hostile() || dynamic_visibility_data.source_keeper();
+
+        let viable = has_controller && has_sources && can_claim;
+        let can_expand = !hostile;
+
+        let candidate_room_data = CandidateRoomData::new(search_room_entity, viable, can_expand);
+
+        Some(candidate_room_data)
     }
 
-    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
-        assert!(Some(owner) == *self.owner);
-
-        self.owner.take();
-    }
-
-    fn child_complete(&mut self, child: Entity) {
-        self.claim_missions.retain(|e| *e != child);
-    }
-
-    fn describe(&mut self, _system_data: &mut OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
-        describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
-            global_ui.operations().add_text("Claim".to_string(), None);
-        })
-    }
-
-    fn pre_run_operation(&mut self, _system_data: &mut OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {
-    }
-
-    fn run_operation(
-        &mut self,
+    fn spawn_remote_build(
         system_data: &mut OperationExecutionSystemData,
-        runtime_data: &mut OperationExecutionRuntimeData,
-    ) -> Result<OperationResult, ()> {
+        runtime_data: &mut OperationExecutionRuntimeData
+    ) {
         //
         // Ensure remote builders occur.
         //
@@ -166,11 +168,47 @@ impl Operation for ClaimOperation {
                 }
             }
         }
+    }
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+#[allow(clippy::cognitive_complexity)]
+impl Operation for ClaimOperation {
+    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+        &self.owner
+    }
+
+    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+        assert!(Some(owner) == *self.owner);
+
+        self.owner.take();
+    }
+
+    fn child_complete(&mut self, child: Entity) {
+        self.claim_missions.retain(|e| *e != child);
+    }
+
+    fn describe(&mut self, _system_data: &mut OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
+        describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
+            global_ui.operations().add_text("Claim".to_string(), None);
+        })
+    }
+
+    fn pre_run_operation(&mut self, _system_data: &mut OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {
+    }
+
+    fn run_operation(
+        &mut self,
+        system_data: &mut OperationExecutionSystemData,
+        runtime_data: &mut OperationExecutionRuntimeData,
+    ) -> Result<OperationResult, ()> {
+        
+        Self::spawn_remote_build(system_data, runtime_data);
 
         //
         // Trigger new claim missions.
         //
-        let current_claim_missions = self.claim_missions.len();
+
         let mut currently_owned_rooms = 0;
 
         for (_, room_data) in (&*system_data.entities, &*system_data.room_data).join() {
@@ -192,71 +230,30 @@ impl Operation for ClaimOperation {
         let current_gcl = game::gcl::level();
         let maximum_rooms = ((cpu_limit / ESTIMATED_ROOM_CPU_COST) as u32).min(current_gcl);
 
-        //TODO: Make this not a hard cap!
-        if currently_owned_rooms + current_claim_missions >= maximum_rooms as usize {
+        if currently_owned_rooms + self.claim_missions.len() >= maximum_rooms as usize {
             return Ok(OperationResult::Running);
         }
 
-        //TODO: Do this in a single pass and use closest room to be the home room.
-
-        let mut desired_missions = vec![];
-
-        for (entity, room_data) in (&*system_data.entities, &*system_data.room_data).join() {
-            if let Some(room) = game::rooms::get(room_data.name) {
-                let controller = room.controller();
-
-                let (my_room, room_level) = controller
-                    .map(|controller| (controller.my(), controller.level()))
-                    .unwrap_or((false, 0));
-
-                if my_room && room_level >= 2 {
-                    let mut candidate_rooms = vec![room_data.name];
-
-                    //TODO: Configure how far to expand room search.
-                    for _ in 0..2 {
-                        candidate_rooms = candidate_rooms
-                            .into_iter()
-                            .flat_map(|room_name| {
-                                game::map::describe_exits(room_name)
-                                    .values()
-                                    .cloned()
-                                    .chain(std::iter::once(room_name))
-                                    .collect::<Vec<RoomName>>()
-                            })
-                            .filter(|room_name| {
-                                if let Some(search_room_entity) = system_data.mapping.get_room(&room_name) {
-                                    if let Some(search_room_data) = system_data.room_data.get(search_room_entity) {
-                                        if let Some(search_room_visibility_data) = search_room_data.get_dynamic_visibility_data() {
-                                            if search_room_visibility_data.updated_within(5000)
-                                                && (search_room_visibility_data.owner().hostile()
-                                                    || search_room_visibility_data.source_keeper())
-                                            {
-                                                return false;
-                                            }
-                                        }
-                                    }
-                                }
-                                true
-                            })
-                            .unique()
-                            .collect();
-                    }
-
-                    for offset_room_name in candidate_rooms {
-                        if let Some(offset_room_entity) = system_data.mapping.get_room(&offset_room_name) {
-                            desired_missions.push((offset_room_entity, entity));
-                        } else {
-                            system_data
-                                .visibility
-                                .request(VisibilityRequest::new(offset_room_name, VISIBILITY_PRIORITY_MEDIUM));
-                        }
-                    }
-                }
-            }
+        if game::time() % 50 != 25 {
+            return Ok(OperationResult::Running);
         }
 
-        for (room_data_entity, home_room_data_entity) in desired_missions {
-            let room_data = system_data.room_data.get(room_data_entity).unwrap();
+        let gather_system_data = GatherSystemData {
+            entities: system_data.entities,
+            mapping: system_data.mapping,
+            room_data: system_data.room_data,
+        };
+        
+        let gathered_data = gather_candidate_rooms(&gather_system_data, 2, Self::gather_candidate_room_data);
+
+        for unknown_room in gathered_data.unknown_rooms().iter() {
+            system_data
+                .visibility
+                .request(VisibilityRequest::new(unknown_room.room_name(), VISIBILITY_PRIORITY_MEDIUM));
+        }
+
+        for candidate_room in gathered_data.candidate_rooms().iter() {
+            let room_data = system_data.room_data.get_mut(candidate_room.room_data_entity()).unwrap();
 
             //
             // Skip rooms that don't have sufficient sources. (If it is not known yet if they do, at least scout.)
@@ -268,75 +265,39 @@ impl Operation for ClaimOperation {
                 }
             }
 
-            let dynamic_visibility_data = room_data.get_dynamic_visibility_data();
+            let mission_data = system_data.mission_data;
 
-            //
-            // Spawn scout missions for claim rooms that have not had visibility updated in a long time.
-            //
-
-            if dynamic_visibility_data.as_ref().map(|v| !v.updated_within(1000)).unwrap_or(true) {
-                system_data.visibility.request(VisibilityRequest::new(room_data.name, VISIBILITY_PRIORITY_MEDIUM));
-            }
-
-            //
-            // Spawn claim missions for rooms that are not owned and have recent visibility.
-            //
-
-            let can_claim = dynamic_visibility_data
-                .as_ref()
-                .map(|v| {
-                    v.updated_within(1000)
-                        && v.owner().neutral()
-                        && (v.reservation().neutral() || v.reservation().mine())
-                        && !v.source_keeper()
-                })
-                .unwrap_or(false);
-
-            if can_claim {
-                //TODO: Check path finding and accessibility to room.
-
-                //TODO: wiarchbe: Use trait instead of match.
-                let has_claim_mission =
-                    room_data
-                        .get_missions()
-                        .iter()
-                        .any(|mission_entity| match system_data.mission_data.get(*mission_entity) {
-                            Some(MissionData::Claim(_)) => true,
-                            _ => false,
-                        });
-
-                //
-                // Spawn a new mission to fill the claim role if missing.
-                //
-
-                if !has_claim_mission {
-                    info!("Starting claim for room. Room: {}", room_data.name);
-
-                    let operation_entity = runtime_data.entity;
-                    let room_entity = room_data_entity;
-                    let home_room_entity = home_room_data_entity;
-
-                    system_data.updater.exec_mut(move |world| {
-                        let mission_entity = ClaimMission::build(
-                            world.create_entity(),
-                            Some(OperationOrMissionEntity::Operation(operation_entity)),
-                            room_entity,
-                            home_room_entity,
-                        )
-                        .build();
-
-                        let room_data_storage = &mut world.write_storage::<RoomData>();
-
-                        if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                            room_data.add_mission(mission_entity);
-                        }
-
-                        let operation_data_storage = &mut world.write_storage::<OperationData>();
-
-                        if let Some(OperationData::Claim(operation_data)) = operation_data_storage.get_mut(operation_entity) {
-                            operation_data.claim_missions.push(mission_entity);
-                        }
+            //TODO: wiarchbe: Use trait instead of match.
+            let has_claim_mission =
+                room_data
+                    .get_missions()
+                    .iter()
+                    .any(|mission_entity| match mission_data.get(*mission_entity) {
+                        Some(MissionData::Claim(_)) => true,
+                        _ => false,
                     });
+
+            //
+            // Spawn a new mission to fill the claim role if missing.
+            //
+
+            if !has_claim_mission {
+                info!("Starting claim for room. Room: {}", room_data.name);
+
+                let mission_entity = ClaimMission::build(
+                    system_data.updater.create_entity(system_data.entities),
+                    Some(OperationOrMissionEntity::Operation(runtime_data.entity)),
+                    candidate_room.room_data_entity(),
+                    candidate_room.home_room_data_entity(),
+                )
+                .build();
+
+                room_data.add_mission(mission_entity);
+
+                self.claim_missions.push(mission_entity);
+
+                if currently_owned_rooms + self.claim_missions.len() >= maximum_rooms as usize {
+                    break
                 }
             }
         }

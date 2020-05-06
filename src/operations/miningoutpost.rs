@@ -5,38 +5,16 @@ use crate::missions::miningoutpost::*;
 use crate::ownership::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
-use std::collections::HashMap;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use screeps_rover::*;
+use crate::room::gather::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct MiningOutpostOperation {
     owner: EntityOption<OperationOrMissionEntity>,
-}
-
-struct CandidateRoomData {
-    room_data_entity: Entity,
-    viable: bool,
-    can_expand: bool
-}
-
-struct CandidateRoom {
-    room_data_entity: Entity,
-    home_room_data_entity: Entity
-}
-
-struct UnknownRoom {
-    room_name: RoomName,
-    home_room_data_entity: Entity,
-}
-
-struct GatherRoomData {
-    candidate_rooms: Vec<CandidateRoom>,
-    unknown_rooms: Vec<UnknownRoom>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -54,9 +32,9 @@ impl MiningOutpostOperation {
         MiningOutpostOperation { owner: owner.into() }
     }
 
-    fn gather_candidate_room_data(system_data: &OperationExecutionSystemData, room_name: RoomName) -> Option<CandidateRoomData> {
-        let search_room_entity = system_data.mapping.get_room(&room_name)?;
-        let search_room_data = system_data.room_data.get(search_room_entity)?;
+    fn gather_candidate_room_data(gather_system_data: &GatherSystemData, room_name: RoomName) -> Option<CandidateRoomData> {
+        let search_room_entity = gather_system_data.mapping.get_room(&room_name)?;
+        let search_room_data = gather_system_data.room_data.get(search_room_entity)?;
         
         let static_visibility_data = search_room_data.get_static_visibility_data()?;
         let dynamic_visibility_data = search_room_data.get_dynamic_visibility_data()?;
@@ -76,120 +54,12 @@ impl MiningOutpostOperation {
         let can_reserve = dynamic_visibility_data.owner().neutral() && dynamic_visibility_data.reservation().neutral();
         let hostile = dynamic_visibility_data.owner().hostile() || dynamic_visibility_data.source_keeper();
 
-        let candidate_room_data = CandidateRoomData {
-            room_data_entity: search_room_entity,
-            viable: has_sources && can_reserve,
-            can_expand: !hostile
-        };
+        let viable = has_sources && can_reserve;
+        let can_expand = !hostile;
+
+        let candidate_room_data = CandidateRoomData::new(search_room_entity, viable, can_expand);
 
         Some(candidate_room_data)
-    }
-
-    fn gather_candidate_rooms(system_data: &OperationExecutionSystemData, max_distance: u32) -> GatherRoomData {
-        let mut unknown_rooms = HashMap::new();
-
-        struct VisitedRoomData {
-            room_data_entity: Entity,
-            home_room_data_entity: Entity,
-            distance: u32,
-            viable: bool,
-            can_expand: bool
-        };
-
-        let mut visited_rooms: HashMap<RoomName, VisitedRoomData> = HashMap::new();
-        let mut expansion_rooms: HashMap<RoomName, Entity> = HashMap::new();
-
-        for (entity, room_data) in (&*system_data.entities, &*system_data.room_data).join() {
-            if let Some(room) = game::rooms::get(room_data.name) {
-                let seed_room = room.controller()
-                    .map(|controller| controller.my() && controller.level() >= 2)
-                    .unwrap_or(false);
-
-                if seed_room {
-                    let visited_room = VisitedRoomData {
-                        room_data_entity: entity,
-                        home_room_data_entity: entity,
-                        distance: 0,
-                        viable: false,
-                        can_expand: true
-                    };
-
-                    if visited_room.can_expand {
-                        let room_exits = game::map::describe_exits(room_data.name);
-
-                        let source_room_status = game::map::get_room_status(room_data.name);
-
-                        for expansion_room in room_exits.values() {
-                            let expansion_room_status = game::map::get_room_status(*expansion_room);
-
-                            if can_traverse_between_room_status(&source_room_status, &expansion_room_status) {
-                                expansion_rooms.insert(*expansion_room, entity);
-                            }
-                        }
-                    }  
-                    
-                    visited_rooms.insert(room_data.name, visited_room);
-                }
-            }
-        }
-
-        let mut distance = 1;
-
-        while !expansion_rooms.is_empty() && distance <= max_distance {
-            let next_rooms: HashMap<RoomName, Entity> = std::mem::replace(&mut expansion_rooms, HashMap::new());
-
-            for (source_room_name, home_room_entity) in next_rooms.iter() {
-                if !visited_rooms.contains_key(source_room_name) {
-                    let candiate_room_data = Self::gather_candidate_room_data(system_data, *source_room_name);
-
-                    if let Some(candidate_room_data) = candiate_room_data {
-                        let visited_room = VisitedRoomData {
-                            room_data_entity: candidate_room_data.room_data_entity,
-                            home_room_data_entity: *home_room_entity,
-                            distance,
-                            viable: candidate_room_data.viable,
-                            can_expand: candidate_room_data.can_expand
-                        };
-
-                        if visited_room.can_expand {
-                            let room_exits = game::map::describe_exits(*source_room_name);
-
-                            let source_room_status = game::map::get_room_status(*source_room_name);
-    
-                            for expansion_room in room_exits.values() {
-                                let expansion_room_status = game::map::get_room_status(*expansion_room);
-
-                                if can_traverse_between_room_status(&source_room_status, &expansion_room_status) {
-                                    expansion_rooms.insert(*expansion_room, *home_room_entity);
-                                }
-                            }
-                        }
-                        
-                        visited_rooms.insert(*source_room_name, visited_room);
-                    } else {
-                        unknown_rooms.insert(*source_room_name, *home_room_entity);
-                    }
-                }
-            }
-
-            distance += 1;
-        }
-
-        let candidate_rooms = visited_rooms
-            .values()
-            .filter(|v| v.viable)
-            .map(|v| CandidateRoom { room_data_entity: v.room_data_entity, home_room_data_entity: v.home_room_data_entity })
-            .collect();
-
-        let returned_unknown_rooms = unknown_rooms
-            .into_iter()
-            .map(|(room_name, home_room_data_entity)| UnknownRoom { room_name, home_room_data_entity })
-            .collect();
-
-        GatherRoomData {
-            candidate_rooms,
-            unknown_rooms: returned_unknown_rooms
-        }
     }
 }
 
@@ -219,18 +89,24 @@ impl Operation for MiningOutpostOperation {
         if game::time() % 50 != 25 {
             return Ok(OperationResult::Running);
         }
-        
-        let gathered_data = Self::gather_candidate_rooms(system_data, 1);
 
-        for unknown_room in gathered_data.unknown_rooms.iter() {
+        let gather_system_data = GatherSystemData {
+            entities: system_data.entities,
+            mapping: system_data.mapping,
+            room_data: system_data.room_data,
+        };
+        
+        let gathered_data = gather_candidate_rooms(&gather_system_data, 1, Self::gather_candidate_room_data);
+
+        for unknown_room in gathered_data.unknown_rooms().iter() {
             system_data
                 .visibility
-                .request(VisibilityRequest::new(unknown_room.room_name, VISIBILITY_PRIORITY_MEDIUM));
+                .request(VisibilityRequest::new(unknown_room.room_name(), VISIBILITY_PRIORITY_MEDIUM));
         }
 
-        for candidate_room in gathered_data.candidate_rooms.iter() {
+        for candidate_room in gathered_data.candidate_rooms().iter() {
             let room_data_storage = &mut *system_data.room_data;
-            let room_data = room_data_storage.get_mut(candidate_room.room_data_entity).unwrap();
+            let room_data = room_data_storage.get_mut(candidate_room.room_data_entity()).unwrap();
             let dynamic_visibility_data = room_data.get_dynamic_visibility_data();
 
             //
@@ -268,15 +144,11 @@ impl Operation for MiningOutpostOperation {
                 if !has_mining_outpost_mission {
                     info!("Starting mining outpost mission for room. Room: {}", room_data.name);
 
-                    let owner_entity = runtime_data.entity;
-                    let room_entity = candidate_room.room_data_entity;
-                    let home_room_entity = candidate_room.home_room_data_entity;
-
                     let mission_entity = MiningOutpostMission::build(
                         system_data.updater.create_entity(system_data.entities),
-                        Some(OperationOrMissionEntity::Operation(owner_entity)),
-                        room_entity,
-                        home_room_entity,
+                        Some(OperationOrMissionEntity::Operation(runtime_data.entity)),
+                        candidate_room.room_data_entity(),
+                        candidate_room.home_room_data_entity(),
                     )
                     .build();
 
