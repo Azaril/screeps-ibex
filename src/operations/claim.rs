@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 use crate::room::gather::*;
+use crate::room::roomplansystem::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ClaimOperation {
@@ -263,6 +264,16 @@ impl Operation for ClaimOperation {
                 if static_visibility_data.sources().len() < 2 {
                     continue;
                 }
+            }
+
+            //
+            // Ensure a plan exists for the room or request one if it doesn't.
+            //
+
+            if system_data.room_plan_data.get(candidate_room.room_data_entity()).is_none() {
+                system_data.room_plan_queue.request(RoomPlanRequest::new(room_data.name, 0.5));
+
+                continue;
             }
 
             let mission_data = system_data.mission_data;

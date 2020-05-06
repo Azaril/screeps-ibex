@@ -4,6 +4,7 @@ use crate::missions::data::*;
 use crate::ownership::*;
 use crate::room::data::*;
 use crate::room::visibilitysystem::*;
+use crate::room::roomplansystem::*;
 use crate::ui::*;
 use crate::visualize::*;
 use log::*;
@@ -15,6 +16,8 @@ pub struct OperationSystemData<'a> {
     updater: Read<'a, LazyUpdate>,
     entities: Entities<'a>,
     room_data: WriteStorage<'a, RoomData>,
+    room_plan_data: ReadStorage<'a, RoomPlanData>,
+    room_plan_queue: Write<'a, RoomPlanQueue>,
     mission_data: ReadStorage<'a, MissionData>,
     mapping: Read<'a, EntityMappingData>,
     visibility: Write<'a, VisibilityQueue>,
@@ -26,6 +29,8 @@ pub struct OperationExecutionSystemData<'a, 'b> {
     pub updater: &'b Read<'a, LazyUpdate>,
     pub entities: &'b Entities<'a>,
     pub room_data: &'b mut WriteStorage<'a, RoomData>,
+    pub room_plan_data: &'b ReadStorage<'a, RoomPlanData>,
+    pub room_plan_queue: &'b mut RoomPlanQueue,
     pub mission_data: &'b ReadStorage<'a, MissionData>,
     pub mapping: &'b Read<'a, EntityMappingData>,
     pub visibility: &'b mut VisibilityQueue,
@@ -76,6 +81,8 @@ impl<'a> System<'a> for PreRunOperationSystem {
             updater: &data.updater,
             entities: &data.entities,
             room_data: &mut data.room_data,
+            room_plan_data: &data.room_plan_data,
+            room_plan_queue: &mut data.room_plan_queue,
             mission_data: &data.mission_data,
             mapping: &data.mapping,
             visibility: &mut data.visibility,
@@ -143,6 +150,8 @@ impl<'a> System<'a> for RunOperationSystem {
             updater: &data.updater,
             entities: &data.entities,
             room_data: &mut data.room_data,
+            room_plan_data: &data.room_plan_data,
+            room_plan_queue: &mut data.room_plan_queue,
             mission_data: &data.mission_data,
             mapping: &data.mapping,
             visibility: &mut data.visibility,
