@@ -16,7 +16,7 @@
   "gnetId": null,
   "graphTooltip": 0,
   "id": 3158,
-  "iteration": 1585085498974,
+  "iteration": 1588795225494,
   "links": [],
   "panels": [
     {
@@ -502,18 +502,23 @@
       "steppedLine": true,
       "targets": [
         {
+          "refCount": 1,
           "refId": "A",
-          "target": "alias(divideSeries(nonNegativeDerivative(screeps.$user.shard.$shard.gcl.progress), #B), 'GCL per tick')",
+          "target": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.gcl.progress, 100)), #B), 'GCL per tick')",
+          "targetFull": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.gcl.progress, 100)), derivative(screeps.$user.shard.$shard.time)), 'GCL per tick')",
           "textEditor": false
         },
         {
           "hide": true,
+          "refCount": 0,
           "refId": "B",
           "target": "derivative(screeps.$user.shard.$shard.time)"
         },
         {
+          "refCount": 0,
           "refId": "C",
-          "target": "alias(movingAverage(divideSeries(nonNegativeDerivative(screeps.$user.shard.$shard.gcl.progress), #B), '1hour'), '1hr Moving Average')"
+          "target": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.gcl.progress, 100)), #B), '1hour'), '1hr Moving Average')",
+          "targetFull": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.gcl.progress, 100)), derivative(screeps.$user.shard.$shard.time)), '1hour'), '1hr Moving Average')"
         }
       ],
       "thresholds": [],
@@ -729,7 +734,7 @@
           "hide": false,
           "refCount": -1,
           "refId": "B",
-          "target": "alias(screeps.$user.shard.$shard.market.credits, 'Total')",
+          "target": "alias(keepLastValue(screeps.$user.shard.$shard.market.credits, 100), 'Total')",
           "textEditor": false
         }
       ],
@@ -828,10 +833,10 @@
       "steppedLine": true,
       "targets": [
         {
-          "refCount": 0,
+          "refCount": 1,
           "refId": "A",
-          "target": "alias(divideSeries(nonNegativeDerivative(screeps.$user.shard.$shard.market.credits), #B), 'Credits per tick')",
-          "targetFull": "alias(divideSeries(nonNegativeDerivative(screeps.$user.shard.$shard.market.credits), derivative(screeps.$user.shard.$shard.time)), 'Credits per tick')",
+          "target": "alias(divideSeries(derivative(keepLastValue(screeps.$user.shard.$shard.market.credits, 100)), #B), 'Credits per tick')",
+          "targetFull": "alias(divideSeries(derivative(keepLastValue(screeps.$user.shard.$shard.market.credits, 100)), derivative(screeps.$user.shard.$shard.time)), 'Credits per tick')",
           "textEditor": false
         },
         {
@@ -843,15 +848,15 @@
         {
           "refCount": 0,
           "refId": "C",
-          "target": "alias(movingAverage(divideSeries(nonNegativeDerivative(screeps.$user.shard.$shard.market.credits), #B), '1hour'), '1hr Moving Average')",
-          "targetFull": "alias(movingAverage(divideSeries(nonNegativeDerivative(screeps.$user.shard.$shard.market.credits), derivative(screeps.$user.shard.$shard.time)), '1hour'), '1hr Moving Average')"
+          "target": "alias(movingAverage(divideSeries(derivative(keepLastValue(screeps.$user.shard.$shard.market.credits, 100)), #B), '10min'), '10 Minute Moving Average')",
+          "targetFull": "alias(movingAverage(divideSeries(derivative(keepLastValue(screeps.$user.shard.$shard.market.credits, 100)), derivative(screeps.$user.shard.$shard.time)), '10min'), '10 Minute Moving Average')"
         }
       ],
       "thresholds": [],
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Credits",
+      "title": "Credits Change",
       "tooltip": {
         "msResolution": false,
         "shared": true,
@@ -868,11 +873,12 @@
       },
       "yaxes": [
         {
+          "decimals": null,
           "format": "short",
           "label": null,
           "logBase": 1,
           "max": null,
-          "min": 0,
+          "min": null,
           "show": true
         },
         {
@@ -1041,18 +1047,22 @@
       "tableColumn": "",
       "targets": [
         {
+          "refCount": 0,
           "refId": "A",
-          "target": "divideSeries(diffSeries(screeps.$user.shard.$shard.gcl.progress_total, #B), #C)"
+          "target": "divideSeries(diffSeries(keepLastValue(screeps.$user.shard.$shard.gcl.progress_total, 100), #B), #C)",
+          "targetFull": "divideSeries(diffSeries(keepLastValue(screeps.$user.shard.$shard.gcl.progress_total, 100), keepLastValue(screeps.$user.shard.$shard.gcl.progress, 100)), scaleToSeconds(movingAverage(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.gcl.progress, 100)), '1hour'), 1))"
         },
         {
           "hide": true,
+          "refCount": -1,
           "refId": "B",
-          "target": "screeps.$user.shard.$shard.gcl.progress"
+          "target": "keepLastValue(screeps.$user.shard.$shard.gcl.progress, 100)"
         },
         {
           "hide": true,
+          "refCount": 1,
           "refId": "C",
-          "target": "scaleToSeconds(movingAverage(nonNegativeDerivative(screeps.$user.shard.$shard.gcl.progress), '1hour'), 1)"
+          "target": "scaleToSeconds(movingAverage(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.gcl.progress, 100)), '1hour'), 1)"
         }
       ],
       "thresholds": "",
@@ -1083,8 +1093,8 @@
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "W23N1",
-          "value": "W23N1"
+          "text": "E33S31",
+          "value": "E33S31"
         }
       },
       "title": "$room",
@@ -1150,8 +1160,8 @@
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "W23N1",
-          "value": "W23N1"
+          "text": "E33S31",
+          "value": "E33S31"
         }
       },
       "sparkline": {
@@ -1225,8 +1235,8 @@
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "W23N1",
-          "value": "W23N1"
+          "text": "E33S31",
+          "value": "E33S31"
         }
       },
       "seriesOverrides": [
@@ -1241,18 +1251,23 @@
       "steppedLine": true,
       "targets": [
         {
+          "refCount": 1,
           "refId": "A",
-          "target": "alias(divideSeries(nonNegativeDerivative(screeps.$user.shard.$shard.room.$room.controller_progress), #C), 'RCL per tick')",
+          "target": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), #C), 'RCL per tick')",
+          "targetFull": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), derivative(screeps.$user.shard.$shard.time)), 'RCL per tick')",
           "textEditor": false
         },
         {
           "hide": true,
+          "refCount": 0,
           "refId": "C",
           "target": "derivative(screeps.$user.shard.$shard.time)"
         },
         {
+          "refCount": 0,
           "refId": "B",
-          "target": "alias(movingAverage(divideSeries(nonNegativeDerivative(screeps.$user.shard.$shard.room.$room.controller_progress), #C), '1hour'), '1hr Moving Average')"
+          "target": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), #C), '1hour'), '1hr Moving Average')",
+          "targetFull": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), derivative(screeps.$user.shard.$shard.time)), '1hour'), '1hr Moving Average')"
         }
       ],
       "thresholds": [],
@@ -1344,8 +1359,8 @@
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "W23N1",
-          "value": "W23N1"
+          "text": "E33S31",
+          "value": "E33S31"
         }
       },
       "seriesOverrides": [
@@ -1480,8 +1495,8 @@
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "W23N1",
-          "value": "W23N1"
+          "text": "E33S31",
+          "value": "E33S31"
         }
       },
       "sparkline": {
@@ -1575,8 +1590,8 @@
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "W23N1",
-          "value": "W23N1"
+          "text": "E33S31",
+          "value": "E33S31"
         }
       },
       "sparkline": {
@@ -1628,13 +1643,13 @@
       "id": 176,
       "panels": [],
       "repeat": null,
-      "repeatIteration": 1585085498974,
+      "repeatIteration": 1588795225494,
       "repeatPanelId": 167,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "W24N2",
-          "value": "W24N2"
+          "text": "E34S31",
+          "value": "E34S31"
         }
       },
       "title": "$room",
@@ -1696,14 +1711,14 @@
           "to": "null"
         }
       ],
-      "repeatIteration": 1585085498974,
+      "repeatIteration": 1588795225494,
       "repeatPanelId": 8,
       "repeatedByRow": true,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "W24N2",
-          "value": "W24N2"
+          "text": "E34S31",
+          "value": "E34S31"
         }
       },
       "sparkline": {
@@ -1773,14 +1788,14 @@
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
-      "repeatIteration": 1585085498974,
+      "repeatIteration": 1588795225494,
       "repeatPanelId": 53,
       "repeatedByRow": true,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "W24N2",
-          "value": "W24N2"
+          "text": "E34S31",
+          "value": "E34S31"
         }
       },
       "seriesOverrides": [
@@ -1795,18 +1810,23 @@
       "steppedLine": true,
       "targets": [
         {
+          "refCount": 1,
           "refId": "A",
-          "target": "alias(divideSeries(nonNegativeDerivative(screeps.$user.shard.$shard.room.$room.controller_progress), #C), 'RCL per tick')",
+          "target": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), #C), 'RCL per tick')",
+          "targetFull": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), derivative(screeps.$user.shard.$shard.time)), 'RCL per tick')",
           "textEditor": false
         },
         {
           "hide": true,
+          "refCount": 0,
           "refId": "C",
           "target": "derivative(screeps.$user.shard.$shard.time)"
         },
         {
+          "refCount": 0,
           "refId": "B",
-          "target": "alias(movingAverage(divideSeries(nonNegativeDerivative(screeps.$user.shard.$shard.room.$room.controller_progress), #C), '1hour'), '1hr Moving Average')"
+          "target": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), #C), '1hour'), '1hr Moving Average')",
+          "targetFull": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), derivative(screeps.$user.shard.$shard.time)), '1hour'), '1hr Moving Average')"
         }
       ],
       "thresholds": [],
@@ -1894,14 +1914,14 @@
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
-      "repeatIteration": 1585085498974,
+      "repeatIteration": 1588795225494,
       "repeatPanelId": 82,
       "repeatedByRow": true,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "W24N2",
-          "value": "W24N2"
+          "text": "E34S31",
+          "value": "E34S31"
         }
       },
       "seriesOverrides": [
@@ -2032,14 +2052,14 @@
           "to": "null"
         }
       ],
-      "repeatIteration": 1585085498974,
+      "repeatIteration": 1588795225494,
       "repeatPanelId": 16,
       "repeatedByRow": true,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "W24N2",
-          "value": "W24N2"
+          "text": "E34S31",
+          "value": "E34S31"
         }
       },
       "sparkline": {
@@ -2129,14 +2149,579 @@
           "to": "null"
         }
       ],
-      "repeatIteration": 1585085498974,
+      "repeatIteration": 1588795225494,
       "repeatPanelId": 31,
       "repeatedByRow": true,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "W24N2",
-          "value": "W24N2"
+          "text": "E34S31",
+          "value": "E34S31"
+        }
+      },
+      "sparkline": {
+        "fillColor": "rgba(31, 118, 189, 0.18)",
+        "full": false,
+        "lineColor": "rgb(31, 120, 193)",
+        "show": false
+      },
+      "tableColumn": "",
+      "targets": [
+        {
+          "refId": "A",
+          "target": "divideSeries(diffSeries(screeps.$user.shard.$shard.room.$room.controller_progress_total, #B), #C)",
+          "textEditor": false
+        },
+        {
+          "hide": true,
+          "refId": "B",
+          "target": "screeps.$user.shard.$shard.room.$room.controller_progress"
+        },
+        {
+          "hide": true,
+          "refId": "C",
+          "target": "scaleToSeconds(movingAverage(nonNegativeDerivative(screeps.$user.shard.$shard.room.$room.controller_progress), '1hour'), 1)"
+        }
+      ],
+      "thresholds": "",
+      "title": "Time to Next RCL",
+      "type": "singlestat",
+      "valueFontSize": "70%",
+      "valueMaps": [
+        {
+          "op": "=",
+          "text": "N/A",
+          "value": "null"
+        }
+      ],
+      "valueName": "current"
+    },
+    {
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "id": 182,
+      "panels": [],
+      "repeat": null,
+      "repeatIteration": 1588795225494,
+      "repeatPanelId": 167,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "E35S31",
+          "value": "E35S31"
+        }
+      },
+      "title": "$room",
+      "type": "row"
+    },
+    {
+      "cacheTimeout": null,
+      "colorBackground": false,
+      "colorValue": true,
+      "colors": [
+        "rgba(245, 54, 54, 0.9)",
+        "rgba(237, 129, 40, 0.89)",
+        "rgba(50, 172, 45, 0.97)"
+      ],
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "format": "none",
+      "gauge": {
+        "maxValue": 100,
+        "minValue": 0,
+        "show": false,
+        "thresholdLabels": false,
+        "thresholdMarkers": true
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 0,
+        "y": 41
+      },
+      "id": 183,
+      "interval": null,
+      "isNew": true,
+      "links": [],
+      "mappingType": 1,
+      "mappingTypes": [
+        {
+          "name": "value to text",
+          "value": 1
+        },
+        {
+          "name": "range to text",
+          "value": 2
+        }
+      ],
+      "maxDataPoints": 100,
+      "nullPointMode": "connected",
+      "nullText": null,
+      "options": {},
+      "postfix": "",
+      "postfixFontSize": "50%",
+      "prefix": "",
+      "prefixFontSize": "50%",
+      "rangeMaps": [
+        {
+          "from": "null",
+          "text": "N/A",
+          "to": "null"
+        }
+      ],
+      "repeatIteration": 1588795225494,
+      "repeatPanelId": 8,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "E35S31",
+          "value": "E35S31"
+        }
+      },
+      "sparkline": {
+        "fillColor": "rgba(31, 118, 189, 0.18)",
+        "full": false,
+        "lineColor": "rgb(31, 120, 193)",
+        "show": false
+      },
+      "tableColumn": "",
+      "targets": [
+        {
+          "refId": "A",
+          "target": "screeps.$user.shard.$shard.room.$room.controller_level"
+        }
+      ],
+      "thresholds": "4.01,7.01",
+      "title": "RCL",
+      "type": "singlestat",
+      "valueFontSize": "120%",
+      "valueMaps": [
+        {
+          "op": "=",
+          "text": "N/A",
+          "value": "null"
+        }
+      ],
+      "valueName": "current"
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 10,
+        "w": 6,
+        "x": 4,
+        "y": 41
+      },
+      "hiddenSeries": false,
+      "id": 184,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "max": true,
+        "min": true,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatIteration": 1588795225494,
+      "repeatPanelId": 53,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "E35S31",
+          "value": "E35S31"
+        }
+      },
+      "seriesOverrides": [
+        {
+          "alias": "1hr Moving Average",
+          "fill": 0,
+          "steppedLine": false
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": true,
+      "targets": [
+        {
+          "refCount": 1,
+          "refId": "A",
+          "target": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), #C), 'RCL per tick')",
+          "targetFull": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), derivative(screeps.$user.shard.$shard.time)), 'RCL per tick')",
+          "textEditor": false
+        },
+        {
+          "hide": true,
+          "refCount": 0,
+          "refId": "C",
+          "target": "derivative(screeps.$user.shard.$shard.time)"
+        },
+        {
+          "refCount": 0,
+          "refId": "B",
+          "target": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), #C), '1hour'), '1hr Moving Average')",
+          "targetFull": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), derivative(screeps.$user.shard.$shard.time)), '1hour'), '1hr Moving Average')"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "RCL Upgrade",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 10,
+        "w": 6,
+        "x": 10,
+        "y": 41
+      },
+      "hiddenSeries": false,
+      "id": 185,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "hideEmpty": false,
+        "hideZero": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatIteration": 1588795225494,
+      "repeatPanelId": 82,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "E35S31",
+          "value": "E35S31"
+        }
+      },
+      "seriesOverrides": [
+        {
+          "alias": "Total",
+          "lines": false,
+          "stack": false
+        }
+      ],
+      "spaceLength": 10,
+      "stack": true,
+      "steppedLine": false,
+      "targets": [
+        {
+          "refId": "B",
+          "target": "alias(screeps.$user.shard.$shard.room.$room.energy_available, 'Spawns and Extensions')"
+        },
+        {
+          "refId": "A",
+          "target": "alias(screeps.$user.shard.$shard.room.$room.storage_energy, 'Storage')"
+        },
+        {
+          "refId": "C",
+          "target": "alias(screeps.$user.shard.$shard.room.$room.terminal_energy, 'Terminal')",
+          "textEditor": false
+        },
+        {
+          "refId": "D",
+          "target": "alias(sumSeries(#A, #B, #C), \"Total\")",
+          "textEditor": true
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Room Stored Energy",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "cacheTimeout": null,
+      "colorBackground": false,
+      "colorValue": false,
+      "colors": [
+        "rgba(245, 54, 54, 0.9)",
+        "rgba(237, 129, 40, 0.89)",
+        "rgba(50, 172, 45, 0.97)"
+      ],
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "format": "percentunit",
+      "gauge": {
+        "maxValue": 1,
+        "minValue": 0,
+        "show": true,
+        "thresholdLabels": false,
+        "thresholdMarkers": true
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 44
+      },
+      "id": 186,
+      "interval": null,
+      "isNew": true,
+      "links": [],
+      "mappingType": 1,
+      "mappingTypes": [
+        {
+          "name": "value to text",
+          "value": 1
+        },
+        {
+          "name": "range to text",
+          "value": 2
+        }
+      ],
+      "maxDataPoints": 100,
+      "nullPointMode": "connected",
+      "nullText": null,
+      "options": {},
+      "postfix": "",
+      "postfixFontSize": "50%",
+      "prefix": "",
+      "prefixFontSize": "50%",
+      "rangeMaps": [
+        {
+          "from": "null",
+          "text": "N/A",
+          "to": "null"
+        }
+      ],
+      "repeatIteration": 1588795225494,
+      "repeatPanelId": 16,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "E35S31",
+          "value": "E35S31"
+        }
+      },
+      "sparkline": {
+        "fillColor": "rgba(31, 118, 189, 0.18)",
+        "full": false,
+        "lineColor": "rgb(31, 120, 193)",
+        "show": false
+      },
+      "tableColumn": "",
+      "targets": [
+        {
+          "refId": "A",
+          "target": "divideSeries(screeps.$user.shard.$shard.room.$room.controller_progress, #B)"
+        },
+        {
+          "hide": true,
+          "refId": "B",
+          "target": "screeps.$user.shard.$shard.room.$room.controller_progress_total"
+        }
+      ],
+      "thresholds": "",
+      "title": "RCL progress",
+      "type": "singlestat",
+      "valueFontSize": "120%",
+      "valueMaps": [
+        {
+          "op": "=",
+          "text": "N/A",
+          "value": "null"
+        }
+      ],
+      "valueName": "current"
+    },
+    {
+      "cacheTimeout": null,
+      "colorBackground": false,
+      "colorValue": false,
+      "colors": [
+        "rgba(245, 54, 54, 0.9)",
+        "rgba(237, 129, 40, 0.89)",
+        "rgba(50, 172, 45, 0.97)"
+      ],
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "format": "s",
+      "gauge": {
+        "maxValue": 100,
+        "minValue": 0,
+        "show": false,
+        "thresholdLabels": false,
+        "thresholdMarkers": true
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 0,
+        "y": 48
+      },
+      "id": 187,
+      "interval": null,
+      "isNew": true,
+      "links": [],
+      "mappingType": 1,
+      "mappingTypes": [
+        {
+          "name": "value to text",
+          "value": 1
+        },
+        {
+          "name": "range to text",
+          "value": 2
+        }
+      ],
+      "maxDataPoints": 100,
+      "nullPointMode": "connected",
+      "nullText": null,
+      "options": {},
+      "postfix": "",
+      "postfixFontSize": "50%",
+      "prefix": "",
+      "prefixFontSize": "50%",
+      "rangeMaps": [
+        {
+          "from": "null",
+          "text": "N/A",
+          "to": "null"
+        }
+      ],
+      "repeatIteration": 1588795225494,
+      "repeatPanelId": 31,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "E35S31",
+          "value": "E35S31"
         }
       },
       "sparkline": {
@@ -2177,7 +2762,7 @@
       "valueName": "current"
     }
   ],
-  "refresh": "30s",
+  "refresh": false,
   "schemaVersion": 22,
   "style": "dark",
   "tags": [
@@ -2266,7 +2851,7 @@
     ]
   },
   "time": {
-    "from": "now-6h",
+    "from": "now-3h",
     "to": "now"
   },
   "timepicker": {
@@ -2297,5 +2882,5 @@
   "timezone": "browser",
   "title": "Full Overview",
   "uid": "y1clLT_Wk",
-  "version": 20
+  "version": 21
 }
