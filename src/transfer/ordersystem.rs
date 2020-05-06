@@ -21,6 +21,8 @@ pub struct OrderQueueActiveRequest {
 pub struct OrderQueueRoomData {
     outgoing_passive_requests: Vec<OrderQueuePassiveRequest>,
     outgoing_active_requests: Vec<OrderQueueActiveRequest>,
+
+    incoming_passive_requests: Vec<OrderQueuePassiveRequest>,
 }
 
 impl OrderQueueRoomData {
@@ -28,6 +30,8 @@ impl OrderQueueRoomData {
         OrderQueueRoomData {
             outgoing_passive_requests: Vec::new(),
             outgoing_active_requests: Vec::new(),
+
+            incoming_passive_requests: Vec::new(),
         }
     }
 }
@@ -63,6 +67,12 @@ impl OrderQueue {
         });
     }
 
+    pub fn request_passive_purchase(&mut self, room: RoomName, resource: ResourceType, amount: u32) {
+        let room = self.get_room(room);
+
+        room.incoming_passive_requests.push(OrderQueuePassiveRequest { resource, amount });
+    }
+
     pub fn clear(&mut self) {
         self.rooms.clear();
     }
@@ -90,11 +100,11 @@ pub struct OrderQueueSystemData<'a> {
     ui: Option<Write<'a, UISystem>>,
 }
 
-struct PassiveSellOrderParameters {
+struct PassiveOrderParameters {
     room_name: RoomName,
     resource: ResourceType,
     amount: u32,
-    minimum_sale_amount: u32,
+    minimum_amount: u32,
     price: f64,
 }
 
@@ -112,15 +122,15 @@ pub struct OrderQueueSystem;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl OrderQueueSystem {
-    fn sell_passive_order(my_orders: &HashMap<String, MyOrder>, params: PassiveSellOrderParameters) {
-        if params.amount < params.minimum_sale_amount {
+    fn sell_passive_order(my_orders: &HashMap<String, MyOrder>, params: PassiveOrderParameters) {
+        if params.amount < params.minimum_amount {
             //TODO: Handle order in progress, cancel etc.?
             return;
         }
 
         let market_resource_type = MarketResourceType::Resource(params.resource);
 
-        let current_orders: Vec<_> = my_orders
+        let mut current_orders = my_orders
             .values()
             .filter(|o| o.order_type == OrderType::Sell && o.resource_type == market_resource_type)
             .filter(|o| o.remaining_amount > 0)
@@ -128,15 +138,14 @@ impl OrderQueueSystem {
                 o.room_name
                     .map(|order_room_name| order_room_name == params.room_name)
                     .unwrap_or(false)
-            })
-            .collect();
+            });
 
         //
         // NOTE: Sell in block of minimum sale amount, not total capacity.
         //
 
-        if current_orders.is_empty() {
-            let sell_amount = params.minimum_sale_amount;
+        if current_orders.next().is_none() {
+            let sell_amount = params.minimum_amount;
 
             match create_order(
                 OrderType::Sell,
@@ -161,6 +170,54 @@ impl OrderQueueSystem {
         }
     }
 
+    fn buy_passive_order(my_orders: &HashMap<String, MyOrder>, params: PassiveOrderParameters) {
+        if params.amount < params.minimum_amount {
+            //TODO: Handle order in progress, cancel etc.?
+            return;
+        }
+
+        let market_resource_type = MarketResourceType::Resource(params.resource);
+
+        let mut current_orders = my_orders
+            .values()
+            .filter(|o| o.order_type == OrderType::Buy && o.resource_type == market_resource_type)
+            .filter(|o| o.remaining_amount > 0)
+            .filter(|o| {
+                o.room_name
+                    .map(|order_room_name| order_room_name == params.room_name)
+                    .unwrap_or(false)
+            });
+
+        //
+        // NOTE: Buy at maximum in blocks of minimum amount, not total desired.
+        //
+
+        if current_orders.next().is_none() {
+            let buy_amount = params.amount.min(params.minimum_amount);
+
+            match create_order(
+                OrderType::Buy,
+                market_resource_type,
+                params.price,
+                buy_amount,
+                Some(params.room_name),
+            ) {
+                ReturnCode::Ok => {
+                    info!(
+                        "Placed buy order! Room: {} Resource: {:?} Price: {} Amount: {}",
+                        params.room_name, params.resource, params.price, buy_amount
+                    );
+                }
+                err => {
+                    info!(
+                        "Failed to place buy order! Error: {:?} Room: {} Resource: {:?} Price: {} Amount: {}",
+                        err, params.room_name, params.resource, params.price, buy_amount
+                    );
+                }
+            }
+        }
+    }
+
     fn calc_transaction_cost_fractional(from: RoomName, to: RoomName) -> f64 {
         let distance = game::map::get_room_linear_distance(from, to, true) as f64;
 
@@ -172,10 +229,14 @@ impl OrderQueueSystem {
         terminal: &StructureTerminal,
         order_cache: &mut OrderCache,
         active_orders: &[ActiveSellOrderParameters],
-    )
+    ) -> bool
      {
-        if terminal.cooldown() > 0 || terminal.store_used_capacity(Some(ResourceType::Energy)) == 0 {
-            return;
+        if terminal.cooldown() > 0 {
+            return true;
+        }
+
+        if terminal.store_used_capacity(Some(ResourceType::Energy)) == 0 {
+            return false;
         }
 
         active_orders
@@ -232,8 +293,11 @@ impl OrderQueueSystem {
                     err => {
                         info!("Failed to complete deal! Error: {:?} Room: {}Resource: {:?} Amount: {} Transfer Cost: {} Price: {} Effectice Price: {} Id: {}", err, source_room_name, resource, transfer_amount, transfer_cost, order_price, effective_price_per_unit, order_id);
                     }
-                }
-            });
+                };
+
+                true
+            })
+            .unwrap_or(false)
     }
 }
 
@@ -265,16 +329,17 @@ impl<'a> System<'a> for OrderQueueSystem {
             }
         }
 
-        let can_buy = crate::features::market::buy();
+        if game::time() % 20 != 0 || game::cpu::bucket() <= game::cpu::tick_limit() {
+            return;
+        }
+
+        let can_buy = crate::features::market::buy() && game::market::credits() > crate::features::market::credit_reserve();
         let can_sell = crate::features::market::sell();
 
         if !can_buy && !can_sell {
             return;
         }
 
-        if game::time() % 50 != 0 || game::cpu::bucket() <= game::cpu::tick_limit() {
-            return;
-        }
 
         let mut order_cache = OrderCache::new();
 
@@ -309,11 +374,11 @@ impl<'a> System<'a> for OrderQueueSystem {
                             if let Some(latest_resource_history) = resource_history.get(&market_resource).unwrap().last() {
                                 Self::sell_passive_order(
                                     &my_orders,
-                                    PassiveSellOrderParameters {
+                                    PassiveOrderParameters {
                                         room_name: *room_name,
                                         resource: entry.resource,
                                         amount: entry.amount,
-                                        minimum_sale_amount: 2000,
+                                        minimum_amount: 2000,
                                         price: latest_resource_history.avg_price + (latest_resource_history.stddev_price * 0.1),
                                     },
                                 );
@@ -358,7 +423,37 @@ impl<'a> System<'a> for OrderQueueSystem {
                             })
                             .collect();                       
 
-                        Self::sell_active_orders(*room_name, &terminal, &mut order_cache, &active_orders);
+                        let _terminal_busy = Self::sell_active_orders(*room_name, &terminal, &mut order_cache, &active_orders);
+                    }
+
+                    if can_buy {
+                        for entry in &room_data.incoming_passive_requests {
+                            //
+                            // NOTE: This current relies on the orders being in sequential date order.
+                            //
+
+                            let market_resource = MarketResourceType::Resource(entry.resource);
+
+                            let _ = resource_history
+                                .entry(market_resource)
+                                .or_insert_with(|| game::market::get_history(Some(market_resource)));
+
+                            //TODO: Validate that the current average price is sane (compare to prior day?).
+                            //TODO: Need better pricing calculations.
+
+                            if let Some(latest_resource_history) = resource_history.get(&market_resource).unwrap().last() {
+                                Self::buy_passive_order(
+                                    &my_orders,
+                                    PassiveOrderParameters {
+                                        room_name: *room_name,
+                                        resource: entry.resource,
+                                        amount: entry.amount,
+                                        minimum_amount: 2000,
+                                        price: latest_resource_history.avg_price + (latest_resource_history.stddev_price * 0.1),
+                                    },
+                                );
+                            }
+                        }
                     }
                 }
             }
