@@ -6,3 +6,4 @@ pub mod roomplansystem;
 pub mod scoring;
 pub mod updateroomsystem;
 pub mod visibilitysystem;
+pub mod gather;
