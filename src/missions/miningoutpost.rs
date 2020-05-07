@@ -9,6 +9,7 @@ use super::raid::*;
 use super::remotemine::*;
 use super::reserve::*;
 use super::dismantle::*;
+use super::defend::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
@@ -25,9 +26,20 @@ pub struct MiningOutpostMissionContext {
 machine!(
     #[derive(Clone, ConvertSaveload)]
     enum MiningOutpostState {
-        Scout { scout_mission: EntityOption<Entity> },
-        Cleanup { scout_mission: EntityOption<Entity>, raid_mission: EntityOption<Entity>, dismantle_mission: EntityOption<Entity> },
-        Mine { remote_mine_mission: EntityOption<Entity>, reserve_mission: EntityOption<Entity> }
+        Scout { 
+            scout_mission: EntityOption<Entity> 
+        },
+        Cleanup { 
+            scout_mission: EntityOption<Entity>, 
+            raid_mission: EntityOption<Entity>, 
+            dismantle_mission: EntityOption<Entity>, 
+            defend_mission: EntityOption<Entity>
+        },
+        Mine { 
+            remote_mine_mission: EntityOption<Entity>, 
+            reserve_mission: EntityOption<Entity>,
+            defend_mission: EntityOption<Entity>
+        }
     }
 
     impl {
@@ -41,15 +53,31 @@ machine!(
 
         * => fn visualize(&self, _system_data: &MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {}
 
-        _ => fn get_children(&self) -> Vec<Entity>;
-
-        _ => fn child_complete(&mut self, child: Entity);
+        * => fn get_children(&self) -> Vec<Entity> {
+            self.get_children_internal()
+                .iter()
+                .filter_map(|e| e.as_ref())
+                .cloned()
+                .collect()
+        }
+    
+        * => fn child_complete(&mut self, child: Entity) {
+            for mission_child in self.get_children_internal_mut().iter_mut() {
+                if mission_child.map(|e| e == child).unwrap_or(false) {
+                    mission_child.take();
+                }
+            }
+        }
         
         * => fn gather_data(&self, _system_data: &MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {}
         
         _ => fn tick(&mut self, state_context: &mut MiningOutpostMissionContext, tick_context: &mut MissionTickContext) -> Result<Option<MiningOutpostState>, String>;
 
-        _ => fn complete(&mut self, _system_data: &mut MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData);
+        * => fn complete(&mut self, system_data: &mut MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {
+            for mission_child in self.get_children_internal_mut().iter_mut() {
+                mission_child.take().map(|e| system_data.mission_requests.abort(e));
+            }
+        }
     }
 );
 
@@ -70,18 +98,12 @@ fn can_run_mission(state_context: &mut MiningOutpostMissionContext, tick_context
 }
 
 impl Scout {
-    fn get_children(&self) -> Vec<Entity> {
+    fn get_children_internal(&self) -> [&Option<Entity>; 1] {
         [&self.scout_mission]
-            .iter()
-            .filter_map(|e| e.as_ref())
-            .cloned()
-            .collect()
     }
 
-    fn child_complete(&mut self, child: Entity) {
-        if self.scout_mission.map(|e| e == child).unwrap_or(false) {
-            self.scout_mission.take();
-        }
+    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 1] {
+        [&mut self.scout_mission]
     }
 
     fn tick(&mut self, state_context: &mut MiningOutpostMissionContext, tick_context: &mut MissionTickContext) -> Result<Option<MiningOutpostState>, String> {
@@ -121,7 +143,7 @@ impl Scout {
         } else {
             info!("Completed scouting of room - transitioning to cleanup");
 
-            Ok(Some(MiningOutpostState::cleanup(self.scout_mission.clone(), None.into(), None.into())))
+            Ok(Some(MiningOutpostState::cleanup(self.scout_mission.clone(), None.into(), None.into(), None.into())))
         }
     }
 
@@ -132,33 +154,15 @@ impl Scout {
     
         Ok(needs_scouting)
     }
-
-    fn complete(&mut self, system_data: &mut MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {
-        self.scout_mission.take().map(|e| system_data.mission_requests.abort(e));
-    }
 }
 
 impl Cleanup {
-    fn get_children(&self) -> Vec<Entity> {
-        [&self.scout_mission, &self.raid_mission, &self.dismantle_mission]
-            .iter()
-            .filter_map(|e| e.as_ref())
-            .cloned()
-            .collect()
+    fn get_children_internal(&self) -> [&Option<Entity>; 4] {
+        [&self.scout_mission, &self.raid_mission, &self.dismantle_mission, &self.defend_mission]
     }
 
-    fn child_complete(&mut self, child: Entity) {
-        if self.scout_mission.map(|e| e == child).unwrap_or(false) {
-            self.scout_mission.take();
-        }
-
-        if self.raid_mission.map(|e| e == child).unwrap_or(false) {
-            self.raid_mission.take();
-        }
-
-        if self.dismantle_mission.map(|e| e == child).unwrap_or(false) {
-            self.dismantle_mission.take();
-        }
+    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 4] {
+        [&mut self.scout_mission, &mut self.raid_mission, &mut self.dismantle_mission, &mut self.defend_mission]
     }
 
     fn tick(&mut self, state_context: &mut MiningOutpostMissionContext, tick_context: &mut MissionTickContext) -> Result<Option<MiningOutpostState>, String> {
@@ -169,13 +173,14 @@ impl Cleanup {
         self.tick_scouting(state_context, tick_context)?;
         self.tick_raiding(state_context, tick_context)?;
         self.tick_dismantling(state_context, tick_context)?;
+        self.tick_defend(state_context, tick_context)?;
 
         if self.raid_mission.is_none() && self.dismantle_mission.is_none() {
             info!("No active raiding or dismantling - transitioning to mining");
             
             self.scout_mission.take().map(|e| tick_context.system_data.mission_requests.abort(e));
             
-            Ok(Some(MiningOutpostState::mine(None.into(), None.into())))
+            Ok(Some(MiningOutpostState::mine(None.into(), None.into(), self.defend_mission.clone())))
         } else {
             Ok(None)
         }
@@ -307,30 +312,35 @@ impl Cleanup {
         Ok(None)
     }
 
-    fn complete(&mut self, system_data: &mut MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {
-        self.scout_mission.take().map(|e| system_data.mission_requests.abort(e));
-        self.raid_mission.take().map(|e| system_data.mission_requests.abort(e));
-        self.dismantle_mission.take().map(|e| system_data.mission_requests.abort(e));
+    fn tick_defend(&mut self, state_context: &mut MiningOutpostMissionContext, tick_context: &mut MissionTickContext) -> Result<(), String> {
+        let has_defend = self.defend_mission.map(|e| tick_context.system_data.entities.is_alive(e)).unwrap_or(false);
+
+        if !has_defend {
+            let outpost_room_data = tick_context.system_data.room_data.get_mut(state_context.outpost_room_data).ok_or("Expected outpost room data")?;
+
+            let mission_entity = DefendMission::build(
+                tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
+                Some(OperationOrMissionEntity::Mission(tick_context.runtime_data.entity)),
+                state_context.outpost_room_data,
+                state_context.home_room_data
+            ).build();
+
+            outpost_room_data.add_mission(mission_entity);
+
+            self.defend_mission = Some(mission_entity).into();
+        }
+
+        Ok(())
     }
 }
 
 impl Mine {
-    fn get_children(&self) -> Vec<Entity> {
+    fn get_children_internal(&self) -> [&Option<Entity>; 2] {
         [&self.remote_mine_mission, &self.reserve_mission]
-            .iter()
-            .filter_map(|e| e.as_ref())
-            .cloned()
-            .collect()
     }
 
-    fn child_complete(&mut self, child: Entity) {
-        if self.remote_mine_mission.map(|e| e == child).unwrap_or(false) {
-            self.remote_mine_mission.take();
-        }
-
-        if self.reserve_mission.map(|e| e == child).unwrap_or(false) {
-            self.reserve_mission.take();
-        }
+    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 2] {
+        [&mut self.remote_mine_mission, &mut self.reserve_mission]
     }
 
     fn tick(&mut self, state_context: &mut MiningOutpostMissionContext, tick_context: &mut MissionTickContext) -> Result<Option<MiningOutpostState>, String> {
@@ -372,11 +382,24 @@ impl Mine {
             self.reserve_mission = Some(mission_entity).into();
         }
 
-        Ok(None)
-    }
+        let has_defend = self.defend_mission.map(|e| tick_context.system_data.entities.is_alive(e)).unwrap_or(false);
 
-    fn complete(&mut self, system_data: &mut MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {
-        self.remote_mine_mission.take().map(|e| system_data.mission_requests.abort(e));
+        if !has_defend {
+            let outpost_room_data = tick_context.system_data.room_data.get_mut(state_context.outpost_room_data).ok_or("Expected outpost room data")?;
+
+            let mission_entity = DefendMission::build(
+                tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
+                Some(OperationOrMissionEntity::Mission(tick_context.runtime_data.entity)),
+                state_context.outpost_room_data,
+                state_context.home_room_data
+            ).build();
+
+            outpost_room_data.add_mission(mission_entity);
+
+            self.defend_mission = Some(mission_entity).into();
+        }
+
+        Ok(None)
     }
 }
 
