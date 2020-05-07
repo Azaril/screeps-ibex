@@ -21,6 +21,7 @@ pub enum MissionData {
     Raid(super::raid::RaidMission),
     Dismantle(super::dismantle::DismantleMission),
     Colony(super::colony::ColonyMission),
+    Defend(super::defend::DefendMission),
 }
 
 impl MissionData {
@@ -42,6 +43,7 @@ impl MissionData {
             MissionData::Raid(ref mut data) => data,
             MissionData::Dismantle(ref mut data) => data,
             MissionData::Colony(ref mut data) => data,
+            MissionData::Defend(ref mut data) => data,
         }
     }
 }

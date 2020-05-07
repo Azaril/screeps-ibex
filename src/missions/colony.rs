@@ -45,36 +45,42 @@ machine!(
         }
 
         * => fn visualize(&self, _system_data: &MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {}
-
-        _ => fn get_children(&self) -> Vec<Entity>;
-
-        _ => fn child_complete(&mut self, child: Entity);
+        
+        * => fn get_children(&self) -> Vec<Entity> {
+            self.get_children_internal()
+                .iter()
+                .filter_map(|e| e.as_ref())
+                .cloned()
+                .collect()
+        }
+    
+        * => fn child_complete(&mut self, child: Entity) {
+            for mission_child in self.get_children_internal_mut().iter_mut() {
+                if mission_child.map(|e| e == child).unwrap_or(false) {
+                    mission_child.take();
+                }
+            }
+        }
         
         * => fn gather_data(&self, _system_data: &MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {}
         
         _ => fn tick(&mut self, state_context: &mut ColonyMissionContext, tick_context: &mut MissionTickContext) -> Result<Option<ColonyState>, String>;
 
-        _ => fn complete(&mut self, _system_data: &mut MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData);
+        * => fn complete(&mut self, system_data: &mut MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {
+            for mission_child in self.get_children_internal_mut().iter_mut() {
+                mission_child.take().map(|e| system_data.mission_requests.abort(e));
+            }
+        }
     }
 );
 
 impl Incubate {
-    fn get_children(&self) -> Vec<Entity> {
+    fn get_children_internal(&self) -> [&Option<Entity>; 7] {
         [&self.construction_mission, &self.local_supply_mission, &self.local_build_mission, &self.haul_mission, &self.terminal_mission, &self.tower_mission, &self.upgrade_mission]
-            .iter()
-            .filter_map(|e| e.as_ref())
-            .cloned()
-            .collect()
     }
 
-    fn child_complete(&mut self, child: Entity) {
-        let mut all_children = [&mut self.construction_mission, &mut self.local_supply_mission, &mut self.local_build_mission, &mut self.haul_mission, &mut self.terminal_mission, &mut self.tower_mission, &mut self.upgrade_mission];
-
-        for mission_child in all_children.iter_mut() {
-            if mission_child.map(|e| e == child).unwrap_or(false) {
-                mission_child.take();
-            }
-        }
+    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 7] {
+        [&mut self.construction_mission, &mut self.local_supply_mission, &mut self.local_build_mission, &mut self.haul_mission, &mut self.terminal_mission, &mut self.tower_mission, &mut self.upgrade_mission]
     }
 
     fn tick(&mut self, state_context: &mut ColonyMissionContext, tick_context: &mut MissionTickContext) -> Result<Option<ColonyState>, String> {
@@ -170,16 +176,6 @@ impl Incubate {
         }
 
         Ok(None)
-    }
-
-    fn complete(&mut self, system_data: &mut MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {
-        self.construction_mission.take().map(|e| system_data.mission_requests.abort(e));
-        self.local_supply_mission.take().map(|e| system_data.mission_requests.abort(e));
-        self.local_build_mission.take().map(|e| system_data.mission_requests.abort(e));
-        self.haul_mission.take().map(|e| system_data.mission_requests.abort(e));
-        self.terminal_mission.take().map(|e| system_data.mission_requests.abort(e));
-        self.tower_mission.take().map(|e| system_data.mission_requests.abort(e));
-        self.upgrade_mission.take().map(|e| system_data.mission_requests.abort(e));
     }
 }
 

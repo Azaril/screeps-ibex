@@ -17,3 +17,4 @@ pub mod context;
 pub mod raid;
 pub mod dismantle;
 pub mod colony;
+pub mod defend;
