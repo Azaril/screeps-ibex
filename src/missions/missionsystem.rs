@@ -10,6 +10,7 @@ use crate::transfer::ordersystem::*;
 use crate::transfer::transfersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
+use crate::room::visibilitysystem::*;
 use log::*;
 use specs::prelude::*;
 
@@ -29,6 +30,7 @@ pub struct MissionSystemData<'a> {
     ui: Option<Write<'a, UISystem>>,
     transfer_queue: Write<'a, TransferQueue>,
     order_queue: Write<'a, OrderQueue>,
+    visibility: Write<'a, VisibilityQueue>,
 }
 
 pub struct MissionExecutionSystemData<'a, 'b> {
@@ -46,6 +48,7 @@ pub struct MissionExecutionSystemData<'a, 'b> {
     pub ui: Option<&'b mut UISystem>,
     pub transfer_queue: &'b mut TransferQueue,
     pub order_queue: &'b mut OrderQueue,    
+    pub visibility: &'b mut Write<'a, VisibilityQueue>,
 }
 
 pub struct MissionRequests {
@@ -235,6 +238,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
             ui: data.ui.as_deref_mut(),
             transfer_queue: &mut data.transfer_queue,
             order_queue: &mut data.order_queue,
+            visibility: &mut data.visibility,
         };
 
         for (entity, mission_data) in (&data.entities, &mut data.missions).join() {
@@ -299,6 +303,7 @@ impl<'a> System<'a> for RunMissionSystem {
             ui: data.ui.as_deref_mut(),
             transfer_queue: &mut data.transfer_queue,
             order_queue: &mut data.order_queue,
+            visibility: &mut data.visibility,
         };
 
         for (entity, mission_data) in (&data.entities, &mut data.missions).join() {
