@@ -4,12 +4,12 @@ use super::context::*;
 use crate::ownership::*;
 use crate::serialize::*;
 use crate::jobs::utility::dismantle::*;
-use super::scout::*;
 use super::raid::*;
 use super::remotemine::*;
 use super::reserve::*;
 use super::dismantle::*;
 use super::defend::*;
+use crate::room::visibilitysystem::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
@@ -27,10 +27,9 @@ machine!(
     #[derive(Clone, ConvertSaveload)]
     enum MiningOutpostState {
         Scout { 
-            scout_mission: EntityOption<Entity> 
+            phantom: std::marker::PhantomData<Entity>
         },
         Cleanup { 
-            scout_mission: EntityOption<Entity>, 
             raid_mission: EntityOption<Entity>, 
             dismantle_mission: EntityOption<Entity>, 
             defend_mission: EntityOption<Entity>
@@ -98,12 +97,12 @@ fn can_run_mission(state_context: &mut MiningOutpostMissionContext, tick_context
 }
 
 impl Scout {
-    fn get_children_internal(&self) -> [&Option<Entity>; 1] {
-        [&self.scout_mission]
+    fn get_children_internal(&self) -> [&Option<Entity>; 0] {
+        []
     }
 
-    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 1] {
-        [&mut self.scout_mission]
+    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 0] {
+        []
     }
 
     fn tick(&mut self, state_context: &mut MiningOutpostMissionContext, tick_context: &mut MissionTickContext) -> Result<Option<MiningOutpostState>, String> {
@@ -119,31 +118,17 @@ impl Scout {
             }
         }
         
-        let needs_scout = self.requires_scouting(state_context, tick_context)?;
-
-        if needs_scout {
-            let has_scout = self.scout_mission.map(|e| tick_context.system_data.entities.is_alive(e)).unwrap_or(false);
-
-            if !has_scout {
-                let outpost_room_data = tick_context.system_data.room_data.get_mut(state_context.outpost_room_data).ok_or("Expected outpost room data")?;
-
-                let mission_entity = ScoutMission::build(
-                    tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                    Some(OperationOrMissionEntity::Mission(tick_context.runtime_data.entity)),
-                    state_context.outpost_room_data,
-                    state_context.home_room_data,
-                ).build();
-
-                outpost_room_data.add_mission(mission_entity);
-
-                self.scout_mission = Some(mission_entity).into();
-            }
+        if outpost_room_data.get_dynamic_visibility_data().map(|v| !v.visible()).unwrap_or(true) {
+            tick_context
+                .system_data
+                .visibility
+                .request(VisibilityRequest::new(outpost_room_data.name, VISIBILITY_PRIORITY_MEDIUM));
 
             Ok(None)
         } else {
             info!("Completed scouting of room - transitioning to cleanup");
 
-            Ok(Some(MiningOutpostState::cleanup(self.scout_mission.clone(), None.into(), None.into(), None.into())))
+            Ok(Some(MiningOutpostState::cleanup(None.into(), None.into(), None.into())))
         }
     }
 
@@ -157,12 +142,12 @@ impl Scout {
 }
 
 impl Cleanup {
-    fn get_children_internal(&self) -> [&Option<Entity>; 4] {
-        [&self.scout_mission, &self.raid_mission, &self.dismantle_mission, &self.defend_mission]
+    fn get_children_internal(&self) -> [&Option<Entity>; 3] {
+        [&self.raid_mission, &self.dismantle_mission, &self.defend_mission]
     }
 
-    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 4] {
-        [&mut self.scout_mission, &mut self.raid_mission, &mut self.dismantle_mission, &mut self.defend_mission]
+    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 3] {
+        [&mut self.raid_mission, &mut self.dismantle_mission, &mut self.defend_mission]
     }
 
     fn tick(&mut self, state_context: &mut MiningOutpostMissionContext, tick_context: &mut MissionTickContext) -> Result<Option<MiningOutpostState>, String> {
@@ -178,8 +163,6 @@ impl Cleanup {
         if self.raid_mission.is_none() && self.dismantle_mission.is_none() {
             info!("No active raiding or dismantling - transitioning to mining");
             
-            self.scout_mission.take().map(|e| tick_context.system_data.mission_requests.abort(e));
-            
             Ok(Some(MiningOutpostState::mine(None.into(), None.into(), self.defend_mission.clone())))
         } else {
             Ok(None)
@@ -189,29 +172,13 @@ impl Cleanup {
     fn tick_scouting(&mut self, state_context: &mut MiningOutpostMissionContext, tick_context: &mut MissionTickContext) -> Result<(), String> {
         let needs_scout = self.requires_scouting(state_context, tick_context)?;
 
-        if let Some(scout_mission_entity) = *self.scout_mission {
-            tick_context.system_data.updater.exec_mut(move |world| {
-                if let Some(MissionData::Scout(mission_data)) = world.write_storage::<MissionData>().get_mut(scout_mission_entity) {
-                    if needs_scout {
-                        mission_data.enable_spawning();
-                    } else {
-                        mission_data.disable_spawning();
-                    }
-                }
-            })   
-        } else if needs_scout {
-            let outpost_room_data = tick_context.system_data.room_data.get_mut(state_context.outpost_room_data).ok_or("Expected outpost room data")?;
+        if needs_scout {
+            let outpost_room_data = tick_context.system_data.room_data.get(state_context.outpost_room_data).ok_or("Expected outpost room")?;
 
-            let mission_entity = ScoutMission::build(
-                tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                Some(OperationOrMissionEntity::Mission(tick_context.runtime_data.entity)),
-                state_context.outpost_room_data,
-                state_context.home_room_data,
-            ).build();
-
-            outpost_room_data.add_mission(mission_entity);
-
-            self.scout_mission = Some(mission_entity).into();
+            tick_context
+                .system_data
+                .visibility
+                .request(VisibilityRequest::new(outpost_room_data.name, VISIBILITY_PRIORITY_MEDIUM));
         }
 
         Ok(())
@@ -428,7 +395,7 @@ impl MiningOutpostMission {
                 home_room_data,
                 outpost_room_data
             },
-            state: MiningOutpostState::scout(None.into())
+            state: MiningOutpostState::scout(std::marker::PhantomData)
         }
     }
 }
