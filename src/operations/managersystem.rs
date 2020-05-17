@@ -1,7 +1,7 @@
 use super::claim::*;
+use super::colony::*;
 use super::data::*;
 use super::miningoutpost::*;
-use super::colony::*;
 use log::*;
 use specs::*;
 

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 
-#[derive(Clone, ConvertSaveload)]
+#[derive(ConvertSaveload)]
 pub struct ConstructionMission {
     owner: EntityOption<OperationOrMissionEntity>,
     room_data: Entity,
@@ -22,7 +22,9 @@ impl ConstructionMission {
     {
         let mission = ConstructionMission::new(owner, room_data);
 
-        builder.with(MissionData::Construction(mission)).marked::<SerializeMarker>()
+        builder
+            .with(MissionData::Construction(EntityRefCell::new(mission)))
+            .marked::<SerializeMarker>()
     }
 
     pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity) -> ConstructionMission {
@@ -49,15 +51,11 @@ impl Mission for ConstructionMission {
         self.room_data
     }
 
-    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         "Construction".to_string()
     }
 
-    fn run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        _runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<MissionResult, String> {
+    fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 

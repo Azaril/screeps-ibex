@@ -65,9 +65,9 @@ machine!(
         }
 
         Idle, Harvest, FinishedDelivery, Build, FinishedBuild, Repair, FinishedRepair, Upgrade, MoveToRoom, Wait => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
-        
+
         Idle, Harvest, FinishedDelivery, Build, FinishedBuild, Repair, FinishedRepair, Upgrade, MoveToRoom, Wait => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
-        
+
         _ => fn tick(&mut self, state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState>;
     }
 );
@@ -83,7 +83,7 @@ impl Idle {
         if in_delivery_room && state_context.allow_haul {
             let transfer_queue_data = TransferQueueGeneratorData {
                 cause: "Harvest Idle",
-                room_data: &*tick_context.system_data.room_data
+                room_data: &*tick_context.system_data.room_data,
             };
 
             if let Some(state) = get_new_pickup_and_delivery_full_capacity_state(
@@ -108,7 +108,7 @@ impl Idle {
             if state_context.allow_haul {
                 let transfer_queue_data = TransferQueueGeneratorData {
                     cause: "Harvest Idle",
-                    room_data: &*tick_context.system_data.room_data
+                    room_data: &*tick_context.system_data.room_data,
                 };
 
                 if let Some(state) = get_new_pickup_and_delivery_full_capacity_state(
@@ -127,7 +127,7 @@ impl Idle {
 
             let transfer_queue_data = TransferQueueGeneratorData {
                 cause: "Harvest Idle",
-                room_data: &*tick_context.system_data.room_data
+                room_data: &*tick_context.system_data.room_data,
             };
 
             get_new_delivery_current_resources_state(
@@ -226,7 +226,7 @@ impl FinishedDelivery {
             .filter_map(|priority| {
                 let transfer_queue_data = TransferQueueGeneratorData {
                     cause: "Harvest Finished Delivery",
-                    room_data: &*tick_context.system_data.room_data
+                    room_data: &*tick_context.system_data.room_data,
                 };
 
                 get_new_delivery_current_resources_state(

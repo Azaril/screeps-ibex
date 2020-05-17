@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 
-#[derive(Clone, ConvertSaveload)]
+#[derive(ConvertSaveload)]
 pub struct ClaimMission {
     owner: EntityOption<OperationOrMissionEntity>,
     room_data: Entity,
@@ -28,7 +28,9 @@ impl ClaimMission {
     {
         let mission = ClaimMission::new(owner, room_data, home_room_data);
 
-        builder.with(MissionData::Claim(mission)).marked::<SerializeMarker>()
+        builder
+            .with(MissionData::Claim(EntityRefCell::new(mission)))
+            .marked::<SerializeMarker>()
     }
 
     pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity, home_room_data: Entity) -> ClaimMission {
@@ -55,7 +57,7 @@ impl ClaimMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::Claim(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.claimers.push(creep_entity);
+                    mission_data.get_mut().claimers.push(creep_entity);
                 }
             });
         })
@@ -78,15 +80,11 @@ impl Mission for ClaimMission {
         self.room_data
     }
 
-    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!("Claim - Claimers: {}", self.claimers.len())
     }
 
-    fn pre_run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        _runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<(), String> {
+    fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         //
         // Cleanup claimers that no longer exist.
         //
@@ -97,11 +95,7 @@ impl Mission for ClaimMission {
         Ok(())
     }
 
-    fn run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<MissionResult, String> {
+    fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility data")?;
 
@@ -144,7 +138,7 @@ impl Mission for ClaimMission {
                     "Claimer".to_string(),
                     &body,
                     SPAWN_PRIORITY_MEDIUM,
-                    Self::create_handle_claimer_spawn(runtime_data.entity, *controller),
+                    Self::create_handle_claimer_spawn(mission_entity, *controller),
                 );
 
                 system_data.spawn_queue.request(home_room_data.name, spawn_request);

@@ -83,7 +83,7 @@ impl RoomDisposition {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RoomSign {
     user: RoomDisposition,
-    message: String
+    message: String,
 }
 
 impl RoomSign {
@@ -224,11 +224,9 @@ impl RoomData {
         let controller_reservation_name = controller.as_ref().and_then(|c| c.reservation()).map(|r| r.username);
         let controller_reservation_disposition = Self::name_option_to_disposition(controller_reservation_name);
 
-        let sign = controller.as_ref().and_then(|c| c.sign()).map(|s| {
-            RoomSign {
-                user: Self::name_to_disposition(s.username),
-                message: s.text
-            }
+        let sign = controller.as_ref().and_then(|c| c.sign()).map(|s| RoomSign {
+            user: Self::name_to_disposition(s.username),
+            message: s.text,
         });
 
         //TODO: This is expensive - can really just be calculated for room number. Not possible to calculate given x/y coord is private.
@@ -245,7 +243,7 @@ impl RoomData {
             owner: controller_owner_disposition,
             reservation: controller_reservation_disposition,
             source_keeper,
-            sign
+            sign,
         }
     }
 

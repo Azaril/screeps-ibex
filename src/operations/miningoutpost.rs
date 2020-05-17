@@ -3,6 +3,7 @@ use super::operationsystem::*;
 use crate::missions::data::*;
 use crate::missions::miningoutpost::*;
 use crate::ownership::*;
+use crate::room::gather::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use log::*;
@@ -10,7 +11,6 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use crate::room::gather::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct MiningOutpostOperation {
@@ -35,23 +35,20 @@ impl MiningOutpostOperation {
     fn gather_candidate_room_data(gather_system_data: &GatherSystemData, room_name: RoomName) -> Option<CandidateRoomData> {
         let search_room_entity = gather_system_data.mapping.get_room(&room_name)?;
         let search_room_data = gather_system_data.room_data.get(search_room_entity)?;
-        
+
         let static_visibility_data = search_room_data.get_static_visibility_data()?;
         let dynamic_visibility_data = search_room_data.get_dynamic_visibility_data()?;
 
         let has_sources = !static_visibility_data.sources().is_empty();
 
-        let visibility_timeout = if has_sources {
-            3000
-        } else {
-            10000
-        };
+        let visibility_timeout = if has_sources { 3000 } else { 10000 };
 
         if !dynamic_visibility_data.updated_within(visibility_timeout) {
             return None;
         }
 
-        let can_reserve = dynamic_visibility_data.owner().neutral() && (dynamic_visibility_data.reservation().neutral() || dynamic_visibility_data.reservation().mine());
+        let can_reserve = dynamic_visibility_data.owner().neutral()
+            && (dynamic_visibility_data.reservation().neutral() || dynamic_visibility_data.reservation().mine());
         let hostile = dynamic_visibility_data.owner().hostile() || dynamic_visibility_data.source_keeper();
 
         let viable = has_sources && can_reserve;
@@ -95,7 +92,7 @@ impl Operation for MiningOutpostOperation {
             mapping: system_data.mapping,
             room_data: system_data.room_data,
         };
-        
+
         let gathered_data = gather_candidate_rooms(&gather_system_data, 1, Self::gather_candidate_room_data);
 
         for unknown_room in gathered_data.unknown_rooms().iter() {

@@ -9,17 +9,17 @@ use crate::remoteobjectid::*;
 use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
-use crate::transfer::transfersystem::*;
 use crate::store::*;
+use crate::transfer::transfersystem::*;
 use itertools::*;
 use screeps::*;
+use screeps_cache::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use std::collections::HashMap;
-use screeps_cache::*;
-use std::rc::*;
 use std::cell::*;
+use std::collections::HashMap;
+use std::rc::*;
 
 #[derive(ConvertSaveload)]
 pub struct LocalSupplyMission {
@@ -46,7 +46,7 @@ struct StructureData {
     containers: Vec<RemoteObjectId<StructureContainer>>,
     spawns: Vec<RemoteObjectId<StructureSpawn>>,
     extensions: Vec<RemoteObjectId<StructureExtension>>,
-    storage: Vec<RemoteObjectId<StructureStorage>>
+    storage: Vec<RemoteObjectId<StructureStorage>>,
 }
 
 #[derive(Clone, ConvertSaveload)]
@@ -65,7 +65,9 @@ impl LocalSupplyMission {
     {
         let mission = LocalSupplyMission::new(owner, room_data);
 
-        builder.with(MissionData::LocalSupply(mission)).marked::<SerializeMarker>()
+        builder
+            .with(MissionData::LocalSupply(EntityRefCell::new(mission)))
+            .marked::<SerializeMarker>()
     }
 
     pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity) -> LocalSupplyMission {
@@ -97,8 +99,8 @@ impl LocalSupplyMission {
 
                 if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
                     match target {
-                        StaticMineTarget::Source(_) => mission_data.source_container_miners.push(creep_entity),
-                        StaticMineTarget::Mineral(_, _) => mission_data.mineral_container_miners.push(creep_entity),
+                        StaticMineTarget::Source(_) => mission_data.get_mut().source_container_miners.push(creep_entity),
+                        StaticMineTarget::Mineral(_, _) => mission_data.get_mut().mineral_container_miners.push(creep_entity),
                     }
                 }
             });
@@ -122,7 +124,7 @@ impl LocalSupplyMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.source_link_miners.push(creep_entity);
+                    mission_data.get_mut().source_link_miners.push(creep_entity);
                 }
             });
         })
@@ -144,7 +146,7 @@ impl LocalSupplyMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.harvesters.push(creep_entity);
+                    mission_data.get_mut().harvesters.push(creep_entity);
                 }
             });
         })
@@ -289,7 +291,7 @@ impl LocalSupplyMission {
             containers,
             spawns: spawns.iter().map(|s| s.remote_id()).collect(),
             extensions: extensions.iter().map(|e| e.remote_id()).collect(),
-            storage: storage.iter().map(|s| s.remote_id()).collect()
+            storage: storage.iter().map(|s| s.remote_id()).collect(),
         }
     }
 
@@ -371,7 +373,7 @@ impl LocalSupplyMission {
         let mut structure_data = self.structure_data.borrow_mut();
         let structure_data = structure_data.access(
             |d| game::time() - d.last_updated >= 10,
-            || Self::create_structure_data(&static_visibility_data, &room)
+            || Self::create_structure_data(&static_visibility_data, &room),
         );
         let structure_data = structure_data.get();
 
@@ -393,7 +395,7 @@ impl LocalSupplyMission {
 
         let transfer_queue_data = TransferQueueGeneratorData {
             cause: "Link Transfer",
-            room_data: &*system_data.room_data
+            room_data: &*system_data.room_data,
         };
 
         for link_id in all_links {
@@ -441,7 +443,7 @@ impl LocalSupplyMission {
     fn spawn_creeps(
         &mut self,
         system_data: &mut MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
+        mission_entity: Entity,
         creep_data: &CreepData,
     ) -> Result<(), String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
@@ -457,7 +459,7 @@ impl LocalSupplyMission {
         let mut structure_data = self.structure_data.borrow_mut();
         let structure_data = structure_data.access(
             |d| game::time() - d.last_updated >= 10,
-            || Self::create_structure_data(&static_visibility_data, &room)
+            || Self::create_structure_data(&static_visibility_data, &room),
         );
         let structure_data = structure_data.get();
 
@@ -558,7 +560,7 @@ impl LocalSupplyMission {
                         format!("Harvester - Source: {}", source_id.id()),
                         &body,
                         priority,
-                        Self::create_handle_harvester_spawn(runtime_data.entity, *source_id, self.room_data),
+                        Self::create_handle_harvester_spawn(mission_entity, *source_id, self.room_data),
                     );
 
                     system_data.spawn_queue.request(room_data.name, spawn_request);
@@ -628,7 +630,7 @@ impl LocalSupplyMission {
                                 format!("Link Miner - Source: {}", source_id.id()),
                                 &body,
                                 SPAWN_PRIORITY_HIGH,
-                                Self::create_handle_link_miner_spawn(runtime_data.entity, *source_id, *link, target_container.cloned()),
+                                Self::create_handle_link_miner_spawn(mission_entity, *source_id, *link, target_container.cloned()),
                             );
 
                             system_data.spawn_queue.request(room_data.name, spawn_request);
@@ -671,11 +673,7 @@ impl LocalSupplyMission {
                                 format!("Container Miner - Source: {}", source_id.id()),
                                 &body,
                                 SPAWN_PRIORITY_HIGH,
-                                Self::create_handle_container_miner_spawn(
-                                    runtime_data.entity,
-                                    StaticMineTarget::Source(*source_id),
-                                    *container,
-                                ),
+                                Self::create_handle_container_miner_spawn(mission_entity, StaticMineTarget::Source(*source_id), *container),
                             );
 
                             system_data.spawn_queue.request(room_data.name, spawn_request);
@@ -742,7 +740,7 @@ impl LocalSupplyMission {
                         &body,
                         SPAWN_PRIORITY_LOW,
                         Self::create_handle_container_miner_spawn(
-                            runtime_data.entity,
+                            mission_entity,
                             StaticMineTarget::Mineral(*mineral_id, *extractor_id),
                             *container,
                         ),
@@ -1127,19 +1125,19 @@ impl LocalSupplyMission {
             let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
             let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
             let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
-    
+
             let mut structure_data = structure_data.borrow_mut();
             let structure_data = structure_data.access(
                 |d| game::time() - d.last_updated >= 10,
-                || Self::create_structure_data(&static_visibility_data, &room)
+                || Self::create_structure_data(&static_visibility_data, &room),
             );
             let structure_data = structure_data.get();
-    
+
             Self::request_transfer_for_spawns(transfer, &structure_data.spawns);
             Self::request_transfer_for_extension(transfer, &structure_data.extensions);
             Self::request_transfer_for_storage(transfer, &structure_data.storage);
             Self::request_transfer_for_containers(transfer, &structure_data);
-            
+
             Self::request_transfer_for_ruins(transfer, &room);
             Self::request_transfer_for_tombstones(transfer, &room);
             Self::request_transfer_for_dropped_resources(transfer, &room);
@@ -1153,18 +1151,18 @@ impl LocalSupplyMission {
             let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
             let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
             let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
-    
+
             let mut structure_data = structure_data.borrow_mut();
             let structure_data = structure_data.access(
                 |d| game::time() - d.last_updated >= 10,
-                || Self::create_structure_data(&static_visibility_data, &room)
+                || Self::create_structure_data(&static_visibility_data, &room),
             );
             let structure_data = structure_data.get();
-    
+
             Self::request_transfer_for_source_links(transfer, &structure_data);
             Self::request_transfer_for_storage_links(transfer, &structure_data);
             Self::request_transfer_for_controller_links(transfer, &structure_data);
-    
+
             Ok(())
         })
     }
@@ -1186,7 +1184,7 @@ impl Mission for LocalSupplyMission {
         self.room_data
     }
 
-    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!(
             "Local Supply - Miners: {} Harvesters: {} Minerals: {}",
             self.source_container_miners.len() + self.source_link_miners.len(),
@@ -1195,11 +1193,7 @@ impl Mission for LocalSupplyMission {
         )
     }
 
-    fn pre_run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        _runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<(), String> {
+    fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         //
         // Cleanup creeps that no longer exist.
         //
@@ -1215,20 +1209,24 @@ impl Mission for LocalSupplyMission {
 
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
-        system_data.transfer_queue.register_generator(room_data.name, TransferTypeFlags::HAUL, Self::transfer_request_haul_generator(self.room_data, self.structure_data.clone()));        
-        system_data.transfer_queue.register_generator(room_data.name, TransferTypeFlags::LINK, Self::transfer_request_link_generator(self.room_data, self.structure_data.clone()));        
+        system_data.transfer_queue.register_generator(
+            room_data.name,
+            TransferTypeFlags::HAUL,
+            Self::transfer_request_haul_generator(self.room_data, self.structure_data.clone()),
+        );
+        system_data.transfer_queue.register_generator(
+            room_data.name,
+            TransferTypeFlags::LINK,
+            Self::transfer_request_link_generator(self.room_data, self.structure_data.clone()),
+        );
 
         Ok(())
     }
 
-    fn run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<MissionResult, String> {
+    fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
         let creep_data = self.create_creep_data(system_data)?;
 
-        self.spawn_creeps(system_data, runtime_data, &creep_data)?;
+        self.spawn_creeps(system_data, mission_entity, &creep_data)?;
 
         self.link_transfer(system_data)?;
 

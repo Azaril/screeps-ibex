@@ -17,7 +17,7 @@ use specs::*;
 pub struct DismantleJobContext {
     dismantle_room: Entity,
     delivery_room: Entity,
-    ignore_storage: bool
+    ignore_storage: bool,
 }
 
 machine!(
@@ -55,9 +55,9 @@ machine!(
         }
 
         Idle, Dismantle, FinishedDismantle, FinishedDelivery, MoveToRoom, Wait => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
-        
+
         Idle, Dismantle, FinishedDismantle, FinishedDelivery, MoveToRoom, Wait => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
-        
+
         _ => fn tick(&mut self, state_context: &mut DismantleJobContext, tick_context: &mut JobTickContext) -> Option<DismantleState>;
     }
 );
@@ -66,20 +66,22 @@ impl Idle {
     fn tick(&mut self, state_context: &mut DismantleJobContext, tick_context: &mut JobTickContext) -> Option<DismantleState> {
         let dismantle_room_data = tick_context.system_data.room_data.get(state_context.dismantle_room)?;
         let delivery_room_data = tick_context.system_data.room_data.get(state_context.delivery_room)?;
-        
+
         let creep = tick_context.runtime_data.owner;
 
         let in_dismantle_room = creep.room().map(|r| r.name() == dismantle_room_data.name).unwrap_or(false);
 
         if in_dismantle_room {
-            if let Some(state) = get_new_dismantle_state(creep, &dismantle_room_data, state_context.ignore_storage, DismantleState::dismantle) {
+            if let Some(state) =
+                get_new_dismantle_state(creep, &dismantle_room_data, state_context.ignore_storage, DismantleState::dismantle)
+            {
                 return Some(state);
             }
         }
 
         let transfer_queue_data = TransferQueueGeneratorData {
             cause: "Dismantle Idle",
-            room_data: &*tick_context.system_data.room_data
+            room_data: &*tick_context.system_data.room_data,
         };
 
         get_new_delivery_current_resources_state(
@@ -89,7 +91,7 @@ impl Idle {
             TransferPriorityFlags::ALL,
             TransferTypeFlags::HAUL,
             tick_context.runtime_data.transfer_queue,
-            DismantleState::delivery
+            DismantleState::delivery,
         )
         .or_else(|| {
             if creep.store_used_capacity(None) == 0 {
@@ -112,8 +114,13 @@ impl FinishedDismantle {
     fn tick(&mut self, state_context: &mut DismantleJobContext, tick_context: &mut JobTickContext) -> Option<DismantleState> {
         let dismantle_room_data = tick_context.system_data.room_data.get(state_context.dismantle_room)?;
 
-        get_new_dismantle_state(tick_context.runtime_data.owner, &dismantle_room_data, state_context.ignore_storage, DismantleState::dismantle)
-            .or_else(|| Some(DismantleState::idle()))
+        get_new_dismantle_state(
+            tick_context.runtime_data.owner,
+            &dismantle_room_data,
+            state_context.ignore_storage,
+            DismantleState::dismantle,
+        )
+        .or_else(|| Some(DismantleState::idle()))
     }
 }
 
@@ -144,7 +151,7 @@ impl FinishedDelivery {
             .filter_map(|priority| {
                 let transfer_queue_data = TransferQueueGeneratorData {
                     cause: "Dismantle Finished Delivery",
-                    room_data: &*tick_context.system_data.room_data
+                    room_data: &*tick_context.system_data.room_data,
                 };
 
                 get_new_delivery_current_resources_state(
@@ -187,7 +194,7 @@ impl DismantleJob {
             context: DismantleJobContext {
                 dismantle_room,
                 delivery_room,
-                ignore_storage
+                ignore_storage,
             },
             state: DismantleState::idle(),
         }

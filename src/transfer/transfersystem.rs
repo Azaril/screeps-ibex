@@ -4,14 +4,14 @@ use crate::ui::*;
 use crate::visualize::*;
 use bitflags::*;
 use itertools::*;
+use log::*;
 use screeps::*;
 use serde::*;
-use specs::prelude::{Entity, Entities, LazyUpdate, Read, ResourceId, System, SystemData, World, Write, WriteStorage};
+use specs::prelude::{Entities, Entity, LazyUpdate, Read, ResourceId, System, SystemData, World, Write, WriteStorage};
+use std::borrow::*;
 use std::collections::hash_map::*;
 use std::collections::HashMap;
-use std::borrow::*;
 use std::collections::HashSet;
-use log::*;
 
 #[derive(Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Clone, Copy, Serialize, Deserialize)]
 #[repr(u8)]
@@ -276,7 +276,7 @@ impl TransferTarget {
 
 impl std::convert::TryFrom<&Structure> for TransferTarget {
     type Error = ();
-    
+
     fn try_from(val: &Structure) -> Result<TransferTarget, ()> {
         match val {
             Structure::Container(s) => Ok(s.into()),
@@ -290,7 +290,7 @@ impl std::convert::TryFrom<&Structure> for TransferTarget {
             Structure::Factory(s) => Ok(s.into()),
             Structure::Nuker(s) => Ok(s.into()),
             Structure::PowerSpawn(s) => Ok(s.into()),
-            _ => Err(())
+            _ => Err(()),
         }
     }
 }
@@ -1276,17 +1276,23 @@ pub trait TransferRequestSystem {
     fn register_delivery(&mut self, ticket: &TransferDepositTicket, delivery_type: TransferType);
 }
 
-pub struct TransferQueueGeneratorData<'a, 's, RD> where RD: std::ops::Deref<Target = specs::storage::MaskedStorage<RoomData>> {
+pub struct TransferQueueGeneratorData<'a, 's, RD>
+where
+    RD: std::ops::Deref<Target = specs::storage::MaskedStorage<RoomData>>,
+{
     //TODO: Make this private.
     pub cause: &'a str,
-    pub room_data: &'a specs::storage::Storage<'s, RoomData, RD>
+    pub room_data: &'a specs::storage::Storage<'s, RoomData, RD>,
 }
 
-impl<'a, 's, RD> TransferRequestSystemData for TransferQueueGeneratorData<'a, 's, RD> where RD: std::ops::Deref<Target = specs::storage::MaskedStorage<RoomData>> {
+impl<'a, 's, RD> TransferRequestSystemData for TransferQueueGeneratorData<'a, 's, RD>
+where
+    RD: std::ops::Deref<Target = specs::storage::MaskedStorage<RoomData>>,
+{
     fn get_cause(&self) -> &str {
         self.cause
     }
-    
+
     fn get_room_data(&self, entity: Entity) -> Option<&RoomData> {
         self.room_data.get(entity)
     }
@@ -1298,11 +1304,12 @@ pub trait TransferRequestSystemData {
     fn get_room_data(&self, entity: Entity) -> Option<&RoomData>;
 }
 
-pub type TransferQueueGenerator = Box<dyn Fn(&dyn TransferRequestSystemData, &mut dyn TransferRequestSystem, RoomName) -> Result<(), String>>;
+pub type TransferQueueGenerator =
+    Box<dyn Fn(&dyn TransferRequestSystemData, &mut dyn TransferRequestSystem, RoomName) -> Result<(), String>>;
 
 struct GeneratorEntry {
     transfer_types: TransferTypeFlags,
-    generator: TransferQueueGenerator
+    generator: TransferQueueGenerator,
 }
 
 #[derive(Default)]
@@ -1314,16 +1321,16 @@ struct LazyTransferQueueRooms {
 //TODO: Return a 'resolved' interface once the initial flush has happened. Right now the 'data' propagates to many objects.
 impl LazyTransferQueueRooms {
     fn register_generator(&mut self, room: RoomName, transfer_types: TransferTypeFlags, generator: TransferQueueGenerator) {
-        self.generators.entry(room).or_insert_with(Vec::new).push(GeneratorEntry {
-            transfer_types,
-            generator
-        });
+        self.generators
+            .entry(room)
+            .or_insert_with(Vec::new)
+            .push(GeneratorEntry { transfer_types, generator });
     }
 
     fn flush_generators(&mut self, data: &dyn TransferRequestSystemData, room: RoomName, transfer_types: TransferTypeFlags) {
         while let Some(entry) = self.get_next_generator(room, transfer_types) {
             match (entry.generator)(data, self, room) {
-                Ok(_) => {},
+                Ok(_) => {}
                 Err(err) => info!("Transfer information generator error: {}", err),
             }
         }
@@ -1339,7 +1346,12 @@ impl LazyTransferQueueRooms {
         None
     }
 
-    pub fn get_room(&mut self, data: &dyn TransferRequestSystemData, room: RoomName, transfer_types: TransferTypeFlags) -> &mut TransferQueueRoomData {
+    pub fn get_room(
+        &mut self,
+        data: &dyn TransferRequestSystemData,
+        room: RoomName,
+        transfer_types: TransferTypeFlags,
+    ) -> &mut TransferQueueRoomData {
         self.flush_generators(data, room, transfer_types);
 
         self.get_room_no_flush(room)
@@ -1349,7 +1361,12 @@ impl LazyTransferQueueRooms {
         self.rooms.entry(room).or_insert_with(TransferQueueRoomData::new)
     }
 
-    pub fn try_get_room(&mut self, data: &dyn TransferRequestSystemData, room: RoomName, transfer_types: TransferTypeFlags) -> Option<&TransferQueueRoomData> {
+    pub fn try_get_room(
+        &mut self,
+        data: &dyn TransferRequestSystemData,
+        room: RoomName,
+        transfer_types: TransferTypeFlags,
+    ) -> Option<&TransferQueueRoomData> {
         self.flush_generators(data, room, transfer_types);
 
         self.try_get_room_no_flush(room)
@@ -1461,7 +1478,7 @@ impl TransferRequestSystem for LazyTransferQueueRooms {
 
 #[derive(Default)]
 pub struct TransferQueue {
-    _rooms: LazyTransferQueueRooms   
+    _rooms: LazyTransferQueueRooms,
 }
 
 impl TransferRequestSystem for TransferQueue {
@@ -1487,11 +1504,21 @@ impl TransferQueue {
         self._rooms.register_generator(room, transfer_types, generator)
     }
 
-    pub fn get_room(&mut self, data: &dyn TransferRequestSystemData, room: RoomName, transfer_types: TransferTypeFlags) -> &mut TransferQueueRoomData {
+    pub fn get_room(
+        &mut self,
+        data: &dyn TransferRequestSystemData,
+        room: RoomName,
+        transfer_types: TransferTypeFlags,
+    ) -> &mut TransferQueueRoomData {
         self._rooms.get_room(data, room, transfer_types)
     }
 
-    pub fn try_get_room(&mut self, data: &dyn TransferRequestSystemData, room: RoomName, transfer_types: TransferTypeFlags) -> Option<&TransferQueueRoomData> {
+    pub fn try_get_room(
+        &mut self,
+        data: &dyn TransferRequestSystemData,
+        room: RoomName,
+        transfer_types: TransferTypeFlags,
+    ) -> Option<&TransferQueueRoomData> {
         self._rooms.try_get_room(data, room, transfer_types)
     }
 
@@ -1541,7 +1568,8 @@ impl TransferQueue {
             if let Some(room) = self.try_get_room(data, *delivery_room, delivery_types) {
                 if room.stats.deposit_priorities.intersects(allowed_priorities) {
                     for (target, node) in room.nodes.iter() {
-                        let delivery_resources = node.select_delivery(allowed_priorities, delivery_types, available_resources, available_capacity);
+                        let delivery_resources =
+                            node.select_delivery(allowed_priorities, delivery_types, available_resources, available_capacity);
 
                         if !delivery_resources.is_empty() {
                             tickets.push(TransferDepositTicket {
@@ -1557,7 +1585,12 @@ impl TransferQueue {
         tickets
     }
 
-    pub fn get_available_withdrawl_totals(&mut self, data: &dyn TransferRequestSystemData, rooms: &[RoomName], transfer_type: TransferType) -> HashMap<ResourceType, u32> {
+    pub fn get_available_withdrawl_totals(
+        &mut self,
+        data: &dyn TransferRequestSystemData,
+        rooms: &[RoomName],
+        transfer_type: TransferType,
+    ) -> HashMap<ResourceType, u32> {
         let mut available_resources: HashMap<_, u32> = HashMap::new();
 
         for room_name in rooms {
@@ -1650,7 +1683,8 @@ impl TransferQueue {
             return None;
         }
 
-        let global_available_resources = self.get_available_withdrawl_totals_by_priority(data, pickup_rooms, transfer_type, pickup_priority);
+        let global_available_resources =
+            self.get_available_withdrawl_totals_by_priority(data, pickup_rooms, transfer_type, pickup_priority);
 
         if global_available_resources.is_empty() {
             return None;
@@ -1755,7 +1789,9 @@ impl TransferQueue {
             })
             .collect();
 
-        let node = self.try_get_room(data, target.pos().room_name(), delivery_type.into()).and_then(|r| r.try_get_node(target))?;
+        let node = self
+            .try_get_room(data, target.pos().room_name(), delivery_type.into())
+            .and_then(|r| r.try_get_node(target))?;
 
         let pickup = TransferWithdrawTicket {
             target: *target,
@@ -1784,22 +1820,29 @@ impl TransferQueue {
             return None;
         }
 
-        self.select_deliveries(data, rooms, allowed_priorities, delivery_types, &available_resources, available_capacity)
-            .iter()
-            .map(|delivery| {
-                let resources = delivery
-                    .resources
-                    .iter()
-                    .flat_map(|(_, entries)| entries.iter().map(|e| e.amount))
-                    .sum::<u32>();
+        self.select_deliveries(
+            data,
+            rooms,
+            allowed_priorities,
+            delivery_types,
+            &available_resources,
+            available_capacity,
+        )
+        .iter()
+        .map(|delivery| {
+            let resources = delivery
+                .resources
+                .iter()
+                .flat_map(|(_, entries)| entries.iter().map(|e| e.amount))
+                .sum::<u32>();
 
-                let length = anchor_location.get_range_to(&delivery.target.pos());
-                let value = (resources as f32) / (length as f32);
+            let length = anchor_location.get_range_to(&delivery.target.pos());
+            let value = (resources as f32) / (length as f32);
 
-                (delivery, value)
-            })
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-            .map(|(delivery, _)| delivery.clone())
+            (delivery, value)
+        })
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .map(|(delivery, _)| delivery.clone())
     }
 
     pub fn select_pickup_and_delivery(
@@ -1879,7 +1922,7 @@ impl<'a> System<'a> for TransferQueueUpdateSystem {
             if let Some(ui) = &mut data.ui {
                 let transfer_queue_data = TransferQueueGeneratorData {
                     cause: "Transfer System",
-                    room_data: &data.room_data
+                    room_data: &data.room_data,
                 };
 
                 data.transfer_queue.visualize(&transfer_queue_data, ui, visualizer);

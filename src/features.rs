@@ -97,7 +97,10 @@ pub mod market {
     }
 
     pub fn credit_reserve() -> f64 {
-        ::screeps::memory::root().path_f64("_features.market.credit_reserve").unwrap_or(None).unwrap_or(10_000_000.0)
+        ::screeps::memory::root()
+            .path_f64("_features.market.credit_reserve")
+            .unwrap_or(None)
+            .unwrap_or(10_000_000.0)
     }
 }
 

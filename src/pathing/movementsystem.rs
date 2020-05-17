@@ -1,11 +1,11 @@
 use crate::creep::*;
-use screeps::*;
-use serde::*;
-use specs::*;
-use specs::prelude::*;
-use crate::room::data::*;
 use crate::entitymappingsystem::*;
+use crate::room::data::*;
+use screeps::*;
 use screeps_rover::*;
+use serde::*;
+use specs::prelude::*;
+use specs::*;
 
 #[derive(Component, Serialize, Deserialize)]
 pub struct CreepMovementData {
@@ -37,7 +37,13 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
         Ok(creep)
     }
 
-    fn get_room_weight(&self, from_room_name: RoomName, to_room_name: RoomName, current_room_name: RoomName, room_options: &RoomOptions) -> Option<f64> {
+    fn get_room_weight(
+        &self,
+        from_room_name: RoomName,
+        to_room_name: RoomName,
+        current_room_name: RoomName,
+        room_options: &RoomOptions,
+    ) -> Option<f64> {
         if !can_traverse_between_rooms(from_room_name, to_room_name) {
             return Some(f64::INFINITY);
         }
@@ -53,9 +59,9 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
                     if dynamic_visibility_data.source_keeper() || dynamic_visibility_data.owner().hostile() {
                         return Some(f64::INFINITY);
                     }
-                } 
+                }
             }
-            
+
             if dynamic_visibility_data.owner().mine() || dynamic_visibility_data.owner().friendly() {
                 Some(3.0)
             } else if dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().friendly() {
@@ -82,7 +88,7 @@ impl<'a> System<'a> for MovementUpdateSystem {
             entities: &data.entities,
             creep_owner: &data.creep_owner,
             room_data: &data.room_data,
-            mapping: &data.mapping
+            mapping: &data.mapping,
         };
 
         let mut system = MovementSystem::new(&mut *data.cost_matrix);
@@ -94,9 +100,9 @@ impl<'a> System<'a> for MovementUpdateSystem {
         system.set_reuse_path_length(10);
 
         if crate::features::pathing::custom() {
-            system.process(&mut external, movement_data);            
+            system.process(&mut external, movement_data);
         } else {
             system.process_inbuilt(&mut external, movement_data);
-        }        
+        }
     }
 }

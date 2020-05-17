@@ -229,8 +229,7 @@ impl OrderQueueSystem {
         terminal: &StructureTerminal,
         order_cache: &mut OrderCache,
         active_orders: &[ActiveSellOrderParameters],
-    ) -> bool
-     {
+    ) -> bool {
         if terminal.cooldown() > 0 {
             return true;
         }
@@ -302,18 +301,17 @@ impl OrderQueueSystem {
 }
 
 struct OrderCache {
-    orders: HashMap<MarketResourceType, Vec<Order>>
+    orders: HashMap<MarketResourceType, Vec<Order>>,
 }
 
 impl OrderCache {
     fn new() -> OrderCache {
-        OrderCache {
-            orders: HashMap::new()
-        }
+        OrderCache { orders: HashMap::new() }
     }
 
     fn get_orders(&mut self, resource_type: MarketResourceType) -> &Vec<Order> {
-        self.orders.entry(resource_type)
+        self.orders
+            .entry(resource_type)
             .or_insert_with(|| game::market::get_all_orders(Some(resource_type)))
     }
 }
@@ -339,7 +337,6 @@ impl<'a> System<'a> for OrderQueueSystem {
         if !can_buy && !can_sell {
             return;
         }
-
 
         let mut order_cache = OrderCache::new();
 
@@ -421,7 +418,7 @@ impl<'a> System<'a> for OrderQueueSystem {
 
                                 None
                             })
-                            .collect();                       
+                            .collect();
 
                         let _terminal_busy = Self::sell_active_orders(*room_name, &terminal, &mut order_cache, &active_orders);
                     }

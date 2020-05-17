@@ -1,6 +1,5 @@
-use specs::*;
-use specs::prelude::*;
 use screeps_rover::*;
+use specs::prelude::*;
 
 #[derive(SystemData)]
 pub struct CostMatrixStoreSystemData<'a> {

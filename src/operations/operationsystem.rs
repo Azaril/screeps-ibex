@@ -3,8 +3,8 @@ use crate::entitymappingsystem::EntityMappingData;
 use crate::missions::data::*;
 use crate::ownership::*;
 use crate::room::data::*;
-use crate::room::visibilitysystem::*;
 use crate::room::roomplansystem::*;
+use crate::room::visibilitysystem::*;
 use crate::ui::*;
 use crate::visualize::*;
 use log::*;
@@ -89,9 +89,7 @@ impl<'a> System<'a> for PreRunOperationSystem {
         };
 
         for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
-            let mut runtime_data = OperationExecutionRuntimeData {
-                entity: entity,
-            };
+            let mut runtime_data = OperationExecutionRuntimeData { entity: entity };
 
             let operation = operation_data.as_operation();
 
@@ -127,7 +125,7 @@ fn queue_cleanup_operation(updater: &LazyUpdate, entity: Entity, owner: Option<O
             }
             Some(OperationOrMissionEntity::Mission(owner_mission_entity)) => {
                 if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(owner_mission_entity) {
-                    mission_data.as_mission().child_complete(entity);
+                    mission_data.as_mission_mut().child_complete(entity);
                 }
             }
             None => {}
@@ -158,9 +156,7 @@ impl<'a> System<'a> for RunOperationSystem {
         };
 
         for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
-            let mut runtime_data = OperationExecutionRuntimeData {
-                entity: entity,
-            };
+            let mut runtime_data = OperationExecutionRuntimeData { entity: entity };
 
             let operation = operation_data.as_operation();
 

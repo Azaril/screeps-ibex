@@ -12,12 +12,13 @@ use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 
-#[derive(Clone, ConvertSaveload)]
+#[derive(ConvertSaveload)]
 pub struct RemoteMineMission {
     owner: EntityOption<OperationOrMissionEntity>,
     room_data: Entity,
     home_room_data: Entity,
     harvesters: EntityVec<Entity>,
+    allow_spawning: bool,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -28,7 +29,9 @@ impl RemoteMineMission {
     {
         let mission = RemoteMineMission::new(owner, room_data, home_room_data);
 
-        builder.with(MissionData::RemoteMine(mission)).marked::<SerializeMarker>()
+        builder
+            .with(MissionData::RemoteMine(EntityRefCell::new(mission)))
+            .marked::<SerializeMarker>()
     }
 
     pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity, home_room_data: Entity) -> RemoteMineMission {
@@ -37,7 +40,12 @@ impl RemoteMineMission {
             room_data,
             home_room_data,
             harvesters: EntityVec::new(),
+            allow_spawning: true,
         }
+    }
+
+    pub fn allow_spawning(&mut self, allow: bool) {
+        self.allow_spawning = allow
     }
 
     fn create_handle_harvester_spawn(
@@ -56,7 +64,7 @@ impl RemoteMineMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::RemoteMine(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.harvesters.push(creep_entity);
+                    mission_data.get_mut().harvesters.push(creep_entity);
                 }
             });
         })
@@ -79,15 +87,11 @@ impl Mission for RemoteMineMission {
         self.room_data
     }
 
-    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!("Remote Mine - Harvesters: {}", self.harvesters.len())
     }
 
-    fn pre_run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        _runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<(), String> {
+    fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         //
         // Cleanup creeps that no longer exist.
         //
@@ -98,11 +102,7 @@ impl Mission for RemoteMineMission {
         Ok(())
     }
 
-    fn run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<MissionResult, String> {
+    fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility data")?;
 
@@ -122,7 +122,7 @@ impl Mission for RemoteMineMission {
 
         //TODO: Add better dynamic cpu adaptation.
         let bucket = game::cpu::bucket();
-        let can_spawn = bucket > 9000.0 && crate::features::remote_mine::harvest();
+        let can_spawn = bucket > 9000.0 && crate::features::remote_mine::harvest() && self.allow_spawning;
 
         if !can_spawn {
             return Ok(MissionResult::Running);
@@ -182,7 +182,7 @@ impl Mission for RemoteMineMission {
                         format!("Remote Mine - Target Room: {}", room_data.name),
                         &body,
                         priority,
-                        Self::create_handle_harvester_spawn(runtime_data.entity, *source, self.home_room_data),
+                        Self::create_handle_harvester_spawn(mission_entity, *source, self.home_room_data),
                     );
 
                     system_data.spawn_queue.request(home_room_data.name, spawn_request);

@@ -9,6 +9,8 @@ use crate::missions::missionsystem::*;
 use crate::operations::data::*;
 use crate::operations::managersystem::*;
 use crate::operations::operationsystem::*;
+use crate::pathing::costmatrixsystem::*;
+use crate::pathing::movementsystem::*;
 use crate::room::createroomsystem::*;
 use crate::room::data::*;
 use crate::room::roomplansystem::*;
@@ -23,14 +25,12 @@ use crate::ui::*;
 use crate::visualize::*;
 use log::*;
 use screeps::*;
+use screeps_rover::*;
 use specs::{
     prelude::*,
     saveload::{DeserializeComponents, SerializeComponents},
 };
 use std::collections::HashSet;
-use screeps_rover::*;
-use crate::pathing::movementsystem::*;
-use crate::pathing::costmatrixsystem::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 fn serialize_world(world: &World, segment: u32) {
@@ -58,7 +58,7 @@ fn serialize_world(world: &World, segment: u32) {
 
         fn run(&mut self, mut data: Self::SystemData) {
             struct BinCodeSerializerAcceptor<'a, 'b> {
-                data: &'b mut SerializeSystemData<'a>
+                data: &'b mut SerializeSystemData<'a>,
             }
 
             impl<'a, 'b> bincode::SerializerAcceptor for BinCodeSerializerAcceptor<'a, 'b> {
@@ -133,16 +133,15 @@ fn deserialize_world(world: &World, segment: u32) {
 
             if let Some(encoded_data) = encoded_data {
                 if !encoded_data.is_empty() {
-                    let decoded_data = base64::decode(&encoded_data)
-                        .unwrap_or_else(|_| Vec::new());
+                    let decoded_data = base64::decode(&encoded_data).unwrap_or_else(|_| Vec::new());
 
                     struct BinCodeDeserializerAcceptor<'a, 'b> {
-                        data: &'b mut DeserializeSystemData<'a>
+                        data: &'b mut DeserializeSystemData<'a>,
                     }
 
                     impl<'a, 'b, 'c> bincode::DeserializerAcceptor<'c> for BinCodeDeserializerAcceptor<'a, 'b> {
                         type Output = Result<(), String>;
-        
+
                         fn accept<T: serde::Deserializer<'c>>(self, de: T) -> Self::Output {
                             DeserializeComponents::<std::convert::Infallible, SerializeMarker>::deserialize(
                                 &mut (
@@ -165,7 +164,7 @@ fn deserialize_world(world: &World, segment: u32) {
                     }
 
                     let reader = bincode::SliceReader::new(&decoded_data);
-        
+
                     bincode::with_deserializer(reader, BinCodeDeserializerAcceptor { data: &mut data })
                         .unwrap_or_else(|e| error!("Failed deserialization: {}", e));
                 }
@@ -191,7 +190,7 @@ impl CostMatrixStorage for CostMatrixStorageInterface {
         Ok(res)
     }
 
-    fn set_cache(&mut self, segment:u32, data: &CostMatrixCache) -> Result<(), String> {
+    fn set_cache(&mut self, segment: u32, data: &CostMatrixCache) -> Result<(), String> {
         let encoded = crate::serialize::encode_to_string(data)?;
 
         raw_memory::set_segment(segment, &encoded);

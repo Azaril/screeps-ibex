@@ -13,7 +13,7 @@ impl MemoryArbiter {
     pub fn new() -> MemoryArbiter {
         MemoryArbiter {
             active: None,
-            requests: HashSet::new()
+            requests: HashSet::new(),
         }
     }
 

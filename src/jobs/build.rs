@@ -58,9 +58,9 @@ machine!(
         }
 
         Idle, FinishedPickup, Harvest, Build, Repair, Wait => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
-        
+
         Idle, FinishedPickup, Harvest, Build, Repair, Wait => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
-        
+
         _ => fn tick(&mut self, state_context: &mut BuildJobContext, tick_context: &mut JobTickContext) -> Option<BuildState>;
     }
 );
@@ -76,7 +76,7 @@ impl Idle {
             .or_else(|| {
                 let transfer_queue_data = TransferQueueGeneratorData {
                     cause: "Build Idle",
-                    room_data: &*tick_context.system_data.room_data
+                    room_data: &*tick_context.system_data.room_data,
                 };
 
                 get_new_pickup_state_fill_resource(
@@ -121,7 +121,7 @@ impl FinishedPickup {
 
         let transfer_queue_data = TransferQueueGeneratorData {
             cause: "Build Finished Pickup",
-            room_data: &*tick_context.system_data.room_data
+            room_data: &*tick_context.system_data.room_data,
         };
 
         get_new_pickup_state_fill_resource(

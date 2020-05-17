@@ -1,7 +1,7 @@
 use super::data::*;
 use super::operationsystem::*;
-use crate::missions::data::*;
 use crate::missions::colony::*;
+use crate::missions::data::*;
 use crate::ownership::*;
 use crate::serialize::*;
 use log::*;
@@ -87,7 +87,7 @@ impl Operation for ColonyOperation {
                                 entity,
                             )
                             .build();
-                
+
                             room_data.add_mission(mission_entity);
                         }
                     }

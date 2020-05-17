@@ -1,5 +1,6 @@
 use super::data::*;
 use super::missionsystem::*;
+use crate::creep::*;
 use crate::jobs::data::*;
 use crate::jobs::haul::*;
 use crate::ownership::*;
@@ -10,15 +11,15 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use crate::creep::*;
 use std::convert::*;
 
-#[derive(Clone, ConvertSaveload)]
+#[derive(ConvertSaveload)]
 pub struct RaidMission {
     owner: EntityOption<OperationOrMissionEntity>,
     room_data: Entity,
     home_room_data: Entity,
     raiders: EntityVec<Entity>,
+    allow_spawning: bool,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -29,7 +30,9 @@ impl RaidMission {
     {
         let mission = RaidMission::new(owner, room_data, home_room_data);
 
-        builder.with(MissionData::Raid(mission)).marked::<SerializeMarker>()
+        builder
+            .with(MissionData::Raid(EntityRefCell::new(mission)))
+            .marked::<SerializeMarker>()
     }
 
     pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity, home_room_data: Entity) -> RaidMission {
@@ -38,7 +41,12 @@ impl RaidMission {
             room_data,
             home_room_data,
             raiders: EntityVec::new(),
+            allow_spawning: true,
         }
+    }
+
+    pub fn allow_spawning(&mut self, allow: bool) {
+        self.allow_spawning = allow
     }
 
     fn create_handle_raider_spawn(
@@ -50,14 +58,14 @@ impl RaidMission {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Haul(HaulJob::new( &[raid_room], &[delivery_room]));
+                let creep_job = JobData::Haul(HaulJob::new(&[raid_room], &[delivery_room]));
 
                 let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::Raid(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.raiders.push(creep_entity);
+                    mission_data.get_mut().raiders.push(creep_entity);
                 }
             });
         })
@@ -109,15 +117,11 @@ impl Mission for RaidMission {
         self.room_data
     }
 
-    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!("Raid - Raiders: {}", self.raiders.len())
     }
 
-    fn pre_run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        _runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<(), String> {
+    fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         //
         // Cleanup creeps that no longer exist.
         //
@@ -126,29 +130,28 @@ impl Mission for RaidMission {
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
-        
-        system_data.transfer_queue.register_generator(room_data.name, TransferTypeFlags::HAUL, Box::new(|_system, transfer, room_name| {
-            let room = game::rooms::get(room_name).ok_or("Expected room")?;
 
-            Self::request_transfer_for_structures(transfer, &room);
+        system_data.transfer_queue.register_generator(
+            room_data.name,
+            TransferTypeFlags::HAUL,
+            Box::new(|_system, transfer, room_name| {
+                let room = game::rooms::get(room_name).ok_or("Expected room")?;
 
-            Ok(())
-        }));
+                Self::request_transfer_for_structures(transfer, &room);
+
+                Ok(())
+            }),
+        );
 
         Ok(())
     }
 
-    fn run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<MissionResult, String> {
+    fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility data")?;
 
         if dynamic_visibility_data.updated_within(1000)
-            && (dynamic_visibility_data.owner().mine() 
-                || dynamic_visibility_data.owner().friendly())
+            && (dynamic_visibility_data.owner().mine() || dynamic_visibility_data.owner().friendly())
         {
             return Err("Room is owned by ourselves or a friendly".to_string());
         }
@@ -157,17 +160,15 @@ impl Mission for RaidMission {
         if let Some(room) = game::rooms::get(room_data.name) {
             let structures = room.find(find::STRUCTURES);
 
-            let has_resources = structures
-                .iter()
-                .any(|structure| {
-                    if let Some(store) = structure.as_has_store() {
-                        let store_types = store.store_types();
+            let has_resources = structures.iter().any(|structure| {
+                if let Some(store) = structure.as_has_store() {
+                    let store_types = store.store_types();
 
-                        return store_types.iter().any(|t| store.store_used_capacity(Some(*t)) > 0);
-                    }
+                    return store_types.iter().any(|t| store.store_used_capacity(Some(*t)) > 0);
+                }
 
-                    false
-                });
+                false
+            });
 
             if !has_resources {
                 return Ok(MissionResult::Success);
@@ -179,7 +180,7 @@ impl Mission for RaidMission {
 
         //TODO: Add better dynamic cpu adaptation.
         let bucket = game::cpu::bucket();
-        let can_spawn = bucket > 9000.0 && crate::features::raid();
+        let can_spawn = bucket > 9000.0 && crate::features::raid() && self.allow_spawning;
 
         if !can_spawn {
             return Ok(MissionResult::Running);
@@ -204,7 +205,7 @@ impl Mission for RaidMission {
                     format!("Raider - Target Room: {}", room_data.name),
                     &body,
                     priority,
-                    Self::create_handle_raider_spawn(runtime_data.entity, self.room_data, self.home_room_data),
+                    Self::create_handle_raider_spawn(mission_entity, self.room_data, self.home_room_data),
                 );
 
                 system_data.spawn_queue.request(home_room_data.name, spawn_request);
