@@ -1,20 +1,19 @@
-use super::data::*;
-use super::missionsystem::*;
-use super::context::*;
-use crate::ownership::*;
-use crate::serialize::*;
 use super::construction::*;
-use super::localsupply::*;
-use super::localbuild::*;
+use super::data::*;
 use super::haul::*;
+use super::localbuild::*;
+use super::localsupply::*;
+use super::missionsystem::*;
 use super::terminal::*;
 use super::tower::*;
 use super::upgrade::*;
+use crate::ownership::*;
+use crate::serialize::*;
+use screeps::*;
+use screeps_machine::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use screeps_machine::*;
-use screeps::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ColonyMissionContext {
@@ -24,7 +23,7 @@ pub struct ColonyMissionContext {
 machine!(
     #[derive(Clone, ConvertSaveload)]
     enum ColonyState {
-        Incubate { 
+        Incubate {
             construction_mission: EntityOption<Entity>,
             local_supply_mission: EntityOption<Entity>,
             local_build_mission: EntityOption<Entity>,
@@ -36,7 +35,7 @@ machine!(
     }
 
     impl {
-        * => fn describe_state(&self, _system_data: &MissionExecutionSystemData, _describe_data: &mut MissionDescribeData, _state_context: &ColonyMissionContext) -> String {
+        * => fn describe_state(&self, _system_data: &MissionExecutionSystemData, _mission_entity: Entity, _state_context: &ColonyMissionContext) -> String {
             format!("Colony - {}", self.status_description())
         }
 
@@ -44,8 +43,8 @@ machine!(
             std::any::type_name::<Self>().to_string()
         }
 
-        * => fn visualize(&self, _system_data: &MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {}
-        
+        * => fn visualize(&self, _system_data: &MissionExecutionSystemData, _mission_entity: Entity, _state_context: &ColonyMissionContext) {}
+
         * => fn get_children(&self) -> Vec<Entity> {
             self.get_children_internal()
                 .iter()
@@ -53,7 +52,7 @@ machine!(
                 .cloned()
                 .collect()
         }
-    
+
         * => fn child_complete(&mut self, child: Entity) {
             for mission_child in self.get_children_internal_mut().iter_mut() {
                 if mission_child.map(|e| e == child).unwrap_or(false) {
@@ -61,12 +60,12 @@ machine!(
                 }
             }
         }
-        
-        * => fn gather_data(&self, _system_data: &MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {}
-        
-        _ => fn tick(&mut self, state_context: &mut ColonyMissionContext, tick_context: &mut MissionTickContext) -> Result<Option<ColonyState>, String>;
 
-        * => fn complete(&mut self, system_data: &mut MissionExecutionSystemData, _runtime_data: &mut MissionExecutionRuntimeData) {
+        * => fn gather_data(&self, _system_data: &MissionExecutionSystemData, _mission_entity: Entity) {}
+
+        _ => fn tick(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity, state_context: &mut ColonyMissionContext) -> Result<Option<ColonyState>, String>;
+
+        * => fn complete(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) {
             for mission_child in self.get_children_internal_mut().iter_mut() {
                 mission_child.take().map(|e| system_data.mission_requests.abort(e));
             }
@@ -76,99 +75,130 @@ machine!(
 
 impl Incubate {
     fn get_children_internal(&self) -> [&Option<Entity>; 7] {
-        [&self.construction_mission, &self.local_supply_mission, &self.local_build_mission, &self.haul_mission, &self.terminal_mission, &self.tower_mission, &self.upgrade_mission]
+        [
+            &self.construction_mission,
+            &self.local_supply_mission,
+            &self.local_build_mission,
+            &self.haul_mission,
+            &self.terminal_mission,
+            &self.tower_mission,
+            &self.upgrade_mission,
+        ]
     }
 
     fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 7] {
-        [&mut self.construction_mission, &mut self.local_supply_mission, &mut self.local_build_mission, &mut self.haul_mission, &mut self.terminal_mission, &mut self.tower_mission, &mut self.upgrade_mission]
+        [
+            &mut self.construction_mission,
+            &mut self.local_supply_mission,
+            &mut self.local_build_mission,
+            &mut self.haul_mission,
+            &mut self.terminal_mission,
+            &mut self.tower_mission,
+            &mut self.upgrade_mission,
+        ]
     }
 
-    fn tick(&mut self, state_context: &mut ColonyMissionContext, tick_context: &mut MissionTickContext) -> Result<Option<ColonyState>, String> {
-        let room_data = tick_context.system_data.room_data.get_mut(state_context.room_data).ok_or("Expected colony room data")?;
+    fn tick(
+        &mut self,
+        system_data: &mut MissionExecutionSystemData,
+        mission_entity: Entity,
+        state_context: &mut ColonyMissionContext,
+    ) -> Result<Option<ColonyState>, String> {
+        let room_data = system_data
+            .room_data
+            .get_mut(state_context.room_data)
+            .ok_or("Expected colony room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected coloy room")?;
-        
+
         if !room_data.get_dynamic_visibility_data().map(|v| v.owner().mine()).unwrap_or(false) {
             return Err("Colony room not owned!".to_owned());
         }
 
-        if self.construction_mission.is_none() { 
+        if self.construction_mission.is_none() {
             let mission_entity = ConstructionMission::build(
-                tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                Some(OperationOrMissionEntity::Mission(tick_context.runtime_data.entity)),
+                system_data.updater.create_entity(system_data.entities),
+                Some(OperationOrMissionEntity::Mission(mission_entity)),
                 state_context.room_data,
-            ).build();
+            )
+            .build();
 
             room_data.add_mission(mission_entity);
 
             self.construction_mission = Some(mission_entity).into();
         }
 
-        if self.local_supply_mission.is_none() { 
+        if self.local_supply_mission.is_none() {
             let mission_entity = LocalSupplyMission::build(
-                tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                Some(OperationOrMissionEntity::Mission(tick_context.runtime_data.entity)),
+                system_data.updater.create_entity(system_data.entities),
+                Some(OperationOrMissionEntity::Mission(mission_entity)),
                 state_context.room_data,
-            ).build();
+            )
+            .build();
 
             room_data.add_mission(mission_entity);
 
             self.local_supply_mission = Some(mission_entity).into();
         }
 
-        if self.local_build_mission.is_none() { 
+        if self.local_build_mission.is_none() {
             let mission_entity = LocalBuildMission::build(
-                tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                Some(OperationOrMissionEntity::Mission(tick_context.runtime_data.entity)),
+                system_data.updater.create_entity(system_data.entities),
+                Some(OperationOrMissionEntity::Mission(mission_entity)),
                 state_context.room_data,
-            ).build();
+            )
+            .build();
 
             room_data.add_mission(mission_entity);
 
             self.local_build_mission = Some(mission_entity).into();
         }
 
-        if self.haul_mission.is_none() { 
+        if self.haul_mission.is_none() {
             let mission_entity = HaulMission::build(
-                tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                Some(OperationOrMissionEntity::Mission(tick_context.runtime_data.entity)),
+                system_data.updater.create_entity(system_data.entities),
+                Some(OperationOrMissionEntity::Mission(mission_entity)),
                 state_context.room_data,
-            ).build();
+            )
+            .build();
 
             room_data.add_mission(mission_entity);
 
             self.haul_mission = Some(mission_entity).into();
         }
 
-        if self.terminal_mission.is_none() && room.terminal().is_some() { 
+        if self.terminal_mission.is_none() && room.terminal().is_some() {
             let mission_entity = TerminalMission::build(
-                tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                Some(OperationOrMissionEntity::Mission(tick_context.runtime_data.entity)),
+                system_data.updater.create_entity(system_data.entities),
+                Some(OperationOrMissionEntity::Mission(mission_entity)),
                 state_context.room_data,
-            ).build();
+            )
+            .build();
 
             room_data.add_mission(mission_entity);
 
             self.terminal_mission = Some(mission_entity).into();
         }
 
-        if self.tower_mission.is_none() { 
+        if self.tower_mission.is_none() {
             let mission_entity = TowerMission::build(
-                tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                Some(OperationOrMissionEntity::Mission(tick_context.runtime_data.entity)),
+                system_data.updater.create_entity(system_data.entities),
+                Some(OperationOrMissionEntity::Mission(mission_entity)),
                 state_context.room_data,
-            ).build();
+            )
+            .build();
 
             room_data.add_mission(mission_entity);
 
             self.tower_mission = Some(mission_entity).into();
         }
 
-        if self.upgrade_mission.is_none() { 
+        if self.upgrade_mission.is_none() {
             let mission_entity = UpgradeMission::build(
-                tick_context.system_data.updater.create_entity(tick_context.system_data.entities),
-                Some(OperationOrMissionEntity::Mission(tick_context.runtime_data.entity)),
+                system_data.updater.create_entity(system_data.entities),
+                Some(OperationOrMissionEntity::Mission(mission_entity)),
                 state_context.room_data,
-            ).build();
+            )
+            .build();
 
             room_data.add_mission(mission_entity);
 
@@ -179,11 +209,11 @@ impl Incubate {
     }
 }
 
-#[derive(Clone, ConvertSaveload)]
+#[derive(ConvertSaveload)]
 pub struct ColonyMission {
     owner: EntityOption<OperationOrMissionEntity>,
     context: ColonyMissionContext,
-    state: ColonyState
+    state: ColonyState,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -194,16 +224,24 @@ impl ColonyMission {
     {
         let mission = ColonyMission::new(owner, room_data);
 
-        builder.with(MissionData::Colony(mission)).marked::<SerializeMarker>()
+        builder
+            .with(MissionData::Colony(EntityRefCell::new(mission)))
+            .marked::<SerializeMarker>()
     }
 
     pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity) -> ColonyMission {
         ColonyMission {
             owner: owner.into(),
-            context: ColonyMissionContext { 
-                room_data,
-            },
-            state: ColonyState::incubate(None.into(), None.into(), None.into(), None.into(), None.into(), None.into(), None.into())
+            context: ColonyMissionContext { room_data },
+            state: ColonyState::incubate(
+                None.into(),
+                None.into(),
+                None.into(),
+                None.into(),
+                None.into(),
+                None.into(),
+                None.into(),
+            ),
         }
     }
 }
@@ -232,36 +270,27 @@ impl Mission for ColonyMission {
         self.state.child_complete(child);
     }
 
-    fn describe_state(&self, system_data: &mut MissionExecutionSystemData, describe_data: &mut MissionDescribeData) -> String {
-        self.state.describe_state(system_data, describe_data, &self.context)
+    fn describe_state(&self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> String {
+        self.state.describe_state(system_data, mission_entity, &self.context)
     }
 
-    fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, runtime_data: &mut MissionExecutionRuntimeData) -> Result<(), String> {
-        self.state.gather_data(system_data, runtime_data);
+    fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<(), String> {
+        self.state.gather_data(system_data, mission_entity);
 
         Ok(())
     }
 
-    fn run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<MissionResult, String> {
-        let mut tick_context = MissionTickContext {
-            system_data,
-            runtime_data
-        };
-
-        while let Some(tick_result) = self.state.tick(&mut self.context, &mut tick_context)? {
+    fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
+        while let Some(tick_result) = self.state.tick(system_data, mission_entity, &mut self.context)? {
             self.state = tick_result
         }
 
-        self.state.visualize(system_data, runtime_data);
+        self.state.visualize(system_data, mission_entity, &mut self.context);
 
         Ok(MissionResult::Running)
     }
 
-    fn complete(&mut self, system_data: &mut MissionExecutionSystemData, runtime_data: &mut MissionExecutionRuntimeData) {
-        self.state.complete(system_data, runtime_data);
+    fn complete(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) {
+        self.state.complete(system_data, mission_entity);
     }
 }

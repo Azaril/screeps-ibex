@@ -251,11 +251,12 @@ impl<'a> System<'a> for RoomPlanSystem {
                     .iter()
                     .filter(|request| {
                         crate::features::construction::force_plan()
-                            || (crate::features::construction::allow_replan() && planner_state
-                                .last_planned
-                                .get(&request.room_name)
-                                .map(|last_completion| game::time() >= last_completion + 2000)
-                                .unwrap_or(true))
+                            || (crate::features::construction::allow_replan()
+                                && planner_state
+                                    .last_planned
+                                    .get(&request.room_name)
+                                    .map(|last_completion| game::time() >= last_completion + 2000)
+                                    .unwrap_or(true))
                     })
                     .max_by(|a, b| a.priority.partial_cmp(&b.priority).unwrap())
                     .cloned();

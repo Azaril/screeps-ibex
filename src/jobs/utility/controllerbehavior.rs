@@ -162,7 +162,12 @@ where
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn tick_sign<F, R>(tick_context: &mut JobTickContext, controller_id: RemoteObjectId<StructureController>, message: &str, next_state: F) -> Option<R>
+pub fn tick_sign<F, R>(
+    tick_context: &mut JobTickContext,
+    controller_id: RemoteObjectId<StructureController>,
+    message: &str,
+    next_state: F,
+) -> Option<R>
 where
     F: Fn() -> R,
 {

@@ -1,9 +1,9 @@
+use super::dismantle::*;
+use crate::findnearest::*;
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
 use crate::room::data::*;
 use crate::structureidentifier::*;
-use crate::findnearest::*;
-use super::dismantle::*;
 use screeps::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -39,7 +39,11 @@ where
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn tick_dismantle<F, R>(tick_context: &mut JobTickContext, dismantle_structure_id: RemoteStructureIdentifier, next_state: F) -> Option<R>
+pub fn tick_dismantle<F, R>(
+    tick_context: &mut JobTickContext,
+    dismantle_structure_id: RemoteStructureIdentifier,
+    next_state: F,
+) -> Option<R>
 where
     F: Fn() -> R,
 {

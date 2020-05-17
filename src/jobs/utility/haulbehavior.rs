@@ -71,7 +71,11 @@ pub fn get_new_delivery_current_resources_state<F, R>(
 where
     F: Fn(Vec<TransferDepositTicket>) -> R,
 {
-    let available_resources: HashMap<ResourceType, u32> = creep.store_types().into_iter().map(|r| (r, creep.store_used_capacity(Some(r)))).collect();
+    let available_resources: HashMap<ResourceType, u32> = creep
+        .store_types()
+        .into_iter()
+        .map(|r| (r, creep.store_used_capacity(Some(r))))
+        .collect();
     let available_capacity = TransferCapacity::Finite(available_resources.values().sum());
 
     if !available_capacity.empty() {
@@ -152,7 +156,7 @@ where
                 //       the node is already being visited so it's worthwhile picking up any resource that can be transfered
                 //       on the route.
                 //
-                
+
                 if let Some((additional_pickup, additional_delivery)) = transfer_queue.get_delivery_from_target(
                     data,
                     &pickup_room_names,

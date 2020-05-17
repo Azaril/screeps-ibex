@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 
-#[derive(Clone, ConvertSaveload)]
+#[derive(ConvertSaveload)]
 pub struct UpgradeMission {
     owner: EntityOption<OperationOrMissionEntity>,
     room_data: Entity,
@@ -25,7 +25,9 @@ impl UpgradeMission {
     {
         let mission = UpgradeMission::new(owner, room_data);
 
-        builder.with(MissionData::Upgrade(mission)).marked::<SerializeMarker>()
+        builder
+            .with(MissionData::Upgrade(EntityRefCell::new(mission)))
+            .marked::<SerializeMarker>()
     }
 
     pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity) -> UpgradeMission {
@@ -52,7 +54,7 @@ impl UpgradeMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::Upgrade(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.upgraders.push(creep_entity);
+                    mission_data.get_mut().upgraders.push(creep_entity);
                 }
             });
         })
@@ -75,15 +77,11 @@ impl Mission for UpgradeMission {
         self.room_data
     }
 
-    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!("Upgrade - Upgraders: {}", self.upgraders.len())
     }
 
-    fn pre_run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        _runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<(), String> {
+    fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         //
         // Cleanup creeps that no longer exist.
         //
@@ -94,11 +92,7 @@ impl Mission for UpgradeMission {
         Ok(())
     }
 
-    fn run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<MissionResult, String> {
+    fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
         //TODO: Limit upgraders to 15 total work parts upgrading across all creeps.
 
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
@@ -123,9 +117,7 @@ impl Mission for UpgradeMission {
                             None
                         }
                     })
-                    .any(|container| {
-                        container.store_of(ResourceType::Energy) as f32 / CONTAINER_CAPACITY as f32 > 0.75
-                    })
+                    .any(|container| container.store_of(ResourceType::Energy) as f32 / CONTAINER_CAPACITY as f32 > 0.75)
             }
         };
 
@@ -198,7 +190,7 @@ impl Mission for UpgradeMission {
                     "Upgrader".to_string(),
                     &body,
                     priority,
-                    Self::create_handle_upgrader_spawn(runtime_data.entity, self.room_data, allow_harvest),
+                    Self::create_handle_upgrader_spawn(mission_entity, self.room_data, allow_harvest),
                 );
 
                 system_data.spawn_queue.request(room_data.name, spawn_request);

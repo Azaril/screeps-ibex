@@ -11,12 +11,13 @@ use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 
-#[derive(Clone, ConvertSaveload)]
+#[derive(ConvertSaveload)]
 pub struct ReserveMission {
     owner: EntityOption<OperationOrMissionEntity>,
     room_data: Entity,
     home_room_data: Entity,
     reservers: EntityVec<Entity>,
+    allow_spawning: bool,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -27,7 +28,9 @@ impl ReserveMission {
     {
         let mission = ReserveMission::new(owner, room_data, home_room_data);
 
-        builder.with(MissionData::Reserve(mission)).marked::<SerializeMarker>()
+        builder
+            .with(MissionData::Reserve(EntityRefCell::new(mission)))
+            .marked::<SerializeMarker>()
     }
 
     pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity, home_room_data: Entity) -> ReserveMission {
@@ -36,7 +39,12 @@ impl ReserveMission {
             room_data,
             home_room_data,
             reservers: EntityVec::new(),
+            allow_spawning: true,
         }
+    }
+
+    pub fn allow_spawning(&mut self, allow: bool) {
+        self.allow_spawning = allow
     }
 
     fn create_handle_reserver_spawn(
@@ -54,7 +62,7 @@ impl ReserveMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::Reserve(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.reservers.push(creep_entity);
+                    mission_data.get_mut().reservers.push(creep_entity);
                 }
             });
         })
@@ -77,15 +85,11 @@ impl Mission for ReserveMission {
         self.room_data
     }
 
-    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!("Reserve - Reservers: {}", self.reservers.len())
     }
 
-    fn pre_run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        _runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<(), String> {
+    fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         //
         // Cleanup reservers that no longer exist.
         //
@@ -96,11 +100,7 @@ impl Mission for ReserveMission {
         Ok(())
     }
 
-    fn run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<MissionResult, String> {
+    fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility data")?;
 
@@ -125,7 +125,7 @@ impl Mission for ReserveMission {
 
         //TODO: Add better dynamic cpu adaptation.
         let bucket = game::cpu::bucket();
-        let can_spawn = bucket > 9000.0 && crate::features::remote_mine::reserve();
+        let can_spawn = bucket > 9000.0 && crate::features::remote_mine::reserve() && self.allow_spawning;
 
         if !can_spawn {
             return Ok(MissionResult::Running);
@@ -136,13 +136,13 @@ impl Mission for ReserveMission {
             .iter()
             .filter(|entity| {
                 system_data.creep_spawning.get(**entity).is_some()
-                        || system_data
-                            .creep_owner
-                            .get(**entity)
-                            .and_then(|creep_owner| creep_owner.owner.resolve())
-                            .and_then(|creep| creep.ticks_to_live().ok())
-                            .map(|count| count > 100)
-                            .unwrap_or(false)
+                    || system_data
+                        .creep_owner
+                        .get(**entity)
+                        .and_then(|creep_owner| creep_owner.owner.resolve())
+                        .and_then(|creep| creep.ticks_to_live().ok())
+                        .map(|count| count > 100)
+                        .unwrap_or(false)
             })
             .count();
 
@@ -169,7 +169,7 @@ impl Mission for ReserveMission {
                     format!("Reserver - Target Room: {}", room_data.name),
                     &body,
                     SPAWN_PRIORITY_LOW,
-                    Self::create_handle_reserver_spawn(runtime_data.entity, *controller_id),
+                    Self::create_handle_reserver_spawn(mission_entity, *controller_id),
                 );
 
                 system_data.spawn_queue.request(home_room_data.name, spawn_request);

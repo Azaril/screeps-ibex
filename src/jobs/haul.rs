@@ -2,8 +2,8 @@ use super::actions::*;
 use super::context::*;
 use super::jobsystem::*;
 use super::utility::haulbehavior::*;
-use super::utility::waitbehavior::*;
 use super::utility::movebehavior::*;
+use super::utility::waitbehavior::*;
 use crate::serialize::*;
 use crate::transfer::transfersystem::*;
 use itertools::*;
@@ -52,9 +52,9 @@ machine!(
         }
 
         Idle, MoveToRoom, Wait => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
-        
+
         Idle, MoveToRoom, Wait => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
-        
+
         _ => fn tick(&mut self, state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState>;
     }
 );
@@ -76,9 +76,9 @@ impl Idle {
 
         let transfer_queue_data = TransferQueueGeneratorData {
             cause: "Haul Idle",
-            room_data: &*tick_context.system_data.room_data
+            room_data: &*tick_context.system_data.room_data,
         };
-        
+
         get_new_delivery_current_resources_state(
             creep,
             &transfer_queue_data,
@@ -105,7 +105,7 @@ impl Idle {
                 .filter_map(|priority| {
                     let transfer_queue_data = TransferQueueGeneratorData {
                         cause: "Haul Idle",
-                        room_data: &*tick_context.system_data.room_data
+                        room_data: &*tick_context.system_data.room_data,
                     };
 
                     get_new_pickup_and_delivery_full_capacity_state(

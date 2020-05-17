@@ -3,24 +3,24 @@ use super::missionsystem::*;
 use crate::jobs::data::*;
 use crate::jobs::haul::*;
 use crate::ownership::*;
+use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use crate::transfer::transfersystem::*;
 use screeps::*;
+use screeps_cache::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 use std::collections::HashMap;
-use screeps_cache::*;
-use crate::room::data::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct HaulingStats {
     last_updated: u32,
-    unfufilled_hauling: u32
+    unfufilled_hauling: u32,
 }
 
-#[derive(Clone, ConvertSaveload)]
+#[derive(ConvertSaveload)]
 pub struct HaulMission {
     owner: EntityOption<OperationOrMissionEntity>,
     room_data: Entity,
@@ -37,7 +37,9 @@ impl HaulMission {
     {
         let mission = HaulMission::new(owner, room_data);
 
-        builder.with(MissionData::Haul(mission)).marked::<SerializeMarker>()
+        builder
+            .with(MissionData::Haul(EntityRefCell::new(mission)))
+            .marked::<SerializeMarker>()
     }
 
     pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity) -> HaulMission {
@@ -45,7 +47,7 @@ impl HaulMission {
             owner: owner.into(),
             room_data,
             haulers: EntityVec::new(),
-            stats: None
+            stats: None,
         }
     }
 
@@ -64,13 +66,20 @@ impl HaulMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::Haul(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.haulers.push(creep_entity);
+                    mission_data.get_mut().haulers.push(creep_entity);
                 }
             });
         })
     }
 
-    fn update_stats<'a, 's, RD>(transfer_queue: &mut TransferQueue, transfer_queue_data: &TransferQueueGeneratorData<'a, 's, RD>, room_name: RoomName) -> HaulingStats where RD: std::ops::Deref<Target = specs::storage::MaskedStorage<RoomData>> {
+    fn update_stats<'a, 's, RD>(
+        transfer_queue: &mut TransferQueue,
+        transfer_queue_data: &TransferQueueGeneratorData<'a, 's, RD>,
+        room_name: RoomName,
+    ) -> HaulingStats
+    where
+        RD: std::ops::Deref<Target = specs::storage::MaskedStorage<RoomData>>,
+    {
         const UPDATE_RATE: u32 = 20;
 
         let unfufilled = transfer_queue
@@ -82,7 +91,7 @@ impl HaulMission {
 
         HaulingStats {
             last_updated: game::time(),
-            unfufilled_hauling: total_unfufilled
+            unfufilled_hauling: total_unfufilled,
         }
     }
 }
@@ -103,15 +112,11 @@ impl Mission for HaulMission {
         self.room_data
     }
 
-    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!("Hauler - Haulers: {}", self.haulers.len())
     }
 
-    fn pre_run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        _runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<(), String> {
+    fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         //
         // Cleanup haulers that no longer exist.
         //
@@ -122,11 +127,7 @@ impl Mission for HaulMission {
         Ok(())
     }
 
-    fn run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<MissionResult, String> {
+    fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data_storage = &*system_data.room_data;
         let room_data = room_data_storage.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
@@ -135,12 +136,12 @@ impl Mission for HaulMission {
         let transfer_queue = &mut *system_data.transfer_queue;
         let mut transfer_queue_data = TransferQueueGeneratorData {
             cause: "Haul Run Mission",
-            room_data: &*room_data_storage
+            room_data: &*room_data_storage,
         };
 
         let stats = self.stats.access(
             |s| game::time() - s.last_updated >= 20,
-            || Self::update_stats(transfer_queue, &mut transfer_queue_data, room_data.name)
+            || Self::update_stats(transfer_queue, &mut transfer_queue_data, room_data.name),
         );
         let stats = stats.get();
 
@@ -182,7 +183,7 @@ impl Mission for HaulMission {
                     format!("Haul - Target Room: {}", room_data.name),
                     &body,
                     priority,
-                    Self::create_handle_hauler_spawn(runtime_data.entity, haul_rooms),
+                    Self::create_handle_hauler_spawn(mission_entity, haul_rooms),
                 );
 
                 system_data.spawn_queue.request(room_data.name, spawn_request);

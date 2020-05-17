@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::iter::Iterator;
@@ -151,6 +152,62 @@ where
 }
 
 #[derive(Clone, Debug)]
+pub struct EntityRefCell<T>(RefCell<T>);
+
+impl<T> EntityRefCell<T> {
+    pub fn new(val: T) -> EntityRefCell<T> {
+        EntityRefCell(RefCell::new(val))
+    }
+}
+
+impl<T> std::ops::Deref for EntityRefCell<T> {
+    type Target = RefCell<T>;
+
+    fn deref(&self) -> &RefCell<T> {
+        &self.0
+    }
+}
+
+impl<T> std::ops::DerefMut for EntityRefCell<T> {
+    fn deref_mut(&mut self) -> &mut RefCell<T> {
+        &mut self.0
+    }
+}
+
+impl<T> From<RefCell<T>> for EntityRefCell<T> {
+    fn from(value: RefCell<T>) -> EntityRefCell<T> {
+        EntityRefCell(value)
+    }
+}
+
+impl<C, M: Serialize + Marker> ConvertSaveload<M> for EntityRefCell<C>
+where
+    for<'de> M: Deserialize<'de>,
+    C: ConvertSaveload<M>,
+{
+    type Data = <C as ConvertSaveload<M>>::Data;
+    type Error = <C as ConvertSaveload<M>>::Error;
+
+    fn convert_into<F>(&self, mut ids: F) -> Result<Self::Data, Self::Error>
+    where
+        F: FnMut(Entity) -> Option<M>,
+    {
+        let converted_item = self.0.borrow().convert_into(|entity| ids(entity))?;
+
+        Ok(converted_item)
+    }
+
+    fn convert_from<F>(data: Self::Data, mut ids: F) -> Result<Self, Self::Error>
+    where
+        F: FnMut(M) -> Option<Entity>,
+    {
+        let converted_item = ConvertSaveload::convert_from(data, |marker| ids(marker))?;
+
+        Ok(EntityRefCell(RefCell::new(converted_item)))
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct EntityHashMap<K, V>(HashMap<K, V>);
 
 impl<K, V> EntityHashMap<K, V> {
@@ -214,10 +271,11 @@ where
     }
 }
 
-pub trait EntityItertools : Iterator {
+pub trait EntityItertools: Iterator {
     fn into_entity_group_map<K, V>(self) -> EntityHashMap<K, EntityVec<V>>
-        where Self: Iterator<Item=(K, V)> + Sized,
-            K: Hash + Eq,
+    where
+        Self: Iterator<Item = (K, V)> + Sized,
+        K: Hash + Eq,
     {
         let mut lookup = EntityHashMap::new();
 
@@ -229,9 +287,12 @@ pub trait EntityItertools : Iterator {
     }
 }
 
-impl<T: ?Sized> EntityItertools for T where T: Iterator { }
+impl<T: ?Sized> EntityItertools for T where T: Iterator {}
 
-pub fn encode_to_string<T>(data: T) -> Result<String, String> where T: Serialize {
+pub fn encode_to_string<T>(data: T) -> Result<String, String>
+where
+    T: Serialize,
+{
     let serialized_data = bincode::serialize(&data).map_err(|e| e.to_string())?;
 
     let encoded_data = base64::encode(&serialized_data);
@@ -239,7 +300,10 @@ pub fn encode_to_string<T>(data: T) -> Result<String, String> where T: Serialize
     Ok(encoded_data)
 }
 
-pub fn decode_from_string<T>(data: &str) -> Result<T, String> where for<'de> T: Deserialize<'de> {
+pub fn decode_from_string<T>(data: &str) -> Result<T, String>
+where
+    for<'de> T: Deserialize<'de>,
+{
     let decoded_data = base64::decode(data).map_err(|e| e.to_string())?;
 
     let data = bincode::deserialize_from(decoded_data.as_slice()).map_err(|e| e.to_string())?;

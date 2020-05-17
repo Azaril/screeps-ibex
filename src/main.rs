@@ -25,11 +25,11 @@ mod room;
 mod serialize;
 mod spawnsystem;
 mod statssystem;
+mod store;
 mod structureidentifier;
 mod transfer;
 mod ui;
 mod visualize;
-mod store;
 
 use log::*;
 use stdweb::*;

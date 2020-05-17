@@ -153,7 +153,7 @@ impl<'a> System<'a> for StatsSystem {
             let stats = Stats {
                 shard: Self::get_shards_stats(&data),
             };
-            
+
             if let Ok(stats_data) = serde_json::to_string(&stats) {
                 data.memory_arbiter.set(99, &stats_data);
             }

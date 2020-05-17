@@ -4,8 +4,8 @@ use super::jobsystem::*;
 use super::utility::controllerbehavior::*;
 use super::utility::movebehavior::*;
 use super::utility::waitbehavior::*;
-use crate::remoteobjectid::*;
 use crate::constants::*;
+use crate::remoteobjectid::*;
 use screeps::*;
 use screeps_machine::*;
 use serde::*;
@@ -47,21 +47,16 @@ machine!(
         }
 
         * => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
-        
+
         * => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
-        
+
         _ => fn tick(&mut self, state_context: &mut ReserveJobContext, tick_context: &mut JobTickContext) -> Option<ReserveState>;
     }
 );
 
 impl MoveToController {
     fn tick(&mut self, state_context: &mut ReserveJobContext, tick_context: &mut JobTickContext) -> Option<ReserveState> {
-        tick_move_to_position(
-            tick_context,
-            state_context.reserve_target.pos(),
-            1,
-            ReserveState::sign_controller,
-        )
+        tick_move_to_position(tick_context, state_context.reserve_target.pos(), 1, ReserveState::sign_controller)
     }
 }
 
@@ -73,7 +68,12 @@ impl ReserveController {
 
 impl SignController {
     pub fn tick(&mut self, state_context: &mut ReserveJobContext, tick_context: &mut JobTickContext) -> Option<ReserveState> {
-        tick_sign(tick_context, state_context.reserve_target, ROOM_SIGN, ReserveState::reserve_controller)
+        tick_sign(
+            tick_context,
+            state_context.reserve_target,
+            ROOM_SIGN,
+            ReserveState::reserve_controller,
+        )
     }
 }
 

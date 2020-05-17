@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 
-#[derive(Clone, ConvertSaveload)]
+#[derive(ConvertSaveload)]
 pub struct ScoutMission {
     owner: EntityOption<OperationOrMissionEntity>,
     room_data: Entity,
@@ -19,7 +19,6 @@ pub struct ScoutMission {
     scouts: EntityVec<Entity>,
     next_spawn: Option<u32>,
     spawned_scouts: u32,
-    allow_spawning: bool
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -30,7 +29,9 @@ impl ScoutMission {
     {
         let mission = ScoutMission::new(owner, room_data, home_room_data);
 
-        builder.with(MissionData::Scout(mission)).marked::<SerializeMarker>()
+        builder
+            .with(MissionData::Scout(EntityRefCell::new(mission)))
+            .marked::<SerializeMarker>()
     }
 
     pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity, home_room_data: Entity) -> ScoutMission {
@@ -41,16 +42,7 @@ impl ScoutMission {
             scouts: EntityVec::new(),
             next_spawn: None,
             spawned_scouts: 0,
-            allow_spawning: true
         }
-    }
-
-    pub fn enable_spawning(&mut self) {
-        self.allow_spawning = true;
-    }
-
-    pub fn disable_spawning(&mut self) {
-        self.allow_spawning = false;
     }
 
     fn create_handle_scout_spawn(mission_entity: Entity, scout_room: RoomName) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
@@ -65,10 +57,12 @@ impl ScoutMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::Scout(mission_data)) = mission_data_storage.get_mut(mission_entity) {
+                    let mission_data = mission_data.get_mut();
+
                     mission_data.scouts.push(creep_entity);
 
                     mission_data.spawned_scouts += 1;
-                    mission_data.next_spawn = Some(std::cmp::min(mission_data.spawned_scouts * 2000, 10000));
+                    mission_data.next_spawn = Some(std::cmp::min(mission_data.spawned_scouts * 2000, 6000));
                 }
             });
         })
@@ -91,15 +85,11 @@ impl Mission for ScoutMission {
         self.room_data
     }
 
-    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
-        format!("Scout - Scouts: {}", self.scouts.len())
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
+        format!("Scout - Scouts: {} - Next spawn: {:?}", self.scouts.len(), self.next_spawn)
     }
 
-    fn pre_run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        _runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<(), String> {
+    fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         //
         // Cleanup scouts that no longer exist.
         //
@@ -110,11 +100,7 @@ impl Mission for ScoutMission {
         Ok(())
     }
 
-    fn run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<MissionResult, String> {
+    fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
         let data_is_fresh = room_data
@@ -135,7 +121,7 @@ impl Mission for ScoutMission {
         let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
         let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
 
-        let should_spawn = self.next_spawn.map(|t| t >= game::time()).unwrap_or(true) && self.allow_spawning && game::cpu::bucket() > 5000.0;
+        let should_spawn = self.next_spawn.map(|t| t >= game::time()).unwrap_or(true) && game::cpu::bucket() > 5000.0;
 
         if self.scouts.is_empty() && should_spawn {
             //TODO: Compute best body parts to use.
@@ -153,7 +139,7 @@ impl Mission for ScoutMission {
                     format!("Scout - Target Room: {}", room_data.name),
                     &body,
                     SPAWN_PRIORITY_LOW,
-                    Self::create_handle_scout_spawn(runtime_data.entity, room_data.name),
+                    Self::create_handle_scout_spawn(mission_entity, room_data.name),
                 );
 
                 system_data.spawn_queue.request(home_room_data.name, spawn_request);

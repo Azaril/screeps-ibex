@@ -5,9 +5,9 @@ use super::utility::controllerbehavior::*;
 use super::utility::harvestbehavior::*;
 use super::utility::haulbehavior::*;
 use super::utility::waitbehavior::*;
+use crate::constants::*;
 use crate::remoteobjectid::*;
 use crate::transfer::transfersystem::*;
-use crate::constants::*;
 use screeps::*;
 use screeps_machine::*;
 use serde::{Deserialize, Serialize};
@@ -55,9 +55,9 @@ machine!(
         }
 
         Idle, Harvest, FinishedPickup, Sign, Upgrade, Wait => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
-        
+
         Idle, Harvest, FinishedPickup, Sign, Upgrade, Wait => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
-        
+
         _ => fn tick(&mut self, state_context: &mut UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState>;
     }
 );
@@ -68,7 +68,7 @@ impl Idle {
 
         let transfer_queue_data = TransferQueueGeneratorData {
             cause: "Upgrade Idle",
-            room_data: &*tick_context.system_data.room_data
+            room_data: &*tick_context.system_data.room_data,
         };
 
         get_new_pickup_state_fill_resource(
@@ -117,10 +117,10 @@ impl Pickup {
 impl FinishedPickup {
     pub fn tick(&self, state_context: &UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState> {
         let home_room_data = tick_context.system_data.room_data.get(state_context.home_room)?;
-        
+
         let transfer_queue_data = TransferQueueGeneratorData {
             cause: "Upgrade Finished Pickup",
-            room_data: &*tick_context.system_data.room_data
+            room_data: &*tick_context.system_data.room_data,
         };
 
         get_new_pickup_state_fill_resource(

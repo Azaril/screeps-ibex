@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 
-#[derive(Clone, ConvertSaveload)]
+#[derive(ConvertSaveload)]
 pub struct RemoteBuildMission {
     owner: EntityOption<OperationOrMissionEntity>,
     room_data: Entity,
@@ -27,7 +27,9 @@ impl RemoteBuildMission {
     {
         let mission = RemoteBuildMission::new(owner, room_data, home_room_data);
 
-        builder.with(MissionData::RemoteBuild(mission)).marked::<SerializeMarker>()
+        builder
+            .with(MissionData::RemoteBuild(EntityRefCell::new(mission)))
+            .marked::<SerializeMarker>()
     }
 
     pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity, home_room_data: Entity) -> RemoteBuildMission {
@@ -60,7 +62,7 @@ impl RemoteBuildMission {
                 let mission_data_storage = &mut world.write_storage::<MissionData>();
 
                 if let Some(MissionData::RemoteBuild(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.builders.push(creep_entity);
+                    mission_data.get_mut().builders.push(creep_entity);
                 }
             });
         })
@@ -83,15 +85,11 @@ impl Mission for RemoteBuildMission {
         self.room_data
     }
 
-    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _describe_data: &mut MissionDescribeData) -> String {
+    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!("Remote Build - Builders: {}", self.builders.len())
     }
 
-    fn pre_run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        _runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<(), String> {
+    fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         //
         // Cleanup creeps that no longer exist.
         //
@@ -102,11 +100,7 @@ impl Mission for RemoteBuildMission {
         Ok(())
     }
 
-    fn run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        runtime_data: &mut MissionExecutionRuntimeData,
-    ) -> Result<MissionResult, String> {
+    fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
         if let Some(room) = game::rooms::get(room_data.name) {
@@ -149,7 +143,7 @@ impl Mission for RemoteBuildMission {
                     format!("Remote Builder - Target Room: {}", room_data.name),
                     &body,
                     priority,
-                    Self::create_handle_builder_spawn(runtime_data.entity, self.room_data, true),
+                    Self::create_handle_builder_spawn(mission_entity, self.room_data, true),
                 );
 
                 system_data.spawn_queue.request(home_room_data.name, spawn_request);

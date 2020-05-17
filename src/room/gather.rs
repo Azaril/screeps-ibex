@@ -1,14 +1,14 @@
-use std::collections::HashMap;
+use crate::entitymappingsystem::*;
+use crate::room::data::*;
+use screeps::*;
 use screeps_rover::*;
 use specs::*;
-use screeps::*;
-use crate::room::data::*;
-use crate::entitymappingsystem::*;
+use std::collections::HashMap;
 
 pub struct CandidateRoomData {
     room_data_entity: Entity,
     viable: bool,
-    can_expand: bool
+    can_expand: bool,
 }
 
 impl CandidateRoomData {
@@ -16,14 +16,14 @@ impl CandidateRoomData {
         CandidateRoomData {
             room_data_entity,
             viable,
-            can_expand
+            can_expand,
         }
     }
 }
 
 pub struct CandidateRoom {
     room_data_entity: Entity,
-    home_room_data_entity: Entity
+    home_room_data_entity: Entity,
 }
 
 impl CandidateRoom {
@@ -71,7 +71,7 @@ struct VisitedRoomData {
     home_room_data_entity: Entity,
     distance: u32,
     viable: bool,
-    can_expand: bool
+    can_expand: bool,
 }
 
 pub struct GatherSystemData<'a, 'b> {
@@ -80,7 +80,10 @@ pub struct GatherSystemData<'a, 'b> {
     pub room_data: &'b mut WriteStorage<'a, RoomData>,
 }
 
-pub fn gather_candidate_rooms<F>(system_data: &GatherSystemData, max_distance: u32, candidate_generator: F) -> GatherRoomData where F: Fn(&GatherSystemData, RoomName) -> Option<CandidateRoomData> {
+pub fn gather_candidate_rooms<F>(system_data: &GatherSystemData, max_distance: u32, candidate_generator: F) -> GatherRoomData
+where
+    F: Fn(&GatherSystemData, RoomName) -> Option<CandidateRoomData>,
+{
     let mut unknown_rooms = HashMap::new();
 
     let mut visited_rooms: HashMap<RoomName, VisitedRoomData> = HashMap::new();
@@ -88,7 +91,8 @@ pub fn gather_candidate_rooms<F>(system_data: &GatherSystemData, max_distance: u
 
     for (entity, room_data) in (&*system_data.entities, &*system_data.room_data).join() {
         if let Some(room) = game::rooms::get(room_data.name) {
-            let seed_room = room.controller()
+            let seed_room = room
+                .controller()
                 .map(|controller| controller.my() && controller.level() >= 2)
                 .unwrap_or(false);
 
@@ -98,7 +102,7 @@ pub fn gather_candidate_rooms<F>(system_data: &GatherSystemData, max_distance: u
                     home_room_data_entity: entity,
                     distance: 0,
                     viable: false,
-                    can_expand: true
+                    can_expand: true,
                 };
 
                 if visited_room.can_expand {
@@ -113,8 +117,8 @@ pub fn gather_candidate_rooms<F>(system_data: &GatherSystemData, max_distance: u
                             expansion_rooms.insert(*expansion_room, entity);
                         }
                     }
-                }  
-                
+                }
+
                 visited_rooms.insert(room_data.name, visited_room);
             }
         }
@@ -135,7 +139,7 @@ pub fn gather_candidate_rooms<F>(system_data: &GatherSystemData, max_distance: u
                         home_room_data_entity: *home_room_entity,
                         distance,
                         viable: candidate_room_data.viable,
-                        can_expand: candidate_room_data.can_expand
+                        can_expand: candidate_room_data.can_expand,
                     };
 
                     if visited_room.can_expand {
@@ -151,7 +155,7 @@ pub fn gather_candidate_rooms<F>(system_data: &GatherSystemData, max_distance: u
                             }
                         }
                     }
-                    
+
                     visited_rooms.insert(*source_room_name, visited_room);
                 } else {
                     unknown_rooms.insert(*source_room_name, *home_room_entity);
@@ -165,16 +169,22 @@ pub fn gather_candidate_rooms<F>(system_data: &GatherSystemData, max_distance: u
     let candidate_rooms = visited_rooms
         .values()
         .filter(|v| v.viable)
-        .map(|v| CandidateRoom { room_data_entity: v.room_data_entity, home_room_data_entity: v.home_room_data_entity })
+        .map(|v| CandidateRoom {
+            room_data_entity: v.room_data_entity,
+            home_room_data_entity: v.home_room_data_entity,
+        })
         .collect();
 
     let returned_unknown_rooms = unknown_rooms
         .into_iter()
-        .map(|(room_name, home_room_data_entity)| UnknownRoom { room_name, home_room_data_entity })
+        .map(|(room_name, home_room_data_entity)| UnknownRoom {
+            room_name,
+            home_room_data_entity,
+        })
         .collect();
 
     GatherRoomData {
         candidate_rooms,
-        unknown_rooms: returned_unknown_rooms
+        unknown_rooms: returned_unknown_rooms,
     }
 }

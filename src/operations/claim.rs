@@ -5,6 +5,8 @@ use crate::missions::data::*;
 use crate::missions::remotebuild::*;
 use crate::ownership::*;
 use crate::room::data::*;
+use crate::room::gather::*;
+use crate::room::roomplansystem::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use log::*;
@@ -12,8 +14,6 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use crate::room::gather::*;
-use crate::room::roomplansystem::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ClaimOperation {
@@ -42,24 +42,21 @@ impl ClaimOperation {
     fn gather_candidate_room_data(gather_system_data: &GatherSystemData, room_name: RoomName) -> Option<CandidateRoomData> {
         let search_room_entity = gather_system_data.mapping.get_room(&room_name)?;
         let search_room_data = gather_system_data.room_data.get(search_room_entity)?;
-        
+
         let static_visibility_data = search_room_data.get_static_visibility_data()?;
         let dynamic_visibility_data = search_room_data.get_dynamic_visibility_data()?;
 
         let has_controller = static_visibility_data.controller().is_some();
         let has_sources = !static_visibility_data.sources().is_empty();
 
-        let visibility_timeout = if has_sources {
-            5000
-        } else {
-            10000
-        };
+        let visibility_timeout = if has_sources { 5000 } else { 10000 };
 
         if !dynamic_visibility_data.updated_within(visibility_timeout) {
             return None;
         }
 
-        let can_claim = dynamic_visibility_data.owner().neutral() && (dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().neutral());
+        let can_claim = dynamic_visibility_data.owner().neutral()
+            && (dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().neutral());
         let hostile = dynamic_visibility_data.owner().hostile() || dynamic_visibility_data.source_keeper();
 
         let viable = has_controller && has_sources && can_claim;
@@ -70,10 +67,7 @@ impl ClaimOperation {
         Some(candidate_room_data)
     }
 
-    fn spawn_remote_build(
-        system_data: &mut OperationExecutionSystemData,
-        runtime_data: &mut OperationExecutionRuntimeData
-    ) {
+    fn spawn_remote_build(system_data: &mut OperationExecutionSystemData, runtime_data: &mut OperationExecutionRuntimeData) {
         //
         // Ensure remote builders occur.
         //
@@ -101,12 +95,14 @@ impl ClaimOperation {
                                 //TODO: wiarchbe: Use trait instead of match.
                                 let mission_data = system_data.mission_data;
 
-                                let has_remote_build_mission = room_data.get_missions().iter().any(|mission_entity| {
-                                    match mission_data.get(*mission_entity) {
-                                        Some(MissionData::RemoteBuild(_)) => true,
-                                        _ => false,
-                                    }
-                                });
+                                let has_remote_build_mission =
+                                    room_data
+                                        .get_missions()
+                                        .iter()
+                                        .any(|mission_entity| match mission_data.get(*mission_entity) {
+                                            Some(MissionData::RemoteBuild(_)) => true,
+                                            _ => false,
+                                        });
 
                                 //
                                 // Spawn a new mission to fill the remote build role if missing.
@@ -195,15 +191,13 @@ impl Operation for ClaimOperation {
         })
     }
 
-    fn pre_run_operation(&mut self, _system_data: &mut OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {
-    }
+    fn pre_run_operation(&mut self, _system_data: &mut OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {}
 
     fn run_operation(
         &mut self,
         system_data: &mut OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
-        
         Self::spawn_remote_build(system_data, runtime_data);
 
         //
@@ -244,7 +238,7 @@ impl Operation for ClaimOperation {
             mapping: system_data.mapping,
             room_data: system_data.room_data,
         };
-        
+
         let gathered_data = gather_candidate_rooms(&gather_system_data, 2, Self::gather_candidate_room_data);
 
         for unknown_room in gathered_data.unknown_rooms().iter() {
@@ -279,14 +273,13 @@ impl Operation for ClaimOperation {
             let mission_data = system_data.mission_data;
 
             //TODO: wiarchbe: Use trait instead of match.
-            let has_claim_mission =
-                room_data
-                    .get_missions()
-                    .iter()
-                    .any(|mission_entity| match mission_data.get(*mission_entity) {
-                        Some(MissionData::Claim(_)) => true,
-                        _ => false,
-                    });
+            let has_claim_mission = room_data
+                .get_missions()
+                .iter()
+                .any(|mission_entity| match mission_data.get(*mission_entity) {
+                    Some(MissionData::Claim(_)) => true,
+                    _ => false,
+                });
 
             //
             // Spawn a new mission to fill the claim role if missing.
@@ -308,7 +301,7 @@ impl Operation for ClaimOperation {
                 self.claim_missions.push(mission_entity);
 
                 if currently_owned_rooms + self.claim_missions.len() >= maximum_rooms as usize {
-                    break
+                    break;
                 }
             }
         }
