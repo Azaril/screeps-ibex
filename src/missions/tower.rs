@@ -1,7 +1,6 @@
 use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::utility::repair::*;
-use crate::ownership::*;
 use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::transfer::transfersystem::*;
@@ -12,13 +11,13 @@ use specs::*;
 
 #[derive(ConvertSaveload)]
 pub struct TowerMission {
-    owner: EntityOption<OperationOrMissionEntity>,
+    owner: EntityOption<Entity>,
     room_data: Entity,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl TowerMission {
-    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>, room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
@@ -29,7 +28,7 @@ impl TowerMission {
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity) -> TowerMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity) -> TowerMission {
         TowerMission {
             owner: owner.into(),
             room_data,
@@ -39,11 +38,11 @@ impl TowerMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for TowerMission {
-    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+    fn get_owner(&self) -> &Option<Entity> {
         &self.owner
     }
 
-    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+    fn owner_complete(&mut self, owner: Entity) {
         assert!(Some(owner) == *self.owner);
 
         self.owner.take();

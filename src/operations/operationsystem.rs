@@ -1,7 +1,6 @@
 use super::data::*;
 use crate::entitymappingsystem::EntityMappingData;
 use crate::missions::data::*;
-use crate::ownership::*;
 use crate::room::data::*;
 use crate::room::roomplansystem::*;
 use crate::room::visibilitysystem::*;
@@ -53,9 +52,9 @@ pub enum OperationResult {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub trait Operation {
-    fn get_owner(&self) -> &Option<OperationOrMissionEntity>;
+    fn get_owner(&self) -> &Option<Entity>;
 
-    fn owner_complete(&mut self, owner: OperationOrMissionEntity);
+    fn owner_complete(&mut self, owner: Entity);
 
     fn child_complete(&mut self, _child: Entity) {}
 
@@ -115,23 +114,19 @@ impl<'a> System<'a> for PreRunOperationSystem {
     }
 }
 
-fn queue_cleanup_operation(updater: &LazyUpdate, entity: Entity, owner: Option<OperationOrMissionEntity>) {
+fn queue_cleanup_operation(updater: &LazyUpdate, operation_entity: Entity, owner: Option<Entity>) {
     updater.exec_mut(move |world| {
-        match owner {
-            Some(OperationOrMissionEntity::Operation(owner_operation_entity)) => {
-                if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(owner_operation_entity) {
-                    operation_data.as_operation().child_complete(entity);
-                }
+        if let Some(owner) = owner {
+            if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(owner) {
+                operation_data.as_operation().child_complete(operation_entity);
             }
-            Some(OperationOrMissionEntity::Mission(owner_mission_entity)) => {
-                if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(owner_mission_entity) {
-                    mission_data.as_mission_mut().child_complete(entity);
-                }
+
+            if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(owner) {
+                mission_data.as_mission_mut().child_complete(operation_entity);
             }
-            None => {}
         }
 
-        if let Err(err) = world.delete_entity(entity) {
+        if let Err(err) = world.delete_entity(operation_entity) {
             warn!("Trying to clean up operation entity that no longer exists. Error: {}", err);
         }
     });

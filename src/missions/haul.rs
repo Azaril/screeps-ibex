@@ -2,7 +2,6 @@ use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
 use crate::jobs::haul::*;
-use crate::ownership::*;
 use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
@@ -22,7 +21,7 @@ struct HaulingStats {
 
 #[derive(ConvertSaveload)]
 pub struct HaulMission {
-    owner: EntityOption<OperationOrMissionEntity>,
+    owner: EntityOption<Entity>,
     room_data: Entity,
     haulers: EntityVec<Entity>,
     //TODO: Create a room stats component?
@@ -31,7 +30,7 @@ pub struct HaulMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl HaulMission {
-    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>, room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
@@ -42,7 +41,7 @@ impl HaulMission {
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity) -> HaulMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity) -> HaulMission {
         HaulMission {
             owner: owner.into(),
             room_data,
@@ -100,11 +99,11 @@ impl HaulMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for HaulMission {
-    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+    fn get_owner(&self) -> &Option<Entity> {
         &self.owner
     }
 
-    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+    fn owner_complete(&mut self, owner: Entity) {
         assert!(Some(owner) == *self.owner);
 
         self.owner.take();

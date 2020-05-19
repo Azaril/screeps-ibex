@@ -4,7 +4,6 @@ use crate::jobs::data::*;
 use crate::jobs::harvest::*;
 use crate::jobs::linkmine::*;
 use crate::jobs::staticmine::*;
-use crate::ownership::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use crate::serialize::*;
@@ -23,7 +22,7 @@ use std::rc::*;
 
 #[derive(ConvertSaveload)]
 pub struct LocalSupplyMission {
-    owner: EntityOption<OperationOrMissionEntity>,
+    owner: EntityOption<Entity>,
     room_data: Entity,
     harvesters: EntityVec<Entity>,
     source_container_miners: EntityVec<Entity>,
@@ -59,7 +58,7 @@ struct CreepData {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl LocalSupplyMission {
-    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>, room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
@@ -70,7 +69,7 @@ impl LocalSupplyMission {
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity) -> LocalSupplyMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity) -> LocalSupplyMission {
         LocalSupplyMission {
             owner: owner.into(),
             room_data,
@@ -1176,11 +1175,11 @@ impl LocalSupplyMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for LocalSupplyMission {
-    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+    fn get_owner(&self) -> &Option<Entity> {
         &self.owner
     }
 
-    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+    fn owner_complete(&mut self, owner: Entity) {
         assert!(Some(owner) == *self.owner);
 
         self.owner.take();

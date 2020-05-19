@@ -7,7 +7,6 @@ use super::remotemine::*;
 use super::reserve::*;
 use crate::componentaccess::*;
 use crate::jobs::utility::dismantle::*;
-use crate::ownership::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use log::*;
@@ -267,7 +266,7 @@ impl Cleanup {
 
                 let mission_entity = RaidMission::build(
                     system_data.updater.create_entity(system_data.entities),
-                    Some(OperationOrMissionEntity::Mission(mission_entity)),
+                    Some(mission_entity),
                     state_context.outpost_room_data,
                     state_context.home_room_data,
                 )
@@ -331,7 +330,7 @@ impl Cleanup {
 
                 let mission_entity = DismantleMission::build(
                     system_data.updater.create_entity(system_data.entities),
-                    Some(OperationOrMissionEntity::Mission(mission_entity)),
+                    Some(mission_entity),
                     state_context.outpost_room_data,
                     state_context.home_room_data,
                     false,
@@ -383,7 +382,7 @@ impl Cleanup {
 
             let mission_entity = DefendMission::build(
                 system_data.updater.create_entity(system_data.entities),
-                Some(OperationOrMissionEntity::Mission(mission_entity)),
+                Some(mission_entity),
                 state_context.outpost_room_data,
                 state_context.home_room_data,
             )
@@ -427,7 +426,7 @@ impl Mine {
 
             let mission_entity = RemoteMineMission::build(
                 system_data.updater.create_entity(system_data.entities),
-                Some(OperationOrMissionEntity::Mission(mission_entity)),
+                Some(mission_entity),
                 state_context.outpost_room_data,
                 state_context.home_room_data,
             )
@@ -448,7 +447,7 @@ impl Mine {
 
             let mission_entity = ReserveMission::build(
                 system_data.updater.create_entity(system_data.entities),
-                Some(OperationOrMissionEntity::Mission(mission_entity)),
+                Some(mission_entity),
                 state_context.outpost_room_data,
                 state_context.home_room_data,
             )
@@ -469,7 +468,7 @@ impl Mine {
 
             let mission_entity = DefendMission::build(
                 system_data.updater.create_entity(system_data.entities),
-                Some(OperationOrMissionEntity::Mission(mission_entity)),
+                Some(mission_entity),
                 state_context.outpost_room_data,
                 state_context.home_room_data,
             )
@@ -509,14 +508,14 @@ impl Mine {
 
 #[derive(ConvertSaveload)]
 pub struct MiningOutpostMission {
-    owner: EntityOption<OperationOrMissionEntity>,
+    owner: EntityOption<Entity>,
     context: MiningOutpostMissionContext,
     state: MiningOutpostState,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl MiningOutpostMission {
-    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>, outpost_room_data: Entity, home_room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, outpost_room_data: Entity, home_room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
@@ -527,7 +526,7 @@ impl MiningOutpostMission {
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<OperationOrMissionEntity>, outpost_room_data: Entity, home_room_data: Entity) -> MiningOutpostMission {
+    pub fn new(owner: Option<Entity>, outpost_room_data: Entity, home_room_data: Entity) -> MiningOutpostMission {
         MiningOutpostMission {
             owner: owner.into(),
             context: MiningOutpostMissionContext {
@@ -541,11 +540,11 @@ impl MiningOutpostMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for MiningOutpostMission {
-    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+    fn get_owner(&self) -> &Option<Entity> {
         &self.owner
     }
 
-    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+    fn owner_complete(&mut self, owner: Entity) {
         assert!(Some(owner) == *self.owner);
 
         self.owner.take();

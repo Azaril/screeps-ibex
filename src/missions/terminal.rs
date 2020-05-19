@@ -1,6 +1,5 @@
 use super::data::*;
 use super::missionsystem::*;
-use crate::ownership::*;
 use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::transfer::ordersystem::*;
@@ -14,13 +13,13 @@ use std::collections::HashSet;
 
 #[derive(ConvertSaveload)]
 pub struct TerminalMission {
-    owner: EntityOption<OperationOrMissionEntity>,
+    owner: EntityOption<Entity>,
     room_data: Entity,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl TerminalMission {
-    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>, room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
@@ -31,7 +30,7 @@ impl TerminalMission {
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity) -> TerminalMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity) -> TerminalMission {
         TerminalMission {
             owner: owner.into(),
             room_data,
@@ -112,11 +111,11 @@ struct ResourceThresholds {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for TerminalMission {
-    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+    fn get_owner(&self) -> &Option<Entity> {
         &self.owner
     }
 
-    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+    fn owner_complete(&mut self, owner: Entity) {
         assert!(Some(owner) == *self.owner);
 
         self.owner.take();

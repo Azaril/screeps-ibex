@@ -3,7 +3,6 @@ use super::missionsystem::*;
 use crate::jobs::data::*;
 use crate::jobs::dismantle::*;
 use crate::jobs::utility::dismantle::*;
-use crate::ownership::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use screeps::*;
@@ -13,7 +12,7 @@ use specs::*;
 
 #[derive(ConvertSaveload)]
 pub struct DismantleMission {
-    owner: EntityOption<OperationOrMissionEntity>,
+    owner: EntityOption<Entity>,
     room_data: Entity,
     home_room_data: Entity,
     ignore_storage: bool,
@@ -25,7 +24,7 @@ pub struct DismantleMission {
 impl DismantleMission {
     pub fn build<B>(
         builder: B,
-        owner: Option<OperationOrMissionEntity>,
+        owner: Option<Entity>,
         room_data: Entity,
         home_room_data: Entity,
         ignore_storage: bool,
@@ -41,7 +40,7 @@ impl DismantleMission {
     }
 
     pub fn new(
-        owner: Option<OperationOrMissionEntity>,
+        owner: Option<Entity>,
         room_data: Entity,
         home_room_data: Entity,
         ignore_storage: bool,
@@ -88,11 +87,11 @@ impl DismantleMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for DismantleMission {
-    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+    fn get_owner(&self) -> &Option<Entity> {
         &self.owner
     }
 
-    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+    fn owner_complete(&mut self, owner: Entity) {
         assert!(Some(owner) == *self.owner);
 
         self.owner.take();

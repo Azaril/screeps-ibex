@@ -2,7 +2,6 @@ use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
 use crate::jobs::harvest::*;
-use crate::ownership::*;
 use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
@@ -14,7 +13,7 @@ use specs::*;
 
 #[derive(ConvertSaveload)]
 pub struct RemoteMineMission {
-    owner: EntityOption<OperationOrMissionEntity>,
+    owner: EntityOption<Entity>,
     room_data: Entity,
     home_room_data: Entity,
     harvesters: EntityVec<Entity>,
@@ -23,7 +22,7 @@ pub struct RemoteMineMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl RemoteMineMission {
-    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>, room_data: Entity, home_room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
@@ -34,7 +33,7 @@ impl RemoteMineMission {
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity, home_room_data: Entity) -> RemoteMineMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> RemoteMineMission {
         RemoteMineMission {
             owner: owner.into(),
             room_data,
@@ -75,11 +74,11 @@ impl RemoteMineMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for RemoteMineMission {
-    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+    fn get_owner(&self) -> &Option<Entity> {
         &self.owner
     }
 
-    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+    fn owner_complete(&mut self, owner: Entity) {
         assert!(Some(owner) == *self.owner);
 
         self.owner.take();

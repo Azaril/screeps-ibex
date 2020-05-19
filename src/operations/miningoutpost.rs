@@ -2,7 +2,6 @@ use super::data::*;
 use super::operationsystem::*;
 use crate::missions::data::*;
 use crate::missions::miningoutpost::*;
-use crate::ownership::*;
 use crate::room::gather::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
@@ -14,12 +13,12 @@ use specs::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct MiningOutpostOperation {
-    owner: EntityOption<OperationOrMissionEntity>,
+    owner: EntityOption<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl MiningOutpostOperation {
-    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>) -> B
     where
         B: Builder + MarkedBuilder,
     {
@@ -28,7 +27,7 @@ impl MiningOutpostOperation {
         builder.with(OperationData::MiningOutpost(operation)).marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<OperationOrMissionEntity>) -> MiningOutpostOperation {
+    pub fn new(owner: Option<Entity>) -> MiningOutpostOperation {
         MiningOutpostOperation { owner: owner.into() }
     }
 
@@ -62,11 +61,11 @@ impl MiningOutpostOperation {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Operation for MiningOutpostOperation {
-    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+    fn get_owner(&self) -> &Option<Entity> {
         &self.owner
     }
 
-    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+    fn owner_complete(&mut self, owner: Entity) {
         assert!(Some(owner) == *self.owner);
 
         self.owner.take();
@@ -143,7 +142,7 @@ impl Operation for MiningOutpostOperation {
 
                     let mission_entity = MiningOutpostMission::build(
                         system_data.updater.create_entity(system_data.entities),
-                        Some(OperationOrMissionEntity::Operation(runtime_data.entity)),
+                        Some(runtime_data.entity),
                         candidate_room.room_data_entity(),
                         candidate_room.home_room_data_entity(),
                     )

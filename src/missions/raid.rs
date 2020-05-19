@@ -3,7 +3,6 @@ use super::missionsystem::*;
 use crate::creep::*;
 use crate::jobs::data::*;
 use crate::jobs::haul::*;
-use crate::ownership::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use crate::transfer::transfersystem::*;
@@ -15,7 +14,7 @@ use std::convert::*;
 
 #[derive(ConvertSaveload)]
 pub struct RaidMission {
-    owner: EntityOption<OperationOrMissionEntity>,
+    owner: EntityOption<Entity>,
     room_data: Entity,
     home_room_data: Entity,
     raiders: EntityVec<Entity>,
@@ -24,7 +23,7 @@ pub struct RaidMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl RaidMission {
-    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>, room_data: Entity, home_room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
@@ -35,7 +34,7 @@ impl RaidMission {
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity, home_room_data: Entity) -> RaidMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> RaidMission {
         RaidMission {
             owner: owner.into(),
             room_data,
@@ -105,11 +104,11 @@ impl RaidMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for RaidMission {
-    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+    fn get_owner(&self) -> &Option<Entity> {
         &self.owner
     }
 
-    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+    fn owner_complete(&mut self, owner: Entity) {
         assert!(Some(owner) == *self.owner);
 
         self.owner.take();

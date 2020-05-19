@@ -2,7 +2,6 @@ use super::data::*;
 use super::operationsystem::*;
 use crate::missions::colony::*;
 use crate::missions::data::*;
-use crate::ownership::*;
 use crate::serialize::*;
 use log::*;
 use screeps::*;
@@ -12,12 +11,12 @@ use specs::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ColonyOperation {
-    owner: EntityOption<OperationOrMissionEntity>,
+    owner: EntityOption<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl ColonyOperation {
-    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>) -> B
     where
         B: Builder + MarkedBuilder,
     {
@@ -26,18 +25,18 @@ impl ColonyOperation {
         builder.with(OperationData::Colony(operation)).marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<OperationOrMissionEntity>) -> ColonyOperation {
+    pub fn new(owner: Option<Entity>) -> ColonyOperation {
         ColonyOperation { owner: owner.into() }
     }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Operation for ColonyOperation {
-    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+    fn get_owner(&self) -> &Option<Entity> {
         &self.owner
     }
 
-    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+    fn owner_complete(&mut self, owner: Entity) {
         assert!(Some(owner) == *self.owner);
 
         self.owner.take();
@@ -83,7 +82,7 @@ impl Operation for ColonyOperation {
 
                             let mission_entity = ColonyMission::build(
                                 system_data.updater.create_entity(system_data.entities),
-                                Some(OperationOrMissionEntity::Operation(runtime_data.entity)),
+                                Some(runtime_data.entity),
                                 entity,
                             )
                             .build();

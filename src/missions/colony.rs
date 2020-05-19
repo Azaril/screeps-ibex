@@ -7,7 +7,6 @@ use super::missionsystem::*;
 use super::terminal::*;
 use super::tower::*;
 use super::upgrade::*;
-use crate::ownership::*;
 use crate::serialize::*;
 use screeps::*;
 use screeps_machine::*;
@@ -117,7 +116,7 @@ impl Incubate {
         if self.construction_mission.is_none() {
             let mission_entity = ConstructionMission::build(
                 system_data.updater.create_entity(system_data.entities),
-                Some(OperationOrMissionEntity::Mission(mission_entity)),
+                Some(mission_entity),
                 state_context.room_data,
             )
             .build();
@@ -130,7 +129,7 @@ impl Incubate {
         if self.local_supply_mission.is_none() {
             let mission_entity = LocalSupplyMission::build(
                 system_data.updater.create_entity(system_data.entities),
-                Some(OperationOrMissionEntity::Mission(mission_entity)),
+                Some(mission_entity),
                 state_context.room_data,
             )
             .build();
@@ -143,7 +142,7 @@ impl Incubate {
         if self.local_build_mission.is_none() {
             let mission_entity = LocalBuildMission::build(
                 system_data.updater.create_entity(system_data.entities),
-                Some(OperationOrMissionEntity::Mission(mission_entity)),
+                Some(mission_entity),
                 state_context.room_data,
             )
             .build();
@@ -156,7 +155,7 @@ impl Incubate {
         if self.haul_mission.is_none() {
             let mission_entity = HaulMission::build(
                 system_data.updater.create_entity(system_data.entities),
-                Some(OperationOrMissionEntity::Mission(mission_entity)),
+                Some(mission_entity),
                 state_context.room_data,
             )
             .build();
@@ -169,7 +168,7 @@ impl Incubate {
         if self.terminal_mission.is_none() && room.terminal().is_some() {
             let mission_entity = TerminalMission::build(
                 system_data.updater.create_entity(system_data.entities),
-                Some(OperationOrMissionEntity::Mission(mission_entity)),
+                Some(mission_entity),
                 state_context.room_data,
             )
             .build();
@@ -182,7 +181,7 @@ impl Incubate {
         if self.tower_mission.is_none() {
             let mission_entity = TowerMission::build(
                 system_data.updater.create_entity(system_data.entities),
-                Some(OperationOrMissionEntity::Mission(mission_entity)),
+                Some(mission_entity),
                 state_context.room_data,
             )
             .build();
@@ -195,7 +194,7 @@ impl Incubate {
         if self.upgrade_mission.is_none() {
             let mission_entity = UpgradeMission::build(
                 system_data.updater.create_entity(system_data.entities),
-                Some(OperationOrMissionEntity::Mission(mission_entity)),
+                Some(mission_entity),
                 state_context.room_data,
             )
             .build();
@@ -211,14 +210,14 @@ impl Incubate {
 
 #[derive(ConvertSaveload)]
 pub struct ColonyMission {
-    owner: EntityOption<OperationOrMissionEntity>,
+    owner: EntityOption<Entity>,
     context: ColonyMissionContext,
     state: ColonyState,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl ColonyMission {
-    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>, room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
@@ -229,7 +228,7 @@ impl ColonyMission {
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity) -> ColonyMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity) -> ColonyMission {
         ColonyMission {
             owner: owner.into(),
             context: ColonyMissionContext { room_data },
@@ -248,11 +247,11 @@ impl ColonyMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for ColonyMission {
-    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+    fn get_owner(&self) -> &Option<Entity> {
         &self.owner
     }
 
-    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+    fn owner_complete(&mut self, owner: Entity) {
         assert!(Some(owner) == *self.owner);
 
         self.owner.take();

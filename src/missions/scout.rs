@@ -2,7 +2,6 @@ use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
 use crate::jobs::scout::*;
-use crate::ownership::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use log::*;
@@ -13,7 +12,7 @@ use specs::*;
 
 #[derive(ConvertSaveload)]
 pub struct ScoutMission {
-    owner: EntityOption<OperationOrMissionEntity>,
+    owner: EntityOption<Entity>,
     room_data: Entity,
     home_room_data: Entity,
     scouts: EntityVec<Entity>,
@@ -23,7 +22,7 @@ pub struct ScoutMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl ScoutMission {
-    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>, room_data: Entity, home_room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
@@ -34,7 +33,7 @@ impl ScoutMission {
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<OperationOrMissionEntity>, room_data: Entity, home_room_data: Entity) -> ScoutMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> ScoutMission {
         ScoutMission {
             owner: owner.into(),
             room_data,
@@ -71,11 +70,11 @@ impl ScoutMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for ScoutMission {
-    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+    fn get_owner(&self) -> &Option<Entity> {
         &self.owner
     }
 
-    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+    fn owner_complete(&mut self, owner: Entity) {
         assert!(Some(owner) == *self.owner);
 
         self.owner.take();

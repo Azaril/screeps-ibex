@@ -3,7 +3,6 @@ use crate::componentaccess::*;
 use crate::creep::*;
 use crate::jobs::data::*;
 use crate::operations::data::*;
-use crate::ownership::*;
 use crate::room::data::*;
 use crate::room::roomplansystem::*;
 use crate::room::visibilitysystem::*;
@@ -105,37 +104,24 @@ impl MissionRequests {
                     if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(child_entity) {
                         operation_data
                             .as_operation()
-                            .owner_complete(OperationOrMissionEntity::Mission(mission_entity));
+                            .owner_complete(mission_entity);
                     }
 
                     if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(child_entity) {
                         mission_data
                             .as_mission_mut()
-                            .owner_complete(OperationOrMissionEntity::Mission(mission_entity));
+                            .owner_complete(mission_entity);
                     }
                 }
 
-                //TODO: Remove hacks for data cleanup. Or move to single entity type?
-                match owner {
-                    Some(OperationOrMissionEntity::Operation(owner_operation_entity)) => {
-                        if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(owner_operation_entity) {
-                            operation_data.as_operation().child_complete(mission_entity);
-                        }
-
-                        if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(owner_operation_entity) {
-                            mission_data.as_mission_mut().child_complete(mission_entity);
-                        }
+                if let Some(owner) = owner {
+                    if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(owner) {
+                        operation_data.as_operation().child_complete(mission_entity);
                     }
-                    Some(OperationOrMissionEntity::Mission(owner_mission_entity)) => {
-                        if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(owner_mission_entity) {
-                            operation_data.as_operation().child_complete(mission_entity);
-                        }
 
-                        if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(owner_mission_entity) {
-                            mission_data.as_mission_mut().child_complete(mission_entity);
-                        }
+                    if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(owner) {
+                        mission_data.as_mission_mut().child_complete(mission_entity);
                     }
-                    None => {}
                 }
 
                 if let Err(err) = world.delete_entity(mission_entity) {
@@ -153,9 +139,9 @@ pub enum MissionResult {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub trait Mission {
-    fn get_owner(&self) -> &Option<OperationOrMissionEntity>;
+    fn get_owner(&self) -> &Option<Entity>;
 
-    fn owner_complete(&mut self, owner: OperationOrMissionEntity);
+    fn owner_complete(&mut self, owner: Entity);
 
     fn get_room(&self) -> Entity;
 
