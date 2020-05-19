@@ -54,11 +54,11 @@ impl ScoutMission {
 
                 let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
-                let mission_data_storage = &mut world.write_storage::<MissionData>();
-
-                if let Some(MissionData::Scout(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    let mission_data = mission_data.get_mut();
-
+                if let Some(mut mission_data) = world
+                    .write_storage::<MissionData>()
+                    .get_mut(mission_entity)
+                    .as_mission_type_mut::<ScoutMission>()
+                {
                     mission_data.scouts.push(creep_entity);
 
                     mission_data.spawned_scouts += 1;

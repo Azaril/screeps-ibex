@@ -30,7 +30,7 @@ pub enum MissionData {
 impl MissionData {
     pub fn as_mission(&self) -> Ref<dyn Mission> {
         match self {
-            MissionData::LocalSupply(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
+            MissionData::LocalSupply(data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::Upgrade(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::LocalBuild(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::Tower(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
@@ -73,33 +73,75 @@ impl MissionData {
     }
 }
 
-pub trait AsMissionType<T> {
-    fn as_mission_type<'a>(&self) -> Option<Ref<T>>;
+//
+// Trait
+//
+
+pub trait AsMissionType<'a, SM> {
+    fn as_mission_type<T>(&'a self) -> Option<Ref<'a, T>>
+    where
+        Ref<'a, T>: TryFrom<SM>;
 }
 
-pub trait EntityAsMissionType {
-    fn as_mission_type<'a, T>(&self, accessor: &dyn Fn(Entity) -> Option<&'a MissionData>) -> Option<Ref<'a, T>>
+pub trait AsMissionTypeMut<'a, SM> {
+    fn as_mission_type_mut<T>(&'a self) -> Option<RefMut<'a, T>>
     where
-        std::cell::Ref<'a, T>: TryFrom<&'a MissionData>;
-
-    fn as_mission_type_mut<'a, T>(&self, accessor: &dyn Fn(Entity) -> Option<&'a MissionData>) -> Option<RefMut<'a, T>>
-    where
-        std::cell::RefMut<'a, T>: TryFrom<&'a MissionData>;
+        RefMut<'a, T>: TryFrom<SM>;
 }
 
-impl EntityAsMissionType for Option<Entity> {
-    fn as_mission_type<'a, T>(&self, accessor: &dyn Fn(Entity) -> Option<&'a MissionData>) -> Option<Ref<'a, T>>
+//
+// Data
+//
+
+impl<'a, M> AsMissionType<'a, &'a MissionData> for M
+where
+    M: std::borrow::Borrow<MissionData> + 'a,
+{
+    fn as_mission_type<T>(&'a self) -> Option<Ref<'a, T>>
     where
-        std::cell::Ref<'a, T>: TryFrom<&'a MissionData>,
+        Ref<'a, T>: TryFrom<&'a MissionData>,
     {
-        self.and_then(accessor).map(std::convert::TryInto::try_into).and_then(Result::ok)
+        self.borrow().try_into().ok()
     }
+}
 
-    fn as_mission_type_mut<'a, T>(&self, accessor: &dyn Fn(Entity) -> Option<&'a MissionData>) -> Option<RefMut<'a, T>>
+impl<'a, M> AsMissionTypeMut<'a, &'a MissionData> for M
+where
+    M: std::borrow::Borrow<MissionData> + 'a,
+{
+    fn as_mission_type_mut<T>(&'a self) -> Option<RefMut<'a, T>>
     where
-        std::cell::RefMut<'a, T>: TryFrom<&'a MissionData>,
+        RefMut<'a, T>: TryFrom<&'a MissionData>,
     {
-        self.and_then(accessor).map(std::convert::TryInto::try_into).and_then(Result::ok)
+        self.borrow().try_into().ok()
+    }
+}
+
+//
+// Option
+//
+
+impl<'a, M> AsMissionType<'a, &'a MissionData> for Option<M>
+where
+    M: std::borrow::Borrow<MissionData> + 'a,
+{
+    fn as_mission_type<T>(&'a self) -> Option<Ref<'a, T>>
+    where
+        Ref<'a, T>: TryFrom<&'a MissionData>,
+    {
+        self.as_ref().and_then(|m| m.borrow().try_into().ok())
+    }
+}
+
+impl<'a, M> AsMissionTypeMut<'a, &'a MissionData> for Option<M>
+where
+    M: std::borrow::Borrow<MissionData> + 'a,
+{
+    fn as_mission_type_mut<T>(&'a self) -> Option<RefMut<'a, T>>
+    where
+        RefMut<'a, T>: TryFrom<&'a MissionData>,
+    {
+        self.as_ref().and_then(|m| m.borrow().try_into().ok())
     }
 }
 
@@ -152,52 +194,8 @@ macro_rules! mission_type {
                 }
             }
         }
-
-        impl AsMissionType<$mission> for MissionData {
-            fn as_mission_type<'a>(&self) -> Option<Ref<$mission>> {
-                self.try_into().ok()
-            }
-        }
     };
 }
-
-/*
-impl<'a> TryFrom<&'a MissionData> for Ref<'a, super::localsupply::LocalSupplyMission> {
-    type Error = ();
-
-    fn try_from(value: &'a MissionData) -> Result<Self, Self::Error> {
-        if let MissionData::LocalSupply(data) = value {
-            Ok(data.borrow())
-        } else {
-            Err(())
-        }
-    }
-}
-
-impl<'a> TryFrom<&'a mut MissionData> for Ref<'a, super::localsupply::LocalSupplyMission> {
-    type Error = ();
-
-    fn try_from(value: &'a mut MissionData) -> Result<Self, Self::Error> {
-        if let MissionData::LocalSupply(data) = value {
-            Ok(data.borrow())
-        } else {
-            Err(())
-        }
-    }
-}
-
-impl<'a> TryFrom<&'a mut MissionData> for RefMut<'a, super::localsupply::LocalSupplyMission> {
-    type Error = ();
-
-    fn try_from(value: &'a MissionData) -> Result<Self, Self::Error> {
-        if let (data) = value {
-            Ok(data.borrow_mut())
-        } else {
-            Err(())
-        }
-    }
-}
-*/
 
 mission_type!(super::localsupply::LocalSupplyMission, MissionData::LocalSupply);
 mission_type!(super::upgrade::UpgradeMission, MissionData::Upgrade);
