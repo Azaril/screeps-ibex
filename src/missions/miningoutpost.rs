@@ -5,6 +5,7 @@ use super::missionsystem::*;
 use super::raid::*;
 use super::remotemine::*;
 use super::reserve::*;
+use crate::componentaccess::*;
 use crate::jobs::utility::dismantle::*;
 use crate::ownership::*;
 use crate::room::visibilitysystem::*;
@@ -174,17 +175,22 @@ impl Cleanup {
         self.tick_dismantling(system_data, mission_entity, state_context)?;
         self.tick_defend(system_data, mission_entity, state_context)?;
 
-        let room_is_safe = self
-            .defend_mission
-            .as_mission_type::<DefendMission>(system_data.missions)
+        let room_is_safe = system_data
+            .missions
+            .try_get(self.defend_mission)
+            .as_mission_type::<DefendMission>()
             .map(|d| d.is_room_safe())
             .unwrap_or(true);
 
-        if let Some(mut raid_mission) = self.raid_mission.as_mission_type_mut::<RaidMission>(system_data.missions) {
+        if let Some(mut raid_mission) = system_data.missions.try_get(self.raid_mission).as_mission_type_mut::<RaidMission>() {
             raid_mission.allow_spawning(room_is_safe);
         }
 
-        if let Some(mut dismantle_mission) = self.dismantle_mission.as_mission_type_mut::<DismantleMission>(system_data.missions) {
+        if let Some(mut dismantle_mission) = system_data
+            .missions
+            .try_get(self.dismantle_mission)
+            .as_mission_type_mut::<DismantleMission>()
+        {
             dismantle_mission.allow_spawning(room_is_safe);
         }
 
@@ -474,20 +480,26 @@ impl Mine {
             self.defend_mission = Some(mission_entity).into();
         }
 
-        let room_is_safe = self
-            .defend_mission
-            .as_mission_type::<DefendMission>(system_data.missions)
+        let room_is_safe = system_data
+            .missions
+            .try_get(self.defend_mission)
+            .as_mission_type::<DefendMission>()
             .map(|d| d.is_room_safe())
             .unwrap_or(true);
 
-        if let Some(mut remote_mine_mission) = self
-            .remote_mine_mission
-            .as_mission_type_mut::<RemoteMineMission>(system_data.missions)
+        if let Some(mut remote_mine_mission) = system_data
+            .missions
+            .try_get(self.remote_mine_mission)
+            .as_mission_type_mut::<RemoteMineMission>()
         {
             remote_mine_mission.allow_spawning(room_is_safe);
         }
 
-        if let Some(mut reserve_mission) = self.reserve_mission.as_mission_type_mut::<ReserveMission>(system_data.missions) {
+        if let Some(mut reserve_mission) = system_data
+            .missions
+            .try_get(self.reserve_mission)
+            .as_mission_type_mut::<ReserveMission>()
+        {
             reserve_mission.allow_spawning(room_is_safe);
         }
 

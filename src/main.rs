@@ -6,6 +6,7 @@
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
+mod componentaccess;
 mod constants;
 mod creep;
 mod entitymappingsystem;

@@ -1,4 +1,5 @@
 use super::data::*;
+use crate::componentaccess::*;
 use crate::creep::*;
 use crate::jobs::data::*;
 use crate::operations::data::*;
@@ -33,7 +34,7 @@ pub struct MissionSystemData<'a> {
     visibility: Write<'a, VisibilityQueue>,
 }
 
-pub struct MissionExecutionSystemData<'a, 'b, 'c> {
+pub struct MissionExecutionSystemData<'a, 'b, 'c: 'b> {
     pub updater: &'b Read<'a, LazyUpdate>,
     pub room_data: &'b mut WriteStorage<'a, RoomData>,
     pub room_plan_data: &'b ReadStorage<'a, RoomPlanData>,
@@ -41,7 +42,7 @@ pub struct MissionExecutionSystemData<'a, 'b, 'c> {
     pub creep_owner: &'b ReadStorage<'a, CreepOwner>,
     pub creep_spawning: &'b ReadStorage<'a, CreepSpawning>,
     pub job_data: &'b WriteStorage<'a, JobData>,
-    pub missions: &'b dyn Fn(Entity) -> Option<&'c MissionData>,
+    pub missions: &'b (dyn ComponentAccess<MissionData> + 'c),
     pub mission_requests: &'b mut MissionRequests,
     pub spawn_queue: &'b mut SpawnQueue,
     pub room_plan_queue: &'b mut RoomPlanQueue,
@@ -69,9 +70,9 @@ impl MissionRequests {
         &mut self.abort
     }
 
-    fn process<'b>(system_data: &mut MissionExecutionSystemData) {
+    fn process(system_data: &mut MissionExecutionSystemData) {
         while let Some(mission_entity) = system_data.mission_requests.abort.pop() {
-            if let Some(mission_data) = (system_data.missions)(mission_entity) {
+            if let Some(mission_data) = system_data.missions.get(mission_entity) {
                 let mut mission = mission_data.as_mission_mut();
 
                 mission.complete(system_data, mission_entity);
@@ -198,15 +199,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
     fn run(&mut self, mut data: Self::SystemData) {
         let mut mission_requests = MissionRequests::new();
 
-        let missions = &data.missions;
-        let restricted_missions = missions.restrict();
-
-        for (entity, mission_data) in (&data.entities, &restricted_missions).join() {
-            let current = mission_data.get_unchecked();
-            let mut mission = current.as_mission_mut();
-
-            let mission_access = |e: Entity| mission_data.get(e);
-
+        for (entity, mission_data) in (&data.entities, &mut data.missions.restrict_mut()).join() {
             let mut system_data = MissionExecutionSystemData {
                 updater: &data.updater,
                 entities: &data.entities,
@@ -215,7 +208,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 creep_owner: &data.creep_owner,
                 creep_spawning: &data.creep_spawning,
                 job_data: &data.job_data,
-                missions: &mission_access,
+                missions: &mission_data,
                 mission_requests: &mut mission_requests,
                 spawn_queue: &mut data.spawn_queue,
                 room_plan_queue: &mut data.room_plan_queue,
@@ -225,6 +218,8 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 order_queue: &mut data.order_queue,
                 visibility: &mut data.visibility,
             };
+
+            let mut mission = mission_data.get_unchecked().as_mission_mut();
 
             let cleanup_mission = match mission.pre_run_mission(&mut system_data, entity) {
                 Ok(()) => false,
@@ -255,12 +250,7 @@ impl<'a> System<'a> for RunMissionSystem {
     fn run(&mut self, mut data: Self::SystemData) {
         let mut mission_requests = MissionRequests::new();
 
-        for (entity, mission_data) in (&data.entities, &data.missions.restrict()).join() {
-            let current = mission_data.get_unchecked();
-            let mut mission = current.as_mission_mut();
-
-            let mission_access = |e: Entity| mission_data.get(e);
-
+        for (entity, mission_data) in (&data.entities, &mut data.missions.restrict_mut()).join() {
             let mut system_data = MissionExecutionSystemData {
                 updater: &data.updater,
                 entities: &data.entities,
@@ -269,7 +259,7 @@ impl<'a> System<'a> for RunMissionSystem {
                 creep_owner: &data.creep_owner,
                 creep_spawning: &data.creep_spawning,
                 job_data: &data.job_data,
-                missions: &mission_access,
+                missions: &mission_data,
                 mission_requests: &mut mission_requests,
                 spawn_queue: &mut data.spawn_queue,
                 room_plan_queue: &mut data.room_plan_queue,
@@ -279,6 +269,8 @@ impl<'a> System<'a> for RunMissionSystem {
                 order_queue: &mut data.order_queue,
                 visibility: &mut data.visibility,
             };
+
+            let mut mission = mission_data.get_unchecked().as_mission_mut();
 
             let cleanup_mission = match mission.run_mission(&mut system_data, entity) {
                 Ok(MissionResult::Running) => false,

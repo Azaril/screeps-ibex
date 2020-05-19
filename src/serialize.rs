@@ -116,6 +116,14 @@ impl<T> From<Option<T>> for EntityOption<T> {
     }
 }
 
+impl<T> From<EntityOption<T>> for Option<T> {
+    fn from(value: EntityOption<T>) -> Option<T> {
+        value.0
+    }
+}
+
+impl<T: Copy> Copy for EntityOption<T> {}
+
 impl<C, M: Serialize + Marker> ConvertSaveload<M> for EntityOption<C>
 where
     for<'de> M: Deserialize<'de>,

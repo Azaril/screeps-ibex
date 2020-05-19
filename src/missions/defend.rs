@@ -79,7 +79,7 @@ impl Idle {
             .map(room_has_hostiles)
             .unwrap_or(false)
         {
-            return Ok(Some(DefendState::active(EntityVec::new())));
+            return Ok(Some(DefendState::active(EntityVec::new(), None)));
         } else if defend_room_data
             .get_dynamic_visibility_data()
             .map(|v| !v.updated_within(1000))
@@ -110,14 +110,12 @@ impl Active {
             .get(state_context.defend_room_data)
             .ok_or("Expected defend room data")?;
 
-        let has_hostiles = game::rooms::get(defend_room_data.name)
-            .as_ref()
-            .map(room_has_hostiles);
+        let has_hostiles = game::rooms::get(defend_room_data.name).as_ref().map(room_has_hostiles);
 
         if let Some(has_hostiles) = has_hostiles {
             if has_hostiles {
                 self.last_hostiles = Some(game::time());
-            } else if self.last_hostiles.map(|last| game::time() - last >= 20) {
+            } else if self.last_hostiles.map(|last| game::time() - last >= 20).unwrap_or(false) {
                 return Ok(Some(DefendState::idle(std::marker::PhantomData)));
             }
         }

@@ -95,12 +95,14 @@ impl LocalSupplyMission {
 
                 let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
-                let mission_data_storage = &mut world.write_storage::<MissionData>();
-
-                if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
+                if let Some(mut mission_data) = world
+                    .write_storage::<MissionData>()
+                    .get_mut(mission_entity)
+                    .as_mission_type_mut::<LocalSupplyMission>()
+                {
                     match target {
-                        StaticMineTarget::Source(_) => mission_data.get_mut().source_container_miners.push(creep_entity),
-                        StaticMineTarget::Mineral(_, _) => mission_data.get_mut().mineral_container_miners.push(creep_entity),
+                        StaticMineTarget::Source(_) => mission_data.source_container_miners.push(creep_entity),
+                        StaticMineTarget::Mineral(_, _) => mission_data.mineral_container_miners.push(creep_entity),
                     }
                 }
             });
@@ -121,10 +123,12 @@ impl LocalSupplyMission {
 
                 let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
-                let mission_data_storage = &mut world.write_storage::<MissionData>();
-
-                if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.get_mut().source_link_miners.push(creep_entity);
+                if let Some(mut mission_data) = world
+                    .write_storage::<MissionData>()
+                    .get_mut(mission_entity)
+                    .as_mission_type_mut::<LocalSupplyMission>()
+                {
+                    mission_data.source_link_miners.push(creep_entity);
                 }
             });
         })
@@ -143,10 +147,12 @@ impl LocalSupplyMission {
 
                 let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
-                let mission_data_storage = &mut world.write_storage::<MissionData>();
-
-                if let Some(MissionData::LocalSupply(mission_data)) = mission_data_storage.get_mut(mission_entity) {
-                    mission_data.get_mut().harvesters.push(creep_entity);
+                if let Some(mut mission_data) = world
+                    .write_storage::<MissionData>()
+                    .get_mut(mission_entity)
+                    .as_mission_type_mut::<LocalSupplyMission>()
+                {
+                    mission_data.harvesters.push(creep_entity);
                 }
             });
         })
