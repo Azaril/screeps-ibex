@@ -1,6 +1,5 @@
 use super::data::*;
 use super::missionsystem::*;
-use crate::ownership::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use screeps::*;
@@ -130,14 +129,14 @@ impl Active {
 
 #[derive(ConvertSaveload)]
 pub struct DefendMission {
-    owner: EntityOption<OperationOrMissionEntity>,
+    owner: EntityOption<Entity>,
     context: DefendMissionContext,
     state: DefendState,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl DefendMission {
-    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>, defend_room_data: Entity, home_room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, defend_room_data: Entity, home_room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
@@ -148,7 +147,7 @@ impl DefendMission {
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<OperationOrMissionEntity>, defend_room_data: Entity, home_room_data: Entity) -> DefendMission {
+    pub fn new(owner: Option<Entity>, defend_room_data: Entity, home_room_data: Entity) -> DefendMission {
         DefendMission {
             owner: owner.into(),
             context: DefendMissionContext {
@@ -166,11 +165,11 @@ impl DefendMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for DefendMission {
-    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+    fn get_owner(&self) -> &Option<Entity> {
         &self.owner
     }
 
-    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+    fn owner_complete(&mut self, owner: Entity) {
         assert!(Some(owner) == *self.owner);
 
         self.owner.take();

@@ -19,7 +19,6 @@ mod logging;
 mod memorysystem;
 mod missions;
 mod operations;
-mod ownership;
 mod pathing;
 mod remoteobjectid;
 mod room;

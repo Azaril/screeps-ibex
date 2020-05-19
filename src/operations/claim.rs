@@ -3,7 +3,6 @@ use super::operationsystem::*;
 use crate::missions::claim::*;
 use crate::missions::data::*;
 use crate::missions::remotebuild::*;
-use crate::ownership::*;
 use crate::room::data::*;
 use crate::room::gather::*;
 use crate::room::roomplansystem::*;
@@ -17,13 +16,13 @@ use specs::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ClaimOperation {
-    owner: EntityOption<OperationOrMissionEntity>,
+    owner: EntityOption<Entity>,
     claim_missions: EntityVec<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl ClaimOperation {
-    pub fn build<B>(builder: B, owner: Option<OperationOrMissionEntity>) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>) -> B
     where
         B: Builder + MarkedBuilder,
     {
@@ -32,7 +31,7 @@ impl ClaimOperation {
         builder.with(OperationData::Claim(operation)).marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<OperationOrMissionEntity>) -> ClaimOperation {
+    pub fn new(owner: Option<Entity>) -> ClaimOperation {
         ClaimOperation {
             owner: owner.into(),
             claim_missions: EntityVec::new(),
@@ -145,7 +144,7 @@ impl ClaimOperation {
                                         system_data.updater.exec_mut(move |world| {
                                             let mission_entity = RemoteBuildMission::build(
                                                 world.create_entity(),
-                                                Some(OperationOrMissionEntity::Operation(owner_entity)),
+                                                Some(owner_entity),
                                                 room_entity,
                                                 home_room_data_entity,
                                             )
@@ -171,11 +170,11 @@ impl ClaimOperation {
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 #[allow(clippy::cognitive_complexity)]
 impl Operation for ClaimOperation {
-    fn get_owner(&self) -> &Option<OperationOrMissionEntity> {
+    fn get_owner(&self) -> &Option<Entity> {
         &self.owner
     }
 
-    fn owner_complete(&mut self, owner: OperationOrMissionEntity) {
+    fn owner_complete(&mut self, owner: Entity) {
         assert!(Some(owner) == *self.owner);
 
         self.owner.take();
@@ -290,7 +289,7 @@ impl Operation for ClaimOperation {
 
                 let mission_entity = ClaimMission::build(
                     system_data.updater.create_entity(system_data.entities),
-                    Some(OperationOrMissionEntity::Operation(runtime_data.entity)),
+                    Some(runtime_data.entity),
                     candidate_room.room_data_entity(),
                     candidate_room.home_room_data_entity(),
                 )
