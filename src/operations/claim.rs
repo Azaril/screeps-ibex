@@ -94,14 +94,9 @@ impl ClaimOperation {
                                 //TODO: wiarchbe: Use trait instead of match.
                                 let mission_data = system_data.mission_data;
 
-                                let has_remote_build_mission =
-                                    room_data
-                                        .get_missions()
-                                        .iter()
-                                        .any(|mission_entity| match mission_data.get(*mission_entity) {
-                                            Some(MissionData::RemoteBuild(_)) => true,
-                                            _ => false,
-                                        });
+                                let has_remote_build_mission = room_data.get_missions().iter().any(|mission_entity| {
+                                    mission_data.get(*mission_entity).as_mission_type::<RemoteBuildMission>().is_some()
+                                });
 
                                 //
                                 // Spawn a new mission to fill the remote build role if missing.
@@ -275,10 +270,7 @@ impl Operation for ClaimOperation {
             let has_claim_mission = room_data
                 .get_missions()
                 .iter()
-                .any(|mission_entity| match mission_data.get(*mission_entity) {
-                    Some(MissionData::Claim(_)) => true,
-                    _ => false,
-                });
+                .any(|mission_entity| mission_data.get(*mission_entity).as_mission_type::<ClaimMission>().is_some());
 
             //
             // Spawn a new mission to fill the claim role if missing.

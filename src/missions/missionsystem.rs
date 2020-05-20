@@ -102,15 +102,11 @@ impl MissionRequests {
 
                 for child_entity in children {
                     if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(child_entity) {
-                        operation_data
-                            .as_operation()
-                            .owner_complete(mission_entity);
+                        operation_data.as_operation().owner_complete(mission_entity);
                     }
 
                     if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(child_entity) {
-                        mission_data
-                            .as_mission_mut()
-                            .owner_complete(mission_entity);
+                        mission_data.as_mission_mut().owner_complete(mission_entity);
                     }
                 }
 
@@ -205,21 +201,23 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 visibility: &mut data.visibility,
             };
 
-            let mut mission = mission_data.get_unchecked().as_mission_mut();
+            {
+                let mut mission = mission_data.get_unchecked().as_mission_mut();
 
-            let cleanup_mission = match mission.pre_run_mission(&mut system_data, entity) {
-                Ok(()) => false,
-                Err(error) => {
-                    info!("Mission failed, cleaning up. Error: {}", error);
+                let cleanup_mission = match mission.pre_run_mission(&mut system_data, entity) {
+                    Ok(()) => false,
+                    Err(error) => {
+                        info!("Mission failed, cleaning up. Error: {}", error);
 
-                    true
+                        true
+                    }
+                };
+
+                if cleanup_mission {
+                    system_data.mission_requests.abort(entity);
+                } else {
+                    mission.describe(&mut system_data, entity);
                 }
-            };
-
-            if cleanup_mission {
-                system_data.mission_requests.abort(entity);
-            } else {
-                mission.describe(&mut system_data, entity);
             }
 
             MissionRequests::process(&mut system_data);
@@ -256,22 +254,24 @@ impl<'a> System<'a> for RunMissionSystem {
                 visibility: &mut data.visibility,
             };
 
-            let mut mission = mission_data.get_unchecked().as_mission_mut();
+            {
+                let mut mission = mission_data.get_unchecked().as_mission_mut();
 
-            let cleanup_mission = match mission.run_mission(&mut system_data, entity) {
-                Ok(MissionResult::Running) => false,
-                Ok(MissionResult::Success) => {
-                    info!("Mission complete, cleaning up.");
-                    true
-                }
-                Err(error) => {
-                    info!("Mission failed, cleaning up. Error: {}", error);
-                    true
-                }
-            };
+                let cleanup_mission = match mission.run_mission(&mut system_data, entity) {
+                    Ok(MissionResult::Running) => false,
+                    Ok(MissionResult::Success) => {
+                        info!("Mission complete, cleaning up.");
+                        true
+                    }
+                    Err(error) => {
+                        info!("Mission failed, cleaning up. Error: {}", error);
+                        true
+                    }
+                };
 
-            if cleanup_mission {
-                system_data.mission_requests.abort(entity);
+                if cleanup_mission {
+                    system_data.mission_requests.abort(entity);
+                }
             }
 
             MissionRequests::process(&mut system_data);

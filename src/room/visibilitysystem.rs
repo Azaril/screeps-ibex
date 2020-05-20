@@ -120,7 +120,8 @@ impl<'a> System<'a> for VisibilityQueueSystem {
         let mut room_priorities: HashMap<RoomName, f32> = HashMap::new();
 
         for request in &data.visibility_queue.requests {
-            room_priorities.entry(request.room_name)
+            room_priorities
+                .entry(request.room_name)
                 .and_modify(|e| *e = e.max(request.priority))
                 .or_insert(request.priority);
         }

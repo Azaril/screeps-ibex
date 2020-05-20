@@ -124,14 +124,12 @@ impl Operation for MiningOutpostOperation {
                 //TODO: wiarchbe: Use trait instead of match.
                 let mission_data = system_data.mission_data;
 
-                let has_mining_outpost_mission =
-                    room_data
-                        .get_missions()
-                        .iter()
-                        .any(|mission_entity| match mission_data.get(*mission_entity) {
-                            Some(MissionData::MiningOutpost(_)) => true,
-                            _ => false,
-                        });
+                let has_mining_outpost_mission = room_data.get_missions().iter().any(|mission_entity| {
+                    mission_data
+                        .get(*mission_entity)
+                        .as_mission_type::<MiningOutpostMission>()
+                        .is_some()
+                });
 
                 //
                 // Spawn a new mission to fill the mining outpost role if missing.

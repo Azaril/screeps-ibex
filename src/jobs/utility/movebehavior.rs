@@ -22,7 +22,7 @@ where
 {
     let room_half_width = ROOM_WIDTH as u32 / 2;
     let room_half_height = ROOM_HEIGHT as u32 / 2;
-    let range = room_half_width.max(room_half_height) - 1;
+    let range = room_half_width.max(room_half_height) - 2;
 
     let target_pos = RoomPosition::new(room_half_width, room_half_height, room_name);
 

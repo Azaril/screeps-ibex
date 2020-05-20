@@ -61,7 +61,10 @@ impl ScoutMission {
                     mission_data.scouts.push(creep_entity);
 
                     mission_data.spawned_scouts += 1;
-                    mission_data.next_spawn = Some(std::cmp::min(mission_data.spawned_scouts * 2000, 6000));
+
+                    let next_spawn_time = std::cmp::min(mission_data.spawned_scouts * 2000, 6000) + game::time();
+
+                    mission_data.next_spawn = Some(next_spawn_time);
                 }
             });
         })
@@ -85,7 +88,20 @@ impl Mission for ScoutMission {
     }
 
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
-        format!("Scout - Scouts: {} - Next spawn: {:?}", self.scouts.len(), self.next_spawn)
+        let next_spawn = self
+            .next_spawn
+            .map(|ready_time| {
+                let time = game::time();
+
+                if time >= ready_time {
+                    0
+                } else {
+                    ready_time - time
+                }
+            })
+            .unwrap_or(0);
+
+        format!("Scout - Scouts: {} - Next spawn: {}", self.scouts.len(), next_spawn)
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
@@ -120,7 +136,7 @@ impl Mission for ScoutMission {
         let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
         let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
 
-        let should_spawn = self.next_spawn.map(|t| t >= game::time()).unwrap_or(true) && game::cpu::bucket() > 5000.0;
+        let should_spawn = self.next_spawn.map(|t| game::time() >= t).unwrap_or(true) && game::cpu::bucket() > 5000.0;
 
         if self.scouts.is_empty() && should_spawn {
             //TODO: Compute best body parts to use.

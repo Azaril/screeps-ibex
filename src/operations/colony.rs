@@ -53,39 +53,43 @@ impl Operation for ColonyOperation {
         system_data: &mut OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
+        if game::time() % 50 != 15 {
+            return Ok(OperationResult::Running);
+        }
+
         for (entity, room_data) in (&*system_data.entities, &mut *system_data.room_data).join() {
             if let Some(room) = game::rooms::get(room_data.name) {
-                if let Some(controller) = room.controller() {
-                    if controller.my() {
-                        //
-                        // Query if any missions running on the room currently fufill the colony role.
-                        //
+                let my_controller = room.controller().map(|c| c.my()).unwrap_or(false);
+                let my_spawns = !room.find(find::MY_SPAWNS).is_empty();
 
-                        let mission_data = system_data.mission_data;
+                if my_controller || my_spawns {
+                    //
+                    // Query if any missions running on the room currently fufill the colony role.
+                    //
 
-                        //TODO: wiarchbe: Use trait instead of match.
-                        let has_colony_mission =
-                            room_data
-                                .get_missions()
-                                .iter()
-                                .any(|mission_entity| mission_data.get(*mission_entity).as_mission_type::<ColonyMission>().is_some());
+                    let mission_data = system_data.mission_data;
 
-                        //
-                        // Spawn a new mission to fill the colony role if missing.
-                        //
+                    //TODO: wiarchbe: Use trait instead of match.
+                    let has_colony_mission = room_data
+                        .get_missions()
+                        .iter()
+                        .any(|mission_entity| mission_data.get(*mission_entity).as_mission_type::<ColonyMission>().is_some());
 
-                        if !has_colony_mission {
-                            info!("Starting colony mission for spawning room. Room: {}", room_data.name);
+                    //
+                    // Spawn a new mission to fill the colony role if missing.
+                    //
 
-                            let mission_entity = ColonyMission::build(
-                                system_data.updater.create_entity(system_data.entities),
-                                Some(runtime_data.entity),
-                                entity,
-                            )
-                            .build();
+                    if !has_colony_mission {
+                        info!("Starting colony mission for spawning room. Room: {}", room_data.name);
 
-                            room_data.add_mission(mission_entity);
-                        }
+                        let mission_entity = ColonyMission::build(
+                            system_data.updater.create_entity(system_data.entities),
+                            Some(runtime_data.entity),
+                            entity,
+                        )
+                        .build();
+
+                        room_data.add_mission(mission_entity);
                     }
                 }
             }
