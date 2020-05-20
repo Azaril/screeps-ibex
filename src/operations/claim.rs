@@ -163,7 +163,6 @@ impl ClaimOperation {
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-#[allow(clippy::cognitive_complexity)]
 impl Operation for ClaimOperation {
     fn get_owner(&self) -> &Option<Entity> {
         &self.owner

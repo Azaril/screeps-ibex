@@ -398,12 +398,12 @@ impl Cleanup {
 }
 
 impl Mine {
-    fn get_children_internal(&self) -> [&Option<Entity>; 2] {
-        [&self.remote_mine_mission, &self.reserve_mission]
+    fn get_children_internal(&self) -> [&Option<Entity>; 3] {
+        [&self.remote_mine_mission, &self.reserve_mission, &self.defend_mission]
     }
 
-    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 2] {
-        [&mut self.remote_mine_mission, &mut self.reserve_mission]
+    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 3] {
+        [&mut self.remote_mine_mission, &mut self.reserve_mission, &mut self.defend_mission]
     }
 
     fn tick(
