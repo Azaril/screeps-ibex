@@ -68,10 +68,7 @@ impl Operation for ColonyOperation {
                             room_data
                                 .get_missions()
                                 .iter()
-                                .any(|mission_entity| match mission_data.get(*mission_entity) {
-                                    Some(MissionData::Colony(_)) => true,
-                                    _ => false,
-                                });
+                                .any(|mission_entity| mission_data.get(*mission_entity).as_mission_type::<ColonyMission>().is_some());
 
                         //
                         // Spawn a new mission to fill the colony role if missing.
