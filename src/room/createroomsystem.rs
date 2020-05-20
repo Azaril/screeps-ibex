@@ -4,6 +4,7 @@ use log::*;
 use screeps::*;
 use specs::saveload::*;
 use specs::*;
+use std::collections::HashSet;
 
 pub struct CreateRoomDataSystem;
 
@@ -27,11 +28,12 @@ impl<'a> System<'a> for CreateRoomDataSystem {
             .iter()
             .map(|construction_site| construction_site.pos().room_name());
 
-        let missing_rooms = visible_rooms
+        let missing_rooms: HashSet<_> = visible_rooms
             .into_iter()
             .chain(flag_rooms)
             .chain(construction_site_rooms)
-            .filter(|name| !existing_rooms.contains(name));
+            .filter(|name| !existing_rooms.contains(name))
+            .collect();
 
         for room in missing_rooms {
             info!("Creating room data for room: {}", room);
