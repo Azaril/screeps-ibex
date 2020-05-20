@@ -22,13 +22,7 @@ pub struct DismantleMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl DismantleMission {
-    pub fn build<B>(
-        builder: B,
-        owner: Option<Entity>,
-        room_data: Entity,
-        home_room_data: Entity,
-        ignore_storage: bool,
-    ) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_data: Entity, ignore_storage: bool) -> B
     where
         B: Builder + MarkedBuilder,
     {
@@ -39,12 +33,7 @@ impl DismantleMission {
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(
-        owner: Option<Entity>,
-        room_data: Entity,
-        home_room_data: Entity,
-        ignore_storage: bool,
-    ) -> DismantleMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_data: Entity, ignore_storage: bool) -> DismantleMission {
         DismantleMission {
             owner: owner.into(),
             room_data,
