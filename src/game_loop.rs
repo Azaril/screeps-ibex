@@ -276,14 +276,6 @@ pub fn tick() {
         tick,
     } = unsafe { ENVIRONMENT.get_or_insert_with(|| create_environment()) };
 
-    if crate::features::visualize::on() {
-        world.insert(Visualizer::new());
-        world.insert(UISystem::new());
-    } else {
-        world.remove::<Visualizer>();
-        world.remove::<UISystem>();
-    }
-
     const COMPONENT_SEGMENT: u32 = 50;
 
     let is_data_ready = {
@@ -302,6 +294,18 @@ pub fn tick() {
         MemoryArbiterSystem.run_now(world);
 
         return;
+    }
+
+    //
+    // Add dynamic resources.
+    //
+
+    if crate::features::visualize::on() {
+        world.insert(Visualizer::new());
+        world.insert(UISystem::new());
+    } else {
+        world.remove::<Visualizer>();
+        world.remove::<UISystem>();
     }
 
     //
