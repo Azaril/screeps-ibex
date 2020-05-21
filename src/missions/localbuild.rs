@@ -80,7 +80,7 @@ impl LocalBuildMission {
 
             if desired_builders > 0 {
                 let priority = if self.builders.is_empty() {
-                    SPAWN_PRIORITY_HIGH
+                    (SPAWN_PRIORITY_HIGH + SPAWN_PRIORITY_MEDIUM) / 2.0
                 } else {
                     construction_sites
                         .iter()
