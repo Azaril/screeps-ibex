@@ -84,12 +84,12 @@ fn serialize_world(world: &World, segment: u32) {
                 }
             }
 
-            let mut serialized_data = Vec::<u8>::with_capacity(1024 * 100);
+            let mut serialized_data = Vec::<u8>::with_capacity(1024 * 20);
 
             bincode::with_serializer(&mut serialized_data, BinCodeSerializerAcceptor { data: &mut data })
                 .unwrap_or_else(|e| error!("Failed serialization: {}", e));
 
-            let encoded_data = base64::encode(&serialized_data);
+            let encoded_data = encode_buffer_to_string(&serialized_data).unwrap();
 
             data.memory_arbiter.set(self.segment, &encoded_data);
         }
@@ -133,7 +133,7 @@ fn deserialize_world(world: &World, segment: u32) {
 
             if let Some(encoded_data) = encoded_data {
                 if !encoded_data.is_empty() {
-                    let decoded_data = base64::decode(&encoded_data).unwrap_or_else(|_| Vec::new());
+                    let decoded_data = decode_buffer_from_string(&encoded_data).unwrap_or_else(|_| Vec::new());
 
                     struct BinCodeDeserializerAcceptor<'a, 'b> {
                         data: &'b mut DeserializeSystemData<'a>,
@@ -179,59 +179,27 @@ fn deserialize_world(world: &World, segment: u32) {
     sys.run_now(&world);
 }
 
-struct CostMatrixStorageInterface;
-
-impl CostMatrixStorage for CostMatrixStorageInterface {
-    fn get_cache(&self, segment: u32) -> Result<CostMatrixCache, String> {
-        let raw_data = raw_memory::get_segment(segment).ok_or("Memory segment not active")?;
-
-        let res = crate::serialize::decode_from_string(&raw_data)?;
-
-        Ok(res)
-    }
-
-    fn set_cache(&mut self, segment: u32, data: &CostMatrixCache) -> Result<(), String> {
-        let encoded = crate::serialize::encode_to_string(data)?;
-
-        raw_memory::set_segment(segment, &encoded);
-
-        Ok(())
-    }
+struct GameEnvironment<'a, 'b, 'c, 'd> {
+    world: World,
+    pre_pass_dispatcher: Dispatcher<'a, 'b>,
+    main_pass_dispatcher: Dispatcher<'c, 'd>,
+    loaded: bool,
+    tick: Option<u32>,
 }
 
-#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn tick() {
-    crate::features::js::prepare();
+static mut ENVIRONMENT: Option<GameEnvironment> = None;
+
+const COST_MATRIX_SYSTEM_SEGMENT: u32 = 55;
+
+fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
+    info!("Initializing game environment");
 
     let mut world = World::new();
 
-    let mut memory_arbiter = MemoryArbiter::new();
-
-    const COMPONENT_SEGMENT: u32 = 50;
-    const COST_MATRIX_SYSTEM_SEGMENT: u32 = 55;
-
-    memory_arbiter.request(COMPONENT_SEGMENT);
-    memory_arbiter.request(COST_MATRIX_SYSTEM_SEGMENT);
-
-    if !memory_arbiter.is_active(COMPONENT_SEGMENT) {
-        world.insert(memory_arbiter);
-
-        let mut memory_system = MemoryArbiterSystem {};
-
-        memory_system.run_now(&world);
-
-        return;
-    } else {
-        world.insert(memory_arbiter);
-    }
+    world.insert(MemoryArbiter::new());
 
     world.insert(SerializeMarkerAllocator::new());
     world.register::<SerializeMarker>();
-
-    if crate::features::visualize::on() {
-        world.insert(Visualizer::new());
-        world.insert(UISystem::new());
-    }
 
     let cost_matrix_storage = Box::new(CostMatrixStorageInterface);
     let cost_matrix_system = CostMatrixSystem::new(cost_matrix_storage, COST_MATRIX_SYSTEM_SEGMENT);
@@ -261,7 +229,7 @@ pub fn tick() {
     // Main update
     //
 
-    let mut main_dispatcher = DispatcherBuilder::new()
+    let mut main_pass_dispatcher = DispatcherBuilder::new()
         .with(OperationManagerSystem, "operations_manager", &[])
         .with(PreRunOperationSystem, "pre_run_operations", &[])
         .with(PreRunMissionSystem, "pre_run_missions", &[])
@@ -287,13 +255,72 @@ pub fn tick() {
         .with(MemoryArbiterSystem, "memory", &[])
         .build();
 
-    main_dispatcher.setup(&mut world);
+    main_pass_dispatcher.setup(&mut world);
+
+    GameEnvironment {
+        world,
+        pre_pass_dispatcher,
+        main_pass_dispatcher,
+        loaded: false,
+        tick: None,
+    }
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn tick() {
+    let GameEnvironment {
+        world,
+        pre_pass_dispatcher,
+        main_pass_dispatcher,
+        loaded,
+        tick,
+    } = unsafe { ENVIRONMENT.get_or_insert_with(|| create_environment()) };
+
+    if crate::features::visualize::on() {
+        world.insert(Visualizer::new());
+        world.insert(UISystem::new());
+    } else {
+        world.remove::<Visualizer>();
+        world.remove::<UISystem>();
+    }
+
+    const COMPONENT_SEGMENT: u32 = 50;
+
+    let is_data_ready = {
+        let mut memory_arbiter = world.write_resource::<MemoryArbiter>();
+
+        memory_arbiter.request(COMPONENT_SEGMENT);
+        //TODO: Remove this load from here.
+        memory_arbiter.request(COST_MATRIX_SYSTEM_SEGMENT);
+
+        memory_arbiter.is_active(COMPONENT_SEGMENT)
+    };
+
+    if !is_data_ready {
+        info!("Component data is not ready, delaying execution");
+
+        MemoryArbiterSystem.run_now(world);
+
+        return;
+    }
 
     //
     // Deserialize world state.
     //
 
-    deserialize_world(&world, COMPONENT_SEGMENT);
+    let current_time = game::time();
+
+    let environment_is_valid = tick.map(|t| t + 1 == current_time).unwrap_or(false);
+
+    if !*loaded || !environment_is_valid {
+        info!("Deserializing world state to environment");
+
+        deserialize_world(&world, COMPONENT_SEGMENT);
+
+        *loaded = true;
+    }
+
+    *tick = Some(current_time);
 
     //
     // Prepare globals
@@ -322,7 +349,7 @@ pub fn tick() {
     pre_pass_dispatcher.dispatch(&world);
     world.maintain();
 
-    main_dispatcher.dispatch(&world);
+    main_pass_dispatcher.dispatch(&world);
     world.maintain();
 
     //
@@ -344,7 +371,6 @@ fn cleanup_memory() -> Result<(), Box<dyn (::std::error::Error)>> {
     let screeps_memory = match screeps::memory::root().dict("creeps")? {
         Some(v) => v,
         None => {
-            warn!("not cleaning game creep memory: no Memory.creeps dict");
             return Ok(());
         }
     };

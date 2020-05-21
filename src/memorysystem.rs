@@ -33,7 +33,7 @@ impl MemoryArbiter {
 
     pub fn set(&mut self, segment: u32, data: &str) {
         if data.len() > 50 * 1024 {
-            error!("Memory segment too large: {}", data);
+            error!("Memory segment too large - Segment: {} - Data: {}", segment, data);
         }
 
         raw_memory::set_segment(segment, data);
