@@ -22,7 +22,8 @@ uuid = { version = "0.8", features = ["serde"] }
 wee_alloc = { version = "0.4", optional = true }
 pathfinding = { version = "2.0" }
 bincode = "1.2"
-base64 = "0.12"
+base64 = "0.2"
+flate2 = "1.0"
 #screeps-game-api = { git = "https://github.com/Azaril/screeps-game-api", branch = "pathfinding" }
 screeps-game-api = { path = "C:\\source\\screeps-game-api" }
 screeps-machine = { git = "https://github.com/Azaril/screeps-machine" }

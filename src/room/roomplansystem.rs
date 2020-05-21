@@ -239,7 +239,13 @@ impl<'a> System<'a> for RoomPlanSystem {
             let planner_data = data.memory_arbiter.get(MEMORY_SEGMENT).unwrap();
 
             let mut planner_state = if !planner_data.is_empty() {
-                crate::serialize::decode_from_string(&planner_data).unwrap_or_default()
+                match crate::serialize::decode_from_string(&planner_data) {
+                    Ok(state) => state,
+                    Err(err) => {
+                        info!("Failed to decode planner state, resetting. Err: {}", err);
+                        RoomPlannerData::default()
+                    }
+                }
             } else {
                 RoomPlannerData::default()
             };

@@ -124,7 +124,7 @@ impl Mission for RemoteBuildMission {
 
         if self.builders.len() < desired_builders {
             let priority = if self.builders.is_empty() {
-                SPAWN_PRIORITY_MEDIUM
+                (SPAWN_PRIORITY_HIGH + SPAWN_PRIORITY_MEDIUM) / 2.0
             } else {
                 SPAWN_PRIORITY_LOW
             };

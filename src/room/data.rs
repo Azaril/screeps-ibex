@@ -8,10 +8,13 @@ use specs::*;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RoomStaticVisibilityData {
     #[serde(default)]
+    #[serde(rename = "c")]
     controller: Option<RemoteObjectId<StructureController>>,
     #[serde(default)]
+    #[serde(rename = "s")]
     sources: Vec<RemoteObjectId<Source>>,
     #[serde(default)]
+    #[serde(rename = "m")]
     minerals: Vec<RemoteObjectId<Mineral>>,
 }
 
@@ -31,9 +34,13 @@ impl RoomStaticVisibilityData {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RoomDisposition {
+    #[serde(rename = "n")]
     Neutral,
+    #[serde(rename = "m")]
     Mine,
+    #[serde(rename = "f")]
     Friendly(String),
+    #[serde(rename = "h")]
     Hostile(String),
 }
 
@@ -82,7 +89,9 @@ impl RoomDisposition {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RoomSign {
+    #[serde(rename = "u")]
     user: RoomDisposition,
+    #[serde(rename = "m")]
     message: String,
 }
 
@@ -99,12 +108,17 @@ impl RoomSign {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RoomDynamicVisibilityData {
     #[serde(default)]
+    #[serde(rename = "u")]
     update_tick: u32,
+    #[serde(rename = "o")]
     owner: RoomDisposition,
+    #[serde(rename = "r")]
     reservation: RoomDisposition,
     #[serde(default)]
+    #[serde(rename = "sk")]
     source_keeper: bool,
     #[serde(default)]
+    #[serde(rename = "s")]
     sign: Option<RoomSign>,
 }
 

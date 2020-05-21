@@ -303,7 +303,21 @@ where
 {
     let serialized_data = bincode::serialize(&data).map_err(|e| e.to_string())?;
 
-    let encoded_data = base64::encode(&serialized_data);
+    encode_buffer_to_string(&serialized_data)
+}
+
+pub fn encode_buffer_to_string(data: &[u8]) -> Result<String, String> {
+    use flate2::write::*;
+    use flate2::*;
+    use std::io::prelude::*;
+
+    let mut compressor = GzEncoder::new(Vec::with_capacity(1024 * 20), Compression::default());
+
+    compressor.write_all(data).map_err(|e| e.to_string())?;
+
+    let compressed_data = compressor.finish().map_err(|e| e.to_string())?;
+
+    let encoded_data = base64::encode(&compressed_data);
 
     Ok(encoded_data)
 }
@@ -312,9 +326,24 @@ pub fn decode_from_string<T>(data: &str) -> Result<T, String>
 where
     for<'de> T: Deserialize<'de>,
 {
-    let decoded_data = base64::decode(data).map_err(|e| e.to_string())?;
+    let decoded_data = decode_buffer_from_string(data)?;
 
     let data = bincode::deserialize_from(decoded_data.as_slice()).map_err(|e| e.to_string())?;
 
     Ok(data)
+}
+
+pub fn decode_buffer_from_string(data: &str) -> Result<Vec<u8>, String> {
+    use flate2::read::*;
+    use std::io::prelude::*;
+
+    let decoded_data = base64::decode(data).map_err(|e| e.to_string())?;
+    
+    let mut decompressor = GzDecoder::new(decoded_data.as_slice());
+
+    let mut decompressed_data = Vec::with_capacity(1024 * 20);
+
+    decompressor.read_to_end(&mut decompressed_data).map_err(|e| e.to_string())?;
+
+    Ok(decompressed_data)
 }
