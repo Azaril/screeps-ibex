@@ -322,65 +322,29 @@ impl<'a> System<'a> for OrderQueueSystem {
             }
         }
 
-        if game::time() % 20 != 0 || game::cpu::bucket() <= game::cpu::tick_limit() {
-            return;
-        }
-
         let can_buy = crate::features::market::buy() && game::market::credits() > crate::features::market::credit_reserve();
         let can_sell = crate::features::market::sell();
 
-        if !can_buy && !can_sell {
-            return;
-        }
+        let can_run = game::time() % 20 == 0 && game::cpu::bucket() >= game::cpu::tick_limit() && (can_buy || can_sell);
 
-        let mut order_cache = OrderCache::new();
+        if can_run {
+            let mut order_cache = OrderCache::new();
 
-        let my_orders = game::market::orders();
+            let my_orders = game::market::orders();
 
-        let complete_orders = my_orders.values().filter(|order| order.remaining_amount == 0);
+            let complete_orders = my_orders.values().filter(|order| order.remaining_amount == 0);
 
-        for order in complete_orders {
-            game::market::cancel_order(&order.id);
-        }
+            for order in complete_orders {
+                game::market::cancel_order(&order.id);
+            }
 
-        if !data.order_queue.rooms.is_empty() {
-            let mut resource_history = HashMap::new();
+            if !data.order_queue.rooms.is_empty() {
+                let mut resource_history = HashMap::new();
 
-            for (room_name, room_data) in &data.order_queue.rooms {
-                if let Some(terminal) = game::rooms::get(*room_name).and_then(|r| r.terminal()) {
-                    if can_sell {
-                        for entry in &room_data.outgoing_passive_requests {
-                            //
-                            // NOTE: This current relies on the orders being in sequential date order.
-                            //
-
-                            let market_resource = MarketResourceType::Resource(entry.resource);
-
-                            let _ = resource_history
-                                .entry(market_resource)
-                                .or_insert_with(|| game::market::get_history(Some(market_resource)));
-
-                            //TODO: Validate that the current average price is sane (compare to prior day?).
-                            //TODO: Need better pricing calculations.
-
-                            if let Some(latest_resource_history) = resource_history.get(&market_resource).unwrap().last() {
-                                Self::sell_passive_order(
-                                    &my_orders,
-                                    PassiveOrderParameters {
-                                        room_name: *room_name,
-                                        resource: entry.resource,
-                                        amount: entry.amount,
-                                        minimum_amount: 2000,
-                                        price: latest_resource_history.avg_price + (latest_resource_history.stddev_price * 0.1),
-                                    },
-                                );
-                            }
-                        }
-
-                        let active_orders: Vec<_> = room_data
-                            .outgoing_active_requests
-                            .iter()
-                            .filter_map(|entry| {
+                for (room_name, room_data) in &data.order_queue.rooms {
+                    if let Some(terminal) = game::rooms::get(*room_name).and_then(|r| r.terminal()) {
+                        if can_sell {
+                            for entry in &room_data.outgoing_passive_requests {
                                 //
                                 // NOTE: This current relies on the orders being in sequential date order.
                                 //
@@ -391,59 +355,91 @@ impl<'a> System<'a> for OrderQueueSystem {
                                     .entry(market_resource)
                                     .or_insert_with(|| game::market::get_history(Some(market_resource)));
 
-                                let energy_market_resource = MarketResourceType::Resource(ResourceType::Energy);
-
-                                let _ = resource_history
-                                    .entry(energy_market_resource)
-                                    .or_insert_with(|| game::market::get_history(Some(energy_market_resource)));
+                                //TODO: Validate that the current average price is sane (compare to prior day?).
+                                //TODO: Need better pricing calculations.
 
                                 if let Some(latest_resource_history) = resource_history.get(&market_resource).unwrap().last() {
-                                    if let Some(latest_energy_history) = resource_history.get(&energy_market_resource).unwrap().last() {
-                                        return Some(ActiveSellOrderParameters {
+                                    Self::sell_passive_order(
+                                        &my_orders,
+                                        PassiveOrderParameters {
+                                            room_name: *room_name,
                                             resource: entry.resource,
                                             amount: entry.amount,
-                                            minimum_sale_amount: 2000,
-                                            minimum_price: latest_resource_history.avg_price - (latest_resource_history.stddev_price * 0.2),
-                                            available_transfer_energy: entry.available_transfer_energy,
-                                            maximum_transfer_energy: OrderQueue::maximum_transfer_energy(),
-                                            energy_cost: latest_energy_history.avg_price - (latest_energy_history.stddev_price * 0.2),
-                                        });
-                                    }
+                                            minimum_amount: 2000,
+                                            price: latest_resource_history.avg_price + (latest_resource_history.stddev_price * 0.1),
+                                        },
+                                    );
                                 }
+                            }
 
-                                None
-                            })
-                            .collect();
+                            let active_orders: Vec<_> = room_data
+                                .outgoing_active_requests
+                                .iter()
+                                .filter_map(|entry| {
+                                    //
+                                    // NOTE: This current relies on the orders being in sequential date order.
+                                    //
 
-                        let _terminal_busy = Self::sell_active_orders(*room_name, &terminal, &mut order_cache, &active_orders);
-                    }
+                                    let market_resource = MarketResourceType::Resource(entry.resource);
 
-                    if can_buy {
-                        for entry in &room_data.incoming_passive_requests {
-                            //
-                            // NOTE: This current relies on the orders being in sequential date order.
-                            //
+                                    let _ = resource_history
+                                        .entry(market_resource)
+                                        .or_insert_with(|| game::market::get_history(Some(market_resource)));
 
-                            let market_resource = MarketResourceType::Resource(entry.resource);
+                                    let energy_market_resource = MarketResourceType::Resource(ResourceType::Energy);
 
-                            let _ = resource_history
-                                .entry(market_resource)
-                                .or_insert_with(|| game::market::get_history(Some(market_resource)));
+                                    let _ = resource_history
+                                        .entry(energy_market_resource)
+                                        .or_insert_with(|| game::market::get_history(Some(energy_market_resource)));
 
-                            //TODO: Validate that the current average price is sane (compare to prior day?).
-                            //TODO: Need better pricing calculations.
+                                    if let Some(latest_resource_history) = resource_history.get(&market_resource).unwrap().last() {
+                                        if let Some(latest_energy_history) = resource_history.get(&energy_market_resource).unwrap().last() {
+                                            return Some(ActiveSellOrderParameters {
+                                                resource: entry.resource,
+                                                amount: entry.amount,
+                                                minimum_sale_amount: 2000,
+                                                minimum_price: latest_resource_history.avg_price - (latest_resource_history.stddev_price * 0.2),
+                                                available_transfer_energy: entry.available_transfer_energy,
+                                                maximum_transfer_energy: OrderQueue::maximum_transfer_energy(),
+                                                energy_cost: latest_energy_history.avg_price - (latest_energy_history.stddev_price * 0.2),
+                                            });
+                                        }
+                                    }
 
-                            if let Some(latest_resource_history) = resource_history.get(&market_resource).unwrap().last() {
-                                Self::buy_passive_order(
-                                    &my_orders,
-                                    PassiveOrderParameters {
-                                        room_name: *room_name,
-                                        resource: entry.resource,
-                                        amount: entry.amount,
-                                        minimum_amount: 2000,
-                                        price: latest_resource_history.avg_price + (latest_resource_history.stddev_price * 0.1),
-                                    },
-                                );
+                                    None
+                                })
+                                .collect();
+
+                            let _terminal_busy = Self::sell_active_orders(*room_name, &terminal, &mut order_cache, &active_orders);
+                        }
+
+                        if can_buy {
+                            for entry in &room_data.incoming_passive_requests {
+                                //
+                                // NOTE: This current relies on the orders being in sequential date order.
+                                //
+
+                                let market_resource = MarketResourceType::Resource(entry.resource);
+
+                                let _ = resource_history
+                                    .entry(market_resource)
+                                    .or_insert_with(|| game::market::get_history(Some(market_resource)));
+
+                                //TODO: Validate that the current average price is sane (compare to prior day?).
+                                //TODO: Need better pricing calculations.
+
+                                if let Some(latest_resource_history) = resource_history.get(&market_resource).unwrap().last() {
+                                    Self::buy_passive_order(
+                                        &my_orders,
+                                        PassiveOrderParameters {
+                                            room_name: *room_name,
+                                            resource: entry.resource,
+                                            amount: entry.amount,
+                                            minimum_amount: 2000,
+                                            price: latest_resource_history.avg_price + (latest_resource_history.stddev_price * 0.1),
+                                        },
+                                    );
+                                }
                             }
                         }
                     }
