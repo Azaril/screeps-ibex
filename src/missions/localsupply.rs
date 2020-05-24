@@ -410,7 +410,7 @@ impl LocalSupplyMission {
                     let link_pos = link.pos();
                     let room_name = link_pos.room_name();
 
-                    let best_transfer = ACTIVE_TRANSFER_PRIORITIES
+                    let best_transfer = ALL_TRANSFER_PRIORITIES
                         .iter()
                         .filter_map(|priority| {
                             transfer_queue.get_delivery_from_target(
