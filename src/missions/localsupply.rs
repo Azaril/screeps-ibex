@@ -28,12 +28,14 @@ pub struct LocalSupplyMission {
     source_container_miners: EntityVec<Entity>,
     source_link_miners: EntityVec<Entity>,
     mineral_container_miners: EntityVec<Entity>,
+    #[convert_save_load_attr(serde(skip))]
+    #[convert_save_load_skip_convert]
     structure_data: Rc<RefCell<Option<StructureData>>>,
 }
 
 type MineralExtractorPair = (RemoteObjectId<Mineral>, RemoteObjectId<StructureExtractor>);
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 struct StructureData {
     last_updated: u32,
     sources_to_containers: HashMap<RemoteObjectId<Source>, Vec<RemoteObjectId<StructureContainer>>>,
@@ -48,7 +50,6 @@ struct StructureData {
     storage: Vec<RemoteObjectId<StructureStorage>>,
 }
 
-#[derive(Clone, ConvertSaveload)]
 struct CreepData {
     sources_to_harvesters: EntityHashMap<RemoteObjectId<Source>, EntityVec<Entity>>,
     containers_to_source_miners: EntityHashMap<RemoteObjectId<StructureContainer>, EntityVec<Entity>>,
@@ -409,14 +410,14 @@ impl LocalSupplyMission {
                     let link_pos = link.pos();
                     let room_name = link_pos.room_name();
 
-                    let best_transfer = ALL_TRANSFER_PRIORITIES
+                    let best_transfer = ACTIVE_TRANSFER_PRIORITIES
                         .iter()
                         .filter_map(|priority| {
                             transfer_queue.get_delivery_from_target(
                                 &transfer_queue_data,
                                 &[room_name],
                                 &TransferTarget::Link(link_id),
-                                TransferPriorityFlags::ACTIVE,
+                                TransferPriorityFlags::ALL,
                                 priority.into(),
                                 TransferType::Link,
                                 TransferCapacity::Infinite,

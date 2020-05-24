@@ -268,15 +268,27 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn tick() {
+    const COMPONENT_SEGMENT: u32 = 50;
+    
+    if crate::features::reset::reset_environment() {
+        info!("Resetting environment");
+        unsafe { ENVIRONMENT = None };
+    }
+
+    if crate::features::reset::reset_memory() {
+        info!("Resetting memory");
+        raw_memory::set_segment(COMPONENT_SEGMENT, "");
+    }
+
+    crate::features::reset::clear();
+
     let GameEnvironment {
         world,
         pre_pass_dispatcher,
         main_pass_dispatcher,
         loaded,
         tick,
-    } = unsafe { ENVIRONMENT.get_or_insert_with(|| create_environment()) };
-
-    const COMPONENT_SEGMENT: u32 = 50;
+    } = unsafe { ENVIRONMENT.get_or_insert_with(|| create_environment()) }; 
 
     let is_data_ready = {
         let mut memory_arbiter = world.write_resource::<MemoryArbiter>();

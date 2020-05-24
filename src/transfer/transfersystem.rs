@@ -12,6 +12,7 @@ use std::borrow::*;
 use std::collections::hash_map::*;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use super::utility::*;
 
 #[derive(Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Clone, Copy, Serialize, Deserialize)]
 #[repr(u8)]
@@ -732,6 +733,50 @@ impl TransferNode {
         }
 
         delivery_resources
+    }
+
+    pub fn select_single_delivery(
+        &self,
+        allowed_priorities: TransferPriorityFlags,
+        delivery_types: TransferTypeFlags,
+        available_resources: &HashMap<ResourceType, u32>,
+        available_capacity: TransferCapacity,
+    ) -> Option<(ResourceType, Vec<TransferDepositTicketResourceEntry>)> {
+        let mut delivery_resources: HashMap<ResourceType, Vec<TransferDepositTicketResourceEntry>> = HashMap::new();
+        
+        for (resource, amount) in available_resources {
+            let mut remaining_capacity = available_capacity;
+
+            for key in self.deposits.keys() {
+                if key.matches(Some(*resource), allowed_priorities, delivery_types) || (key.resource == None && delivery_types.contains(key.allowed_type.into()) && allowed_priorities.contains(key.priority.into())) {
+                    let remaining_amount = self.get_available_deposit(key);
+
+                    if remaining_amount > 0 {
+                        let delivery_amount = remaining_capacity.clamp((remaining_amount as u32).min(*amount));
+
+                        delivery_resources
+                            .entry(*resource)
+                            .or_insert_with(Vec::new)
+                            .push(TransferDepositTicketResourceEntry {
+                                target_resource: Some(*resource),
+                                amount: delivery_amount as u32,
+                                priority: key.priority,
+                            });
+
+                        remaining_capacity.consume(delivery_amount);
+
+                        if remaining_capacity.empty() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        delivery_resources
+            .into_iter()
+            .max_by_key(|(_, entries)| entries.iter().map(|e| e.amount).sum::<u32>())
+            .map(|(r, e)| (r, e))
     }
 
     pub fn visualize(&self, visualizer: &mut RoomVisualizer, pos: RoomPosition) {
@@ -1478,30 +1523,30 @@ impl TransferRequestSystem for LazyTransferQueueRooms {
 
 #[derive(Default)]
 pub struct TransferQueue {
-    _rooms: LazyTransferQueueRooms,
+    rooms: LazyTransferQueueRooms,
 }
 
 impl TransferRequestSystem for TransferQueue {
     fn request_withdraw(&mut self, withdraw_request: TransferWithdrawRequest) {
-        self._rooms.request_withdraw(withdraw_request)
+        self.rooms.request_withdraw(withdraw_request)
     }
 
     fn request_deposit(&mut self, deposit_request: TransferDepositRequest) {
-        self._rooms.request_deposit(deposit_request)
+        self.rooms.request_deposit(deposit_request)
     }
 
     fn register_pickup(&mut self, ticket: &TransferWithdrawTicket, pickup_type: TransferType) {
-        self._rooms.register_pickup(ticket, pickup_type)
+        self.rooms.register_pickup(ticket, pickup_type)
     }
 
     fn register_delivery(&mut self, ticket: &TransferDepositTicket, delivery_type: TransferType) {
-        self._rooms.register_delivery(ticket, delivery_type)
+        self.rooms.register_delivery(ticket, delivery_type)
     }
 }
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl TransferQueue {
     pub fn register_generator(&mut self, room: RoomName, transfer_types: TransferTypeFlags, generator: TransferQueueGenerator) {
-        self._rooms.register_generator(room, transfer_types, generator)
+        self.rooms.register_generator(room, transfer_types, generator)
     }
 
     pub fn get_room(
@@ -1510,7 +1555,13 @@ impl TransferQueue {
         room: RoomName,
         transfer_types: TransferTypeFlags,
     ) -> &mut TransferQueueRoomData {
-        self._rooms.get_room(data, room, transfer_types)
+        self.rooms.get_room(data, room, transfer_types)
+    }
+
+    pub fn get_all_rooms(
+        &self
+    ) -> HashSet<RoomName> {
+        self.rooms.get_all_rooms()
     }
 
     pub fn try_get_room(
@@ -1519,7 +1570,7 @@ impl TransferQueue {
         room: RoomName,
         transfer_types: TransferTypeFlags,
     ) -> Option<&TransferQueueRoomData> {
-        self._rooms.try_get_room(data, room, transfer_types)
+        self.rooms.try_get_room(data, room, transfer_types)
     }
 
     pub fn select_pickups(
@@ -1545,6 +1596,56 @@ impl TransferQueue {
                                 resources: pickup_resources,
                             })
                         }
+                    }
+                }
+            }
+        }
+
+        tickets
+    }
+
+    pub fn select_single_delivery(
+        &mut self,
+        data: &dyn TransferRequestSystemData,
+        delivery_rooms: &[RoomName],
+        allowed_priorities: TransferPriorityFlags,
+        delivery_types: TransferTypeFlags,
+        available_resources: &HashMap<ResourceType, u32>,
+        available_capacity: TransferCapacity,
+    ) -> Vec<TransferDepositTicket> {
+        delivery_rooms
+            .iter()
+            .flat_map(|room| {
+                self.select_single_delivery_for_room(data, *room, allowed_priorities, delivery_types, available_resources, available_capacity)
+            })
+            .collect::<Vec<_>>()
+    }
+
+    pub fn select_single_delivery_for_room(
+        &mut self,
+        data: &dyn TransferRequestSystemData,
+        delivery_room: RoomName,
+        allowed_priorities: TransferPriorityFlags,
+        delivery_types: TransferTypeFlags,
+        available_resources: &HashMap<ResourceType, u32>,
+        available_capacity: TransferCapacity,
+    ) -> Vec<TransferDepositTicket> {
+        let mut tickets = Vec::new();
+
+        if let Some(room) = self.try_get_room(data, delivery_room, delivery_types) {
+            if room.stats.deposit_priorities.intersects(allowed_priorities) {
+                for (target, node) in room.nodes.iter() {
+                    if let Some((delivery_resource, delivery_entries)) =
+                        node.select_single_delivery(allowed_priorities, delivery_types, available_resources, available_capacity) {
+
+                        let mut delivery_resources = HashMap::new();
+
+                        delivery_resources.insert(delivery_resource, delivery_entries);
+
+                        tickets.push(TransferDepositTicket {
+                            target: *target,
+                            resources: delivery_resources,
+                        })
                     }
                 }
             }
@@ -1745,6 +1846,75 @@ impl TransferQueue {
         .map(|(pickup, delivery, _)| (pickup, delivery.clone()))
     }
 
+    pub fn get_terminal_delivery_from_target(
+        &mut self,
+        data: &dyn TransferRequestSystemData,
+        target: &TransferTarget,
+        allowed_pickup_priorities: TransferPriorityFlags,
+        allowed_delivery_priorities: TransferPriorityFlags,
+        delivery_type: TransferType,
+        available_transfer_energy: u32,
+        available_capacity: TransferCapacity,
+    ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)> {
+        if available_capacity.empty() {
+            return None;
+        }
+
+        let available_resources = self
+            .try_get_room(data, target.pos().room_name(), delivery_type.into())
+            .and_then(|room| room.try_get_node(target))
+            .map(|node| node.get_available_withdrawl_totals_by_priority(delivery_type, allowed_pickup_priorities))?;
+
+        if available_resources.is_empty() {
+            return None;
+        }
+
+        let source_room = target.pos().room_name();
+
+        let mut all_rooms = self.get_all_rooms();
+        
+        all_rooms.remove(&source_room);
+        
+        let target_rooms = all_rooms.into_iter().collect::<Vec<_>>();
+
+        let delivery = self.get_terminal_delivery(
+            data,
+            &target_rooms,
+            allowed_delivery_priorities,
+            delivery_type.into(),
+            available_transfer_energy,
+            &available_resources,
+            available_capacity,
+            source_room
+        )?;
+
+        let delivery_resources = delivery
+            .resources()
+            .iter()
+            .map(|(resource, entries)| {
+                let total = entries.iter().map(|entry| entry.amount).sum();
+
+                (Some(*resource), total)
+            })
+            .collect();
+
+        let node = self
+            .try_get_room(data, target.pos().room_name(), delivery_type.into())
+            .and_then(|r| r.try_get_node(target))?;
+
+        let pickup = TransferWithdrawTicket {
+            target: *target,
+            resources: node.select_pickup(
+                allowed_pickup_priorities,
+                delivery_type.into(),
+                &delivery_resources,
+                available_capacity,
+            ),
+        };
+
+        Some((pickup, delivery))
+    }
+
     pub fn get_delivery_from_target(
         &mut self,
         data: &dyn TransferRequestSystemData,
@@ -1845,6 +2015,52 @@ impl TransferQueue {
         .map(|(delivery, _)| delivery.clone())
     }
 
+    pub fn get_terminal_delivery(
+        &mut self,
+        data: &dyn TransferRequestSystemData,
+        rooms: &[RoomName],
+        allowed_priorities: TransferPriorityFlags,
+        delivery_types: TransferTypeFlags,
+        available_transfer_energy: u32,
+        available_resources: &HashMap<ResourceType, u32>,
+        available_capacity: TransferCapacity,
+        anchor_location: RoomName,
+    ) -> Option<TransferDepositTicket> {
+        if available_capacity.empty() {
+            return None;
+        }
+
+        rooms
+            .iter()
+            .flat_map(|room| {
+                let cost_per_unit = super::utility::calc_transaction_cost_fractional(anchor_location, *room);
+
+                let max_resources = (available_transfer_energy as f64 / cost_per_unit).floor() as u32;
+
+                let capacity = TransferCapacity::Finite(available_capacity.clamp(max_resources));
+
+                self.select_single_delivery_for_room(data, *room, allowed_priorities, delivery_types, available_resources, capacity)
+            })
+            .map(|delivery| {
+                let resources = delivery
+                    .resources
+                    .iter()
+                    .flat_map(|(_, entries)| entries.iter().map(|e| e.amount))
+                    .sum::<u32>();
+
+                let to = delivery.target.pos().room_name();
+
+                let cost_per_unit = super::utility::calc_transaction_cost_fractional(anchor_location, to);
+                
+                let cost = (cost_per_unit * resources as f64).ceil();
+                let value = (resources as f32) / (cost as f32);
+
+                (delivery, value)
+            })
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .map(|(delivery, _)| delivery.clone())
+    }
+
     pub fn select_pickup_and_delivery(
         &mut self,
         data: &dyn TransferRequestSystemData,
@@ -1855,21 +2071,15 @@ impl TransferQueue {
         current_position: RoomPosition,
         available_capacity: TransferCapacity,
     ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)> {
-        let mut priorities = ALL_TRANSFER_PRIORITIES
-            .iter()
-            .cartesian_product(ALL_TRANSFER_PRIORITIES.iter())
-            .filter(|(&p1, &p2)| allowed_priorities.contains(p1.into()) || allowed_priorities.contains(p2.into()))
-            .collect_vec();
-
-        priorities.sort_by(|(a_1, a_2), (b_1, b_2)| a_1.max(a_2).cmp(b_1.max(b_2)).then_with(|| a_1.cmp(b_1)).then_with(|| a_2.cmp(b_2)));
+        let priorities = generate_active_priorities(allowed_priorities, allowed_priorities);
 
         for (pickup_priority, delivery_priority) in priorities {
             if let Some((pickup_ticket, delivery_ticket)) = self.select_best_delivery(
                 data,
                 pickup_rooms,
                 delivery_rooms,
-                *pickup_priority,
-                *delivery_priority,
+                pickup_priority,
+                delivery_priority,
                 transfer_type,
                 current_position,
                 available_capacity,
@@ -1882,12 +2092,12 @@ impl TransferQueue {
     }
 
     pub fn clear(&mut self) {
-        self._rooms.clear();
+        self.rooms.clear();
     }
 
     fn visualize(&mut self, data: &dyn TransferRequestSystemData, ui: &mut UISystem, visualizer: &mut Visualizer) {
         if crate::features::transfer::visualize_demand() {
-            let room_names = self._rooms.get_all_rooms();
+            let room_names = self.rooms.get_all_rooms();
 
             for room_name in room_names.iter() {
                 let room = self.get_room(data, *room_name, TransferTypeFlags::all());

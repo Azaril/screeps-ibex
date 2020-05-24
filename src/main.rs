@@ -1,4 +1,4 @@
-#![recursion_limit = "128"]
+#![recursion_limit = "256"]
 #![allow(dead_code)]
 #![warn(clippy::all)]
 #![feature(const_fn)]
