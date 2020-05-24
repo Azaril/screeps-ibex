@@ -268,9 +268,15 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn tick() {
+    //
+    // Deserialize world state.
+    //
+
+    let current_time = game::time();
+
     const COMPONENT_SEGMENT: u32 = 50;
     
-    if crate::features::reset::reset_environment() {
+    if unsafe { ENVIRONMENT.as_ref() }.and_then(|e| e.tick).map(|t| t + 1 != current_time).unwrap_or_else(|| crate::features::reset::reset_environment()) {
         info!("Resetting environment");
         unsafe { ENVIRONMENT = None };
     }
@@ -318,17 +324,9 @@ pub fn tick() {
     } else {
         world.remove::<Visualizer>();
         world.remove::<UISystem>();
-    }
+    }    
 
-    //
-    // Deserialize world state.
-    //
-
-    let current_time = game::time();
-
-    let environment_is_valid = tick.map(|t| t + 1 == current_time).unwrap_or(false);
-
-    if !*loaded || !environment_is_valid {
+    if !*loaded {
         info!("Deserializing world state to environment");
 
         deserialize_world(&world, COMPONENT_SEGMENT);
