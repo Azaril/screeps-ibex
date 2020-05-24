@@ -100,26 +100,21 @@ impl Idle {
             )
         })
         .or_else(|| {
-            ACTIVE_TRANSFER_PRIORITIES
-                .iter()
-                .filter_map(|priority| {
-                    let transfer_queue_data = TransferQueueGeneratorData {
-                        cause: "Haul Idle",
-                        room_data: &*tick_context.system_data.room_data,
-                    };
+            let transfer_queue_data = TransferQueueGeneratorData {
+                cause: "Haul Idle",
+                room_data: &*tick_context.system_data.room_data,
+            };
 
-                    get_new_pickup_and_delivery_full_capacity_state(
-                        creep,
-                        &transfer_queue_data,
-                        &pickup_rooms,
-                        &delivery_rooms,
-                        TransferPriorityFlags::from(priority),
-                        TransferType::Haul,
-                        tick_context.runtime_data.transfer_queue,
-                        HaulState::pickup,
-                    )
-                })
-                .next()
+            get_new_pickup_and_delivery_full_capacity_state(
+                creep,
+                &transfer_queue_data,
+                &pickup_rooms,
+                &delivery_rooms,
+                TransferPriorityFlags::ALL,
+                TransferType::Haul,
+                tick_context.runtime_data.transfer_queue,
+                HaulState::pickup,
+            )
         })
         .or_else(|| {
             for room in &pickup_rooms {

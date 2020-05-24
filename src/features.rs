@@ -5,6 +5,10 @@ pub mod js {
         js! {
             _.defaultsDeep(Memory, {
                 _features: {
+                    reset: {
+                        environment: false,
+                        memory: false,
+                    },
                     visualize: {
                         on: true
                     },
@@ -44,6 +48,21 @@ pub mod js {
                 }
             });
         }
+    }
+}
+
+pub mod reset {
+    pub fn reset_environment() -> bool {
+        ::screeps::memory::root().path_bool("_features.reset.environment")
+    }
+
+    pub fn reset_memory() -> bool {
+        ::screeps::memory::root().path_bool("_features.reset.memory")
+    }
+
+    pub fn clear() {
+        ::screeps::memory::root().path_set("_features.reset.environment", false);
+        ::screeps::memory::root().path_set("_features.reset.memory", false);
     }
 }
 

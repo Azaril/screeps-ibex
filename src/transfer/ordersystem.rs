@@ -6,6 +6,7 @@ use screeps::game::market::*;
 use screeps::*;
 use specs::prelude::{Entities, LazyUpdate, Read, ResourceId, System, SystemData, World, Write, WriteStorage};
 use std::collections::HashMap;
+use super::utility::*;
 
 pub struct OrderQueuePassiveRequest {
     resource: ResourceType,
@@ -218,12 +219,6 @@ impl OrderQueueSystem {
         }
     }
 
-    fn calc_transaction_cost_fractional(from: RoomName, to: RoomName) -> f64 {
-        let distance = game::map::get_room_linear_distance(from, to, true) as f64;
-
-        1.0 - (-distance / 30.0).exp()
-    }
-
     fn sell_active_orders(
         source_room_name: RoomName,
         terminal: &StructureTerminal,
@@ -250,7 +245,7 @@ impl OrderQueueSystem {
                             let transfer_amount = o.remaining_amount.min(params.amount);
 
                             if transfer_amount > 0 {
-                                let transfer_cost_per_unit = Self::calc_transaction_cost_fractional(source_room_name, order_room_name);
+                                let transfer_cost_per_unit = calc_transaction_cost_fractional(source_room_name, order_room_name);
                                 let energy_transfer_cost_per_unit = transfer_cost_per_unit * params.energy_cost;
                                 let effective_price_per_unit = o.price - energy_transfer_cost_per_unit;
 
