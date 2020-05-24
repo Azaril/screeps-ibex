@@ -205,16 +205,18 @@ impl Mission for TerminalMission {
                             }
                         }
 
-                        let deposit_request = TransferDepositRequest::new(
-                            TransferTarget::Terminal(terminal.remote_id()), 
-                            Some(resource_type), 
-                            TransferPriority::Low, 
-                            transfer_amount, 
-                            TransferType::Terminal);
-                        
-                        system_data
-                            .transfer_queue
-                            .request_deposit(deposit_request);
+                        if transfer_amount > Self::get_minimum_terminal_transfer_amount(resource_type) {
+                            let deposit_request = TransferDepositRequest::new(
+                                TransferTarget::Terminal(terminal.remote_id()), 
+                                Some(resource_type), 
+                                TransferPriority::Low, 
+                                transfer_amount, 
+                                TransferType::Terminal);
+                            
+                            system_data
+                                .transfer_queue
+                                .request_deposit(deposit_request);
+                        }
                     }
                 } else {
                     let effective_terminal_amount = current_total_amount - thresholds.desired_storage_amount.min(current_total_amount);
@@ -450,13 +452,14 @@ impl Mission for TerminalMission {
                 0
             };
 
-            let best_transfer = ACTIVE_TRANSFER_PRIORITIES
+            //TODO: Potentially use active priority pairs to iterate here. Currently relies on there never being a None -> None priority request.
+            let best_transfer = ALL_TRANSFER_PRIORITIES
                 .iter()
                 .filter_map(|priority| {
                     transfer_queue.get_terminal_delivery_from_target(
                         &transfer_queue_data,
                         &TransferTarget::Terminal(terminal.remote_id()),
-                        TransferPriorityFlags::ALL,
+                        TransferPriorityFlags::ACTIVE,
                         priority.into(),
                         TransferType::Terminal,
                         available_transfer_energy,

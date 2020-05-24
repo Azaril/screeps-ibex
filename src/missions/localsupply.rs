@@ -418,7 +418,7 @@ impl LocalSupplyMission {
                                 &transfer_queue_data,
                                 &[room_name],
                                 &TransferTarget::Link(link_id),
-                                TransferPriorityFlags::ALL,
+                                TransferPriorityFlags::ACTIVE,
                                 priority.into(),
                                 TransferType::Link,
                                 TransferCapacity::Infinite,
