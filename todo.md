@@ -1,7 +1,6 @@
 # High Priority
 
 - Remote upgrade mission/role.
-- Lazy evaluation of transfer data. (Register callback to materialize when requested.)
 - Add stuck detection and response for creeps.
 - Use 'local supply' mission for both local supply and remote mine.
 - Add lost creep recovery - i.e. memory is lost.
@@ -10,13 +9,10 @@
 1. Gather haul requests/providers/state.
 2. Gather visibility requests and missions in progress to gather visibility.
 - Add remote mining capability. (Static + container mining needed. Switch from remote harvesting.)
-- Add build priority bucketing.
 - Computer number of hauler/harvester parts needed based on path distance.
-- Attach missions to operations as needed. (Requires entity vector fix or workaround.)
 - Add heuristics for which rooms to claim next. (Number of sources, source proximity, amount of swamp, etc.)
 - Factory usage.
 - Lab usage.
-- Add dismantle to claim/reserve so they can try and reach blocked off controllers.
 - Add CPU analysis.
 1. Prevent additional remote mining, reserving or claiming of new rooms without sufficient CPU.
 - Post-process for room planner. (Remove roads not needed, fix RCL for links etc. based on distance, prioritize storage.)
@@ -25,14 +21,10 @@
 
 # Medium Priority
 
-- Find a common pattern for state storage.
-- Room-to-room terminal transfer. (Multi-room chaining if needed.)
-- Add chrome tracing format profiling.
 - Add observer support to visibility requests. (Currently just used for triggering room data generation.)
 - Pathfinding solution. (Use built in path finder.)
-- Add per-room stats (i.e. energy availble over X minutes) to use for predicting needed roles.
+- Add per-room stats (i.e. energy available over X minutes) to use for predicting needed roles.
 
 # Low priority
 
 - Add market statistics that can be used to drive buy/sell price.
-- Rename all serde serialized properties to minimize space/decode cost.
