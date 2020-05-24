@@ -17,3 +17,4 @@ pub mod scout;
 pub mod terminal;
 pub mod tower;
 pub mod upgrade;
+pub mod powerspawn;

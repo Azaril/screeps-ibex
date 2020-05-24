@@ -38,42 +38,46 @@ impl TerminalMission {
         }
     }
 
-    pub fn get_desired_reserve_terminal_amount(resource: ResourceType) -> u32 {
+    pub fn can_run(room: &Room) -> bool {
+        room.terminal().is_some()
+    }
+
+    fn get_desired_reserve_terminal_amount(resource: ResourceType) -> u32 {
         match resource {
             ResourceType::Energy => OrderQueue::maximum_transfer_energy(),
             _ => 0,
         }
     }
 
-    pub fn get_desired_storage_amount(resource: ResourceType) -> u32 {
+    fn get_desired_storage_amount(resource: ResourceType) -> u32 {
         match resource {
             ResourceType::Energy => 150_000,
             _ => 10_000,
         }
     }
 
-    pub fn get_desired_transfer_outgoing_terminal_amount(resource: ResourceType) -> u32 {
+    fn get_desired_transfer_outgoing_terminal_amount(resource: ResourceType) -> u32 {
         match resource {
             ResourceType::Energy => 50_000,
             _ => 0,
         }
     }
 
-    pub fn get_desired_passive_terminal_amount(resource: ResourceType) -> u32 {
+    fn get_desired_passive_terminal_amount(resource: ResourceType) -> u32 {
         match resource {
             ResourceType::Energy => 10_000,
             _ => 10_000,
         }
     }
 
-    pub fn get_desired_active_terminal_amount(resource: ResourceType) -> u32 {
+    fn get_desired_active_terminal_amount(resource: ResourceType) -> u32 {
         match resource {
             ResourceType::Energy => 10_000,
             _ => 5_000,
         }
     }
 
-    pub fn get_minimum_terminal_transfer_amount(resource: ResourceType) -> u32 {
+    fn get_minimum_terminal_transfer_amount(resource: ResourceType) -> u32 {
         match resource {
             ResourceType::Energy => 1_000,
             _ => 100,
