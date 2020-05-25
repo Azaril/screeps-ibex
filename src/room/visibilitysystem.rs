@@ -35,6 +35,10 @@ impl VisibilityQueue {
     pub fn request(&mut self, visibility_request: VisibilityRequest) {
         self.requests.push(visibility_request);
     }
+
+    fn clear(&mut self) {
+        self.requests.clear();
+    }
 }
 
 #[derive(SystemData)]
@@ -146,5 +150,7 @@ impl<'a> System<'a> for VisibilityQueueSystem {
         //TODO: Use observer to look at room.
 
         Self::spawn_scout_missions(&mut data, &room_priorities);
+
+        data.visibility_queue.clear();
     }
 }

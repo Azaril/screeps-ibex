@@ -28,10 +28,9 @@ impl<'a> System<'a> for EntityMappingSystem {
     type SystemData = EntityMappingSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        let mapping = &mut data.mapping;
-
-        for (entity, room_data) in (&data.entities, &data.room_data).join() {
-            mapping.rooms.insert(room_data.name, entity);
-        }
+        data.mapping.rooms = (&data.entities, &data.room_data)
+            .join()
+            .map(|(entity, room_data)| (room_data.name, entity))
+            .collect::<HashMap<RoomName, Entity>>();
     }
 }
