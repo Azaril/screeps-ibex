@@ -157,11 +157,17 @@ where
                 //       on the route.
                 //
 
+                let mut allowed_pickup_priorities = TransferPriorityFlags::ALL;
+
+                if allowed_priorities.contains(TransferPriorityFlags::NONE) {
+                    allowed_pickup_priorities.remove(TransferPriorityFlags::NONE);
+                }
+
                 if let Some((additional_pickup, additional_delivery)) = transfer_queue.get_delivery_from_target(
                     data,
                     &pickup_room_names,
                     pickup.target(),
-                    TransferPriorityFlags::ALL,
+                    allowed_pickup_priorities,
                     allowed_priorities,
                     TransferType::Haul,
                     remaining_capacity,
