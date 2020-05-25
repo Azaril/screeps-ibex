@@ -33,6 +33,10 @@ impl RoomPlanQueue {
     pub fn request(&mut self, room_plan_request: RoomPlanRequest) {
         self.requests.push(room_plan_request);
     }
+
+    fn clear(&mut self) {
+        self.requests.clear();
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize, Component)]
@@ -359,5 +363,7 @@ impl<'a> System<'a> for RoomPlanSystem {
                 data.memory_arbiter.set(MEMORY_SEGMENT, &output_planner_data);
             }
         }
+
+        data.room_plan_queue.clear();
     }
 }
