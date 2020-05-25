@@ -85,12 +85,25 @@ impl Mission for PowerSpawnMission {
             Box::new(move |_system, transfer, _room_name| {
                 for power_spawn in &power_spawns {
                     let required_energy = power_spawn.store_free_capacity(Some(ResourceType::Energy));
-        
+
+                    let map_priority  = |fraction: f32| {
+                        if fraction < 0.25 {
+                            TransferPriority::High
+                        } else if fraction < 0.5 {
+                            TransferPriority::Medium
+                        } else {
+                            TransferPriority::Low
+                        }
+                    };
+
                     if required_energy > 0 {
+                        let maximum_energy = power_spawn.store_capacity(Some(ResourceType::Energy));
+                        let energy_fraction = (required_energy as f32) / (maximum_energy as f32);
+
                         let deposit_request = TransferDepositRequest::new(
                             TransferTarget::PowerSpawn(power_spawn.remote_id()), 
                             Some(ResourceType::Energy), 
-                            TransferPriority::Low, 
+                            map_priority(energy_fraction), 
                             required_energy as u32, 
                             TransferType::Haul);
                         
@@ -100,10 +113,13 @@ impl Mission for PowerSpawnMission {
                     let required_power = power_spawn.store_free_capacity(Some(ResourceType::Power));
         
                     if required_power > 0 {
+                        let maximum_power = power_spawn.store_capacity(Some(ResourceType::Power));
+                        let power_fraction = (required_power as f32) / (maximum_power as f32);
+
                         let deposit_request = TransferDepositRequest::new(
                             TransferTarget::PowerSpawn(power_spawn.remote_id()), 
                             Some(ResourceType::Power), 
-                            TransferPriority::Low, 
+                            map_priority(power_fraction), 
                             required_power as u32, 
                             TransferType::Haul);
                         
