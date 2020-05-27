@@ -376,8 +376,7 @@ impl LocalSupplyMission {
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility")?;
 
-        let mut structure_data = self.structure_data.borrow_mut();
-        let structure_data = structure_data.access(
+        let mut structure_data = self.structure_data.access(
             |d| game::time() - d.last_updated >= 10,
             || Self::create_structure_data(&static_visibility_data, &room),
         );
@@ -463,8 +462,7 @@ impl LocalSupplyMission {
         let likely_owned_room = dynamic_visibility_data.updated_within(2000)
             && (dynamic_visibility_data.owner().mine() || dynamic_visibility_data.reservation().mine());
 
-        let mut structure_data = self.structure_data.borrow_mut();
-        let structure_data = structure_data.access(
+        let mut structure_data = self.structure_data.access(
             |d| game::time() - d.last_updated >= 10,
             || Self::create_structure_data(&static_visibility_data, &room),
         );
@@ -1133,8 +1131,7 @@ impl LocalSupplyMission {
             let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
             let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
-            let mut structure_data = structure_data.borrow_mut();
-            let structure_data = structure_data.access(
+            let mut structure_data = structure_data.access(
                 |d| game::time() - d.last_updated >= 10,
                 || Self::create_structure_data(&static_visibility_data, &room),
             );
@@ -1159,8 +1156,7 @@ impl LocalSupplyMission {
             let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
             let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
-            let mut structure_data = structure_data.borrow_mut();
-            let structure_data = structure_data.access(
+            let mut structure_data = structure_data.access(
                 |d| game::time() - d.last_updated >= 10,
                 || Self::create_structure_data(&static_visibility_data, &room),
             );

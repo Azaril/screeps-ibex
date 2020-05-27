@@ -140,7 +140,7 @@ impl Mission for HaulMission {
             room_data: &*room_data_storage,
         };
 
-        let stats = self.stats.access(
+        let mut stats = self.stats.access(
             |s| game::time() - s.last_updated >= 20,
             || Self::update_stats(transfer_queue, &mut transfer_queue_data, room_data.name),
         );

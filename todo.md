@@ -28,3 +28,4 @@
 # Low priority
 
 - Add market statistics that can be used to drive buy/sell price.
+- Use generator for spawn queue to compute only on-demand.
