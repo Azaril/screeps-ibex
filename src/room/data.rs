@@ -4,6 +4,8 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+use std::cell::*;
+use screeps_cache::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RoomStaticVisibilityData {
@@ -107,17 +109,14 @@ impl RoomSign {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RoomDynamicVisibilityData {
-    #[serde(default)]
     #[serde(rename = "u")]
     update_tick: u32,
     #[serde(rename = "o")]
     owner: RoomDisposition,
     #[serde(rename = "r")]
     reservation: RoomDisposition,
-    #[serde(default)]
     #[serde(rename = "sk")]
     source_keeper: bool,
-    #[serde(default)]
     #[serde(rename = "s")]
     sign: Option<RoomSign>,
 }
@@ -152,14 +151,22 @@ impl RoomDynamicVisibilityData {
     }
 }
 
-#[derive(Clone, Component, ConvertSaveload)]
+#[derive(Component, ConvertSaveload)]
 pub struct RoomData {
+    #[convert_save_load_attr(serde(rename = "n"))]
     pub name: RoomName,
+    #[convert_save_load_skip_convert]
+    #[convert_save_load_attr(serde(skip))]    
     visible: bool,
-    has_been_visible: bool,
+    #[convert_save_load_attr(serde(rename = "m"))]
     missions: EntityVec<Entity>,
+    #[convert_save_load_attr(serde(rename = "s"))]
     static_visibility_data: Option<RoomStaticVisibilityData>,
+    #[convert_save_load_attr(serde(rename = "d"))]
     dynamic_visibility_data: Option<RoomDynamicVisibilityData>,
+    #[convert_save_load_skip_convert]
+    #[convert_save_load_attr(serde(skip))]
+    room_structure_data: RefCell<Option<RoomStructureData>>,
 }
 
 impl RoomData {
@@ -167,10 +174,10 @@ impl RoomData {
         RoomData {
             name: room_name,
             visible: false,
-            has_been_visible: false,
             missions: EntityVec::new(),
             static_visibility_data: None,
             dynamic_visibility_data: None,
+            room_structure_data: RefCell::new(None)
         }
     }
 
@@ -192,7 +199,6 @@ impl RoomData {
 
     pub fn update(&mut self, room: &Room) {
         self.visible = true;
-        self.has_been_visible = true;
 
         if self.static_visibility_data.is_none() {
             self.static_visibility_data = Some(Self::create_static_visibility_data(&room));
@@ -267,5 +273,204 @@ impl RoomData {
 
     pub fn get_dynamic_visibility_data(&self) -> Option<&RoomDynamicVisibilityData> {
         self.dynamic_visibility_data.as_ref()
+    }
+
+    pub fn get_structures(&self) -> impl MaybeGet<Ref<RoomStructureData>> {
+        let name = self.name;
+
+        self.room_structure_data.maybe_access(
+            |s| game::time() != s.last_updated,
+            move || game::rooms::get(name).as_ref().map(|room| RoomStructureData::new(room))
+        )
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct RoomStructureData {
+    last_updated: u32,
+    structures: Vec<Structure>,
+
+    containers: Vec<StructureContainer>,
+    controllers: Vec<StructureController>,
+    extensions: Vec<StructureExtension>,
+    extractors: Vec<StructureExtractor>,
+    factories: Vec<StructureFactory>,
+    invader_cores: Vec<StructureInvaderCore>,
+    keeper_lairs: Vec<StructureKeeperLair>,
+    labs: Vec<StructureLab>,
+    links: Vec<StructureLink>,
+    nukers: Vec<StructureNuker>,
+    observers: Vec<StructureObserver>,
+    power_banks: Vec<StructurePowerBank>,
+    power_spawns: Vec<StructurePowerSpawn>,
+    portals: Vec<StructurePortal>,
+    ramparts: Vec<StructureRampart>,
+    roads: Vec<StructureRoad>,
+    spawns: Vec<StructureSpawn>,
+    storages: Vec<StructureStorage>,
+    terminals: Vec<StructureTerminal>,
+    towers: Vec<StructureTower>,
+    walls: Vec<StructureWall>,
+}
+
+impl RoomStructureData {
+    fn new(room: &Room) -> RoomStructureData {
+        let structures = room.find(find::STRUCTURES);
+
+        let mut containers = Vec::new();
+        let mut controllers = Vec::new();
+        let mut extensions = Vec::new();
+        let mut extractors = Vec::new();
+        let mut factories = Vec::new();
+        let mut invader_cores = Vec::new();
+        let mut keeper_lairs = Vec::new();
+        let mut labs = Vec::new();
+        let mut links = Vec::new();
+        let mut nukers = Vec::new();
+        let mut observers = Vec::new();
+        let mut power_banks = Vec::new();
+        let mut power_spawns = Vec::new();
+        let mut portals = Vec::new();
+        let mut ramparts = Vec::new();
+        let mut roads = Vec::new();
+        let mut spawns = Vec::new();
+        let mut storages = Vec::new();
+        let mut terminals = Vec::new();
+        let mut towers = Vec::new();
+        let mut walls = Vec::new();
+
+        for structure in structures.iter() {
+            match structure {
+                Structure::Container(data) => containers.push(data.clone()),
+                Structure::Controller(data) => controllers.push(data.clone()),
+                Structure::Extension(data) => extensions.push(data.clone()),
+                Structure::Extractor(data) => extractors.push(data.clone()),
+                Structure::Factory(data) => factories.push(data.clone()),
+                Structure::InvaderCore(data) => invader_cores.push(data.clone()),
+                Structure::KeeperLair(data) => keeper_lairs.push(data.clone()),
+                Structure::Lab(data) => labs.push(data.clone()),
+                Structure::Link(data) => links.push(data.clone()),
+                Structure::Nuker(data) => nukers.push(data.clone()),
+                Structure::Observer(data) => observers.push(data.clone()),
+                Structure::PowerBank(data) => power_banks.push(data.clone()),
+                Structure::PowerSpawn(data) => power_spawns.push(data.clone()),
+                Structure::Portal(data) => portals.push(data.clone()),
+                Structure::Rampart(data) => ramparts.push(data.clone()),
+                Structure::Road(data) => roads.push(data.clone()),
+                Structure::Spawn(data) => spawns.push(data.clone()),
+                Structure::Storage(data) => storages.push(data.clone()),
+                Structure::Terminal(data) => terminals.push(data.clone()),
+                Structure::Tower(data) => towers.push(data.clone()),
+                Structure::Wall(data) => walls.push(data.clone()),
+            }
+        }
+
+        RoomStructureData {
+            last_updated: game::time(),
+
+            structures,
+
+            containers,
+            controllers,
+            extensions,
+            extractors,
+            factories,
+            invader_cores,
+            keeper_lairs,
+            labs,
+            links,
+            nukers,
+            observers,
+            power_banks,
+            power_spawns,
+            portals,
+            ramparts,
+            roads,
+            spawns,
+            storages,
+            terminals,
+            towers,
+            walls,
+        }
+    }
+
+    pub fn containers(&self) -> &[StructureContainer] {
+        &self.containers
+    }
+
+    pub fn controllers(&self) -> &[StructureController] {
+        &self.controllers
+    }
+
+    pub fn extensions(&self) -> &[StructureExtension] {
+        &self.extensions
+    }
+
+    pub fn extractors(&self) -> &[StructureExtractor] {
+        &self.extractors
+    }
+
+    pub fn factories(&self) -> &[StructureFactory] {
+        &self.factories
+    }
+
+    pub fn invader_cores(&self) -> &[StructureInvaderCore] {
+        &self.invader_cores
+    }
+
+    pub fn keeper_lairs(&self) -> &[StructureKeeperLair] {
+        &self.keeper_lairs
+    }
+
+    pub fn labs(&self) -> &[StructureLab] {
+        &self.labs
+    }
+
+    pub fn links(&self) -> &[StructureLink] {
+        &self.links
+    }
+
+    pub fn nukers(&self) -> &[StructureNuker] {
+        &self.nukers
+    }
+
+    pub fn observers(&self) -> &[StructureObserver] {
+        &self.observers
+    }
+
+    pub fn power_banks(&self) -> &[StructurePowerBank] {
+        &self.power_banks
+    }
+
+    pub fn portals(&self) -> &[StructurePortal] {
+        &self.portals
+    }
+
+    pub fn ramparts(&self) -> &[StructureRampart] {
+        &self.ramparts
+    }
+
+    pub fn roads(&self) -> &[StructureRoad] {
+        &self.roads
+    }
+
+    pub fn spawns(&self) -> &[StructureSpawn] {
+        &self.spawns
+    }
+
+    pub fn storages(&self) -> &[StructureStorage] {
+        &self.storages
+    }
+
+    pub fn terminals(&self) -> &[StructureTerminal] {
+        &self.terminals
+    }
+
+    pub fn towers(&self) -> &[StructureTower] {
+        &self.towers
+    }
+
+    pub fn walls(&self) -> &[StructureWall] {
+        &self.walls
     }
 }

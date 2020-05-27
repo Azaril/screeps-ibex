@@ -29,7 +29,8 @@ flate2 = "1.0"
 #screeps-game-api = { git = "https://github.com/Azaril/screeps-game-api", branch = "pathfinding" }
 screeps-game-api = { path = "C:\\source\\screeps-game-api" }
 screeps-machine = { git = "https://github.com/Azaril/screeps-machine" }
-screeps-cache = { git = "https://github.com/Azaril/screeps-cache" }
+#screeps-cache = { git = "https://github.com/Azaril/screeps-cache" }
+screeps-cache = { path = "C:\\source\\screeps-cache" }
 #screeps-rover = { git = "https://github.com/Azaril/screeps-rover" }
 screeps-rover = { path = "C:\\source\\screeps-rover" }
 screeps-timing = { git = "https://github.com/Azaril/screeps-timing", optional = true }
