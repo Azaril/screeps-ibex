@@ -1,0 +1,15 @@
+[submodule "screeps-cache"]
+	path = screeps-cache
+	url = https://github.com/Azaril/screeps-cache.git
+[submodule "screeps-machine"]
+	path = screeps-machine
+	url = https://github.com/Azaril/screeps-machine.git
+[submodule "screeps-rover"]
+	path = screeps-rover
+	url = https://github.com/Azaril/screeps-rover.git
+[submodule "screeps-timing"]
+	path = screeps-timing
+	url = https://github.com/Azaril/screeps-timing.git
+[submodule "screeps-timing-annotate"]
+	path = screeps-timing-annotate
+	url = https://github.com/Azaril/screeps-timing-annotate.git
