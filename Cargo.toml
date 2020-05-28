@@ -1,43 +1,32 @@
-[package]
-name = "screeps-ibex"
-version = "0.0.1"
-authors = []
-edition = "2018"
-
-[features]
-default = ["wee-alloc"]
-profile = ["screeps-timing", "screeps-timing-annotate"]
-wee-alloc = ["wee_alloc"]
-
-[dependencies]
-stdweb = "0.4"
-log = "0.4"
-fern = "0.5"
-serde = { version = "1.0", features = ["rc"] }
-serde_json = "1.0"
-#specs = { version = "0.16", default-features = false, features = ["serde", "shred-derive"] }
-#specs = { git = "https://github.com/Azaril/specs", default-features = false, features = ["serde", "derive"] }
-specs = { path = "C:\\source\\specs", default-features = false, features = ["serde", "derive"] }
-itertools = "0.8"
-bitflags = "1.2.1"
-uuid = { version = "0.8", features = ["serde"] }
-wee_alloc = { version = "0.4", optional = true }
-pathfinding = { version = "2.0" }
-bincode = "1.2"
-base64 = "0.2"
-flate2 = "1.0"
-#screeps-game-api = { git = "https://github.com/Azaril/screeps-game-api", branch = "pathfinding" }
-screeps-game-api = { path = "C:\\source\\screeps-game-api" }
-screeps-machine = { git = "https://github.com/Azaril/screeps-machine" }
-#screeps-cache = { git = "https://github.com/Azaril/screeps-cache" }
-screeps-cache = { path = "C:\\source\\screeps-cache" }
-#screeps-rover = { git = "https://github.com/Azaril/screeps-rover" }
-screeps-rover = { path = "C:\\source\\screeps-rover" }
-screeps-timing = { git = "https://github.com/Azaril/screeps-timing", optional = true }
-screeps-timing-annotate = { git = "https://github.com/Azaril/screeps-timing-annotate", optional = true }
+[workspace]
+members = [
+    "screeps-ibex",
+    "screeps-cache",
+    "screeps-rover",
+    "screeps-timing",
+    "screeps-timing-annotate"
+]
 
 [profile.release]
 panic = "abort"
 opt-level = "z"
 lto = true
 codegen-units = 1
+
+[patch.crates-io]
+screeps-game-api = { git = "https://github.com/Azaril/screeps-game-api", branch = "pathfinding" }
+
+[patch.'https://github.com/Azaril/screeps-cache']
+screeps-cache = { path = "screeps-cache" }
+
+[patch.'https://github.com/Azaril/screeps-machine']
+screeps-machine = { path = "screeps-machine" }
+
+[patch.'https://github.com/Azaril/screeps-rover']
+screeps-rover = { path = "screeps-rover" }
+
+[patch.'https://github.com/Azaril/screeps-timing']
+screeps-timing = { path = "screeps-timing" }
+
+[patch.'https://github.com/Azaril/screeps-timing-annotate']
+screeps-timing-annotate = { path = "screeps-timing-annotate" }

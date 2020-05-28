@@ -1,0 +1,33 @@
+[package]
+name = "screeps-ibex"
+version = "0.0.1"
+authors = []
+edition = "2018"
+
+[features]
+default = ["wee-alloc"]
+profile = ["screeps-timing", "screeps-timing-annotate"]
+wee-alloc = ["wee_alloc"]
+
+[dependencies]
+stdweb = "0.4"
+log = "0.4"
+fern = "0.5"
+serde = { version = "1.0", features = ["rc"] }
+serde_json = "1.0"
+#specs = { version = "0.16", default-features = false, features = ["serde", "shred-derive"] }
+specs = { git = "https://github.com/amethyst/specs", default-features = false, features = ["serde", "derive"] }
+itertools = "0.8"
+bitflags = "1.2.1"
+uuid = { version = "0.8", features = ["serde"] }
+wee_alloc = { version = "0.4", optional = true }
+pathfinding = { version = "2.0" }
+bincode = "1.2"
+base64 = "0.2"
+flate2 = "1.0"
+screeps-game-api = { version = "0.7" }
+screeps-machine = { git = "https://github.com/Azaril/screeps-machine" }
+screeps-cache = { git = "https://github.com/Azaril/screeps-cache" }
+screeps-rover = { git = "https://github.com/Azaril/screeps-rover" }
+screeps-timing = { git = "https://github.com/Azaril/screeps-timing", optional = true }
+screeps-timing-annotate = { git = "https://github.com/Azaril/screeps-timing-annotate", optional = true }
