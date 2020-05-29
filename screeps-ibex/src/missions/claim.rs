@@ -142,7 +142,7 @@ impl Mission for ClaimMission {
                     Self::create_handle_claimer_spawn(mission_entity, *controller),
                 );
 
-                system_data.spawn_queue.request(home_room_data.name, spawn_request);
+                system_data.spawn_queue.request(self.home_room_data, spawn_request);
             }
         }
 

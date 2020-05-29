@@ -6,6 +6,8 @@ use crate::jobs::haul::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use crate::transfer::transfersystem::*;
+use crate::room::data::*;
+use crate::jobs::utility::dismantle::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
@@ -72,19 +74,21 @@ impl RaidMission {
         })
     }
 
-    fn request_transfer_for_structures(transfer: &mut dyn TransferRequestSystem, room: &Room) {
+    fn request_transfer_for_structures(transfer: &mut dyn TransferRequestSystem, room_data: &RoomData) -> Result<(), String> {
         //TODO: Fill out remaining types?
         //Structure::Ruin(s) => Ok(s.into()),
         //Structure::Tombstone(s) => Ok(s.into()),
         //Structure::Resource(s) => Ok(s.into()),
 
-        for structure in room.find(find::STRUCTURES) {
+        let structures = room_data.get_structures().ok_or("Expected structures")?;
+
+        for structure in structures.all().iter() {
             if let Some(store) = structure.as_has_store() {
                 for resource in store.store_types() {
                     let resource_amount = store.store_used_capacity(Some(resource));
 
                     if resource_amount > 0 {
-                        if let Ok(transfer_target) = (&structure).try_into() {
+                        if let Ok(transfer_target) = structure.try_into() {
                             let transfer_request = TransferWithdrawRequest::new(
                                 transfer_target,
                                 resource,
@@ -99,6 +103,8 @@ impl RaidMission {
                 }
             }
         }
+
+        Ok(())
     }
 }
 
@@ -132,13 +138,15 @@ impl Mission for RaidMission {
 
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
+        let room_data_entity = self.room_data;
+
         system_data.transfer_queue.register_generator(
             room_data.name,
             TransferTypeFlags::HAUL,
-            Box::new(|_system, transfer, room_name| {
-                let room = game::rooms::get(room_name).ok_or("Expected room")?;
+            Box::new(move |system, transfer, _room_name| {
+                let room_data = system.get_room_data(room_data_entity).ok_or("Expected room")?;
 
-                Self::request_transfer_for_structures(transfer, &room);
+                Self::request_transfer_for_structures(transfer, &room_data)?;
 
                 Ok(())
             }),
@@ -157,21 +165,8 @@ impl Mission for RaidMission {
             return Err("Room is owned by ourselves or a friendly".to_string());
         }
 
-        //TODO: Factor this in to common code - used also by mining outpost mission.
-        if let Some(room) = game::rooms::get(room_data.name) {
-            let structures = room.find(find::STRUCTURES);
-
-            let has_resources = structures.iter().any(|structure| {
-                if let Some(store) = structure.as_has_store() {
-                    let store_types = store.store_types();
-
-                    return store_types.iter().any(|t| store.store_used_capacity(Some(*t)) > 0);
-                }
-
-                false
-            });
-
-            if !has_resources {
+        if let Some(structures) = room_data.get_structures() {
+            if structures.all().iter().all(|s| has_empty_storage(s)) {
                 return Ok(MissionResult::Success);
             }
         }
@@ -209,7 +204,7 @@ impl Mission for RaidMission {
                     Self::create_handle_raider_spawn(mission_entity, self.room_data, self.home_room_data),
                 );
 
-                system_data.spawn_queue.request(home_room_data.name, spawn_request);
+                system_data.spawn_queue.request(self.home_room_data, spawn_request);
             }
         }
 

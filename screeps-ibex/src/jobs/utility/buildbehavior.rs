@@ -12,10 +12,8 @@ where
 {
     if creep.store_used_capacity(Some(ResourceType::Energy)) > 0 {
         //TODO: This requires visibility and could fail?
-        if let Some(room) = game::rooms::get(build_room.name) {
-            if let Some(construction_site) = select_construction_site(&creep, &room) {
-                return Some(state_map(construction_site.remote_id()));
-            }
+        if let Some(construction_site) = build_room.get_construction_sites().and_then(|construction_sites| select_construction_site(&creep, &construction_sites)) {
+            return Some(state_map(construction_site.remote_id()));
         }
     }
 

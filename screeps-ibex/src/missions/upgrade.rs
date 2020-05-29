@@ -194,7 +194,7 @@ impl Mission for UpgradeMission {
                     Self::create_handle_upgrader_spawn(mission_entity, self.room_data, allow_harvest),
                 );
 
-                system_data.spawn_queue.request(room_data.name, spawn_request);
+                system_data.spawn_queue.request(self.room_data, spawn_request);
             }
         }
 

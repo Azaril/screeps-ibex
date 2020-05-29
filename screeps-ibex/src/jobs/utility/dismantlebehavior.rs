@@ -14,18 +14,28 @@ where
     //TODO: Add bypass for energy check.
     if creep.store_capacity(Some(ResourceType::Energy)) == 0 || creep.store_free_capacity(Some(ResourceType::Energy)) > 0 {
         //TODO: This requires visibility and could fail?
-        if let Some(room) = game::rooms::get(dismantle_room.name) {
+        if let Some(structures) = dismantle_room.get_structures() {
             //TODO: Don't collect here when range check is fixed.
-            let structures: Vec<Structure> = get_dismantle_structures(room, ignore_storage).collect();
+            let dismantle_structures = structures
+                .all()
+                .into_iter()
+                .filter(|s| can_dismantle(*s))
+                .filter(|s| ignore_storage || has_empty_storage(*s))
+                .collect::<Vec<_>>();
 
             let creep_pos = creep.pos();
 
             //TODO: Fix this hack which is a workaround for range of 1 pathfinding returning empty path.
-            let mut best_structure = structures.iter().find(|s| s.pos().get_range_to(&creep_pos) <= 1).cloned();
+            let mut best_structure: Option<Structure> = dismantle_structures
+                .iter()
+                .find(|s| s.pos().get_range_to(&creep_pos) <= 1)
+                .map(|&s| s.clone());
 
             if best_structure.is_none() {
-                best_structure = structures
+                best_structure = dismantle_structures
                     .into_iter()
+                    .cloned()
+                    //TODO: Remove clone when find_nearest is fixed.
                     .find_nearest_from(creep_pos, PathFinderHelpers::same_room_ignore_creeps_range_1);
             }
 

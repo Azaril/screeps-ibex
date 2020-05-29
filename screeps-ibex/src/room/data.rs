@@ -167,6 +167,12 @@ pub struct RoomData {
     #[convert_save_load_skip_convert]
     #[convert_save_load_attr(serde(skip))]
     room_structure_data: RefCell<Option<RoomStructureData>>,
+    #[convert_save_load_skip_convert]
+    #[convert_save_load_attr(serde(skip))]
+    room_construction_sites_data: RefCell<Option<ConstructionSiteData>>,
+    #[convert_save_load_skip_convert]
+    #[convert_save_load_attr(serde(skip))]
+    room_creep_data: RefCell<Option<CreepData>>,
 }
 
 impl RoomData {
@@ -177,7 +183,9 @@ impl RoomData {
             missions: EntityVec::new(),
             static_visibility_data: None,
             dynamic_visibility_data: None,
-            room_structure_data: RefCell::new(None)
+            room_structure_data: RefCell::new(None),
+            room_construction_sites_data: RefCell::new(None),
+            room_creep_data: RefCell::new(None),
         }
     }
 
@@ -275,17 +283,35 @@ impl RoomData {
         self.dynamic_visibility_data.as_ref()
     }
 
-    pub fn get_structures(&self) -> impl MaybeGet<Ref<RoomStructureData>> {
+    pub fn get_structures(&self) -> Option<Ref<RoomStructureData>> {
         let name = self.name;
 
         self.room_structure_data.maybe_access(
             |s| game::time() != s.last_updated,
             move || game::rooms::get(name).as_ref().map(|room| RoomStructureData::new(room))
-        )
+        ).take()
+    }
+
+    pub fn get_construction_sites(&self) -> Option<Ref<Vec<ConstructionSite>>> {
+        let name = self.name;
+
+        self.room_construction_sites_data.maybe_access(
+            |s| game::time() != s.last_updated,
+            move || game::rooms::get(name).as_ref().map(|room| ConstructionSiteData::new(room))
+        ).take().map(|s| Ref::map(s, |o| &o.construction_sites))
+    }
+
+    pub fn get_creeps(&self) -> Option<Ref<Vec<Creep>>> {
+        let name = self.name;
+
+        self.room_creep_data.maybe_access(
+            |s| game::time() != s.last_updated,
+            move || game::rooms::get(name).as_ref().map(|room| CreepData::new(room))
+        ).take().map(|s| Ref::map(s, |o| &o.creeps))
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct RoomStructureData {
     last_updated: u32,
     structures: Vec<Structure>,
@@ -394,6 +420,10 @@ impl RoomStructureData {
         }
     }
 
+    pub fn all(&self) -> &Vec<Structure> {
+        &self.structures
+    }
+
     pub fn containers(&self) -> &[StructureContainer] {
         &self.containers
     }
@@ -442,6 +472,10 @@ impl RoomStructureData {
         &self.power_banks
     }
 
+    pub fn power_spawns(&self) -> &[StructurePowerSpawn] {
+        &self.power_spawns
+    }
+
     pub fn portals(&self) -> &[StructurePortal] {
         &self.portals
     }
@@ -472,5 +506,39 @@ impl RoomStructureData {
 
     pub fn walls(&self) -> &[StructureWall] {
         &self.walls
+    }
+}
+
+#[derive(Clone)]
+struct ConstructionSiteData {
+    last_updated: u32,
+    construction_sites: Vec<ConstructionSite>
+}
+
+impl ConstructionSiteData {
+    fn new(room: &Room) -> ConstructionSiteData {
+        let construction_sites = room.find(find::CONSTRUCTION_SITES);
+
+        ConstructionSiteData {
+            last_updated: game::time(),
+            construction_sites
+        }
+    }
+}
+
+#[derive(Clone)]
+struct CreepData {
+    last_updated: u32,
+    creeps: Vec<Creep>
+}
+
+impl CreepData {
+    fn new(room: &Room) -> CreepData {
+        let creeps = room.find(find::CREEPS);
+
+        CreepData {
+            last_updated: game::time(),
+            creeps
+        }
     }
 }

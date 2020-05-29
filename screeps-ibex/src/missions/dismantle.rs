@@ -72,6 +72,15 @@ impl DismantleMission {
             });
         })
     }
+
+    pub fn requires_dismantling(structures: &[Structure]) -> bool {
+        structures
+            .iter()
+            .filter(|s| can_dismantle(*s))
+            .filter(|s| has_empty_storage(*s))
+            .next()
+            .is_some()
+    }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -116,10 +125,8 @@ impl Mission for DismantleMission {
         }
 
         if self.dismantlers.is_empty() {
-            if let Some(room) = game::rooms::get(room_data.name) {
-                let requires_dismantling = get_dismantle_structures(room, false).next().is_some();
-
-                if !requires_dismantling {
+            if let Some(structures) = room_data.get_structures() {
+                if !Self::requires_dismantling(structures.all()) {
                     return Ok(MissionResult::Success);
                 }
             }
@@ -173,7 +180,7 @@ impl Mission for DismantleMission {
                     Self::create_handle_dismantler_spawn(mission_entity, self.room_data, self.home_room_data, self.ignore_storage),
                 );
 
-                system_data.spawn_queue.request(home_room_data.name, spawn_request);
+                system_data.spawn_queue.request(self.home_room_data, spawn_request);
             }
         }
 

@@ -186,7 +186,7 @@ impl Mission for RemoteMineMission {
                         Self::create_handle_harvester_spawn(mission_entity, *source, self.home_room_data),
                     );
 
-                    system_data.spawn_queue.request(home_room_data.name, spawn_request);
+                    system_data.spawn_queue.request(self.home_room_data, spawn_request);
                 }
             }
         }

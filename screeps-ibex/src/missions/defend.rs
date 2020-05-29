@@ -2,6 +2,7 @@ use super::data::*;
 use super::missionsystem::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
+use crate::room::data::*;
 use screeps::*;
 use screeps_machine::*;
 use serde::{Deserialize, Serialize};
@@ -45,20 +46,22 @@ machine!(
     }
 );
 
-fn room_has_hostiles(room: &Room) -> bool {
-    let hostile_creeps = room.find(find::HOSTILE_CREEPS);
+fn room_has_hostiles(room_data: &RoomData) -> Option<bool> {
+    let has_hostile_creeps = room_data.get_creeps().map(|creeps| creeps.iter().any(|c| !c.my()));
 
-    if !hostile_creeps.is_empty() {
-        return true;
+    if let Some(has_hostile_creeps) = has_hostile_creeps {
+        if has_hostile_creeps {
+            return Some(true);
+        }
+
+        let has_hostile_structures = room_data.get_structures().map(|structures| structures.all().iter().filter_map(|s| s.as_owned()).any(|s| !s.my()));
+
+        if let Some(has_hostile_structures) = has_hostile_structures {
+            return Some(has_hostile_structures);
+        }
     }
 
-    let hostile_structures = room.find(find::HOSTILE_STRUCTURES);
-
-    if !hostile_structures.is_empty() {
-        return true;
-    }
-
-    false
+    None
 }
 
 impl Idle {
@@ -73,11 +76,7 @@ impl Idle {
             .get(state_context.defend_room_data)
             .ok_or("Expected defend room data")?;
 
-        if game::rooms::get(defend_room_data.name)
-            .as_ref()
-            .map(room_has_hostiles)
-            .unwrap_or(false)
-        {
+        if room_has_hostiles(&defend_room_data).unwrap_or(false) {
             return Ok(Some(DefendState::active(EntityVec::new(), None)));
         } else if defend_room_data
             .get_dynamic_visibility_data()
@@ -109,9 +108,7 @@ impl Active {
             .get(state_context.defend_room_data)
             .ok_or("Expected defend room data")?;
 
-        let has_hostiles = game::rooms::get(defend_room_data.name).as_ref().map(room_has_hostiles);
-
-        if let Some(has_hostiles) = has_hostiles {
+        if let Some(has_hostiles) = room_has_hostiles(&defend_room_data) {
             if has_hostiles {
                 self.last_hostiles = Some(game::time());
             } else if self.last_hostiles.map(|last| game::time() - last >= 20).unwrap_or(false) {

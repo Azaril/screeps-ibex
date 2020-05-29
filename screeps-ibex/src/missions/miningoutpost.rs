@@ -6,11 +6,9 @@ use super::raid::*;
 use super::remotemine::*;
 use super::reserve::*;
 use crate::componentaccess::*;
-use crate::jobs::utility::dismantle::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use log::*;
-use screeps::*;
 use screeps_machine::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
@@ -292,8 +290,8 @@ impl Cleanup {
             .get(state_context.outpost_room_data)
             .ok_or("Expected outpost room")?;
 
-        if let Some(room) = game::rooms::get(outpost_room_data.name) {
-            let structures = room.find(find::STRUCTURES);
+        if let Some(structures) = outpost_room_data.get_structures() {
+            let structures = structures.all();
 
             let has_resources = structures.iter().any(|structure| {
                 if let Some(store) = structure.as_has_store() {
@@ -357,8 +355,8 @@ impl Cleanup {
             .get(state_context.outpost_room_data)
             .ok_or("Expected outpost room")?;
 
-        if let Some(room) = game::rooms::get(outpost_room_data.name) {
-            let requires_dismantling = get_dismantle_structures(room, false).next().is_some();
+        if let Some(structures) = outpost_room_data.get_structures() {
+            let requires_dismantling = DismantleMission::requires_dismantling(structures.all());
 
             return Ok(Some(requires_dismantling));
         }

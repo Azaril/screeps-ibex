@@ -158,63 +158,28 @@ impl LocalSupplyMission {
         })
     }
 
-    fn create_structure_data(static_visibility_data: &RoomStaticVisibilityData, room: &Room) -> StructureData {
+    fn create_structure_data(room_data: &RoomData) -> Option<StructureData> {
+        let structure_data = room_data.get_structures()?;
+        let static_visibility_data = room_data.get_static_visibility_data()?;
+
         let sources = static_visibility_data.sources();
         let controller = static_visibility_data.controller();
 
-        let storage = room.storage();
-
-        let structures = room.find(find::STRUCTURES);
-
-        let spawns = structures
-            .iter()
-            .filter_map(|structure| match structure {
-                Structure::Spawn(spawn) => Some(spawn),
-                _ => None,
-            })
-            .collect_vec();
-
-        let extensions = structures
-            .iter()
-            .filter_map(|structure| match structure {
-                Structure::Extension(extension) => Some(extension),
-                _ => None,
-            })
-            .collect_vec();
-
-        let room_links = structures
-            .iter()
-            .filter_map(|structure| match structure {
-                Structure::Link(link) => Some(link),
-                _ => None,
-            })
-            .collect_vec();
-
-        let containers = structures
-            .iter()
-            .filter_map(|structure| match structure {
-                Structure::Container(container) => Some(container.remote_id()),
-                _ => None,
-            })
-            .collect_vec();
-
-        let room_extractors = structures
-            .iter()
-            .filter_map(|structure| match structure {
-                Structure::Extractor(extractor) => Some(extractor.remote_id()),
-                _ => None,
-            })
-            .collect_vec();
+        let storages = structure_data.storages();
+        let spawns = structure_data.spawns();
+        let extensions = structure_data.extensions();
+        let links = structure_data.links();
+        let containers = structure_data.containers();
+        let extractors = structure_data.extractors();
 
         let sources_to_containers = sources
             .iter()
             .filter_map(|source| {
                 let nearby_container = containers
                     .iter()
-                    .cloned()
                     .find(|container| container.pos().is_near_to(&source.pos()));
 
-                nearby_container.map(|container| (*source, container))
+                nearby_container.map(|container| (*source, container.remote_id()))
             })
             .into_group_map();
 
@@ -223,10 +188,9 @@ impl LocalSupplyMission {
             .filter_map(|controller| {
                 let nearby_container = containers
                     .iter()
-                    .cloned()
                     .find(|container| container.pos().is_near_to(&controller.pos()));
 
-                nearby_container.map(|container| (**controller, container))
+                nearby_container.map(|container| (**controller, container.remote_id()))
             })
             .into_group_map();
 
@@ -236,24 +200,23 @@ impl LocalSupplyMission {
         let controller_links: Vec<_> = controller
             .iter()
             .filter_map(|controller| {
-                let nearby_link = room_links.iter().find(|link| link.pos().in_range_to(&controller.pos(), 2));
+                let nearby_link = links.iter().find(|link| link.pos().in_range_to(&controller.pos(), 2));
 
                 nearby_link.map(|link| link.remote_id())
             })
             .collect();
 
-        let minerals = room.find(find::MINERALS);
+        let minerals = static_visibility_data.minerals();
 
-        let mineral_extractors_to_containers = room_extractors
+        let mineral_extractors_to_containers = extractors
             .iter()
             .filter_map(|extractor| {
                 if let Some(mineral) = minerals.iter().find(|m| m.pos() == extractor.pos()) {
                     let nearby_container = containers
                         .iter()
-                        .cloned()
                         .find(|container| container.pos().is_near_to(&extractor.pos()));
 
-                    nearby_container.map(|container| ((mineral.remote_id(), *extractor), container))
+                    nearby_container.map(|container| ((*mineral, extractor.remote_id()), container.remote_id()))
                 } else {
                     None
                 }
@@ -266,7 +229,7 @@ impl LocalSupplyMission {
         let sources_to_links = sources
             .iter()
             .flat_map(|&source| {
-                room_links
+                links
                     .iter()
                     .filter(move |link| link.pos().in_range_to(&source.pos(), 2))
                     .map(|link| link.remote_id())
@@ -275,18 +238,17 @@ impl LocalSupplyMission {
             })
             .into_group_map();
 
-        let storage_links = room_links
+        let storage_links = links
             .into_iter()
             .filter(|link| {
-                storage
-                    .as_ref()
-                    .map(|storage| link.pos().in_range_to(&storage.pos(), 2))
-                    .unwrap_or(false)
+                storages
+                    .iter()
+                    .any(|storage| link.pos().in_range_to(&storage.pos(), 2))
             })
             .map(|link| link.remote_id())
             .collect();
 
-        StructureData {
+        Some(StructureData {
             last_updated: game::time(),
             sources_to_containers,
             sources_to_links,
@@ -294,11 +256,11 @@ impl LocalSupplyMission {
             mineral_extractors_to_containers,
             controllers_to_containers,
             controller_links,
-            containers,
+            containers: containers.iter().map(|s| s.remote_id()).collect(),
             spawns: spawns.iter().map(|s| s.remote_id()).collect(),
             extensions: extensions.iter().map(|e| e.remote_id()).collect(),
-            storage: storage.iter().map(|s| s.remote_id()).collect(),
-        }
+            storage: storages.iter().map(|s| s.remote_id()).collect(),
+        })
     }
 
     fn create_creep_data(&self, system_data: &MissionExecutionSystemData) -> Result<CreepData, String> {
@@ -373,14 +335,12 @@ impl LocalSupplyMission {
 
     fn get_all_links(&mut self, system_data: &mut MissionExecutionSystemData) -> Result<Vec<RemoteObjectId<StructureLink>>, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
-        let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
-        let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility")?;
 
-        let mut structure_data = self.structure_data.access(
+        let mut structure_data = self.structure_data.maybe_access(
             |d| game::time() - d.last_updated >= 10,
-            || Self::create_structure_data(&static_visibility_data, &room),
+            || Self::create_structure_data(&room_data),
         );
-        let structure_data = structure_data.get();
+        let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
         let all_links = structure_data
             .sources_to_links
@@ -462,11 +422,11 @@ impl LocalSupplyMission {
         let likely_owned_room = dynamic_visibility_data.updated_within(2000)
             && (dynamic_visibility_data.owner().mine() || dynamic_visibility_data.reservation().mine());
 
-        let mut structure_data = self.structure_data.access(
+        let mut structure_data = self.structure_data.maybe_access(
             |d| game::time() - d.last_updated >= 10,
-            || Self::create_structure_data(&static_visibility_data, &room),
+            || Self::create_structure_data(&room_data),
         );
-        let structure_data = structure_data.get();
+        let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
         //
         // Sort sources so requests with equal priority go to the source with the least activity.
@@ -568,7 +528,7 @@ impl LocalSupplyMission {
                         Self::create_handle_harvester_spawn(mission_entity, *source_id, self.room_data),
                     );
 
-                    system_data.spawn_queue.request(room_data.name, spawn_request);
+                    system_data.spawn_queue.request(self.room_data, spawn_request);
                 }
             } else {
                 let alive_source_miners = source_container_miners
@@ -638,7 +598,7 @@ impl LocalSupplyMission {
                                 Self::create_handle_link_miner_spawn(mission_entity, *source_id, *link, target_container.cloned()),
                             );
 
-                            system_data.spawn_queue.request(room_data.name, spawn_request);
+                            system_data.spawn_queue.request(self.room_data, spawn_request);
                         }
                     }
                 } else if !source_containers.is_empty() {
@@ -681,7 +641,7 @@ impl LocalSupplyMission {
                                 Self::create_handle_container_miner_spawn(mission_entity, StaticMineTarget::Source(*source_id), *container),
                             );
 
-                            system_data.spawn_queue.request(room_data.name, spawn_request);
+                            system_data.spawn_queue.request(self.room_data, spawn_request);
                         }
                     }
                 }
@@ -751,7 +711,7 @@ impl LocalSupplyMission {
                         ),
                     );
 
-                    system_data.spawn_queue.request(room_data.name, spawn_request);
+                    system_data.spawn_queue.request(self.room_data, spawn_request);
                 }
             }
         }
@@ -1128,14 +1088,13 @@ impl LocalSupplyMission {
     fn transfer_request_haul_generator(room_entity: Entity, structure_data: Rc<RefCell<Option<StructureData>>>) -> TransferQueueGenerator {
         Box::new(move |system, transfer, _room_name| {
             let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
-            let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
             let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
-            let mut structure_data = structure_data.access(
+            let mut structure_data = structure_data.maybe_access(
                 |d| game::time() - d.last_updated >= 10,
-                || Self::create_structure_data(&static_visibility_data, &room),
+                || Self::create_structure_data(&room_data),
             );
-            let structure_data = structure_data.get();
+            let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
             Self::request_transfer_for_spawns(transfer, &structure_data.spawns);
             Self::request_transfer_for_extension(transfer, &structure_data.extensions);
@@ -1153,14 +1112,12 @@ impl LocalSupplyMission {
     fn transfer_request_link_generator(room_entity: Entity, structure_data: Rc<RefCell<Option<StructureData>>>) -> TransferQueueGenerator {
         Box::new(move |system, transfer, _room_name| {
             let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
-            let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
-            let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
-            let mut structure_data = structure_data.access(
+            let mut structure_data = structure_data.maybe_access(
                 |d| game::time() - d.last_updated >= 10,
-                || Self::create_structure_data(&static_visibility_data, &room),
+                || Self::create_structure_data(&room_data),
             );
-            let structure_data = structure_data.get();
+            let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
             Self::request_transfer_for_source_links(transfer, &structure_data);
             Self::request_transfer_for_storage_links(transfer, &structure_data);

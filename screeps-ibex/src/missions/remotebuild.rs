@@ -9,6 +9,7 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+use crate::room::data::*;
 
 #[derive(ConvertSaveload)]
 pub struct RemoteBuildMission {
@@ -68,6 +69,25 @@ impl RemoteBuildMission {
             });
         })
     }
+
+    pub fn can_run(room_data: &RoomData) -> bool {
+        let has_spawns = room_data.get_structures().map(|structures| !structures.spawns().is_empty()).unwrap_or(false);
+
+        if !has_spawns {
+            if let Some(construction_sites) = room_data.get_construction_sites() {
+                let has_pending_spawn = construction_sites
+                    .iter()
+                    .filter(|s| s.my())
+                    .filter(|s| s.structure_type() == StructureType::Spawn)
+                    .next()
+                    .is_some();
+
+                return has_pending_spawn;
+            }
+        }
+
+        false
+    }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -104,16 +124,8 @@ impl Mission for RemoteBuildMission {
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
-        if let Some(room) = game::rooms::get(room_data.name) {
-            let construction_sites = room.find(find::MY_CONSTRUCTION_SITES);
-
-            if construction_sites.is_empty() {
-                return Ok(MissionResult::Success);
-            }
-
-            if !construction_sites.iter().any(|c| c.structure_type() == StructureType::Spawn) {
-                return Ok(MissionResult::Success);
-            }
+        if !Self::can_run(&room_data) {
+            return Ok(MissionResult::Success);
         }
 
         let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
@@ -147,7 +159,7 @@ impl Mission for RemoteBuildMission {
                     Self::create_handle_builder_spawn(mission_entity, self.room_data, true),
                 );
 
-                system_data.spawn_queue.request(home_room_data.name, spawn_request);
+                system_data.spawn_queue.request(self.home_room_data, spawn_request);
             }
         }
 
