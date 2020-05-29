@@ -187,7 +187,7 @@ impl Mission for HaulMission {
                     Self::create_handle_hauler_spawn(mission_entity, haul_rooms),
                 );
 
-                system_data.spawn_queue.request(room_data.name, spawn_request);
+                system_data.spawn_queue.request(self.room_data, spawn_request);
             }
         }
 

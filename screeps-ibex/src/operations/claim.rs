@@ -80,14 +80,10 @@ impl ClaimOperation {
 
             if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
                 if dynamic_visibility_data.visible() && dynamic_visibility_data.owner().mine() {
-                    if let Some(room) = game::rooms::get(room_data.name) {
-                        let spawns = room.find(find::MY_SPAWNS);
-
-                        if spawns.is_empty() {
-                            let construction_sites = room.find(find::CONSTRUCTION_SITES);
-
+                    if RemoteBuildMission::can_run(&room_data) {
+                        if let Some(construction_sites) = room_data.get_construction_sites() {
                             let spawn_construction_site = construction_sites
-                                .into_iter()
+                                .iter()
                                 .find(|construction_site| construction_site.structure_type() == StructureType::Spawn);
 
                             if let Some(spawn_construction_site) = spawn_construction_site {
@@ -114,10 +110,8 @@ impl ClaimOperation {
                                     for (other_entity, other_room_data) in (&*system_data.entities, &*system_data.room_data).join() {
                                         if let Some(other_dynamic_visibility_data) = other_room_data.get_dynamic_visibility_data() {
                                             if other_dynamic_visibility_data.visible() && other_dynamic_visibility_data.owner().mine() {
-                                                if let Some(other_room) = game::rooms::get(other_room_data.name) {
-                                                    let spawns = other_room.find(find::MY_SPAWNS);
-
-                                                    for spawn in spawns {
+                                                if let Some(structures) = other_room_data.get_structures() {
+                                                    for spawn in structures.spawns().iter().filter(|s| s.my()) {
                                                         let distance = construction_site_pos.get_range_to(&spawn.pos());
                                                         if let Some((nearest_distance, _)) = nearest_spawn {
                                                             if distance < nearest_distance {

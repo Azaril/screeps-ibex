@@ -173,7 +173,7 @@ impl Mission for ReserveMission {
                     Self::create_handle_reserver_spawn(mission_entity, *controller_id),
                 );
 
-                system_data.spawn_queue.request(home_room_data.name, spawn_request);
+                system_data.spawn_queue.request(self.home_room_data, spawn_request);
             }
         }
 

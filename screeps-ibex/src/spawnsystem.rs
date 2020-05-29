@@ -4,6 +4,7 @@ use crate::visualize::*;
 use screeps::*;
 use specs::prelude::*;
 use std::collections::HashMap;
+use log::*;
 
 pub const SPAWN_PRIORITY_CRITICAL: f32 = 100.0;
 pub const SPAWN_PRIORITY_HIGH: f32 = 75.0;
@@ -40,12 +41,12 @@ impl SpawnRequest {
 
 #[derive(Default)]
 pub struct SpawnQueue {
-    requests: HashMap<RoomName, Vec<SpawnRequest>>,
+    requests: HashMap<Entity, Vec<SpawnRequest>>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl SpawnQueue {
-    pub fn request(&mut self, room: RoomName, spawn_request: SpawnRequest) {
+    pub fn request(&mut self, room: Entity, spawn_request: SpawnRequest) {
         let requests = self.requests.entry(room).or_insert_with(Vec::new);
 
         let pos = requests
@@ -57,18 +58,6 @@ impl SpawnQueue {
 
     pub fn clear(&mut self) {
         self.requests.clear();
-    }
-
-    fn visualize(&self, ui: &mut UISystem, visualizer: &mut Visualizer) {
-        for (room_name, requests) in &self.requests {
-            ui.with_room(*room_name, visualizer, |room_ui| {
-                for request in requests.iter() {
-                    let text = format!("{} - {} - {}", request.priority, request.cost(), request.description);
-
-                    room_ui.spawn_queue().add_text(text, None);
-                }
-            });
-        }
     }
 }
 
@@ -82,8 +71,8 @@ pub struct SpawnQueueSystemData<'a> {
     ui: Option<Write<'a, UISystem>>,
 }
 
-pub struct SpawnQueueExecutionSystemData<'a> {
-    pub updater: Read<'a, LazyUpdate>,
+pub struct SpawnQueueExecutionSystemData<'a, 'b> {
+    pub updater: &'b Read<'a, LazyUpdate>,
 }
 
 pub struct SpawnQueueSystem;
@@ -106,6 +95,58 @@ impl SpawnQueueSystem {
             }
         }
     }
+
+    fn process_room_spawns(data: &SpawnQueueSystemData, room_entity: Entity, requests: &Vec<SpawnRequest>) -> Result<(), String> {
+        let room_data = data.room_data.get(room_entity).ok_or("Expected room data")?;
+        let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
+        let structures = room_data.get_structures().ok_or("Expected structures")?;
+
+        let mut spawns = structures.spawns().iter().map(|s| s).collect::<Vec<_>>();
+
+        let mut available_energy = room.energy_available();
+
+        let system_data = SpawnQueueExecutionSystemData { updater: &data.updater };
+
+        for request in requests {
+            if let Some(pos) = spawns.iter().position(|spawn| spawn.is_active() && !spawn.is_spawning()) {
+                let spawn = &spawns[pos];
+
+                //TODO: Is this needed? is available energy decremented on an Ok response to spawn?
+                let body_cost: u32 = request.body.iter().map(|p| p.cost()).sum();
+
+                if body_cost > available_energy {
+                    break;
+                }
+
+                match Self::spawn_creep(&spawn, &request.body) {
+                    Ok(name) => {
+                        (*request.callback)(&system_data, &name);
+
+                        spawns.remove(pos);
+
+                        available_energy -= body_cost;
+                    }
+                    Err(ReturnCode::NotEnough) => {
+                        //
+                        // If there was not enough energy available for the highest priority request,
+                        // continue waiting for energy and don't allow any other spawns to occur.
+                        //
+                        break;
+                    }
+                    Err(_) => {
+                        //
+                        // Any other errors are assumed to be mis-configuration and should be ignored
+                        // rather than block further spawns.
+                        //
+                    }
+                };
+            } else {
+                break;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl<'a> System<'a> for SpawnQueueSystem {
@@ -114,55 +155,24 @@ impl<'a> System<'a> for SpawnQueueSystem {
     fn run(&mut self, mut data: Self::SystemData) {
         if let Some(visualizer) = &mut data.visualizer {
             if let Some(ui) = &mut data.ui {
-                data.spawn_queue.visualize(ui, visualizer);
+                for (room_entity, requests) in data.spawn_queue.requests.iter() {
+                    if let Some(room_data) = data.room_data.get(*room_entity) {
+                        ui.with_room(room_data.name, visualizer, |room_ui| {
+                            for request in requests.iter() {
+                                let text = format!("{} - {} - {}", request.priority, request.cost(), request.description);
+            
+                                room_ui.spawn_queue().add_text(text, None);
+                            }
+                        });
+                    }
+                }
             }
         }
 
-        let system_data = SpawnQueueExecutionSystemData { updater: data.updater };
-
-        for (room_name, requests) in &mut data.spawn_queue.requests {
-            if let Some(room) = game::rooms::get(*room_name) {
-                let mut spawns = room.find(find::MY_SPAWNS);
-
-                let mut available_energy = room.energy_available();
-
-                for request in requests {
-                    if let Some(pos) = spawns.iter().position(|spawn| spawn.is_active() && !spawn.is_spawning()) {
-                        let spawn = &spawns[pos];
-
-                        //TODO: Is this needed? is available energy decremented on an Ok response to spawn?
-                        let body_cost: u32 = request.body.iter().map(|p| p.cost()).sum();
-
-                        if body_cost > available_energy {
-                            break;
-                        }
-
-                        match Self::spawn_creep(&spawn, &request.body) {
-                            Ok(name) => {
-                                (*request.callback)(&system_data, &name);
-
-                                spawns.remove(pos);
-
-                                available_energy -= body_cost;
-                            }
-                            Err(ReturnCode::NotEnough) => {
-                                //
-                                // If there was not enough energy available for the highest priority request,
-                                // continue waiting for energy and don't allow any other spawns to occur.
-                                //
-                                break;
-                            }
-                            Err(_) => {
-                                //
-                                // Any other errors are assumed to be mis-configuration and should be ignored
-                                // rather than block further spawns.
-                                //
-                            }
-                        };
-                    } else {
-                        break;
-                    }
-                }
+        for (room_entity, requests) in &data.spawn_queue.requests {
+            match Self::process_room_spawns(&data, *room_entity, requests) {
+                Ok(()) => {},
+                Err(err) => warn!("Failed spawning for room: {}", err)
             }
         }
 

@@ -209,7 +209,7 @@ impl Incubate {
             self.upgrade_mission = Some(mission_entity).into();
         }
 
-        if self.power_spawn_mission.is_none() && PowerSpawnMission::can_run(&room)  {
+        if self.power_spawn_mission.is_none() && PowerSpawnMission::can_run(&room_data)  {
             let mission_entity = PowerSpawnMission::build(
                 system_data.updater.create_entity(system_data.entities),
                 Some(mission_entity),

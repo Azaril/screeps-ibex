@@ -23,9 +23,7 @@ fn map_structure_priority(structure: StructureType) -> BuildPriority {
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn select_construction_site(creep: &Creep, room: &Room) -> Option<ConstructionSite> {
-    let construction_sites = room.find(find::MY_CONSTRUCTION_SITES);
-
+pub fn select_construction_site(creep: &Creep, construction_sites: &[ConstructionSite]) -> Option<ConstructionSite> {
     let mut priority_construction_sites: Vec<_> = construction_sites
         .iter()
         .map(|s| (s, map_structure_priority(s.structure_type())))

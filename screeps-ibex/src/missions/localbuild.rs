@@ -10,6 +10,7 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+use crate::room::data::*;
 
 #[derive(ConvertSaveload)]
 pub struct LocalBuildMission {
@@ -39,9 +40,10 @@ impl LocalBuildMission {
         }
     }
 
-    fn get_builder_priority(&self, room: &Room, has_sufficient_energy: bool) -> Option<(u32, f32)> {
-        let controller = room.controller()?;
-        let construction_sites = room.find(find::MY_CONSTRUCTION_SITES);
+    fn get_builder_priority(&self, room_data: &RoomData, has_sufficient_energy: bool) -> Option<(u32, f32)> {
+        let structures = room_data.get_structures()?;
+        let controller_level = structures.controllers().iter().map(|c| c.level()).max().unwrap_or(0);
+        let construction_sites = room_data.get_construction_sites()?;
 
         if !construction_sites.is_empty() {
             let required_progress: u32 = construction_sites
@@ -49,7 +51,7 @@ impl LocalBuildMission {
                 .map(|construction_site| construction_site.progress_total() - construction_site.progress())
                 .sum();
 
-            let desired_builders_for_progress: u32 = if controller.level() <= 3 {
+            let desired_builders_for_progress: u32 = if controller_level <= 3 {
                 match required_progress {
                     0 => 0,
                     1..=1000 => 1,
@@ -58,7 +60,7 @@ impl LocalBuildMission {
                     3001..=4000 => 4,
                     _ => 5,
                 }
-            } else if controller.level() <= 6 {
+            } else if controller_level <= 6 {
                 match required_progress {
                     0 => 0,
                     1..=2000 => 1,
@@ -102,7 +104,9 @@ impl LocalBuildMission {
         }
     }
 
-    fn get_repairer_priority(&self, room: &Room) -> Option<(u32, f32)> {
+    fn get_repairer_priority(&self, room_data: &RoomData) -> Option<(u32, f32)> {
+        let room = game::rooms::get(room_data.name)?;
+
         //TODO: Not requiring full hashmap just to check for presence would be cheaper. Lazy iterator would be sufficient.
         let repair_targets = get_prioritized_repair_targets(&room, Some(RepairPriority::Medium), true);
 
@@ -177,21 +181,18 @@ impl Mission for LocalBuildMission {
         let room_data_storage = &*system_data.room_data;
         let room_data = room_data_storage.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
+        let structure_data = room_data.get_structures().ok_or("Expected structure data")?;
 
         let has_sufficient_energy = {
-            if let Some(storage) = room.storage() {
-                storage.store_of(ResourceType::Energy) >= 50_000
-            } else {
-                let structures = room.find(find::STRUCTURES);
-                structures
+            if !structure_data.storages().is_empty() {
+                structure_data
+                    .storages()
                     .iter()
-                    .filter_map(|structure| {
-                        if let Structure::Container(container) = structure {
-                            Some(container)
-                        } else {
-                            None
-                        }
-                    })
+                    .any(|container| container.store_of(ResourceType::Energy) >= 50_000)
+            } else {
+                structure_data
+                    .containers()
+                    .iter()
                     .any(|container| container.store_of(ResourceType::Energy) as f32 / CONTAINER_CAPACITY as f32 > 0.50)
             }
         };
@@ -199,12 +200,12 @@ impl Mission for LocalBuildMission {
         let mut spawn_count = 0;
         let mut spawn_priority = SPAWN_PRIORITY_NONE;
 
-        if let Some((desired_builders, build_priority)) = self.get_builder_priority(&room, has_sufficient_energy) {
+        if let Some((desired_builders, build_priority)) = self.get_builder_priority(&room_data, has_sufficient_energy) {
             spawn_count = spawn_count.max(desired_builders);
             spawn_priority = spawn_priority.max(build_priority);
         }
 
-        if let Some((desired_repairers, repair_priority)) = self.get_repairer_priority(&room) {
+        if let Some((desired_repairers, repair_priority)) = self.get_repairer_priority(&room_data) {
             spawn_count = spawn_count.max(desired_repairers);
             spawn_priority = spawn_priority.max(repair_priority);
         }
@@ -237,7 +238,7 @@ impl Mission for LocalBuildMission {
                     Self::create_handle_builder_spawn(mission_entity, self.room_data, allow_harvest),
                 );
 
-                system_data.spawn_queue.request(room_data.name, spawn_request);
+                system_data.spawn_queue.request(self.room_data, spawn_request);
             }
         }
 
