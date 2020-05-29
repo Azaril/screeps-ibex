@@ -98,41 +98,42 @@ impl Mission for UpgradeMission {
 
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
-        let controller = room.controller().ok_or("Expected controller")?;
+        let structures = room_data.get_structures().ok_or("Expected structure data")?;
+        let creeps = room_data.get_creeps().ok_or("Expected creeps")?;
 
-        if !controller.my() {
+        let controllers = structures.controllers();
+
+        if !controllers.iter().any(|c| c.my()) {
             return Err("Room not owned by user".to_string());
         }
 
+        let controller_level = controllers.iter().map(|c| c.level()).max().ok_or("Expected controller level")?;
+
         let has_excess_energy = {
-            if let Some(storage) = room.storage() {
-                storage.store_of(ResourceType::Energy) >= 100_000
-            } else {
-                let structures = room.find(find::STRUCTURES);
+            if !structures.storages().is_empty() {
                 structures
+                    .storages()
                     .iter()
-                    .filter_map(|structure| {
-                        if let Structure::Container(container) = structure {
-                            Some(container)
-                        } else {
-                            None
-                        }
-                    })
+                    .any(|container| container.store_of(ResourceType::Energy) >= 100_000)
+            } else {
+                structures
+                    .containers()
+                    .iter()
                     .any(|container| container.store_of(ResourceType::Energy) as f32 / CONTAINER_CAPACITY as f32 > 0.75)
             }
         };
 
-        let are_hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
+        let are_hostile_creeps = !creeps.hostile().is_empty();
 
         //TODO: Need better calculation for maximum number of upgraders.
         let max_upgraders = if game::cpu::bucket() < game::cpu::tick_limit() * 10.0 {
             1
         } else if are_hostile_creeps {
             1
-        } else if controller.level() >= 8 {
+        } else if controller_level >= 8 {
             1
         } else if has_excess_energy {
-            if controller.level() <= 3 {
+            if controller_level <= 3 {
                 5
             } else {
                 3
@@ -142,14 +143,14 @@ impl Mission for UpgradeMission {
         };
 
         if self.upgraders.len() < max_upgraders {
-            let storage_sufficient = room
-                .storage()
-                .map(|s| s.store_used_capacity(Some(ResourceType::Energy)) > 50_000)
-                .unwrap_or(true);
+            let storage_sufficient = structures
+                .storages()
+                .iter()
+                .any(|s| s.store_used_capacity(Some(ResourceType::Energy)) > 50_000);
 
             let work_parts_per_upgrader = if !storage_sufficient {
                 Some(1)
-            } else if controller.level() == 8 {
+            } else if controller_level == 8 {
                 let work_parts_per_tick = (CONTROLLER_MAX_UPGRADE_PER_TICK as f32) / (UPGRADE_CONTROLLER_POWER as f32);
 
                 let work_parts = (work_parts_per_tick / (max_upgraders as f32)).ceil();
@@ -159,9 +160,10 @@ impl Mission for UpgradeMission {
                 None
             };
 
-            let downgrade_risk = controller_downgrade(controller.level())
-                .map(|ticks| controller.ticks_to_downgrade() < ticks / 2)
-                .unwrap_or(false);
+            let downgrade_risk = controllers
+                .iter()
+                .filter_map(|controller| controller_downgrade(controller.level()).map(|ticks| controller.ticks_to_downgrade() < ticks / 2))
+                .any(|risk| risk);            
 
             let maximum_energy = if self.upgraders.is_empty() && downgrade_risk {
                 room.energy_available()
@@ -185,7 +187,7 @@ impl Mission for UpgradeMission {
                     SPAWN_PRIORITY_LOW
                 };
 
-                let allow_harvest = controller.level() <= 3;
+                let allow_harvest = controller_level <= 3;
 
                 let spawn_request = SpawnRequest::new(
                     "Upgrader".to_string(),

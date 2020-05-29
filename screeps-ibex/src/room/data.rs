@@ -301,13 +301,13 @@ impl RoomData {
         ).take().map(|s| Ref::map(s, |o| &o.construction_sites))
     }
 
-    pub fn get_creeps(&self) -> Option<Ref<Vec<Creep>>> {
+    pub fn get_creeps(&self) -> Option<Ref<CreepData>> {
         let name = self.name;
 
         self.room_creep_data.maybe_access(
             |s| game::time() != s.last_updated,
             move || game::rooms::get(name).as_ref().map(|room| CreepData::new(room))
-        ).take().map(|s| Ref::map(s, |o| &o.creeps))
+        ).take()
     }
 }
 
@@ -420,7 +420,7 @@ impl RoomStructureData {
         }
     }
 
-    pub fn all(&self) -> &Vec<Structure> {
+    pub fn all(&self) -> &[Structure] {
         &self.structures
     }
 
@@ -527,18 +527,37 @@ impl ConstructionSiteData {
 }
 
 #[derive(Clone)]
-struct CreepData {
+pub struct CreepData {
     last_updated: u32,
-    creeps: Vec<Creep>
+    creeps: Vec<Creep>,
+
+    friendly: Vec<Creep>,
+    hostile: Vec<Creep>,
 }
 
 impl CreepData {
     fn new(room: &Room) -> CreepData {
         let creeps = room.find(find::CREEPS);
 
+        let (friendly, hostile) = creeps.iter().cloned().partition(|c| c.my());
+
         CreepData {
             last_updated: game::time(),
-            creeps
+            creeps,
+            friendly,
+            hostile
         }
+    }
+
+    pub fn all(&self) -> &[Creep] {
+        &self.creeps
+    }
+
+    pub fn friendly(&self) -> &[Creep] {
+        &self.friendly
+    }
+
+    pub fn hostile(&self) -> &[Creep] {
+        &self.hostile
     }
 }
