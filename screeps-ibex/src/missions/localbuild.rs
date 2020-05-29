@@ -105,16 +105,11 @@ impl LocalBuildMission {
     }
 
     fn get_repairer_priority(&self, room_data: &RoomData) -> Option<(u32, f32)> {
-        let room = game::rooms::get(room_data.name)?;
+        let (priority, _) = select_repair_structure_and_priority(room_data, None, true)?;
 
-        //TODO: Not requiring full hashmap just to check for presence would be cheaper. Lazy iterator would be sufficient.
-        let repair_targets = get_prioritized_repair_targets(&room, Some(RepairPriority::Medium), true);
-
-        let has_priority = |priority| repair_targets.get(&priority).map(|s| !s.is_empty()).unwrap_or(false);
-
-        if has_priority(RepairPriority::Critical) || has_priority(RepairPriority::High) {
+        if priority >= RepairPriority::High {
             Some((1, SPAWN_PRIORITY_HIGH))
-        } else if has_priority(RepairPriority::Medium) {
+        } else if priority >= RepairPriority::Medium {
             Some((1, SPAWN_PRIORITY_MEDIUM))
         } else {
             None

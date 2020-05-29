@@ -47,21 +47,27 @@ machine!(
 );
 
 fn room_has_hostiles(room_data: &RoomData) -> Option<bool> {
-    let has_hostile_creeps = room_data.get_creeps().map(|creeps| creeps.iter().any(|c| !c.my()));
+    let creeps = room_data.get_creeps()?;
 
-    if let Some(has_hostile_creeps) = has_hostile_creeps {
-        if has_hostile_creeps {
-            return Some(true);
-        }
-
-        let has_hostile_structures = room_data.get_structures().map(|structures| structures.all().iter().filter_map(|s| s.as_owned()).any(|s| !s.my()));
-
-        if let Some(has_hostile_structures) = has_hostile_structures {
-            return Some(has_hostile_structures);
-        }
+    if !creeps.hostile().is_empty() {
+        log::info!("Hostile creeps!");
+        return Some(true);
     }
 
-    None
+    let structures = room_data.get_structures()?;
+
+    let has_hostile_structures = structures
+        .all()
+        .iter()
+        .filter_map(|s| s.as_owned())
+        .any(|s| s.has_owner() && !s.my());
+
+    if has_hostile_structures {
+        log::info!("Hostile structures!");
+        return Some(true);
+    }
+
+    Some(false)
 }
 
 impl Idle {
@@ -109,6 +115,7 @@ impl Active {
             .ok_or("Expected defend room data")?;
 
         if let Some(has_hostiles) = room_has_hostiles(&defend_room_data) {
+            log::info!("Has hostiles: {}", has_hostiles);
             if has_hostiles {
                 self.last_hostiles = Some(game::time());
             } else if self.last_hostiles.map(|last| game::time() - last >= 20).unwrap_or(false) {

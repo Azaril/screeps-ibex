@@ -18,6 +18,7 @@
 - Post-process for room planner. (Remove roads not needed, fix RCL for links etc. based on distance, prioritize storage.)
 1. Apply RCL as post-process with constraints. (i.e. do extensions by distance, don't spawn extractor container till RCL 6 etc.)
 - Spawn body calculation using current available energy needs to use at least min body cost, otherwise never ends up in queue. (Will not block lower priority spawns!)
+- Order system needs better analysis of price history and hard guards on price manipulation.
 
 # Medium Priority
 
@@ -29,3 +30,4 @@
 
 - Add market statistics that can be used to drive buy/sell price.
 - Use generator for spawn queue to compute only on-demand.
+- Use cache storage/terminal objects rather than pulling them off room.

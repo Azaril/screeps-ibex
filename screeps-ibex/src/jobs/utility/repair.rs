@@ -1,6 +1,5 @@
-use itertools::*;
 use screeps::*;
-use std::collections::HashMap;
+use crate::room::data::*;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Ord, PartialOrd)]
 pub enum RepairPriority {
@@ -106,10 +105,10 @@ fn map_structure_repair_priority(
     }
 }
 
-pub fn get_repair_targets(room: &Room, allow_walls: bool) -> Vec<(Structure, u32, u32)> {
-    room.find(find::STRUCTURES)
-        .into_iter()
-        .filter(|structure| match structure {
+pub fn get_repair_targets(structures: &[Structure], allow_walls: bool) -> impl Iterator<Item = (&Structure, u32, u32)> {
+    structures
+        .iter()
+        .filter(move |structure| match structure {
             Structure::Wall(_) => allow_walls,
             Structure::Rampart(_) => allow_walls,
             _ => true,
@@ -121,7 +120,6 @@ pub fn get_repair_targets(room: &Room, allow_walls: bool) -> Vec<(Structure, u32
                 true
             }
         })
-        .map(|owned_structure| owned_structure.as_structure())
         .filter_map(|structure| {
             let hits = if let Some(attackable) = structure.as_attackable() {
                 let hits = attackable.hits();
@@ -138,43 +136,44 @@ pub fn get_repair_targets(room: &Room, allow_walls: bool) -> Vec<(Structure, u32
             hits.map(|(hits, hits_max)| (structure, hits, hits_max))
         })
         .filter(|(_, hits, hits_max)| hits < hits_max)
-        .collect()
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_prioritized_repair_targets(
-    room: &Room,
-    minimum_priority: Option<RepairPriority>,
+    structures: &[Structure],
+    available_energy: u32,
+    are_hostile_creeps: bool,
     allow_walls: bool,
-) -> HashMap<RepairPriority, Vec<Structure>> {
-    let are_hostile_creeps = !room.find(find::HOSTILE_CREEPS).is_empty();
-
-    let available_energy = room
-        .storage()
-        .map(|s| s.store_used_capacity(Some(ResourceType::Energy)))
-        .unwrap_or(0);
-
-    get_repair_targets(room, allow_walls)
-        .into_iter()
-        .filter_map(|(structure, hits, hits_max)| {
+) -> impl Iterator<Item = (RepairPriority, &Structure)> {
+    get_repair_targets(structures, allow_walls)
+        .filter_map(move |(structure, hits, hits_max)| {
             map_structure_repair_priority(&structure, hits, hits_max, available_energy, are_hostile_creeps)
-                .filter(|p| minimum_priority.map(|op| *p >= op).unwrap_or(true))
                 .map(|p| (p, structure))
         })
-        .into_group_map()
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn select_repair_structure(room: &Room, minimum_priority: Option<RepairPriority>, allow_walls: bool) -> Option<Structure> {
-    let mut repair_targets = get_prioritized_repair_targets(room, minimum_priority, allow_walls);
+pub fn select_repair_structure_and_priority(room_data: &RoomData, minimum_priority: Option<RepairPriority>, allow_walls: bool) -> Option<(RepairPriority, Structure)> {
+    let structures = room_data.get_structures()?;
+    let creeps = room_data.get_creeps()?;
 
-    ORDERED_REPAIR_PRIORITIES
+    let are_hostile_creeps = !creeps.hostile().is_empty();
+
+    let available_energy = structures
+        .storages()
         .iter()
-        .filter_map(|priority| repair_targets.remove(priority))
-        .filter_map(|targets| {
-            targets
-                .into_iter()
-                .min_by_key(|structure| structure.as_attackable().unwrap().hits())
-        })
-        .next()
+        .map(|s| s.store_used_capacity(Some(ResourceType::Energy)))
+        .sum::<u32>();
+
+    get_prioritized_repair_targets(structures.all(), available_energy, are_hostile_creeps, allow_walls)
+        .filter(|(priority, _)| minimum_priority.map(|op| *priority >= op).unwrap_or(true))
+        .map(|(priority, structure)| (priority, structure, structure.as_attackable().unwrap().hits()))
+        .max_by(|(priority_a, _, hits_a), (priority_b, _, hits_b)| priority_a.cmp(priority_b).then_with(|| hits_a.cmp(hits_b).reverse()))
+        .map(|(priority, structure, _)| (priority, structure.clone()))
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn select_repair_structure(room_data: &RoomData, minimum_priority: Option<RepairPriority>, allow_walls: bool) -> Option<Structure> {
+    select_repair_structure_and_priority(room_data, minimum_priority, allow_walls)
+        .map(|(_, structure)| structure)
 }
