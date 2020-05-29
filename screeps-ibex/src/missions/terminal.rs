@@ -4,6 +4,7 @@ use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::transfer::ordersystem::*;
 use crate::transfer::transfersystem::*;
+use crate::transfer::utility::*;
 use itertools::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -193,7 +194,7 @@ impl Mission for TerminalMission {
 
                 if current_total_amount < total_reserve_amount {
                     let transfer_amount = total_reserve_amount - current_total_amount;
-                    let terminal_free_amount = terminal.store_free_capacity(Some(resource_type)).max(0) as u32;
+                    let terminal_free_amount = terminal.store_free_capacity(None).max(0) as u32;
                     let transfer_amount = transfer_amount.min(terminal_free_amount);
 
                     if transfer_amount > 0 {
@@ -223,7 +224,7 @@ impl Mission for TerminalMission {
                         }
                     }
                 } else {
-                    let effective_terminal_amount = current_total_amount - thresholds.desired_storage_amount.min(current_total_amount);
+                    let effective_terminal_amount = (current_total_amount - thresholds.desired_storage_amount.min(current_total_amount)).min(current_terminal_amount);
 
                     if effective_terminal_amount >= *thresholds.terminal_transfer_outgoing_threshold.start() {
                         let transfer_amount = effective_terminal_amount - thresholds.terminal_transfer_outgoing_threshold.start();
@@ -456,15 +457,17 @@ impl Mission for TerminalMission {
                 0
             };
 
+            let priorities = generate_active_priorities(TransferPriorityFlags::ALL, TransferPriorityFlags::ALL);
+
             //TODO: Potentially use active priority pairs to iterate here. Currently relies on there never being a None -> None priority request.
-            let best_transfer = ALL_TRANSFER_PRIORITIES
+            let best_transfer = priorities
                 .iter()
-                .filter_map(|priority| {
+                .filter_map(|(pickup_priority, delivery_priority)| {
                     transfer_queue.get_terminal_delivery_from_target(
                         &transfer_queue_data,
                         &TransferTarget::Terminal(terminal.remote_id()),
-                        TransferPriorityFlags::ACTIVE,
-                        priority.into(),
+                        pickup_priority.into(),
+                        delivery_priority.into(),
                         TransferType::Terminal,
                         available_transfer_energy,
                         TransferCapacity::Infinite,
