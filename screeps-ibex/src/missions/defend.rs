@@ -84,7 +84,7 @@ impl Idle {
             return Ok(Some(DefendState::active(EntityVec::new(), None)));
         } else if defend_room_data
             .get_dynamic_visibility_data()
-            .map(|v| !v.updated_within(1000))
+            .map(|v| !v.updated_within(100))
             .unwrap_or(true)
         {
             system_data

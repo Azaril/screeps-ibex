@@ -122,6 +122,10 @@ pub struct RoomDynamicVisibilityData {
 }
 
 impl RoomDynamicVisibilityData {
+    pub fn last_updated(&self) -> u32 {
+        self.update_tick
+    }
+
     pub fn age(&self) -> u32 {
         game::time() - self.update_tick
     }
