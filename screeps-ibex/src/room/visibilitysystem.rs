@@ -8,6 +8,7 @@ use screeps::*;
 use specs::prelude::*;
 use specs::saveload::*;
 use std::collections::HashMap;
+use bitflags::*;
 
 pub const VISIBILITY_PRIORITY_CRITICAL: f32 = 100.0;
 pub const VISIBILITY_PRIORITY_HIGH: f32 = 75.0;
@@ -15,25 +16,46 @@ pub const VISIBILITY_PRIORITY_MEDIUM: f32 = 50.0;
 pub const VISIBILITY_PRIORITY_LOW: f32 = 25.0;
 pub const VISIBILITY_PRIORITY_NONE: f32 = 0.0;
 
+bitflags! {
+    pub struct VisibilityRequestFlags: u8 {
+        const UNSET = 0;
+
+        const OBSERVE = 1u8;
+        const SCOUT = 1u8 << 1;
+
+        const ALL = Self::OBSERVE.bits | Self::SCOUT.bits;
+    }
+}
+
 pub struct VisibilityRequest {
     room_name: RoomName,
     priority: f32,
+    allowed_types: VisibilityRequestFlags
 }
 
 impl VisibilityRequest {
-    pub fn new(room_name: RoomName, priority: f32) -> VisibilityRequest {
-        VisibilityRequest { room_name, priority }
+    pub fn new(room_name: RoomName, priority: f32, allowed_types: VisibilityRequestFlags) -> VisibilityRequest {
+        VisibilityRequest { room_name, priority, allowed_types }
+    }
+
+    
+    fn combine_with(&mut self, other: &VisibilityRequest) {
+        self.priority = self.priority.max(other.priority);
+        self.allowed_types |= other.allowed_types;
     }
 }
 
 #[derive(Default)]
 pub struct VisibilityQueue {
-    pub requests: Vec<VisibilityRequest>,
+    pub requests: HashMap<RoomName, VisibilityRequest>,
 }
 
 impl VisibilityQueue {
     pub fn request(&mut self, visibility_request: VisibilityRequest) {
-        self.requests.push(visibility_request);
+        self.requests
+            .entry(visibility_request.room_name)
+            .and_modify(|e| e.combine_with(&visibility_request))
+            .or_insert(visibility_request);
     }
 
     fn clear(&mut self) {
@@ -54,8 +76,26 @@ pub struct VisibilityQueueSystemData<'a> {
 pub struct VisibilityQueueSystem;
 
 impl VisibilityQueueSystem {
-    fn process_requests<'a>(system_data: &mut VisibilityQueueSystemData<'a>, rooms: &HashMap<RoomName, f32>) {
-        if !rooms.is_empty() {
+    fn process_requests<'a, 'b, T>(system_data: &mut VisibilityQueueSystemData<'a>, requests: T) where T: Iterator<Item = &'b VisibilityRequest> {
+        //
+        // Get all unknown rooms and the last time they were visible.
+        //
+
+        let mut unknown_rooms = requests
+            .map(|VisibilityRequest { room_name, priority, allowed_types }| {
+                let last_visible =  system_data
+                    .mapping
+                    .get_room(room_name)
+                    .and_then(|entity| system_data.room_data.get(entity))
+                    .and_then(|r| r.get_dynamic_visibility_data())
+                    .map(|v| v.last_updated())
+                    .unwrap_or(0);
+
+                (room_name, priority, allowed_types, last_visible)                            
+            })
+            .collect::<Vec<_>>();
+        
+        if !unknown_rooms.is_empty() {
             //
             // Get all rooms and observers can that service requests.
             //
@@ -81,27 +121,10 @@ impl VisibilityQueueSystem {
                 })
                 .collect::<Vec<_>>();
 
-            //
-            // Get all unknown rooms and the last time they were visible.
-            //
-
-            let mut unknown_rooms = rooms
-                .iter()
-                .map(|(room_name, priority)| {
-                    let last_visible =  system_data
-                        .mapping
-                        .get_room(room_name)
-                        .and_then(|entity| system_data.room_data.get(entity))
-                        .and_then(|r| r.get_dynamic_visibility_data())
-                        .map(|v| v.last_updated())
-                        .unwrap_or(0);
-
-                    (room_name, priority, last_visible)                            
-                })
-                .collect::<Vec<_>>();
+            
 
             unknown_rooms
-                .sort_by(|(_, priority_a, last_visible_a), (_, priority_b, last_visible_b)| {
+                .sort_by(|(_, priority_a, _, last_visible_a), (_, priority_b, _, last_visible_b)| {
                     priority_a
                         .partial_cmp(priority_b)
                         .unwrap()
@@ -113,77 +136,82 @@ impl VisibilityQueueSystem {
             // Process requests in priority order.
             //
             
-            for (unknown_room_name, _, last_visible) in unknown_rooms.iter() {
-                let observer = home_room_data
-                    .iter_mut()
-                    .filter(|(_, _, observers)| !observers.is_empty())
-                    .map(|(entity, home_room_name, observers)| {
-                        let delta = **unknown_room_name - *home_room_name;
-                        let range = delta.0.abs().max(delta.1.abs()) as u32;
+            for (unknown_room_name, _, allowed_types, last_visible) in unknown_rooms.iter() {
 
-                        (entity, home_room_name, observers, range)
-                    })
-                    //TODO: Handle observer infinite range boost
-                    .filter(|(_, _, _, range)| *range <= OBSERVER_RANGE)
-                    .min_by_key(|(_, _, _, range)| *range)
-                    .and_then(|(_, _, observers, _)| observers.pop());
+                if allowed_types.contains(VisibilityRequestFlags::OBSERVE) {
+                    let observer = home_room_data
+                        .iter_mut()
+                        .filter(|(_, _, observers)| !observers.is_empty())
+                        .map(|(entity, home_room_name, observers)| {
+                            let delta = **unknown_room_name - *home_room_name;
+                            let range = delta.0.abs().max(delta.1.abs()) as u32;
 
-                //
-                // Use observer on room if available.
-                //
+                            (entity, home_room_name, observers, range)
+                        })
+                        //TODO: Handle observer infinite range boost
+                        .filter(|(_, _, _, range)| *range <= OBSERVER_RANGE)
+                        .min_by_key(|(_, _, _, range)| *range)
+                        .and_then(|(_, _, observers, _)| observers.pop());
 
-                if let Some(observer) = observer {
-                    match observer.observe_room(**unknown_room_name) {
-                        ReturnCode::Ok => info!("Observering: {}", **unknown_room_name),
-                        err => info!("Failed to observe: {:?}", err)
+                    //
+                    // Use observer on room if available.
+                    //
+
+                    if let Some(observer) = observer {
+                        match observer.observe_room(**unknown_room_name) {
+                            ReturnCode::Ok => {},
+                            err => info!("Failed to observe: {:?}", err)
+                        }
+
+                        continue;
                     }
-
-                    continue;
                 }
 
                 //
                 // Use scout mission after a short period of time.
                 //
 
-                if *last_visible >= 20 {
-                    if let Some(room_entity) = system_data.mapping.get_room(&unknown_room_name) {
-                        if let Some(room_data) = system_data.room_data.get_mut(room_entity) {
-                            let mission_data_storage = &system_data.mission_data;
+                if allowed_types.contains(VisibilityRequestFlags::SCOUT) {
+                    if game::time() - *last_visible >= 20 {
+                        if let Some(room_entity) = system_data.mapping.get_room(&unknown_room_name) {
+                            if let Some(room_data) = system_data.room_data.get_mut(room_entity) {
+                                let mission_data_storage = &system_data.mission_data;
 
-                            let has_scout_mission =
-                                room_data
-                                    .get_missions()
-                                    .iter()
-                                    .any(|mission_entity| match mission_data_storage.get(*mission_entity) {
-                                        Some(MissionData::Scout(_)) => true,
-                                        _ => false,
-                                    });
+                                let has_scout_mission =
+                                    room_data
+                                        .get_missions()
+                                        .iter()
+                                        .any(|mission_entity| match mission_data_storage.get(*mission_entity) {
+                                            Some(MissionData::Scout(_)) => true,
+                                            _ => false,
+                                        });
 
-                            //
-                            // Spawn a new mission to fill the scout role if missing.
-                            //
+                                //
+                                // Spawn a new mission to fill the scout role if missing.
+                                //
 
-                            if !has_scout_mission {
-                                //TODO: Use path distance instead of linear distance.
-                                let nearest_room_entity = home_room_data
-                                    .iter()
-                                    .min_by_key(|(_, home_room_name, _)| {
-                                        let delta = room_data.name - *home_room_name;
+                                if !has_scout_mission {
+                                    //TODO: Use path distance instead of linear distance.
+                                    let nearest_room_entity = home_room_data
+                                        .iter()
+                                        .min_by_key(|(_, home_room_name, _)| {
+                                            let delta = room_data.name - *home_room_name;
 
-                                        delta.0.abs().max(delta.1.abs())
-                                    })
-                                    .map(|(entity, _, _)| entity);
+                                            delta.0.abs().max(delta.1.abs())
+                                        })
+                                        .map(|(entity, _, _)| entity);
 
-                                if let Some(nearest_room_entity) = nearest_room_entity {
-                                    let mission_entity = ScoutMission::build(
-                                        system_data.updater.create_entity(&system_data.entities),
-                                        None,
-                                        room_entity,
-                                        *nearest_room_entity,
-                                    )
-                                    .build();
+                                    if let Some(nearest_room_entity) = nearest_room_entity {
+                                        let mission_entity = ScoutMission::build(
+                                            system_data.updater.create_entity(&system_data.entities),
+                                            None,
+                                            room_entity,
+                                            *nearest_room_entity,
+                                        )
+                                        .build();
 
-                                    room_data.add_mission(mission_entity);
+                                        room_data.add_mission(mission_entity);
+                                    }
                                 }
                             }
                         }
@@ -199,21 +227,12 @@ impl<'a> System<'a> for VisibilityQueueSystem {
     type SystemData = VisibilityQueueSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        let mut room_priorities: HashMap<RoomName, f32> = HashMap::new();
-
-        for request in &data.visibility_queue.requests {
-            room_priorities
-                .entry(request.room_name)
-                .and_modify(|e| *e = e.max(request.priority))
-                .or_insert(request.priority);
-        }
-
         let existing_rooms = (&data.entities, &data.room_data)
             .join()
             .map(|(_, room_data)| room_data.name)
             .collect::<std::collections::HashSet<RoomName>>();
 
-        let missing_rooms = room_priorities.keys().filter(|name| !existing_rooms.contains(name));
+        let missing_rooms = data.visibility_queue.requests.keys().filter(|name| !existing_rooms.contains(name));
 
         for room_name in missing_rooms {
             info!("Creating room data for room: {}", room_name);
@@ -225,8 +244,8 @@ impl<'a> System<'a> for VisibilityQueueSystem {
                 .build();
         }
 
-        Self::process_requests(&mut data, &room_priorities);
+        let requests = std::mem::replace(&mut data.visibility_queue.requests, HashMap::new());
 
-        data.visibility_queue.clear();
+        Self::process_requests(&mut data, requests.values());
     }
 }

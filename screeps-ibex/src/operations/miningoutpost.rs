@@ -97,7 +97,7 @@ impl Operation for MiningOutpostOperation {
         for unknown_room in gathered_data.unknown_rooms().iter() {
             system_data
                 .visibility
-                .request(VisibilityRequest::new(unknown_room.room_name(), VISIBILITY_PRIORITY_MEDIUM));
+                .request(VisibilityRequest::new(unknown_room.room_name(), VISIBILITY_PRIORITY_MEDIUM, VisibilityRequestFlags::ALL));
         }
 
         for candidate_room in gathered_data.candidate_rooms().iter() {

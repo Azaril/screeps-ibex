@@ -137,7 +137,7 @@ impl Scout {
         {
             system_data
                 .visibility
-                .request(VisibilityRequest::new(outpost_room_data.name, VISIBILITY_PRIORITY_MEDIUM));
+                .request(VisibilityRequest::new(outpost_room_data.name, VISIBILITY_PRIORITY_MEDIUM, VisibilityRequestFlags::ALL));
 
             Ok(None)
         } else {
@@ -220,7 +220,7 @@ impl Cleanup {
 
             system_data
                 .visibility
-                .request(VisibilityRequest::new(outpost_room_data.name, VISIBILITY_PRIORITY_MEDIUM));
+                .request(VisibilityRequest::new(outpost_room_data.name, VISIBILITY_PRIORITY_MEDIUM, VisibilityRequestFlags::ALL));
         }
 
         Ok(())
