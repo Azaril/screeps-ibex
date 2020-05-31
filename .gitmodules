@@ -13,3 +13,6 @@
 [submodule "screeps-timing-annotate"]
 	path = screeps-timing-annotate
 	url = https://github.com/Azaril/screeps-timing-annotate.git
+[submodule "screeps-foreman"]
+	path = screeps-foreman
+	url = https://github.com/Azaril/screeps-foreman.git

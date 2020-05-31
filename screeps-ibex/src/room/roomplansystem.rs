@@ -1,6 +1,6 @@
 use super::data::*;
-use super::layout::*;
-use super::planner::*;
+use screeps_foreman::layout::*;
+use screeps_foreman::planner::*;
 use crate::entitymappingsystem::*;
 use crate::memorysystem::*;
 use crate::ui::*;
@@ -150,7 +150,7 @@ impl RoomPlannerRunningData {
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility")?;
         let mut data_source = RoomDataPlannerDataSource::new(room_data.name, static_visibility_data);
 
-        let planner = Planner::new(crate::room::scoring::score_state);
+        let planner = Planner::new(screeps_foreman::scoring::score_state);
 
         planner.seed(ALL_ROOT_NODES, &mut data_source)
     }
@@ -160,7 +160,7 @@ impl RoomPlannerRunningData {
 
         let mut data_source = RoomDataPlannerDataSource::new(room_data.name, static_visibility_data);
 
-        let planner = Planner::new(crate::room::scoring::score_state);
+        let planner = Planner::new(screeps_foreman::scoring::score_state);
 
         planner.evaluate(ALL_ROOT_NODES, &mut data_source, &mut self.planner_state, budget)
     }
@@ -365,5 +365,27 @@ impl<'a> System<'a> for RoomPlanSystem {
         }
 
         data.room_plan_queue.clear();
+    }
+}
+
+impl screeps_foreman::planner::RoomVisualizer for crate::visualize::RoomVisualizer {
+    fn circle(&mut self, x: f32, y: f32, style: Option<CircleStyle>) {
+        crate::visualize::RoomVisualizer::circle(self, x, y, style)
+    }
+
+    fn line(&mut self, from: (f32, f32), to: (f32, f32), style: Option<LineStyle>) {
+        crate::visualize::RoomVisualizer::line(self, from, to, style)
+    }
+
+    fn rect(&mut self, x: f32, y: f32, width: f32, height: f32, style: Option<RectStyle>) {
+        crate::visualize::RoomVisualizer::rect(self, x, y, width, height, style)
+    }
+
+    fn poly(&mut self, points: Vec<(f32, f32)>, style: Option<PolyStyle>) {
+        crate::visualize::RoomVisualizer::poly(self, points, style)
+    }
+
+    fn text(&mut self, x: f32, y: f32, text: String, style: Option<TextStyle>) {
+        crate::visualize::RoomVisualizer::text(self, x, y, text, style)
     }
 }

@@ -1,5 +1,6 @@
 # High Priority
 
+- Fix partial hauls due to damage causing return to harvesting source. (Stay stick with delivery once started.)
 - Remote upgrade mission/role.
 - Add stuck detection and response for creeps.
 - Use 'local supply' mission for both local supply and remote mine.
@@ -22,7 +23,6 @@
 
 # Medium Priority
 
-- Add observer support to visibility requests. (Currently just used for triggering room data generation.)
 - Pathfinding solution. (Use built in path finder.)
 - Add per-room stats (i.e. energy available over X minutes) to use for predicting needed roles.
 
