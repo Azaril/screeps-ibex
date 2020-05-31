@@ -4,7 +4,8 @@ members = [
     "screeps-cache",
     "screeps-rover",
     "screeps-timing",
-    "screeps-timing-annotate"
+    "screeps-timing-annotate",
+    "screeps-foreman"
 ]
 
 [profile.release]
@@ -30,3 +31,6 @@ screeps-timing = { path = "screeps-timing" }
 
 [patch.'https://github.com/Azaril/screeps-timing-annotate']
 screeps-timing-annotate = { path = "screeps-timing-annotate" }
+
+[patch.'https://github.com/Azaril/screeps-foreman']
+screeps-foreman = { path = "screeps-foreman" }

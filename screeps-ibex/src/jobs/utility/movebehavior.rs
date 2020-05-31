@@ -1,4 +1,5 @@
-use crate::constants::*;
+//TODO: Shared constants for crate.
+use screeps_foreman::constants::*;
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
 use screeps::*;

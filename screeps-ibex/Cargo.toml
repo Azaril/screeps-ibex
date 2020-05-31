@@ -29,5 +29,6 @@ screeps-game-api = { version = "0.7" }
 screeps-machine = { git = "https://github.com/Azaril/screeps-machine" }
 screeps-cache = { git = "https://github.com/Azaril/screeps-cache" }
 screeps-rover = { git = "https://github.com/Azaril/screeps-rover" }
+screeps-foreman = { git = "https://github.com/Azaril/screeps-foreman" }
 screeps-timing = { git = "https://github.com/Azaril/screeps-timing", optional = true }
 screeps-timing-annotate = { git = "https://github.com/Azaril/screeps-timing-annotate", optional = true }
