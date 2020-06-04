@@ -1,0 +1,21 @@
+[package]
+name = "screeps-foreman-bench"
+version = "0.1.0"
+authors = ["William Archbell <william@archbell.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+log = "0.4"
+env_logger = "0.7.1"
+serde = "1.0"
+serde_json = "1.0"
+image = "0.23"
+screeps-foreman = { git = "https://github.com/Azaril/screeps-foreman", default-features = false, features = ["shim"] }
+
+[patch.'https://github.com/Azaril/screeps-cache']
+screeps-cache = { path = "../screeps-cache" }
+
+[patch.'https://github.com/Azaril/screeps-foreman']
+screeps-foreman = { path = "../screeps-foreman" }

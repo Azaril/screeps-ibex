@@ -162,7 +162,11 @@ impl RoomPlannerRunningData {
 
         let planner = Planner::new(screeps_foreman::scoring::score_state);
 
-        planner.evaluate(ALL_ROOT_NODES, &mut data_source, &mut self.planner_state, budget)
+        let start_cpu = game::cpu::get_used();
+
+        let should_continue = || (game::cpu::get_used() - start_cpu) < budget;
+
+        planner.evaluate(ALL_ROOT_NODES, &mut data_source, &mut self.planner_state, should_continue)
     }
 }
 
@@ -368,24 +372,105 @@ impl<'a> System<'a> for RoomPlanSystem {
     }
 }
 
-impl screeps_foreman::planner::RoomVisualizer for crate::visualize::RoomVisualizer {
-    fn circle(&mut self, x: f32, y: f32, style: Option<CircleStyle>) {
-        crate::visualize::RoomVisualizer::circle(self, x, y, style)
-    }
-
-    fn line(&mut self, from: (f32, f32), to: (f32, f32), style: Option<LineStyle>) {
-        crate::visualize::RoomVisualizer::line(self, from, to, style)
-    }
-
-    fn rect(&mut self, x: f32, y: f32, width: f32, height: f32, style: Option<RectStyle>) {
-        crate::visualize::RoomVisualizer::rect(self, x, y, width, height, style)
-    }
-
-    fn poly(&mut self, points: Vec<(f32, f32)>, style: Option<PolyStyle>) {
-        crate::visualize::RoomVisualizer::poly(self, points, style)
-    }
-
-    fn text(&mut self, x: f32, y: f32, text: String, style: Option<TextStyle>) {
-        crate::visualize::RoomVisualizer::text(self, x, y, text, style)
+impl screeps_foreman::RoomVisualizer for RoomVisualizer {
+    fn render(&mut self, location: screeps_foreman::location::Location, structure: StructureType) {
+        match structure {
+            StructureType::Spawn => {
+                RoomVisualizer::circle(
+                    self,
+                    location.x() as f32,
+                    location.y() as f32,
+                    Some(CircleStyle::default().fill("green").opacity(1.0)),
+                );
+            }
+            StructureType::Extension => {
+                RoomVisualizer::circle(
+                    self,
+                    location.x() as f32,
+                    location.y() as f32,
+                    Some(CircleStyle::default().fill("purple").opacity(1.0)),
+                );
+            }
+            StructureType::Container => {
+                RoomVisualizer::circle(
+                    self,
+                    location.x() as f32,
+                    location.y() as f32,
+                    Some(CircleStyle::default().fill("blue").opacity(1.0)),
+                );
+            }
+            StructureType::Storage => {
+                RoomVisualizer::circle(
+                    self,
+                    location.x() as f32,
+                    location.y() as f32,
+                    Some(CircleStyle::default().fill("red").opacity(1.0)),
+                );
+            }
+            StructureType::Link => {
+                RoomVisualizer::circle(
+                    self,
+                    location.x() as f32,
+                    location.y() as f32,
+                    Some(CircleStyle::default().fill("orange").opacity(1.0)),
+                );
+            }
+            StructureType::Terminal => {
+                RoomVisualizer::circle(
+                    self,
+                    location.x() as f32,
+                    location.y() as f32,
+                    Some(CircleStyle::default().fill("pink").opacity(1.0)),
+                );
+            }
+            StructureType::Nuker => {
+                RoomVisualizer::circle(
+                    self,
+                    location.x() as f32,
+                    location.y() as f32,
+                    Some(CircleStyle::default().fill("black").opacity(1.0)),
+                );
+            }
+             StructureType::Lab => {
+                RoomVisualizer::circle(
+                    self,
+                    location.x() as f32,
+                    location.y() as f32,
+                    Some(CircleStyle::default().fill("aqua").opacity(1.0)),
+                );
+            }
+            StructureType::PowerSpawn => {
+                RoomVisualizer::circle(
+                    self,
+                    location.x() as f32,
+                    location.y() as f32,
+                    Some(CircleStyle::default().fill("Fuschia").opacity(1.0)),
+                );
+            } 
+            StructureType::Observer => {
+                RoomVisualizer::circle(
+                    self,
+                    location.x() as f32,
+                    location.y() as f32,
+                    Some(CircleStyle::default().fill("Lime").opacity(1.0)),
+                );
+            } 
+            StructureType::Factory => {
+                RoomVisualizer::circle(
+                    self,
+                    location.x() as f32,
+                    location.y() as f32,
+                    Some(CircleStyle::default().fill("Brown").opacity(1.0)),
+                );
+            }
+            _ => {
+                RoomVisualizer::circle(
+                    self,
+                    location.x() as f32,
+                    location.y() as f32,
+                    Some(CircleStyle::default().fill("yellow").opacity(1.0)),
+                );
+            }
+        }
     }
 }

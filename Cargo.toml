@@ -5,8 +5,9 @@ members = [
     "screeps-rover",
     "screeps-timing",
     "screeps-timing-annotate",
-    "screeps-foreman"
+    "screeps-foreman",
 ]
+exclude = ["screeps-foreman-bench"]
 
 [profile.release]
 panic = "abort"
