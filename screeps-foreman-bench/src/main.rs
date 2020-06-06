@@ -9,6 +9,7 @@ use std::io::Read;
 use serde::*;
 use std::convert::*;
 use image::*;
+use std::time::*;
 
 struct RoomDataPlannerDataSource {
     terrain: FastRoomTerrain,
@@ -38,17 +39,76 @@ impl PlannerRoomDataSource for RoomDataPlannerDataSource {
 fn main() -> Result<(), String> {
     env_logger::init();
 
+    std::fs::create_dir_all("output").map_err(|err| format!("Failed to create output folder: {}", err))?;
+
     info!("Loading map data...");
     let map_data = load_map_data("resources/map-mmo-shard3.json")?;
     info!("Finished loading map data");
 
-    info!("Getting room features...");
-    let room = map_data.get_room("E34S31")?;
-    info!("Finished getting room features");
+    /*
+    let rooms = map_data
+        .get_rooms()
+        .iter()
+        .filter(|room_data| room_data.get_sources().len() == 2 && room_data.get_controllers().len() == 1)
+        .take(10)
+        .collect::<Vec<_>>();
+    */
 
-    info!("Planning...");
-    let plan = evaluate_plan(&room)?.ok_or("Failed to create plan for room")?;
-    info!("Plan complete");
+    let rooms = vec![map_data.get_room("E34S31")?];
+
+    let maximum_seconds = None;
+    //let maximum_seconds = Some(5.0);
+
+    //let maximum_batch_seconds = None;
+    let maximum_batch_seconds = Some(1.0);
+
+    for room in rooms {
+        run_room(&room, maximum_seconds, maximum_batch_seconds)?;
+    }
+
+    Ok(())
+}
+
+fn run_room(room: &RoomData, maximum_seconds: Option<f32>, maximum_batch_seconds: Option<f32>) -> Result<(), String> {
+    let room_name = &room.room;
+    
+    info!("Planning: {}", room.room);
+
+    let epoch = Instant::now();
+
+    #[cfg(feature = "profile")]
+    {
+        let epoch = epoch.clone();
+
+        screeps_timing::start_trace(Box::new(move || {
+            let elapsed = epoch.elapsed();
+
+            elapsed.as_micros() as u64
+        }))
+    }
+
+    let plan_result = evaluate_plan(&room, maximum_seconds, maximum_batch_seconds);
+    
+    let duration = epoch.elapsed().as_secs_f32();
+
+    info!("Planning complete - Duration: {}", duration);
+
+    #[cfg(feature = "profile")]
+    {
+        info!("Gathering trace...");
+        let trace = screeps_timing::stop_trace();
+        info!("Done gathering trace");
+
+        let trace_name = format!("output/{}.json", room_name);
+
+        let trace_file = &File::create(trace_name).map_err(|err| format!("Failed to crate trace file: {}", err))?;
+
+        info!("Serializing trace to disk...");
+        serde_json::to_writer(trace_file, &trace).map_err(|err| format!("Failed to serialize json: {}", err))?;
+        info!("Done serializing");
+    }
+
+    let plan = plan_result?.ok_or("Failed to create plan for room")?;
 
     let mut img: RgbImage = ImageBuffer::new(500, 500);
 
@@ -57,7 +117,9 @@ fn main() -> Result<(), String> {
 
     render_plan(&mut img, &plan, 10);
 
-    img.save("output.png").map_err(|err| format!("Failed to save image: {}", err))?;
+    let output_name = format!("output/{}.png", room_name);
+
+    img.save(output_name).map_err(|err| format!("Failed to save image: {}", err))?;
 
     Ok(())
 }
@@ -202,6 +264,10 @@ impl MapData {
             .find(|room| room.room == room_name)
             .ok_or("Failed to find room".to_owned())
     }
+
+    fn get_rooms(&self) -> &[RoomData] {
+        &self.rooms
+    }
 }
 
 fn load_map_data<P>(path: P) -> Result<MapData, String> where P: AsRef<Path>  {
@@ -214,7 +280,7 @@ fn load_map_data<P>(path: P) -> Result<MapData, String> where P: AsRef<Path>  {
     Ok(data)
 }
 
-fn evaluate_plan(room: &RoomData) -> Result<Option<Plan>, String> {
+fn evaluate_plan(room: &RoomData, max_seconds: Option<f32>, max_batch_seconds: Option<f32>) -> Result<Option<Plan>, String> {
     let mut data_source = RoomDataPlannerDataSource {
         terrain: room.get_terrain()?,
         controllers: room.get_controllers(),
@@ -223,6 +289,8 @@ fn evaluate_plan(room: &RoomData) -> Result<Option<Plan>, String> {
     };
 
     let planner = Planner::new(screeps_foreman::scoring::score_state);
+
+    let epoch = Instant::now();
 
     let seed_result = planner.seed(screeps_foreman::layout::ALL_ROOT_NODES, &mut data_source)?;
 
@@ -239,21 +307,48 @@ fn evaluate_plan(room: &RoomData) -> Result<Option<Plan>, String> {
         }
     };
 
-    let evaluate_result = planner.evaluate(screeps_foreman::layout::ALL_ROOT_NODES, &mut data_source, &mut running_state, || true)?;
+    info!("Starting evaluating...");
 
-    let plan = match evaluate_result {
-        PlanEvaluationResult::Complete(plan) => {
-            if plan.is_some() {
-                info!("Evalaute complete - planned room layout.");
-            } else {
-                info!("Evalaute complete - failed to find room layout.");
+    let plan = loop {
+        let batch_epoch = Instant::now();
+
+        let evaluate_result = planner.evaluate(
+            screeps_foreman::layout::ALL_ROOT_NODES, 
+            &mut data_source, 
+            &mut running_state, 
+            || {
+                let elapsed = epoch.elapsed().as_secs_f32();
+
+                if max_seconds.map(|max| elapsed >= max).unwrap_or(false) {
+                    return false;
+                }
+
+                let batch_elapsed = batch_epoch.elapsed().as_secs_f32();
+
+                if max_batch_seconds.map(|max| batch_elapsed >= max).unwrap_or(false) {
+                    return false;
+                }
+
+                true
             }
-            
-            Ok(plan)
-        },
-        PlanEvaluationResult::Running() => {
-            Err("Expected to run to completion".to_owned())
-        }
+        )?;
+    
+        match evaluate_result {
+            PlanEvaluationResult::Complete(plan) => {
+                if plan.is_some() {
+                    info!("Evaluate complete - planned room layout.");
+                } else {
+                    info!("Evaluate complete - failed to find room layout.");
+                }
+                
+                break Ok(plan)
+            },
+            PlanEvaluationResult::Running() => {
+                if max_seconds.map(|max| epoch.elapsed().as_secs_f32() >= max).unwrap_or(false) {
+                    break Err("Exceeded maximum duration for planning".to_owned());
+                }
+            }
+        };
     }?;
 
     Ok(plan)
