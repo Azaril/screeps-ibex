@@ -51,9 +51,7 @@ where
     }
 
     if !creep_pos.in_range_to(&target_position, 3) {
-        if !tick_context.action_flags.contains(SimultaneousActionFlags::MOVE) {
-            tick_context.action_flags.insert(SimultaneousActionFlags::MOVE);
-
+        if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
                 .movement
@@ -71,9 +69,7 @@ where
             }
         }
 
-        if !tick_context.action_flags.contains(SimultaneousActionFlags::REPAIR) {
-            tick_context.action_flags.insert(SimultaneousActionFlags::REPAIR);
-
+        if tick_context.action_flags.consume(SimultaneousActionFlags::REPAIR) {
             match creep.repair(structure) {
                 ReturnCode::Ok => None,
                 _ => Some(next_state()),

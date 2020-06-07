@@ -54,9 +54,7 @@ where
     //TODO: Check visibility cache and cancel if controller doesn't exist or isn't owned?
 
     if !creep_pos.in_range_to(&target_position, 3) {
-        if !action_flags.contains(SimultaneousActionFlags::MOVE) {
-            action_flags.insert(SimultaneousActionFlags::MOVE);
-
+        if action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
                 .movement
@@ -91,9 +89,7 @@ where
     //TODO: Check visibility cache and cancel if controller doesn't exist or is owned?
 
     if !creep_pos.is_near_to(&target_position) {
-        if !action_flags.contains(SimultaneousActionFlags::MOVE) {
-            action_flags.insert(SimultaneousActionFlags::MOVE);
-
+        if action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
                 .movement
@@ -128,9 +124,7 @@ where
     //TODO: Check visibility cache and cancel if controller doesn't exist or is owned?
 
     if !creep_pos.is_near_to(&target_position) {
-        if !action_flags.contains(SimultaneousActionFlags::MOVE) {
-            action_flags.insert(SimultaneousActionFlags::MOVE);
-
+        if action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
                 .movement
@@ -180,9 +174,7 @@ where
     //TODO: Check visibility cache and cancel if controller doesn't exist or is owned?
 
     if !creep_pos.is_near_to(&target_position) {
-        if !action_flags.contains(SimultaneousActionFlags::MOVE) {
-            action_flags.insert(SimultaneousActionFlags::MOVE);
-
+        if action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
                 .movement
@@ -194,9 +186,7 @@ where
     }
 
     if let Some(controller) = controller_id.resolve() {
-        if !action_flags.contains(SimultaneousActionFlags::SIGN) {
-            action_flags.insert(SimultaneousActionFlags::SIGN);
-
+        if action_flags.consume(SimultaneousActionFlags::SIGN) {
             creep.sign_controller(&controller, message);
         }
     }

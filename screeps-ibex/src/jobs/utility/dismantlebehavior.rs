@@ -88,9 +88,7 @@ where
     }
 
     if !creep_pos.in_range_to(&target_position, 1) {
-        if !tick_context.action_flags.contains(SimultaneousActionFlags::MOVE) {
-            tick_context.action_flags.insert(SimultaneousActionFlags::MOVE);
-
+        if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
                 .movement
@@ -102,9 +100,7 @@ where
     }
 
     if let Some(structure) = dismantle_target.as_ref() {
-        if !tick_context.action_flags.contains(SimultaneousActionFlags::DISMANTLE) {
-            tick_context.action_flags.insert(SimultaneousActionFlags::DISMANTLE);
-
+        if tick_context.action_flags.consume(SimultaneousActionFlags::DISMANTLE) {
             match creep.dismantle(structure) {
                 ReturnCode::Ok => None,
                 _ => Some(next_state()),

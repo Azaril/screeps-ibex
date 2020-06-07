@@ -50,9 +50,7 @@ where
     }
 
     if !creep_pos.in_range_to(&target_position, 3) {
-        if !tick_context.action_flags.contains(SimultaneousActionFlags::MOVE) {
-            tick_context.action_flags.insert(SimultaneousActionFlags::MOVE);
-
+        if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
                 .movement
@@ -64,9 +62,7 @@ where
     }
 
     if let Some(construction_site) = construction_site {
-        if !tick_context.action_flags.contains(SimultaneousActionFlags::BUILD) {
-            tick_context.action_flags.insert(SimultaneousActionFlags::BUILD);
-
+        if tick_context.action_flags.consume(SimultaneousActionFlags::BUILD) {
             match creep.build(&construction_site) {
                 ReturnCode::Ok => None,
                 _ => Some(next_state()),

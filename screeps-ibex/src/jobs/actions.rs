@@ -29,3 +29,15 @@ bitflags! {
         //TODO: Handle overlapping priorities.
     }
 }
+
+impl SimultaneousActionFlags {
+    pub fn consume(&mut self, flags: SimultaneousActionFlags) -> bool {
+        if !self.intersects(flags) {
+            self.insert(flags);
+
+            true
+        } else {
+            false
+        }
+    }
+}

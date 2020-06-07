@@ -245,9 +245,7 @@ where
     let pos = ticket.target().pos();
 
     if !creep.pos().is_near_to(&pos) {
-        if !action_flags.contains(SimultaneousActionFlags::MOVE) {
-            action_flags.insert(SimultaneousActionFlags::MOVE);
-
+        if action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
                 .movement
@@ -260,7 +258,7 @@ where
 
     loop {
         if let Some((resource, amount)) = ticket.get_next_withdrawl() {
-            if !action_flags.contains(SimultaneousActionFlags::TRANSFER) {
+            if !action_flags.intersects(SimultaneousActionFlags::TRANSFER) {
                 ticket.consume_withdrawl(resource, amount);
 
                 if ticket.target().withdraw_resource_amount(creep, resource, amount) == ReturnCode::Ok {
@@ -303,9 +301,7 @@ where
             let pos = ticket.target().pos();
 
             if !creep_pos.is_near_to(&pos) {
-                if !tick_context.action_flags.contains(SimultaneousActionFlags::MOVE) {
-                    tick_context.action_flags.insert(SimultaneousActionFlags::MOVE);
-
+                if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
                     tick_context
                         .runtime_data
                         .movement
@@ -317,7 +313,7 @@ where
             }
 
             while let Some((resource, amount)) = ticket.get_next_deposit() {
-                if !tick_context.action_flags.contains(SimultaneousActionFlags::TRANSFER) {
+                if !tick_context.action_flags.intersects(SimultaneousActionFlags::TRANSFER) {
                     ticket.consume_deposit(resource, amount);
 
                     if ticket.target().creep_transfer_resource_amount(creep, resource, amount) == ReturnCode::Ok {
@@ -374,9 +370,7 @@ where
         let pos = target.pos();
 
         if !creep_pos.is_near_to(&pos) {
-            if !tick_context.action_flags.contains(SimultaneousActionFlags::MOVE) {
-                tick_context.action_flags.insert(SimultaneousActionFlags::MOVE);
-
+            if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
                 tick_context
                     .runtime_data
                     .movement
@@ -390,9 +384,7 @@ where
         let store_types = creep.store_types();
 
         if let Some(resource) = store_types.first() {
-            if !tick_context.action_flags.contains(SimultaneousActionFlags::TRANSFER) {
-                tick_context.action_flags.insert(SimultaneousActionFlags::TRANSFER);
-
+            if tick_context.action_flags.consume(SimultaneousActionFlags::TRANSFER) {
                 let amount = creep.store_used_capacity(Some(*resource));
 
                 if target.creep_transfer_resource_amount(creep, *resource, amount) == ReturnCode::Ok {
