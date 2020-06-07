@@ -52,12 +52,19 @@ fn main() -> Result<(), String> {
         .filter(|room_data| room_data.get_sources().len() == 2 && room_data.get_controllers().len() == 1)
         .take(10)
         .collect::<Vec<_>>();
-    */
+        */
 
-    let rooms = vec![map_data.get_room("E34S31")?];
+    let rooms = vec![
+        map_data.get_room("E33S31")?,
+        map_data.get_room("E34S31")?,
+        map_data.get_room("E35S31")?,
+        
+        //map_data.get_room("E33S31")?,
+        //map_data.get_room("E11N11")?,
+    ];
 
     let maximum_seconds = None;
-    //let maximum_seconds = Some(5.0);
+    //let maximum_seconds = Some(2.0);
 
     //let maximum_batch_seconds = None;
     let maximum_batch_seconds = Some(1.0);
@@ -157,7 +164,11 @@ struct ImgVisualizer<'a> {
 
 impl<'a> RoomVisualizer for ImgVisualizer<'a> {
     fn render(&mut self, location: Location, structure: StructureType) {
-        let color = Rgb([255, 0, 0]);
+        let color = match structure {
+            StructureType::Road => Rgb([50, 0, 50]),
+            StructureType::Rampart => Rgb([0, 255, 0]),
+            _ => Rgb([255, 0, 0]),
+        };
 
         fill_region(&mut self.img, location.x() as u32 * self.pixel_size, location.y() as u32 * self.pixel_size, self.pixel_size, self.pixel_size, color);
     }
@@ -252,11 +263,12 @@ impl RoomData {
 
 #[derive(Deserialize)]
 struct MapData {
-    description: String,
+    //description: String,
     rooms: Vec<RoomData>
 }
 
 impl MapData {
+    #[allow(dead_code)]
     fn get_room(&self, room_name: &str) -> Result<&RoomData, String> {
         self
             .rooms
@@ -265,6 +277,7 @@ impl MapData {
             .ok_or("Failed to find room".to_owned())
     }
 
+    #[allow(dead_code)]
     fn get_rooms(&self) -> &[RoomData] {
         &self.rooms
     }
