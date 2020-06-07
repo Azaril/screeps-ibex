@@ -463,6 +463,16 @@ impl screeps_foreman::RoomVisualizer for RoomVisualizer {
                     Some(CircleStyle::default().fill("Brown").opacity(1.0)),
                 );
             }
+            StructureType::Rampart => {
+                RoomVisualizer::rect(
+                    self,
+                    location.x() as f32 - 0.5,
+                    location.y() as f32 - 0.5,
+                    1.0,
+                    1.0,
+                    Some(RectStyle::default().fill("Green").opacity(0.3)),
+                );
+            }
             _ => {
                 RoomVisualizer::circle(
                     self,
