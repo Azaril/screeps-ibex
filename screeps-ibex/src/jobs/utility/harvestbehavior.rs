@@ -88,9 +88,7 @@ where
     let target_position = target_id.pos();
 
     if !creep.pos().is_near_to(&target_position) {
-        if !action_flags.contains(SimultaneousActionFlags::MOVE) {
-            action_flags.insert(SimultaneousActionFlags::MOVE);
-
+        if action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
                 .movement
@@ -102,9 +100,7 @@ where
     }
 
     if let Some(harvest_target) = target_id.resolve() {
-        if !action_flags.contains(SimultaneousActionFlags::HARVEST) {
-            action_flags.insert(SimultaneousActionFlags::HARVEST);
-
+        if action_flags.consume(SimultaneousActionFlags::HARVEST) {
             match creep.harvest(&harvest_target) {
                 ReturnCode::Ok => {
                     if optimistic_completion {

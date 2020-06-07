@@ -41,9 +41,7 @@ where
         return Some(next_state());
     }
 
-    if !tick_context.action_flags.contains(SimultaneousActionFlags::MOVE) {
-        tick_context.action_flags.insert(SimultaneousActionFlags::MOVE);
-
+    if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
         //TODO: What to do with failure here?
         tick_context
             .runtime_data
