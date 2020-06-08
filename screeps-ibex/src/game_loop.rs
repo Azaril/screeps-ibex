@@ -276,7 +276,7 @@ pub fn tick() {
 
     const COMPONENT_SEGMENT: u32 = 50;
     
-    if unsafe { ENVIRONMENT.as_ref() }.and_then(|e| e.tick).map(|t| t + 1 != current_time).unwrap_or_else(|| crate::features::reset::reset_environment()) {
+    if crate::features::reset::reset_environment() || unsafe { ENVIRONMENT.as_ref() }.and_then(|e| e.tick).map(|t| t + 1 != current_time).unwrap_or(false) {
         info!("Resetting environment");
         unsafe { ENVIRONMENT = None };
     }
