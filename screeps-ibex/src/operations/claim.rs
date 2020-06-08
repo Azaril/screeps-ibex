@@ -122,7 +122,7 @@ impl ClaimOperation {
         for scorer in scorers.iter() {
             let (score, weight) = scorer(system_data, candidate)?;
 
-            total_score += score;
+            total_score += score * weight;
             total_weight += weight;
         }
 
