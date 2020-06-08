@@ -92,7 +92,7 @@ impl Operation for MiningOutpostOperation {
             room_data: system_data.room_data,
         };
 
-        let gathered_data = gather_candidate_rooms(&gather_system_data, 1, Self::gather_candidate_room_data);
+        let gathered_data = gather_candidate_rooms(&gather_system_data, 2, 1, Self::gather_candidate_room_data);
 
         for unknown_room in gathered_data.unknown_rooms().iter() {
             system_data

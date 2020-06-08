@@ -6,18 +6,77 @@ use specs::saveload::*;
 use specs::*;
 use std::cell::*;
 use screeps_cache::*;
+use screeps_foreman::planner::{FastRoomTerrain, TerrainFlags};
+use screeps_foreman::constants::*;
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct RoomTerrainStatistics {
+    walkable_tiles: u32,
+    swamp_tiles: u32,
+    plain_tiles: u32,
+    wall_tiles: u32
+}
+
+impl RoomTerrainStatistics {
+    fn from_terrain(terrain: &FastRoomTerrain) -> RoomTerrainStatistics {
+        let mut walkable_tiles = 0;
+        let mut swamp_tiles = 0;
+        let mut plain_tiles = 0;
+        let mut wall_tiles = 0;
+
+        for x in 0..ROOM_WIDTH as u8 {
+            for y in 0..ROOM_HEIGHT as u8 {
+                let terrain_mask = terrain.get_xy(x, y);
+
+                if terrain_mask.contains(TerrainFlags::WALL) {
+                    wall_tiles += 1;
+                } else {
+                    walkable_tiles += 1;
+
+                    if terrain_mask.contains(TerrainFlags::SWAMP) {
+                        swamp_tiles += 1;
+                    } else {
+                        plain_tiles += 1;
+                    }
+                }
+            }
+        }
+
+        RoomTerrainStatistics {
+            walkable_tiles,
+            swamp_tiles,
+            plain_tiles,
+            wall_tiles
+        }
+    }
+
+    pub fn walkable_tiles(&self) -> u32 {
+        self.walkable_tiles
+    }
+
+    pub fn swamp_tiles(&self) -> u32 {
+        self.swamp_tiles
+    }
+
+    pub fn plain_tiles(&self) -> u32 {
+        self.plain_tiles
+    }
+
+    pub fn wall_tiles(&self) -> u32 {
+        self.wall_tiles
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RoomStaticVisibilityData {
-    #[serde(default)]
     #[serde(rename = "c")]
     controller: Option<RemoteObjectId<StructureController>>,
-    #[serde(default)]
     #[serde(rename = "s")]
     sources: Vec<RemoteObjectId<Source>>,
-    #[serde(default)]
     #[serde(rename = "m")]
     minerals: Vec<RemoteObjectId<Mineral>>,
+    #[serde(rename = "r")]
+    terrain_statistics: RoomTerrainStatistics
 }
 
 impl RoomStaticVisibilityData {
@@ -31,6 +90,10 @@ impl RoomStaticVisibilityData {
 
     pub fn minerals(&self) -> &Vec<RemoteObjectId<Mineral>> {
         &self.minerals
+    }
+
+    pub fn terrain_statistics(&self) -> &RoomTerrainStatistics {
+        &self.terrain_statistics
     }
 }
 
@@ -224,10 +287,15 @@ impl RoomData {
         let source_ids = room.find(find::SOURCES).into_iter().map(|s| s.remote_id()).collect();
         let mineral_ids = room.find(find::MINERALS).into_iter().map(|s| s.remote_id()).collect();
 
+        let terrain = room.get_terrain();
+        let terrain = FastRoomTerrain::new(terrain.get_raw_buffer());
+        let terrain_statistics = RoomTerrainStatistics::from_terrain(&terrain);
+
         RoomStaticVisibilityData {
             controller: controller_id,
             sources: source_ids,
             minerals: mineral_ids,
+            terrain_statistics
         }
     }
 

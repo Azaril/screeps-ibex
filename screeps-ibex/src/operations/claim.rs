@@ -66,6 +66,75 @@ impl ClaimOperation {
         Some(candidate_room_data)
     }
 
+    fn source_score(system_data: &mut OperationExecutionSystemData, candidate: &CandidateRoom) -> Option<(f32, f32)> {
+        let room_data = system_data.room_data.get(candidate.room_data_entity())?;
+        let static_visibility_data = room_data.get_static_visibility_data()?;
+        let sources = static_visibility_data.sources().len();
+
+        if sources == 0 {
+            return None;
+        }
+
+        let score = sources.min(2) as f32 / 2.0;
+
+        Some((score, 2.0))
+    }
+
+    fn walkability_score(system_data: &mut OperationExecutionSystemData, candidate: &CandidateRoom) -> Option<(f32, f32)> {
+        let room_data = system_data.room_data.get(candidate.room_data_entity())?;
+        let static_visibility_data = room_data.get_static_visibility_data()?;
+        let statistics = static_visibility_data.terrain_statistics();
+
+        let walkable_tiles = statistics.walkable_tiles();
+
+        if walkable_tiles == 0 {
+            return None;
+        }
+
+        let plains_ratio = statistics.plain_tiles() as f32 / statistics.walkable_tiles() as f32;
+
+        Some((plains_ratio, 1.0))
+    }
+
+    fn distance_score(_system_data: &mut OperationExecutionSystemData, candidate: &CandidateRoom) -> Option<(f32, f32)> {
+        let score = match candidate.distance() {
+            0 => None,
+            1 => Some(0.5),
+            2 => Some(1.0),
+            3 => Some(1.0),
+            4 => Some(0.75),
+            _ => Some(0.5)
+        }?;
+
+        Some((score, 0.5))
+    }
+
+    fn score_candidate_room(system_data: &mut OperationExecutionSystemData, candidate: &CandidateRoom) -> Option<f32> {
+        let scorers = [
+            Self::source_score,
+            Self::walkability_score,
+            Self::distance_score
+        ];
+
+        let mut total_score = 0.0;
+        let mut total_weight = 0.0;
+    
+        for scorer in scorers.iter() {
+            let (score, weight) = scorer(system_data, candidate)?;
+
+            total_score += score;
+            total_weight += weight;
+        }
+
+        if total_weight > 0.0 {
+            let score = total_score / total_weight;
+    
+            Some(score)
+        } else {
+            None
+        }
+    }
+
     fn spawn_remote_build(system_data: &mut OperationExecutionSystemData, runtime_data: &mut OperationExecutionRuntimeData) {
         //
         // Ensure remote builders occur.
@@ -226,7 +295,7 @@ impl Operation for ClaimOperation {
             room_data: system_data.room_data,
         };
 
-        let gathered_data = gather_candidate_rooms(&gather_system_data, 4, Self::gather_candidate_room_data);
+        let gathered_data = gather_candidate_rooms(&gather_system_data, 4, 4, Self::gather_candidate_room_data);
 
         for unknown_room in gathered_data.unknown_rooms().iter() {
             system_data
@@ -234,7 +303,21 @@ impl Operation for ClaimOperation {
                 .request(VisibilityRequest::new(unknown_room.room_name(), VISIBILITY_PRIORITY_MEDIUM, VisibilityRequestFlags::ALL));
         }
 
-        for candidate_room in gathered_data.candidate_rooms().iter() {
+        let mut scored_candidate_rooms = gathered_data
+            .candidate_rooms()
+            .iter()
+            .filter_map(|candidate| {
+                let score = Self::score_candidate_room(system_data, candidate)?;
+
+                Some((candidate, score))
+            })
+            .collect::<Vec<_>>();
+
+        scored_candidate_rooms.sort_by(|(_, score_a), (_, score_b)| {
+            score_a.partial_cmp(&score_b).unwrap().reverse()
+        });
+
+        for (candidate_room, _) in scored_candidate_rooms.iter() {
             let room_data = system_data.room_data.get_mut(candidate_room.room_data_entity()).unwrap();
 
             //
