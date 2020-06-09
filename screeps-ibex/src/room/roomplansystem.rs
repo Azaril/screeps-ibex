@@ -39,14 +39,40 @@ impl RoomPlanQueue {
     }
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+pub enum RoomPlanState {
+    Valid(Plan),
+    Failed
+}
+
+impl RoomPlanState {
+    pub fn valid(&self) -> bool {
+        match self {
+            RoomPlanState::Valid(_) => true,
+            RoomPlanState::Failed => false
+        }
+    }
+
+    pub fn plan(&self) -> Option<&Plan> {
+        match self {
+            RoomPlanState::Valid(plan) => Some(plan),
+            RoomPlanState::Failed => None
+        }
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize, Component)]
 pub struct RoomPlanData {
-    plan: Plan,
+    state: RoomPlanState,
 }
 
 impl RoomPlanData {
-    pub fn plan(&self) -> &Plan {
-        &self.plan
+    pub fn valid(&self) -> bool {
+        self.state.valid()
+    }
+
+    pub fn plan(&self) -> Option<&Plan> {
+        self.state.plan()
     }
 }
 
@@ -219,14 +245,14 @@ impl RoomPlanSystem {
         }
     }
 
-    fn attach_plan(data: &mut RoomPlanSystemData, room_name: RoomName, plan: Plan) -> Result<(), String> {
+    fn attach_plan_state(data: &mut RoomPlanSystemData, room_name: RoomName, state: RoomPlanState) -> Result<(), String> {
         let room_entity = data.mapping.get_room(&room_name).ok_or("Expected room entity")?;
 
         if let Some(room_plan_data) = data.room_plan_data.get_mut(room_entity) {
-            room_plan_data.plan = plan;
+            room_plan_data.state = state;
         } else {
             data.room_plan_data
-                .insert(room_entity, RoomPlanData { plan })
+                .insert(room_entity, RoomPlanData { state })
                 .map_err(|err| err.to_string())?;
         }
 
@@ -290,12 +316,16 @@ impl<'a> System<'a> for RoomPlanSystem {
                         Ok(PlanSeedResult::Complete(Some(plan))) => {
                             info!("Seeding complete and viable plan found. Room: {}", request.room_name);
 
-                            if let Err(err) = Self::attach_plan(&mut data, request.room_name, plan) {
+                            if let Err(err) = Self::attach_plan_state(&mut data, request.room_name, RoomPlanState::Valid(plan)) {
                                 info!("Failed to attach plan to room! Room: {} - Err: {}", request.room_name, err);
                             }
                         }
                         Ok(PlanSeedResult::Complete(None)) => {
                             info!("Seeding complete but no viable plan found. Room: {}", request.room_name);
+
+                            if let Err(err) = Self::attach_plan_state(&mut data, request.room_name, RoomPlanState::Failed) {
+                                info!("Failed to attach plan to room! Room: {} - Err: {}", request.room_name, err);
+                            }
                         }
                         Err(err) => {
                             info!("Seeding failure! Room: {} - Error: {}", request.room_name, err);
@@ -312,7 +342,7 @@ impl<'a> System<'a> for RoomPlanSystem {
                     Ok(PlanEvaluationResult::Complete(Some(plan))) => {
                         info!("Planning complete and viable plan found. Room: {}", running_state.room_name);
 
-                        if let Err(err) = Self::attach_plan(&mut data, running_state.room_name, plan) {
+                        if let Err(err) = Self::attach_plan_state(&mut data, running_state.room_name, RoomPlanState::Valid(plan)) {
                             info!("Failed to attach plan to room! Room: {} - Error: {}", running_state.room_name, err);
                         }
 
@@ -320,6 +350,10 @@ impl<'a> System<'a> for RoomPlanSystem {
                     }
                     Ok(PlanEvaluationResult::Complete(None)) => {
                         info!("Planning complete but no viable plan found. Room: {}", running_state.room_name);
+
+                        if let Err(err) = Self::attach_plan_state(&mut data, running_state.room_name, RoomPlanState::Failed) {
+                            info!("Failed to attach plan to room! Room: {} - Error: {}", running_state.room_name, err);
+                        }
 
                         true
                     }
@@ -358,7 +392,9 @@ impl<'a> System<'a> for RoomPlanSystem {
                     for (_, room_data, room_plan_data) in (&data.entities, &data.room_data, &data.room_plan_data).join() {
                         let room_visualizer = visualizer.get_room(room_data.name);
 
-                        room_plan_data.plan.visualize(room_visualizer);
+                        if let Some(plan) = room_plan_data.plan() {
+                            plan.visualize(room_visualizer);
+                        }
                     }
                 }
             }

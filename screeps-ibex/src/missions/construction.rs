@@ -60,7 +60,9 @@ impl Mission for ConstructionMission {
 
         let request_plan = if let Some(room_plan_data) = system_data.room_plan_data.get(self.room_data) {
             if (game::time() % 50 == 0) && crate::features::construction::execute() {
-                room_plan_data.plan().execute(&room);
+                if let Some(plan) = room_plan_data.plan() {
+                    plan.execute(&room);
+                }
 
                 //TODO: Finish when plan is complete?
             }
