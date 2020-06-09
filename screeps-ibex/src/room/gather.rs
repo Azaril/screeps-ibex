@@ -1,5 +1,6 @@
 use crate::entitymappingsystem::*;
 use crate::room::data::*;
+use crate::room::roomplansystem::*;
 use screeps::*;
 use screeps_rover::*;
 use specs::*;
@@ -44,6 +45,7 @@ impl CandidateRoom {
 pub struct UnknownRoom {
     room_name: RoomName,
     home_room_data_entity: Entity,
+    distance: u32,
 }
 
 impl UnknownRoom {
@@ -53,6 +55,10 @@ impl UnknownRoom {
 
     pub fn home_room_data_entity(&self) -> Entity {
         self.home_room_data_entity
+    }
+
+    pub fn distance(&self) -> u32 {
+        self.distance
     }
 }
 
@@ -83,6 +89,7 @@ pub struct GatherSystemData<'a, 'b> {
     pub entities: &'b Entities<'a>,
     pub mapping: &'b Read<'a, EntityMappingData>,
     pub room_data: &'b mut WriteStorage<'a, RoomData>,
+    pub room_plan_data: &'b ReadStorage<'a, RoomPlanData>
 }
 
 pub fn gather_candidate_rooms<F>(system_data: &GatherSystemData, min_rcl: u32, max_distance: u32, candidate_generator: F) -> GatherRoomData
@@ -163,7 +170,7 @@ where
 
                     visited_rooms.insert(*source_room_name, visited_room);
                 } else {
-                    unknown_rooms.insert(*source_room_name, *home_room_entity);
+                    unknown_rooms.insert(*source_room_name, (*home_room_entity, distance));
                 }
             }
         }
@@ -183,9 +190,10 @@ where
 
     let returned_unknown_rooms = unknown_rooms
         .into_iter()
-        .map(|(room_name, home_room_data_entity)| UnknownRoom {
+        .map(|(room_name, (home_room_data_entity, distance))| UnknownRoom {
             room_name,
             home_room_data_entity,
+            distance, 
         })
         .collect();
 
