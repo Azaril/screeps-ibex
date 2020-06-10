@@ -146,30 +146,45 @@ impl Mission for DismantleMission {
         let desired_dismantlers = 1;
 
         if self.dismantlers.len() < desired_dismantlers {
-            let body_definition = crate::creep::SpawnBodyDefinition {
-                maximum_energy: home_room.energy_capacity_available(),
-                minimum_repeat: None,
-                maximum_repeat: None,
-                pre_body: &[],
-                repeat_body: &[
-                    Part::Work,
-                    Part::Work,
-                    Part::Work,
-                    Part::Work,
-                    Part::Move,
-                    Part::Move,
-                    Part::Move,
-                    Part::Move,
-                    Part::Carry,
-                    Part::Carry,
-                    Part::Move,
-                    Part::Move,
-                    Part::Carry,
-                    Part::Carry,
-                    Part::Move,
-                    Part::Move,
-                ],
-                post_body: &[],
+            let body_definition = if room_data.get_structures().map(|s| !s.storages().is_empty()).unwrap_or(false) { 
+                crate::creep::SpawnBodyDefinition {
+                    maximum_energy: home_room.energy_capacity_available(),
+                    minimum_repeat: None,
+                    maximum_repeat: None,
+                    pre_body: &[
+                        Part::Move,
+                        Part::Move,
+                        Part::Work,
+                        Part::Work,
+                    ],
+                    repeat_body: &[
+                        Part::Work,
+                        Part::Work,
+                        Part::Move,
+                        Part::Move,
+                        Part::Carry,
+                        Part::Carry,
+                        Part::Move,
+                        Part::Move,
+                        Part::Carry,
+                        Part::Carry,
+                        Part::Move,
+                        Part::Move,
+                    ],
+                    post_body: &[],
+                }
+            } else {
+                crate::creep::SpawnBodyDefinition {
+                    maximum_energy: home_room.energy_capacity_available(),
+                    minimum_repeat: Some(1),
+                    maximum_repeat: None,
+                    pre_body: &[],
+                    repeat_body: &[
+                        Part::Move,
+                        Part::Work,
+                    ],
+                    post_body: &[],
+                } 
             };
 
             if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {

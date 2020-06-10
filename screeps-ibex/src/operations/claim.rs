@@ -38,6 +38,8 @@ impl ClaimOperation {
         }
     }
 
+    const VISIBILITY_TIMEOUT: u32 = 10000;
+
     fn gather_candidate_room_data(gather_system_data: &GatherSystemData, room_name: RoomName) -> Option<CandidateRoomData> {
         let search_room_entity = gather_system_data.mapping.get_room(&room_name)?;
         let search_room_data = gather_system_data.room_data.get(search_room_entity)?;
@@ -48,7 +50,7 @@ impl ClaimOperation {
         let has_controller = static_visibility_data.controller().is_some();
         let has_sources = !static_visibility_data.sources().is_empty();
 
-        let visibility_timeout = if has_sources { 10000 } else { 20000 };
+        let visibility_timeout = if has_sources { Self::VISIBILITY_TIMEOUT } else { Self::VISIBILITY_TIMEOUT * 2 };
 
         if !dynamic_visibility_data.updated_within(visibility_timeout) {
             return None;
@@ -58,7 +60,7 @@ impl ClaimOperation {
             && (dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().neutral());
         let hostile = dynamic_visibility_data.owner().hostile() || dynamic_visibility_data.source_keeper();
 
-        let can_plan = gather_system_data.room_plan_data.get(search_room_entity).map(|plan| !plan.valid()).unwrap_or(true);
+        let can_plan = gather_system_data.room_plan_data.get(search_room_entity).map(|plan| plan.valid()).unwrap_or(true);
 
         let viable = has_controller && has_sources && can_claim && can_plan;
         let can_expand = !hostile;
@@ -102,7 +104,7 @@ impl ClaimOperation {
         let score = match candidate.distance() {
             0 => None,
             1 => Some(0.5),
-            2 => Some(1.0),
+            2 => Some(0.75),
             3 => Some(1.0),
             4 => Some(0.75),
             _ => Some(0.5)
@@ -289,10 +291,6 @@ impl Operation for ClaimOperation {
             return Ok(OperationResult::Running);
         }
 
-        if game::time() % 50 != 25 {
-            return Ok(OperationResult::Running);
-        }
-
         let gather_system_data = GatherSystemData {
             entities: system_data.entities,
             mapping: system_data.mapping,
@@ -302,15 +300,34 @@ impl Operation for ClaimOperation {
 
         let gathered_data = gather_candidate_rooms(&gather_system_data, 3, 4, Self::gather_candidate_room_data);
 
+        //
+        // Request visibility for all rooms that are going stale or have not had visibility.
+        //
+
         for unknown_room in gathered_data.unknown_rooms().iter() {
             system_data
                 .visibility
                 .request(VisibilityRequest::new(unknown_room.room_name(), VISIBILITY_PRIORITY_MEDIUM, VisibilityRequestFlags::ALL));
         }
 
+        for candidate_room in gathered_data.candidate_rooms().iter() {
+            let room_data = system_data.room_data.get_mut(candidate_room.room_data_entity()).ok_or(())?;
+            let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or(())?;
+
+            if dynamic_visibility_data.age() > Self::VISIBILITY_TIMEOUT / 2 {
+                system_data
+                    .visibility
+                    .request(VisibilityRequest::new(room_data.name, VISIBILITY_PRIORITY_MEDIUM, VisibilityRequestFlags::ALL));
+            }
+        }
+
         if gathered_data.unknown_rooms().iter().any(|unknown_room| unknown_room.distance() <= 3) {
             return Ok(OperationResult::Running);
         }
+
+        //
+        // Score rooms for priority.
+        //
 
         let mut scored_candidate_rooms = gathered_data
             .candidate_rooms()
@@ -331,7 +348,7 @@ impl Operation for ClaimOperation {
         //
 
         for (candidate_room, _) in scored_candidate_rooms.iter().take(available_rooms as usize) {
-            let room_data = system_data.room_data.get_mut(candidate_room.room_data_entity()).unwrap();
+            let room_data = system_data.room_data.get_mut(candidate_room.room_data_entity()).ok_or(())?;
 
             //
             // Ensure a room plan exists for the room.

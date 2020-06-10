@@ -62,17 +62,19 @@ impl Mission for ConstructionMission {
             if (game::time() % 50 == 0) && crate::features::construction::execute() {
                 if let Some(plan) = room_plan_data.plan() {
                     plan.execute(&room);
+
+                    false
+                } else {
+                    crate::features::construction::allow_replan()
                 }
-
-                //TODO: Finish when plan is complete?
-            }
-
-            crate::features::construction::force_plan()
+            } else {
+                false
+            }            
         } else {
             true
         };
 
-        if request_plan {
+        if request_plan || crate::features::construction::force_plan() {
             system_data.room_plan_queue.request(RoomPlanRequest::new(room_data.name, 1.0));
         }
 
