@@ -81,8 +81,6 @@ impl HaulMission {
     where
         RD: std::ops::Deref<Target = specs::storage::MaskedStorage<RoomData>>,
     {
-        const UPDATE_RATE: u32 = 20;
-
         let unfufilled = transfer_queue
             .try_get_room(transfer_queue_data, room_name, TransferType::Haul.into())
             .map(|r| r.stats().total_unfufilled_resources(TransferType::Haul))
@@ -146,9 +144,10 @@ impl Mission for HaulMission {
         );
         let stats = stats.get();
 
-        let base_amount = controller.level() * 500;
+        let base_amount = (controller.level() as f32 * 100.0).powf(1.25);
 
-        let desired_haulers = (stats.unfufilled_hauling as f32 / base_amount as f32).ceil().min(3.0) as usize;
+        let desired_haulers_for_unfufilled = (stats.unfufilled_hauling as f32 / base_amount as f32).ceil() as usize;
+        let desired_haulers = desired_haulers_for_unfufilled.min(3) as usize;
 
         let should_spawn = self.haulers.len() < desired_haulers;
 
@@ -172,7 +171,7 @@ impl Mission for HaulMission {
             if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                 let haul_rooms = &[self.room_data];
 
-                let priority = if self.haulers.is_empty() {
+                let priority = if (self.haulers.len() as f32) < (desired_haulers_for_unfufilled as f32 / 2.0).ceil() {
                     SPAWN_PRIORITY_HIGH
                 } else {
                     SPAWN_PRIORITY_MEDIUM

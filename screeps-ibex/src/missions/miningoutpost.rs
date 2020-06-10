@@ -82,6 +82,17 @@ fn can_run_mission(
     _mission_entity: Entity,
     state_context: &mut MiningOutpostMissionContext,
 ) -> Result<bool, String> {
+    let home_room_data = system_data
+        .room_data
+        .get(state_context.home_room_data)
+        .ok_or("Expected home room data")?;
+
+    let home_room_dynamic_visibility_data = home_room_data.get_dynamic_visibility_data().ok_or("Expected home room visibility")?;
+    
+    if !home_room_dynamic_visibility_data.visible() || !home_room_dynamic_visibility_data.owner().mine() {
+        return Ok(false);
+    }
+
     let outpost_room_data = system_data
         .room_data
         .get(state_context.outpost_room_data)
