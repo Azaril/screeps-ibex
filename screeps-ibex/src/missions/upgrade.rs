@@ -163,7 +163,7 @@ impl Mission for UpgradeMission {
             let downgrade_risk = controllers
                 .iter()
                 .filter_map(|controller| controller_downgrade(controller.level()).map(|ticks| controller.ticks_to_downgrade() < ticks / 2))
-                .any(|risk| risk);            
+                .any(|risk| risk);
 
             let maximum_energy = if self.upgraders.is_empty() && downgrade_risk {
                 room.energy_available()

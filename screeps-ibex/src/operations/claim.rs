@@ -50,7 +50,11 @@ impl ClaimOperation {
         let has_controller = static_visibility_data.controller().is_some();
         let has_sources = !static_visibility_data.sources().is_empty();
 
-        let visibility_timeout = if has_sources { Self::VISIBILITY_TIMEOUT } else { Self::VISIBILITY_TIMEOUT * 2 };
+        let visibility_timeout = if has_sources {
+            Self::VISIBILITY_TIMEOUT
+        } else {
+            Self::VISIBILITY_TIMEOUT * 2
+        };
 
         if !dynamic_visibility_data.updated_within(visibility_timeout) {
             return None;
@@ -60,7 +64,11 @@ impl ClaimOperation {
             && (dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().neutral());
         let hostile = dynamic_visibility_data.owner().hostile() || dynamic_visibility_data.source_keeper();
 
-        let can_plan = gather_system_data.room_plan_data.get(search_room_entity).map(|plan| plan.valid()).unwrap_or(true);
+        let can_plan = gather_system_data
+            .room_plan_data
+            .get(search_room_entity)
+            .map(|plan| plan.valid())
+            .unwrap_or(true);
 
         let viable = has_controller && has_sources && can_claim && can_plan;
         let can_expand = !hostile;
@@ -107,22 +115,18 @@ impl ClaimOperation {
             2 => Some(0.75),
             3 => Some(1.0),
             4 => Some(0.75),
-            _ => Some(0.5)
+            _ => Some(0.5),
         }?;
 
         Some((score, 0.5))
     }
 
     fn score_candidate_room(system_data: &mut OperationExecutionSystemData, candidate: &CandidateRoom) -> Option<f32> {
-        let scorers = [
-            Self::source_score,
-            Self::walkability_score,
-            Self::distance_score,
-        ];
+        let scorers = [Self::source_score, Self::walkability_score, Self::distance_score];
 
         let mut total_score = 0.0;
         let mut total_weight = 0.0;
-    
+
         for scorer in scorers.iter() {
             let (score, weight) = scorer(system_data, candidate)?;
 
@@ -132,7 +136,7 @@ impl ClaimOperation {
 
         if total_weight > 0.0 {
             let score = total_score / total_weight;
-    
+
             Some(score)
         } else {
             None
@@ -305,9 +309,11 @@ impl Operation for ClaimOperation {
         //
 
         for unknown_room in gathered_data.unknown_rooms().iter() {
-            system_data
-                .visibility
-                .request(VisibilityRequest::new(unknown_room.room_name(), VISIBILITY_PRIORITY_MEDIUM, VisibilityRequestFlags::ALL));
+            system_data.visibility.request(VisibilityRequest::new(
+                unknown_room.room_name(),
+                VISIBILITY_PRIORITY_MEDIUM,
+                VisibilityRequestFlags::ALL,
+            ));
         }
 
         for candidate_room in gathered_data.candidate_rooms().iter() {
@@ -315,13 +321,19 @@ impl Operation for ClaimOperation {
             let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or(())?;
 
             if dynamic_visibility_data.age() > Self::VISIBILITY_TIMEOUT / 2 {
-                system_data
-                    .visibility
-                    .request(VisibilityRequest::new(room_data.name, VISIBILITY_PRIORITY_MEDIUM, VisibilityRequestFlags::ALL));
+                system_data.visibility.request(VisibilityRequest::new(
+                    room_data.name,
+                    VISIBILITY_PRIORITY_MEDIUM,
+                    VisibilityRequestFlags::ALL,
+                ));
             }
         }
 
-        if gathered_data.unknown_rooms().iter().any(|unknown_room| unknown_room.distance() <= 3) {
+        if gathered_data
+            .unknown_rooms()
+            .iter()
+            .any(|unknown_room| unknown_room.distance() <= 3)
+        {
             return Ok(OperationResult::Running);
         }
 
@@ -339,9 +351,7 @@ impl Operation for ClaimOperation {
             })
             .collect::<Vec<_>>();
 
-        scored_candidate_rooms.sort_by(|(_, score_a), (_, score_b)| {
-            score_a.partial_cmp(&score_b).unwrap().reverse()
-        });
+        scored_candidate_rooms.sort_by(|(_, score_a), (_, score_b)| score_a.partial_cmp(&score_b).unwrap().reverse());
 
         //
         // Plan or claim best rooms up to the number of available rooms.

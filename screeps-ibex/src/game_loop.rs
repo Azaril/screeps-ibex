@@ -275,8 +275,13 @@ pub fn tick() {
     let current_time = game::time();
 
     const COMPONENT_SEGMENT: u32 = 50;
-    
-    if crate::features::reset::reset_environment() || unsafe { ENVIRONMENT.as_ref() }.and_then(|e| e.tick).map(|t| t + 1 != current_time).unwrap_or(false) {
+
+    if crate::features::reset::reset_environment()
+        || unsafe { ENVIRONMENT.as_ref() }
+            .and_then(|e| e.tick)
+            .map(|t| t + 1 != current_time)
+            .unwrap_or(false)
+    {
         info!("Resetting environment");
         unsafe { ENVIRONMENT = None };
     }
@@ -294,7 +299,7 @@ pub fn tick() {
         main_pass_dispatcher,
         loaded,
         tick,
-    } = unsafe { ENVIRONMENT.get_or_insert_with(|| create_environment()) }; 
+    } = unsafe { ENVIRONMENT.get_or_insert_with(|| create_environment()) };
 
     let is_data_ready = {
         let mut memory_arbiter = world.write_resource::<MemoryArbiter>();
@@ -324,7 +329,7 @@ pub fn tick() {
     } else {
         world.remove::<Visualizer>();
         world.remove::<UISystem>();
-    }    
+    }
 
     if !*loaded {
         info!("Deserializing world state to environment");

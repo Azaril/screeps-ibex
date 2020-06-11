@@ -3,13 +3,13 @@ use super::missionsystem::*;
 use crate::creep::*;
 use crate::jobs::build::*;
 use crate::jobs::data::*;
+use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use crate::room::data::*;
 
 #[derive(ConvertSaveload)]
 pub struct RemoteBuildMission {
@@ -71,7 +71,10 @@ impl RemoteBuildMission {
     }
 
     pub fn can_run(room_data: &RoomData) -> bool {
-        let has_spawns = room_data.get_structures().map(|structures| !structures.spawns().is_empty()).unwrap_or(false);
+        let has_spawns = room_data
+            .get_structures()
+            .map(|structures| !structures.spawns().is_empty())
+            .unwrap_or(false);
 
         if !has_spawns {
             if let Some(construction_sites) = room_data.get_construction_sites() {

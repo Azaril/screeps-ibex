@@ -1,3 +1,4 @@
+use super::utility::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use crate::ui::*;
@@ -12,7 +13,6 @@ use std::borrow::*;
 use std::collections::hash_map::*;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use super::utility::*;
 
 #[derive(Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Clone, Copy, Serialize, Deserialize)]
 #[repr(u8)]
@@ -743,12 +743,16 @@ impl TransferNode {
         available_capacity: TransferCapacity,
     ) -> Option<(ResourceType, Vec<TransferDepositTicketResourceEntry>)> {
         let mut delivery_resources: HashMap<ResourceType, Vec<TransferDepositTicketResourceEntry>> = HashMap::new();
-        
+
         for (resource, amount) in available_resources {
             let mut remaining_capacity = available_capacity;
 
             for key in self.deposits.keys() {
-                if key.matches(Some(*resource), allowed_priorities, delivery_types) || (key.resource == None && delivery_types.contains(key.allowed_type.into()) && allowed_priorities.contains(key.priority.into())) {
+                if key.matches(Some(*resource), allowed_priorities, delivery_types)
+                    || (key.resource == None
+                        && delivery_types.contains(key.allowed_type.into())
+                        && allowed_priorities.contains(key.priority.into()))
+                {
                     let remaining_amount = self.get_available_deposit(key);
 
                     if remaining_amount > 0 {
@@ -1558,9 +1562,7 @@ impl TransferQueue {
         self.rooms.get_room(data, room, transfer_types)
     }
 
-    pub fn get_all_rooms(
-        &self
-    ) -> HashSet<RoomName> {
+    pub fn get_all_rooms(&self) -> HashSet<RoomName> {
         self.rooms.get_all_rooms()
     }
 
@@ -1616,7 +1618,14 @@ impl TransferQueue {
         delivery_rooms
             .iter()
             .flat_map(|room| {
-                self.select_single_delivery_for_room(data, *room, allowed_priorities, delivery_types, available_resources, available_capacity)
+                self.select_single_delivery_for_room(
+                    data,
+                    *room,
+                    allowed_priorities,
+                    delivery_types,
+                    available_resources,
+                    available_capacity,
+                )
             })
             .collect::<Vec<_>>()
     }
@@ -1636,8 +1645,8 @@ impl TransferQueue {
             if room.stats.deposit_priorities.intersects(allowed_priorities) {
                 for (target, node) in room.nodes.iter() {
                     if let Some((delivery_resource, delivery_entries)) =
-                        node.select_single_delivery(allowed_priorities, delivery_types, available_resources, available_capacity) {
-
+                        node.select_single_delivery(allowed_priorities, delivery_types, available_resources, available_capacity)
+                    {
                         let mut delivery_resources = HashMap::new();
 
                         delivery_resources.insert(delivery_resource, delivery_entries);
@@ -1872,9 +1881,9 @@ impl TransferQueue {
         let source_room = target.pos().room_name();
 
         let mut all_rooms = self.get_all_rooms();
-        
+
         all_rooms.remove(&source_room);
-        
+
         let target_rooms = all_rooms.into_iter().collect::<Vec<_>>();
 
         let delivery = self.get_terminal_delivery(
@@ -1885,7 +1894,7 @@ impl TransferQueue {
             available_transfer_energy,
             &available_resources,
             available_capacity,
-            source_room
+            source_room,
         )?;
 
         let delivery_resources = delivery
@@ -2051,7 +2060,7 @@ impl TransferQueue {
                 let to = delivery.target.pos().room_name();
 
                 let cost_per_unit = super::utility::calc_transaction_cost_fractional(anchor_location, to);
-                
+
                 let cost = (cost_per_unit * resources as f64).ceil();
                 let value = (resources as f32) / (cost as f32);
 

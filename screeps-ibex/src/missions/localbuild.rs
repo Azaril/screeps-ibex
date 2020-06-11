@@ -4,13 +4,13 @@ use crate::creep::*;
 use crate::jobs::build::*;
 use crate::jobs::data::*;
 use crate::jobs::utility::repair::*;
+use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use crate::room::data::*;
 
 #[derive(ConvertSaveload)]
 pub struct LocalBuildMission {

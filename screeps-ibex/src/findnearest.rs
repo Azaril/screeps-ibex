@@ -72,78 +72,82 @@ pub trait FindNearestItertools: Iterator {
     where
         Self: Iterator<Item = V> + Sized,
         V: HasPosition,
-        F: Fn(RoomPosition, RoomPosition) -> Path {
-            self.filter_map(|pos_object| {
-                let path = generator(start_pos, pos_object.pos());
-    
-                let len = if let Path::Vectorized(vector_path) = &path {
-                    if !vector_path.is_empty() {
-                        //TODO: Check end point is actually target.
-                        Some(vector_path.len())
-                    } else {
-                        None
-                    }
+        F: Fn(RoomPosition, RoomPosition) -> Path,
+    {
+        self.filter_map(|pos_object| {
+            let path = generator(start_pos, pos_object.pos());
+
+            let len = if let Path::Vectorized(vector_path) = &path {
+                if !vector_path.is_empty() {
+                    //TODO: Check end point is actually target.
+                    Some(vector_path.len())
                 } else {
                     None
-                };
-    
-                len.map(|l| (l, path))
-            })
-            .min_by_key(|(length, _)| *length)
-            .map(|(_, path)| path)
+                }
+            } else {
+                None
+            };
+
+            len.map(|l| (l, path))
+        })
+        .min_by_key(|(length, _)| *length)
+        .map(|(_, path)| path)
     }
 
     fn find_nearest_to<F, V>(self, end_pos: RoomPosition, generator: F) -> Option<V>
     where
         Self: Iterator<Item = V> + Sized,
         V: HasPosition,
-        F: Fn(RoomPosition, RoomPosition) -> Path {
-            self.filter_map(|pos_object| {
-                if let Path::Vectorized(path) = generator(pos_object.pos(), end_pos) {
-                    if !path.is_empty() {
-                        //TODO: Check end point is actually target.
-                        Some((path.len(), pos_object))
-                    } else {
-                        None
-                    }
+        F: Fn(RoomPosition, RoomPosition) -> Path,
+    {
+        self.filter_map(|pos_object| {
+            if let Path::Vectorized(path) = generator(pos_object.pos(), end_pos) {
+                if !path.is_empty() {
+                    //TODO: Check end point is actually target.
+                    Some((path.len(), pos_object))
                 } else {
                     None
                 }
-            })
-            .min_by_key(|(length, _)| *length)
-            .map(|(_, pos_object)| pos_object)
+            } else {
+                None
+            }
+        })
+        .min_by_key(|(length, _)| *length)
+        .map(|(_, pos_object)| pos_object)
     }
 
     fn find_nearest_path_to<F, V>(self, end_pos: RoomPosition, generator: F) -> Option<Path>
     where
         Self: Iterator<Item = V> + Sized,
         V: HasPosition,
-        F: Fn(RoomPosition, RoomPosition) -> Path {
-            self.filter_map(|pos_object| {
-                let path = generator(pos_object.pos(), end_pos);
-    
-                let len = if let Path::Vectorized(vector_path) = &path {
-                    if !vector_path.is_empty() {
-                        //TODO: Check end point is actually target.
-                        Some(vector_path.len())
-                    } else {
-                        None
-                    }
+        F: Fn(RoomPosition, RoomPosition) -> Path,
+    {
+        self.filter_map(|pos_object| {
+            let path = generator(pos_object.pos(), end_pos);
+
+            let len = if let Path::Vectorized(vector_path) = &path {
+                if !vector_path.is_empty() {
+                    //TODO: Check end point is actually target.
+                    Some(vector_path.len())
                 } else {
                     None
-                };
-    
-                len.map(|l| (l, path))
-            })
-            .min_by_key(|(length, _)| *length)
-            .map(|(_, path)| path)
+                }
+            } else {
+                None
+            };
+
+            len.map(|l| (l, path))
+        })
+        .min_by_key(|(length, _)| *length)
+        .map(|(_, path)| path)
     }
 
     fn find_nearest_linear<V>(self, other_pos: RoomPosition) -> Option<V>
     where
         Self: Iterator<Item = V> + Sized,
-        V: HasPosition {
-            self.map(|pos_object| (other_pos.get_range_to(&pos_object), pos_object))
+        V: HasPosition,
+    {
+        self.map(|pos_object| (other_pos.get_range_to(&pos_object), pos_object))
             .min_by_key(|(length, _)| *length)
             .map(|(_, pos_object)| pos_object)
     }
@@ -151,8 +155,9 @@ pub trait FindNearestItertools: Iterator {
     fn find_nearest_linear_distance<V>(self, other_pos: RoomPosition) -> Option<u32>
     where
         Self: Iterator<Item = V> + Sized,
-        V: HasPosition {
-            self.map(|pos_object| other_pos.get_range_to(&pos_object)).min()
+        V: HasPosition,
+    {
+        self.map(|pos_object| other_pos.get_range_to(&pos_object)).min()
     }
 
     fn find_nearest_linear_by<F, V>(self, other_pos: RoomPosition, pos_generator: F) -> Option<V>

@@ -6,12 +6,12 @@ use crate::transfer::ordersystem::*;
 use crate::transfer::transfersystem::*;
 use crate::transfer::utility::*;
 use itertools::*;
+use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 use std::collections::HashSet;
-use log::*;
 
 #[derive(ConvertSaveload)]
 pub struct TerminalMission {
@@ -202,7 +202,7 @@ impl Mission for TerminalMission {
                             //TODO: Only purchase when transfer is not available.
                             //TODO: Need to correctly figure out how much
                             let purchase_amount = transfer_amount / 4;
-    
+
                             if purchase_amount > 0 {
                                 system_data
                                     .order_queue
@@ -212,39 +212,39 @@ impl Mission for TerminalMission {
 
                         if transfer_amount > Self::get_minimum_terminal_transfer_amount(resource_type) {
                             let deposit_request = TransferDepositRequest::new(
-                                TransferTarget::Terminal(terminal.remote_id()), 
-                                Some(resource_type), 
-                                TransferPriority::Low, 
-                                transfer_amount, 
-                                TransferType::Terminal);
-                            
-                            system_data
-                                .transfer_queue
-                                .request_deposit(deposit_request);
+                                TransferTarget::Terminal(terminal.remote_id()),
+                                Some(resource_type),
+                                TransferPriority::Low,
+                                transfer_amount,
+                                TransferType::Terminal,
+                            );
+
+                            system_data.transfer_queue.request_deposit(deposit_request);
                         }
                     }
                 } else {
-                    let effective_terminal_amount = (current_total_amount - thresholds.desired_storage_amount.min(current_total_amount)).min(current_terminal_amount);
+                    let effective_terminal_amount =
+                        (current_total_amount - thresholds.desired_storage_amount.min(current_total_amount)).min(current_terminal_amount);
 
                     if effective_terminal_amount >= *thresholds.terminal_transfer_outgoing_threshold.start() {
                         let transfer_amount = effective_terminal_amount - thresholds.terminal_transfer_outgoing_threshold.start();
-                        let transfer_amount =
-                        transfer_amount.min(thresholds.terminal_transfer_outgoing_threshold.end() - thresholds.terminal_transfer_outgoing_threshold.start());
+                        let transfer_amount = transfer_amount.min(
+                            thresholds.terminal_transfer_outgoing_threshold.end() - thresholds.terminal_transfer_outgoing_threshold.start(),
+                        );
 
                         if transfer_amount > 0 && transfer_amount >= Self::get_minimum_terminal_transfer_amount(resource_type) {
                             let withdraw_request = TransferWithdrawRequest::new(
-                                TransferTarget::Terminal(terminal.remote_id()), 
-                                resource_type, 
-                                TransferPriority::None, 
-                                transfer_amount, 
-                                TransferType::Terminal);
-                            
-                            system_data
-                                .transfer_queue
-                                .request_withdraw(withdraw_request);
+                                TransferTarget::Terminal(terminal.remote_id()),
+                                resource_type,
+                                TransferPriority::None,
+                                transfer_amount,
+                                TransferType::Terminal,
+                            );
+
+                            system_data.transfer_queue.request_withdraw(withdraw_request);
                         }
                     }
-                    
+
                     if effective_terminal_amount >= *thresholds.terminal_passive_threshold.start() {
                         let passive_amount = effective_terminal_amount - thresholds.terminal_passive_threshold.start();
                         let passive_amount =
@@ -306,7 +306,8 @@ impl Mission for TerminalMission {
 
                         if current_terminal_amount < *thresholds.terminal_reserve_threshold.end() {
                             let max_transfer = thresholds.terminal_reserve_threshold.end() - thresholds.terminal_reserve_threshold.start();
-                            let transfer_amount = (*thresholds.terminal_reserve_threshold.end() - current_terminal_amount).min(max_transfer);
+                            let transfer_amount =
+                                (*thresholds.terminal_reserve_threshold.end() - current_terminal_amount).min(max_transfer);
 
                             let transfer_request = TransferDepositRequest::new(
                                 TransferTarget::Terminal(terminal_id),
@@ -326,9 +327,11 @@ impl Mission for TerminalMission {
 
                         if current_storage_amount > thresholds.desired_storage_amount {
                             if current_terminal_amount < *thresholds.terminal_transfer_outgoing_threshold.end() {
-                                let max_transfer = thresholds.terminal_transfer_outgoing_threshold.end() - thresholds.terminal_transfer_outgoing_threshold.start();
-                                let transfer_amount = (*thresholds.terminal_transfer_outgoing_threshold.end() - current_terminal_amount).min(max_transfer);
-    
+                                let max_transfer = thresholds.terminal_transfer_outgoing_threshold.end()
+                                    - thresholds.terminal_transfer_outgoing_threshold.start();
+                                let transfer_amount =
+                                    (*thresholds.terminal_transfer_outgoing_threshold.end() - current_terminal_amount).min(max_transfer);
+
                                 let transfer_request = TransferDepositRequest::new(
                                     TransferTarget::Terminal(terminal_id),
                                     Some(resource_type),
@@ -336,14 +339,16 @@ impl Mission for TerminalMission {
                                     transfer_amount,
                                     TransferType::Haul,
                                 );
-    
+
                                 transfer.request_deposit(transfer_request);
                             }
 
                             if current_terminal_amount < *thresholds.terminal_passive_threshold.end() {
-                                let max_transfer = thresholds.terminal_passive_threshold.end() - thresholds.terminal_passive_threshold.start();
-                                let transfer_amount = (*thresholds.terminal_passive_threshold.end() - current_terminal_amount).min(max_transfer);
-    
+                                let max_transfer =
+                                    thresholds.terminal_passive_threshold.end() - thresholds.terminal_passive_threshold.start();
+                                let transfer_amount =
+                                    (*thresholds.terminal_passive_threshold.end() - current_terminal_amount).min(max_transfer);
+
                                 let transfer_request = TransferDepositRequest::new(
                                     TransferTarget::Terminal(terminal_id),
                                     Some(resource_type),
@@ -351,14 +356,16 @@ impl Mission for TerminalMission {
                                     transfer_amount,
                                     TransferType::Haul,
                                 );
-    
+
                                 transfer.request_deposit(transfer_request);
                             }
 
                             if current_terminal_amount < *thresholds.terminal_active_threshold.end() {
-                                let max_transfer = thresholds.terminal_active_threshold.end() - thresholds.terminal_active_threshold.start();
-                                let transfer_amount = (*thresholds.terminal_active_threshold.end() - current_terminal_amount).min(max_transfer);
-    
+                                let max_transfer =
+                                    thresholds.terminal_active_threshold.end() - thresholds.terminal_active_threshold.start();
+                                let transfer_amount =
+                                    (*thresholds.terminal_active_threshold.end() - current_terminal_amount).min(max_transfer);
+
                                 let transfer_request = TransferDepositRequest::new(
                                     TransferTarget::Terminal(terminal_id),
                                     Some(resource_type),
@@ -366,7 +373,7 @@ impl Mission for TerminalMission {
                                     transfer_amount,
                                     TransferType::Haul,
                                 );
-    
+
                                 transfer.request_deposit(transfer_request);
                             }
                         }
@@ -483,9 +490,15 @@ impl Mission for TerminalMission {
                     .resources()
                     .iter()
                     .map(|(resource, entries)| (resource, entries.iter().map(|e| e.amount()).sum::<u32>()))
-                    .max_by_key(|(_, amount)| *amount) {
-
-                    info!("Terminal transfer: {} -> {} - Resource: {:?} - Amount: {}", room_data.name, delivery.target().pos().room_name(), transfer_resource, transfer_amount);
+                    .max_by_key(|(_, amount)| *amount)
+                {
+                    info!(
+                        "Terminal transfer: {} -> {} - Resource: {:?} - Amount: {}",
+                        room_data.name,
+                        delivery.target().pos().room_name(),
+                        transfer_resource,
+                        transfer_amount
+                    );
 
                     terminal.send(*transfer_resource, transfer_amount, delivery.target().pos().room_name(), None);
                 }

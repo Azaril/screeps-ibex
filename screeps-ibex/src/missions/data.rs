@@ -25,7 +25,7 @@ pub enum MissionData {
     Dismantle(EntityRefCell<super::dismantle::DismantleMission>),
     Colony(EntityRefCell<super::colony::ColonyMission>),
     Defend(EntityRefCell<super::defend::DefendMission>),
-    PowerSpawn(EntityRefCell<super::powerspawn::PowerSpawnMission>)
+    PowerSpawn(EntityRefCell<super::powerspawn::PowerSpawnMission>),
 }
 
 impl MissionData {

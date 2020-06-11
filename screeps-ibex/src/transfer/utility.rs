@@ -1,6 +1,6 @@
-use screeps::*;
 use super::transfersystem::*;
 use itertools::*;
+use screeps::*;
 
 pub fn calc_transaction_cost_fractional(from: RoomName, to: RoomName) -> f64 {
     let distance = game::map::get_room_linear_distance(from, to, true) as f64;
@@ -8,7 +8,10 @@ pub fn calc_transaction_cost_fractional(from: RoomName, to: RoomName) -> f64 {
     1.0 - (-distance / 30.0).exp()
 }
 
-pub fn generate_active_priorities(pickup_priorities: TransferPriorityFlags, delivery_priorities: TransferPriorityFlags) -> Vec<(TransferPriority, TransferPriority)> {
+pub fn generate_active_priorities(
+    pickup_priorities: TransferPriorityFlags,
+    delivery_priorities: TransferPriorityFlags,
+) -> Vec<(TransferPriority, TransferPriority)> {
     let mut priorities = ALL_TRANSFER_PRIORITIES
         .iter()
         .cartesian_product(ALL_TRANSFER_PRIORITIES.iter())

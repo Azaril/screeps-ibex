@@ -1,20 +1,20 @@
 use crate::remoteobjectid::*;
 use crate::serialize::EntityVec;
 use screeps::*;
+use screeps_cache::*;
+use screeps_foreman::constants::*;
+use screeps_foreman::planner::{FastRoomTerrain, TerrainFlags};
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 use std::cell::*;
-use screeps_cache::*;
-use screeps_foreman::planner::{FastRoomTerrain, TerrainFlags};
-use screeps_foreman::constants::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RoomTerrainStatistics {
     walkable_tiles: u32,
     swamp_tiles: u32,
     plain_tiles: u32,
-    wall_tiles: u32
+    wall_tiles: u32,
 }
 
 impl RoomTerrainStatistics {
@@ -46,7 +46,7 @@ impl RoomTerrainStatistics {
             walkable_tiles,
             swamp_tiles,
             plain_tiles,
-            wall_tiles
+            wall_tiles,
         }
     }
 
@@ -76,7 +76,7 @@ pub struct RoomStaticVisibilityData {
     #[serde(rename = "m")]
     minerals: Vec<RemoteObjectId<Mineral>>,
     #[serde(rename = "r")]
-    terrain_statistics: RoomTerrainStatistics
+    terrain_statistics: RoomTerrainStatistics,
 }
 
 impl RoomStaticVisibilityData {
@@ -223,7 +223,7 @@ pub struct RoomData {
     #[convert_save_load_attr(serde(rename = "n"))]
     pub name: RoomName,
     #[convert_save_load_skip_convert]
-    #[convert_save_load_attr(serde(skip))]    
+    #[convert_save_load_attr(serde(skip))]
     visible: bool,
     #[convert_save_load_attr(serde(rename = "m"))]
     missions: EntityVec<Entity>,
@@ -295,7 +295,7 @@ impl RoomData {
             controller: controller_id,
             sources: source_ids,
             minerals: mineral_ids,
-            terrain_statistics
+            terrain_statistics,
         }
     }
 
@@ -358,28 +358,35 @@ impl RoomData {
     pub fn get_structures(&self) -> Option<Ref<RoomStructureData>> {
         let name = self.name;
 
-        self.room_structure_data.maybe_access(
-            |s| game::time() != s.last_updated,
-            move || game::rooms::get(name).as_ref().map(|room| RoomStructureData::new(room))
-        ).take()
+        self.room_structure_data
+            .maybe_access(
+                |s| game::time() != s.last_updated,
+                move || game::rooms::get(name).as_ref().map(|room| RoomStructureData::new(room)),
+            )
+            .take()
     }
 
     pub fn get_construction_sites(&self) -> Option<Ref<Vec<ConstructionSite>>> {
         let name = self.name;
 
-        self.room_construction_sites_data.maybe_access(
-            |s| game::time() != s.last_updated,
-            move || game::rooms::get(name).as_ref().map(|room| ConstructionSiteData::new(room))
-        ).take().map(|s| Ref::map(s, |o| &o.construction_sites))
+        self.room_construction_sites_data
+            .maybe_access(
+                |s| game::time() != s.last_updated,
+                move || game::rooms::get(name).as_ref().map(|room| ConstructionSiteData::new(room)),
+            )
+            .take()
+            .map(|s| Ref::map(s, |o| &o.construction_sites))
     }
 
     pub fn get_creeps(&self) -> Option<Ref<CreepData>> {
         let name = self.name;
 
-        self.room_creep_data.maybe_access(
-            |s| game::time() != s.last_updated,
-            move || game::rooms::get(name).as_ref().map(|room| CreepData::new(room))
-        ).take()
+        self.room_creep_data
+            .maybe_access(
+                |s| game::time() != s.last_updated,
+                move || game::rooms::get(name).as_ref().map(|room| CreepData::new(room)),
+            )
+            .take()
     }
 }
 
@@ -584,7 +591,7 @@ impl RoomStructureData {
 #[derive(Clone)]
 struct ConstructionSiteData {
     last_updated: u32,
-    construction_sites: Vec<ConstructionSite>
+    construction_sites: Vec<ConstructionSite>,
 }
 
 impl ConstructionSiteData {
@@ -593,7 +600,7 @@ impl ConstructionSiteData {
 
         ConstructionSiteData {
             last_updated: game::time(),
-            construction_sites
+            construction_sites,
         }
     }
 }
@@ -617,7 +624,7 @@ impl CreepData {
             last_updated: game::time(),
             creeps,
             friendly,
-            hostile
+            hostile,
         }
     }
 

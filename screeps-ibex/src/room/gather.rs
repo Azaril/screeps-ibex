@@ -9,7 +9,7 @@ use std::collections::HashMap;
 pub struct CandidateRoomData {
     room_data_entity: Entity,
     viable: bool,
-    can_expand: bool
+    can_expand: bool,
 }
 
 impl CandidateRoomData {
@@ -17,7 +17,7 @@ impl CandidateRoomData {
         CandidateRoomData {
             room_data_entity,
             viable,
-            can_expand
+            can_expand,
         }
     }
 }
@@ -89,7 +89,7 @@ pub struct GatherSystemData<'a, 'b> {
     pub entities: &'b Entities<'a>,
     pub mapping: &'b Read<'a, EntityMappingData>,
     pub room_data: &'b mut WriteStorage<'a, RoomData>,
-    pub room_plan_data: &'b ReadStorage<'a, RoomPlanData>
+    pub room_plan_data: &'b ReadStorage<'a, RoomPlanData>,
 }
 
 pub fn gather_candidate_rooms<F>(system_data: &GatherSystemData, min_rcl: u32, max_distance: u32, candidate_generator: F) -> GatherRoomData
@@ -184,7 +184,7 @@ where
         .map(|v| CandidateRoom {
             room_data_entity: v.room_data_entity,
             home_room_data_entity: v.home_room_data_entity,
-            distance: v.distance
+            distance: v.distance,
         })
         .collect();
 
@@ -193,7 +193,7 @@ where
         .map(|(room_name, (home_room_data_entity, distance))| UnknownRoom {
             room_name,
             home_room_data_entity,
-            distance, 
+            distance,
         })
         .collect();
 
