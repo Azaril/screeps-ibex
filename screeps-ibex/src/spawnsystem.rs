@@ -1,10 +1,10 @@
 use crate::room::data::*;
 use crate::ui::*;
 use crate::visualize::*;
+use log::*;
 use screeps::*;
 use specs::prelude::*;
 use std::collections::HashMap;
-use log::*;
 
 pub const SPAWN_PRIORITY_CRITICAL: f32 = 100.0;
 pub const SPAWN_PRIORITY_HIGH: f32 = 75.0;
@@ -160,7 +160,7 @@ impl<'a> System<'a> for SpawnQueueSystem {
                         ui.with_room(room_data.name, visualizer, |room_ui| {
                             for request in requests.iter() {
                                 let text = format!("{} - {} - {}", request.priority, request.cost(), request.description);
-            
+
                                 room_ui.spawn_queue().add_text(text, None);
                             }
                         });
@@ -171,8 +171,8 @@ impl<'a> System<'a> for SpawnQueueSystem {
 
         for (room_entity, requests) in &data.spawn_queue.requests {
             match Self::process_room_spawns(&data, *room_entity, requests) {
-                Ok(()) => {},
-                Err(err) => warn!("Failed spawning for room: {}", err)
+                Ok(()) => {}
+                Err(err) => warn!("Failed spawning for room: {}", err),
             }
         }
 

@@ -338,7 +338,7 @@ pub fn decode_buffer_from_string(data: &str) -> Result<Vec<u8>, String> {
     use std::io::prelude::*;
 
     let decoded_data = base64::decode(data).map_err(|e| e.to_string())?;
-    
+
     let mut decompressor = GzDecoder::new(decoded_data.as_slice());
 
     let mut decompressed_data = Vec::with_capacity(1024 * 20);

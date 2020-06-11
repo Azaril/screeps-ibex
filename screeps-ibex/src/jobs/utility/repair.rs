@@ -1,5 +1,5 @@
-use screeps::*;
 use crate::room::data::*;
+use screeps::*;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Ord, PartialOrd)]
 pub enum RepairPriority {
@@ -145,15 +145,17 @@ pub fn get_prioritized_repair_targets(
     are_hostile_creeps: bool,
     allow_walls: bool,
 ) -> impl Iterator<Item = (RepairPriority, &Structure)> {
-    get_repair_targets(structures, allow_walls)
-        .filter_map(move |(structure, hits, hits_max)| {
-            map_structure_repair_priority(&structure, hits, hits_max, available_energy, are_hostile_creeps)
-                .map(|p| (p, structure))
-        })
+    get_repair_targets(structures, allow_walls).filter_map(move |(structure, hits, hits_max)| {
+        map_structure_repair_priority(&structure, hits, hits_max, available_energy, are_hostile_creeps).map(|p| (p, structure))
+    })
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn select_repair_structure_and_priority(room_data: &RoomData, minimum_priority: Option<RepairPriority>, allow_walls: bool) -> Option<(RepairPriority, Structure)> {
+pub fn select_repair_structure_and_priority(
+    room_data: &RoomData,
+    minimum_priority: Option<RepairPriority>,
+    allow_walls: bool,
+) -> Option<(RepairPriority, Structure)> {
     let structures = room_data.get_structures()?;
     let creeps = room_data.get_creeps()?;
 
@@ -174,6 +176,5 @@ pub fn select_repair_structure_and_priority(room_data: &RoomData, minimum_priori
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn select_repair_structure(room_data: &RoomData, minimum_priority: Option<RepairPriority>, allow_walls: bool) -> Option<Structure> {
-    select_repair_structure_and_priority(room_data, minimum_priority, allow_walls)
-        .map(|(_, structure)| structure)
+    select_repair_structure_and_priority(room_data, minimum_priority, allow_walls).map(|(_, structure)| structure)
 }

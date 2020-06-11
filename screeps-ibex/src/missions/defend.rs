@@ -1,8 +1,8 @@
 use super::data::*;
 use super::missionsystem::*;
+use crate::room::data::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
-use crate::room::data::*;
 use screeps::*;
 use screeps_machine::*;
 use serde::{Deserialize, Serialize};
@@ -82,20 +82,24 @@ impl Idle {
 
         if room_has_hostiles(&defend_room_data).unwrap_or(false) {
             return Ok(Some(DefendState::active(EntityVec::new(), None)));
-        } else { 
+        } else {
             let visibility_age = defend_room_data
                 .get_dynamic_visibility_data()
                 .map(|v| v.age())
                 .unwrap_or_else(|| game::time());
 
             if visibility_age >= 100 {
-                system_data
-                    .visibility
-                    .request(VisibilityRequest::new(defend_room_data.name, VISIBILITY_PRIORITY_MEDIUM, VisibilityRequestFlags::ALL));
+                system_data.visibility.request(VisibilityRequest::new(
+                    defend_room_data.name,
+                    VISIBILITY_PRIORITY_MEDIUM,
+                    VisibilityRequestFlags::ALL,
+                ));
             } else if visibility_age >= 20 {
-                system_data
-                    .visibility
-                    .request(VisibilityRequest::new(defend_room_data.name, VISIBILITY_PRIORITY_MEDIUM, VisibilityRequestFlags::OBSERVE));    
+                system_data.visibility.request(VisibilityRequest::new(
+                    defend_room_data.name,
+                    VISIBILITY_PRIORITY_MEDIUM,
+                    VisibilityRequestFlags::OBSERVE,
+                ));
             }
         }
 

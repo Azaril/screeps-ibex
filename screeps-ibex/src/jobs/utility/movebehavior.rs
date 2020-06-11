@@ -1,8 +1,8 @@
 //TODO: Shared constants for crate.
-use screeps_foreman::constants::*;
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
 use screeps::*;
+use screeps_foreman::constants::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_move_to_room_state<F, R>(creep: &Creep, room_name: RoomName, state_map: F) -> Option<R>

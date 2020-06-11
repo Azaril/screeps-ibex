@@ -175,9 +175,7 @@ impl LocalSupplyMission {
         let sources_to_containers = sources
             .iter()
             .filter_map(|source| {
-                let nearby_container = containers
-                    .iter()
-                    .find(|container| container.pos().is_near_to(&source.pos()));
+                let nearby_container = containers.iter().find(|container| container.pos().is_near_to(&source.pos()));
 
                 nearby_container.map(|container| (*source, container.remote_id()))
             })
@@ -186,9 +184,7 @@ impl LocalSupplyMission {
         let controllers_to_containers = controller
             .iter()
             .filter_map(|controller| {
-                let nearby_container = containers
-                    .iter()
-                    .find(|container| container.pos().is_near_to(&controller.pos()));
+                let nearby_container = containers.iter().find(|container| container.pos().is_near_to(&controller.pos()));
 
                 nearby_container.map(|container| (**controller, container.remote_id()))
             })
@@ -212,9 +208,7 @@ impl LocalSupplyMission {
             .iter()
             .filter_map(|extractor| {
                 if let Some(mineral) = minerals.iter().find(|m| m.pos() == extractor.pos()) {
-                    let nearby_container = containers
-                        .iter()
-                        .find(|container| container.pos().is_near_to(&extractor.pos()));
+                    let nearby_container = containers.iter().find(|container| container.pos().is_near_to(&extractor.pos()));
 
                     nearby_container.map(|container| ((*mineral, extractor.remote_id()), container.remote_id()))
                 } else {
@@ -240,11 +234,7 @@ impl LocalSupplyMission {
 
         let storage_links = links
             .into_iter()
-            .filter(|link| {
-                storages
-                    .iter()
-                    .any(|storage| link.pos().in_range_to(&storage.pos(), 2))
-            })
+            .filter(|link| storages.iter().any(|storage| link.pos().in_range_to(&storage.pos(), 2)))
             .map(|link| link.remote_id())
             .collect();
 
@@ -336,10 +326,9 @@ impl LocalSupplyMission {
     fn get_all_links(&mut self, system_data: &mut MissionExecutionSystemData) -> Result<Vec<RemoteObjectId<StructureLink>>, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
-        let mut structure_data = self.structure_data.maybe_access(
-            |d| game::time() - d.last_updated >= 10,
-            || Self::create_structure_data(&room_data),
-        );
+        let mut structure_data = self
+            .structure_data
+            .maybe_access(|d| game::time() - d.last_updated >= 10, || Self::create_structure_data(&room_data));
         let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
         let all_links = structure_data
@@ -422,10 +411,9 @@ impl LocalSupplyMission {
         let likely_owned_room = dynamic_visibility_data.updated_within(2000)
             && (dynamic_visibility_data.owner().mine() || dynamic_visibility_data.reservation().mine());
 
-        let mut structure_data = self.structure_data.maybe_access(
-            |d| game::time() - d.last_updated >= 10,
-            || Self::create_structure_data(&room_data),
-        );
+        let mut structure_data = self
+            .structure_data
+            .maybe_access(|d| game::time() - d.last_updated >= 10, || Self::create_structure_data(&room_data));
         let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
         //
@@ -1090,10 +1078,8 @@ impl LocalSupplyMission {
             let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
             let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
-            let mut structure_data = structure_data.maybe_access(
-                |d| game::time() - d.last_updated >= 10,
-                || Self::create_structure_data(&room_data),
-            );
+            let mut structure_data =
+                structure_data.maybe_access(|d| game::time() - d.last_updated >= 10, || Self::create_structure_data(&room_data));
             let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
             Self::request_transfer_for_spawns(transfer, &structure_data.spawns);
@@ -1113,10 +1099,8 @@ impl LocalSupplyMission {
         Box::new(move |system, transfer, _room_name| {
             let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
 
-            let mut structure_data = structure_data.maybe_access(
-                |d| game::time() - d.last_updated >= 10,
-                || Self::create_structure_data(&room_data),
-            );
+            let mut structure_data =
+                structure_data.maybe_access(|d| game::time() - d.last_updated >= 10, || Self::create_structure_data(&room_data));
             let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
             Self::request_transfer_for_source_links(transfer, &structure_data);

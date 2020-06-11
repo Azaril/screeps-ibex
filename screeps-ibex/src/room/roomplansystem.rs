@@ -1,12 +1,12 @@
 use super::data::*;
-use screeps_foreman::layout::*;
-use screeps_foreman::planner::*;
 use crate::entitymappingsystem::*;
 use crate::memorysystem::*;
 use crate::ui::*;
 use crate::visualize::*;
 use log::*;
 use screeps::*;
+use screeps_foreman::layout::*;
+use screeps_foreman::planner::*;
 use serde::{Deserialize, Serialize};
 use specs::prelude::{Entities, ResourceId, System, SystemData, World, Write, WriteStorage};
 use specs::*;
@@ -42,21 +42,21 @@ impl RoomPlanQueue {
 #[derive(Clone, Deserialize, Serialize)]
 pub enum RoomPlanState {
     Valid(Plan),
-    Failed
+    Failed,
 }
 
 impl RoomPlanState {
     pub fn valid(&self) -> bool {
         match self {
             RoomPlanState::Valid(_) => true,
-            RoomPlanState::Failed => false
+            RoomPlanState::Failed => false,
         }
     }
 
     pub fn plan(&self) -> Option<&Plan> {
         match self {
             RoomPlanState::Valid(plan) => Some(plan),
-            RoomPlanState::Failed => None
+            RoomPlanState::Failed => None,
         }
     }
 }
@@ -467,7 +467,7 @@ impl screeps_foreman::RoomVisualizer for RoomVisualizer {
                     Some(CircleStyle::default().fill("black").opacity(1.0)),
                 );
             }
-             StructureType::Lab => {
+            StructureType::Lab => {
                 RoomVisualizer::circle(
                     self,
                     location.x() as f32,
@@ -482,7 +482,7 @@ impl screeps_foreman::RoomVisualizer for RoomVisualizer {
                     location.y() as f32,
                     Some(CircleStyle::default().fill("Fuschia").opacity(1.0)),
                 );
-            } 
+            }
             StructureType::Observer => {
                 RoomVisualizer::circle(
                     self,
@@ -490,7 +490,7 @@ impl screeps_foreman::RoomVisualizer for RoomVisualizer {
                     location.y() as f32,
                     Some(CircleStyle::default().fill("Lime").opacity(1.0)),
                 );
-            } 
+            }
             StructureType::Factory => {
                 RoomVisualizer::circle(
                     self,

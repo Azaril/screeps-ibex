@@ -87,8 +87,10 @@ fn can_run_mission(
         .get(state_context.home_room_data)
         .ok_or("Expected home room data")?;
 
-    let home_room_dynamic_visibility_data = home_room_data.get_dynamic_visibility_data().ok_or("Expected home room visibility")?;
-    
+    let home_room_dynamic_visibility_data = home_room_data
+        .get_dynamic_visibility_data()
+        .ok_or("Expected home room visibility")?;
+
     if !home_room_dynamic_visibility_data.visible() || !home_room_dynamic_visibility_data.owner().mine() {
         return Ok(false);
     }
@@ -146,9 +148,11 @@ impl Scout {
             .map(|v| !v.visible())
             .unwrap_or(true)
         {
-            system_data
-                .visibility
-                .request(VisibilityRequest::new(outpost_room_data.name, VISIBILITY_PRIORITY_MEDIUM, VisibilityRequestFlags::ALL));
+            system_data.visibility.request(VisibilityRequest::new(
+                outpost_room_data.name,
+                VISIBILITY_PRIORITY_MEDIUM,
+                VisibilityRequestFlags::ALL,
+            ));
 
             Ok(None)
         } else {
@@ -229,9 +233,11 @@ impl Cleanup {
                 .get(state_context.outpost_room_data)
                 .ok_or("Expected outpost room")?;
 
-            system_data
-                .visibility
-                .request(VisibilityRequest::new(outpost_room_data.name, VISIBILITY_PRIORITY_MEDIUM, VisibilityRequestFlags::ALL));
+            system_data.visibility.request(VisibilityRequest::new(
+                outpost_room_data.name,
+                VISIBILITY_PRIORITY_MEDIUM,
+                VisibilityRequestFlags::ALL,
+            ));
         }
 
         Ok(())

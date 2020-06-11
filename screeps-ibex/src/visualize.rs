@@ -43,7 +43,7 @@ impl RoomVisualizer {
                 js! {
                     let visuals = JSON.parse(@{data});
 
-                    visuals.forEach(function(v) { console.addVisual(@{room_name}, v); }); 
+                    visuals.forEach(function(v) { console.addVisual(@{room_name}, v); });
                 };
             }
         }

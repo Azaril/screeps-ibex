@@ -90,15 +90,17 @@ impl Operation for MiningOutpostOperation {
             entities: system_data.entities,
             mapping: system_data.mapping,
             room_data: system_data.room_data,
-            room_plan_data: system_data.room_plan_data
+            room_plan_data: system_data.room_plan_data,
         };
 
         let gathered_data = gather_candidate_rooms(&gather_system_data, 2, 1, Self::gather_candidate_room_data);
 
         for unknown_room in gathered_data.unknown_rooms().iter() {
-            system_data
-                .visibility
-                .request(VisibilityRequest::new(unknown_room.room_name(), VISIBILITY_PRIORITY_MEDIUM, VisibilityRequestFlags::ALL));
+            system_data.visibility.request(VisibilityRequest::new(
+                unknown_room.room_name(),
+                VISIBILITY_PRIORITY_MEDIUM,
+                VisibilityRequestFlags::ALL,
+            ));
         }
 
         for candidate_room in gathered_data.candidate_rooms().iter() {

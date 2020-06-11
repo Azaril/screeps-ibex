@@ -3,12 +3,12 @@ use crate::entitymappingsystem::*;
 use crate::missions::data::*;
 use crate::missions::scout::*;
 use crate::serialize::*;
+use bitflags::*;
 use log::*;
 use screeps::*;
 use specs::prelude::*;
 use specs::saveload::*;
 use std::collections::HashMap;
-use bitflags::*;
 
 pub const VISIBILITY_PRIORITY_CRITICAL: f32 = 100.0;
 pub const VISIBILITY_PRIORITY_HIGH: f32 = 75.0;
@@ -30,15 +30,18 @@ bitflags! {
 pub struct VisibilityRequest {
     room_name: RoomName,
     priority: f32,
-    allowed_types: VisibilityRequestFlags
+    allowed_types: VisibilityRequestFlags,
 }
 
 impl VisibilityRequest {
     pub fn new(room_name: RoomName, priority: f32, allowed_types: VisibilityRequestFlags) -> VisibilityRequest {
-        VisibilityRequest { room_name, priority, allowed_types }
+        VisibilityRequest {
+            room_name,
+            priority,
+            allowed_types,
+        }
     }
 
-    
     fn combine_with(&mut self, other: &VisibilityRequest) {
         self.priority = self.priority.max(other.priority);
         self.allowed_types |= other.allowed_types;
@@ -76,34 +79,42 @@ pub struct VisibilityQueueSystemData<'a> {
 pub struct VisibilityQueueSystem;
 
 impl VisibilityQueueSystem {
-    fn process_requests<'a, 'b, T>(system_data: &mut VisibilityQueueSystemData<'a>, requests: T) where T: Iterator<Item = &'b VisibilityRequest> {
+    fn process_requests<'a, 'b, T>(system_data: &mut VisibilityQueueSystemData<'a>, requests: T)
+    where
+        T: Iterator<Item = &'b VisibilityRequest>,
+    {
         //
         // Get all unknown rooms and the last time they were visible.
         //
 
         let mut unknown_rooms = requests
-            .map(|VisibilityRequest { room_name, priority, allowed_types }| {
-                let last_visible =  system_data
-                    .mapping
-                    .get_room(room_name)
-                    .and_then(|entity| system_data.room_data.get(entity))
-                    .and_then(|r| r.get_dynamic_visibility_data())
-                    .map(|v| v.last_updated())
-                    .unwrap_or(0);
+            .map(
+                |VisibilityRequest {
+                     room_name,
+                     priority,
+                     allowed_types,
+                 }| {
+                    let last_visible = system_data
+                        .mapping
+                        .get_room(room_name)
+                        .and_then(|entity| system_data.room_data.get(entity))
+                        .and_then(|r| r.get_dynamic_visibility_data())
+                        .map(|v| v.last_updated())
+                        .unwrap_or(0);
 
-                (room_name, priority, allowed_types, last_visible)                            
-            })
+                    (room_name, priority, allowed_types, last_visible)
+                },
+            )
             .collect::<Vec<_>>();
-        
+
         if !unknown_rooms.is_empty() {
-            unknown_rooms
-                .sort_by(|(_, priority_a, _, last_visible_a), (_, priority_b, _, last_visible_b)| {
-                    priority_a
-                        .partial_cmp(priority_b)
-                        .unwrap()
-                        .reverse()
-                        .then_with(|| last_visible_a.cmp(last_visible_b))
-                });
+            unknown_rooms.sort_by(|(_, priority_a, _, last_visible_a), (_, priority_b, _, last_visible_b)| {
+                priority_a
+                    .partial_cmp(priority_b)
+                    .unwrap()
+                    .reverse()
+                    .then_with(|| last_visible_a.cmp(last_visible_b))
+            });
 
             //
             // Get all rooms and observers can that service requests.
@@ -113,13 +124,13 @@ impl VisibilityQueueSystem {
                 .join()
                 .filter_map(|(entity, room_data)| {
                     let dynamic_visibility_data = room_data.get_dynamic_visibility_data()?;
-                    
+
                     if !dynamic_visibility_data.owner().mine() {
                         return None;
                     }
 
                     let structures = room_data.get_structures()?;
-                    
+
                     if structures.spawns().is_empty() {
                         return None;
                     }
@@ -135,7 +146,7 @@ impl VisibilityQueueSystem {
             //
             // Process requests in priority order.
             //
-            
+
             for (unknown_room_name, _, allowed_types, last_visible) in unknown_rooms.iter() {
                 if allowed_types.contains(VisibilityRequestFlags::OBSERVE) {
                     let observer = home_room_data
@@ -158,8 +169,8 @@ impl VisibilityQueueSystem {
 
                     if let Some(observer) = observer {
                         match observer.observe_room(**unknown_room_name) {
-                            ReturnCode::Ok => {},
-                            err => info!("Failed to observe: {:?}", err)
+                            ReturnCode::Ok => {}
+                            err => info!("Failed to observe: {:?}", err),
                         }
 
                         continue;
@@ -191,9 +202,8 @@ impl VisibilityQueueSystem {
 
                                 if !has_scout_mission {
                                     //TODO: Use path distance instead of linear distance.
-                                    let home_data_data_with_range = home_room_data
-                                        .iter()
-                                        .map(|(entity, home_room_name, max_level, observers)| {
+                                    let home_data_data_with_range =
+                                        home_room_data.iter().map(|(entity, home_room_name, max_level, observers)| {
                                             let delta = room_data.name - *home_room_name;
                                             let range = delta.0.abs().max(delta.1.abs()) as u32;
 
@@ -204,15 +214,14 @@ impl VisibilityQueueSystem {
                                         .clone()
                                         .filter(|(_, _, max_level, _, range)| **max_level >= 2 && *range <= 5)
                                         .max_by(|(_, _, max_level_a, _, range_a), (_, _, max_level_b, _, range_b)| {
-                                            max_level_a.cmp(max_level_b)
-                                                .then_with(|| range_a.cmp(range_b).reverse())
+                                            max_level_a.cmp(max_level_b).then_with(|| range_a.cmp(range_b).reverse())
                                         })
-                                        .or_else(|| { 
+                                        .or_else(|| {
                                             home_data_data_with_range
                                                 .clone()
                                                 .filter(|(_, _, max_level, _, _)| **max_level >= 2)
                                                 .min_by_key(|(_, _, _, _, range)| *range)
-                                            })
+                                        })
                                         .map(|(entity, _, _, _, _)| entity);
 
                                     if let Some(nearest_room_entity) = nearest_room_entity {
@@ -260,7 +269,7 @@ impl<'a> System<'a> for VisibilityQueueSystem {
                 .marked::<SerializeMarker>()
                 .with(RoomData::new(*room_name))
                 .build();
-        }        
+        }
 
         Self::process_requests(&mut data, requests.values());
     }

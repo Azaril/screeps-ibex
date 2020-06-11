@@ -1,13 +1,13 @@
 use super::data::*;
 use super::missionsystem::*;
 use crate::remoteobjectid::*;
+use crate::room::data::*;
 use crate::serialize::*;
 use crate::transfer::transfersystem::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use crate::room::data::*;
 
 #[derive(ConvertSaveload)]
 pub struct PowerSpawnMission {
@@ -36,7 +36,10 @@ impl PowerSpawnMission {
     }
 
     pub fn can_run(room_data: &RoomData) -> bool {
-        room_data.get_structures().map(|structures| !structures.power_spawns().is_empty()).unwrap_or(false)
+        room_data
+            .get_structures()
+            .map(|structures| !structures.power_spawns().is_empty())
+            .unwrap_or(false)
     }
 }
 
@@ -82,7 +85,7 @@ impl Mission for PowerSpawnMission {
                 for power_spawn in power_spawns.iter() {
                     let required_energy = power_spawn.store_free_capacity(Some(ResourceType::Energy));
 
-                    let map_priority  = |fraction: f32| {
+                    let map_priority = |fraction: f32| {
                         if fraction < 0.25 {
                             TransferPriority::High
                         } else if fraction < 0.5 {
@@ -97,28 +100,30 @@ impl Mission for PowerSpawnMission {
                         let energy_fraction = (required_energy as f32) / (maximum_energy as f32);
 
                         let deposit_request = TransferDepositRequest::new(
-                            TransferTarget::PowerSpawn(power_spawn.remote_id()), 
-                            Some(ResourceType::Energy), 
-                            map_priority(energy_fraction), 
-                            required_energy as u32, 
-                            TransferType::Haul);
-                        
+                            TransferTarget::PowerSpawn(power_spawn.remote_id()),
+                            Some(ResourceType::Energy),
+                            map_priority(energy_fraction),
+                            required_energy as u32,
+                            TransferType::Haul,
+                        );
+
                         transfer.request_deposit(deposit_request);
                     }
-        
+
                     let required_power = power_spawn.store_free_capacity(Some(ResourceType::Power));
-        
+
                     if required_power > 0 {
                         let maximum_power = power_spawn.store_capacity(Some(ResourceType::Power));
                         let power_fraction = (required_power as f32) / (maximum_power as f32);
 
                         let deposit_request = TransferDepositRequest::new(
-                            TransferTarget::PowerSpawn(power_spawn.remote_id()), 
-                            Some(ResourceType::Power), 
-                            map_priority(power_fraction), 
-                            required_power as u32, 
-                            TransferType::Haul);
-                        
+                            TransferTarget::PowerSpawn(power_spawn.remote_id()),
+                            Some(ResourceType::Power),
+                            map_priority(power_fraction),
+                            required_power as u32,
+                            TransferType::Haul,
+                        );
+
                         transfer.request_deposit(deposit_request);
                     }
                 }

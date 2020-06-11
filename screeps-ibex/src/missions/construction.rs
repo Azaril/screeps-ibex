@@ -69,7 +69,7 @@ impl Mission for ConstructionMission {
                 }
             } else {
                 false
-            }            
+            }
         } else {
             true
         };

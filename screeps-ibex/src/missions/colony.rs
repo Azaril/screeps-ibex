@@ -4,10 +4,10 @@ use super::haul::*;
 use super::localbuild::*;
 use super::localsupply::*;
 use super::missionsystem::*;
+use super::powerspawn::*;
 use super::terminal::*;
 use super::tower::*;
 use super::upgrade::*;
-use super::powerspawn::*;
 use crate::serialize::*;
 use screeps::*;
 use screeps_machine::*;
@@ -209,7 +209,7 @@ impl Incubate {
             self.upgrade_mission = Some(mission_entity).into();
         }
 
-        if self.power_spawn_mission.is_none() && PowerSpawnMission::can_run(&room_data)  {
+        if self.power_spawn_mission.is_none() && PowerSpawnMission::can_run(&room_data) {
             let mission_entity = PowerSpawnMission::build(
                 system_data.updater.create_entity(system_data.entities),
                 Some(mission_entity),
