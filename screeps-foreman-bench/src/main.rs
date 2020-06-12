@@ -10,6 +10,7 @@ use serde::*;
 use std::convert::*;
 use image::*;
 use std::time::*;
+use std::collections::HashMap;
 
 struct RoomDataPlannerDataSource {
     terrain: FastRoomTerrain,
@@ -43,6 +44,7 @@ fn main() -> Result<(), String> {
 
     info!("Loading map data...");
     let map_data = load_map_data("resources/map-mmo-shard3.json")?;
+    let shard = "shard3";
     info!("Finished loading map data");
 
     /*
@@ -55,9 +57,9 @@ fn main() -> Result<(), String> {
         */
 
     let rooms = vec![
-        map_data.get_room("E33S31")?,
+        //map_data.get_room("E33S31")?,
         map_data.get_room("E34S31")?,
-        map_data.get_room("E35S31")?,
+        //map_data.get_room("E35S31")?,
         
         //map_data.get_room("E33S31")?,
         //map_data.get_room("E11N11")?,
@@ -70,13 +72,13 @@ fn main() -> Result<(), String> {
     let maximum_batch_seconds = Some(1.0);
 
     for room in rooms {
-        run_room(&room, maximum_seconds, maximum_batch_seconds)?;
+        run_room(shard, &room, maximum_seconds, maximum_batch_seconds)?;
     }
 
     Ok(())
 }
 
-fn run_room(room: &RoomData, maximum_seconds: Option<f32>, maximum_batch_seconds: Option<f32>) -> Result<(), String> {
+fn run_room(shard: &str, room: &RoomData, maximum_seconds: Option<f32>, maximum_batch_seconds: Option<f32>) -> Result<(), String> {
     let room_name = &room.room;
     
     info!("Planning: {}", room.room);
@@ -106,8 +108,7 @@ fn run_room(room: &RoomData, maximum_seconds: Option<f32>, maximum_batch_seconds
         let trace = screeps_timing::stop_trace();
         info!("Done gathering trace");
 
-        let trace_name = format!("output/{}.json", room_name);
-
+        let trace_name = format!("output/{}_trace.json", room_name);
         let trace_file = &File::create(trace_name).map_err(|err| format!("Failed to crate trace file: {}", err))?;
 
         info!("Serializing trace to disk...");
@@ -124,11 +125,122 @@ fn run_room(room: &RoomData, maximum_seconds: Option<f32>, maximum_batch_seconds
 
     render_plan(&mut img, &plan, 10);
 
-    let output_name = format!("output/{}.png", room_name);
+    let output_img_name = format!("output/{}.png", room_name);
+    img.save(output_img_name).map_err(|err| format!("Failed to save image: {}", err))?;
 
-    img.save(output_name).map_err(|err| format!("Failed to save image: {}", err))?;
+    let serialized_plan = serialize_plan(shard, &room, &plan)?;
+
+    let output_plan_name = format!("output/{}_plan.json", room_name);
+    let output_plan_file = &File::create(output_plan_name).map_err(|err| format!("Failed to crate plan file: {}", err))?;
+
+    serde_json::to_writer(output_plan_file, &serialized_plan).map_err(|err| format!("Failed to write plan json: {}", err))?;
 
     Ok(())
+}
+
+#[derive(Serialize, Hash, Ord, PartialOrd, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+enum RoomPlannerStructure {
+    Spawn = 0,
+    Extension = 1,
+    Road = 2,
+    Wall = 3,
+    Rampart = 4,
+    KeeperLair = 5,
+    Portal = 6,
+    Controller = 7,
+    Link = 8,
+    Storage = 9,
+    Tower = 10,
+    Observer = 11,
+    PowerBank = 12,
+    PowerSpawn = 13,
+    Extractor = 14,
+    Lab = 15,
+    Terminal = 16,
+    Container = 17,
+    Nuker = 18,
+    Factory = 19,
+    InvaderCore = 20,
+}
+
+impl From<StructureType> for RoomPlannerStructure {
+    fn from(data: StructureType) -> Self {
+        match data {
+            StructureType::Spawn => RoomPlannerStructure::Spawn,
+            StructureType::Extension => RoomPlannerStructure::Extension,
+            StructureType::Road => RoomPlannerStructure::Road,
+            StructureType::Wall => RoomPlannerStructure::Wall,
+            StructureType::Rampart => RoomPlannerStructure::Rampart,
+            StructureType::KeeperLair => RoomPlannerStructure::KeeperLair,
+            StructureType::Portal => RoomPlannerStructure::Portal,
+            StructureType::Controller => RoomPlannerStructure::Controller,
+            StructureType::Link => RoomPlannerStructure::Link,
+            StructureType::Storage => RoomPlannerStructure::Storage,
+            StructureType::Tower => RoomPlannerStructure::Tower,
+            StructureType::Observer => RoomPlannerStructure::Observer,
+            StructureType::PowerBank => RoomPlannerStructure::PowerBank,
+            StructureType::PowerSpawn => RoomPlannerStructure::PowerSpawn,
+            StructureType::Extractor => RoomPlannerStructure::Extractor,
+            StructureType::Lab => RoomPlannerStructure::Lab,
+            StructureType::Terminal => RoomPlannerStructure::Terminal,
+            StructureType::Container => RoomPlannerStructure::Container,
+            StructureType::Nuker => RoomPlannerStructure::Nuker,
+            StructureType::Factory => RoomPlannerStructure::Factory,
+            StructureType::InvaderCore => RoomPlannerStructure::InvaderCore,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct RoomPlannerPosition {
+    x: u8,
+    y: u8
+}
+
+impl From<Location> for RoomPlannerPosition {
+    fn from(data: Location) -> Self {
+        Self {
+            x: data.x(),
+            y: data.y()
+        }
+    }
+}
+
+#[derive(Serialize, Default)]
+struct RoomPlannerEntry {
+    pos: Vec<RoomPlannerPosition>
+}
+
+#[derive(Serialize)]
+struct RoomPlannerData {
+    name: String,
+    shard: String,
+    rcl: u32,
+    buildings: HashMap<RoomPlannerStructure, RoomPlannerEntry>
+}
+
+impl RoomVisualizer for RoomPlannerData {
+    fn render(&mut self, location: Location, structure_type: StructureType) { 
+        let entry = self.buildings
+            .entry(structure_type.into())
+            .or_insert_with(RoomPlannerEntry::default);
+
+        entry.pos.push(location.into());
+    }
+}
+
+fn serialize_plan(shard: &str, room_data: &RoomData, plan: &Plan) -> Result<RoomPlannerData, String> {
+    let mut data = RoomPlannerData {
+        name: room_data.room.to_owned(),
+        shard: shard.to_owned(),
+        rcl: 8,
+        buildings: HashMap::new()
+    };
+
+    plan.visualize(&mut data);
+
+    Ok(data)
 }
 
 fn fill_region(img: &mut RgbImage, x: u32, y: u32, width: u32, height: u32, val: image::Rgb<u8>) {
