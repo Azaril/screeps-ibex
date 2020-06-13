@@ -43,7 +43,7 @@ pub mod js {
                     raid: true,
                     dismantle: true,
                     pathing: {
-                        custom: false
+                        custom: true
                     }
                 }
             });
