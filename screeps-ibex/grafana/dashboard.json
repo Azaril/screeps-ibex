@@ -16,7 +16,7 @@
   "gnetId": null,
   "graphTooltip": 0,
   "id": 3158,
-  "iteration": 1589945800026,
+  "iteration": 1592085613906,
   "links": [],
   "panels": [
     {
@@ -585,7 +585,7 @@
       "grid": {},
       "gridPos": {
         "h": 9,
-        "w": 6,
+        "w": 5,
         "x": 10,
         "y": 9
       },
@@ -626,25 +626,18 @@
       "targets": [
         {
           "hide": false,
+          "refCount": -1,
           "refId": "B",
-          "target": "alias(sumSeries(screeps.$user.shard.$shard.room.*.energy_available), 'Spawns and Extensions')",
-          "textEditor": false
-        },
-        {
-          "hide": false,
-          "refId": "A",
-          "target": "alias(sumSeries(screeps.$user.shard.$shard.room.*.storage_energy), 'Storage')"
-        },
-        {
-          "hide": false,
-          "refId": "C",
-          "target": "alias(sumSeries(screeps.$user.shard.$shard.room.*.terminal_energy), 'Terminals')",
-          "textEditor": false
-        },
-        {
-          "refId": "D",
-          "target": "alias(sumSeries(#A, #B, #C), \"Total\")",
+          "target": "groupByNode(screeps.$user.shard.$shard.room.*.storage.*.energy, 7, \"sumSeries\")",
           "textEditor": true
+        },
+        {
+          "hide": false,
+          "refCount": 0,
+          "refId": "A",
+          "target": "alias(sumSeries(#B), 'Total')",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.*.storage.*.energy, 7, \"sumSeries\")), 'Total')",
+          "textEditor": false
         }
       ],
       "thresholds": [],
@@ -702,8 +695,104 @@
       "grid": {},
       "gridPos": {
         "h": 9,
-        "w": 8,
-        "x": 16,
+        "w": 5,
+        "x": 15,
+        "y": 9
+      },
+      "hiddenSeries": false,
+      "id": 187,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "hide": false,
+          "refCount": -1,
+          "refId": "B",
+          "target": "groupByNode(screeps.$user.shard.$shard.room.*.storage.*.*, 8, \"sumSeries\")",
+          "textEditor": true
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Global Resources",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": 0,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 9,
+        "w": 4,
+        "x": 20,
         "y": 9
       },
       "hiddenSeries": false,
@@ -1245,7 +1334,7 @@
       "grid": {},
       "gridPos": {
         "h": 10,
-        "w": 6,
+        "w": 5,
         "x": 10,
         "y": 19
       },
@@ -1295,21 +1384,16 @@
       "steppedLine": false,
       "targets": [
         {
-          "refId": "B",
-          "target": "alias(screeps.$user.shard.$shard.room.$room.energy_available, 'Spawns and Extensions')"
-        },
-        {
+          "refCount": -1,
           "refId": "A",
-          "target": "alias(screeps.$user.shard.$shard.room.$room.storage_energy, 'Storage')"
+          "target": "groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.energy, 7, \"sumSeries\")",
+          "textEditor": true
         },
         {
-          "refId": "C",
-          "target": "alias(screeps.$user.shard.$shard.room.$room.terminal_energy, 'Terminal')",
-          "textEditor": false
-        },
-        {
+          "refCount": 0,
           "refId": "D",
-          "target": "alias(sumSeries(#A, #B, #C), \"Total\")",
+          "target": "alias(sumSeries(#A), \"Total\")",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.energy, 7, \"sumSeries\")), \"Total\")",
           "textEditor": true
         }
       ],
@@ -1322,7 +1406,124 @@
         "msResolution": false,
         "shared": true,
         "sort": 0,
-        "value_type": "cumulative"
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 10,
+        "w": 5,
+        "x": 15,
+        "y": 19
+      },
+      "hiddenSeries": false,
+      "id": 188,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "hideEmpty": false,
+        "hideZero": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "E33S31",
+          "value": "E33S31"
+        }
+      },
+      "seriesOverrides": [
+        {
+          "alias": "Total",
+          "lines": false,
+          "stack": false
+        }
+      ],
+      "spaceLength": 10,
+      "stack": true,
+      "steppedLine": false,
+      "targets": [
+        {
+          "refCount": -1,
+          "refId": "A",
+          "target": "groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.*, 8, \"sumSeries\")",
+          "textEditor": true
+        },
+        {
+          "refCount": 0,
+          "refId": "D",
+          "target": "alias(sumSeries(#A), \"Total\")",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.*, 8, \"sumSeries\")), \"Total\")",
+          "textEditor": true
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Room Resources",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
       },
       "type": "graph",
       "xaxis": {
@@ -1564,10 +1765,10 @@
         "x": 0,
         "y": 29
       },
-      "id": 175,
+      "id": 189,
       "panels": [],
       "repeat": null,
-      "repeatIteration": 1589945800026,
+      "repeatIteration": 1592085613906,
       "repeatPanelId": 167,
       "scopedVars": {
         "room": {
@@ -1605,7 +1806,7 @@
         "x": 0,
         "y": 30
       },
-      "id": 176,
+      "id": 190,
       "interval": null,
       "isNew": true,
       "links": [],
@@ -1635,7 +1836,7 @@
           "to": "null"
         }
       ],
-      "repeatIteration": 1589945800026,
+      "repeatIteration": 1592085613906,
       "repeatPanelId": 8,
       "repeatedByRow": true,
       "scopedVars": {
@@ -1689,7 +1890,7 @@
         "y": 30
       },
       "hiddenSeries": false,
-      "id": 177,
+      "id": 191,
       "isNew": true,
       "legend": {
         "alignAsTable": true,
@@ -1712,7 +1913,7 @@
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
-      "repeatIteration": 1589945800026,
+      "repeatIteration": 1592085613906,
       "repeatPanelId": 53,
       "repeatedByRow": true,
       "scopedVars": {
@@ -1808,12 +2009,12 @@
       "grid": {},
       "gridPos": {
         "h": 10,
-        "w": 6,
+        "w": 5,
         "x": 10,
         "y": 30
       },
       "hiddenSeries": false,
-      "id": 178,
+      "id": 192,
       "isNew": true,
       "legend": {
         "alignAsTable": true,
@@ -1838,7 +2039,7 @@
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
-      "repeatIteration": 1589945800026,
+      "repeatIteration": 1592085613906,
       "repeatPanelId": 82,
       "repeatedByRow": true,
       "scopedVars": {
@@ -1860,21 +2061,16 @@
       "steppedLine": false,
       "targets": [
         {
-          "refId": "B",
-          "target": "alias(screeps.$user.shard.$shard.room.$room.energy_available, 'Spawns and Extensions')"
-        },
-        {
+          "refCount": -1,
           "refId": "A",
-          "target": "alias(screeps.$user.shard.$shard.room.$room.storage_energy, 'Storage')"
+          "target": "groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.energy, 7, \"sumSeries\")",
+          "textEditor": true
         },
         {
-          "refId": "C",
-          "target": "alias(screeps.$user.shard.$shard.room.$room.terminal_energy, 'Terminal')",
-          "textEditor": false
-        },
-        {
+          "refCount": 0,
           "refId": "D",
-          "target": "alias(sumSeries(#A, #B, #C), \"Total\")",
+          "target": "alias(sumSeries(#A), \"Total\")",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.energy, 7, \"sumSeries\")), \"Total\")",
           "textEditor": true
         }
       ],
@@ -1887,7 +2083,127 @@
         "msResolution": false,
         "shared": true,
         "sort": 0,
-        "value_type": "cumulative"
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 10,
+        "w": 5,
+        "x": 15,
+        "y": 30
+      },
+      "hiddenSeries": false,
+      "id": 193,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "hideEmpty": false,
+        "hideZero": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatIteration": 1592085613906,
+      "repeatPanelId": 188,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "E34S31",
+          "value": "E34S31"
+        }
+      },
+      "seriesOverrides": [
+        {
+          "alias": "Total",
+          "lines": false,
+          "stack": false
+        }
+      ],
+      "spaceLength": 10,
+      "stack": true,
+      "steppedLine": false,
+      "targets": [
+        {
+          "refCount": -1,
+          "refId": "A",
+          "target": "groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.*, 8, \"sumSeries\")",
+          "textEditor": true
+        },
+        {
+          "refCount": 0,
+          "refId": "D",
+          "target": "alias(sumSeries(#A), \"Total\")",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.*, 8, \"sumSeries\")), \"Total\")",
+          "textEditor": true
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Room Resources",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
       },
       "type": "graph",
       "xaxis": {
@@ -1946,7 +2262,7 @@
         "x": 0,
         "y": 33
       },
-      "id": 179,
+      "id": 194,
       "interval": null,
       "isNew": true,
       "links": [],
@@ -1976,7 +2292,7 @@
           "to": "null"
         }
       ],
-      "repeatIteration": 1589945800026,
+      "repeatIteration": 1592085613906,
       "repeatPanelId": 16,
       "repeatedByRow": true,
       "scopedVars": {
@@ -2043,7 +2359,7 @@
         "x": 0,
         "y": 37
       },
-      "id": 180,
+      "id": 195,
       "interval": null,
       "isNew": true,
       "links": [],
@@ -2073,7 +2389,7 @@
           "to": "null"
         }
       ],
-      "repeatIteration": 1589945800026,
+      "repeatIteration": 1592085613906,
       "repeatPanelId": 31,
       "repeatedByRow": true,
       "scopedVars": {
@@ -2133,10 +2449,10 @@
         "x": 0,
         "y": 40
       },
-      "id": 181,
+      "id": 196,
       "panels": [],
       "repeat": null,
-      "repeatIteration": 1589945800026,
+      "repeatIteration": 1592085613906,
       "repeatPanelId": 167,
       "scopedVars": {
         "room": {
@@ -2174,7 +2490,7 @@
         "x": 0,
         "y": 41
       },
-      "id": 182,
+      "id": 197,
       "interval": null,
       "isNew": true,
       "links": [],
@@ -2204,7 +2520,7 @@
           "to": "null"
         }
       ],
-      "repeatIteration": 1589945800026,
+      "repeatIteration": 1592085613906,
       "repeatPanelId": 8,
       "repeatedByRow": true,
       "scopedVars": {
@@ -2258,7 +2574,7 @@
         "y": 41
       },
       "hiddenSeries": false,
-      "id": 183,
+      "id": 198,
       "isNew": true,
       "legend": {
         "alignAsTable": true,
@@ -2281,7 +2597,7 @@
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
-      "repeatIteration": 1589945800026,
+      "repeatIteration": 1592085613906,
       "repeatPanelId": 53,
       "repeatedByRow": true,
       "scopedVars": {
@@ -2377,12 +2693,12 @@
       "grid": {},
       "gridPos": {
         "h": 10,
-        "w": 6,
+        "w": 5,
         "x": 10,
         "y": 41
       },
       "hiddenSeries": false,
-      "id": 184,
+      "id": 199,
       "isNew": true,
       "legend": {
         "alignAsTable": true,
@@ -2407,7 +2723,7 @@
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
-      "repeatIteration": 1589945800026,
+      "repeatIteration": 1592085613906,
       "repeatPanelId": 82,
       "repeatedByRow": true,
       "scopedVars": {
@@ -2429,21 +2745,16 @@
       "steppedLine": false,
       "targets": [
         {
-          "refId": "B",
-          "target": "alias(screeps.$user.shard.$shard.room.$room.energy_available, 'Spawns and Extensions')"
-        },
-        {
+          "refCount": -1,
           "refId": "A",
-          "target": "alias(screeps.$user.shard.$shard.room.$room.storage_energy, 'Storage')"
+          "target": "groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.energy, 7, \"sumSeries\")",
+          "textEditor": true
         },
         {
-          "refId": "C",
-          "target": "alias(screeps.$user.shard.$shard.room.$room.terminal_energy, 'Terminal')",
-          "textEditor": false
-        },
-        {
+          "refCount": 0,
           "refId": "D",
-          "target": "alias(sumSeries(#A, #B, #C), \"Total\")",
+          "target": "alias(sumSeries(#A), \"Total\")",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.energy, 7, \"sumSeries\")), \"Total\")",
           "textEditor": true
         }
       ],
@@ -2456,7 +2767,127 @@
         "msResolution": false,
         "shared": true,
         "sort": 0,
-        "value_type": "cumulative"
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 10,
+        "w": 5,
+        "x": 15,
+        "y": 41
+      },
+      "hiddenSeries": false,
+      "id": 200,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "hideEmpty": false,
+        "hideZero": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatIteration": 1592085613906,
+      "repeatPanelId": 188,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "E35S31",
+          "value": "E35S31"
+        }
+      },
+      "seriesOverrides": [
+        {
+          "alias": "Total",
+          "lines": false,
+          "stack": false
+        }
+      ],
+      "spaceLength": 10,
+      "stack": true,
+      "steppedLine": false,
+      "targets": [
+        {
+          "refCount": -1,
+          "refId": "A",
+          "target": "groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.*, 8, \"sumSeries\")",
+          "textEditor": true
+        },
+        {
+          "refCount": 0,
+          "refId": "D",
+          "target": "alias(sumSeries(#A), \"Total\")",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.*, 8, \"sumSeries\")), \"Total\")",
+          "textEditor": true
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Room Resources",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
       },
       "type": "graph",
       "xaxis": {
@@ -2515,7 +2946,7 @@
         "x": 0,
         "y": 44
       },
-      "id": 185,
+      "id": 201,
       "interval": null,
       "isNew": true,
       "links": [],
@@ -2545,7 +2976,7 @@
           "to": "null"
         }
       ],
-      "repeatIteration": 1589945800026,
+      "repeatIteration": 1592085613906,
       "repeatPanelId": 16,
       "repeatedByRow": true,
       "scopedVars": {
@@ -2612,7 +3043,7 @@
         "x": 0,
         "y": 48
       },
-      "id": 186,
+      "id": 202,
       "interval": null,
       "isNew": true,
       "links": [],
@@ -2642,7 +3073,7 @@
           "to": "null"
         }
       ],
-      "repeatIteration": 1589945800026,
+      "repeatIteration": 1592085613906,
       "repeatPanelId": 31,
       "repeatedByRow": true,
       "scopedVars": {
@@ -2783,7 +3214,7 @@
     ]
   },
   "time": {
-    "from": "now-6h",
+    "from": "now-30m",
     "to": "now"
   },
   "timepicker": {
@@ -2814,5 +3245,5 @@
   "timezone": "browser",
   "title": "Full Overview",
   "uid": "y1clLT_Wk",
-  "version": 24
+  "version": 26
 }
