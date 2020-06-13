@@ -41,6 +41,7 @@ impl MemoryArbiter {
 
     pub fn clear(&mut self) {
         self.requests.clear();
+        self.active = None;
     }
 }
 
