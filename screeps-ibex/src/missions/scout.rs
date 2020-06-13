@@ -87,7 +87,7 @@ impl Mission for ScoutMission {
         self.room_data
     }
 
-    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
+    fn describe_state(&self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         let next_spawn = self
             .next_spawn
             .map(|ready_time| {
@@ -101,7 +101,9 @@ impl Mission for ScoutMission {
             })
             .unwrap_or(0);
 
-        format!("Scout - Scouts: {} - Next spawn: {}", self.scouts.len(), next_spawn)
+        let home_room_name = system_data.room_data.get(self.home_room_data).map(|d| d.name.to_string()).unwrap_or_else(|| "Unknown".to_owned());
+
+        format!("Scout - Scouts: {} - Home Room: {} - Next spawn: {}", self.scouts.len(), home_room_name, next_spawn)
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
@@ -131,6 +133,10 @@ impl Mission for ScoutMission {
             );
 
             return Ok(MissionResult::Success);
+        }
+
+        if self.spawned_scouts >= 5 && self.scouts.is_empty() {
+            return Err(format!("Failed scout mission - unable to scout room after {} attempts", self.spawned_scouts));
         }
 
         let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
