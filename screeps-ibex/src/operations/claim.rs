@@ -89,7 +89,7 @@ impl ClaimOperation {
 
         let score = sources.min(2) as f32 / 2.0;
 
-        Some((score, 2.0))
+        Some((score, 4.0))
     }
 
     fn walkability_score(system_data: &mut OperationExecutionSystemData, candidate: &CandidateRoom) -> Option<(f32, f32)> {
@@ -104,6 +104,10 @@ impl ClaimOperation {
         }
 
         let plains_ratio = statistics.plain_tiles() as f32 / statistics.walkable_tiles() as f32;
+
+        if plains_ratio < 0.75 {
+            return None;
+        }
 
         Some((plains_ratio, 1.0))
     }
