@@ -205,7 +205,7 @@ impl VisibilityQueueSystem {
                                     let home_data_data_with_range =
                                         home_room_data.iter().map(|(entity, home_room_name, max_level, observers)| {
                                             let delta = room_data.name - *home_room_name;
-                                            let range = delta.0.abs().max(delta.1.abs()) as u32;
+                                            let range = delta.0.abs() as u32 + delta.1.abs() as u32;
 
                                             (entity, home_room_name, max_level, observers, range)
                                         });
