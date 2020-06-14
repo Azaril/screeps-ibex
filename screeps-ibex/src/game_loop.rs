@@ -194,6 +194,8 @@ const COST_MATRIX_SYSTEM_SEGMENT: u32 = 55;
 fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
     info!("Initializing game environment");
 
+    crate::features::js::prepare();
+
     let mut world = World::new();
 
     world.insert(MemoryArbiter::new());
@@ -271,7 +273,7 @@ pub fn tick() {
     //
     // Deserialize world state.
     //
-
+    
     let current_time = game::time();
 
     const COMPONENT_SEGMENT: u32 = 50;
