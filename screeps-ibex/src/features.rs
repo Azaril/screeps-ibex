@@ -43,7 +43,15 @@ pub mod js {
                     raid: true,
                     dismantle: true,
                     pathing: {
-                        custom: true
+                        custom: true,
+                        visualize: {
+                            on: false
+                        }
+                    },
+                    room: {
+                        visualize: {
+                            on: false
+                        }
                     }
                 }
             });
@@ -166,5 +174,11 @@ pub mod pathing {
 
     pub fn custom() -> bool {
         ::screeps::memory::root().path_bool("_features.pathing.custom")
+    }
+}
+
+pub mod room {
+    pub fn visualize() -> bool {
+        ::screeps::memory::root().path_bool("_features.room.visualize.on") && crate::features::visualize::on()
     }
 }

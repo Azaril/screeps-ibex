@@ -7,6 +7,7 @@ pub const SPAWN_QUEUE_POS: (f32, f32) = (35.0, 5.0);
 pub const JOBS_POS: (f32, f32) = (35.0, 25.0);
 pub const OPERATIONS_POS: (f32, f32) = (5.0, 5.0);
 pub const MISSION_POS: (f32, f32) = (5.0, 25.0);
+pub const ROOM_DATA_POS: (f32, f32) = (25.0, 5.0);
 
 pub struct RoomUI<'a> {
     room_state: &'a mut RoomUIState,
