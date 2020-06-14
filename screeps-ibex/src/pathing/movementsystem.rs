@@ -41,7 +41,6 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
         &self,
         from_room_name: RoomName,
         to_room_name: RoomName,
-        current_room_name: RoomName,
         room_options: &RoomOptions,
     ) -> Option<f64> {
         if !can_traverse_between_rooms(from_room_name, to_room_name) {
@@ -51,14 +50,10 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
         let target_room_entity = self.mapping.get_room(&to_room_name)?;
         let target_room_data = self.room_data.get(target_room_entity)?;
 
-        let is_current_room = to_room_name == current_room_name;
-
         if let Some(dynamic_visibility_data) = target_room_data.get_dynamic_visibility_data() {
-            if !is_current_room {
-                if !room_options.allow_hostile() {
-                    if dynamic_visibility_data.source_keeper() || dynamic_visibility_data.owner().hostile() {
-                        return Some(f64::INFINITY);
-                    }
+            if !room_options.allow_hostile() {
+                if dynamic_visibility_data.source_keeper() || dynamic_visibility_data.owner().hostile() {
+                    return Some(f64::INFINITY);
                 }
             }
 

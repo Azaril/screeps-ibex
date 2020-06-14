@@ -7,7 +7,9 @@ use screeps_foreman::planner::{FastRoomTerrain, TerrainFlags};
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use std::cell::*;
+use std::{fmt::Display, cell::*};
+use crate::visualize::*;
+use crate::ui::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RoomTerrainStatistics {
@@ -95,6 +97,9 @@ impl RoomStaticVisibilityData {
     pub fn terrain_statistics(&self) -> &RoomTerrainStatistics {
         &self.terrain_statistics
     }
+
+    pub fn visualize(&self, _room_visualizer: &mut RoomVisualizer, _list_state: &mut ListVisualizerState) {
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -107,6 +112,17 @@ pub enum RoomDisposition {
     Friendly(String),
     #[serde(rename = "h")]
     Hostile(String),
+}
+
+impl Display for RoomDisposition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RoomDisposition::Neutral => write!(f, "Neutral"),
+            RoomDisposition::Mine => write!(f, "Mine"),
+            RoomDisposition::Friendly(name) => write!(f, "Friendly: {}", name),
+            RoomDisposition::Hostile(name) => write!(f, "Hostile: {}", name), 
+        }
+    }    
 }
 
 impl RoomDisposition {
@@ -216,15 +232,21 @@ impl RoomDynamicVisibilityData {
     pub fn sign(&self) -> &Option<RoomSign> {
         &self.sign
     }
+
+    pub fn visualize(&self, room_visualizer: &mut RoomVisualizer, list_state: &mut ListVisualizerState) {
+        let mut list_visualizer = list_state.visualize(room_visualizer);
+
+        list_visualizer.add_text(format!("Visible: {} - Age: {}", self.visible(), self.age()), None);
+        list_visualizer.add_text(format!("Owner: {}", self.owner()), None);
+        list_visualizer.add_text(format!("Reservation: {}", self.reservation()), None);
+        list_visualizer.add_text(format!("Source Keeper: {}", self.source_keeper()), None);
+    }
 }
 
 #[derive(Component, ConvertSaveload)]
 pub struct RoomData {
     #[convert_save_load_attr(serde(rename = "n"))]
     pub name: RoomName,
-    #[convert_save_load_skip_convert]
-    #[convert_save_load_attr(serde(skip))]
-    visible: bool,
     #[convert_save_load_attr(serde(rename = "m"))]
     missions: EntityVec<Entity>,
     #[convert_save_load_attr(serde(rename = "s"))]
@@ -246,13 +268,25 @@ impl RoomData {
     pub fn new(room_name: RoomName) -> RoomData {
         RoomData {
             name: room_name,
-            visible: false,
             missions: EntityVec::new(),
             static_visibility_data: None,
             dynamic_visibility_data: None,
             room_structure_data: RefCell::new(None),
             room_construction_sites_data: RefCell::new(None),
             room_creep_data: RefCell::new(None),
+        }
+    }
+
+    pub fn visualize(&self, room_visualizer: &mut RoomVisualizer) {
+        let missions_text_style = TextStyle::default().font(0.5).align(TextAlign::Left);
+        let mut list_state = ListVisualizerState::new(ROOM_DATA_POS, (0.0, 1.0), Some(missions_text_style));
+
+        if let Some(static_visibility_data) = self.get_static_visibility_data() {
+            static_visibility_data.visualize(room_visualizer, &mut list_state);
+        }
+
+        if let Some(dynamic_visibility_data) = self.get_dynamic_visibility_data() {
+            dynamic_visibility_data.visualize(room_visualizer, &mut list_state);
         }
     }
 
@@ -268,18 +302,12 @@ impl RoomData {
         self.missions.retain(|other| *other != mission);
     }
 
-    pub fn clear_visible(&mut self) {
-        self.visible = false;
-    }
-
     pub fn update(&mut self, room: &Room) {
-        self.visible = true;
-
         if self.static_visibility_data.is_none() {
             self.static_visibility_data = Some(Self::create_static_visibility_data(&room));
         }
 
-        self.dynamic_visibility_data = Some(Self::create_dynamic_visibility_data(&room));
+        self.dynamic_visibility_data = Some(self.create_dynamic_visibility_data(&room));
     }
 
     fn create_static_visibility_data(room: &Room) -> RoomStaticVisibilityData {
@@ -315,7 +343,7 @@ impl RoomData {
         }
     }
 
-    fn create_dynamic_visibility_data(room: &Room) -> RoomDynamicVisibilityData {
+    fn create_dynamic_visibility_data(&self, room: &Room) -> RoomDynamicVisibilityData {
         let controller = room.controller();
 
         let controller_owner_name = controller.as_ref().and_then(|c| c.owner_name());
@@ -330,13 +358,7 @@ impl RoomData {
         });
 
         //TODO: This is expensive - can really just be calculated for room number. Not possible to calculate given x/y coord is private.
-        let source_keeper = room.find(find::HOSTILE_STRUCTURES).into_iter().any(|s| {
-            if let Structure::KeeperLair(_) = s.as_structure() {
-                true
-            } else {
-                false
-            }
-        });
+        let source_keeper = self.get_structures().map(|s| !s.keeper_lairs().is_empty()).unwrap_or(false);
 
         RoomDynamicVisibilityData {
             update_tick: game::time(),

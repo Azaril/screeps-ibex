@@ -1,22 +1,38 @@
 use super::data::*;
 use screeps::*;
 use specs::prelude::*;
+use crate::visualize::*;
+
+#[derive(SystemData)]
+pub struct UpdateRoomDataSystemData<'a> {
+    entities: Entities<'a>,
+    room_data: WriteStorage<'a, RoomData>,
+    updater: Read<'a, LazyUpdate>,
+    visualizer: Option<Write<'a, Visualizer>>,
+}
 
 pub struct UpdateRoomDataSystem;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for UpdateRoomDataSystem {
-    //TODO: Move this to derived system data.
-    type SystemData = (Entities<'a>, WriteStorage<'a, RoomData>, Read<'a, LazyUpdate>);
+    type SystemData = UpdateRoomDataSystemData<'a>;
 
-    fn run(&mut self, (entities, mut room_datas, _updater): Self::SystemData) {
+    fn run(&mut self, mut data: Self::SystemData) {
         let rooms = game::rooms::hashmap();
 
-        for (_entity, room_data) in (&entities, &mut room_datas).join() {
+        for (_entity, room_data) in (&data.entities, &mut data.room_data).join() {
             if let Some(room) = rooms.get(&room_data.name) {
                 room_data.update(&room);
-            } else {
-                room_data.clear_visible();
+            }
+        }
+
+        if crate::features::room::visualize() {
+            if let Some(visualizer) = &mut data.visualizer {
+                for (_entity, room_data) in (&data.entities, &mut data.room_data).join() {
+                    let room_visualizer = visualizer.get_room(room_data.name);
+
+                    room_data.visualize(room_visualizer);
+                }
             }
         }
     }

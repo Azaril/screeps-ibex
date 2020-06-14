@@ -38,7 +38,7 @@ impl ClaimOperation {
         }
     }
 
-    const VISIBILITY_TIMEOUT: u32 = 10000;
+    const VISIBILITY_TIMEOUT: u32 = 20000;
 
     fn gather_candidate_room_data(gather_system_data: &GatherSystemData, room_name: RoomName) -> Option<CandidateRoomData> {
         let search_room_entity = gather_system_data.mapping.get_room(&room_name)?;
@@ -338,6 +338,17 @@ impl Operation for ClaimOperation {
             .iter()
             .any(|unknown_room| unknown_room.distance() <= 3)
         {
+            use itertools::*;
+
+            let rooms = gathered_data
+                .unknown_rooms()
+                .iter()
+                .filter(|unknown_room| unknown_room.distance() <= 3)
+                .map(|unknown_room| format!("Unknown room: {} - Distance: {}", unknown_room.room_name(), unknown_room.distance()))
+                .join("\n");
+
+            info!("Can't claim, unknown rooms! \n{}", rooms);
+
             return Ok(OperationResult::Running);
         }
 
