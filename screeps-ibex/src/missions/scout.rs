@@ -135,7 +135,7 @@ impl Mission for ScoutMission {
             return Ok(MissionResult::Success);
         }
 
-        if self.spawned_scouts >= 5 && self.scouts.is_empty() {
+        if self.spawned_scouts >= 4 && self.scouts.is_empty() {
             return Err(format!("Failed scout mission - unable to scout room after {} attempts", self.spawned_scouts));
         }
 

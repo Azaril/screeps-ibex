@@ -37,7 +37,7 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
         Ok(creep)
     }
 
-    fn get_room_weight(
+    fn get_room_cost(
         &self,
         from_room_name: RoomName,
         to_room_name: RoomName,
