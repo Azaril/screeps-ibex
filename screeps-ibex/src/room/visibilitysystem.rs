@@ -212,15 +212,12 @@ impl VisibilityQueueSystem {
 
                                     let nearest_room_entity = home_data_data_with_range
                                         .clone()
-                                        .filter(|(_, _, max_level, _, range)| **max_level >= 2 && *range <= 5)
+                                        .filter(|(_, _, max_level, _, _)| **max_level >= 2)
                                         .max_by(|(_, _, max_level_a, _, range_a), (_, _, max_level_b, _, range_b)| {
-                                            max_level_a.cmp(max_level_b).then_with(|| range_a.cmp(range_b).reverse())
-                                        })
-                                        .or_else(|| {
-                                            home_data_data_with_range
-                                                .clone()
-                                                .filter(|(_, _, max_level, _, _)| **max_level >= 2)
-                                                .min_by_key(|(_, _, _, _, range)| *range)
+                                            let max_level_a = (**max_level_a).min(3);
+                                            let max_level_b = (**max_level_b).min(3);
+
+                                            max_level_a.cmp(&max_level_b).then_with(|| range_a.cmp(range_b).reverse())
                                         })
                                         .map(|(entity, _, _, _, _)| entity);
 
