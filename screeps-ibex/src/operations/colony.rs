@@ -58,12 +58,7 @@ impl Operation for ColonyOperation {
         }
 
         for (entity, room_data) in (&*system_data.entities, &mut *system_data.room_data).join() {
-            let needs_colony = room_data
-                .get_structures()
-                .map(|structures| {
-                    structures.spawns().iter().any(|spawn| spawn.my()) || structures.controllers().iter().any(|controller| controller.my())
-                })
-                .unwrap_or(false);
+            let needs_colony = ColonyMission::can_run(&room_data);
 
             if needs_colony {
                 //

@@ -5,6 +5,7 @@ use crate::serialize::*;
 use crate::transfer::ordersystem::*;
 use crate::transfer::transfersystem::*;
 use crate::transfer::utility::*;
+use crate::room::data::*;
 use itertools::*;
 use log::*;
 use screeps::*;
@@ -39,8 +40,8 @@ impl TerminalMission {
         }
     }
 
-    pub fn can_run(room: &Room) -> bool {
-        room.terminal().is_some()
+    pub fn can_run(room_data: &RoomData) -> bool {
+        room_data.get_structures().map(|s| !s.terminals().is_empty()).unwrap_or(false)
     }
 
     fn get_desired_reserve_terminal_amount(resource: ResourceType) -> u32 {

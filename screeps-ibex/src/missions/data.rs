@@ -26,6 +26,7 @@ pub enum MissionData {
     Colony(EntityRefCell<super::colony::ColonyMission>),
     Defend(EntityRefCell<super::defend::DefendMission>),
     PowerSpawn(EntityRefCell<super::powerspawn::PowerSpawnMission>),
+    Labs(EntityRefCell<super::labs::LabsMission>),
 }
 
 impl MissionData {
@@ -49,6 +50,7 @@ impl MissionData {
             MissionData::Colony(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::Defend(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::PowerSpawn(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
+            MissionData::Labs(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
         }
     }
 
@@ -72,6 +74,7 @@ impl MissionData {
             MissionData::Colony(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::Defend(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::PowerSpawn(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
+            MissionData::Labs(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
         }
     }
 }
@@ -218,3 +221,4 @@ mission_type!(super::dismantle::DismantleMission, MissionData::Dismantle);
 mission_type!(super::colony::ColonyMission, MissionData::Colony);
 mission_type!(super::defend::DefendMission, MissionData::Defend);
 mission_type!(super::powerspawn::PowerSpawnMission, MissionData::PowerSpawn);
+mission_type!(super::labs::LabsMission, MissionData::Labs);

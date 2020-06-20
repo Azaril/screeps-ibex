@@ -369,7 +369,7 @@ impl Operation for ClaimOperation {
             //
 
             if system_data.room_plan_data.get(candidate_room.room_data_entity()).is_none() {
-                system_data.room_plan_queue.request(RoomPlanRequest::new(room_data.name, 0.5));
+                system_data.room_plan_queue.request(RoomPlanRequest::new(candidate_room.room_data_entity(), 0.5));
 
                 continue;
             }
