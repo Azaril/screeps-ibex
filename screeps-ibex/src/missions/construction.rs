@@ -59,23 +59,21 @@ impl Mission for ConstructionMission {
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
         let request_plan = if let Some(room_plan_data) = system_data.room_plan_data.get(self.room_data) {
-            if (game::time() % 50 == 0) && crate::features::construction::execute() {
-                if let Some(plan) = room_plan_data.plan() {
+            if let Some(plan) = room_plan_data.plan() {
+                if (game::time() % 50 == 0) && crate::features::construction::execute() {
                     plan.execute(&room);
-
-                    false
-                } else {
-                    crate::features::construction::allow_replan()
                 }
-            } else {
+
                 false
+            } else {
+                crate::features::construction::allow_replan()
             }
         } else {
             true
         };
 
         if request_plan || crate::features::construction::force_plan() {
-            system_data.room_plan_queue.request(RoomPlanRequest::new(room_data.name, 1.0));
+            system_data.room_plan_queue.request(RoomPlanRequest::new(self.room_data, 1.0));
         }
 
         Ok(MissionResult::Running)

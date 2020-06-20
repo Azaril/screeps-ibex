@@ -4,6 +4,7 @@ use crate::jobs::data::*;
 use crate::jobs::upgrade::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use crate::room::data::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
@@ -35,6 +36,13 @@ impl UpgradeMission {
             room_data,
             upgraders: EntityVec::new(),
         }
+    }
+
+    pub fn can_run(room_data: &RoomData) -> bool {
+        room_data
+            .get_structures()
+            .map(|s| s.controllers().iter().any(|c| c.my()))
+            .unwrap_or(false)
     }
 
     fn create_handle_upgrader_spawn(
@@ -103,7 +111,7 @@ impl Mission for UpgradeMission {
 
         let controllers = structures.controllers();
 
-        if !controllers.iter().any(|c| c.my()) {
+        if !Self::can_run(&room_data) {
             return Err("Room not owned by user".to_string());
         }
 

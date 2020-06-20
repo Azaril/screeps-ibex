@@ -8,12 +8,14 @@ use super::powerspawn::*;
 use super::terminal::*;
 use super::tower::*;
 use super::upgrade::*;
+use super::labs::*;
 use crate::serialize::*;
-use screeps::*;
+use crate::room::data::*;
 use screeps_machine::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+use screeps::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ColonyMissionContext {
@@ -32,6 +34,7 @@ machine!(
             tower_mission: EntityOption<Entity>,
             upgrade_mission: EntityOption<Entity>,
             power_spawn_mission: EntityOption<Entity>,
+            labs_mission: EntityOption<Entity>,
         }
     }
 
@@ -75,7 +78,7 @@ machine!(
 );
 
 impl Incubate {
-    fn get_children_internal(&self) -> [&Option<Entity>; 8] {
+    fn get_children_internal(&self) -> [&Option<Entity>; 9] {
         [
             &self.construction_mission,
             &self.local_supply_mission,
@@ -85,10 +88,11 @@ impl Incubate {
             &self.tower_mission,
             &self.upgrade_mission,
             &self.power_spawn_mission,
+            &self.labs_mission,
         ]
     }
 
-    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 8] {
+    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 9] {
         [
             &mut self.construction_mission,
             &mut self.local_supply_mission,
@@ -98,6 +102,7 @@ impl Incubate {
             &mut self.tower_mission,
             &mut self.upgrade_mission,
             &mut self.power_spawn_mission,
+            &mut self.labs_mission,
         ]
     }
 
@@ -112,9 +117,7 @@ impl Incubate {
             .get_mut(state_context.room_data)
             .ok_or("Expected colony room data")?;
 
-        let room = game::rooms::get(room_data.name).ok_or("Expected colony room")?;
-
-        if !room_data.get_dynamic_visibility_data().map(|v| v.owner().mine()).unwrap_or(false) {
+        if !ColonyMission::can_run(&room_data) {
             return Err("Colony room not owned!".to_owned());
         }
 
@@ -170,7 +173,7 @@ impl Incubate {
             self.haul_mission = Some(mission_entity).into();
         }
 
-        if self.terminal_mission.is_none() && TerminalMission::can_run(&room) {
+        if self.terminal_mission.is_none() && TerminalMission::can_run(&room_data) {
             let mission_entity = TerminalMission::build(
                 system_data.updater.create_entity(system_data.entities),
                 Some(mission_entity),
@@ -196,7 +199,7 @@ impl Incubate {
             self.tower_mission = Some(mission_entity).into();
         }
 
-        if self.upgrade_mission.is_none() {
+        if self.upgrade_mission.is_none() && UpgradeMission::can_run(&room_data) {
             let mission_entity = UpgradeMission::build(
                 system_data.updater.create_entity(system_data.entities),
                 Some(mission_entity),
@@ -220,6 +223,19 @@ impl Incubate {
             room_data.add_mission(mission_entity);
 
             self.power_spawn_mission = Some(mission_entity).into();
+        }
+
+        if self.labs_mission.is_none() && LabsMission::can_run(&room_data) {
+            let mission_entity = LabsMission::build(
+                system_data.updater.create_entity(system_data.entities),
+                Some(mission_entity),
+                state_context.room_data,
+            )
+            .build();
+
+            room_data.add_mission(mission_entity);
+
+            self.labs_mission = Some(mission_entity).into();
         }
 
         Ok(None)
@@ -259,8 +275,19 @@ impl ColonyMission {
                 None.into(),
                 None.into(),
                 None.into(),
+                None.into()
             ),
         }
+    }
+
+    pub fn can_run(room_data: &RoomData) -> bool {
+        if let Some(structures) = room_data.get_structures() {
+            if structures.spawns().iter().any(|spawn| spawn.my()) {
+                return true;
+            }
+        }
+        
+        room_data.get_dynamic_visibility_data().map(|v| v.owner().mine()).unwrap_or(false)
     }
 }
 
