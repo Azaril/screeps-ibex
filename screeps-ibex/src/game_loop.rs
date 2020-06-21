@@ -33,9 +33,9 @@ use specs::{
 use std::collections::HashSet;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-fn serialize_world(world: &World, segment: u32) {
-    struct Serialize {
-        segment: u32,
+fn serialize_world(world: &World, segments: &[u32]) {
+    struct Serialize<'a> {
+        segments: &'a [u32],
     }
 
     #[derive(SystemData)]
@@ -53,7 +53,7 @@ fn serialize_world(world: &World, segment: u32) {
         mission_data: ReadStorage<'a, MissionData>,
     }
 
-    impl<'a> System<'a> for Serialize {
+    impl<'a, 'b> System<'a> for Serialize<'b> {
         type SystemData = SerializeSystemData<'a>;
 
         fn run(&mut self, mut data: Self::SystemData) {
@@ -84,26 +84,43 @@ fn serialize_world(world: &World, segment: u32) {
                 }
             }
 
-            let mut serialized_data = Vec::<u8>::with_capacity(1024 * 20);
+            let mut serialized_data = Vec::<u8>::with_capacity(1024 * 50);
 
             bincode::with_serializer(&mut serialized_data, BinCodeSerializerAcceptor { data: &mut data })
                 .unwrap_or_else(|e| error!("Failed serialization: {}", e));
 
             let encoded_data = encode_buffer_to_string(&serialized_data).unwrap();
 
-            data.memory_arbiter.set(self.segment, &encoded_data);
+            let mut segments = self.segments.to_owned();
+
+            for chunk in encoded_data.as_bytes().chunks(1024 * 50) {
+                if let Some(segment) = segments.pop() {
+                    //
+                    // NOTE: This relies on not using multi-byte characters for encoding. (This is valid from base64 encoding.)
+                    //
+                    let chunk_str = unsafe { std::str::from_utf8_unchecked(chunk) };
+
+                    data.memory_arbiter.set(segment, chunk_str);
+                } else {
+                    error!("Not enough segments available to store all state. Segment count: {} - Needed segments: {}", self.segments.len(), encoded_data.len() as f32 / (1024.0 * 50.0));
+                }
+            }
+
+            for segment in segments {
+                data.memory_arbiter.set(segment, &"");
+            }
         }
     }
 
-    let mut sys = Serialize { segment };
+    let mut sys = Serialize { segments };
 
     sys.run_now(&world);
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-fn deserialize_world(world: &World, segment: u32) {
-    struct Deserialize {
-        segment: u32,
+fn deserialize_world(world: &World, segments: &[u32]) {
+    struct Deserialize<'a> {
+        segments: &'a [u32],
     }
 
     #[derive(SystemData)]
@@ -121,7 +138,7 @@ fn deserialize_world(world: &World, segment: u32) {
         mission_data: WriteStorage<'a, MissionData>,
     }
 
-    impl<'a> System<'a> for Deserialize {
+    impl<'a, 'b> System<'a> for Deserialize<'b> {
         type SystemData = DeserializeSystemData<'a>;
 
         fn run(&mut self, mut data: Self::SystemData) {
@@ -129,52 +146,53 @@ fn deserialize_world(world: &World, segment: u32) {
             // NOTE: System assumes that segment is available and will panic if data is not accesible.
             //
 
-            let encoded_data = data.memory_arbiter.get(self.segment);
+            use itertools::*;
 
-            if let Some(encoded_data) = encoded_data {
-                if !encoded_data.is_empty() {
-                    let decoded_data = decode_buffer_from_string(&encoded_data).unwrap_or_else(|_| Vec::new());
+            let encoded_data = self.segments
+                .iter()
+                .filter_map(|segment| data.memory_arbiter.get(*segment))
+                .join("");
 
-                    struct BinCodeDeserializerAcceptor<'a, 'b> {
-                        data: &'b mut DeserializeSystemData<'a>,
-                    }
+            if !encoded_data.is_empty() {
+                let decoded_data = decode_buffer_from_string(&encoded_data).unwrap_or_else(|_| Vec::new());
 
-                    impl<'a, 'b, 'c> bincode::DeserializerAcceptor<'c> for BinCodeDeserializerAcceptor<'a, 'b> {
-                        type Output = Result<(), String>;
-
-                        fn accept<T: serde::Deserializer<'c>>(self, de: T) -> Self::Output {
-                            DeserializeComponents::<std::convert::Infallible, SerializeMarker>::deserialize(
-                                &mut (
-                                    &mut self.data.creep_spawnings,
-                                    &mut self.data.creep_owners,
-                                    &mut self.data.room_data,
-                                    &mut self.data.room_plan_data,
-                                    &mut self.data.job_data,
-                                    &mut self.data.operation_data,
-                                    &mut self.data.mission_data,
-                                ),
-                                &self.data.entities,
-                                &mut self.data.markers,
-                                &mut self.data.marker_alloc,
-                                de,
-                            )
-                            .map(|_| ())
-                            .map_err(|e| e.to_string())
-                        }
-                    }
-
-                    let reader = bincode::SliceReader::new(&decoded_data);
-
-                    bincode::with_deserializer(reader, BinCodeDeserializerAcceptor { data: &mut data })
-                        .unwrap_or_else(|e| error!("Failed deserialization: {}", e));
+                struct BinCodeDeserializerAcceptor<'a, 'b> {
+                    data: &'b mut DeserializeSystemData<'a>,
                 }
-            } else {
-                panic!("Failed to get world data from segment that was expected to be active.");
+
+                impl<'a, 'b, 'c> bincode::DeserializerAcceptor<'c> for BinCodeDeserializerAcceptor<'a, 'b> {
+                    type Output = Result<(), String>;
+
+                    fn accept<T: serde::Deserializer<'c>>(self, de: T) -> Self::Output {
+                        DeserializeComponents::<std::convert::Infallible, SerializeMarker>::deserialize(
+                            &mut (
+                                &mut self.data.creep_spawnings,
+                                &mut self.data.creep_owners,
+                                &mut self.data.room_data,
+                                &mut self.data.room_plan_data,
+                                &mut self.data.job_data,
+                                &mut self.data.operation_data,
+                                &mut self.data.mission_data,
+                            ),
+                            &self.data.entities,
+                            &mut self.data.markers,
+                            &mut self.data.marker_alloc,
+                            de,
+                        )
+                        .map(|_| ())
+                        .map_err(|e| e.to_string())
+                    }
+                }
+
+                let reader = bincode::SliceReader::new(&decoded_data);
+
+                bincode::with_deserializer(reader, BinCodeDeserializerAcceptor { data: &mut data })
+                    .unwrap_or_else(|e| error!("Failed deserialization: {}", e));
             }
         }
     }
 
-    let mut sys = Deserialize { segment };
+    let mut sys = Deserialize { segments };
 
     sys.run_now(&world);
 }
@@ -276,7 +294,7 @@ pub fn tick() {
     
     let current_time = game::time();
 
-    const COMPONENT_SEGMENT: u32 = 50;
+    const COMPONENT_SEGMENTS: &[u32] = &[50, 51, 52];
 
     if crate::features::reset::reset_environment()
         || unsafe { ENVIRONMENT.as_ref() }
@@ -290,7 +308,10 @@ pub fn tick() {
 
     if crate::features::reset::reset_memory() {
         info!("Resetting memory");
-        raw_memory::set_segment(COMPONENT_SEGMENT, "");
+
+        for segment in COMPONENT_SEGMENTS.iter() {
+            raw_memory::set_segment(*segment, "");
+        }        
     }
 
     crate::features::reset::clear();
@@ -306,11 +327,16 @@ pub fn tick() {
     let is_data_ready = {
         let mut memory_arbiter = world.write_resource::<MemoryArbiter>();
 
-        memory_arbiter.request(COMPONENT_SEGMENT);
+        for segment in COMPONENT_SEGMENTS.iter() {
+            memory_arbiter.request(*segment);
+        }
+
         //TODO: Remove this load from here.
         memory_arbiter.request(COST_MATRIX_SYSTEM_SEGMENT);
 
-        memory_arbiter.is_active(COMPONENT_SEGMENT)
+        COMPONENT_SEGMENTS
+            .iter()
+            .all(|segment| memory_arbiter.is_active(*segment))        
     };
 
     if !is_data_ready {
@@ -336,7 +362,7 @@ pub fn tick() {
     if !*loaded {
         info!("Deserializing world state to environment");
 
-        deserialize_world(&world, COMPONENT_SEGMENT);
+        deserialize_world(&world, COMPONENT_SEGMENTS);
 
         *loaded = true;
     }
@@ -383,7 +409,7 @@ pub fn tick() {
     // Serialize world state.
     //
 
-    serialize_world(&world, COMPONENT_SEGMENT);
+    serialize_world(&world, COMPONENT_SEGMENTS);
 }
 
 fn cleanup_memory() -> Result<(), Box<dyn (::std::error::Error)>> {
