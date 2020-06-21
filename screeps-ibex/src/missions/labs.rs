@@ -102,48 +102,52 @@ impl Idle {
 
         let mut target_resources = Self::desired_resources().to_vec();
 
-        while let Some((target_resource, amount)) = target_resources.pop() {
-            let available_amount = available_resources.entry(target_resource).or_insert(0);
+        while let Some((target_resource, desired_amount)) = target_resources.pop() {
+            let needed_amount = {
+                let available_amount = available_resources.entry(target_resource).or_insert(0);
 
-            let needed_amount = *available_amount as i32 - amount as i32;
+                let needed_amount = desired_amount as i32 - *available_amount as i32;
 
-            *available_amount -= amount.min(*available_amount);
+                *available_amount -= desired_amount.min(*available_amount);
+
+                needed_amount
+            };
 
             if needed_amount > 0 {
+                let needed_amount = needed_amount as u32;
+
                 if let Some(resource_components) = target_resource.reaction_components() {
-                    let available_resources = resource_components
+                    let component_available_resources: Vec<_> = resource_components
                         .iter()
                         .map(|component_resource| {
-                            (component_resource, *available_resources.get(component_resource).unwrap_or(&0))
-                        });
+                            (*component_resource, *available_resources.get(component_resource).unwrap_or(&0))
+                        })
+                        .collect();
 
-                    let available_reactions = available_resources
-                        .clone()
+                    let available_reactions = component_available_resources
+                        .iter()
                         .map(|(_, available_amount)| available_amount / LAB_REACTION_AMOUNT)
                         .min()
-                        .unwrap_or(0);
+                        .unwrap_or(0)
+                        .min(needed_amount);
 
                     if available_reactions > 0 {
                         all_available_reactions
                             .entry(target_resource)
                             .and_modify(|e| *e += available_reactions)
                             .or_insert(available_reactions);
-                    }                    
 
-                    let needed_component_resources = needed_amount as u32 * LAB_REACTION_AMOUNT;
+                        for (resource, _) in component_available_resources.iter() {
+                            let used_amount = available_reactions * LAB_REACTION_AMOUNT;
 
-                    let needed_resources = available_resources
-                        .clone()
-                        .filter_map(|(component_resource, available_amount)| {
-                            if available_amount < needed_component_resources {
-                                Some((component_resource, needed_component_resources - available_amount))
-                            } else {
-                                None
-                            }
-                        });
+                            available_resources.entry(*resource).and_modify(|e| *e -= (*e).min(used_amount));
+                        }
+                    }
 
-                    for (component_resource, component_needed_amount) in needed_resources {
-                        target_resources.push((*component_resource, component_needed_amount));
+                    for (resource, available_amount) in component_available_resources.iter() {
+                        if *available_amount < needed_amount {
+                            target_resources.push((*resource, needed_amount - available_amount));
+                        }
                     }
                 }
             }

@@ -6,7 +6,6 @@ use crate::transfer::ordersystem::*;
 use crate::transfer::transfersystem::*;
 use crate::transfer::utility::*;
 use crate::room::data::*;
-use itertools::*;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -61,7 +60,7 @@ impl TerminalMission {
     fn get_desired_transfer_outgoing_terminal_amount(resource: ResourceType) -> u32 {
         match resource {
             ResourceType::Energy => 50_000,
-            _ => 0,
+            _ => 5000,
         }
     }
 
@@ -120,6 +119,28 @@ impl TerminalMission {
             terminal_active_threshold: c..=d,
         }
     }
+
+    fn get_known_resources_types(storage_resource_types: &[ResourceType], terminal_resource_types: &[ResourceType]) -> HashSet<ResourceType> {
+        let base_resources = [
+            ResourceType::Energy, 
+            ResourceType::Power, 
+            ResourceType::Hydrogen, 
+            ResourceType::Oxygen, 
+            ResourceType::Utrium, 
+            ResourceType::Lemergium, 
+            ResourceType::Keanium, 
+            ResourceType::Zynthium, 
+            ResourceType::Catalyst, 
+            ResourceType::Ghodium, 
+        ];
+
+        storage_resource_types
+            .iter()
+            .copied()
+            .chain(terminal_resource_types.iter().copied())
+            .chain(base_resources.iter().copied())
+            .collect()
+    }
 }
 
 struct ResourceThresholds {
@@ -165,14 +186,7 @@ impl Mission for TerminalMission {
             let current_terminal_energy = terminal.store_of(ResourceType::Energy);
             let available_transfer_energy = Self::get_desired_reserve_terminal_amount(ResourceType::Energy).min(current_terminal_energy);
 
-            let storage_resource_types = storage.store_types();
-            let terminal_storage_types = terminal.store_types();
-
-            let known_resource_types: HashSet<ResourceType> = storage_resource_types
-                .into_iter()
-                .chain(terminal_storage_types.into_iter())
-                .chain(std::iter::once(ResourceType::Energy))
-                .collect();
+            let known_resource_types = Self::get_known_resources_types(&storage.store_types(), &terminal.store_types());
 
             //TODO: Include resources that are requested by transport system but don't exist in the room.
 
@@ -283,19 +297,12 @@ impl Mission for TerminalMission {
                 let room = game::rooms::get(room_name).ok_or("Expected room")?;
                 let terminal = room.terminal().ok_or("Expected terminal")?;
 
-                let terminal_storage_types = terminal.store_types();
                 let terminal_id = terminal.remote_id();
 
                 if let Some(storage) = room.storage() {
-                    let storage_resource_types = storage.store_types();
+                    let known_resource_types = Self::get_known_resources_types(&storage.store_types(), &terminal.store_types());
 
-                    let all_resource_types = storage_resource_types
-                        .into_iter()
-                        .chain(terminal_storage_types.into_iter())
-                        .chain(std::iter::once(ResourceType::Energy))
-                        .unique();
-
-                    for resource_type in all_resource_types {
+                    for resource_type in known_resource_types {
                         let current_storage_amount = storage.store_used_capacity(Some(resource_type));
                         let current_terminal_amount = terminal.store_used_capacity(Some(resource_type));
 
