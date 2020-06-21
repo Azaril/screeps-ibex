@@ -11,6 +11,8 @@ use std::convert::*;
 use image::*;
 use std::time::*;
 use std::collections::HashMap;
+#[cfg(not(feature = "profile"))]
+use rayon::prelude::*;
 
 struct RoomDataPlannerDataSource {
     terrain: FastRoomTerrain,
@@ -52,36 +54,67 @@ fn main() -> Result<(), String> {
         .get_rooms()
         .iter()
         .filter(|room_data| room_data.get_sources().len() == 2 && room_data.get_controllers().len() == 1)
-        .take(10)
+        .take(1000)
         .collect::<Vec<_>>();
-        */
+    */
 
     let rooms = vec![
-        //map_data.get_room("E33S31")?,
-        map_data.get_room("E34S31")?,
+        map_data.get_room("E33S31")?,
+        //map_data.get_room("E34S31")?,
         //map_data.get_room("E35S31")?,
         
         //map_data.get_room("E33S31")?,
         //map_data.get_room("E11N11")?,
+
+        //map_data.get_room("E11N1")?,
+        //map_data.get_room("E29S11")?,
     ];
 
-    let maximum_seconds = None;
+    let maximum_seconds = Some(60.0);
     //let maximum_seconds = Some(2.0);
 
     //let maximum_batch_seconds = None;
-    let maximum_batch_seconds = Some(1.0);
+    let maximum_batch_seconds = Some(5.0);
 
+    
+    #[cfg(not(feature = "profile"))]
+    let room_iter = rooms.par_iter();
+
+    #[cfg(feature = "profile")]
+    let room_iter = rooms.iter();
+
+    let room_results: Vec<_> = room_iter
+        .map(|room| {
+            let res = run_room(shard, &room, maximum_seconds, maximum_batch_seconds);
+
+            (room, res)
+        })
+        .collect();
+
+    for (room, result) in room_results {
+        match result {
+            Ok(()) => {
+                info!("Succesfully ran room planning: {}", room.name());
+            },
+            Err(err) => {
+                error!("Failed running room planning: {} - Error: {}", room.name(), err);
+            }
+        }
+    }
+
+    /*
     for room in rooms {
         run_room(shard, &room, maximum_seconds, maximum_batch_seconds)?;
     }
+    */
 
     Ok(())
 }
 
 fn run_room(shard: &str, room: &RoomData, maximum_seconds: Option<f32>, maximum_batch_seconds: Option<f32>) -> Result<(), String> {
-    let room_name = &room.room;
+    let room_name = room.name();
     
-    info!("Planning: {}", room.room);
+    info!("Planning: {}", room_name);
 
     let epoch = Instant::now();
 
@@ -232,7 +265,7 @@ impl RoomVisualizer for RoomPlannerData {
 
 fn serialize_plan(shard: &str, room_data: &RoomData, plan: &Plan) -> Result<RoomPlannerData, String> {
     let mut data = RoomPlannerData {
-        name: room_data.room.to_owned(),
+        name: room_data.name().to_owned(),
         shard: shard.to_owned(),
         rcl: 8,
         buildings: HashMap::new()
@@ -336,6 +369,10 @@ struct RoomData {
 }
 
 impl RoomData {
+    fn name(&self) -> &str {
+        &self.room
+    }
+
     fn get_terrain(&self) -> Result<FastRoomTerrain, String> {
         if self.terrain.len() != 50 * 50 {
             return Err("Terrain was not expected 50 x 50 layout".to_owned());
@@ -375,7 +412,6 @@ impl RoomData {
 
 #[derive(Deserialize)]
 struct MapData {
-    //description: String,
     rooms: Vec<RoomData>
 }
 
@@ -385,7 +421,7 @@ impl MapData {
         self
             .rooms
             .iter()
-            .find(|room| room.room == room_name)
+            .find(|room| room.name() == room_name)
             .ok_or("Failed to find room".to_owned())
     }
 

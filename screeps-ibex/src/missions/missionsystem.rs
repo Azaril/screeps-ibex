@@ -65,10 +65,6 @@ impl MissionRequests {
         self.abort.push(mission);
     }
 
-    fn get_abort_requests_mut(&mut self) -> &mut Vec<Entity> {
-        &mut self.abort
-    }
-
     fn process(system_data: &mut MissionExecutionSystemData) {
         while let Some(mission_entity) = system_data.mission_requests.abort.pop() {
             if let Some(mission_data) = system_data.missions.get(mission_entity) {

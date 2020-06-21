@@ -16,6 +16,7 @@ env_logger = "0.7.1"
 serde = "1.0"
 serde_json = "1.0"
 image = "0.23"
+rayon = "1.1"
 screeps-foreman = { git = "https://github.com/Azaril/screeps-foreman", default-features = false, features = ["shim"] }
 screeps-timing = { git = "https://github.com/Azaril/screeps-timing", optional = true }
 screeps-timing-annotate = { git = "https://github.com/Azaril/screeps-timing-annotate", optional = true }
@@ -31,3 +32,6 @@ screeps-timing = { path = "../screeps-timing" }
 
 [patch.'https://github.com/Azaril/screeps-timing-annotate']
 screeps-timing-annotate = { path = "../screeps-timing-annotate" }
+
+[profile.release]
+debug = true
