@@ -285,6 +285,8 @@ impl ColonyMission {
             if structures.spawns().iter().any(|spawn| spawn.my()) {
                 return true;
             }
+        } else {
+            return false;
         }
         
         room_data.get_dynamic_visibility_data().map(|v| v.owner().mine()).unwrap_or(false)
