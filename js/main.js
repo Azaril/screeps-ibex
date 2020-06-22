@@ -36,10 +36,7 @@ function wasm_initialize() {
             return;
         }
 
-        var wasm_bytes_copy = new ArrayBuffer(wasm_bytes.byteLength);
-        new Uint8Array(wasm_bytes_copy).set(new Uint8Array(wasm_bytes));
-
-        wasm_module = new WebAssembly.Module(wasm_bytes_copy);
+        wasm_module = new WebAssembly.Module(wasm_bytes);
     }
 
     if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
