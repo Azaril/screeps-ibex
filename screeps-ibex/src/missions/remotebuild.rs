@@ -81,9 +81,7 @@ impl RemoteBuildMission {
                 let has_pending_spawn = construction_sites
                     .iter()
                     .filter(|s| s.my())
-                    .filter(|s| s.structure_type() == StructureType::Spawn)
-                    .next()
-                    .is_some();
+                    .any(|s| s.structure_type() == StructureType::Spawn);
 
                 return has_pending_spawn;
             }

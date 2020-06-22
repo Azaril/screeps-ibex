@@ -3,7 +3,6 @@ use super::operationsystem::*;
 use crate::missions::claim::*;
 use crate::missions::data::*;
 use crate::missions::remotebuild::*;
-use crate::room::data::*;
 use crate::room::gather::*;
 use crate::room::roomplansystem::*;
 use crate::room::visibilitysystem::*;
@@ -152,6 +151,8 @@ impl ClaimOperation {
         // Ensure remote builders occur.
         //
 
+        let mut needs_remote_build = Vec::new();
+
         for (entity, room_data) in (&*system_data.entities, &*system_data.room_data).join() {
             //TODO: The construction operation will trigger construction sites - this is brittle to rely on.
 
@@ -162,74 +163,80 @@ impl ClaimOperation {
             if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
                 if dynamic_visibility_data.visible() && dynamic_visibility_data.owner().mine() {
                     if RemoteBuildMission::can_run(&room_data) {
-                        if let Some(construction_sites) = room_data.get_construction_sites() {
-                            let spawn_construction_site = construction_sites
-                                .iter()
-                                .find(|construction_site| construction_site.structure_type() == StructureType::Spawn);
+                        let mission_data = system_data.mission_data;
 
-                            if let Some(spawn_construction_site) = spawn_construction_site {
-                                //TODO: wiarchbe: Use trait instead of match.
-                                let mission_data = system_data.mission_data;
+                        let has_remote_build_mission = room_data.get_missions().iter().any(|mission_entity| {
+                            mission_data.get(*mission_entity).as_mission_type::<RemoteBuildMission>().is_some()
+                        });
 
-                                let has_remote_build_mission = room_data.get_missions().iter().any(|mission_entity| {
-                                    mission_data.get(*mission_entity).as_mission_type::<RemoteBuildMission>().is_some()
-                                });
+                        //
+                        // Spawn a new mission to fill the remote build role if missing.
+                        //
 
-                                //
-                                // Spawn a new mission to fill the remote build role if missing.
-                                //
-
-                                if !has_remote_build_mission {
-                                    info!("Starting remote build for room. Room: {}", room_data.name);
-
-                                    let room_entity = entity;
-
-                                    let construction_site_pos = spawn_construction_site.pos();
-                                    let mut nearest_spawn = None;
-
-                                    //TODO: Replace this hack that finds the nearest room. (Need state machine to drive operation. Blocked on specs vec serialization.)
-                                    for (other_entity, other_room_data) in (&*system_data.entities, &*system_data.room_data).join() {
-                                        if let Some(other_dynamic_visibility_data) = other_room_data.get_dynamic_visibility_data() {
-                                            if other_dynamic_visibility_data.visible() && other_dynamic_visibility_data.owner().mine() {
-                                                if let Some(structures) = other_room_data.get_structures() {
-                                                    for spawn in structures.spawns().iter().filter(|s| s.my()) {
-                                                        let distance = construction_site_pos.get_range_to(&spawn.pos());
-                                                        if let Some((nearest_distance, _)) = nearest_spawn {
-                                                            if distance < nearest_distance {
-                                                                nearest_spawn = Some((distance, other_entity));
-                                                            }
-                                                        } else {
-                                                            nearest_spawn = Some((distance, other_entity));
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    if let Some((_, nearest_spawn_room_entity)) = nearest_spawn {
-                                        let owner_entity = runtime_data.entity;
-                                        let home_room_data_entity = nearest_spawn_room_entity;
-
-                                        system_data.updater.exec_mut(move |world| {
-                                            let mission_entity = RemoteBuildMission::build(
-                                                world.create_entity(),
-                                                Some(owner_entity),
-                                                room_entity,
-                                                home_room_data_entity,
-                                            )
-                                            .build();
-
-                                            let room_data_storage = &mut world.write_storage::<RoomData>();
-
-                                            if let Some(room_data) = room_data_storage.get_mut(room_entity) {
-                                                room_data.add_mission(mission_entity);
-                                            }
-                                        });
-                                    }
-                                }
-                            }
+                        if !has_remote_build_mission {
+                            needs_remote_build.push(entity);
                         }
+                    }
+                }
+            }
+        }
+
+        if !needs_remote_build.is_empty() {
+            let home_room_data = (&*system_data.entities, &*system_data.room_data)
+                .join()
+                .filter_map(|(entity, room_data)| {
+                    let dynamic_visibility_data = room_data.get_dynamic_visibility_data()?;
+
+                    if !dynamic_visibility_data.owner().mine() {
+                        return None;
+                    }
+
+                    let structures = room_data.get_structures()?;
+
+                    if structures.spawns().is_empty() {
+                        return None;
+                    }
+
+                    let max_level = structures.controllers().iter().map(|c| c.level()).max()?;
+
+                    Some((entity, room_data.name, max_level))
+                })
+                .collect::<Vec<_>>();
+                    
+            for room_entity in needs_remote_build {
+                if let Some(room_data) = system_data.room_data.get_mut(room_entity) {
+                    //TODO: Use path distance instead of linear distance.
+                    let home_data_data_with_range =
+                        home_room_data.iter().map(|(entity, home_room_name, max_level)| {
+                            let delta = room_data.name - *home_room_name;
+                            let range = delta.0.abs() as u32 + delta.1.abs() as u32;
+
+                            (entity, home_room_name, max_level, range)
+                        });
+
+                    let nearest_room_entity = home_data_data_with_range
+                        .clone()
+                        .filter(|(_, _, max_level, _)| **max_level >= 2)
+                        .max_by(|(_, _, max_level_a, range_a), (_, _, max_level_b, range_b)| {
+                            let max_level_a = (**max_level_a).min(3);
+                            let max_level_b = (**max_level_b).min(3);
+
+                            max_level_a.cmp(&max_level_b).then_with(|| range_a.cmp(range_b).reverse())
+                        })
+                        .map(|(entity, _, _, _)| entity);
+
+                    if let Some(nearest_room_entity) = nearest_room_entity {
+                        info!("Starting remote build mission for room: {}", room_data.name);
+
+                        let mission_entity = RemoteBuildMission::build(
+                            system_data.updater.create_entity(&system_data.entities),
+                            Some(runtime_data.entity),
+                            room_entity,
+                            *nearest_room_entity,
+                        )
+                        .build();
+
+                        room_data.add_mission(mission_entity);
                     }
                 }
             }
