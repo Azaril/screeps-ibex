@@ -5,7 +5,7 @@ pub fn can_dismantle<T>(structure: T) -> bool
 where
     T: Borrow<Structure>,
 {
-    structure.borrow().as_attackable().map(|a| a.hits() > 0).unwrap_or(false)
+    structure.borrow().as_attackable().map(|a| a.hits() > 0 && a.hits_max() > 0).unwrap_or(false)
 }
 
 pub fn has_empty_storage<T>(structure: T) -> bool
