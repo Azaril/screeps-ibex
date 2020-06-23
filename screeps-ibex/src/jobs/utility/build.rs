@@ -1,32 +1,11 @@
 use screeps::*;
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Ord, PartialOrd)]
-pub enum BuildPriority {
-    VeryLow,
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-fn map_structure_priority(structure: StructureType) -> BuildPriority {
-    match structure {
-        StructureType::Spawn => BuildPriority::Critical,
-        StructureType::Storage => BuildPriority::High,
-        StructureType::Container => BuildPriority::High,
-        StructureType::Tower => BuildPriority::High,
-        StructureType::Wall => BuildPriority::Low,
-        StructureType::Rampart => BuildPriority::Low,
-        StructureType::Road => BuildPriority::VeryLow,
-        _ => BuildPriority::Medium,
-    }
-}
+use screeps_foreman::planner::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn select_construction_site(creep: &Creep, construction_sites: &[ConstructionSite]) -> Option<ConstructionSite> {
     let mut priority_construction_sites: Vec<_> = construction_sites
         .iter()
-        .map(|s| (s, map_structure_priority(s.structure_type())))
+        .map(|s| (s, get_build_priority(s.structure_type())))
         .collect();
 
     let creep_pos = creep.pos();
