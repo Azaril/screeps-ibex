@@ -491,7 +491,7 @@ impl LocalSupplyMission {
                 //TODO: Compute best body parts to use.
                 let body_definition = crate::creep::SpawnBodyDefinition {
                     maximum_energy: if total_harvesting_creeps == 0 {
-                        room.energy_available()
+                        room.energy_available().max(SPAWN_ENERGY_CAPACITY)
                     } else {
                         room.energy_capacity_available()
                     },
