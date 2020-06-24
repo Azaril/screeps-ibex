@@ -174,7 +174,7 @@ impl Mission for UpgradeMission {
                 .any(|risk| risk);
 
             let maximum_energy = if self.upgraders.is_empty() && downgrade_risk {
-                room.energy_available()
+                room.energy_available().max(SPAWN_ENERGY_CAPACITY)
             } else {
                 room.energy_capacity_available()
             };

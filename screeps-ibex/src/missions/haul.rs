@@ -171,7 +171,7 @@ impl Mission for HaulMission {
             if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                 let haul_rooms = &[self.room_data];
 
-                let priority = if (self.haulers.len() as f32) < (desired_haulers_for_unfufilled as f32 / 2.0).ceil() {
+                let priority = if (self.haulers.len() as f32) < (desired_haulers_for_unfufilled as f32 * 0.75).ceil() {
                     SPAWN_PRIORITY_HIGH
                 } else {
                     SPAWN_PRIORITY_MEDIUM
