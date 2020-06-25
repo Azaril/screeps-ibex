@@ -80,7 +80,7 @@ machine!(
 );
 
 impl Incubate {
-    fn get_children_internal(&self) -> [&Option<Entity>; 9] {
+    fn get_children_internal(&self) -> [&Option<Entity>; 10] {
         [
             &self.construction_mission,
             &self.local_supply_mission,
@@ -91,10 +91,11 @@ impl Incubate {
             &self.upgrade_mission,
             &self.power_spawn_mission,
             &self.labs_mission,
+            &self.defend_mission,
         ]
     }
 
-    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 9] {
+    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 10] {
         [
             &mut self.construction_mission,
             &mut self.local_supply_mission,
@@ -105,6 +106,7 @@ impl Incubate {
             &mut self.upgrade_mission,
             &mut self.power_spawn_mission,
             &mut self.labs_mission,
+            &mut self.defend_mission,
         ]
     }
 

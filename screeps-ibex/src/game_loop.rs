@@ -31,6 +31,7 @@ use specs::{
     saveload::{DeserializeComponents, SerializeComponents},
 };
 use std::collections::HashSet;
+use bincode::{Serializer, Deserializer, DefaultOptions};
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 fn serialize_world(world: &World, segments: &[u32]) {
@@ -57,36 +58,26 @@ fn serialize_world(world: &World, segments: &[u32]) {
         type SystemData = SerializeSystemData<'a>;
 
         fn run(&mut self, mut data: Self::SystemData) {
-            struct BinCodeSerializerAcceptor<'a, 'b> {
-                data: &'b mut SerializeSystemData<'a>,
-            }
-
-            impl<'a, 'b> bincode::SerializerAcceptor for BinCodeSerializerAcceptor<'a, 'b> {
-                type Output = Result<(), String>;
-
-                fn accept<T: serde::Serializer>(self, ser: T) -> Self::Output {
-                    SerializeComponents::<std::convert::Infallible, SerializeMarker>::serialize(
-                        &(
-                            &self.data.creep_spawnings,
-                            &self.data.creep_owners,
-                            &self.data.room_data,
-                            &self.data.room_plan_data,
-                            &self.data.job_data,
-                            &self.data.operation_data,
-                            &self.data.mission_data,
-                        ),
-                        &self.data.entities,
-                        &self.data.markers,
-                        ser,
-                    )
-                    .map(|_| ())
-                    .map_err(|e| e.to_string())
-                }
-            }
-
             let mut serialized_data = Vec::<u8>::with_capacity(1024 * 50);
 
-            bincode::with_serializer(&mut serialized_data, BinCodeSerializerAcceptor { data: &mut data })
+            let mut serializer = Serializer::new(&mut serialized_data, DefaultOptions::new());
+
+            SerializeComponents::<std::convert::Infallible, SerializeMarker>::serialize(
+                    &(
+                        &data.creep_spawnings,
+                        &data.creep_owners,
+                        &data.room_data,
+                        &data.room_plan_data,
+                        &data.job_data,
+                        &data.operation_data,
+                        &data.mission_data,
+                    ),
+                    &data.entities,
+                    &data.markers,
+                    &mut serializer,
+                )
+                .map(|_| ())
+                .map_err(|e| e.to_string())  
                 .unwrap_or_else(|e| error!("Failed serialization: {}", e));
 
             let encoded_data = encode_buffer_to_string(&serialized_data).unwrap();
@@ -156,38 +147,26 @@ fn deserialize_world(world: &World, segments: &[u32]) {
             if !encoded_data.is_empty() {
                 let decoded_data = decode_buffer_from_string(&encoded_data).unwrap_or_else(|_| Vec::new());
 
-                struct BinCodeDeserializerAcceptor<'a, 'b> {
-                    data: &'b mut DeserializeSystemData<'a>,
-                }
+                let mut deserializer = Deserializer::from_slice(&decoded_data, DefaultOptions::new());
 
-                impl<'a, 'b, 'c> bincode::DeserializerAcceptor<'c> for BinCodeDeserializerAcceptor<'a, 'b> {
-                    type Output = Result<(), String>;
-
-                    fn accept<T: serde::Deserializer<'c>>(self, de: T) -> Self::Output {
-                        DeserializeComponents::<std::convert::Infallible, SerializeMarker>::deserialize(
-                            &mut (
-                                &mut self.data.creep_spawnings,
-                                &mut self.data.creep_owners,
-                                &mut self.data.room_data,
-                                &mut self.data.room_plan_data,
-                                &mut self.data.job_data,
-                                &mut self.data.operation_data,
-                                &mut self.data.mission_data,
-                            ),
-                            &self.data.entities,
-                            &mut self.data.markers,
-                            &mut self.data.marker_alloc,
-                            de,
-                        )
-                        .map(|_| ())
-                        .map_err(|e| e.to_string())
-                    }
-                }
-
-                let reader = bincode::SliceReader::new(&decoded_data);
-
-                bincode::with_deserializer(reader, BinCodeDeserializerAcceptor { data: &mut data })
-                    .unwrap_or_else(|e| error!("Failed deserialization: {}", e));
+                DeserializeComponents::<std::convert::Infallible, SerializeMarker>::deserialize(
+                    &mut (
+                        &mut data.creep_spawnings,
+                        &mut data.creep_owners,
+                        &mut data.room_data,
+                        &mut data.room_plan_data,
+                        &mut data.job_data,
+                        &mut data.operation_data,
+                        &mut data.mission_data,
+                    ),
+                    &data.entities,
+                    &mut data.markers,
+                    &mut data.marker_alloc,
+                    &mut deserializer,
+                )
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+                .unwrap_or_else(|e| error!("Failed deserialization: {}", e));
             }
         }
     }
