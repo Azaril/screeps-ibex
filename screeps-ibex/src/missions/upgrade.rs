@@ -183,8 +183,8 @@ impl Mission for UpgradeMission {
                 maximum_energy,
                 minimum_repeat: Some(1),
                 maximum_repeat: work_parts_per_upgrader,
-                pre_body: &[],
-                repeat_body: &[Part::Work, Part::Carry, Part::Move, Part::Move],
+                pre_body: &[Part::Work, Part::Carry, Part::Move, Part::Move],
+                repeat_body: &[Part::Work,Part::Move],
                 post_body: &[],
             };
 

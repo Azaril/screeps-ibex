@@ -9,6 +9,7 @@ use super::terminal::*;
 use super::tower::*;
 use super::upgrade::*;
 use super::labs::*;
+use super::defend::*;
 use crate::serialize::*;
 use crate::room::data::*;
 use screeps_machine::*;
@@ -35,6 +36,7 @@ machine!(
             upgrade_mission: EntityOption<Entity>,
             power_spawn_mission: EntityOption<Entity>,
             labs_mission: EntityOption<Entity>,
+            defend_mission: EntityOption<Entity>,
         }
     }
 
@@ -238,6 +240,20 @@ impl Incubate {
             self.labs_mission = Some(mission_entity).into();
         }
 
+        if self.defend_mission.is_none() {
+            let mission_entity = DefendMission::build(
+                system_data.updater.create_entity(system_data.entities),
+                Some(mission_entity),
+                state_context.room_data,
+                state_context.room_data,
+            )
+            .build();
+
+            room_data.add_mission(mission_entity);
+
+            self.defend_mission = Some(mission_entity).into();
+        }
+
         Ok(None)
     }
 }
@@ -267,6 +283,7 @@ impl ColonyMission {
             owner: owner.into(),
             context: ColonyMissionContext { room_data },
             state: ColonyState::incubate(
+                None.into(),
                 None.into(),
                 None.into(),
                 None.into(),

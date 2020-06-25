@@ -50,8 +50,7 @@ fn room_has_hostiles(room_data: &RoomData) -> Option<bool> {
     let creeps = room_data.get_creeps()?;
 
     let has_hostile_creeps = creeps.hostile().iter().any(|creep| creep.body().iter().any(|p| match p.part {
-        Part::Attack | Part::RangedAttack => true,
-        Part::Work => false, //TODO: Should treat dismantlers as hostile.
+        Part::Attack | Part::RangedAttack | Part::Work => true,
         _ => false
     }));
 
