@@ -45,8 +45,8 @@ fn main() -> Result<(), String> {
     std::fs::create_dir_all("output").map_err(|err| format!("Failed to create output folder: {}", err))?;
 
     info!("Loading map data...");
-    let map_data = load_map_data("resources/map-mmo-shard3.json")?;
-    let shard = "shard3";
+    let shard = "shard1";    
+    let map_data = load_map_data(format!("resources/map-mmo-{}.json", shard))?;
     info!("Finished loading map data");
 
     /*
@@ -59,7 +59,7 @@ fn main() -> Result<(), String> {
     */
 
     let rooms = vec![
-        map_data.get_room("E33S31")?,
+        //map_data.get_room("E33S31")?,
         //map_data.get_room("E34S31")?,
         //map_data.get_room("E35S31")?,
         
@@ -68,6 +68,8 @@ fn main() -> Result<(), String> {
 
         //map_data.get_room("E11N1")?,
         //map_data.get_room("E29S11")?,
+
+        map_data.get_room("W3S52")?,
     ];
 
     let maximum_seconds = Some(60.0);
@@ -312,6 +314,8 @@ impl<'a> RoomVisualizer for ImgVisualizer<'a> {
         let color = match structure {
             StructureType::Road => Rgb([50, 0, 50]),
             StructureType::Rampart => Rgb([0, 255, 0]),
+            StructureType::Spawn => Rgb([255, 255, 0]),
+            StructureType::Storage => Rgb([0, 255, 255]),
             _ => Rgb([255, 0, 0]),
         };
 
