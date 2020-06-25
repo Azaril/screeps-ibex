@@ -62,7 +62,7 @@ impl ScoutMission {
 
                     mission_data.spawned_scouts += 1;
 
-                    let next_spawn_time = std::cmp::min(mission_data.spawned_scouts * CREEP_LIFE_TIME, CREEP_LIFE_TIME * 3) + game::time();
+                    let next_spawn_time = std::cmp::min(mission_data.spawned_scouts * (CREEP_LIFE_TIME / 4), CREEP_LIFE_TIME * 3) + game::time();
 
                     mission_data.next_spawn = Some(next_spawn_time);
                 }
