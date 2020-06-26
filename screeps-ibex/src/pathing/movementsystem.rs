@@ -55,6 +55,16 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
                 if dynamic_visibility_data.source_keeper() || dynamic_visibility_data.owner().hostile() {
                     return Some(f64::INFINITY);
                 }
+
+                if dynamic_visibility_data.updated_within(2000) {
+                    if dynamic_visibility_data.hostile_creeps() {
+                        return Some(f64::INFINITY);
+                    }
+                }
+
+                if dynamic_visibility_data.updated_within(10000) && dynamic_visibility_data.hostile_structures() {
+                    return Some(f64::INFINITY);                    
+                }
             }
 
             if dynamic_visibility_data.owner().mine() || dynamic_visibility_data.owner().friendly() {
