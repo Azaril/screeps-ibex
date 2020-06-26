@@ -6,6 +6,7 @@ members = [
     "screeps-timing",
     "screeps-timing-annotate",
     "screeps-foreman",
+    "screeps-plus-stats",
 ]
 exclude = ["screeps-foreman-bench"]
 
