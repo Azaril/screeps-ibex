@@ -1,6 +1,5 @@
 use super::data::*;
 use super::missionsystem::*;
-use crate::room::data::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use screeps::*;
@@ -46,33 +45,6 @@ machine!(
     }
 );
 
-fn room_has_hostiles(room_data: &RoomData) -> Option<bool> {
-    let creeps = room_data.get_creeps()?;
-
-    let has_hostile_creeps = creeps.hostile().iter().any(|creep| creep.body().iter().any(|p| match p.part {
-        Part::Attack | Part::RangedAttack | Part::Work => true,
-        _ => false
-    }));
-
-    if has_hostile_creeps {
-        return Some(true);
-    }
-
-    let structures = room_data.get_structures()?;
-
-    let has_hostile_structures = structures
-        .all()
-        .iter()
-        .filter_map(|s| s.as_owned())
-        .any(|s| s.has_owner() && !s.my());
-
-    if has_hostile_structures {
-        return Some(true);
-    }
-
-    Some(false)
-}
-
 impl Idle {
     fn tick(
         &mut self,
@@ -85,27 +57,26 @@ impl Idle {
             .get(state_context.defend_room_data)
             .ok_or("Expected defend room data")?;
 
-        if room_has_hostiles(&defend_room_data).unwrap_or(false) {
-            return Ok(Some(DefendState::active(EntityVec::new(), None)));
-        } else {
-            let visibility_age = defend_room_data
-                .get_dynamic_visibility_data()
-                .map(|v| v.age())
-                .unwrap_or_else(|| game::time());
+        let dynamic_visibility_data = defend_room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility")?;
 
-            if visibility_age >= 100 {
-                system_data.visibility.request(VisibilityRequest::new(
-                    defend_room_data.name,
-                    VISIBILITY_PRIORITY_MEDIUM,
-                    VisibilityRequestFlags::ALL,
-                ));
-            } else if visibility_age >= 20 {
-                system_data.visibility.request(VisibilityRequest::new(
-                    defend_room_data.name,
-                    VISIBILITY_PRIORITY_MEDIUM,
-                    VisibilityRequestFlags::OBSERVE,
-                ));
-            }
+        if dynamic_visibility_data.visible() && (dynamic_visibility_data.hostile_creeps() || dynamic_visibility_data.hostile_structures()) {
+            return Ok(Some(DefendState::active(EntityVec::new(), None)));
+        }
+
+        let visibility_age = dynamic_visibility_data.age();
+
+        if visibility_age >= 100 {
+            system_data.visibility.request(VisibilityRequest::new(
+                defend_room_data.name,
+                VISIBILITY_PRIORITY_MEDIUM,
+                VisibilityRequestFlags::ALL,
+            ));
+        } else if visibility_age >= 20 {
+            system_data.visibility.request(VisibilityRequest::new(
+                defend_room_data.name,
+                VISIBILITY_PRIORITY_MEDIUM,
+                VisibilityRequestFlags::OBSERVE,
+            ));
         }
 
         Ok(None)
@@ -128,8 +99,10 @@ impl Active {
             .get(state_context.defend_room_data)
             .ok_or("Expected defend room data")?;
 
-        if let Some(has_hostiles) = room_has_hostiles(&defend_room_data) {
-            if has_hostiles {
+        let dynamic_visibility_data = defend_room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility")?;
+
+        if dynamic_visibility_data.visible() {
+            if dynamic_visibility_data.hostile_creeps() || dynamic_visibility_data.hostile_structures() {
                 self.last_hostiles = Some(game::time());
             } else if self.last_hostiles.map(|last| game::time() - last >= 20).unwrap_or(false) {
                 return Ok(Some(DefendState::idle(std::marker::PhantomData)));

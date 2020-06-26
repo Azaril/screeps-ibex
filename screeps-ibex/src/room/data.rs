@@ -198,6 +198,10 @@ pub struct RoomDynamicVisibilityData {
     source_keeper: bool,
     #[serde(rename = "s")]
     sign: Option<RoomSign>,
+    #[serde(rename = "hc")]
+    hostile_creeps: bool,
+    #[serde(rename = "h")]
+    hostile_structures: bool,    
 }
 
 impl RoomDynamicVisibilityData {
@@ -233,6 +237,14 @@ impl RoomDynamicVisibilityData {
         &self.sign
     }
 
+    pub fn hostile_creeps(&self) -> bool {
+        self.hostile_creeps
+    }
+
+    pub fn hostile_structures(&self) -> bool {
+        self.hostile_structures
+    }
+
     pub fn visualize(&self, room_visualizer: &mut RoomVisualizer, list_state: &mut ListVisualizerState) {
         let mut list_visualizer = list_state.visualize(room_visualizer);
 
@@ -240,6 +252,8 @@ impl RoomDynamicVisibilityData {
         list_visualizer.add_text(format!("Owner: {}", self.owner()), None);
         list_visualizer.add_text(format!("Reservation: {}", self.reservation()), None);
         list_visualizer.add_text(format!("Source Keeper: {}", self.source_keeper()), None);
+        list_visualizer.add_text(format!("Hostile creeps: {}", self.hostile_creeps()), None);
+        list_visualizer.add_text(format!("Hostile structures: {}", self.hostile_structures()), None);
     }
 }
 
@@ -357,8 +371,22 @@ impl RoomData {
             message: s.text,
         });
 
+        let structures = self.get_structures();
+
         //TODO: This is expensive - can really just be calculated for room number. Not possible to calculate given x/y coord is private.
-        let source_keeper = self.get_structures().map(|s| !s.keeper_lairs().is_empty()).unwrap_or(false);
+        let source_keeper = structures.as_ref().map(|s| !s.keeper_lairs().is_empty()).unwrap_or(false);
+
+        //TODO: Include power creeps?
+        let hostile_creeps = self.get_creeps().map(|c| c.hostile().iter().any(|creep| creep.body().iter().any(|p| match p.part {
+            Part::Attack | Part::RangedAttack | Part::Work => true,
+            _ => false
+        }))).unwrap_or(false);
+
+        let hostile_structures = structures
+            .iter()
+            .flat_map(|s| s.all())
+            .filter_map(|s| s.as_owned())
+            .any(|s| s.has_owner() && !s.my());
 
         RoomDynamicVisibilityData {
             update_tick: game::time(),
@@ -366,6 +394,8 @@ impl RoomData {
             reservation: controller_reservation_disposition,
             source_keeper,
             sign,
+            hostile_creeps,
+            hostile_structures,
         }
     }
 
