@@ -82,23 +82,23 @@ fn serialize_world(world: &World, segments: &[u32]) {
 
             let encoded_data = encode_buffer_to_string(&serialized_data).unwrap();
 
-            let mut segments = self.segments.to_owned();
+            let mut segments = self.segments.iter();
 
             for chunk in encoded_data.as_bytes().chunks(1024 * 50) {
-                if let Some(segment) = segments.pop() {
+                if let Some(segment) = segments.next() {
                     //
                     // NOTE: This relies on not using multi-byte characters for encoding. (This is valid from base64 encoding.)
                     //
                     let chunk_str = unsafe { std::str::from_utf8_unchecked(chunk) };
 
-                    data.memory_arbiter.set(segment, chunk_str);
+                    data.memory_arbiter.set(*segment, chunk_str);
                 } else {
                     error!("Not enough segments available to store all state. Segment count: {} - Needed segments: {}", self.segments.len(), encoded_data.len() as f32 / (1024.0 * 50.0));
                 }
             }
 
             for segment in segments {
-                data.memory_arbiter.set(segment, &"");
+                data.memory_arbiter.set(*segment, &"");
             }
         }
     }
