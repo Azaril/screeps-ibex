@@ -54,7 +54,7 @@ fn map_defense_priority(
     structure_type: StructureType,
     hits: u32,
     hits_max: u32,
-    available_energy: u32,
+    available_energy: Option<u32>,
     under_attack: bool,
 ) -> Option<RepairPriority> {
     let health_fraction = (hits as f32) / (hits_max as f32);
@@ -81,7 +81,7 @@ fn map_defense_priority(
         Some(RepairPriority::Medium)
     } else if health_fraction < 0.1 {
         Some(RepairPriority::Low)
-    } else if available_energy > 10_000 {
+    } else if available_energy.map(|e| e > 10_000).unwrap_or(false) {
         Some(RepairPriority::VeryLow)
     } else {
         None
@@ -92,7 +92,7 @@ fn map_structure_repair_priority(
     structure: &Structure,
     hits: u32,
     hits_max: u32,
-    available_energy: u32,
+    available_energy: Option<u32>,
     under_attack: bool,
 ) -> Option<RepairPriority> {
     match structure {
@@ -141,7 +141,7 @@ pub fn get_repair_targets(structures: &[Structure], allow_walls: bool) -> impl I
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_prioritized_repair_targets(
     structures: &[Structure],
-    available_energy: u32,
+    available_energy: Option<u32>,
     are_hostile_creeps: bool,
     allow_walls: bool,
 ) -> impl Iterator<Item = (RepairPriority, &Structure)> {
@@ -167,7 +167,7 @@ pub fn select_repair_structure_and_priority(
         .map(|s| s.store_used_capacity(Some(ResourceType::Energy)))
         .sum::<u32>();
 
-    get_prioritized_repair_targets(structures.all(), available_energy, are_hostile_creeps, allow_walls)
+    get_prioritized_repair_targets(structures.all(), Some(available_energy), are_hostile_creeps, allow_walls)
         .filter(|(priority, _)| minimum_priority.map(|op| *priority >= op).unwrap_or(true))
         .map(|(priority, structure)| (priority, structure, structure.as_attackable().unwrap().hits()))
         .max_by(|(priority_a, _, hits_a), (priority_b, _, hits_b)| priority_a.cmp(priority_b).then_with(|| hits_a.cmp(hits_b).reverse()))

@@ -20,6 +20,8 @@ use std::cell::*;
 use std::collections::HashMap;
 use std::rc::*;
 use crate::creep::*;
+use crate::room::visibilitysystem::*;
+use lerp::*;
 
 //TODO: This mission is overloaded and should be split in to separate mission components.
 
@@ -360,50 +362,50 @@ impl LocalSupplyMission {
     }
 
     fn link_transfer(&mut self, system_data: &mut MissionExecutionSystemData) -> Result<(), String> {
-        let all_links = self.get_all_links(system_data)?;
+        if let Ok(all_links) = self.get_all_links(system_data) {
+            let transfer_queue = &mut system_data.transfer_queue;
 
-        let transfer_queue = &mut system_data.transfer_queue;
+            let transfer_queue_data = TransferQueueGeneratorData {
+                cause: "Link Transfer",
+                room_data: &*system_data.room_data,
+            };
 
-        let transfer_queue_data = TransferQueueGeneratorData {
-            cause: "Link Transfer",
-            room_data: &*system_data.room_data,
-        };
+            for link_id in all_links {
+                if let Some(link) = link_id.resolve() {
+                    if link.cooldown() == 0 && link.store_of(ResourceType::Energy) > 0 {
+                        let link_pos = link.pos();
+                        let room_name = link_pos.room_name();
 
-        for link_id in all_links {
-            if let Some(link) = link_id.resolve() {
-                if link.cooldown() == 0 && link.store_of(ResourceType::Energy) > 0 {
-                    let link_pos = link.pos();
-                    let room_name = link_pos.room_name();
+                        //TODO: Potentially use active priority pairs to iterate here. Currently relies on there never being a None -> None priority request.
+                        let best_transfer = ALL_TRANSFER_PRIORITIES
+                            .iter()
+                            .filter_map(|priority| {
+                                transfer_queue.get_delivery_from_target(
+                                    &transfer_queue_data,
+                                    &[room_name],
+                                    &TransferTarget::Link(link_id),
+                                    TransferPriorityFlags::ACTIVE,
+                                    priority.into(),
+                                    TransferType::Link,
+                                    TransferCapacity::Infinite,
+                                    link_pos,
+                                )
+                            })
+                            .next();
 
-                    //TODO: Potentially use active priority pairs to iterate here. Currently relies on there never being a None -> None priority request.
-                    let best_transfer = ALL_TRANSFER_PRIORITIES
-                        .iter()
-                        .filter_map(|priority| {
-                            transfer_queue.get_delivery_from_target(
-                                &transfer_queue_data,
-                                &[room_name],
-                                &TransferTarget::Link(link_id),
-                                TransferPriorityFlags::ACTIVE,
-                                priority.into(),
-                                TransferType::Link,
-                                TransferCapacity::Infinite,
-                                link_pos,
-                            )
-                        })
-                        .next();
+                        if let Some((pickup, delivery)) = best_transfer {
+                            transfer_queue.register_pickup(&pickup, TransferType::Link);
+                            transfer_queue.register_delivery(&delivery, TransferType::Link);
 
-                    if let Some((pickup, delivery)) = best_transfer {
-                        transfer_queue.register_pickup(&pickup, TransferType::Link);
-                        transfer_queue.register_delivery(&delivery, TransferType::Link);
+                            //TODO: Validate there isn't non-energy in here?
+                            let transfer_amount = delivery
+                                .resources()
+                                .get(&ResourceType::Energy)
+                                .map(|entries| entries.iter().map(|entry| entry.amount()).sum())
+                                .unwrap_or(0);
 
-                        //TODO: Validate there isn't non-energy in here?
-                        let transfer_amount = delivery
-                            .resources()
-                            .get(&ResourceType::Energy)
-                            .map(|entries| entries.iter().map(|entry| entry.amount()).sum())
-                            .unwrap_or(0);
-
-                        delivery.target().link_transfer_energy_amount(&link, transfer_amount);
+                            delivery.target().link_transfer_energy_amount(&link, transfer_amount);
+                        }
                     }
                 }
             }
@@ -437,7 +439,19 @@ impl LocalSupplyMission {
         let mut structure_data = self
             .structure_data
             .maybe_access(|d| game::time() - d.last_updated >= 10 && has_visibility, || Self::create_structure_data(&room_data));
-        let structure_data = structure_data.get().ok_or("Expected structure data")?;
+        let structure_data = structure_data.get();
+
+        if structure_data.is_none() {
+            system_data.visibility.request(VisibilityRequest::new(
+                room_data.name,
+                VISIBILITY_PRIORITY_CRITICAL,
+                VisibilityRequestFlags::ALL,
+            ));
+
+            return Ok(());
+        }
+
+        let structure_data = structure_data.ok_or("Expected structure data")?;
 
         //
         // Sort sources so requests with equal priority go to the source with the least activity.
@@ -512,49 +526,51 @@ impl LocalSupplyMission {
             // Spawn harvesters
             //
 
-            let current_harvesters = source_harvesters.len();
-
-            //TODO: Compute correct number of harvesters to use for source.            
-            let desired_harvesters = 4;
-
             //TODO: Compute the correct time to spawn emergency harvesters.
-            if (source_containers.is_empty() && source_links.is_empty() && current_harvesters < desired_harvesters) || 
-                (total_harvesting_creeps == 0 && room_manhattan_distance == 0) || 
+            if (source_containers.is_empty() && source_links.is_empty()) || 
+                (room_manhattan_distance == 0 && total_harvesting_creeps == 0) || 
                 (room_manhattan_distance > 0 && !home_room_has_storage) {
-                //TODO: Compute best body parts to use.
-                let body_definition = SpawnBodyDefinition {
-                    maximum_energy: if total_harvesting_creeps == 0 {
-                        home_room.energy_available().max(SPAWN_ENERGY_CAPACITY)
-                    } else {
-                        home_room.energy_capacity_available()
-                    },
-                    minimum_repeat: Some(1),
-                    maximum_repeat: Some(5),
-                    pre_body: &[],
-                    repeat_body: &[Part::Move, Part::Move, Part::Carry, Part::Work],
-                    post_body: &[],
-                };
 
-                if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                    let priority_range = if room_manhattan_distance == 0 {
-                        (SPAWN_PRIORITY_CRITICAL, SPAWN_PRIORITY_HIGH)
-                    } else if room_manhattan_distance <= 1 {
-                        (SPAWN_PRIORITY_MEDIUM, SPAWN_PRIORITY_LOW)
-                    } else {
-                        (SPAWN_PRIORITY_LOW, SPAWN_PRIORITY_NONE)
+                let current_harvesters = source_harvesters.len();
+                //TODO: Compute correct number of harvesters to use for source.            
+                let desired_harvesters = 4;
+
+                if current_harvesters < desired_harvesters {
+                    //TODO: Compute best body parts to use.
+                    let body_definition = SpawnBodyDefinition {
+                        maximum_energy: if total_harvesting_creeps == 0 {
+                            home_room.energy_available().max(SPAWN_ENERGY_CAPACITY)
+                        } else {
+                            home_room.energy_capacity_available()
+                        },
+                        minimum_repeat: Some(1),
+                        maximum_repeat: Some(5),
+                        pre_body: &[],
+                        repeat_body: &[Part::Move, Part::Move, Part::Carry, Part::Work],
+                        post_body: &[],
                     };
-        
-                    let interp = (current_harvesters as f32) / (desired_harvesters as f32);
-                    let priority = (priority_range.0 + priority_range.1) * interp;
 
-                    let spawn_request = SpawnRequest::new(
-                        format!("Harvester - Source: {}", source_id.id()),
-                        &body,
-                        priority,
-                        Self::create_handle_harvester_spawn(mission_entity, *source_id, self.home_room_data),
-                    );
+                    if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
+                        let priority_range = if room_manhattan_distance == 0 {
+                            (SPAWN_PRIORITY_CRITICAL, SPAWN_PRIORITY_HIGH)
+                        } else if room_manhattan_distance <= 1 {
+                            (SPAWN_PRIORITY_MEDIUM, SPAWN_PRIORITY_NONE)
+                        } else {
+                            (SPAWN_PRIORITY_LOW, SPAWN_PRIORITY_NONE)
+                        };
+            
+                        let interp = (current_harvesters as f32) / (desired_harvesters as f32);
+                        let priority = priority_range.0.lerp_bounded(priority_range.1, interp);
 
-                    system_data.spawn_queue.request(self.home_room_data, spawn_request);
+                        let spawn_request = SpawnRequest::new(
+                            format!("Harvester - Source: {}", source_id.id()),
+                            &body,
+                            priority,
+                            Self::create_handle_harvester_spawn(mission_entity, *source_id, self.home_room_data),
+                        );
+
+                        system_data.spawn_queue.request(self.home_room_data, spawn_request);
+                    }
                 }
             } else {
                 //TODO: Correctly compute time needed to spawn + get to source.
@@ -676,8 +692,8 @@ impl LocalSupplyMission {
                             SpawnBodyDefinition {
                                 maximum_energy: home_room.energy_capacity_available(),
                                 minimum_repeat: Some(1),
-                                maximum_repeat: Some(work_parts_per_tick),
-                                pre_body: &[],
+                                maximum_repeat: Some(work_parts_per_tick + 1),
+                                pre_body: &[Part::Carry],
                                 repeat_body: &[Part::Move, Part::Work],
                                 post_body: &[],
                             }
@@ -886,6 +902,19 @@ impl LocalSupplyMission {
                     );
 
                     transfer.request_deposit(transfer_request);
+                }
+
+                for resource in container.store_types() {
+                    let resource_amount = container.store_used_capacity(Some(resource));
+                    let transfer_request = TransferWithdrawRequest::new(
+                        TransferTarget::Container(*container_id),
+                        resource,
+                        TransferPriority::None,
+                        resource_amount,
+                        TransferType::Haul,
+                    );
+
+                    transfer.request_withdraw(transfer_request);
                 }
             }
         }

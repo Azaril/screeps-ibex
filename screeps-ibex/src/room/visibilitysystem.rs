@@ -147,7 +147,7 @@ impl VisibilityQueueSystem {
             // Process requests in priority order.
             //
 
-            for (unknown_room_name, _, allowed_types, last_visible) in unknown_rooms.iter() {
+            for (unknown_room_name, priority, allowed_types, last_visible) in unknown_rooms.iter() {
                 if allowed_types.contains(VisibilityRequestFlags::OBSERVE) {
                     let observer = home_room_data
                         .iter_mut()
@@ -187,20 +187,27 @@ impl VisibilityQueueSystem {
                             if let Some(room_data) = system_data.room_data.get_mut(room_entity) {
                                 let mission_data_storage = &system_data.mission_data;
 
-                                let has_scout_mission =
+                                let updated_scout_mission =
                                     room_data
                                         .get_missions()
                                         .iter()
-                                        .any(|mission_entity| match mission_data_storage.get(*mission_entity) {
-                                            Some(MissionData::Scout(_)) => true,
-                                            _ => false,
+                                        .any(|mission_entity| {
+                                            if let Some(mut scout_mission) = mission_data_storage.get(*mission_entity).as_mission_type_mut::<ScoutMission>() {
+                                                let max_priority = scout_mission.get_priority().max(**priority);
+
+                                                scout_mission.set_priority(max_priority);
+
+                                                true
+                                            } else {
+                                                false
+                                            }
                                         });
 
                                 //
                                 // Spawn a new mission to fill the scout role if missing.
                                 //
 
-                                if !has_scout_mission {
+                                if !updated_scout_mission {
                                     //TODO: Use path distance instead of linear distance.
                                     let home_data_data_with_range =
                                         home_room_data.iter().map(|(entity, home_room_name, max_level, observers)| {
@@ -229,6 +236,7 @@ impl VisibilityQueueSystem {
                                             None,
                                             room_entity,
                                             *nearest_room_entity,
+                                            **priority,
                                         )
                                         .build();
 

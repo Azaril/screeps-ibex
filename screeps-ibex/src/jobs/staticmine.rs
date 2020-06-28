@@ -4,6 +4,8 @@ use super::jobsystem::*;
 use super::utility::harvestbehavior::*;
 use super::utility::movebehavior::*;
 use super::utility::waitbehavior::*;
+use super::utility::repairbehavior::*;
+use super::utility::repair::*;
 use crate::remoteobjectid::*;
 use screeps::*;
 use screeps_machine::*;
@@ -70,7 +72,11 @@ impl MoveToContainer {
 impl Harvest {
     fn tick(&mut self, state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
         match state_context.mine_target {
-            StaticMineTarget::Source(source_id) => tick_harvest(tick_context, source_id, true, false, || StaticMineState::wait(1)),
+            StaticMineTarget::Source(source_id) => {
+                tick_opportunistic_repair(tick_context, Some(RepairPriority::Low));
+
+                tick_harvest(tick_context, source_id, true, false, || StaticMineState::wait(1))
+            },
             StaticMineTarget::Mineral(mineral_id, _) => tick_harvest(tick_context, mineral_id, true, false, || StaticMineState::wait(1)),
         }
     }

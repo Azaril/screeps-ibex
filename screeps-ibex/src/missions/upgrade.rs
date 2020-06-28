@@ -193,6 +193,8 @@ impl Mission for UpgradeMission {
             if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                 let priority = if self.upgraders.is_empty() && (downgrade_risk || controller_level <= 1) {
                     SPAWN_PRIORITY_HIGH
+                } else if self.upgraders.is_empty() {
+                    SPAWN_PRIORITY_MEDIUM
                 } else {
                     SPAWN_PRIORITY_LOW
                 };
