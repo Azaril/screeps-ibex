@@ -26,6 +26,7 @@ bincode = "1.2"
 base64 = "0.2"
 flate2 = "1.0"
 shrinkwraprs = "0.3.0"
+lerp = "0.2"
 screeps-game-api = { version = "0.7" }
 screeps-machine = { git = "https://github.com/Azaril/screeps-machine" }
 screeps-cache = { git = "https://github.com/Azaril/screeps-cache" }

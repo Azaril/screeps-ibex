@@ -4,6 +4,7 @@ use crate::jobs::data::*;
 use crate::jobs::scout::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use crate::room::visibilitysystem::*;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,7 @@ pub struct ScoutMission {
     owner: EntityOption<Entity>,
     room_data: Entity,
     home_room_data: Entity,
+    priority: f32,
     scouts: EntityVec<Entity>,
     next_spawn: Option<u32>,
     spawned_scouts: u32,
@@ -22,26 +24,35 @@ pub struct ScoutMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl ScoutMission {
-    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_data: Entity, priority: f32) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = ScoutMission::new(owner, room_data, home_room_data);
+        let mission = ScoutMission::new(owner, room_data, home_room_data, priority);
 
         builder
             .with(MissionData::Scout(EntityRefCell::new(mission)))
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> ScoutMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_data: Entity, priority: f32) -> ScoutMission {
         ScoutMission {
             owner: owner.into(),
             room_data,
             home_room_data,
+            priority,
             scouts: EntityVec::new(),
             next_spawn: None,
             spawned_scouts: 0,
         }
+    }
+
+    pub fn get_priority(&self) -> f32 {
+        self.priority
+    }
+
+    pub fn set_priority(&mut self, priority: f32) {
+        self.priority = priority
     }
 
     fn create_handle_scout_spawn(mission_entity: Entity, scout_room: RoomName) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
@@ -103,7 +114,7 @@ impl Mission for ScoutMission {
 
         let home_room_name = system_data.room_data.get(self.home_room_data).map(|d| d.name.to_string()).unwrap_or_else(|| "Unknown".to_owned());
 
-        format!("Scout - Scouts: {} - Home Room: {} - Next spawn: {}", self.scouts.len(), home_room_name, next_spawn)
+        format!("Scout - Priority: {} - Scouts: {} - Home Room: {} - Next spawn: {}", self.priority, self.scouts.len(), home_room_name, next_spawn)
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
@@ -156,10 +167,20 @@ impl Mission for ScoutMission {
             };
 
             if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
+                let priority = if self.priority >= VISIBILITY_PRIORITY_CRITICAL {
+                    SPAWN_PRIORITY_HIGH
+                }  else if self.priority >= VISIBILITY_PRIORITY_HIGH {
+                    SPAWN_PRIORITY_MEDIUM
+                } else if self.priority >= VISIBILITY_PRIORITY_MEDIUM {
+                    SPAWN_PRIORITY_LOW
+                } else {
+                    SPAWN_PRIORITY_NONE
+                };
+
                 let spawn_request = SpawnRequest::new(
                     format!("Scout - Target Room: {}", room_data.name),
                     &body,
-                    SPAWN_PRIORITY_LOW,
+                    priority,
                     Self::create_handle_scout_spawn(mission_entity, room_data.name),
                 );
 

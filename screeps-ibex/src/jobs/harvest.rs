@@ -188,6 +188,8 @@ impl Idle {
 
 impl Harvest {
     fn tick(&mut self, state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
+        tick_opportunistic_repair(tick_context, Some(RepairPriority::Low));
+
         tick_harvest(tick_context, state_context.harvest_target, false, true, HarvestState::idle)
     }
 }
@@ -225,6 +227,10 @@ impl Delivery {
     }
 
     fn tick(&mut self, _state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
+        if let Some(consumed_energy) = tick_opportunistic_repair(tick_context, Some(RepairPriority::Medium)) {
+            consume_resource_from_deposits(&mut self.deposits, ResourceType::Energy, consumed_energy);
+        }
+
         tick_delivery(tick_context, &mut self.deposits, HarvestState::finished_delivery)
     }
 }

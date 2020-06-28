@@ -57,7 +57,7 @@ impl HaulMission {
         self.allow_spawning = allow
     }
 
-    fn create_handle_hauler_spawn(mission_entity: Entity, pickup_rooms: &[Entity], delivery_rooms: &[Entity]) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    fn create_handle_hauler_spawn(mission_entity: Entity, pickup_rooms: &[Entity], delivery_rooms: &[Entity], allow_repair: bool) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         let pickup_rooms = pickup_rooms.to_vec();
         let delivery_rooms = delivery_rooms.to_vec();
 
@@ -67,7 +67,7 @@ impl HaulMission {
             let delivery_rooms = delivery_rooms.clone();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Haul(HaulJob::new(&pickup_rooms, &delivery_rooms));
+                let creep_job = JobData::Haul(HaulJob::new(&pickup_rooms, &delivery_rooms, allow_repair));
 
                 let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
@@ -182,31 +182,52 @@ impl Mission for HaulMission {
             };
 
             //TODO: Compute best body parts to use.
-            let body_definition = crate::creep::SpawnBodyDefinition {
+            let body_definition = if room_manhattan_distance == 0 {
+              crate::creep::SpawnBodyDefinition {
                 maximum_energy: energy_to_use,
                 minimum_repeat: Some(1),
                 maximum_repeat: Some(8),
                 pre_body: &[],
                 repeat_body: &[Part::Carry, Part::Move],
                 post_body: &[],
+              }
+            } else {
+                crate::creep::SpawnBodyDefinition {
+                    maximum_energy: energy_to_use,
+                    minimum_repeat: Some(1),
+                    maximum_repeat: Some(16),
+                    pre_body: &[Part::Work],
+                    repeat_body: &[Part::Carry, Part::Move],
+                    post_body: &[],
+                  }
             };
 
             if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                 let priority = if (self.haulers.len() as f32) < (desired_haulers_for_unfufilled as f32 * 0.75).ceil() {
-                    SPAWN_PRIORITY_HIGH
+                    if room_manhattan_distance == 0 {
+                        SPAWN_PRIORITY_HIGH
+                    } else {
+                        SPAWN_PRIORITY_MEDIUM
+                    }
                 } else {
-                    SPAWN_PRIORITY_MEDIUM
+                    if room_manhattan_distance == 0 {
+                        SPAWN_PRIORITY_MEDIUM
+                    } else {
+                        SPAWN_PRIORITY_LOW
+                    }
                 };
 
                 let pickup_rooms = &[self.room_data];
                 let delivery_rooms = &[self.home_room_data];
+
+                let allow_repair = room_manhattan_distance > 0;
 
                 //TODO: Make sure there is handling for starvation/bootstrap mode.
                 let spawn_request = SpawnRequest::new(
                     format!("Haul - Target Room: {}", room_data.name),
                     &body,
                     priority,
-                    Self::create_handle_hauler_spawn(mission_entity, pickup_rooms, delivery_rooms),
+                    Self::create_handle_hauler_spawn(mission_entity, pickup_rooms, delivery_rooms, allow_repair),
                 );
 
                 system_data.spawn_queue.request(self.home_room_data, spawn_request);

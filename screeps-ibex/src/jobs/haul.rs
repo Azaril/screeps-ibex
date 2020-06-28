@@ -4,6 +4,8 @@ use super::jobsystem::*;
 use super::utility::haulbehavior::*;
 use super::utility::movebehavior::*;
 use super::utility::waitbehavior::*;
+use super::utility::repair::*;
+use super::utility::repairbehavior::*;
 use crate::serialize::*;
 use crate::transfer::transfersystem::*;
 use itertools::*;
@@ -17,6 +19,7 @@ use specs::*;
 pub struct HaulJobContext {
     pickup_rooms: EntityVec<Entity>,
     delivery_rooms: EntityVec<Entity>,
+    allow_repair: bool
 }
 
 machine!(
@@ -163,13 +166,23 @@ impl Delivery {
         }
     }
 
-    fn tick(&mut self, _state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
+    fn tick(&mut self, state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
+        if state_context.allow_repair {
+            if let Some(consumed_energy) = tick_opportunistic_repair(tick_context, Some(RepairPriority::Low)) {
+                consume_resource_from_deposits(&mut self.deposits, ResourceType::Energy, consumed_energy);
+            }
+        }
+
         tick_delivery(tick_context, &mut self.deposits, HaulState::idle)
     }
 }
 
 impl MoveToRoom {
-    fn tick(&mut self, _state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
+    fn tick(&mut self, state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
+        if state_context.allow_repair {
+            tick_opportunistic_repair(tick_context, Some(RepairPriority::Low));
+        }
+
         tick_move_to_room(tick_context, self.room_name, HaulState::idle)
     }
 }
@@ -188,11 +201,12 @@ pub struct HaulJob {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl HaulJob {
-    pub fn new(pickup_rooms: &[Entity], delivery_rooms: &[Entity]) -> HaulJob {
+    pub fn new(pickup_rooms: &[Entity], delivery_rooms: &[Entity], allow_repair: bool) -> HaulJob {
         HaulJob {
             context: HaulJobContext {
                 pickup_rooms: pickup_rooms.into(),
                 delivery_rooms: delivery_rooms.into(),
+                allow_repair
             },
             state: HaulState::idle(),
         }

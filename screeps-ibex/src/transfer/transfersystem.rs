@@ -1012,7 +1012,7 @@ impl TransferDepositTicket {
             .map(|(resource, entries)| (*resource, entries.iter().map(|e| e.amount).sum::<u32>()))
     }
 
-    pub fn consume_deposit(&mut self, resource: ResourceType, amount: u32) {
+    pub fn consume_deposit(&mut self, resource: ResourceType, amount: u32) -> u32 {
         if let Entry::Occupied(mut e) = self.resources.entry(resource) {
             let mut remaining_amount = amount;
 
@@ -1030,6 +1030,22 @@ impl TransferDepositTicket {
             if entries.is_empty() {
                 e.remove();
             }
+
+            return amount - remaining_amount;
+        } else {
+            return 0;
+        }
+    }
+}
+
+pub fn consume_resource_from_deposits(deposits: &mut [TransferDepositTicket], resource: ResourceType, amount: u32) {
+    let mut remaining_to_consume = amount;
+
+    for deposit in deposits {
+        remaining_to_consume -= deposit.consume_deposit(resource, remaining_to_consume);
+
+        if remaining_to_consume == 0 {
+            break;
         }
     }
 }
