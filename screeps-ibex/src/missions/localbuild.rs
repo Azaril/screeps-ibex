@@ -207,7 +207,7 @@ impl Mission for LocalBuildMission {
 
         if self.builders.len() < spawn_count as usize {
             let use_energy_max = if self.builders.is_empty() && spawn_priority >= SPAWN_PRIORITY_HIGH {
-                room.energy_available()
+                room.energy_available().max(SPAWN_ENERGY_CAPACITY)
             } else {
                 room.energy_capacity_available()
             };

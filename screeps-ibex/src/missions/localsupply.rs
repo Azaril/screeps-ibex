@@ -341,10 +341,11 @@ impl LocalSupplyMission {
 
     fn get_all_links(&mut self, system_data: &mut MissionExecutionSystemData) -> Result<Vec<RemoteObjectId<StructureLink>>, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
+        let has_visibility = room_data.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false);
 
         let mut structure_data = self
             .structure_data
-            .maybe_access(|d| game::time() - d.last_updated >= 10, || Self::create_structure_data(&room_data));
+            .maybe_access(|d| game::time() - d.last_updated >= 10 && has_visibility, || Self::create_structure_data(&room_data));
         let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
         let all_links = structure_data
@@ -418,9 +419,12 @@ impl LocalSupplyMission {
         creep_data: &CreepData,
     ) -> Result<(), String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
-        let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
-
+        
         let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
+        let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+
+        let home_room_structures = home_room_data.get_structures().ok_or("Expected home room structures")?;
+        let home_room_has_storage = !home_room_structures.storages().is_empty();
 
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility")?;
         let sources = static_visibility_data.sources();
@@ -428,10 +432,11 @@ impl LocalSupplyMission {
         let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility")?;
         let likely_owned_room = dynamic_visibility_data.updated_within(2000)
             && (dynamic_visibility_data.owner().mine() || dynamic_visibility_data.reservation().mine());
+        let has_visibility = dynamic_visibility_data.visible();
 
         let mut structure_data = self
             .structure_data
-            .maybe_access(|d| game::time() - d.last_updated >= 10, || Self::create_structure_data(&room_data));
+            .maybe_access(|d| game::time() - d.last_updated >= 10 && has_visibility, || Self::create_structure_data(&room_data));
         let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
         //
@@ -513,13 +518,15 @@ impl LocalSupplyMission {
             let desired_harvesters = 4;
 
             //TODO: Compute the correct time to spawn emergency harvesters.
-            if (source_containers.is_empty() && source_links.is_empty() && current_harvesters < desired_harvesters) || (total_harvesting_creeps == 0 && room_manhattan_distance == 0) {
+            if (source_containers.is_empty() && source_links.is_empty() && current_harvesters < desired_harvesters) || 
+                (total_harvesting_creeps == 0 && room_manhattan_distance == 0) || 
+                (room_manhattan_distance > 0 && !home_room_has_storage) {
                 //TODO: Compute best body parts to use.
                 let body_definition = SpawnBodyDefinition {
                     maximum_energy: if total_harvesting_creeps == 0 {
-                        room.energy_available().max(SPAWN_ENERGY_CAPACITY)
+                        home_room.energy_available().max(SPAWN_ENERGY_CAPACITY)
                     } else {
-                        room.energy_capacity_available()
+                        home_room.energy_capacity_available()
                     },
                     minimum_repeat: Some(1),
                     maximum_repeat: Some(5),
@@ -601,7 +608,7 @@ impl LocalSupplyMission {
 
                         let body_definition = if link.pos().room_name() == home_room_data.name {
                             SpawnBodyDefinition {
-                                maximum_energy: room.energy_capacity_available(),
+                                maximum_energy: home_room.energy_capacity_available(),
                                 minimum_repeat: Some(1),
                                 maximum_repeat: Some(work_parts_per_tick),
                                 pre_body: &[Part::Move, Part::Carry],
@@ -610,7 +617,7 @@ impl LocalSupplyMission {
                             }
                         } else {
                             SpawnBodyDefinition {
-                                maximum_energy: room.energy_capacity_available(),
+                                maximum_energy: home_room.energy_capacity_available(),
                                 minimum_repeat: Some(1),
                                 maximum_repeat: Some(work_parts_per_tick),
                                 pre_body: &[Part::Carry],
@@ -658,7 +665,7 @@ impl LocalSupplyMission {
                         
                         let body_definition = if container.pos().room_name() == home_room_data.name {
                             SpawnBodyDefinition {
-                                maximum_energy: room.energy_capacity_available(),
+                                maximum_energy: home_room.energy_capacity_available(),
                                 minimum_repeat: Some(1),
                                 maximum_repeat: Some(work_parts_per_tick),
                                 pre_body: &[Part::Move],
@@ -667,7 +674,7 @@ impl LocalSupplyMission {
                             }
                         } else {
                             SpawnBodyDefinition {
-                                maximum_energy: room.energy_capacity_available(),
+                                maximum_energy: home_room.energy_capacity_available(),
                                 minimum_repeat: Some(1),
                                 maximum_repeat: Some(work_parts_per_tick),
                                 pre_body: &[],
@@ -735,7 +742,7 @@ impl LocalSupplyMission {
                 //TODO: Compute correct body type.
                 let body_definition = if container.pos().room_name() == home_room_data.name {
                     SpawnBodyDefinition {
-                        maximum_energy: room.energy_capacity_available(),
+                        maximum_energy: home_room.energy_capacity_available(),
                         minimum_repeat: Some(1),
                         maximum_repeat: None,
                         pre_body: &[Part::Move],
@@ -744,7 +751,7 @@ impl LocalSupplyMission {
                     }
                 } else {
                     SpawnBodyDefinition {
-                        maximum_energy: room.energy_capacity_available(),
+                        maximum_energy: home_room.energy_capacity_available(),
                         minimum_repeat: Some(1),
                         maximum_repeat: None,
                         pre_body: &[],
@@ -1142,10 +1149,10 @@ impl LocalSupplyMission {
     fn transfer_request_haul_generator(room_entity: Entity, structure_data: Rc<RefCell<Option<StructureData>>>) -> TransferQueueGenerator {
         Box::new(move |system, transfer, _room_name| {
             let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
-            let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
+            let has_visibility = room_data.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false);
 
             let mut structure_data =
-                structure_data.maybe_access(|d| game::time() - d.last_updated >= 10, || Self::create_structure_data(&room_data));
+                structure_data.maybe_access(|d| game::time() - d.last_updated >= 10 && has_visibility, || Self::create_structure_data(&room_data));
             let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
             Self::request_transfer_for_spawns(transfer, &structure_data.spawns);
@@ -1153,9 +1160,11 @@ impl LocalSupplyMission {
             Self::request_transfer_for_storage(transfer, &structure_data.storage);
             Self::request_transfer_for_containers(transfer, &structure_data);
 
-            Self::request_transfer_for_ruins(transfer, &room);
-            Self::request_transfer_for_tombstones(transfer, &room);
-            Self::request_transfer_for_dropped_resources(transfer, &room);
+            if let Some(room) = game::rooms::get(room_data.name) {
+                Self::request_transfer_for_ruins(transfer, &room);
+                Self::request_transfer_for_tombstones(transfer, &room);
+                Self::request_transfer_for_dropped_resources(transfer, &room);
+            }
 
             Ok(())
         })
@@ -1164,9 +1173,10 @@ impl LocalSupplyMission {
     fn transfer_request_link_generator(room_entity: Entity, structure_data: Rc<RefCell<Option<StructureData>>>) -> TransferQueueGenerator {
         Box::new(move |system, transfer, _room_name| {
             let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
+            let has_visibility = room_data.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false);
 
             let mut structure_data =
-                structure_data.maybe_access(|d| game::time() - d.last_updated >= 10, || Self::create_structure_data(&room_data));
+                structure_data.maybe_access(|d| game::time() - d.last_updated >= 10 && has_visibility, || Self::create_structure_data(&room_data));
             let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
             Self::request_transfer_for_source_links(transfer, &structure_data);

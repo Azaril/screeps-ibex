@@ -85,12 +85,13 @@ impl HaulMission {
     fn update_stats<'a, 's, RD>(
         transfer_queue: &mut TransferQueue,
         transfer_queue_data: &TransferQueueGeneratorData<'a, 's, RD>,
-        room_name: RoomName,
+        pickup_rooms: &[RoomName],
+        delivery_rooms: &[RoomName]
     ) -> HaulingStats
     where
         RD: std::ops::Deref<Target = specs::storage::MaskedStorage<RoomData>>,
     {
-        let unfufilled = transfer_queue.total_unfufilled_resources(transfer_queue_data, &[room_name], &[room_name], TransferType::Haul.into());
+        let unfufilled = transfer_queue.total_unfufilled_resources(transfer_queue_data, pickup_rooms, delivery_rooms, TransferType::Haul.into());
 
         let total_unfufilled: u32 = unfufilled.values().sum();
 
@@ -135,8 +136,10 @@ impl Mission for HaulMission {
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data_storage = &*system_data.room_data;
         let room_data = room_data_storage.get(self.room_data).ok_or("Expected room data")?;
-        let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
-        let controller = room.controller().ok_or("Expected controller")?;
+
+        let home_room_data = room_data_storage.get(self.home_room_data).ok_or("Expected home room data")?;
+        let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+        let controller = home_room.controller().ok_or("Expected controller")?;
 
         let transfer_queue = &mut *system_data.transfer_queue;
         let mut transfer_queue_data = TransferQueueGeneratorData {
@@ -144,24 +147,38 @@ impl Mission for HaulMission {
             room_data: &*room_data_storage,
         };
 
+        let room_visible = room_data.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false);
+
+        let pickup_rooms = &[room_data.name];
+        let delivery_rooms = &[home_room_data.name];
+
         let mut stats = self.stats.access(
-            |s| game::time() - s.last_updated >= 20,
-            || Self::update_stats(transfer_queue, &mut transfer_queue_data, room_data.name),
+            |s| game::time() - s.last_updated >= 20 && room_visible,
+            || Self::update_stats(transfer_queue, &mut transfer_queue_data, pickup_rooms, delivery_rooms),
         );
         let stats = stats.get();
 
-        let base_amount = (controller.level() as f32 * 100.0).powf(1.25);
+        //TODO: Add multiplier for room distance?
 
-        let desired_haulers_for_unfufilled = (stats.unfufilled_hauling as f32 / base_amount as f32).ceil() as usize;
-        let desired_haulers = desired_haulers_for_unfufilled.min(3) as usize;
+        //TODO: Use find route plus cache.
+        let room_offset_distance = home_room_data.name - room_data.name;
+        let room_manhattan_distance = room_offset_distance.0.abs() as u32 + room_offset_distance.1.abs() as u32;
+
+        let range_multiplier = 1.0 - ((room_manhattan_distance.min(3) as f32 / 3.0) * 0.5);
+        let base_amount = (controller.level() as f32 * (100.0 * range_multiplier)).powf(1.25);
+
+        let max_haulers = (room_manhattan_distance + 1) * 3;
+
+        let desired_haulers_for_unfufilled = (stats.unfufilled_hauling as f32 / base_amount as f32).ceil() as u32;
+        let desired_haulers = desired_haulers_for_unfufilled.min(max_haulers) as usize;
 
         let should_spawn = self.haulers.len() < desired_haulers && self.allow_spawning;
 
         if should_spawn {
             let energy_to_use = if self.haulers.is_empty() {
-                room.energy_available()
+                home_room.energy_available().max(SPAWN_ENERGY_CAPACITY)
             } else {
-                room.energy_capacity_available()
+                home_room.energy_capacity_available()
             };
 
             //TODO: Compute best body parts to use.
@@ -192,7 +209,7 @@ impl Mission for HaulMission {
                     Self::create_handle_hauler_spawn(mission_entity, pickup_rooms, delivery_rooms),
                 );
 
-                system_data.spawn_queue.request(self.room_data, spawn_request);
+                system_data.spawn_queue.request(self.home_room_data, spawn_request);
             }
         }
 
