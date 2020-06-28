@@ -76,9 +76,16 @@ impl Idle {
     fn tick(&mut self, state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
         let delivery_room_data = tick_context.system_data.room_data.get(state_context.delivery_room)?;
 
+        let harvest_room_name = state_context.harvest_target.pos().room_name();
+        let harvest_room_data_entity = tick_context.runtime_data.mapping.get_room(&harvest_room_name)?;
+        let harvest_room_data = tick_context.system_data.room_data.get(harvest_room_data_entity)?;
+
         let creep = tick_context.runtime_data.owner;
 
-        let in_delivery_room = creep.room().map(|r| r.name() == delivery_room_data.name).unwrap_or(false);
+        let creep_room_name = creep.room().map(|r| r.name());
+
+        let in_delivery_room = creep_room_name.map(|name| name == delivery_room_data.name).unwrap_or(false);
+        let in_harvest_room = creep_room_name.map(|name| name == harvest_room_name).unwrap_or(false);
 
         if in_delivery_room && state_context.allow_haul {
             let transfer_queue_data = TransferQueueGeneratorData {
@@ -104,6 +111,12 @@ impl Idle {
             return Some(state);
         };
 
+        if in_harvest_room && !in_delivery_room {
+            if let Some(state) = get_new_build_state(creep, harvest_room_data, HarvestState::build) {
+                return Some(state);
+            }
+        } 
+        
         if in_delivery_room {
             if state_context.allow_haul {
                 let transfer_queue_data = TransferQueueGeneratorData {
@@ -128,7 +141,7 @@ impl Idle {
             let transfer_queue_data = TransferQueueGeneratorData {
                 cause: "Harvest Idle",
                 room_data: &*tick_context.system_data.room_data,
-            };
+            };            
 
             get_new_delivery_current_resources_state(
                 creep,
@@ -139,6 +152,7 @@ impl Idle {
                 tick_context.runtime_data.transfer_queue,
                 HarvestState::delivery,
             )
+            .or_else(|| get_new_upgrade_state(creep, delivery_room_data, HarvestState::upgrade, Some(2)))
             .or_else(|| get_new_build_state(creep, delivery_room_data, HarvestState::build))
             .or_else(|| get_new_repair_state(creep, delivery_room_data, Some(RepairPriority::Medium), HarvestState::repair))
             .or_else(|| {
@@ -157,7 +171,7 @@ impl Idle {
                     })
                     .next()
             })
-            .or_else(|| get_new_upgrade_state(creep, delivery_room_data, HarvestState::upgrade))
+            .or_else(|| get_new_upgrade_state(creep, delivery_room_data, HarvestState::upgrade, None))
             .or_else(|| {
                 if creep.store_used_capacity(None) == 0 {
                     get_new_move_to_room_state(creep, state_context.harvest_target.pos().room_name(), HarvestState::move_to_room)

@@ -143,6 +143,7 @@ impl Incubate {
                 system_data.updater.create_entity(system_data.entities),
                 Some(mission_entity),
                 state_context.room_data,
+                state_context.room_data,
             )
             .build();
 
@@ -168,6 +169,7 @@ impl Incubate {
             let mission_entity = HaulMission::build(
                 system_data.updater.create_entity(system_data.entities),
                 Some(mission_entity),
+                state_context.room_data,
                 state_context.room_data,
             )
             .build();

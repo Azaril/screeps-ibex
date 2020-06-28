@@ -11,7 +11,6 @@ use screeps_cache::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use std::collections::HashMap;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct HaulingStats {
@@ -23,42 +22,52 @@ struct HaulingStats {
 pub struct HaulMission {
     owner: EntityOption<Entity>,
     room_data: Entity,
+    home_room_data: Entity,
     haulers: EntityVec<Entity>,
     //TODO: Create a room stats component?
     stats: Option<HaulingStats>,
+    allow_spawning: bool,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl HaulMission {
-    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = HaulMission::new(owner, room_data);
+        let mission = HaulMission::new(owner, room_data, home_room_data);
 
         builder
             .with(MissionData::Haul(EntityRefCell::new(mission)))
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<Entity>, room_data: Entity) -> HaulMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> HaulMission {
         HaulMission {
             owner: owner.into(),
             room_data,
+            home_room_data,
             haulers: EntityVec::new(),
             stats: None,
+            allow_spawning: true
         }
     }
 
-    fn create_handle_hauler_spawn(mission_entity: Entity, haul_rooms: &[Entity]) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
-        let rooms = haul_rooms.to_vec();
+    pub fn allow_spawning(&mut self, allow: bool) {
+        self.allow_spawning = allow
+    }
+
+    fn create_handle_hauler_spawn(mission_entity: Entity, pickup_rooms: &[Entity], delivery_rooms: &[Entity]) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+        let pickup_rooms = pickup_rooms.to_vec();
+        let delivery_rooms = delivery_rooms.to_vec();
 
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
-            let rooms = rooms.clone();
+            let pickup_rooms = pickup_rooms.clone();
+            let delivery_rooms = delivery_rooms.clone();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Haul(HaulJob::new(&rooms, &rooms));
+                let creep_job = JobData::Haul(HaulJob::new(&pickup_rooms, &delivery_rooms));
 
                 let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
@@ -81,10 +90,7 @@ impl HaulMission {
     where
         RD: std::ops::Deref<Target = specs::storage::MaskedStorage<RoomData>>,
     {
-        let unfufilled = transfer_queue
-            .try_get_room(transfer_queue_data, room_name, TransferType::Haul.into())
-            .map(|r| r.stats().total_unfufilled_resources(TransferType::Haul))
-            .unwrap_or_else(HashMap::new);
+        let unfufilled = transfer_queue.total_unfufilled_resources(transfer_queue_data, &[room_name], &[room_name], TransferType::Haul.into());
 
         let total_unfufilled: u32 = unfufilled.values().sum();
 
@@ -149,7 +155,7 @@ impl Mission for HaulMission {
         let desired_haulers_for_unfufilled = (stats.unfufilled_hauling as f32 / base_amount as f32).ceil() as usize;
         let desired_haulers = desired_haulers_for_unfufilled.min(3) as usize;
 
-        let should_spawn = self.haulers.len() < desired_haulers;
+        let should_spawn = self.haulers.len() < desired_haulers && self.allow_spawning;
 
         if should_spawn {
             let energy_to_use = if self.haulers.is_empty() {
@@ -169,21 +175,21 @@ impl Mission for HaulMission {
             };
 
             if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                let haul_rooms = &[self.room_data];
-
                 let priority = if (self.haulers.len() as f32) < (desired_haulers_for_unfufilled as f32 * 0.75).ceil() {
                     SPAWN_PRIORITY_HIGH
                 } else {
                     SPAWN_PRIORITY_MEDIUM
                 };
 
-                //TODO: Compute priority based on transfer requests.
+                let pickup_rooms = &[self.room_data];
+                let delivery_rooms = &[self.home_room_data];
+
                 //TODO: Make sure there is handling for starvation/bootstrap mode.
                 let spawn_request = SpawnRequest::new(
                     format!("Haul - Target Room: {}", room_data.name),
                     &body,
                     priority,
-                    Self::create_handle_hauler_spawn(mission_entity, haul_rooms),
+                    Self::create_handle_hauler_spawn(mission_entity, pickup_rooms, delivery_rooms),
                 );
 
                 system_data.spawn_queue.request(self.room_data, spawn_request);

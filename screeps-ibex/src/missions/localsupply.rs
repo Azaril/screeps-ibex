@@ -19,11 +19,15 @@ use specs::*;
 use std::cell::*;
 use std::collections::HashMap;
 use std::rc::*;
+use crate::creep::*;
+
+//TODO: This mission is overloaded and should be split in to separate mission components.
 
 #[derive(ConvertSaveload)]
 pub struct LocalSupplyMission {
     owner: EntityOption<Entity>,
     room_data: Entity,
+    home_room_data: Entity,
     harvesters: EntityVec<Entity>,
     source_container_miners: EntityVec<Entity>,
     source_link_miners: EntityVec<Entity>,
@@ -31,6 +35,7 @@ pub struct LocalSupplyMission {
     #[convert_save_load_attr(serde(skip))]
     #[convert_save_load_skip_convert]
     structure_data: Rc<RefCell<Option<StructureData>>>,
+    allow_spawning: bool,
 }
 
 type MineralExtractorPair = (RemoteObjectId<Mineral>, RemoteObjectId<StructureExtractor>);
@@ -59,27 +64,33 @@ struct CreepData {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl LocalSupplyMission {
-    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = LocalSupplyMission::new(owner, room_data);
+        let mission = LocalSupplyMission::new(owner, room_data, home_room_data);
 
         builder
             .with(MissionData::LocalSupply(EntityRefCell::new(mission)))
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<Entity>, room_data: Entity) -> LocalSupplyMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> LocalSupplyMission {
         LocalSupplyMission {
             owner: owner.into(),
             room_data,
+            home_room_data,
             harvesters: EntityVec::new(),
             source_container_miners: EntityVec::new(),
             source_link_miners: EntityVec::new(),
             mineral_container_miners: EntityVec::new(),
             structure_data: Rc::new(RefCell::new(None)),
+            allow_spawning: true
         }
+    }
+
+    pub fn allow_spawning(&mut self, allow: bool) {
+        self.allow_spawning = allow
     }
 
     fn create_handle_container_miner_spawn(
@@ -181,16 +192,7 @@ impl LocalSupplyMission {
             })
             .into_group_map();
 
-        let controllers_to_containers = controller
-            .iter()
-            .filter_map(|controller| {
-                let nearby_container = containers.iter().find(|container| container.pos().is_near_to(&controller.pos()));
-
-                nearby_container.map(|container| (**controller, container.remote_id()))
-            })
-            .into_group_map();
-
-        //TODO: This may need more validate that the link is reachable - or assume it is and bad placemented is filtered out
+        //TODO: This may need more validate that the link is reachable - or assume it is and bad placement and is filtered out
         //      during room planning.
         //TODO: May need additional work to make sure link is not used by a controller or storage.
         let controller_links: Vec<_> = controller
@@ -237,6 +239,20 @@ impl LocalSupplyMission {
             .filter(|link| storages.iter().any(|storage| link.pos().in_range_to(&storage.pos(), 2)))
             .map(|link| link.remote_id())
             .collect();
+
+        let controllers_to_containers = controller
+            .iter()
+            .filter_map(|controller| {
+                let nearby_container_id = containers
+                    .iter()
+                    .map(|container| container.remote_id())
+                    .filter(|container| !sources_to_containers.values().any(|other_containers| other_containers.iter().any(|other_container| other_container == container)))
+                    .filter(|container| !mineral_extractors_to_containers.values().any(|other_containers| other_containers.iter().any(|other_container| other_container == container)))
+                    .find(|container| container.pos().in_range_to(&controller.pos(), 2));
+
+                nearby_container_id.map(|container_id| (**controller, container_id))
+            })
+            .into_group_map();
 
         Some(StructureData {
             last_updated: game::time(),
@@ -404,6 +420,8 @@ impl LocalSupplyMission {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
 
+        let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
+
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility")?;
         let sources = static_visibility_data.sources();
 
@@ -481,15 +499,23 @@ impl LocalSupplyMission {
                 .flat_map(|m| m.iter())
                 .collect_vec();
 
+            //TODO: Use find route plus cache.
+            let room_offset_distance = home_room_data.name - source_id.pos().room_name();
+            let room_manhattan_distance = room_offset_distance.0.abs() + room_offset_distance.1.abs();
+
             //
             // Spawn harvesters
             //
 
-            //TODO: Compute correct number of harvesters to use for source.
+            let current_harvesters = source_harvesters.len();
+
+            //TODO: Compute correct number of harvesters to use for source.            
+            let desired_harvesters = 4;
+
             //TODO: Compute the correct time to spawn emergency harvesters.
-            if (source_containers.is_empty() && source_links.is_empty() && source_harvesters.len() < 4) || total_harvesting_creeps == 0 {
+            if (source_containers.is_empty() && source_links.is_empty() && current_harvesters < desired_harvesters) || (total_harvesting_creeps == 0 && room_manhattan_distance == 0) {
                 //TODO: Compute best body parts to use.
-                let body_definition = crate::creep::SpawnBodyDefinition {
+                let body_definition = SpawnBodyDefinition {
                     maximum_energy: if total_harvesting_creeps == 0 {
                         room.energy_available().max(SPAWN_ENERGY_CAPACITY)
                     } else {
@@ -503,22 +529,29 @@ impl LocalSupplyMission {
                 };
 
                 if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                    let priority = if total_harvesting_creeps == 0 {
-                        SPAWN_PRIORITY_CRITICAL
+                    let priority_range = if room_manhattan_distance == 0 {
+                        (SPAWN_PRIORITY_CRITICAL, SPAWN_PRIORITY_HIGH)
+                    } else if room_manhattan_distance <= 1 {
+                        (SPAWN_PRIORITY_MEDIUM, SPAWN_PRIORITY_LOW)
                     } else {
-                        SPAWN_PRIORITY_HIGH
+                        (SPAWN_PRIORITY_LOW, SPAWN_PRIORITY_NONE)
                     };
+        
+                    let interp = (current_harvesters as f32) / (desired_harvesters as f32);
+                    let priority = (priority_range.0 + priority_range.1) * interp;
 
                     let spawn_request = SpawnRequest::new(
                         format!("Harvester - Source: {}", source_id.id()),
                         &body,
                         priority,
-                        Self::create_handle_harvester_spawn(mission_entity, *source_id, self.room_data),
+                        Self::create_handle_harvester_spawn(mission_entity, *source_id, self.home_room_data),
                     );
 
-                    system_data.spawn_queue.request(self.room_data, spawn_request);
+                    system_data.spawn_queue.request(self.home_room_data, spawn_request);
                 }
             } else {
+                //TODO: Correctly compute time needed to spawn + get to source.
+
                 let alive_source_miners = source_container_miners
                     .iter()
                     .chain(source_link_miners.iter())
@@ -566,13 +599,24 @@ impl LocalSupplyMission {
                         let energy_per_tick = (energy_capacity as f32) / (ENERGY_REGEN_TIME as f32);
                         let work_parts_per_tick = (energy_per_tick / (HARVEST_POWER as f32)).ceil() as usize;
 
-                        let body_definition = crate::creep::SpawnBodyDefinition {
-                            maximum_energy: room.energy_capacity_available(),
-                            minimum_repeat: Some(1),
-                            maximum_repeat: Some(work_parts_per_tick),
-                            pre_body: &[Part::Move, Part::Carry],
-                            repeat_body: &[Part::Work],
-                            post_body: &[],
+                        let body_definition = if link.pos().room_name() == home_room_data.name {
+                            SpawnBodyDefinition {
+                                maximum_energy: room.energy_capacity_available(),
+                                minimum_repeat: Some(1),
+                                maximum_repeat: Some(work_parts_per_tick),
+                                pre_body: &[Part::Move, Part::Carry],
+                                repeat_body: &[Part::Work],
+                                post_body: &[],
+                            }
+                        } else {
+                            SpawnBodyDefinition {
+                                maximum_energy: room.energy_capacity_available(),
+                                minimum_repeat: Some(1),
+                                maximum_repeat: Some(work_parts_per_tick),
+                                pre_body: &[Part::Carry],
+                                repeat_body: &[Part::Move, Part::Work],
+                                post_body: &[],
+                            }
                         };
 
                         if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
@@ -586,7 +630,7 @@ impl LocalSupplyMission {
                                 Self::create_handle_link_miner_spawn(mission_entity, *source_id, *link, target_container.cloned()),
                             );
 
-                            system_data.spawn_queue.request(self.room_data, spawn_request);
+                            system_data.spawn_queue.request(self.home_room_data, spawn_request);
                         }
                     }
                 } else if !source_containers.is_empty() {
@@ -611,14 +655,25 @@ impl LocalSupplyMission {
 
                         let energy_per_tick = (energy_capacity as f32) / (ENERGY_REGEN_TIME as f32);
                         let work_parts_per_tick = (energy_per_tick / (HARVEST_POWER as f32)).ceil() as usize;
-
-                        let body_definition = crate::creep::SpawnBodyDefinition {
-                            maximum_energy: room.energy_capacity_available(),
-                            minimum_repeat: Some(1),
-                            maximum_repeat: Some(work_parts_per_tick),
-                            pre_body: &[Part::Move],
-                            repeat_body: &[Part::Work],
-                            post_body: &[],
+                        
+                        let body_definition = if container.pos().room_name() == home_room_data.name {
+                            SpawnBodyDefinition {
+                                maximum_energy: room.energy_capacity_available(),
+                                minimum_repeat: Some(1),
+                                maximum_repeat: Some(work_parts_per_tick),
+                                pre_body: &[Part::Move],
+                                repeat_body: &[Part::Work],
+                                post_body: &[],
+                            }
+                        } else {
+                            SpawnBodyDefinition {
+                                maximum_energy: room.energy_capacity_available(),
+                                minimum_repeat: Some(1),
+                                maximum_repeat: Some(work_parts_per_tick),
+                                pre_body: &[],
+                                repeat_body: &[Part::Move, Part::Work],
+                                post_body: &[],
+                            }
                         };
 
                         if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
@@ -629,7 +684,7 @@ impl LocalSupplyMission {
                                 Self::create_handle_container_miner_spawn(mission_entity, StaticMineTarget::Source(*source_id), *container),
                             );
 
-                            system_data.spawn_queue.request(self.room_data, spawn_request);
+                            system_data.spawn_queue.request(self.home_room_data, spawn_request);
                         }
                     }
                 }
@@ -678,13 +733,24 @@ impl LocalSupplyMission {
 
             for container in available_containers_for_miners {
                 //TODO: Compute correct body type.
-                let body_definition = crate::creep::SpawnBodyDefinition {
-                    maximum_energy: room.energy_capacity_available(),
-                    minimum_repeat: Some(1),
-                    maximum_repeat: Some(10),
-                    pre_body: &[Part::Move],
-                    repeat_body: &[Part::Work],
-                    post_body: &[],
+                let body_definition = if container.pos().room_name() == home_room_data.name {
+                    SpawnBodyDefinition {
+                        maximum_energy: room.energy_capacity_available(),
+                        minimum_repeat: Some(1),
+                        maximum_repeat: None,
+                        pre_body: &[Part::Move],
+                        repeat_body: &[Part::Work],
+                        post_body: &[],
+                    }
+                } else {
+                    SpawnBodyDefinition {
+                        maximum_energy: room.energy_capacity_available(),
+                        minimum_repeat: Some(1),
+                        maximum_repeat: None,
+                        pre_body: &[],
+                        repeat_body: &[Part::Move, Part::Work],
+                        post_body: &[],
+                    }
                 };
 
                 if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
@@ -699,7 +765,7 @@ impl LocalSupplyMission {
                         ),
                     );
 
-                    system_data.spawn_queue.request(self.room_data, spawn_request);
+                    system_data.spawn_queue.request(self.home_room_data, spawn_request);
                 }
             }
         }
@@ -1158,6 +1224,7 @@ impl Mission for LocalSupplyMission {
             TransferTypeFlags::HAUL,
             Self::transfer_request_haul_generator(self.room_data, self.structure_data.clone()),
         );
+        
         system_data.transfer_queue.register_generator(
             room_data.name,
             TransferTypeFlags::LINK,
@@ -1170,7 +1237,9 @@ impl Mission for LocalSupplyMission {
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
         let creep_data = self.create_creep_data(system_data)?;
 
-        self.spawn_creeps(system_data, mission_entity, &creep_data)?;
+        if self.allow_spawning {
+            self.spawn_creeps(system_data, mission_entity, &creep_data)?;
+        }
 
         self.link_transfer(system_data)?;
 
