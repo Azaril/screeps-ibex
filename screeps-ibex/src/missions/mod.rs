@@ -12,7 +12,6 @@ pub mod missionsystem;
 pub mod powerspawn;
 pub mod raid;
 pub mod remotebuild;
-pub mod remotemine;
 pub mod reserve;
 pub mod scout;
 pub mod terminal;

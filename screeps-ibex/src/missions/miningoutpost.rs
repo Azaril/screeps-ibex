@@ -3,11 +3,12 @@ use super::defend::*;
 use super::dismantle::*;
 use super::missionsystem::*;
 use super::raid::*;
-use super::remotemine::*;
+use super::localsupply::*;
 use super::reserve::*;
 use crate::componentaccess::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
+use super::haul::*;
 use log::*;
 use screeps_machine::*;
 use serde::{Deserialize, Serialize};
@@ -32,7 +33,8 @@ machine!(
             defend_mission: EntityOption<Entity>
         },
         Mine {
-            remote_mine_mission: EntityOption<Entity>,
+            supply_mission: EntityOption<Entity>,
+            haul_mission: EntityOption<Entity>,
             reserve_mission: EntityOption<Entity>,
             defend_mission: EntityOption<Entity>
         }
@@ -210,6 +212,7 @@ impl Cleanup {
             info!("No active raiding or dismantling - transitioning to mining");
 
             Ok(Some(MiningOutpostState::mine(
+                None.into(),
                 None.into(),
                 None.into(),
                 self.defend_mission.clone(),
@@ -413,12 +416,12 @@ impl Cleanup {
 }
 
 impl Mine {
-    fn get_children_internal(&self) -> [&Option<Entity>; 3] {
-        [&self.remote_mine_mission, &self.reserve_mission, &self.defend_mission]
+    fn get_children_internal(&self) -> [&Option<Entity>; 4] {
+        [&self.supply_mission, &self.haul_mission, &self.reserve_mission, &self.defend_mission]
     }
 
-    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 3] {
-        [&mut self.remote_mine_mission, &mut self.reserve_mission, &mut self.defend_mission]
+    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 4] {
+        [&mut self.supply_mission, &mut self.haul_mission, &mut self.reserve_mission, &mut self.defend_mission]
     }
 
     fn tick(
@@ -431,15 +434,15 @@ impl Mine {
             return Err("Mission cannot run in current room state".to_string());
         }
 
-        let has_remote_mine = self.remote_mine_mission.map(|e| system_data.entities.is_alive(e)).unwrap_or(false);
+        let has_supply = self.supply_mission.map(|e| system_data.entities.is_alive(e)).unwrap_or(false);
 
-        if !has_remote_mine {
+        if !has_supply {
             let outpost_room_data = system_data
                 .room_data
                 .get_mut(state_context.outpost_room_data)
                 .ok_or("Expected outpost room data")?;
 
-            let mission_entity = RemoteMineMission::build(
+            let mission_entity = LocalSupplyMission::build(
                 system_data.updater.create_entity(system_data.entities),
                 Some(mission_entity),
                 state_context.outpost_room_data,
@@ -449,7 +452,28 @@ impl Mine {
 
             outpost_room_data.add_mission(mission_entity);
 
-            self.remote_mine_mission = Some(mission_entity).into();
+            self.supply_mission = Some(mission_entity).into();
+        }
+
+        let has_haul = self.haul_mission.map(|e| system_data.entities.is_alive(e)).unwrap_or(false);
+
+        if !has_haul {
+            let outpost_room_data = system_data
+                .room_data
+                .get_mut(state_context.outpost_room_data)
+                .ok_or("Expected outpost room data")?;
+
+            let mission_entity = HaulMission::build(
+                system_data.updater.create_entity(system_data.entities),
+                Some(mission_entity),
+                state_context.outpost_room_data,
+                state_context.home_room_data,
+            )
+            .build();
+
+            outpost_room_data.add_mission(mission_entity);
+
+            self.haul_mission = Some(mission_entity).into();
         }
 
         let has_reserve = self.reserve_mission.map(|e| system_data.entities.is_alive(e)).unwrap_or(false);
@@ -501,12 +525,20 @@ impl Mine {
             .map(|d| d.is_room_safe())
             .unwrap_or(true);
 
-        if let Some(mut remote_mine_mission) = system_data
+        if let Some(mut supply_mission) = system_data
             .missions
-            .try_get(self.remote_mine_mission)
-            .as_mission_type_mut::<RemoteMineMission>()
+            .try_get(self.supply_mission)
+            .as_mission_type_mut::<LocalSupplyMission>()
         {
-            remote_mine_mission.allow_spawning(room_is_safe);
+            supply_mission.allow_spawning(room_is_safe);
+        }
+
+        if let Some(mut haul_mission) = system_data
+            .missions
+            .try_get(self.haul_mission)
+            .as_mission_type_mut::<HaulMission>()
+        {
+            haul_mission.allow_spawning(room_is_safe);
         }
 
         if let Some(mut reserve_mission) = system_data

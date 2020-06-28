@@ -5,7 +5,7 @@ use crate::room::data::*;
 use screeps::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn get_new_upgrade_state<F, R>(creep: &Creep, upgrade_room: &RoomData, state_map: F) -> Option<R>
+pub fn get_new_upgrade_state<F, R>(creep: &Creep, upgrade_room: &RoomData, state_map: F, max_rcl: Option<u32>) -> Option<R>
 where
     F: Fn(RemoteObjectId<StructureController>) -> R,
 {
@@ -14,9 +14,12 @@ where
 
         if dynamic_visibility_data.visible() && dynamic_visibility_data.owner().mine() {
             let static_visibility_data = upgrade_room.get_static_visibility_data()?;
-            let controller = static_visibility_data.controller()?;
+            let controller_id = static_visibility_data.controller()?;
+            let controller = controller_id.resolve()?;
 
-            return Some(state_map(*controller));
+            if max_rcl.map(|max_rcl| controller.level() < max_rcl).unwrap_or(true) {
+                return Some(state_map(*controller_id));
+            }
         }
     }
 

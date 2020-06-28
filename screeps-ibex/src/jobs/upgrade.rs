@@ -89,7 +89,7 @@ impl Idle {
             }
         })
         .or_else(|| get_new_sign_state(home_room_data, UpgradeState::sign))
-        .or_else(|| get_new_upgrade_state(&tick_context.runtime_data.owner, home_room_data, UpgradeState::upgrade))
+        .or_else(|| get_new_upgrade_state(&tick_context.runtime_data.owner, home_room_data, UpgradeState::upgrade, None))
         .or_else(|| Some(UpgradeState::wait(5)))
     }
 }

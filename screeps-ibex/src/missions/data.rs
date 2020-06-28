@@ -12,7 +12,6 @@ pub enum MissionData {
     Upgrade(EntityRefCell<super::upgrade::UpgradeMission>),
     LocalBuild(EntityRefCell<super::localbuild::LocalBuildMission>),
     Tower(EntityRefCell<super::tower::TowerMission>),
-    RemoteMine(EntityRefCell<super::remotemine::RemoteMineMission>),
     Scout(EntityRefCell<super::scout::ScoutMission>),
     Construction(EntityRefCell<super::construction::ConstructionMission>),
     Reserve(EntityRefCell<super::reserve::ReserveMission>),
@@ -36,7 +35,6 @@ impl MissionData {
             MissionData::Upgrade(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::LocalBuild(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::Tower(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
-            MissionData::RemoteMine(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::Scout(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::Construction(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::Reserve(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
@@ -60,7 +58,6 @@ impl MissionData {
             MissionData::Upgrade(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::LocalBuild(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::Tower(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
-            MissionData::RemoteMine(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::Scout(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::Construction(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::Reserve(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
@@ -207,7 +204,6 @@ mission_type!(super::localsupply::LocalSupplyMission, MissionData::LocalSupply);
 mission_type!(super::upgrade::UpgradeMission, MissionData::Upgrade);
 mission_type!(super::localbuild::LocalBuildMission, MissionData::LocalBuild);
 mission_type!(super::tower::TowerMission, MissionData::Tower);
-mission_type!(super::remotemine::RemoteMineMission, MissionData::RemoteMine);
 mission_type!(super::scout::ScoutMission, MissionData::Scout);
 mission_type!(super::construction::ConstructionMission, MissionData::Construction);
 mission_type!(super::reserve::ReserveMission, MissionData::Reserve);

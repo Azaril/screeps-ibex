@@ -123,11 +123,13 @@ impl Mission for UpgradeMission {
                     .storages()
                     .iter()
                     .any(|container| container.store_of(ResourceType::Energy) >= 100_000)
-            } else {
+            } else if !structures.containers().is_empty() {
                 structures
                     .containers()
                     .iter()
                     .any(|container| container.store_of(ResourceType::Energy) as f32 / CONTAINER_CAPACITY as f32 > 0.75)
+            } else {
+                true
             }
         };
 

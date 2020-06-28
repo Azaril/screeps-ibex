@@ -5,6 +5,7 @@ use screeps_foreman::planner::*;
 pub fn select_construction_site(creep: &Creep, construction_sites: &[ConstructionSite]) -> Option<ConstructionSite> {
     let mut priority_construction_sites: Vec<_> = construction_sites
         .iter()
+        .filter(|s| s.my())
         .map(|s| (s, get_build_priority(s.structure_type())))
         .collect();
 
