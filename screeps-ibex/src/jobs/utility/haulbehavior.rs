@@ -117,6 +117,7 @@ pub fn get_new_pickup_and_delivery_state<TF, F, R>(
     pickup_rooms: &[&RoomData],
     delivery_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
+    allowed_secondary_priorities: TransferPriorityFlags,
     transfer_type: TransferType,
     available_capacity: TransferCapacity,
     transfer_queue: &mut TransferQueue,
@@ -141,8 +142,8 @@ where
             available_capacity,
             target_filter,
         ) {
-            transfer_queue.register_pickup(&pickup, TransferType::Haul);
-            transfer_queue.register_delivery(&delivery, TransferType::Haul);
+            transfer_queue.register_pickup(&pickup, transfer_type);
+            transfer_queue.register_delivery(&delivery, transfer_type);
 
             let mut deliveries = vec![delivery];
 
@@ -154,7 +155,7 @@ where
                 }
             }
 
-            get_additional_deliveries(data, delivery_rooms, allowed_priorities, transfer_type, remaining_capacity, transfer_queue, &mut pickup, &mut deliveries, target_filter);
+            get_additional_deliveries(data, delivery_rooms, allowed_secondary_priorities, transfer_type, remaining_capacity, transfer_queue, &mut pickup, &mut deliveries, target_filter);
 
             return Some(state_map(pickup, deliveries));
         }
@@ -180,59 +181,73 @@ pub fn get_additional_deliveries<TF>(
 
         let mut remaining_capacity = available_capacity;
 
-        while !remaining_capacity.empty() {
-            let last_delivery_pos = deliveries.last().unwrap().target().pos();
+        let target_priorities = ALL_TRANSFER_PRIORITIES
+            .iter()
+            .map(|p| p.into())
+            .filter(|p| allowed_priorities.contains(*p));
 
-            //
-            // NOTE: Pickup priority is ignored here as it's already known that the delivery priority is allowed. Additionally,
-            //       the node is already being visited so it's worthwhile picking up any resource that can be transfered
-            //       on the route.
-            //
+        for allowed_target_priorities in target_priorities {
+            while !remaining_capacity.empty() {
+                let last_delivery_pos = deliveries.last().unwrap().target().pos();
 
-            let mut allowed_pickup_priorities = TransferPriorityFlags::ALL;
+                //
+                // NOTE: Pickup priority is ignored here as it's already known that the delivery priority is allowed. Additionally,
+                //       the node is already being visited so it's worthwhile picking up any resource that can be transfered
+                //       on the route.
+                //
 
-            if allowed_priorities.contains(TransferPriorityFlags::NONE) {
-                allowed_pickup_priorities.remove(TransferPriorityFlags::NONE);
+                let mut allowed_pickup_priorities = TransferPriorityFlags::ALL;
+
+                if allowed_target_priorities.contains(TransferPriorityFlags::NONE) {
+                    allowed_pickup_priorities.remove(TransferPriorityFlags::NONE);
+                }
+
+                //TODO: This should be multiple anchor points.
+                if let Some((additional_pickup, additional_delivery)) = transfer_queue.get_delivery_from_target(
+                    data,
+                    &delivery_room_names,
+                    pickup.target(),
+                    allowed_pickup_priorities,
+                    allowed_target_priorities,
+                    transfer_type,
+                    remaining_capacity,
+                    last_delivery_pos,
+                    target_filter,
+                ) {
+                    transfer_queue.register_pickup(&additional_pickup, transfer_type);
+                    pickup.combine_with(&additional_pickup);
+
+                    transfer_queue.register_delivery(&additional_delivery, transfer_type);
+
+                    for entries in additional_pickup.resources().values() {
+                        for entry in entries {
+                            remaining_capacity.consume(entry.amount());
+                        }
+                    }
+
+                    let mut merged_delivery = false;
+
+                    for delivery in deliveries.iter_mut() {
+                        if delivery.target() == additional_delivery.target() {
+                            delivery.combine_with(&additional_delivery);
+
+                            merged_delivery = true;
+
+                            break;
+                        }
+                    }
+
+                    if !merged_delivery {
+                        deliveries.push(additional_delivery);
+
+                        //TODO: This needs to resort delivery order.
+                    }
+                } else {
+                    break;
+                }
             }
 
-            if let Some((additional_pickup, additional_delivery)) = transfer_queue.get_delivery_from_target(
-                data,
-                &delivery_room_names,
-                pickup.target(),
-                allowed_pickup_priorities,
-                allowed_priorities,
-                transfer_type,
-                remaining_capacity,
-                last_delivery_pos,
-                target_filter,
-            ) {
-                transfer_queue.register_pickup(&additional_pickup, transfer_type);
-                pickup.combine_with(&additional_pickup);
-
-                transfer_queue.register_delivery(&additional_delivery, transfer_type);
-
-                for entries in additional_pickup.resources().values() {
-                    for entry in entries {
-                        remaining_capacity.consume(entry.amount());
-                    }
-                }
-
-                let mut merged_delivery = false;
-
-                for delivery in deliveries.iter_mut() {
-                    if delivery.target() == additional_delivery.target() {
-                        delivery.combine_with(&additional_delivery);
-
-                        merged_delivery = true;
-
-                        break;
-                    }
-                }
-
-                if !merged_delivery {
-                    deliveries.push(additional_delivery);
-                }
-            } else {
+            if remaining_capacity.empty() {
                 break;
             }
         }
@@ -246,6 +261,7 @@ pub fn get_new_pickup_and_delivery_full_capacity_state<TF, F, R>(
     pickup_rooms: &[&RoomData],
     delivery_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
+    allowed_secondary_priorities: TransferPriorityFlags,
     transfer_type: TransferType,
     transfer_queue: &mut TransferQueue,
     target_filter: TF,
@@ -267,6 +283,7 @@ where
         pickup_rooms,
         delivery_rooms,
         allowed_priorities,
+        allowed_secondary_priorities,
         transfer_type,
         TransferCapacity::Finite(available_capacity),
         transfer_queue,

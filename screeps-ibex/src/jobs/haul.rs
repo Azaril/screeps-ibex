@@ -123,6 +123,7 @@ impl Idle {
                 &pickup_rooms,
                 &delivery_rooms,
                 TransferPriorityFlags::ALL,
+                TransferPriorityFlags::ALL,
                 TransferType::Haul,
                 tick_context.runtime_data.transfer_queue,
                 target_filter,
