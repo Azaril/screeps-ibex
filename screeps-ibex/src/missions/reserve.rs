@@ -132,44 +132,58 @@ impl Mission for ReserveMission {
             return Ok(MissionResult::Running);
         }
 
-        let alive_reservers = self
-            .reservers
-            .iter()
-            .filter(|entity| {
-                system_data.creep_spawning.get(**entity).is_some()
-                    || system_data
-                        .creep_owner
-                        .get(**entity)
-                        .and_then(|creep_owner| creep_owner.owner.resolve())
-                        .and_then(|creep| creep.ticks_to_live().ok())
-                        .map(|count| count > 100)
-                        .unwrap_or(false)
-            })
-            .count();
+        let body_definition = crate::creep::SpawnBodyDefinition {
+            maximum_energy: home_room.energy_capacity_available(),
+            minimum_repeat: Some(1),
+            maximum_repeat: Some(2),
+            pre_body: &[],
+            repeat_body: &[Part::Claim, Part::Move],
+            post_body: &[],
+        };
 
-        //TODO: Use visibility data to estimate amount thas has ticked down.
-        let controller_has_sufficient_reservation = game::rooms::get(room_data.name)
-            .and_then(|r| r.controller())
-            .and_then(|c| c.reservation())
-            .map(|r| r.ticks_to_end > 1000)
-            .unwrap_or(false);
+        if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {        
+            let alive_reservers = self
+                .reservers
+                .iter()
+                .filter(|entity| {
+                    system_data.creep_spawning.get(**entity).is_some()
+                        || system_data
+                            .creep_owner
+                            .get(**entity)
+                            .and_then(|creep_owner| creep_owner.owner.resolve())
+                            .and_then(|creep| creep.ticks_to_live().ok())
+                            .map(|count| count > 100)
+                            .unwrap_or(false)
+                })
+                .count();
 
-        //TODO: Compute number of reservers actually needed.
-        if alive_reservers < 1 && !controller_has_sufficient_reservation {
-            let body_definition = crate::creep::SpawnBodyDefinition {
-                maximum_energy: home_room.energy_capacity_available(),
-                minimum_repeat: Some(1),
-                maximum_repeat: Some(2),
-                pre_body: &[],
-                repeat_body: &[Part::Claim, Part::Move],
-                post_body: &[],
+            //TODO: Use visibility data to estimate amount thas has ticked down.
+            let controller_has_sufficient_reservation = game::rooms::get(room_data.name)
+                .and_then(|r| r.controller())
+                .and_then(|c| c.reservation())
+                .map(|r| r.ticks_to_end > 1000)
+                .unwrap_or(false);
+
+            let claim_parts = body.iter().filter(|p| **p == Part::Claim).count();
+            let desired_reservers = if controller_has_sufficient_reservation {
+                0
+            } else if claim_parts > 1 {
+                1
+            } else {
+                2
             };
 
-            if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
+            if alive_reservers < desired_reservers {
+                let priority = if alive_reservers > 0 {
+                    SPAWN_PRIORITY_LOW
+                } else {
+                    SPAWN_PRIORITY_MEDIUM
+                };
+
                 let spawn_request = SpawnRequest::new(
                     format!("Reserver - Target Room: {}", room_data.name),
                     &body,
-                    SPAWN_PRIORITY_LOW,
+                    priority,
                     Self::create_handle_reserver_spawn(mission_entity, *controller_id),
                 );
 
@@ -177,6 +191,6 @@ impl Mission for ReserveMission {
             }
         }
 
-        Ok(MissionResult::Running)
+        Ok(MissionResult::Running)        
     }
 }
