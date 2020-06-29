@@ -5,6 +5,7 @@ use crate::jobs::dismantle::*;
 use crate::jobs::utility::dismantle::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use crate::remoteobjectid::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
@@ -73,9 +74,10 @@ impl DismantleMission {
         })
     }
 
-    pub fn requires_dismantling(structures: &[Structure]) -> bool {
+    pub fn requires_dismantling(structures: &[Structure], sources: &[RemoteObjectId<Source>]) -> bool {
         structures
             .iter()
+            .filter(|s| ignore_for_dismantle(*s, sources))
             .filter(|s| can_dismantle(*s))
             .filter(|s| has_empty_storage(*s))
             .next()
@@ -126,7 +128,9 @@ impl Mission for DismantleMission {
 
         if self.dismantlers.is_empty() {
             if let Some(structures) = room_data.get_structures() {
-                if !Self::requires_dismantling(structures.all()) {
+                let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
+
+                if !Self::requires_dismantling(structures.all(), static_visibility_data.sources()) {
                     return Ok(MissionResult::Success);
                 }
             }

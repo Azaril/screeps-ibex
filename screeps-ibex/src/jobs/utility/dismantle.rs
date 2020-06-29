@@ -1,5 +1,20 @@
 use screeps::*;
 use std::borrow::*;
+use crate::remoteobjectid::*;
+
+pub fn ignore_for_dismantle<T>(structure: T, sources: &[RemoteObjectId<Source>]) -> bool
+where
+    T: Borrow<Structure>,
+{
+    match structure.borrow() {
+        Structure::Container(c) => {
+            let pos = c.pos();
+
+            sources.iter().any(|s| s.pos().in_range_to(&pos, 1))
+        },
+        _ => false
+    }
+}
 
 pub fn can_dismantle<T>(structure: T) -> bool
 where
