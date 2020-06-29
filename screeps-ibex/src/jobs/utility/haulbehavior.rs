@@ -111,7 +111,7 @@ where
 pub fn get_new_pickup_and_delivery_state<F, R>(
     creep: &Creep,
     data: &dyn TransferRequestSystemData,
-    pickup_rooms_temp: &[&RoomData],
+    pickup_rooms: &[&RoomData],
     delivery_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
     transfer_type: TransferType,
@@ -123,7 +123,7 @@ where
     F: Fn(TransferWithdrawTicket, Vec<TransferDepositTicket>) -> R,
 {
     if !available_capacity.empty() {
-        let pickup_room_names = pickup_rooms_temp.iter().map(|r| r.name).collect_vec();
+        let pickup_room_names = pickup_rooms.iter().map(|r| r.name).collect_vec();
         let delivery_room_names = delivery_rooms.iter().map(|r| r.name).collect_vec();
 
         if let Some((mut pickup, delivery)) = transfer_queue.select_pickup_and_delivery(
@@ -148,53 +148,87 @@ where
                 }
             }
 
-            while !remaining_capacity.empty() {
-                let last_delivery_pos = deliveries.last().unwrap().target().pos();
-
-                //
-                // NOTE: Pickup priority is ignored here as it's already known that the delivery priority is allowed. Additionally,
-                //       the node is already being visited so it's worthwhile picking up any resource that can be transfered
-                //       on the route.
-                //
-
-                let mut allowed_pickup_priorities = TransferPriorityFlags::ALL;
-
-                if allowed_priorities.contains(TransferPriorityFlags::NONE) {
-                    allowed_pickup_priorities.remove(TransferPriorityFlags::NONE);
-                }
-
-                if let Some((additional_pickup, additional_delivery)) = transfer_queue.get_delivery_from_target(
-                    data,
-                    &pickup_room_names,
-                    pickup.target(),
-                    allowed_pickup_priorities,
-                    allowed_priorities,
-                    TransferType::Haul,
-                    remaining_capacity,
-                    last_delivery_pos,
-                ) {
-                    transfer_queue.register_pickup(&additional_pickup, TransferType::Haul);
-                    pickup.combine_with(&additional_pickup);
-
-                    transfer_queue.register_delivery(&additional_delivery, TransferType::Haul);
-
-                    deliveries.push(additional_delivery);
-
-                    for entries in additional_pickup.resources().values() {
-                        for entry in entries {
-                            remaining_capacity.consume(entry.amount());
-                        }
-                    }
-                } else {
-                    break;
-                }
-            }
+            get_additional_deliveries(data, delivery_rooms, allowed_priorities, transfer_type, remaining_capacity, transfer_queue, &mut pickup, &mut deliveries);
 
             return Some(state_map(pickup, deliveries));
         }
     }
 
     None
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn get_additional_deliveries(
+    data: &dyn TransferRequestSystemData,
+    delivery_rooms: &[&RoomData],
+    allowed_priorities: TransferPriorityFlags,
+    transfer_type: TransferType,
+    available_capacity: TransferCapacity,
+    transfer_queue: &mut TransferQueue,
+    pickup: &mut TransferWithdrawTicket,
+    deliveries: &mut Vec<TransferDepositTicket>,
+) {
+    if !available_capacity.empty() {
+        let delivery_room_names = delivery_rooms.iter().map(|r| r.name).collect_vec();
+
+        let mut remaining_capacity = available_capacity;
+
+        while !remaining_capacity.empty() {
+            let last_delivery_pos = deliveries.last().unwrap().target().pos();
+
+            //
+            // NOTE: Pickup priority is ignored here as it's already known that the delivery priority is allowed. Additionally,
+            //       the node is already being visited so it's worthwhile picking up any resource that can be transfered
+            //       on the route.
+            //
+
+            let mut allowed_pickup_priorities = TransferPriorityFlags::ALL;
+
+            if allowed_priorities.contains(TransferPriorityFlags::NONE) {
+                allowed_pickup_priorities.remove(TransferPriorityFlags::NONE);
+            }
+
+            if let Some((additional_pickup, additional_delivery)) = transfer_queue.get_delivery_from_target(
+                data,
+                &delivery_room_names,
+                pickup.target(),
+                allowed_pickup_priorities,
+                allowed_priorities,
+                transfer_type,
+                remaining_capacity,
+                last_delivery_pos,
+            ) {
+                transfer_queue.register_pickup(&additional_pickup, transfer_type);
+                pickup.combine_with(&additional_pickup);
+
+                transfer_queue.register_delivery(&additional_delivery, transfer_type);
+
+                for entries in additional_pickup.resources().values() {
+                    for entry in entries {
+                        remaining_capacity.consume(entry.amount());
+                    }
+                }
+
+                let mut merged_delivery = false;
+
+                for delivery in deliveries.iter_mut() {
+                    if delivery.target() == additional_delivery.target() {
+                        delivery.combine_with(&additional_delivery);
+
+                        merged_delivery = true;
+
+                        break;
+                    }
+                }
+
+                if !merged_delivery {
+                    deliveries.push(additional_delivery);
+                }
+            } else {
+                break;
+            }
+        }
+    }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -242,7 +276,7 @@ where
 
     let creep = tick_context.runtime_data.owner;
     let action_flags = &mut tick_context.action_flags;
-    let pos = ticket.target().pos();
+    let pos = ticket.target().pos();    
 
     if !creep.pos().is_near_to(&pos) {
         if action_flags.consume(SimultaneousActionFlags::MOVE) {

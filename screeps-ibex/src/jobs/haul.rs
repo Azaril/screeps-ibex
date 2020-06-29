@@ -148,7 +148,43 @@ impl Pickup {
         }
     }
 
-    fn tick(&mut self, _state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
+    fn tick(&mut self, state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
+        //
+        // NOTE: All haulers run this at the same time so that transfer data is only hydrated on this tick.
+        //
+
+        if game::time() % 5 == 0 {
+            let creep = tick_context.runtime_data.owner;
+
+            let transfer_queue_data = TransferQueueGeneratorData {
+                cause: "Pickup Tick",
+                room_data: &*tick_context.system_data.room_data,
+            };
+
+            let delivery_rooms = state_context
+                .delivery_rooms
+                .iter()
+                .filter_map(|e| tick_context.system_data.room_data.get(*e))
+                .collect_vec();
+
+            let capacity = creep.store_capacity(None);
+            let store_types = creep.store_types();
+            let used_capacity = store_types.iter().map(|r| creep.store_used_capacity(Some(*r))).sum::<u32>();
+            //TODO: Fix this when double resource counting bug is fixed.
+            //let used_capacity = creep.store_used_capacity(None);
+            let free_capacity = capacity - used_capacity;
+
+            let mut available_capacity = TransferCapacity::Finite(free_capacity);
+
+            for entries in self.withdrawl.resources().values() {
+                for entry in entries {
+                    available_capacity.consume(entry.amount());
+                }
+            }
+
+            get_additional_deliveries(&transfer_queue_data, &delivery_rooms, TransferPriorityFlags::ALL, TransferType::Haul, available_capacity, tick_context.runtime_data.transfer_queue, &mut self.withdrawl, &mut self.deposits);
+        }
+        
         let deposits = &self.deposits;
 
         tick_pickup(tick_context, &mut self.withdrawl, move || HaulState::delivery(deposits.clone()))
