@@ -59,16 +59,18 @@ where
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn get_new_delivery_current_resources_state<F, R>(
+pub fn get_new_delivery_current_resources_state<TF, F, R>(
     creep: &Creep,
     data: &dyn TransferRequestSystemData,
     delivery_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
     transfer_types: TransferTypeFlags,
     transfer_queue: &mut TransferQueue,
+    target_filter: TF,
     state_map: F,
 ) -> Option<R>
 where
+    TF: Fn(&TransferTarget) -> bool,
     F: Fn(Vec<TransferDepositTicket>) -> R,
 {
     let available_resources: HashMap<ResourceType, u32> = creep
@@ -88,6 +90,7 @@ where
             transfer_types,
             &available_resources,
             available_capacity,
+            target_filter
         );
 
         if let Some(delivery) = deliveries
@@ -108,7 +111,7 @@ where
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn get_new_pickup_and_delivery_state<F, R>(
+pub fn get_new_pickup_and_delivery_state<TF, F, R>(
     creep: &Creep,
     data: &dyn TransferRequestSystemData,
     pickup_rooms: &[&RoomData],
@@ -117,10 +120,12 @@ pub fn get_new_pickup_and_delivery_state<F, R>(
     transfer_type: TransferType,
     available_capacity: TransferCapacity,
     transfer_queue: &mut TransferQueue,
+    target_filter: TF,
     state_map: F,
 ) -> Option<R>
 where
     F: Fn(TransferWithdrawTicket, Vec<TransferDepositTicket>) -> R,
+    TF: Fn(&TransferTarget) -> bool + Copy
 {
     if !available_capacity.empty() {
         let pickup_room_names = pickup_rooms.iter().map(|r| r.name).collect_vec();
@@ -134,6 +139,7 @@ where
             transfer_type,
             creep.pos(),
             available_capacity,
+            target_filter,
         ) {
             transfer_queue.register_pickup(&pickup, TransferType::Haul);
             transfer_queue.register_delivery(&delivery, TransferType::Haul);
@@ -148,7 +154,7 @@ where
                 }
             }
 
-            get_additional_deliveries(data, delivery_rooms, allowed_priorities, transfer_type, remaining_capacity, transfer_queue, &mut pickup, &mut deliveries);
+            get_additional_deliveries(data, delivery_rooms, allowed_priorities, transfer_type, remaining_capacity, transfer_queue, &mut pickup, &mut deliveries, target_filter);
 
             return Some(state_map(pickup, deliveries));
         }
@@ -158,7 +164,7 @@ where
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn get_additional_deliveries(
+pub fn get_additional_deliveries<TF>(
     data: &dyn TransferRequestSystemData,
     delivery_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
@@ -167,7 +173,8 @@ pub fn get_additional_deliveries(
     transfer_queue: &mut TransferQueue,
     pickup: &mut TransferWithdrawTicket,
     deliveries: &mut Vec<TransferDepositTicket>,
-) {
+    target_filter: TF
+) where TF: Fn(&TransferTarget) -> bool + Copy {
     if !available_capacity.empty() {
         let delivery_room_names = delivery_rooms.iter().map(|r| r.name).collect_vec();
 
@@ -197,6 +204,7 @@ pub fn get_additional_deliveries(
                 transfer_type,
                 remaining_capacity,
                 last_delivery_pos,
+                target_filter,
             ) {
                 transfer_queue.register_pickup(&additional_pickup, transfer_type);
                 pickup.combine_with(&additional_pickup);
@@ -232,7 +240,7 @@ pub fn get_additional_deliveries(
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn get_new_pickup_and_delivery_full_capacity_state<F, R>(
+pub fn get_new_pickup_and_delivery_full_capacity_state<TF, F, R>(
     creep: &Creep,
     data: &dyn TransferRequestSystemData,
     pickup_rooms: &[&RoomData],
@@ -240,10 +248,12 @@ pub fn get_new_pickup_and_delivery_full_capacity_state<F, R>(
     allowed_priorities: TransferPriorityFlags,
     transfer_type: TransferType,
     transfer_queue: &mut TransferQueue,
+    target_filter: TF,
     state_map: F,
 ) -> Option<R>
 where
     F: Fn(TransferWithdrawTicket, Vec<TransferDepositTicket>) -> R,
+    TF: Fn(&TransferTarget) -> bool + Copy
 {
     let capacity = creep.store_capacity(None);
     let store_types = creep.store_types();
@@ -260,6 +270,7 @@ where
         transfer_type,
         TransferCapacity::Finite(available_capacity),
         transfer_queue,
+        target_filter,
         state_map,
     )
 }

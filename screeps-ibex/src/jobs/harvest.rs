@@ -101,6 +101,7 @@ impl Idle {
                 TransferPriorityFlags::HIGH,
                 TransferType::Haul,
                 tick_context.runtime_data.transfer_queue,
+                target_filters::all,
                 HarvestState::pickup,
             ) {
                 return Some(state);
@@ -132,6 +133,7 @@ impl Idle {
                     TransferPriorityFlags::MEDIUM | TransferPriorityFlags::LOW,
                     TransferType::Haul,
                     tick_context.runtime_data.transfer_queue,
+                    target_filters::all,
                     HarvestState::pickup,
                 ) {
                     return Some(state);
@@ -150,6 +152,7 @@ impl Idle {
                 TransferPriorityFlags::HIGH,
                 TransferTypeFlags::HAUL,
                 tick_context.runtime_data.transfer_queue,
+                target_filters::all,
                 HarvestState::delivery,
             )
             .or_else(|| get_new_upgrade_state(creep, delivery_room_data, HarvestState::upgrade, Some(2)))
@@ -166,6 +169,7 @@ impl Idle {
                             TransferPriorityFlags::from(priority),
                             TransferTypeFlags::HAUL,
                             tick_context.runtime_data.transfer_queue,
+                            target_filters::all,
                             HarvestState::delivery,
                         )
                     })
@@ -256,6 +260,7 @@ impl FinishedDelivery {
                     priority.into(),
                     TransferTypeFlags::HAUL,
                     tick_context.runtime_data.transfer_queue,
+                    target_filters::all,
                     HarvestState::delivery,
                 )
             })

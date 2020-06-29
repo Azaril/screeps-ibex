@@ -389,6 +389,7 @@ impl LocalSupplyMission {
                                     TransferType::Link,
                                     TransferCapacity::Infinite,
                                     link_pos,
+                                    target_filters::link
                                 )
                             })
                             .next();
