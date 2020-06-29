@@ -16,7 +16,7 @@
   "gnetId": null,
   "graphTooltip": 0,
   "id": 3158,
-  "iteration": 1592085613906,
+  "iteration": 1593397088487,
   "links": [],
   "panels": [
     {
@@ -34,8 +34,8 @@
       "scopedVars": {
         "shard": {
           "selected": false,
-          "text": "shard3",
-          "value": "shard3"
+          "text": "shard1",
+          "value": "shard1"
         }
       },
       "title": "CPU for $shard",
@@ -86,8 +86,8 @@
       "scopedVars": {
         "shard": {
           "selected": false,
-          "text": "shard3",
-          "value": "shard3"
+          "text": "shard1",
+          "value": "shard1"
         }
       },
       "seriesOverrides": [
@@ -233,8 +233,8 @@
       "scopedVars": {
         "shard": {
           "selected": false,
-          "text": "shard3",
-          "value": "shard3"
+          "text": "shard1",
+          "value": "shard1"
         }
       },
       "sparkline": {
@@ -306,8 +306,8 @@
       "scopedVars": {
         "shard": {
           "selected": false,
-          "text": "shard3",
-          "value": "shard3"
+          "text": "shard1",
+          "value": "shard1"
         }
       },
       "seriesOverrides": [],
@@ -1102,8 +1102,8 @@
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E33S31",
-          "value": "E33S31"
+          "text": "W1S53",
+          "value": "W1S53"
         }
       },
       "title": "$room",
@@ -1169,8 +1169,8 @@
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E33S31",
-          "value": "E33S31"
+          "text": "W1S53",
+          "value": "W1S53"
         }
       },
       "sparkline": {
@@ -1244,8 +1244,8 @@
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E33S31",
-          "value": "E33S31"
+          "text": "W1S53",
+          "value": "W1S53"
         }
       },
       "seriesOverrides": [
@@ -1368,8 +1368,8 @@
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E33S31",
-          "value": "E33S31"
+          "text": "W1S53",
+          "value": "W1S53"
         }
       },
       "seriesOverrides": [
@@ -1485,8 +1485,8 @@
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E33S31",
-          "value": "E33S31"
+          "text": "W1S53",
+          "value": "W1S53"
         }
       },
       "seriesOverrides": [
@@ -1539,7 +1539,7 @@
           "label": null,
           "logBase": 1,
           "max": null,
-          "min": null,
+          "min": "0",
           "show": true
         },
         {
@@ -1616,8 +1616,8 @@
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E33S31",
-          "value": "E33S31"
+          "text": "W1S53",
+          "value": "W1S53"
         }
       },
       "sparkline": {
@@ -1711,8 +1711,8 @@
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E33S31",
-          "value": "E33S31"
+          "text": "W1S53",
+          "value": "W1S53"
         }
       },
       "sparkline": {
@@ -1768,13 +1768,13 @@
       "id": 189,
       "panels": [],
       "repeat": null,
-      "repeatIteration": 1592085613906,
+      "repeatIteration": 1593397088487,
       "repeatPanelId": 167,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E34S31",
-          "value": "E34S31"
+          "text": "W3S51",
+          "value": "W3S51"
         }
       },
       "title": "$room",
@@ -1836,14 +1836,14 @@
           "to": "null"
         }
       ],
-      "repeatIteration": 1592085613906,
+      "repeatIteration": 1593397088487,
       "repeatPanelId": 8,
       "repeatedByRow": true,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E34S31",
-          "value": "E34S31"
+          "text": "W3S51",
+          "value": "W3S51"
         }
       },
       "sparkline": {
@@ -1913,14 +1913,14 @@
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
-      "repeatIteration": 1592085613906,
+      "repeatIteration": 1593397088487,
       "repeatPanelId": 53,
       "repeatedByRow": true,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E34S31",
-          "value": "E34S31"
+          "text": "W3S51",
+          "value": "W3S51"
         }
       },
       "seriesOverrides": [
@@ -2039,14 +2039,14 @@
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
-      "repeatIteration": 1592085613906,
+      "repeatIteration": 1593397088487,
       "repeatPanelId": 82,
       "repeatedByRow": true,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E34S31",
-          "value": "E34S31"
+          "text": "W3S51",
+          "value": "W3S51"
         }
       },
       "seriesOverrides": [
@@ -2159,14 +2159,14 @@
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
-      "repeatIteration": 1592085613906,
+      "repeatIteration": 1593397088487,
       "repeatPanelId": 188,
       "repeatedByRow": true,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E34S31",
-          "value": "E34S31"
+          "text": "W3S51",
+          "value": "W3S51"
         }
       },
       "seriesOverrides": [
@@ -2219,7 +2219,7 @@
           "label": null,
           "logBase": 1,
           "max": null,
-          "min": null,
+          "min": "0",
           "show": true
         },
         {
@@ -2292,14 +2292,14 @@
           "to": "null"
         }
       ],
-      "repeatIteration": 1592085613906,
+      "repeatIteration": 1593397088487,
       "repeatPanelId": 16,
       "repeatedByRow": true,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E34S31",
-          "value": "E34S31"
+          "text": "W3S51",
+          "value": "W3S51"
         }
       },
       "sparkline": {
@@ -2389,14 +2389,14 @@
           "to": "null"
         }
       ],
-      "repeatIteration": 1592085613906,
+      "repeatIteration": 1593397088487,
       "repeatPanelId": 31,
       "repeatedByRow": true,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E34S31",
-          "value": "E34S31"
+          "text": "W3S51",
+          "value": "W3S51"
         }
       },
       "sparkline": {
@@ -2452,13 +2452,13 @@
       "id": 196,
       "panels": [],
       "repeat": null,
-      "repeatIteration": 1592085613906,
+      "repeatIteration": 1593397088487,
       "repeatPanelId": 167,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E35S31",
-          "value": "E35S31"
+          "text": "W3S52",
+          "value": "W3S52"
         }
       },
       "title": "$room",
@@ -2520,14 +2520,14 @@
           "to": "null"
         }
       ],
-      "repeatIteration": 1592085613906,
+      "repeatIteration": 1593397088487,
       "repeatPanelId": 8,
       "repeatedByRow": true,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E35S31",
-          "value": "E35S31"
+          "text": "W3S52",
+          "value": "W3S52"
         }
       },
       "sparkline": {
@@ -2597,14 +2597,14 @@
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
-      "repeatIteration": 1592085613906,
+      "repeatIteration": 1593397088487,
       "repeatPanelId": 53,
       "repeatedByRow": true,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E35S31",
-          "value": "E35S31"
+          "text": "W3S52",
+          "value": "W3S52"
         }
       },
       "seriesOverrides": [
@@ -2723,14 +2723,14 @@
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
-      "repeatIteration": 1592085613906,
+      "repeatIteration": 1593397088487,
       "repeatPanelId": 82,
       "repeatedByRow": true,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E35S31",
-          "value": "E35S31"
+          "text": "W3S52",
+          "value": "W3S52"
         }
       },
       "seriesOverrides": [
@@ -2843,14 +2843,14 @@
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
-      "repeatIteration": 1592085613906,
+      "repeatIteration": 1593397088487,
       "repeatPanelId": 188,
       "repeatedByRow": true,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E35S31",
-          "value": "E35S31"
+          "text": "W3S52",
+          "value": "W3S52"
         }
       },
       "seriesOverrides": [
@@ -2903,7 +2903,7 @@
           "label": null,
           "logBase": 1,
           "max": null,
-          "min": null,
+          "min": "0",
           "show": true
         },
         {
@@ -2976,14 +2976,14 @@
           "to": "null"
         }
       ],
-      "repeatIteration": 1592085613906,
+      "repeatIteration": 1593397088487,
       "repeatPanelId": 16,
       "repeatedByRow": true,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E35S31",
-          "value": "E35S31"
+          "text": "W3S52",
+          "value": "W3S52"
         }
       },
       "sparkline": {
@@ -3073,14 +3073,2750 @@
           "to": "null"
         }
       ],
-      "repeatIteration": 1592085613906,
+      "repeatIteration": 1593397088487,
       "repeatPanelId": 31,
       "repeatedByRow": true,
       "scopedVars": {
         "room": {
           "selected": false,
-          "text": "E35S31",
-          "value": "E35S31"
+          "text": "W3S52",
+          "value": "W3S52"
+        }
+      },
+      "sparkline": {
+        "fillColor": "rgba(31, 118, 189, 0.18)",
+        "full": false,
+        "lineColor": "rgb(31, 120, 193)",
+        "show": false
+      },
+      "tableColumn": "",
+      "targets": [
+        {
+          "refCount": 0,
+          "refId": "A",
+          "target": "divideSeries(diffSeries(screeps.$user.shard.$shard.room.$room.controller_progress_total, #B), #C)",
+          "targetFull": "divideSeries(diffSeries(screeps.$user.shard.$shard.room.$room.controller_progress_total, keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), scaleToSeconds(movingAverage(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), '1hour'), 1))",
+          "textEditor": false
+        },
+        {
+          "hide": true,
+          "refCount": -1,
+          "refId": "B",
+          "target": "keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)"
+        },
+        {
+          "hide": true,
+          "refCount": 1,
+          "refId": "C",
+          "target": "scaleToSeconds(movingAverage(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), '1hour'), 1)"
+        }
+      ],
+      "thresholds": "",
+      "title": "Time to Next RCL",
+      "type": "singlestat",
+      "valueFontSize": "70%",
+      "valueMaps": [
+        {
+          "op": "=",
+          "text": "N/A",
+          "value": "null"
+        }
+      ],
+      "valueName": "current"
+    },
+    {
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 51
+      },
+      "id": 203,
+      "panels": [],
+      "repeat": null,
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 167,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W3S53",
+          "value": "W3S53"
+        }
+      },
+      "title": "$room",
+      "type": "row"
+    },
+    {
+      "cacheTimeout": null,
+      "colorBackground": false,
+      "colorValue": true,
+      "colors": [
+        "rgba(245, 54, 54, 0.9)",
+        "rgba(237, 129, 40, 0.89)",
+        "rgba(50, 172, 45, 0.97)"
+      ],
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "format": "none",
+      "gauge": {
+        "maxValue": 100,
+        "minValue": 0,
+        "show": false,
+        "thresholdLabels": false,
+        "thresholdMarkers": true
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 0,
+        "y": 52
+      },
+      "id": 204,
+      "interval": null,
+      "isNew": true,
+      "links": [],
+      "mappingType": 1,
+      "mappingTypes": [
+        {
+          "name": "value to text",
+          "value": 1
+        },
+        {
+          "name": "range to text",
+          "value": 2
+        }
+      ],
+      "maxDataPoints": 100,
+      "nullPointMode": "connected",
+      "nullText": null,
+      "options": {},
+      "postfix": "",
+      "postfixFontSize": "50%",
+      "prefix": "",
+      "prefixFontSize": "50%",
+      "rangeMaps": [
+        {
+          "from": "null",
+          "text": "N/A",
+          "to": "null"
+        }
+      ],
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 8,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W3S53",
+          "value": "W3S53"
+        }
+      },
+      "sparkline": {
+        "fillColor": "rgba(31, 118, 189, 0.18)",
+        "full": false,
+        "lineColor": "rgb(31, 120, 193)",
+        "show": false
+      },
+      "tableColumn": "",
+      "targets": [
+        {
+          "refId": "A",
+          "target": "screeps.$user.shard.$shard.room.$room.controller_level"
+        }
+      ],
+      "thresholds": "4.01,7.01",
+      "title": "RCL",
+      "type": "singlestat",
+      "valueFontSize": "120%",
+      "valueMaps": [
+        {
+          "op": "=",
+          "text": "N/A",
+          "value": "null"
+        }
+      ],
+      "valueName": "current"
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 10,
+        "w": 6,
+        "x": 4,
+        "y": 52
+      },
+      "hiddenSeries": false,
+      "id": 205,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "max": true,
+        "min": true,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 53,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W3S53",
+          "value": "W3S53"
+        }
+      },
+      "seriesOverrides": [
+        {
+          "alias": "1hr Moving Average",
+          "fill": 0,
+          "steppedLine": false
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": true,
+      "targets": [
+        {
+          "refCount": 1,
+          "refId": "A",
+          "target": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), #C), 'RCL per tick')",
+          "targetFull": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), derivative(screeps.$user.shard.$shard.time)), 'RCL per tick')",
+          "textEditor": false
+        },
+        {
+          "hide": true,
+          "refCount": 0,
+          "refId": "C",
+          "target": "derivative(screeps.$user.shard.$shard.time)"
+        },
+        {
+          "refCount": 0,
+          "refId": "B",
+          "target": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), #C), '1hour'), '1hr Moving Average')",
+          "targetFull": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), derivative(screeps.$user.shard.$shard.time)), '1hour'), '1hr Moving Average')"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "RCL Upgrade",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 10,
+        "w": 5,
+        "x": 10,
+        "y": 52
+      },
+      "hiddenSeries": false,
+      "id": 206,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "hideEmpty": false,
+        "hideZero": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 82,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W3S53",
+          "value": "W3S53"
+        }
+      },
+      "seriesOverrides": [
+        {
+          "alias": "Total",
+          "lines": false,
+          "stack": false
+        }
+      ],
+      "spaceLength": 10,
+      "stack": true,
+      "steppedLine": false,
+      "targets": [
+        {
+          "refCount": -1,
+          "refId": "A",
+          "target": "groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.energy, 7, \"sumSeries\")",
+          "textEditor": true
+        },
+        {
+          "refCount": 0,
+          "refId": "D",
+          "target": "alias(sumSeries(#A), \"Total\")",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.energy, 7, \"sumSeries\")), \"Total\")",
+          "textEditor": true
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Room Stored Energy",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 10,
+        "w": 5,
+        "x": 15,
+        "y": 52
+      },
+      "hiddenSeries": false,
+      "id": 207,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "hideEmpty": false,
+        "hideZero": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 188,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W3S53",
+          "value": "W3S53"
+        }
+      },
+      "seriesOverrides": [
+        {
+          "alias": "Total",
+          "lines": false,
+          "stack": false
+        }
+      ],
+      "spaceLength": 10,
+      "stack": true,
+      "steppedLine": false,
+      "targets": [
+        {
+          "refCount": -1,
+          "refId": "A",
+          "target": "groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.*, 8, \"sumSeries\")",
+          "textEditor": true
+        },
+        {
+          "refCount": 0,
+          "refId": "D",
+          "target": "alias(sumSeries(#A), \"Total\")",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.*, 8, \"sumSeries\")), \"Total\")",
+          "textEditor": true
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Room Resources",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": "0",
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "cacheTimeout": null,
+      "colorBackground": false,
+      "colorValue": false,
+      "colors": [
+        "rgba(245, 54, 54, 0.9)",
+        "rgba(237, 129, 40, 0.89)",
+        "rgba(50, 172, 45, 0.97)"
+      ],
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "format": "percentunit",
+      "gauge": {
+        "maxValue": 1,
+        "minValue": 0,
+        "show": true,
+        "thresholdLabels": false,
+        "thresholdMarkers": true
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 55
+      },
+      "id": 208,
+      "interval": null,
+      "isNew": true,
+      "links": [],
+      "mappingType": 1,
+      "mappingTypes": [
+        {
+          "name": "value to text",
+          "value": 1
+        },
+        {
+          "name": "range to text",
+          "value": 2
+        }
+      ],
+      "maxDataPoints": 100,
+      "nullPointMode": "connected",
+      "nullText": null,
+      "options": {},
+      "postfix": "",
+      "postfixFontSize": "50%",
+      "prefix": "",
+      "prefixFontSize": "50%",
+      "rangeMaps": [
+        {
+          "from": "null",
+          "text": "N/A",
+          "to": "null"
+        }
+      ],
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 16,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W3S53",
+          "value": "W3S53"
+        }
+      },
+      "sparkline": {
+        "fillColor": "rgba(31, 118, 189, 0.18)",
+        "full": false,
+        "lineColor": "rgb(31, 120, 193)",
+        "show": false
+      },
+      "tableColumn": "",
+      "targets": [
+        {
+          "refId": "A",
+          "target": "divideSeries(screeps.$user.shard.$shard.room.$room.controller_progress, #B)"
+        },
+        {
+          "hide": true,
+          "refId": "B",
+          "target": "screeps.$user.shard.$shard.room.$room.controller_progress_total"
+        }
+      ],
+      "thresholds": "",
+      "title": "RCL progress",
+      "type": "singlestat",
+      "valueFontSize": "120%",
+      "valueMaps": [
+        {
+          "op": "=",
+          "text": "N/A",
+          "value": "null"
+        }
+      ],
+      "valueName": "current"
+    },
+    {
+      "cacheTimeout": null,
+      "colorBackground": false,
+      "colorValue": false,
+      "colors": [
+        "rgba(245, 54, 54, 0.9)",
+        "rgba(237, 129, 40, 0.89)",
+        "rgba(50, 172, 45, 0.97)"
+      ],
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "format": "s",
+      "gauge": {
+        "maxValue": 100,
+        "minValue": 0,
+        "show": false,
+        "thresholdLabels": false,
+        "thresholdMarkers": true
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 0,
+        "y": 59
+      },
+      "id": 209,
+      "interval": null,
+      "isNew": true,
+      "links": [],
+      "mappingType": 1,
+      "mappingTypes": [
+        {
+          "name": "value to text",
+          "value": 1
+        },
+        {
+          "name": "range to text",
+          "value": 2
+        }
+      ],
+      "maxDataPoints": 100,
+      "nullPointMode": "connected",
+      "nullText": null,
+      "options": {},
+      "postfix": "",
+      "postfixFontSize": "50%",
+      "prefix": "",
+      "prefixFontSize": "50%",
+      "rangeMaps": [
+        {
+          "from": "null",
+          "text": "N/A",
+          "to": "null"
+        }
+      ],
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 31,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W3S53",
+          "value": "W3S53"
+        }
+      },
+      "sparkline": {
+        "fillColor": "rgba(31, 118, 189, 0.18)",
+        "full": false,
+        "lineColor": "rgb(31, 120, 193)",
+        "show": false
+      },
+      "tableColumn": "",
+      "targets": [
+        {
+          "refCount": 0,
+          "refId": "A",
+          "target": "divideSeries(diffSeries(screeps.$user.shard.$shard.room.$room.controller_progress_total, #B), #C)",
+          "targetFull": "divideSeries(diffSeries(screeps.$user.shard.$shard.room.$room.controller_progress_total, keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), scaleToSeconds(movingAverage(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), '1hour'), 1))",
+          "textEditor": false
+        },
+        {
+          "hide": true,
+          "refCount": -1,
+          "refId": "B",
+          "target": "keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)"
+        },
+        {
+          "hide": true,
+          "refCount": 1,
+          "refId": "C",
+          "target": "scaleToSeconds(movingAverage(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), '1hour'), 1)"
+        }
+      ],
+      "thresholds": "",
+      "title": "Time to Next RCL",
+      "type": "singlestat",
+      "valueFontSize": "70%",
+      "valueMaps": [
+        {
+          "op": "=",
+          "text": "N/A",
+          "value": "null"
+        }
+      ],
+      "valueName": "current"
+    },
+    {
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 62
+      },
+      "id": 210,
+      "panels": [],
+      "repeat": null,
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 167,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W5S51",
+          "value": "W5S51"
+        }
+      },
+      "title": "$room",
+      "type": "row"
+    },
+    {
+      "cacheTimeout": null,
+      "colorBackground": false,
+      "colorValue": true,
+      "colors": [
+        "rgba(245, 54, 54, 0.9)",
+        "rgba(237, 129, 40, 0.89)",
+        "rgba(50, 172, 45, 0.97)"
+      ],
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "format": "none",
+      "gauge": {
+        "maxValue": 100,
+        "minValue": 0,
+        "show": false,
+        "thresholdLabels": false,
+        "thresholdMarkers": true
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 0,
+        "y": 63
+      },
+      "id": 211,
+      "interval": null,
+      "isNew": true,
+      "links": [],
+      "mappingType": 1,
+      "mappingTypes": [
+        {
+          "name": "value to text",
+          "value": 1
+        },
+        {
+          "name": "range to text",
+          "value": 2
+        }
+      ],
+      "maxDataPoints": 100,
+      "nullPointMode": "connected",
+      "nullText": null,
+      "options": {},
+      "postfix": "",
+      "postfixFontSize": "50%",
+      "prefix": "",
+      "prefixFontSize": "50%",
+      "rangeMaps": [
+        {
+          "from": "null",
+          "text": "N/A",
+          "to": "null"
+        }
+      ],
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 8,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W5S51",
+          "value": "W5S51"
+        }
+      },
+      "sparkline": {
+        "fillColor": "rgba(31, 118, 189, 0.18)",
+        "full": false,
+        "lineColor": "rgb(31, 120, 193)",
+        "show": false
+      },
+      "tableColumn": "",
+      "targets": [
+        {
+          "refId": "A",
+          "target": "screeps.$user.shard.$shard.room.$room.controller_level"
+        }
+      ],
+      "thresholds": "4.01,7.01",
+      "title": "RCL",
+      "type": "singlestat",
+      "valueFontSize": "120%",
+      "valueMaps": [
+        {
+          "op": "=",
+          "text": "N/A",
+          "value": "null"
+        }
+      ],
+      "valueName": "current"
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 10,
+        "w": 6,
+        "x": 4,
+        "y": 63
+      },
+      "hiddenSeries": false,
+      "id": 212,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "max": true,
+        "min": true,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 53,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W5S51",
+          "value": "W5S51"
+        }
+      },
+      "seriesOverrides": [
+        {
+          "alias": "1hr Moving Average",
+          "fill": 0,
+          "steppedLine": false
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": true,
+      "targets": [
+        {
+          "refCount": 1,
+          "refId": "A",
+          "target": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), #C), 'RCL per tick')",
+          "targetFull": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), derivative(screeps.$user.shard.$shard.time)), 'RCL per tick')",
+          "textEditor": false
+        },
+        {
+          "hide": true,
+          "refCount": 0,
+          "refId": "C",
+          "target": "derivative(screeps.$user.shard.$shard.time)"
+        },
+        {
+          "refCount": 0,
+          "refId": "B",
+          "target": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), #C), '1hour'), '1hr Moving Average')",
+          "targetFull": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), derivative(screeps.$user.shard.$shard.time)), '1hour'), '1hr Moving Average')"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "RCL Upgrade",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 10,
+        "w": 5,
+        "x": 10,
+        "y": 63
+      },
+      "hiddenSeries": false,
+      "id": 213,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "hideEmpty": false,
+        "hideZero": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 82,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W5S51",
+          "value": "W5S51"
+        }
+      },
+      "seriesOverrides": [
+        {
+          "alias": "Total",
+          "lines": false,
+          "stack": false
+        }
+      ],
+      "spaceLength": 10,
+      "stack": true,
+      "steppedLine": false,
+      "targets": [
+        {
+          "refCount": -1,
+          "refId": "A",
+          "target": "groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.energy, 7, \"sumSeries\")",
+          "textEditor": true
+        },
+        {
+          "refCount": 0,
+          "refId": "D",
+          "target": "alias(sumSeries(#A), \"Total\")",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.energy, 7, \"sumSeries\")), \"Total\")",
+          "textEditor": true
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Room Stored Energy",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 10,
+        "w": 5,
+        "x": 15,
+        "y": 63
+      },
+      "hiddenSeries": false,
+      "id": 214,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "hideEmpty": false,
+        "hideZero": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 188,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W5S51",
+          "value": "W5S51"
+        }
+      },
+      "seriesOverrides": [
+        {
+          "alias": "Total",
+          "lines": false,
+          "stack": false
+        }
+      ],
+      "spaceLength": 10,
+      "stack": true,
+      "steppedLine": false,
+      "targets": [
+        {
+          "refCount": -1,
+          "refId": "A",
+          "target": "groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.*, 8, \"sumSeries\")",
+          "textEditor": true
+        },
+        {
+          "refCount": 0,
+          "refId": "D",
+          "target": "alias(sumSeries(#A), \"Total\")",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.*, 8, \"sumSeries\")), \"Total\")",
+          "textEditor": true
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Room Resources",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": "0",
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "cacheTimeout": null,
+      "colorBackground": false,
+      "colorValue": false,
+      "colors": [
+        "rgba(245, 54, 54, 0.9)",
+        "rgba(237, 129, 40, 0.89)",
+        "rgba(50, 172, 45, 0.97)"
+      ],
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "format": "percentunit",
+      "gauge": {
+        "maxValue": 1,
+        "minValue": 0,
+        "show": true,
+        "thresholdLabels": false,
+        "thresholdMarkers": true
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 66
+      },
+      "id": 215,
+      "interval": null,
+      "isNew": true,
+      "links": [],
+      "mappingType": 1,
+      "mappingTypes": [
+        {
+          "name": "value to text",
+          "value": 1
+        },
+        {
+          "name": "range to text",
+          "value": 2
+        }
+      ],
+      "maxDataPoints": 100,
+      "nullPointMode": "connected",
+      "nullText": null,
+      "options": {},
+      "postfix": "",
+      "postfixFontSize": "50%",
+      "prefix": "",
+      "prefixFontSize": "50%",
+      "rangeMaps": [
+        {
+          "from": "null",
+          "text": "N/A",
+          "to": "null"
+        }
+      ],
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 16,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W5S51",
+          "value": "W5S51"
+        }
+      },
+      "sparkline": {
+        "fillColor": "rgba(31, 118, 189, 0.18)",
+        "full": false,
+        "lineColor": "rgb(31, 120, 193)",
+        "show": false
+      },
+      "tableColumn": "",
+      "targets": [
+        {
+          "refId": "A",
+          "target": "divideSeries(screeps.$user.shard.$shard.room.$room.controller_progress, #B)"
+        },
+        {
+          "hide": true,
+          "refId": "B",
+          "target": "screeps.$user.shard.$shard.room.$room.controller_progress_total"
+        }
+      ],
+      "thresholds": "",
+      "title": "RCL progress",
+      "type": "singlestat",
+      "valueFontSize": "120%",
+      "valueMaps": [
+        {
+          "op": "=",
+          "text": "N/A",
+          "value": "null"
+        }
+      ],
+      "valueName": "current"
+    },
+    {
+      "cacheTimeout": null,
+      "colorBackground": false,
+      "colorValue": false,
+      "colors": [
+        "rgba(245, 54, 54, 0.9)",
+        "rgba(237, 129, 40, 0.89)",
+        "rgba(50, 172, 45, 0.97)"
+      ],
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "format": "s",
+      "gauge": {
+        "maxValue": 100,
+        "minValue": 0,
+        "show": false,
+        "thresholdLabels": false,
+        "thresholdMarkers": true
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 0,
+        "y": 70
+      },
+      "id": 216,
+      "interval": null,
+      "isNew": true,
+      "links": [],
+      "mappingType": 1,
+      "mappingTypes": [
+        {
+          "name": "value to text",
+          "value": 1
+        },
+        {
+          "name": "range to text",
+          "value": 2
+        }
+      ],
+      "maxDataPoints": 100,
+      "nullPointMode": "connected",
+      "nullText": null,
+      "options": {},
+      "postfix": "",
+      "postfixFontSize": "50%",
+      "prefix": "",
+      "prefixFontSize": "50%",
+      "rangeMaps": [
+        {
+          "from": "null",
+          "text": "N/A",
+          "to": "null"
+        }
+      ],
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 31,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W5S51",
+          "value": "W5S51"
+        }
+      },
+      "sparkline": {
+        "fillColor": "rgba(31, 118, 189, 0.18)",
+        "full": false,
+        "lineColor": "rgb(31, 120, 193)",
+        "show": false
+      },
+      "tableColumn": "",
+      "targets": [
+        {
+          "refCount": 0,
+          "refId": "A",
+          "target": "divideSeries(diffSeries(screeps.$user.shard.$shard.room.$room.controller_progress_total, #B), #C)",
+          "targetFull": "divideSeries(diffSeries(screeps.$user.shard.$shard.room.$room.controller_progress_total, keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), scaleToSeconds(movingAverage(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), '1hour'), 1))",
+          "textEditor": false
+        },
+        {
+          "hide": true,
+          "refCount": -1,
+          "refId": "B",
+          "target": "keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)"
+        },
+        {
+          "hide": true,
+          "refCount": 1,
+          "refId": "C",
+          "target": "scaleToSeconds(movingAverage(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), '1hour'), 1)"
+        }
+      ],
+      "thresholds": "",
+      "title": "Time to Next RCL",
+      "type": "singlestat",
+      "valueFontSize": "70%",
+      "valueMaps": [
+        {
+          "op": "=",
+          "text": "N/A",
+          "value": "null"
+        }
+      ],
+      "valueName": "current"
+    },
+    {
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 73
+      },
+      "id": 217,
+      "panels": [],
+      "repeat": null,
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 167,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W6S51",
+          "value": "W6S51"
+        }
+      },
+      "title": "$room",
+      "type": "row"
+    },
+    {
+      "cacheTimeout": null,
+      "colorBackground": false,
+      "colorValue": true,
+      "colors": [
+        "rgba(245, 54, 54, 0.9)",
+        "rgba(237, 129, 40, 0.89)",
+        "rgba(50, 172, 45, 0.97)"
+      ],
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "format": "none",
+      "gauge": {
+        "maxValue": 100,
+        "minValue": 0,
+        "show": false,
+        "thresholdLabels": false,
+        "thresholdMarkers": true
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 0,
+        "y": 74
+      },
+      "id": 218,
+      "interval": null,
+      "isNew": true,
+      "links": [],
+      "mappingType": 1,
+      "mappingTypes": [
+        {
+          "name": "value to text",
+          "value": 1
+        },
+        {
+          "name": "range to text",
+          "value": 2
+        }
+      ],
+      "maxDataPoints": 100,
+      "nullPointMode": "connected",
+      "nullText": null,
+      "options": {},
+      "postfix": "",
+      "postfixFontSize": "50%",
+      "prefix": "",
+      "prefixFontSize": "50%",
+      "rangeMaps": [
+        {
+          "from": "null",
+          "text": "N/A",
+          "to": "null"
+        }
+      ],
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 8,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W6S51",
+          "value": "W6S51"
+        }
+      },
+      "sparkline": {
+        "fillColor": "rgba(31, 118, 189, 0.18)",
+        "full": false,
+        "lineColor": "rgb(31, 120, 193)",
+        "show": false
+      },
+      "tableColumn": "",
+      "targets": [
+        {
+          "refId": "A",
+          "target": "screeps.$user.shard.$shard.room.$room.controller_level"
+        }
+      ],
+      "thresholds": "4.01,7.01",
+      "title": "RCL",
+      "type": "singlestat",
+      "valueFontSize": "120%",
+      "valueMaps": [
+        {
+          "op": "=",
+          "text": "N/A",
+          "value": "null"
+        }
+      ],
+      "valueName": "current"
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 10,
+        "w": 6,
+        "x": 4,
+        "y": 74
+      },
+      "hiddenSeries": false,
+      "id": 219,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "max": true,
+        "min": true,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 53,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W6S51",
+          "value": "W6S51"
+        }
+      },
+      "seriesOverrides": [
+        {
+          "alias": "1hr Moving Average",
+          "fill": 0,
+          "steppedLine": false
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": true,
+      "targets": [
+        {
+          "refCount": 1,
+          "refId": "A",
+          "target": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), #C), 'RCL per tick')",
+          "targetFull": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), derivative(screeps.$user.shard.$shard.time)), 'RCL per tick')",
+          "textEditor": false
+        },
+        {
+          "hide": true,
+          "refCount": 0,
+          "refId": "C",
+          "target": "derivative(screeps.$user.shard.$shard.time)"
+        },
+        {
+          "refCount": 0,
+          "refId": "B",
+          "target": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), #C), '1hour'), '1hr Moving Average')",
+          "targetFull": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), derivative(screeps.$user.shard.$shard.time)), '1hour'), '1hr Moving Average')"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "RCL Upgrade",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 10,
+        "w": 5,
+        "x": 10,
+        "y": 74
+      },
+      "hiddenSeries": false,
+      "id": 220,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "hideEmpty": false,
+        "hideZero": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 82,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W6S51",
+          "value": "W6S51"
+        }
+      },
+      "seriesOverrides": [
+        {
+          "alias": "Total",
+          "lines": false,
+          "stack": false
+        }
+      ],
+      "spaceLength": 10,
+      "stack": true,
+      "steppedLine": false,
+      "targets": [
+        {
+          "refCount": -1,
+          "refId": "A",
+          "target": "groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.energy, 7, \"sumSeries\")",
+          "textEditor": true
+        },
+        {
+          "refCount": 0,
+          "refId": "D",
+          "target": "alias(sumSeries(#A), \"Total\")",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.energy, 7, \"sumSeries\")), \"Total\")",
+          "textEditor": true
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Room Stored Energy",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 10,
+        "w": 5,
+        "x": 15,
+        "y": 74
+      },
+      "hiddenSeries": false,
+      "id": 221,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "hideEmpty": false,
+        "hideZero": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 188,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W6S51",
+          "value": "W6S51"
+        }
+      },
+      "seriesOverrides": [
+        {
+          "alias": "Total",
+          "lines": false,
+          "stack": false
+        }
+      ],
+      "spaceLength": 10,
+      "stack": true,
+      "steppedLine": false,
+      "targets": [
+        {
+          "refCount": -1,
+          "refId": "A",
+          "target": "groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.*, 8, \"sumSeries\")",
+          "textEditor": true
+        },
+        {
+          "refCount": 0,
+          "refId": "D",
+          "target": "alias(sumSeries(#A), \"Total\")",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.*, 8, \"sumSeries\")), \"Total\")",
+          "textEditor": true
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Room Resources",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": "0",
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "cacheTimeout": null,
+      "colorBackground": false,
+      "colorValue": false,
+      "colors": [
+        "rgba(245, 54, 54, 0.9)",
+        "rgba(237, 129, 40, 0.89)",
+        "rgba(50, 172, 45, 0.97)"
+      ],
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "format": "percentunit",
+      "gauge": {
+        "maxValue": 1,
+        "minValue": 0,
+        "show": true,
+        "thresholdLabels": false,
+        "thresholdMarkers": true
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 77
+      },
+      "id": 222,
+      "interval": null,
+      "isNew": true,
+      "links": [],
+      "mappingType": 1,
+      "mappingTypes": [
+        {
+          "name": "value to text",
+          "value": 1
+        },
+        {
+          "name": "range to text",
+          "value": 2
+        }
+      ],
+      "maxDataPoints": 100,
+      "nullPointMode": "connected",
+      "nullText": null,
+      "options": {},
+      "postfix": "",
+      "postfixFontSize": "50%",
+      "prefix": "",
+      "prefixFontSize": "50%",
+      "rangeMaps": [
+        {
+          "from": "null",
+          "text": "N/A",
+          "to": "null"
+        }
+      ],
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 16,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W6S51",
+          "value": "W6S51"
+        }
+      },
+      "sparkline": {
+        "fillColor": "rgba(31, 118, 189, 0.18)",
+        "full": false,
+        "lineColor": "rgb(31, 120, 193)",
+        "show": false
+      },
+      "tableColumn": "",
+      "targets": [
+        {
+          "refId": "A",
+          "target": "divideSeries(screeps.$user.shard.$shard.room.$room.controller_progress, #B)"
+        },
+        {
+          "hide": true,
+          "refId": "B",
+          "target": "screeps.$user.shard.$shard.room.$room.controller_progress_total"
+        }
+      ],
+      "thresholds": "",
+      "title": "RCL progress",
+      "type": "singlestat",
+      "valueFontSize": "120%",
+      "valueMaps": [
+        {
+          "op": "=",
+          "text": "N/A",
+          "value": "null"
+        }
+      ],
+      "valueName": "current"
+    },
+    {
+      "cacheTimeout": null,
+      "colorBackground": false,
+      "colorValue": false,
+      "colors": [
+        "rgba(245, 54, 54, 0.9)",
+        "rgba(237, 129, 40, 0.89)",
+        "rgba(50, 172, 45, 0.97)"
+      ],
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "format": "s",
+      "gauge": {
+        "maxValue": 100,
+        "minValue": 0,
+        "show": false,
+        "thresholdLabels": false,
+        "thresholdMarkers": true
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 0,
+        "y": 81
+      },
+      "id": 223,
+      "interval": null,
+      "isNew": true,
+      "links": [],
+      "mappingType": 1,
+      "mappingTypes": [
+        {
+          "name": "value to text",
+          "value": 1
+        },
+        {
+          "name": "range to text",
+          "value": 2
+        }
+      ],
+      "maxDataPoints": 100,
+      "nullPointMode": "connected",
+      "nullText": null,
+      "options": {},
+      "postfix": "",
+      "postfixFontSize": "50%",
+      "prefix": "",
+      "prefixFontSize": "50%",
+      "rangeMaps": [
+        {
+          "from": "null",
+          "text": "N/A",
+          "to": "null"
+        }
+      ],
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 31,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W6S51",
+          "value": "W6S51"
+        }
+      },
+      "sparkline": {
+        "fillColor": "rgba(31, 118, 189, 0.18)",
+        "full": false,
+        "lineColor": "rgb(31, 120, 193)",
+        "show": false
+      },
+      "tableColumn": "",
+      "targets": [
+        {
+          "refCount": 0,
+          "refId": "A",
+          "target": "divideSeries(diffSeries(screeps.$user.shard.$shard.room.$room.controller_progress_total, #B), #C)",
+          "targetFull": "divideSeries(diffSeries(screeps.$user.shard.$shard.room.$room.controller_progress_total, keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), scaleToSeconds(movingAverage(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), '1hour'), 1))",
+          "textEditor": false
+        },
+        {
+          "hide": true,
+          "refCount": -1,
+          "refId": "B",
+          "target": "keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)"
+        },
+        {
+          "hide": true,
+          "refCount": 1,
+          "refId": "C",
+          "target": "scaleToSeconds(movingAverage(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), '1hour'), 1)"
+        }
+      ],
+      "thresholds": "",
+      "title": "Time to Next RCL",
+      "type": "singlestat",
+      "valueFontSize": "70%",
+      "valueMaps": [
+        {
+          "op": "=",
+          "text": "N/A",
+          "value": "null"
+        }
+      ],
+      "valueName": "current"
+    },
+    {
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 84
+      },
+      "id": 224,
+      "panels": [],
+      "repeat": null,
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 167,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W8S52",
+          "value": "W8S52"
+        }
+      },
+      "title": "$room",
+      "type": "row"
+    },
+    {
+      "cacheTimeout": null,
+      "colorBackground": false,
+      "colorValue": true,
+      "colors": [
+        "rgba(245, 54, 54, 0.9)",
+        "rgba(237, 129, 40, 0.89)",
+        "rgba(50, 172, 45, 0.97)"
+      ],
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "format": "none",
+      "gauge": {
+        "maxValue": 100,
+        "minValue": 0,
+        "show": false,
+        "thresholdLabels": false,
+        "thresholdMarkers": true
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 0,
+        "y": 85
+      },
+      "id": 225,
+      "interval": null,
+      "isNew": true,
+      "links": [],
+      "mappingType": 1,
+      "mappingTypes": [
+        {
+          "name": "value to text",
+          "value": 1
+        },
+        {
+          "name": "range to text",
+          "value": 2
+        }
+      ],
+      "maxDataPoints": 100,
+      "nullPointMode": "connected",
+      "nullText": null,
+      "options": {},
+      "postfix": "",
+      "postfixFontSize": "50%",
+      "prefix": "",
+      "prefixFontSize": "50%",
+      "rangeMaps": [
+        {
+          "from": "null",
+          "text": "N/A",
+          "to": "null"
+        }
+      ],
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 8,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W8S52",
+          "value": "W8S52"
+        }
+      },
+      "sparkline": {
+        "fillColor": "rgba(31, 118, 189, 0.18)",
+        "full": false,
+        "lineColor": "rgb(31, 120, 193)",
+        "show": false
+      },
+      "tableColumn": "",
+      "targets": [
+        {
+          "refId": "A",
+          "target": "screeps.$user.shard.$shard.room.$room.controller_level"
+        }
+      ],
+      "thresholds": "4.01,7.01",
+      "title": "RCL",
+      "type": "singlestat",
+      "valueFontSize": "120%",
+      "valueMaps": [
+        {
+          "op": "=",
+          "text": "N/A",
+          "value": "null"
+        }
+      ],
+      "valueName": "current"
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 10,
+        "w": 6,
+        "x": 4,
+        "y": 85
+      },
+      "hiddenSeries": false,
+      "id": 226,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "max": true,
+        "min": true,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 53,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W8S52",
+          "value": "W8S52"
+        }
+      },
+      "seriesOverrides": [
+        {
+          "alias": "1hr Moving Average",
+          "fill": 0,
+          "steppedLine": false
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": true,
+      "targets": [
+        {
+          "refCount": 1,
+          "refId": "A",
+          "target": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), #C), 'RCL per tick')",
+          "targetFull": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), derivative(screeps.$user.shard.$shard.time)), 'RCL per tick')",
+          "textEditor": false
+        },
+        {
+          "hide": true,
+          "refCount": 0,
+          "refId": "C",
+          "target": "derivative(screeps.$user.shard.$shard.time)"
+        },
+        {
+          "refCount": 0,
+          "refId": "B",
+          "target": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), #C), '1hour'), '1hr Moving Average')",
+          "targetFull": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), derivative(screeps.$user.shard.$shard.time)), '1hour'), '1hr Moving Average')"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "RCL Upgrade",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 10,
+        "w": 5,
+        "x": 10,
+        "y": 85
+      },
+      "hiddenSeries": false,
+      "id": 227,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "hideEmpty": false,
+        "hideZero": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 82,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W8S52",
+          "value": "W8S52"
+        }
+      },
+      "seriesOverrides": [
+        {
+          "alias": "Total",
+          "lines": false,
+          "stack": false
+        }
+      ],
+      "spaceLength": 10,
+      "stack": true,
+      "steppedLine": false,
+      "targets": [
+        {
+          "refCount": -1,
+          "refId": "A",
+          "target": "groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.energy, 7, \"sumSeries\")",
+          "textEditor": true
+        },
+        {
+          "refCount": 0,
+          "refId": "D",
+          "target": "alias(sumSeries(#A), \"Total\")",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.energy, 7, \"sumSeries\")), \"Total\")",
+          "textEditor": true
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Room Stored Energy",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "grid": {},
+      "gridPos": {
+        "h": 10,
+        "w": 5,
+        "x": 15,
+        "y": 85
+      },
+      "hiddenSeries": false,
+      "id": 228,
+      "isNew": true,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "hideEmpty": false,
+        "hideZero": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "links": [],
+      "nullPointMode": "connected",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 188,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W8S52",
+          "value": "W8S52"
+        }
+      },
+      "seriesOverrides": [
+        {
+          "alias": "Total",
+          "lines": false,
+          "stack": false
+        }
+      ],
+      "spaceLength": 10,
+      "stack": true,
+      "steppedLine": false,
+      "targets": [
+        {
+          "refCount": -1,
+          "refId": "A",
+          "target": "groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.*, 8, \"sumSeries\")",
+          "textEditor": true
+        },
+        {
+          "refCount": 0,
+          "refId": "D",
+          "target": "alias(sumSeries(#A), \"Total\")",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.*, 8, \"sumSeries\")), \"Total\")",
+          "textEditor": true
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Room Resources",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": "0",
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "cacheTimeout": null,
+      "colorBackground": false,
+      "colorValue": false,
+      "colors": [
+        "rgba(245, 54, 54, 0.9)",
+        "rgba(237, 129, 40, 0.89)",
+        "rgba(50, 172, 45, 0.97)"
+      ],
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "format": "percentunit",
+      "gauge": {
+        "maxValue": 1,
+        "minValue": 0,
+        "show": true,
+        "thresholdLabels": false,
+        "thresholdMarkers": true
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 88
+      },
+      "id": 229,
+      "interval": null,
+      "isNew": true,
+      "links": [],
+      "mappingType": 1,
+      "mappingTypes": [
+        {
+          "name": "value to text",
+          "value": 1
+        },
+        {
+          "name": "range to text",
+          "value": 2
+        }
+      ],
+      "maxDataPoints": 100,
+      "nullPointMode": "connected",
+      "nullText": null,
+      "options": {},
+      "postfix": "",
+      "postfixFontSize": "50%",
+      "prefix": "",
+      "prefixFontSize": "50%",
+      "rangeMaps": [
+        {
+          "from": "null",
+          "text": "N/A",
+          "to": "null"
+        }
+      ],
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 16,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W8S52",
+          "value": "W8S52"
+        }
+      },
+      "sparkline": {
+        "fillColor": "rgba(31, 118, 189, 0.18)",
+        "full": false,
+        "lineColor": "rgb(31, 120, 193)",
+        "show": false
+      },
+      "tableColumn": "",
+      "targets": [
+        {
+          "refId": "A",
+          "target": "divideSeries(screeps.$user.shard.$shard.room.$room.controller_progress, #B)"
+        },
+        {
+          "hide": true,
+          "refId": "B",
+          "target": "screeps.$user.shard.$shard.room.$room.controller_progress_total"
+        }
+      ],
+      "thresholds": "",
+      "title": "RCL progress",
+      "type": "singlestat",
+      "valueFontSize": "120%",
+      "valueMaps": [
+        {
+          "op": "=",
+          "text": "N/A",
+          "value": "null"
+        }
+      ],
+      "valueName": "current"
+    },
+    {
+      "cacheTimeout": null,
+      "colorBackground": false,
+      "colorValue": false,
+      "colors": [
+        "rgba(245, 54, 54, 0.9)",
+        "rgba(237, 129, 40, 0.89)",
+        "rgba(50, 172, 45, 0.97)"
+      ],
+      "datasource": "ScreepsPlus-Graphite",
+      "editable": true,
+      "error": false,
+      "format": "s",
+      "gauge": {
+        "maxValue": 100,
+        "minValue": 0,
+        "show": false,
+        "thresholdLabels": false,
+        "thresholdMarkers": true
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 0,
+        "y": 92
+      },
+      "id": 230,
+      "interval": null,
+      "isNew": true,
+      "links": [],
+      "mappingType": 1,
+      "mappingTypes": [
+        {
+          "name": "value to text",
+          "value": 1
+        },
+        {
+          "name": "range to text",
+          "value": 2
+        }
+      ],
+      "maxDataPoints": 100,
+      "nullPointMode": "connected",
+      "nullText": null,
+      "options": {},
+      "postfix": "",
+      "postfixFontSize": "50%",
+      "prefix": "",
+      "prefixFontSize": "50%",
+      "rangeMaps": [
+        {
+          "from": "null",
+          "text": "N/A",
+          "to": "null"
+        }
+      ],
+      "repeatIteration": 1593397088487,
+      "repeatPanelId": 31,
+      "repeatedByRow": true,
+      "scopedVars": {
+        "room": {
+          "selected": false,
+          "text": "W8S52",
+          "value": "W8S52"
         }
       },
       "sparkline": {
@@ -3125,7 +5861,7 @@
       "valueName": "current"
     }
   ],
-  "refresh": false,
+  "refresh": "30s",
   "schemaVersion": 22,
   "style": "dark",
   "tags": [
@@ -3214,7 +5950,7 @@
     ]
   },
   "time": {
-    "from": "now-30m",
+    "from": "now-6h",
     "to": "now"
   },
   "timepicker": {
@@ -3245,5 +5981,5 @@
   "timezone": "browser",
   "title": "Full Overview",
   "uid": "y1clLT_Wk",
-  "version": 26
+  "version": 27
 }
