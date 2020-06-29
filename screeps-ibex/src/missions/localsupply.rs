@@ -812,10 +812,8 @@ impl LocalSupplyMission {
 
                         let storage_fraction = (container_used_capacity as f32) / (container_store_capacity as f32);
                         let priority = if storage_fraction > 0.75 {
-                            TransferPriority::High
-                        } else if storage_fraction > 0.5 {
                             TransferPriority::Medium
-                        } else if storage_fraction > 0.25 {
+                        } else if storage_fraction > 0.5 {
                             TransferPriority::Low
                         } else {
                             TransferPriority::None

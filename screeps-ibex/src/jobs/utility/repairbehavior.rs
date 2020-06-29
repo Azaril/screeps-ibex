@@ -116,7 +116,7 @@ pub fn tick_opportunistic_repair(tick_context: &mut JobTickContext, minimum_prio
                                 let (hits, hits_max) = repair_structure.as_attackable().map(|a| (a.hits(), a.hits_max())).unwrap_or((0, 0));
                                 let max_repair_energy = ((hits_max - hits) as f32 / REPAIR_POWER as f32).ceil() as u32;
                                 let energy_consumed = max_energy_consumed.min(max_repair_energy);
-                                
+
                                 return Some(energy_consumed);
                             },
                             err => {
