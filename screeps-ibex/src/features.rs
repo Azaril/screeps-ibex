@@ -17,6 +17,7 @@ pub mod js {
                         force_plan: false,
                         allow_replan: false,
                         execute: true,
+                        cleanup: false,
                         visualize: {
                             on: true,
                             planner: true,
@@ -95,6 +96,10 @@ pub mod construction {
 
     pub fn execute() -> bool {
         ::screeps::memory::root().path_bool("_features.construction.execute")
+    }
+    
+    pub fn cleanup() -> bool {
+        ::screeps::memory::root().path_bool("_features.construction.cleanup")
     }
 
     pub fn visualize() -> bool {
