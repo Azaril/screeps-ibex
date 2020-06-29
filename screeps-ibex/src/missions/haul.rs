@@ -164,10 +164,16 @@ impl Mission for HaulMission {
         let room_offset_distance = home_room_data.name - room_data.name;
         let room_manhattan_distance = room_offset_distance.0.abs() as u32 + room_offset_distance.1.abs() as u32;
 
-        let range_multiplier = 1.0 - ((room_manhattan_distance.min(3) as f32 / 3.0) * 0.5);
-        let base_amount = (controller.level() as f32 * (100.0 * range_multiplier)).powf(1.25);
+        let work_parts_per_rcl = if room_manhattan_distance == 0 {
+            1
+        } else {
+            2
+        };
 
-        let max_haulers = (room_manhattan_distance + 1) * 3;
+        let range_multiplier = 1.0 - ((room_manhattan_distance.min(3) as f32 / 3.0) * 0.5);
+        let base_amount = controller.level() as f32 * work_parts_per_rcl as f32 * CARRY_CAPACITY as f32 * range_multiplier;
+
+        let max_haulers = 4 + (room_manhattan_distance * 2);
 
         let desired_haulers_for_unfufilled = stats.unfufilled_hauling as f32 / base_amount as f32;
         let desired_haulers_for_unfufilled = if room_manhattan_distance == 0 {
