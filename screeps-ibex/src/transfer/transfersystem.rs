@@ -842,7 +842,7 @@ impl TransferNode {
             .join("\n");
 
         //TODO: Use priority and color to visualize.
-        visualizer.text(pos.x() as f32, pos.y() as f32, full_text, None);
+        visualizer.text(pos.x() as f32, pos.y() as f32, full_text, Some(TextStyle::default().font(0.3)));
     }
 }
 
