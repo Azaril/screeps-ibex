@@ -385,20 +385,20 @@ impl<'a> System<'a> for RoomPlanSystem {
                     }
                 }
 
-                if crate::features::construction::visualize_plan() {
-                    if let Some(visualizer) = &mut data.visualizer {
-                        for (_, room_data, room_plan_data) in (&data.entities, &data.room_data, &data.room_plan_data).join() {
-                            let room_visualizer = visualizer.get_room(room_data.name);
-
-                            if let Some(plan) = room_plan_data.plan() {
-                                plan.visualize(room_visualizer);
-                            }
-                        }
-                    }
-                }
-
                 if let Ok(output_planner_data) = crate::serialize::encode_to_string(&planner_state) {
                     data.memory_arbiter.set(MEMORY_SEGMENT, &output_planner_data);
+                }
+            }
+        }
+        
+        if crate::features::construction::visualize_plan() {
+            if let Some(visualizer) = &mut data.visualizer {
+                for (_, room_data, room_plan_data) in (&data.entities, &data.room_data, &data.room_plan_data).join() {
+                    let room_visualizer = visualizer.get_room(room_data.name);
+
+                    if let Some(plan) = room_plan_data.plan() {
+                        plan.visualize(room_visualizer);
+                    }
                 }
             }
         }
