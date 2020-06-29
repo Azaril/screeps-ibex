@@ -1805,7 +1805,7 @@ impl TransferQueue {
     pub fn get_delivery_from_target(
         &mut self,
         data: &dyn TransferRequestSystemData,
-        rooms: &[RoomName],
+        delivery_rooms: &[RoomName],
         target: &TransferTarget,
         allowed_pickup_priorities: TransferPriorityFlags,
         allowed_delivery_priorities: TransferPriorityFlags,
@@ -1828,7 +1828,7 @@ impl TransferQueue {
 
         let delivery = self.get_delivery(
             data,
-            rooms,
+            delivery_rooms,
             allowed_delivery_priorities,
             delivery_type.into(),
             &available_resources,
@@ -1866,7 +1866,7 @@ impl TransferQueue {
     pub fn get_delivery(
         &mut self,
         data: &dyn TransferRequestSystemData,
-        rooms: &[RoomName],
+        delivery_rooms: &[RoomName],
         allowed_priorities: TransferPriorityFlags,
         delivery_types: TransferTypeFlags,
         available_resources: &HashMap<ResourceType, u32>,
@@ -1879,7 +1879,7 @@ impl TransferQueue {
 
         self.select_deliveries(
             data,
-            rooms,
+            delivery_rooms,
             allowed_priorities,
             delivery_types,
             &available_resources,
