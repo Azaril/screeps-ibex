@@ -375,8 +375,10 @@ impl Cleanup {
             .get(state_context.outpost_room_data)
             .ok_or("Expected outpost room")?;
 
+        let static_visibility_data = outpost_room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
+
         if let Some(structures) = outpost_room_data.get_structures() {
-            let requires_dismantling = DismantleMission::requires_dismantling(structures.all());
+            let requires_dismantling = DismantleMission::requires_dismantling(structures.all(), static_visibility_data.sources());
 
             return Ok(Some(requires_dismantling));
         }
