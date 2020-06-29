@@ -19,7 +19,8 @@ use specs::*;
 pub struct HaulJobContext {
     pickup_rooms: EntityVec<Entity>,
     delivery_rooms: EntityVec<Entity>,
-    allow_repair: bool
+    allow_repair: bool,
+    storage_delivery_only: bool
 }
 
 machine!(
@@ -82,6 +83,12 @@ impl Idle {
             room_data: &*tick_context.system_data.room_data,
         };
 
+        let target_filter = if state_context.storage_delivery_only {
+            target_filters::storage
+        } else {
+            target_filters::all
+        };
+
         get_new_delivery_current_resources_state(
             creep,
             &transfer_queue_data,
@@ -89,6 +96,7 @@ impl Idle {
             TransferPriorityFlags::ACTIVE,
             TransferTypeFlags::HAUL,
             tick_context.runtime_data.transfer_queue,
+            target_filter,
             HaulState::delivery,
         )
         .or_else(|| {
@@ -99,6 +107,7 @@ impl Idle {
                 TransferPriorityFlags::NONE,
                 TransferTypeFlags::HAUL,
                 tick_context.runtime_data.transfer_queue,
+                target_filter,
                 HaulState::delivery,
             )
         })
@@ -116,6 +125,7 @@ impl Idle {
                 TransferPriorityFlags::ALL,
                 TransferType::Haul,
                 tick_context.runtime_data.transfer_queue,
+                target_filter,
                 HaulState::pickup,
             )
         })
@@ -182,7 +192,13 @@ impl Pickup {
                 }
             }
 
-            get_additional_deliveries(&transfer_queue_data, &delivery_rooms, TransferPriorityFlags::ALL, TransferType::Haul, available_capacity, tick_context.runtime_data.transfer_queue, &mut self.withdrawl, &mut self.deposits);
+            let target_filter = if state_context.storage_delivery_only {
+                target_filters::storage
+            } else {
+                target_filters::all
+            };
+
+            get_additional_deliveries(&transfer_queue_data, &delivery_rooms, TransferPriorityFlags::ALL, TransferType::Haul, available_capacity, tick_context.runtime_data.transfer_queue, &mut self.withdrawl, &mut self.deposits, target_filter);
         }
         
         let deposits = &self.deposits;
@@ -237,12 +253,13 @@ pub struct HaulJob {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl HaulJob {
-    pub fn new(pickup_rooms: &[Entity], delivery_rooms: &[Entity], allow_repair: bool) -> HaulJob {
+    pub fn new(pickup_rooms: &[Entity], delivery_rooms: &[Entity], allow_repair: bool, storage_delivery_only: bool) -> HaulJob {
         HaulJob {
             context: HaulJobContext {
                 pickup_rooms: pickup_rooms.into(),
                 delivery_rooms: delivery_rooms.into(),
-                allow_repair
+                allow_repair,
+                storage_delivery_only
             },
             state: HaulState::idle(),
         }

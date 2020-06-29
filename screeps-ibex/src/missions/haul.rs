@@ -57,7 +57,7 @@ impl HaulMission {
         self.allow_spawning = allow
     }
 
-    fn create_handle_hauler_spawn(mission_entity: Entity, pickup_rooms: &[Entity], delivery_rooms: &[Entity], allow_repair: bool) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    fn create_handle_hauler_spawn(mission_entity: Entity, pickup_rooms: &[Entity], delivery_rooms: &[Entity], allow_repair: bool, storage_delivery_only: bool) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         let pickup_rooms = pickup_rooms.to_vec();
         let delivery_rooms = delivery_rooms.to_vec();
 
@@ -67,7 +67,7 @@ impl HaulMission {
             let delivery_rooms = delivery_rooms.clone();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Haul(HaulJob::new(&pickup_rooms, &delivery_rooms, allow_repair));
+                let creep_job = JobData::Haul(HaulJob::new(&pickup_rooms, &delivery_rooms, allow_repair, storage_delivery_only));
 
                 let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
@@ -227,13 +227,14 @@ impl Mission for HaulMission {
                 let delivery_rooms = &[self.home_room_data];
 
                 let allow_repair = room_manhattan_distance > 0;
+                let storage_delivery_only = room_manhattan_distance > 0;
 
                 //TODO: Make sure there is handling for starvation/bootstrap mode.
                 let spawn_request = SpawnRequest::new(
                     format!("Haul - Target Room: {}", room_data.name),
                     &body,
                     priority,
-                    Self::create_handle_hauler_spawn(mission_entity, pickup_rooms, delivery_rooms, allow_repair),
+                    Self::create_handle_hauler_spawn(mission_entity, pickup_rooms, delivery_rooms, allow_repair, storage_delivery_only),
                 );
 
                 system_data.spawn_queue.request(self.home_room_data, spawn_request);

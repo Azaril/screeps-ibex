@@ -91,6 +91,7 @@ impl Idle {
             TransferPriorityFlags::ALL,
             TransferTypeFlags::HAUL,
             tick_context.runtime_data.transfer_queue,
+            target_filters::all,
             DismantleState::delivery,
         )
         .or_else(|| {
@@ -161,6 +162,7 @@ impl FinishedDelivery {
                     priority.into(),
                     TransferTypeFlags::HAUL,
                     tick_context.runtime_data.transfer_queue,
+                    target_filters::all,
                     DismantleState::delivery,
                 )
             })
