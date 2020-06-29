@@ -56,7 +56,7 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
                     return Some(f64::INFINITY);
                 }
 
-                if dynamic_visibility_data.updated_within(2000) {
+                if dynamic_visibility_data.updated_within(5000) {
                     if dynamic_visibility_data.hostile_creeps() {
                         return Some(f64::INFINITY);
                     }

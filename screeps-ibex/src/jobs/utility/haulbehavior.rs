@@ -174,7 +174,7 @@ pub fn get_additional_deliveries<TF>(
     transfer_queue: &mut TransferQueue,
     pickup: &mut TransferWithdrawTicket,
     deliveries: &mut Vec<TransferDepositTicket>,
-    target_filter: TF
+    target_filter: TF,
 ) where TF: Fn(&TransferTarget) -> bool + Copy {
     if !available_capacity.empty() {
         let delivery_room_names = delivery_rooms.iter().map(|r| r.name).collect_vec();
@@ -240,7 +240,18 @@ pub fn get_additional_deliveries<TF>(
                     if !merged_delivery {
                         deliveries.push(additional_delivery);
 
-                        //TODO: This needs to resort delivery order.
+                        let start_pos = pickup.target().pos();
+
+                        let mut destinations = std::mem::replace(deliveries, Vec::new());
+
+                        while let Some(nearest_index) = destinations
+                                .iter()
+                                .enumerate()
+                                .min_by_key(|(_, delivery)| delivery.target().pos().get_range_to(&start_pos))
+                                .map(|(index, _)| index) {
+
+                            deliveries.push(destinations.remove(nearest_index));
+                        }
                     }
                 } else {
                     break;

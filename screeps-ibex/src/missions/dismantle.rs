@@ -150,7 +150,7 @@ impl Mission for DismantleMission {
         let desired_dismantlers = 1;
 
         if self.dismantlers.len() < desired_dismantlers {
-            let body_definition = if room_data.get_structures().map(|s| !s.storages().is_empty()).unwrap_or(false) {
+            let body_definition = if home_room_data.get_structures().map(|s| !s.storages().is_empty()).unwrap_or(false) {
                 crate::creep::SpawnBodyDefinition {
                     maximum_energy: home_room.energy_capacity_available(),
                     minimum_repeat: None,
