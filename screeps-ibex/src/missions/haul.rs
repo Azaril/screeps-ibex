@@ -169,7 +169,12 @@ impl Mission for HaulMission {
 
         let max_haulers = (room_manhattan_distance + 1) * 3;
 
-        let desired_haulers_for_unfufilled = (stats.unfufilled_hauling as f32 / base_amount as f32).ceil() as u32;
+        let desired_haulers_for_unfufilled = stats.unfufilled_hauling as f32 / base_amount as f32;
+        let desired_haulers_for_unfufilled = if room_manhattan_distance == 0 {
+            desired_haulers_for_unfufilled.ceil()
+        } else {
+            desired_haulers_for_unfufilled.floor()
+        } as u32;
         let desired_haulers = desired_haulers_for_unfufilled.min(max_haulers) as usize;
 
         let should_spawn = self.haulers.len() < desired_haulers && self.allow_spawning;
