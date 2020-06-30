@@ -47,6 +47,7 @@ fn serialize_world(world: &World, segments: &[u32]) {
         markers: ReadStorage<'a, SerializeMarker>,
         creep_spawnings: ReadStorage<'a, CreepSpawning>,
         creep_owners: ReadStorage<'a, CreepOwner>,
+        creep_movement_data: ReadStorage<'a, CreepRoverData>,
         room_data: ReadStorage<'a, RoomData>,
         room_plan_data: ReadStorage<'a, RoomPlanData>,
         job_data: ReadStorage<'a, JobData>,
@@ -66,6 +67,7 @@ fn serialize_world(world: &World, segments: &[u32]) {
                     &(
                         &data.creep_spawnings,
                         &data.creep_owners,
+                        &data.creep_movement_data,                        
                         &data.room_data,
                         &data.room_plan_data,
                         &data.job_data,
@@ -122,6 +124,7 @@ fn deserialize_world(world: &World, segments: &[u32]) {
         markers: WriteStorage<'a, SerializeMarker>,
         creep_spawnings: WriteStorage<'a, CreepSpawning>,
         creep_owners: WriteStorage<'a, CreepOwner>,
+        creep_movement_data: WriteStorage<'a, CreepRoverData>,
         room_data: WriteStorage<'a, RoomData>,
         room_plan_data: WriteStorage<'a, RoomPlanData>,
         job_data: WriteStorage<'a, JobData>,
@@ -153,6 +156,7 @@ fn deserialize_world(world: &World, segments: &[u32]) {
                     &mut (
                         &mut data.creep_spawnings,
                         &mut data.creep_owners,
+                        &mut data.creep_movement_data,
                         &mut data.room_data,
                         &mut data.room_plan_data,
                         &mut data.job_data,

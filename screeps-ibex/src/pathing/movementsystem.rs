@@ -8,18 +8,18 @@ use specs::prelude::*;
 use specs::*;
 use shrinkwraprs::*;
 
-#[derive(Shrinkwrap, Component, Serialize, Deserialize)]
+#[derive(Shrinkwrap, Component, Serialize, Deserialize, Clone)]
 #[derive(Default)]
 #[shrinkwrap(mutable)]
 #[serde(transparent)]
-pub struct CreepMovementDataComponent(pub CreepMovementData);
+pub struct CreepRoverData(pub CreepMovementData);
 
 #[derive(SystemData)]
 pub struct MovementUpdateSystemData<'a> {
     entities: Entities<'a>,
     movement: WriteExpect<'a, MovementData<Entity>>,
     creep_owner: ReadStorage<'a, CreepOwner>,
-    creep_movement_data: WriteStorage<'a, CreepMovementDataComponent>,
+    creep_movement_data: WriteStorage<'a, CreepRoverData>,
     room_data: ReadStorage<'a, RoomData>,
     mapping: Read<'a, EntityMappingData>,
     cost_matrix: WriteExpect<'a, CostMatrixSystem>,
@@ -28,7 +28,7 @@ pub struct MovementUpdateSystemData<'a> {
 struct MovementSystemExternalProvider<'a, 'b> {
     entities: &'b Entities<'a>,
     creep_owner: &'b ReadStorage<'a, CreepOwner>,
-    creep_movement_data: &'b mut WriteStorage<'a, CreepMovementDataComponent>,
+    creep_movement_data: &'b mut WriteStorage<'a, CreepRoverData>,
     room_data: &'b ReadStorage<'a, RoomData>,
     mapping: &'b Read<'a, EntityMappingData>,
 }
@@ -43,7 +43,7 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
 
     fn get_creep_movement_data(&mut self, entity: Entity) -> Result<&mut CreepMovementData, MovementError> {
         if !self.creep_movement_data.contains(entity) {
-            let _ = self.creep_movement_data.insert(entity, CreepMovementDataComponent::default());
+            let _ = self.creep_movement_data.insert(entity, CreepRoverData::default());
         }
 
         self.creep_movement_data.get_mut(entity).map(|m| &mut m.0).ok_or("Failed to get creep movement data".to_owned())
