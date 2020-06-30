@@ -158,9 +158,15 @@ impl Scout {
 
             Ok(None)
         } else {
-            info!("Completed scouting of room - transitioning to cleanup");
+            if outpost_room_data.get_dynamic_visibility_data().map(|v| v.owner().mine() || v.reservation().mine()).unwrap_or(false) {
+                info!("Completed scouting of room - room owned or reserved - transitioning to mining");
 
-            Ok(Some(MiningOutpostState::cleanup(None.into(), None.into(), None.into())))
+                Ok(Some(MiningOutpostState::mine(None.into(), None.into(), None.into(), None.into())))
+            } else {
+                info!("Completed scouting of room - transitioning to cleanup");
+
+                Ok(Some(MiningOutpostState::cleanup(None.into(), None.into(), None.into())))    
+            }
         }
     }
 }
