@@ -6,17 +6,20 @@ use screeps_rover::*;
 use serde::*;
 use specs::prelude::*;
 use specs::*;
+use shrinkwraprs::*;
 
-#[derive(Component, Serialize, Deserialize)]
-pub struct CreepMovementData {
-    data: Option<CachedMovementData>,
-}
+#[derive(Shrinkwrap, Component, Serialize, Deserialize)]
+#[derive(Default)]
+#[shrinkwrap(mutable)]
+#[serde(transparent)]
+pub struct CreepMovementDataComponent(pub CreepMovementData);
 
 #[derive(SystemData)]
 pub struct MovementUpdateSystemData<'a> {
     entities: Entities<'a>,
     movement: WriteExpect<'a, MovementData<Entity>>,
     creep_owner: ReadStorage<'a, CreepOwner>,
+    creep_movement_data: WriteStorage<'a, CreepMovementDataComponent>,
     room_data: ReadStorage<'a, RoomData>,
     mapping: Read<'a, EntityMappingData>,
     cost_matrix: WriteExpect<'a, CostMatrixSystem>,
@@ -25,6 +28,7 @@ pub struct MovementUpdateSystemData<'a> {
 struct MovementSystemExternalProvider<'a, 'b> {
     entities: &'b Entities<'a>,
     creep_owner: &'b ReadStorage<'a, CreepOwner>,
+    creep_movement_data: &'b mut WriteStorage<'a, CreepMovementDataComponent>,
     room_data: &'b ReadStorage<'a, RoomData>,
     mapping: &'b Read<'a, EntityMappingData>,
 }
@@ -37,6 +41,14 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
         Ok(creep)
     }
 
+    fn get_creep_movement_data(&mut self, entity: Entity) -> Result<&mut CreepMovementData, MovementError> {
+        if !self.creep_movement_data.contains(entity) {
+            let _ = self.creep_movement_data.insert(entity, CreepMovementDataComponent::default());
+        }
+
+        self.creep_movement_data.get_mut(entity).map(|m| &mut m.0).ok_or("Failed to get creep movement data".to_owned())
+    }
+
     fn get_room_cost(
         &self,
         from_room_name: RoomName,
@@ -44,7 +56,7 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
         room_options: &RoomOptions,
     ) -> Option<f64> {
         if !can_traverse_between_rooms(from_room_name, to_room_name) {
-            return Some(f64::INFINITY);
+            return None;
         }
 
         let target_room_entity = self.mapping.get_room(&to_room_name)?;
@@ -52,27 +64,25 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
 
         if let Some(dynamic_visibility_data) = target_room_data.get_dynamic_visibility_data() {
             if !room_options.allow_hostile() {
-                if dynamic_visibility_data.source_keeper() || dynamic_visibility_data.owner().hostile() {
-                    return Some(f64::INFINITY);
+                if dynamic_visibility_data.source_keeper() || dynamic_visibility_data.owner().hostile() || dynamic_visibility_data.reservation().hostile() {
+                    return None;
                 }
 
-                if dynamic_visibility_data.updated_within(5000) {
-                    if dynamic_visibility_data.hostile_creeps() {
-                        return Some(f64::INFINITY);
-                    }
+                if dynamic_visibility_data.hostile_creeps() {
+                    return None;
                 }
 
-                if dynamic_visibility_data.updated_within(10000) && dynamic_visibility_data.hostile_structures() {
-                    return Some(f64::INFINITY);                    
+                if dynamic_visibility_data.hostile_structures() {
+                    return None;              
                 }
             }
 
             if dynamic_visibility_data.owner().mine() || dynamic_visibility_data.owner().friendly() {
-                Some(3.0)
-            } else if dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().friendly() {
-                Some(2.0)
-            } else {
                 Some(1.0)
+            } else if dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().friendly() {
+                Some(1.0)
+            } else {
+                Some(2.0)
             }
         } else {
             Some(2.0)
@@ -92,6 +102,7 @@ impl<'a> System<'a> for MovementUpdateSystem {
         let mut external = MovementSystemExternalProvider {
             entities: &data.entities,
             creep_owner: &data.creep_owner,
+            creep_movement_data: &mut data.creep_movement_data,
             room_data: &data.room_data,
             mapping: &data.mapping,
         };

@@ -138,7 +138,7 @@ impl Mission for DismantleMission {
 
         //TODO: Add better dynamic cpu adaptation.
         let bucket = game::cpu::bucket();
-        let can_spawn = bucket > 9500.0 && crate::features::dismantle() && self.allow_spawning;
+        let can_spawn = bucket > 9500 && crate::features::dismantle() && self.allow_spawning;
 
         if !can_spawn {
             return Ok(MissionResult::Running);

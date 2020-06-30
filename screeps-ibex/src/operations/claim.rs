@@ -294,7 +294,7 @@ impl Operation for ClaimOperation {
         //
 
         //TODO: Need better dynamic estimation of room cost.
-        const ESTIMATED_ROOM_CPU_COST: f64 = 10.0;
+        const ESTIMATED_ROOM_CPU_COST: u32 = 10;
         let cpu_limit = game::cpu::limit();
 
         let current_gcl = game::gcl::level();
