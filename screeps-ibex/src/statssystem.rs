@@ -5,11 +5,12 @@ use serde::*;
 use serde::ser::SerializeMap;
 use specs::prelude::*;
 use std::collections::HashMap;
+use shrinkwraprs::*;
 
 #[derive(Serialize)]
 pub struct CpuStats {
-    bucket: f64,
-    limit: f64,
+    bucket: u32,
+    limit: u32,
     used: f64,
 }
 
@@ -127,8 +128,6 @@ fn to_resource_name(val: ResourceType) -> &'static str {
         ResourceType::Essence => "essence",
     }
 }
-
-use shrinkwraprs::*;
 
 #[derive(Shrinkwrap)]
 #[derive(Default)]

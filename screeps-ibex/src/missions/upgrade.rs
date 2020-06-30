@@ -136,7 +136,7 @@ impl Mission for UpgradeMission {
         let are_hostile_creeps = !creeps.hostile().is_empty();
 
         //TODO: Need better calculation for maximum number of upgraders.
-        let max_upgraders = if game::cpu::bucket() < game::cpu::tick_limit() * 10.0 {
+        let max_upgraders = if game::cpu::bucket() < game::cpu::tick_limit() * 2 {
             1
         } else if are_hostile_creeps {
             1

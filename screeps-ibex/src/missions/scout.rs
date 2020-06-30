@@ -153,7 +153,7 @@ impl Mission for ScoutMission {
         let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
         let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
 
-        let should_spawn = self.next_spawn.map(|t| game::time() >= t).unwrap_or(true) && game::cpu::bucket() > 5000.0;
+        let should_spawn = self.next_spawn.map(|t| game::time() >= t).unwrap_or(true) && game::cpu::bucket() > 5000;
 
         if self.scouts.is_empty() && should_spawn {
             //TODO: Compute best body parts to use.

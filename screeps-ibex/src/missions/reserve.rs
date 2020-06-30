@@ -126,7 +126,7 @@ impl Mission for ReserveMission {
 
         //TODO: Add better dynamic cpu adaptation.
         let bucket = game::cpu::bucket();
-        let can_spawn = bucket > 9000.0 && crate::features::remote_mine::reserve() && self.allow_spawning;
+        let can_spawn = bucket > 9000 && crate::features::remote_mine::reserve() && self.allow_spawning;
 
         if !can_spawn {
             return Ok(MissionResult::Running);

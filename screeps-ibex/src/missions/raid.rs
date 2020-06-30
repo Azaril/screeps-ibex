@@ -176,7 +176,7 @@ impl Mission for RaidMission {
 
         //TODO: Add better dynamic cpu adaptation.
         let bucket = game::cpu::bucket();
-        let can_spawn = bucket > 9000.0 && crate::features::raid() && self.allow_spawning;
+        let can_spawn = bucket > 9000 && crate::features::raid() && self.allow_spawning;
 
         if !can_spawn {
             return Ok(MissionResult::Running);

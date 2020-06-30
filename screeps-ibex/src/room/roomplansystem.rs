@@ -219,10 +219,10 @@ impl RoomPlanSystem {
         let bucket = game::cpu::bucket();
         let tick_limit = game::cpu::tick_limit();
 
-        if bucket >= tick_limit * 2.0 {
+        if bucket >= tick_limit * 2 {
             let current_cpu = game::cpu::get_used();
-            let remaining_cpu = tick_limit - current_cpu;
-            let max_cpu = (remaining_cpu * 0.25).min(tick_limit / 2.0);
+            let remaining_cpu = tick_limit as f64 - current_cpu;
+            let max_cpu = (remaining_cpu * 0.25).min(tick_limit as f64 / 2.0);
             
             if max_cpu >= 20.0 {
                 return Some(max_cpu);
