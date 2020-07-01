@@ -9,6 +9,7 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+use lerp::*;
 
 #[derive(ConvertSaveload)]
 pub struct UpgradeMission {
@@ -152,15 +153,23 @@ impl Mission for UpgradeMission {
             1
         };
 
-        if self.upgraders.len() < max_upgraders {
-            let storage_sufficient = structures
-                .storages()
-                .iter()
-                .any(|s| s.store_used_capacity(Some(ResourceType::Energy)) > 50_000);
+        let alive_upgraders = self
+            .upgraders
+            .iter()
+            .filter(|entity| {
+                system_data.creep_spawning.get(**entity).is_some()
+                    || system_data
+                        .creep_owner
+                        .get(**entity)
+                        .and_then(|creep_owner| creep_owner.owner.resolve())
+                        .and_then(|creep| creep.ticks_to_live().ok())
+                        .map(|count| count > 100)
+                        .unwrap_or(false)
+            })
+            .count();
 
-            let work_parts_per_upgrader = if !storage_sufficient {
-                Some(1)
-            } else if controller_level == 8 {
+        if alive_upgraders < max_upgraders {
+            let work_parts_per_upgrader = if controller_level == 8 {
                 let work_parts_per_tick = (CONTROLLER_MAX_UPGRADE_PER_TICK as f32) / (UPGRADE_CONTROLLER_POWER as f32);
 
                 let work_parts = (work_parts_per_tick / (max_upgraders as f32)).ceil();
@@ -181,22 +190,35 @@ impl Mission for UpgradeMission {
                 room.energy_capacity_available()
             };
 
-            let body_definition = crate::creep::SpawnBodyDefinition {
-                maximum_energy,
-                minimum_repeat: Some(1),
-                maximum_repeat: work_parts_per_upgrader,
-                pre_body: &[Part::Work, Part::Carry, Part::Move, Part::Move],
-                repeat_body: &[Part::Work,Part::Move],
-                post_body: &[],
+            let body_definition = if controller_level <= 3 {
+                crate::creep::SpawnBodyDefinition{
+                    maximum_energy,
+                    minimum_repeat: Some(1),
+                    maximum_repeat: work_parts_per_upgrader,
+                    pre_body: &[Part::Work, Part::Carry, Part::Move, Part::Move],
+                    repeat_body: &[Part::Work, Part::Move],
+                    post_body: &[],
+                }
+            } else {
+                crate::creep::SpawnBodyDefinition{
+                    maximum_energy,
+                    minimum_repeat: Some(1),
+                    maximum_repeat: work_parts_per_upgrader.map(|p| p - 1),
+                    pre_body: &[Part::Work, Part::Carry, Part::Move, Part::Move],
+                    repeat_body: &[Part::Work],
+                    post_body: &[],
+                }
             };
 
             if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                 let priority = if self.upgraders.is_empty() && (downgrade_risk || controller_level <= 1) {
                     SPAWN_PRIORITY_HIGH
                 } else if self.upgraders.is_empty() {
-                    SPAWN_PRIORITY_MEDIUM
+                    SPAWN_PRIORITY_HIGH
                 } else {
-                    SPAWN_PRIORITY_LOW
+                    let interp = (alive_upgraders as f32) / (max_upgraders as f32);
+                    
+                    SPAWN_PRIORITY_MEDIUM.lerp_bounded(SPAWN_PRIORITY_LOW, interp)
                 };
 
                 let allow_harvest = controller_level <= 3;

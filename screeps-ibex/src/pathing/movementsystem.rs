@@ -113,7 +113,7 @@ impl<'a> System<'a> for MovementUpdateSystem {
             system.set_default_visualization_style(PolyStyle::default());
         }
 
-        system.set_reuse_path_length(10);
+        system.set_reuse_path_length(5);
 
         if crate::features::pathing::custom() {
             system.process(&mut external, movement_data);
