@@ -236,7 +236,7 @@ impl MoveToRoom {
             tick_opportunistic_repair(tick_context, Some(RepairPriority::Low));
         }
 
-        tick_move_to_room(tick_context, self.room_name, HaulState::idle)
+        tick_move_to_room(tick_context, self.room_name, None, HaulState::idle)
     }
 }
 

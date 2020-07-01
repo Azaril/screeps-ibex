@@ -5,6 +5,7 @@ use super::utility::movebehavior::*;
 use screeps::*;
 use screeps_machine::*;
 use serde::*;
+use screeps_rover::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ScoutJobContext {
@@ -52,7 +53,9 @@ impl MoveToRoom {
     pub fn tick(&mut self, state_context: &mut ScoutJobContext, tick_context: &mut JobTickContext) -> Option<ScoutState> {
         //TODO: Scout multiple rooms instead of just suiciding.
         //TODO: Handle navigation failure.
-        tick_move_to_room(tick_context, state_context.room_target, ScoutState::idle)
+        let room_options = RoomOptions::new(HostileBehavior::HighCost);
+
+        tick_move_to_room(tick_context, state_context.room_target, Some(room_options), ScoutState::idle)
     }
 }
 

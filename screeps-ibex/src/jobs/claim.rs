@@ -54,7 +54,7 @@ machine!(
 
 impl MoveToController {
     fn tick(&mut self, state_context: &mut ClaimJobContext, tick_context: &mut JobTickContext) -> Option<ClaimState> {
-        tick_move_to_position(tick_context, state_context.claim_target.pos(), 1, ClaimState::claim_controller)
+        tick_move_to_position(tick_context, state_context.claim_target.pos(), 1, None, ClaimState::claim_controller)
     }
 }
 

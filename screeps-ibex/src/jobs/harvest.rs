@@ -311,7 +311,7 @@ impl Upgrade {
 
 impl MoveToRoom {
     fn tick(&mut self, _state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
-        tick_move_to_room(tick_context, self.room_name, HarvestState::idle)
+        tick_move_to_room(tick_context, self.room_name, None, HarvestState::idle)
     }
 }
 
