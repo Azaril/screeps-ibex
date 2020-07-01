@@ -173,7 +173,7 @@ impl FinishedDelivery {
 
 impl MoveToRoom {
     fn tick(&mut self, _state_context: &mut DismantleJobContext, tick_context: &mut JobTickContext) -> Option<DismantleState> {
-        tick_move_to_room(tick_context, self.room_name, DismantleState::idle)
+        tick_move_to_room(tick_context, self.room_name, None, DismantleState::idle)
     }
 }
 

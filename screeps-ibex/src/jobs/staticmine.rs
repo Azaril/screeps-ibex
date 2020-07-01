@@ -65,7 +65,7 @@ machine!(
 
 impl MoveToContainer {
     fn tick(&mut self, state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
-        tick_move_to_position(tick_context, state_context.container_target.pos(), 0, StaticMineState::harvest)
+        tick_move_to_position(tick_context, state_context.container_target.pos(), 0, None, StaticMineState::harvest)
     }
 }
 

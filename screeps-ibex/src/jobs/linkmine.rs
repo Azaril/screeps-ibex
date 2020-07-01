@@ -62,7 +62,7 @@ machine!(
 
 impl MoveToPosition {
     pub fn tick(&mut self, _state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
-        tick_move_to_position(tick_context, self.target, 0, LinkMineState::idle)
+        tick_move_to_position(tick_context, self.target, 0, None, LinkMineState::idle)
     }
 }
 
