@@ -347,6 +347,47 @@ where
     }
 }
 
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn tick_pickup_and_fill<F, R>(tick_context: &mut JobTickContext, ticket: &mut TransferWithdrawTicket, resource_type: ResourceType, transfer_types: TransferTypeFlags, priorities: TransferPriorityFlags, next_state: F) -> Option<R>
+where
+    F: FnOnce() -> R,
+{
+    //
+    // NOTE: All users run this at the same time so that transfer data is only hydrated on this tick.
+    //
+
+    //TODO: Factor this in to common code.
+    if game::time() % 5 == 0 {
+        let creep = tick_context.runtime_data.owner;
+
+        let transfer_queue_data = TransferQueueGeneratorData {
+            cause: "Pickup Tick",
+            room_data: &*tick_context.system_data.room_data,
+        };
+
+        let capacity = creep.store_capacity(None);
+        let store_types = creep.store_types();
+        let used_capacity = store_types.iter().map(|r| creep.store_used_capacity(Some(*r))).sum::<u32>();
+        //TODO: Fix this when double resource counting bug is fixed.
+        //let used_capacity = creep.store_used_capacity(None);
+        let free_capacity = capacity - used_capacity;
+
+        let mut available_capacity = TransferCapacity::Finite(free_capacity);
+
+        for entries in ticket.resources().values() {
+            for entry in entries {
+                available_capacity.consume(entry.amount());
+            }
+        }
+
+        if let Some(additional_withdrawl) = tick_context.runtime_data.transfer_queue.get_pickup_from_target(&transfer_queue_data, ticket.target(), priorities, transfer_types, available_capacity, resource_type) {
+            ticket.combine_with(&additional_withdrawl);
+        }
+    }
+
+    tick_pickup(tick_context, ticket, next_state)
+}
+
 pub fn visualize_pickup(describe_data: &mut JobDescribeData, ticket: &TransferWithdrawTicket) {
     let pos = describe_data.owner.pos();
     let to = ticket.target().pos();

@@ -107,7 +107,7 @@ impl Pickup {
     }
 
     pub fn tick(&mut self, _state_context: &BuildJobContext, tick_context: &mut JobTickContext) -> Option<BuildState> {
-        tick_pickup(tick_context, &mut self.ticket, BuildState::finished_pickup)
+        tick_pickup_and_fill(tick_context, &mut self.ticket, ResourceType::Energy, TransferTypeFlags::HAUL | TransferTypeFlags::USE, TransferPriorityFlags::ALL, BuildState::finished_pickup)
     }
 
     pub fn visualize(&self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {

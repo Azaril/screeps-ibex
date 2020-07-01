@@ -484,29 +484,13 @@ impl TransferNode {
         ((self.get_deposit(key) as i32) - (self.get_pending_deposit(key) as i32)).max(0) as u32
     }
 
-    pub fn get_available_withdrawl_totals(&self, transfer_type: TransferType) -> HashMap<ResourceType, u32> {
-        let mut available_resources: HashMap<ResourceType, u32> = HashMap::new();
-
-        for key in self.withdrawls.keys().filter(|key| key.allowed_type == transfer_type) {
-            let available = self.get_available_withdrawl(key);
-
-            if available > 0 {
-                let current = available_resources.entry(key.resource).or_insert(0);
-
-                *current += available;
-            }
-        }
-
-        available_resources
-    }
-
-    pub fn get_available_withdrawl_by_resource(&self, transfer_type: TransferType, resource: ResourceType) -> u32 {
+    pub fn get_available_withdrawl_by_resource(&self, transfer_types: TransferTypeFlags, allowed_priorities: TransferPriorityFlags, resource: ResourceType) -> u32 {
         let mut available_resources: u32 = 0;
 
         for key in self
             .withdrawls
             .keys()
-            .filter(|key| key.allowed_type == transfer_type && key.resource == resource)
+            .filter(|key| allowed_priorities.contains(key.priority.into()) && transfer_types.contains(key.allowed_type.into()) && key.resource == resource)
         {
             available_resources += self.get_available_withdrawl(key);
         }
@@ -514,9 +498,9 @@ impl TransferNode {
         available_resources
     }
 
-    pub fn get_available_withdrawl_totals_by_priority(
+    pub fn get_available_withdrawl_totals(
         &self,
-        transfer_type: TransferType,
+        transfer_types: TransferTypeFlags,
         allowed_priorities: TransferPriorityFlags,
     ) -> HashMap<ResourceType, u32> {
         let mut available_resources: HashMap<ResourceType, u32> = HashMap::new();
@@ -524,7 +508,7 @@ impl TransferNode {
         for key in self
             .withdrawls
             .keys()
-            .filter(|key| allowed_priorities.contains(key.priority.into()) && key.allowed_type == transfer_type)
+            .filter(|key| allowed_priorities.contains(key.priority.into()) && transfer_types.contains(key.allowed_type.into()))
         {
             let available = self.get_available_withdrawl(key);
 
@@ -1786,7 +1770,7 @@ impl TransferQueue {
         let available_resources = self
             .try_get_room(data, target.pos().room_name(), delivery_type.into())
             .and_then(|room| room.try_get_node(target))
-            .map(|node| node.get_available_withdrawl_totals_by_priority(delivery_type, allowed_pickup_priorities))?;
+            .map(|node| node.get_available_withdrawl_totals(delivery_type.into(), allowed_pickup_priorities))?;
 
         if available_resources.is_empty() {
             return None;
@@ -1838,6 +1822,48 @@ impl TransferQueue {
         Some((pickup, delivery))
     }
 
+    pub fn get_pickup_from_target(
+        &mut self,
+        data: &dyn TransferRequestSystemData,
+        target: &TransferTarget,
+        allowed_pickup_priorities: TransferPriorityFlags,
+        transfer_types: TransferTypeFlags,
+        available_capacity: TransferCapacity,
+        resource_type: ResourceType,
+    ) -> Option<TransferWithdrawTicket> {
+        if available_capacity.empty() {
+            return None;
+        }
+
+        let node  = self
+            .try_get_room(data, target.pos().room_name(), transfer_types)
+            .and_then(|room| room.try_get_node(target))?;
+
+        let resource_amount = available_capacity.clamp(u32::MAX);
+
+        let mut desired_resources = HashMap::new();        
+
+        desired_resources.insert(Some(resource_type), resource_amount);
+
+        let pickup_resources = node.select_pickup(
+            allowed_pickup_priorities,
+            transfer_types,
+            &desired_resources,
+            available_capacity,
+        );
+
+        if pickup_resources.is_empty() {
+            return None;
+        }
+
+        let pickup_ticket = TransferWithdrawTicket {
+            target: *target,
+            resources: pickup_resources,
+        };
+
+        Some(pickup_ticket)
+    }
+
     pub fn get_delivery_from_target<TF>(
         &mut self,
         data: &dyn TransferRequestSystemData,
@@ -1857,7 +1883,7 @@ impl TransferQueue {
         let available_resources = self
             .try_get_room(data, target.pos().room_name(), delivery_type.into())
             .and_then(|room| room.try_get_node(target))
-            .map(|node| node.get_available_withdrawl_totals_by_priority(delivery_type, allowed_pickup_priorities))?;
+            .map(|node| node.get_available_withdrawl_totals(delivery_type.into(), allowed_pickup_priorities))?;
 
         if available_resources.is_empty() {
             return None;
