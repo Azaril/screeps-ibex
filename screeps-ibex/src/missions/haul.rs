@@ -184,7 +184,7 @@ impl Mission for HaulMission {
                 maximum_energy: energy_to_use,
                 minimum_repeat: Some(1),
                 maximum_repeat: Some(20),
-                pre_body: &[Part::Work],
+                pre_body: &[Part::Work, Part::Move],
                 repeat_body: &[Part::Carry, Part::Move],
                 post_body: &[],
             }
