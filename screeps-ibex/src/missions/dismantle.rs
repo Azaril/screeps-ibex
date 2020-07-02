@@ -77,6 +77,7 @@ impl DismantleMission {
     pub fn requires_dismantling(structures: &[Structure], sources: &[RemoteObjectId<Source>]) -> bool {
         structures
             .iter()
+            .filter(|s| s.structure_type() != StructureType::Road)
             .filter(|s| ignore_for_dismantle(*s, sources))
             .filter(|s| can_dismantle(*s))
             .filter(|s| has_empty_storage(*s))

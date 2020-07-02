@@ -17,7 +17,7 @@ lto = true
 codegen-units = 1
 
 [patch.crates-io]
-screeps-game-api = { git = "https://github.com/Azaril/screeps-game-api", branch = "pathfinding-v2" }
+screeps-game-api = { git = "https://github.com/Azaril/screeps-game-api" }
 
 [patch.'https://github.com/Azaril/screeps-cache']
 screeps-cache = { path = "screeps-cache" }
