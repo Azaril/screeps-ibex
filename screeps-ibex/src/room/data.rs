@@ -1,5 +1,7 @@
 use crate::remoteobjectid::*;
 use crate::serialize::EntityVec;
+use crate::ui::*;
+use crate::visualize::*;
 use screeps::*;
 use screeps_cache::*;
 use screeps_foreman::constants::*;
@@ -7,9 +9,7 @@ use screeps_foreman::planner::{FastRoomTerrain, TerrainFlags};
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use std::{fmt::Display, cell::*};
-use crate::visualize::*;
-use crate::ui::*;
+use std::{cell::*, fmt::Display};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RoomTerrainStatistics {
@@ -98,8 +98,7 @@ impl RoomStaticVisibilityData {
         &self.terrain_statistics
     }
 
-    pub fn visualize(&self, _room_visualizer: &mut RoomVisualizer, _list_state: &mut ListVisualizerState) {
-    }
+    pub fn visualize(&self, _room_visualizer: &mut RoomVisualizer, _list_state: &mut ListVisualizerState) {}
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -120,9 +119,9 @@ impl Display for RoomDisposition {
             RoomDisposition::Neutral => write!(f, "Neutral"),
             RoomDisposition::Mine => write!(f, "Mine"),
             RoomDisposition::Friendly(name) => write!(f, "Friendly: {}", name),
-            RoomDisposition::Hostile(name) => write!(f, "Hostile: {}", name), 
+            RoomDisposition::Hostile(name) => write!(f, "Hostile: {}", name),
         }
-    }    
+    }
 }
 
 impl RoomDisposition {
@@ -201,7 +200,7 @@ pub struct RoomDynamicVisibilityData {
     #[serde(rename = "hc")]
     hostile_creeps: bool,
     #[serde(rename = "h")]
-    hostile_structures: bool,    
+    hostile_structures: bool,
 }
 
 impl RoomDynamicVisibilityData {
@@ -323,7 +322,7 @@ impl RoomData {
 
         self.dynamic_visibility_data = Some(self.create_dynamic_visibility_data(&room));
     }
-    
+
     fn create_static_visibility_data(room: &Room) -> RoomStaticVisibilityData {
         let controller_id = room.controller().map(|c| c.remote_id());
         let source_ids = room.find(find::SOURCES).into_iter().map(|s| s.remote_id()).collect();
@@ -377,13 +376,14 @@ impl RoomData {
         let source_keeper = structures.as_ref().map(|s| !s.keeper_lairs().is_empty()).unwrap_or(false);
 
         //TODO: Include power creeps?
-        let hostile_creeps = self.get_creeps()
+        let hostile_creeps = self
+            .get_creeps()
             .iter()
             .flat_map(|c| c.hostile())
             .flat_map(|c| c.body())
             .any(|p| match p.part {
                 Part::Attack | Part::RangedAttack | Part::Work => true,
-                _ => false
+                _ => false,
             });
 
         let hostile_structures = structures

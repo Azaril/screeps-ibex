@@ -2,14 +2,14 @@ use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
 use crate::jobs::upgrade::*;
+use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
-use crate::room::data::*;
+use lerp::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use lerp::*;
 
 #[derive(ConvertSaveload)]
 pub struct UpgradeMission {
@@ -201,7 +201,7 @@ impl Mission for UpgradeMission {
             };
 
             let body_definition = if controller_level <= 3 {
-                crate::creep::SpawnBodyDefinition{
+                crate::creep::SpawnBodyDefinition {
                     maximum_energy,
                     minimum_repeat: Some(1),
                     maximum_repeat: work_parts_per_upgrader,
@@ -210,7 +210,7 @@ impl Mission for UpgradeMission {
                     post_body: &[],
                 }
             } else {
-                crate::creep::SpawnBodyDefinition{
+                crate::creep::SpawnBodyDefinition {
                     maximum_energy,
                     minimum_repeat: Some(1),
                     maximum_repeat: work_parts_per_upgrader.map(|p| p - 1),
@@ -227,7 +227,7 @@ impl Mission for UpgradeMission {
                     SPAWN_PRIORITY_HIGH
                 } else {
                     let interp = (alive_upgraders as f32) / (max_upgraders as f32);
-                    
+
                     SPAWN_PRIORITY_MEDIUM.lerp_bounded(SPAWN_PRIORITY_LOW, interp)
                 };
 

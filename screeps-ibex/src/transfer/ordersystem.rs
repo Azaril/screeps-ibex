@@ -1,3 +1,4 @@
+use super::utility::*;
 use crate::room::data::*;
 use crate::ui::*;
 use crate::visualize::*;
@@ -6,7 +7,6 @@ use screeps::game::market::*;
 use screeps::*;
 use specs::prelude::{Entities, LazyUpdate, Read, ResourceId, System, SystemData, World, Write, WriteStorage};
 use std::collections::HashMap;
-use super::utility::*;
 
 pub struct OrderQueuePassiveRequest {
     resource: ResourceType,
@@ -398,7 +398,8 @@ impl<'a> System<'a> for OrderQueueSystem {
                                                 resource: entry.resource,
                                                 amount: entry.amount,
                                                 minimum_sale_amount: 2000,
-                                                minimum_price: latest_resource_history.avg_price - (latest_resource_history.stddev_price * 0.2),
+                                                minimum_price: latest_resource_history.avg_price
+                                                    - (latest_resource_history.stddev_price * 0.2),
                                                 available_transfer_energy: entry.available_transfer_energy,
                                                 maximum_transfer_energy: OrderQueue::maximum_transfer_energy(),
                                                 energy_cost: latest_energy_history.avg_price - (latest_energy_history.stddev_price * 0.2),

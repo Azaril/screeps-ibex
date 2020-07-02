@@ -3,8 +3,8 @@ use crate::jobs::actions::*;
 use crate::jobs::context::*;
 use crate::room::data::*;
 use crate::structureidentifier::*;
-use screeps::*;
 use log::*;
+use screeps::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_repair_state<F, R>(creep: &Creep, build_room: &RoomData, minimum_priority: Option<RepairPriority>, state_map: F) -> Option<R>
@@ -83,10 +83,8 @@ where
     }
 }
 
-
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn tick_opportunistic_repair(tick_context: &mut JobTickContext, minimum_priority: Option<RepairPriority>) -> Option<u32>
-{
+pub fn tick_opportunistic_repair(tick_context: &mut JobTickContext, minimum_priority: Option<RepairPriority>) -> Option<u32> {
     if !tick_context.action_flags.intersects(SimultaneousActionFlags::REPAIR) {
         let creep = tick_context.runtime_data.owner;
 
@@ -118,9 +116,14 @@ pub fn tick_opportunistic_repair(tick_context: &mut JobTickContext, minimum_prio
                                 let energy_consumed = max_energy_consumed.min(max_repair_energy);
 
                                 return Some(energy_consumed);
-                            },
+                            }
                             err => {
-                                info!("Failed to repair structure: {:?} - Position: {:?} - Error: {:?}", repair_structure.structure_type(), repair_structure.pos(), err);
+                                info!(
+                                    "Failed to repair structure: {:?} - Position: {:?} - Error: {:?}",
+                                    repair_structure.structure_type(),
+                                    repair_structure.pos(),
+                                    err
+                                );
                                 return None;
                             }
                         }

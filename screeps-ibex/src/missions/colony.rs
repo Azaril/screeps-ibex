@@ -1,6 +1,8 @@
 use super::construction::*;
 use super::data::*;
+use super::defend::*;
 use super::haul::*;
+use super::labs::*;
 use super::localbuild::*;
 use super::localsupply::*;
 use super::missionsystem::*;
@@ -8,15 +10,13 @@ use super::powerspawn::*;
 use super::terminal::*;
 use super::tower::*;
 use super::upgrade::*;
-use super::labs::*;
-use super::defend::*;
-use crate::serialize::*;
 use crate::room::data::*;
+use crate::serialize::*;
+use screeps::*;
 use screeps_machine::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use screeps::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ColonyMissionContext {
@@ -296,7 +296,7 @@ impl ColonyMission {
                 None.into(),
                 None.into(),
                 None.into(),
-                None.into()
+                None.into(),
             ),
         }
     }
@@ -309,7 +309,7 @@ impl ColonyMission {
         } else {
             return false;
         }
-        
+
         room_data.get_dynamic_visibility_data().map(|v| v.owner().mine()).unwrap_or(false)
     }
 }

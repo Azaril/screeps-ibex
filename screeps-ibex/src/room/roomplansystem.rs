@@ -41,7 +41,7 @@ impl RoomPlanQueue {
 #[derive(Clone, Deserialize, Serialize)]
 pub enum RoomPlanState {
     Valid(Plan),
-    Failed { time: u32 }
+    Failed { time: u32 },
 }
 
 impl RoomPlanState {
@@ -197,7 +197,7 @@ impl RoomPlannerRunningData {
 
 #[derive(Clone, Deserialize, Serialize, Default)]
 pub struct RoomPlannerData {
-    running_state: Option<RoomPlannerRunningData>
+    running_state: Option<RoomPlannerRunningData>,
 }
 
 #[derive(SystemData)]
@@ -223,7 +223,7 @@ impl RoomPlanSystem {
             let current_cpu = game::cpu::get_used();
             let remaining_cpu = tick_limit as f64 - current_cpu;
             let max_cpu = (remaining_cpu * 0.25).min(tick_limit as f64 / 2.0);
-            
+
             if max_cpu >= 20.0 {
                 return Some(max_cpu);
             }
@@ -232,7 +232,11 @@ impl RoomPlanSystem {
         None
     }
 
-    fn attach_plan_state(room_plan_data_storage: &mut WriteStorage<RoomPlanData>, room: Entity, state: RoomPlanState) -> Result<(), String> {
+    fn attach_plan_state(
+        room_plan_data_storage: &mut WriteStorage<RoomPlanData>,
+        room: Entity,
+        state: RoomPlanState,
+    ) -> Result<(), String> {
         if let Some(room_plan_data) = room_plan_data_storage.get_mut(room) {
             room_plan_data.state = state;
         } else {
@@ -275,7 +279,9 @@ impl<'a> System<'a> for RoomPlanSystem {
                         if let Some(plan_data) = data.room_plan_data.get(room) {
                             match plan_data.state {
                                 RoomPlanState::Valid(_) => crate::features::construction::force_plan(),
-                                RoomPlanState::Failed { time } => game::time() >= time + 2000 && crate::features::construction::allow_replan(),
+                                RoomPlanState::Failed { time } => {
+                                    game::time() >= time + 2000 && crate::features::construction::allow_replan()
+                                }
                             }
                         } else {
                             true
@@ -305,14 +311,20 @@ impl<'a> System<'a> for RoomPlanSystem {
                                 Ok(PlanSeedResult::Complete(Some(plan))) => {
                                     info!("Seeding complete and viable plan found. Room: {}", room_data.name);
 
-                                    if let Err(err) = Self::attach_plan_state(&mut data.room_plan_data, request.room, RoomPlanState::Valid(plan)) {
+                                    if let Err(err) =
+                                        Self::attach_plan_state(&mut data.room_plan_data, request.room, RoomPlanState::Valid(plan))
+                                    {
                                         info!("Failed to attach plan to room! Room: {} - Err: {}", room_data.name, err);
                                     }
                                 }
                                 Ok(PlanSeedResult::Complete(None)) => {
                                     info!("Seeding complete but no viable plan found. Room: {}", room_data.name);
 
-                                    if let Err(err) = Self::attach_plan_state(&mut data.room_plan_data, request.room, RoomPlanState::Failed { time: game::time() }) {
+                                    if let Err(err) = Self::attach_plan_state(
+                                        &mut data.room_plan_data,
+                                        request.room,
+                                        RoomPlanState::Failed { time: game::time() },
+                                    ) {
                                         info!("Failed to attach plan to room! Room: {} - Err: {}", room_data.name, err);
                                     }
                                 }
@@ -334,7 +346,9 @@ impl<'a> System<'a> for RoomPlanSystem {
                                 Ok(PlanEvaluationResult::Complete(Some(plan))) => {
                                     info!("Planning complete and viable plan found. Room: {}", room_data.name);
 
-                                    if let Err(err) = Self::attach_plan_state(&mut data.room_plan_data, room_entity, RoomPlanState::Valid(plan)) {
+                                    if let Err(err) =
+                                        Self::attach_plan_state(&mut data.room_plan_data, room_entity, RoomPlanState::Valid(plan))
+                                    {
                                         info!("Failed to attach plan to room! Room: {} - Error: {}", room_data.name, err);
                                     }
 
@@ -343,7 +357,11 @@ impl<'a> System<'a> for RoomPlanSystem {
                                 Ok(PlanEvaluationResult::Complete(None)) => {
                                     info!("Planning complete but no viable plan found. Room: {}", room_data.name);
 
-                                    if let Err(err) = Self::attach_plan_state(&mut data.room_plan_data, room_entity, RoomPlanState::Failed { time: game::time() }) {
+                                    if let Err(err) = Self::attach_plan_state(
+                                        &mut data.room_plan_data,
+                                        room_entity,
+                                        RoomPlanState::Failed { time: game::time() },
+                                    ) {
                                         info!("Failed to attach plan to room! Room: {} - Error: {}", room_data.name, err);
                                     }
 
@@ -390,7 +408,7 @@ impl<'a> System<'a> for RoomPlanSystem {
                 }
             }
         }
-        
+
         if crate::features::construction::visualize_plan() {
             if let Some(visualizer) = &mut data.visualizer {
                 for (_, room_data, room_plan_data) in (&data.entities, &data.room_data, &data.room_plan_data).join() {

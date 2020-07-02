@@ -1,11 +1,11 @@
 use super::memorysystem::*;
 use crate::room::data::*;
 use screeps::*;
-use serde::*;
 use serde::ser::SerializeMap;
+use serde::*;
+use shrinkwraprs::*;
 use specs::prelude::*;
 use std::collections::HashMap;
-use shrinkwraprs::*;
 
 #[derive(Serialize)]
 pub struct CpuStats {
@@ -129,8 +129,7 @@ fn to_resource_name(val: ResourceType) -> &'static str {
     }
 }
 
-#[derive(Shrinkwrap)]
-#[derive(Default)]
+#[derive(Shrinkwrap, Default)]
 #[shrinkwrap(mutable)]
 struct StorageResource(HashMap<ResourceType, u32>);
 
@@ -140,7 +139,7 @@ impl Serialize for StorageResource {
         S: Serializer,
     {
         let mut m = s.serialize_map(Some(self.0.len()))?;
-    
+
         for (k, v) in &self.0 {
             let k = to_resource_name(*k);
 
@@ -151,8 +150,7 @@ impl Serialize for StorageResource {
     }
 }
 
-#[derive(Shrinkwrap)]
-#[derive(Default)]
+#[derive(Shrinkwrap, Default)]
 #[shrinkwrap(mutable)]
 struct StorageStructure(HashMap<StructureType, StorageResource>);
 
@@ -162,7 +160,7 @@ impl Serialize for StorageStructure {
         S: Serializer,
     {
         let mut m = s.serialize_map(Some(self.0.len()))?;
-    
+
         for (k, v) in &self.0 {
             let k = to_structure_name(*k);
 
@@ -251,13 +249,13 @@ impl StatsSystem {
                         let structure_type = structure.structure_type();
 
                         if let Some(store) = structure.as_has_store() {
-                            let structure_storage = storage.entry(structure_type)
-                                .or_insert_with(StorageResource::default);
+                            let structure_storage = storage.entry(structure_type).or_insert_with(StorageResource::default);
 
                             for resource_type in store.store_types() {
                                 let amount = store.store_of(resource_type);
 
-                                structure_storage.entry(resource_type)
+                                structure_storage
+                                    .entry(resource_type)
                                     .and_modify(|e| *e += amount)
                                     .or_insert(amount);
                             }

@@ -3,9 +3,9 @@ use super::context::*;
 use super::jobsystem::*;
 use super::utility::haulbehavior::*;
 use super::utility::movebehavior::*;
-use super::utility::waitbehavior::*;
 use super::utility::repair::*;
 use super::utility::repairbehavior::*;
+use super::utility::waitbehavior::*;
 use crate::serialize::*;
 use crate::transfer::transfersystem::*;
 use itertools::*;
@@ -20,7 +20,7 @@ pub struct HaulJobContext {
     pickup_rooms: EntityVec<Entity>,
     delivery_rooms: EntityVec<Entity>,
     allow_repair: bool,
-    storage_delivery_only: bool
+    storage_delivery_only: bool,
 }
 
 machine!(
@@ -199,9 +199,19 @@ impl Pickup {
                 target_filters::all
             };
 
-            get_additional_deliveries(&transfer_queue_data, &delivery_rooms, TransferPriorityFlags::ALL, TransferType::Haul, available_capacity, tick_context.runtime_data.transfer_queue, &mut self.withdrawl, &mut self.deposits, target_filter);
+            get_additional_deliveries(
+                &transfer_queue_data,
+                &delivery_rooms,
+                TransferPriorityFlags::ALL,
+                TransferType::Haul,
+                available_capacity,
+                tick_context.runtime_data.transfer_queue,
+                &mut self.withdrawl,
+                &mut self.deposits,
+                target_filter,
+            );
         }
-        
+
         let deposits = &self.deposits;
 
         tick_pickup(tick_context, &mut self.withdrawl, move || HaulState::delivery(deposits.clone()))
@@ -260,7 +270,7 @@ impl HaulJob {
                 pickup_rooms: pickup_rooms.into(),
                 delivery_rooms: delivery_rooms.into(),
                 allow_repair,
-                storage_delivery_only
+                storage_delivery_only,
             },
             state: HaulState::idle(),
         }

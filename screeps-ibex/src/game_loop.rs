@@ -23,6 +23,7 @@ use crate::transfer::ordersystem::*;
 use crate::transfer::transfersystem::*;
 use crate::ui::*;
 use crate::visualize::*;
+use bincode::{DefaultOptions, Deserializer, Serializer};
 use log::*;
 use screeps::*;
 use screeps_rover::*;
@@ -31,7 +32,6 @@ use specs::{
     saveload::{DeserializeComponents, SerializeComponents},
 };
 use std::collections::HashSet;
-use bincode::{Serializer, Deserializer, DefaultOptions};
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 fn serialize_world(world: &World, segments: &[u32]) {
@@ -64,23 +64,23 @@ fn serialize_world(world: &World, segments: &[u32]) {
             let mut serializer = Serializer::new(&mut serialized_data, DefaultOptions::new());
 
             SerializeComponents::<std::convert::Infallible, SerializeMarker>::serialize(
-                    &(
-                        &data.creep_spawnings,
-                        &data.creep_owners,
-                        &data.creep_movement_data,                        
-                        &data.room_data,
-                        &data.room_plan_data,
-                        &data.job_data,
-                        &data.operation_data,
-                        &data.mission_data,
-                    ),
-                    &data.entities,
-                    &data.markers,
-                    &mut serializer,
-                )
-                .map(|_| ())
-                .map_err(|e| e.to_string())  
-                .unwrap_or_else(|e| error!("Failed serialization: {}", e));
+                &(
+                    &data.creep_spawnings,
+                    &data.creep_owners,
+                    &data.creep_movement_data,
+                    &data.room_data,
+                    &data.room_plan_data,
+                    &data.job_data,
+                    &data.operation_data,
+                    &data.mission_data,
+                ),
+                &data.entities,
+                &data.markers,
+                &mut serializer,
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+            .unwrap_or_else(|e| error!("Failed serialization: {}", e));
 
             let encoded_data = encode_buffer_to_string(&serialized_data).unwrap();
 
@@ -95,7 +95,11 @@ fn serialize_world(world: &World, segments: &[u32]) {
 
                     data.memory_arbiter.set(*segment, chunk_str);
                 } else {
-                    error!("Not enough segments available to store all state. Segment count: {} - Needed segments: {}", self.segments.len(), encoded_data.len() as f32 / (1024.0 * 50.0));
+                    error!(
+                        "Not enough segments available to store all state. Segment count: {} - Needed segments: {}",
+                        self.segments.len(),
+                        encoded_data.len() as f32 / (1024.0 * 50.0)
+                    );
                 }
             }
 
@@ -142,7 +146,8 @@ fn deserialize_world(world: &World, segments: &[u32]) {
 
             use itertools::*;
 
-            let encoded_data = self.segments
+            let encoded_data = self
+                .segments
                 .iter()
                 .filter_map(|segment| data.memory_arbiter.get(*segment))
                 .join("");
@@ -274,7 +279,7 @@ pub fn tick() {
     //
     // Deserialize world state.
     //
-    
+
     let current_time = game::time();
 
     const COMPONENT_SEGMENTS: &[u32] = &[50, 51, 52];
@@ -294,7 +299,7 @@ pub fn tick() {
 
         for segment in COMPONENT_SEGMENTS.iter() {
             raw_memory::set_segment(*segment, "");
-        }        
+        }
     }
 
     crate::features::reset::clear();
@@ -317,9 +322,7 @@ pub fn tick() {
         //TODO: Remove this load from here.
         memory_arbiter.request(COST_MATRIX_SYSTEM_SEGMENT);
 
-        COMPONENT_SEGMENTS
-            .iter()
-            .all(|segment| memory_arbiter.is_active(*segment))        
+        COMPONENT_SEGMENTS.iter().all(|segment| memory_arbiter.is_active(*segment))
     };
 
     if !is_data_ready {

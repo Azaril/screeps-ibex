@@ -1,17 +1,17 @@
 use super::data::*;
 use super::missionsystem::*;
+use crate::jobs::utility::waitbehavior::*;
+use crate::remoteobjectid::*;
+use crate::room::data::*;
 use crate::serialize::*;
+use crate::transfer::transfersystem::*;
+use log::*;
+use screeps::*;
 use screeps_machine::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use crate::jobs::utility::waitbehavior::*;
-use crate::room::data::*;
-use crate::transfer::transfersystem::*;
-use screeps::*;
 use std::collections::HashMap;
-use log::*;
-use crate::remoteobjectid::*;
 use std::marker::PhantomData;
 
 #[derive(Clone, ConvertSaveload)]
@@ -38,7 +38,7 @@ machine!(
             reaction: ResourceType,
             amount: u32,
             input: Vec<ObjectId<StructureLab>>,
-            output: Vec<ObjectId<StructureLab>>,            
+            output: Vec<ObjectId<StructureLab>>,
         }
     }
 
@@ -59,7 +59,7 @@ machine!(
 
 enum ReactionType {
     Forward,
-    Reverse
+    Reverse,
 }
 
 impl Idle {
@@ -72,7 +72,7 @@ impl Idle {
             system_data.transfer_queue.register_generator(
                 room_data.name,
                 TransferTypeFlags::HAUL,
-                Self::transfer_generator(state_context.room_data)
+                Self::transfer_generator(state_context.room_data),
             );
         }
     }
@@ -105,16 +105,17 @@ impl Idle {
         })
     }
 
-    fn get_labs(system_data: &mut MissionExecutionSystemData, state_context: &mut LabsMissionContext, input_labs: usize) -> Result<(Vec<ObjectId<StructureLab>>, Vec<ObjectId<StructureLab>>), String> {
-        let room_data = system_data
-            .room_data
-            .get(state_context.room_data)
-            .ok_or("Expected room data")?;
+    fn get_labs(
+        system_data: &mut MissionExecutionSystemData,
+        state_context: &mut LabsMissionContext,
+        input_labs: usize,
+    ) -> Result<(Vec<ObjectId<StructureLab>>, Vec<ObjectId<StructureLab>>), String> {
+        let room_data = system_data.room_data.get(state_context.room_data).ok_or("Expected room data")?;
 
         let structures = room_data.get_structures().ok_or("Expected structures")?;
 
         let labs = structures.labs();
-        
+
         let inputs: Vec<_> = labs
             .iter()
             .filter(|lab| {
@@ -130,11 +131,7 @@ impl Idle {
             return Err("Insufficient input labs to run reaction".to_owned());
         }
 
-        let outputs: Vec<_> = labs
-            .iter()
-            .filter(|lab| !inputs.contains(&lab.id()))
-            .map(|l| l.id())
-            .collect();
+        let outputs: Vec<_> = labs.iter().filter(|lab| !inputs.contains(&lab.id())).map(|l| l.id()).collect();
 
         Ok((inputs, outputs))
     }
@@ -152,28 +149,28 @@ impl Idle {
                 if !inputs.is_empty() && !outputs.is_empty() {
                     match reaction_type {
                         ReactionType::Forward => {
-                            let room_data = system_data
-                                .room_data
-                                .get(state_context.room_data)
-                                .ok_or("Expected room data")?;
-            
-                            info!("Selected reaction - Room: {} Resource: {:?} - Amount: {}", room_data.name, resource_type, amount);
-                            
+                            let room_data = system_data.room_data.get(state_context.room_data).ok_or("Expected room data")?;
+
+                            info!(
+                                "Selected reaction - Room: {} Resource: {:?} - Amount: {}",
+                                room_data.name, resource_type, amount
+                            );
+
                             let inputs: Vec<_> = inputs
                                 .into_iter()
                                 .zip(components.iter())
                                 .map(|(lab, component)| (lab, *component))
                                 .collect();
-            
+
                             return Ok(Some(LabsState::run_reaction(resource_type, amount, inputs, outputs)));
                         }
                         ReactionType::Reverse => {
-                            let room_data = system_data
-                                .room_data
-                                .get(state_context.room_data)
-                                .ok_or("Expected room data")?;
-            
-                            info!("Selected reverse reaction - Room: {} Resource: {:?} - Amount: {}", room_data.name, resource_type, amount);
+                            let room_data = system_data.room_data.get(state_context.room_data).ok_or("Expected room data")?;
+
+                            info!(
+                                "Selected reverse reaction - Room: {} Resource: {:?} - Amount: {}",
+                                room_data.name, resource_type, amount
+                            );
 
                             //
                             // NOTE: Swap output and input labs for reverse reaction.
@@ -194,7 +191,6 @@ impl Idle {
             //
             // Tier 1 boosts
             //
-
             (ResourceType::UtriumHydride, 1000),
             (ResourceType::UtriumOxide, 1000),
             (ResourceType::KeaniumHydride, 1000),
@@ -205,11 +201,9 @@ impl Idle {
             (ResourceType::ZynthiumOxide, 1000),
             (ResourceType::GhodiumHydride, 1000),
             (ResourceType::GhodiumOxide, 1000),
-
             //
             // Tier 2 boosts
             //
-
             (ResourceType::UtriumAcid, 1000),
             (ResourceType::UtriumAlkalide, 1000),
             (ResourceType::KeaniumAcid, 1000),
@@ -219,12 +213,10 @@ impl Idle {
             (ResourceType::ZynthiumAcid, 1000),
             (ResourceType::ZynthiumAlkalide, 1000),
             (ResourceType::GhodiumAcid, 1000),
-            (ResourceType::GhodiumAlkalide, 1000),    
-            
+            (ResourceType::GhodiumAlkalide, 1000),
             //
             // Tier 3 boosts
             //
-
             (ResourceType::CatalyzedUtriumAcid, 1000),
             (ResourceType::CatalyzedUtriumAlkalide, 1000),
             (ResourceType::CatalyzedKeaniumAcid, 1000),
@@ -234,22 +226,25 @@ impl Idle {
             (ResourceType::CatalyzedZynthiumAcid, 1000),
             (ResourceType::CatalyzedZynthiumAlkalide, 1000),
             (ResourceType::CatalyzedGhodiumAcid, 1000),
-            (ResourceType::CatalyzedGhodiumAlkalide, 1000),    
+            (ResourceType::CatalyzedGhodiumAlkalide, 1000),
         ]
     }
 
-    fn get_target_reaction(system_data: &mut MissionExecutionSystemData, state_context: &mut LabsMissionContext) -> Result<Option<(ReactionType, ResourceType, u32)>, String> {
-        let room_data = system_data
-            .room_data
-            .get(state_context.room_data)
-            .ok_or("Expected room data")?;
+    fn get_target_reaction(
+        system_data: &mut MissionExecutionSystemData,
+        state_context: &mut LabsMissionContext,
+    ) -> Result<Option<(ReactionType, ResourceType, u32)>, String> {
+        let room_data = system_data.room_data.get(state_context.room_data).ok_or("Expected room data")?;
 
         let transfer_queue_data = TransferQueueGeneratorData {
             cause: "Labs Idle",
             room_data: &*system_data.room_data,
         };
 
-        let mut available_resources = system_data.transfer_queue.get_available_withdrawl_totals(&transfer_queue_data, &[room_data.name], TransferType::Haul);
+        let mut available_resources =
+            system_data
+                .transfer_queue
+                .get_available_withdrawl_totals(&transfer_queue_data, &[room_data.name], TransferType::Haul);
 
         let mut all_available_reactions: HashMap<ResourceType, u32> = HashMap::new();
 
@@ -276,9 +271,7 @@ impl Idle {
 
                     let component_available_resources: Vec<_> = resource_components
                         .iter()
-                        .map(|component_resource| {
-                            (*component_resource, *available_resources.get(component_resource).unwrap_or(&0))
-                        })
+                        .map(|component_resource| (*component_resource, *available_resources.get(component_resource).unwrap_or(&0)))
                         .collect();
 
                     //
@@ -339,12 +332,12 @@ impl Idle {
         if best_reverse_reaction.is_some() {
             return Ok(best_reverse_reaction);
         }
-        
+
         Ok(None)
     }
 }
 
-impl Wait {  
+impl Wait {
     fn status_description(&self) -> String {
         format!("Wait - {}", self.ticks)
     }
@@ -369,12 +362,17 @@ impl RunReaction {
             system_data.transfer_queue.register_generator(
                 room_data.name,
                 TransferTypeFlags::HAUL,
-                Self::transfer_generator(state_context.room_data, &self.input, &self.output, self.amount)
+                Self::transfer_generator(state_context.room_data, &self.input, &self.output, self.amount),
             );
         }
     }
 
-    fn transfer_generator(_room_entity: Entity, input: &[(ObjectId<StructureLab>, ResourceType)], output: &[ObjectId<StructureLab>], reaction_amount: u32) -> TransferQueueGenerator {
+    fn transfer_generator(
+        _room_entity: Entity,
+        input: &[(ObjectId<StructureLab>, ResourceType)],
+        output: &[ObjectId<StructureLab>],
+        reaction_amount: u32,
+    ) -> TransferQueueGenerator {
         let input = input.to_owned();
         let output = output.to_owned();
 
@@ -404,7 +402,7 @@ impl RunReaction {
 
                 let current_resource_amount = lab.store_of(*input_resource);
                 let free_capacity = lab.store_free_capacity(Some(*input_resource));
-                
+
                 let deposit_amount = (reaction_amount as i32 - current_resource_amount as i32).min(free_capacity);
 
                 if deposit_amount > 0 {
@@ -457,7 +455,7 @@ impl RunReaction {
         _state_context: &mut LabsMissionContext,
     ) -> Result<Option<LabsState>, String> {
         if self.amount < LAB_REACTION_AMOUNT {
-            return Ok(Some(LabsState::idle(PhantomData)))
+            return Ok(Some(LabsState::idle(PhantomData)));
         }
 
         //TODO: Add stuck detection - (i.e. resources go missing).
@@ -491,17 +489,15 @@ impl RunReaction {
 
                     input_1_resource_amount -= LAB_REACTION_AMOUNT;
                     input_2_resource_amount -= LAB_REACTION_AMOUNT;
-                },
-                err => {
-                    error!("Failed to run lab reaction: {:?}", err)
                 }
+                err => error!("Failed to run lab reaction: {:?}", err),
             }
 
             if self.amount < LAB_REACTION_AMOUNT {
-                return Ok(Some(LabsState::idle(PhantomData)))
+                return Ok(Some(LabsState::idle(PhantomData)));
             }
         }
-        
+
         Ok(None)
     }
 }
@@ -516,12 +512,18 @@ impl RunReverseReaction {
             system_data.transfer_queue.register_generator(
                 room_data.name,
                 TransferTypeFlags::HAUL,
-                Self::transfer_generator(state_context.room_data, &self.input, &self.output, self.reaction, self.amount)
+                Self::transfer_generator(state_context.room_data, &self.input, &self.output, self.reaction, self.amount),
             );
         }
     }
 
-    fn transfer_generator(_room_entity: Entity, input: &[ObjectId<StructureLab>], output: &[ObjectId<StructureLab>], reaction_resource: ResourceType, reaction_amount: u32) -> TransferQueueGenerator {
+    fn transfer_generator(
+        _room_entity: Entity,
+        input: &[ObjectId<StructureLab>],
+        output: &[ObjectId<StructureLab>],
+        reaction_resource: ResourceType,
+        reaction_amount: u32,
+    ) -> TransferQueueGenerator {
         let input = input.to_owned();
         let output = output.to_owned();
 
@@ -540,7 +542,10 @@ impl RunReverseReaction {
 
                 let current_store = lab.store_types();
 
-                for unwanted_resource in current_store.iter().filter(|r| **r != ResourceType::Energy && **r != reaction_resource) {
+                for unwanted_resource in current_store
+                    .iter()
+                    .filter(|r| **r != ResourceType::Energy && **r != reaction_resource)
+                {
                     let unwanted_amount = lab.store_of(*unwanted_resource);
 
                     let transfer_request = TransferWithdrawRequest::new(
@@ -564,7 +569,7 @@ impl RunReverseReaction {
                 };
 
                 let lab_input_reaction_amount = desired_reactions * LAB_REACTION_AMOUNT;
-                
+
                 let deposit_amount = (lab_input_reaction_amount as i32 - current_resource_amount as i32).min(free_capacity);
 
                 if deposit_amount > 0 {
@@ -617,7 +622,7 @@ impl RunReverseReaction {
         _state_context: &mut LabsMissionContext,
     ) -> Result<Option<LabsState>, String> {
         if self.amount < LAB_REACTION_AMOUNT {
-            return Ok(Some(LabsState::idle(PhantomData)))
+            return Ok(Some(LabsState::idle(PhantomData)));
         }
 
         //TODO: Add stuck detection - (i.e. resources go missing).
@@ -626,13 +631,23 @@ impl RunReverseReaction {
         let output_1 = output_1.resolve().ok_or("Expected to resolve first output lab")?;
 
         let output_1_resources = output_1.store_types();
-        let mut output_1_free_capacity = output_1_resources.iter().filter(|r| **r != ResourceType::Energy).next().map(|r| output_1.store_free_capacity(Some(*r))).unwrap_or(LAB_MINERAL_CAPACITY as i32);
+        let mut output_1_free_capacity = output_1_resources
+            .iter()
+            .filter(|r| **r != ResourceType::Energy)
+            .next()
+            .map(|r| output_1.store_free_capacity(Some(*r)))
+            .unwrap_or(LAB_MINERAL_CAPACITY as i32);
 
         let output_2 = self.output.get(1).ok_or("Expected second output lab")?;
         let output_2 = output_2.resolve().ok_or("Expected to resolve second output lab")?;
 
         let output_2_resources = output_2.store_types();
-        let mut output_2_free_capacity = output_2_resources.iter().filter(|r| **r != ResourceType::Energy).next().map(|r| output_2.store_free_capacity(Some(*r))).unwrap_or(LAB_MINERAL_CAPACITY as i32);
+        let mut output_2_free_capacity = output_2_resources
+            .iter()
+            .filter(|r| **r != ResourceType::Energy)
+            .next()
+            .map(|r| output_2.store_free_capacity(Some(*r)))
+            .unwrap_or(LAB_MINERAL_CAPACITY as i32);
 
         for input in self.input.iter() {
             if output_1_free_capacity < LAB_REACTION_AMOUNT as i32 || output_2_free_capacity < LAB_REACTION_AMOUNT as i32 {
@@ -655,7 +670,7 @@ impl RunReverseReaction {
 
                     output_1_free_capacity -= LAB_REACTION_AMOUNT as i32;
                     output_2_free_capacity -= LAB_REACTION_AMOUNT as i32;
-                },
+                }
                 err => {
                     error!("Failed to run lab reverse reaction: {:?}", err);
 
@@ -668,10 +683,10 @@ impl RunReverseReaction {
             }
 
             if self.amount < LAB_REACTION_AMOUNT {
-                return Ok(Some(LabsState::idle(PhantomData)))
+                return Ok(Some(LabsState::idle(PhantomData)));
             }
         }
-        
+
         Ok(None)
     }
 }
@@ -699,9 +714,7 @@ impl LabsMission {
     pub fn new(owner: Option<Entity>, room_data: Entity) -> LabsMission {
         LabsMission {
             owner: owner.into(),
-            context: LabsMissionContext {
-                room_data
-            },
+            context: LabsMissionContext { room_data },
             state: LabsState::idle(PhantomData),
         }
     }

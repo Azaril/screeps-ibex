@@ -484,14 +484,17 @@ impl TransferNode {
         ((self.get_deposit(key) as i32) - (self.get_pending_deposit(key) as i32)).max(0) as u32
     }
 
-    pub fn get_available_withdrawl_by_resource(&self, transfer_types: TransferTypeFlags, allowed_priorities: TransferPriorityFlags, resource: ResourceType) -> u32 {
+    pub fn get_available_withdrawl_by_resource(
+        &self,
+        transfer_types: TransferTypeFlags,
+        allowed_priorities: TransferPriorityFlags,
+        resource: ResourceType,
+    ) -> u32 {
         let mut available_resources: u32 = 0;
 
-        for key in self
-            .withdrawls
-            .keys()
-            .filter(|key| allowed_priorities.contains(key.priority.into()) && transfer_types.contains(key.allowed_type.into()) && key.resource == resource)
-        {
+        for key in self.withdrawls.keys().filter(|key| {
+            allowed_priorities.contains(key.priority.into()) && transfer_types.contains(key.allowed_type.into()) && key.resource == resource
+        }) {
             available_resources += self.get_available_withdrawl(key);
         }
 
@@ -1564,8 +1567,11 @@ impl TransferQueue {
         delivery_types: TransferTypeFlags,
         available_resources: &HashMap<ResourceType, u32>,
         available_capacity: TransferCapacity,
-        target_filter: TF
-    ) -> Vec<TransferDepositTicket> where TF: Fn(&TransferTarget) -> bool {
+        target_filter: TF,
+    ) -> Vec<TransferDepositTicket>
+    where
+        TF: Fn(&TransferTarget) -> bool,
+    {
         let mut tickets = Vec::new();
 
         for delivery_room in delivery_rooms.iter() {
@@ -1685,7 +1691,10 @@ impl TransferQueue {
         current_position: RoomPosition,
         available_capacity: TransferCapacity,
         target_filter: TF,
-    ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)> where TF: Fn(&TransferTarget) -> bool {
+    ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)>
+    where
+        TF: Fn(&TransferTarget) -> bool,
+    {
         if available_capacity.empty() {
             return None;
         }
@@ -1704,7 +1713,7 @@ impl TransferQueue {
             transfer_type.into(),
             &global_available_resources,
             available_capacity,
-            target_filter
+            target_filter,
         )
         .iter()
         .map(|delivery| {
@@ -1835,22 +1844,17 @@ impl TransferQueue {
             return None;
         }
 
-        let node  = self
+        let node = self
             .try_get_room(data, target.pos().room_name(), transfer_types)
             .and_then(|room| room.try_get_node(target))?;
 
         let resource_amount = available_capacity.clamp(u32::MAX);
 
-        let mut desired_resources = HashMap::new();        
+        let mut desired_resources = HashMap::new();
 
         desired_resources.insert(Some(resource_type), resource_amount);
 
-        let pickup_resources = node.select_pickup(
-            allowed_pickup_priorities,
-            transfer_types,
-            &desired_resources,
-            available_capacity,
-        );
+        let pickup_resources = node.select_pickup(allowed_pickup_priorities, transfer_types, &desired_resources, available_capacity);
 
         if pickup_resources.is_empty() {
             return None;
@@ -1875,7 +1879,10 @@ impl TransferQueue {
         available_capacity: TransferCapacity,
         anchor_location: RoomPosition,
         target_filter: TF,
-    ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)> where TF: Fn(&TransferTarget) -> bool {
+    ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)>
+    where
+        TF: Fn(&TransferTarget) -> bool,
+    {
         if available_capacity.empty() {
             return None;
         }
@@ -1897,7 +1904,7 @@ impl TransferQueue {
             &available_resources,
             available_capacity,
             anchor_location,
-            target_filter
+            target_filter,
         )?;
 
         let delivery_resources = delivery
@@ -1936,8 +1943,11 @@ impl TransferQueue {
         available_resources: &HashMap<ResourceType, u32>,
         available_capacity: TransferCapacity,
         anchor_location: RoomPosition,
-        target_filter: TF
-    ) -> Option<TransferDepositTicket> where TF: Fn(&TransferTarget) -> bool {
+        target_filter: TF,
+    ) -> Option<TransferDepositTicket>
+    where
+        TF: Fn(&TransferTarget) -> bool,
+    {
         if available_capacity.empty() {
             return None;
         }
@@ -2024,7 +2034,10 @@ impl TransferQueue {
         current_position: RoomPosition,
         available_capacity: TransferCapacity,
         target_filter: TF,
-    ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)> where TF: Fn(&TransferTarget) -> bool + Copy {
+    ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)>
+    where
+        TF: Fn(&TransferTarget) -> bool + Copy,
+    {
         let priorities = generate_active_priorities(allowed_priorities, allowed_priorities);
 
         for (pickup_priority, delivery_priority) in priorities {
@@ -2037,7 +2050,7 @@ impl TransferQueue {
                 transfer_type,
                 current_position,
                 available_capacity,
-                target_filter
+                target_filter,
             ) {
                 return Some((pickup_ticket, delivery_ticket));
             }
@@ -2046,7 +2059,13 @@ impl TransferQueue {
         None
     }
 
-    pub fn total_unfufilled_resources(&mut self, data: &dyn TransferRequestSystemData, pickup_rooms: &[RoomName], delivery_rooms: &[RoomName], transfer_type: TransferType) -> HashMap<ResourceType, u32> {
+    pub fn total_unfufilled_resources(
+        &mut self,
+        data: &dyn TransferRequestSystemData,
+        pickup_rooms: &[RoomName],
+        delivery_rooms: &[RoomName],
+        transfer_type: TransferType,
+    ) -> HashMap<ResourceType, u32> {
         struct StatsEntry {
             active: u32,
             inactive: u32,
@@ -2084,7 +2103,7 @@ impl TransferQueue {
         }
 
         for pickup_room in delivery_rooms {
-            if let Some(room) = self.try_get_room(data, *pickup_room, transfer_type.into()) {        
+            if let Some(room) = self.try_get_room(data, *pickup_room, transfer_type.into()) {
                 for (key, stats) in &room.stats.deposit_resource_stats {
                     if key.allowed_type == transfer_type {
                         let resource_entry = deposits.entry(key.resource).or_insert(StatsEntry { active: 0, inactive: 0 });

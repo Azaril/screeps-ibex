@@ -90,7 +90,7 @@ where
             transfer_types,
             &available_resources,
             available_capacity,
-            target_filter
+            target_filter,
         );
 
         if let Some(delivery) = deliveries
@@ -126,7 +126,7 @@ pub fn get_new_pickup_and_delivery_state<TF, F, R>(
 ) -> Option<R>
 where
     F: Fn(TransferWithdrawTicket, Vec<TransferDepositTicket>) -> R,
-    TF: Fn(&TransferTarget) -> bool + Copy
+    TF: Fn(&TransferTarget) -> bool + Copy,
 {
     if !available_capacity.empty() {
         let pickup_room_names = pickup_rooms.iter().map(|r| r.name).collect_vec();
@@ -155,7 +155,17 @@ where
                 }
             }
 
-            get_additional_deliveries(data, delivery_rooms, allowed_secondary_priorities, transfer_type, remaining_capacity, transfer_queue, &mut pickup, &mut deliveries, target_filter);
+            get_additional_deliveries(
+                data,
+                delivery_rooms,
+                allowed_secondary_priorities,
+                transfer_type,
+                remaining_capacity,
+                transfer_queue,
+                &mut pickup,
+                &mut deliveries,
+                target_filter,
+            );
 
             return Some(state_map(pickup, deliveries));
         }
@@ -175,7 +185,9 @@ pub fn get_additional_deliveries<TF>(
     pickup: &mut TransferWithdrawTicket,
     deliveries: &mut Vec<TransferDepositTicket>,
     target_filter: TF,
-) where TF: Fn(&TransferTarget) -> bool + Copy {
+) where
+    TF: Fn(&TransferTarget) -> bool + Copy,
+{
     if !available_capacity.empty() {
         let delivery_room_names = delivery_rooms.iter().map(|r| r.name).collect_vec();
 
@@ -245,11 +257,11 @@ pub fn get_additional_deliveries<TF>(
                         let mut destinations = std::mem::replace(deliveries, Vec::new());
 
                         while let Some(nearest_index) = destinations
-                                .iter()
-                                .enumerate()
-                                .min_by_key(|(_, delivery)| delivery.target().pos().get_range_to(&start_pos))
-                                .map(|(index, _)| index) {
-
+                            .iter()
+                            .enumerate()
+                            .min_by_key(|(_, delivery)| delivery.target().pos().get_range_to(&start_pos))
+                            .map(|(index, _)| index)
+                        {
                             deliveries.push(destinations.remove(nearest_index));
                         }
                     }
@@ -280,7 +292,7 @@ pub fn get_new_pickup_and_delivery_full_capacity_state<TF, F, R>(
 ) -> Option<R>
 where
     F: Fn(TransferWithdrawTicket, Vec<TransferDepositTicket>) -> R,
-    TF: Fn(&TransferTarget) -> bool + Copy
+    TF: Fn(&TransferTarget) -> bool + Copy,
 {
     let capacity = creep.store_capacity(None);
     let store_types = creep.store_types();
@@ -315,7 +327,7 @@ where
 
     let creep = tick_context.runtime_data.owner;
     let action_flags = &mut tick_context.action_flags;
-    let pos = ticket.target().pos();    
+    let pos = ticket.target().pos();
 
     if !creep.pos().is_near_to(&pos) {
         if action_flags.consume(SimultaneousActionFlags::MOVE) {
@@ -348,7 +360,14 @@ where
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn tick_pickup_and_fill<F, R>(tick_context: &mut JobTickContext, ticket: &mut TransferWithdrawTicket, resource_type: ResourceType, transfer_types: TransferTypeFlags, priorities: TransferPriorityFlags, next_state: F) -> Option<R>
+pub fn tick_pickup_and_fill<F, R>(
+    tick_context: &mut JobTickContext,
+    ticket: &mut TransferWithdrawTicket,
+    resource_type: ResourceType,
+    transfer_types: TransferTypeFlags,
+    priorities: TransferPriorityFlags,
+    next_state: F,
+) -> Option<R>
 where
     F: FnOnce() -> R,
 {
@@ -380,7 +399,14 @@ where
             }
         }
 
-        if let Some(additional_withdrawl) = tick_context.runtime_data.transfer_queue.get_pickup_from_target(&transfer_queue_data, ticket.target(), priorities, transfer_types, available_capacity, resource_type) {
+        if let Some(additional_withdrawl) = tick_context.runtime_data.transfer_queue.get_pickup_from_target(
+            &transfer_queue_data,
+            ticket.target(),
+            priorities,
+            transfer_types,
+            available_capacity,
+            resource_type,
+        ) {
             ticket.combine_with(&additional_withdrawl);
         }
     }

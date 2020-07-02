@@ -4,8 +4,8 @@ use super::jobsystem::*;
 use super::utility::movebehavior::*;
 use screeps::*;
 use screeps_machine::*;
-use serde::*;
 use screeps_rover::*;
+use serde::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ScoutJobContext {

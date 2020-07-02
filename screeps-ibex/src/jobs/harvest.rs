@@ -117,8 +117,8 @@ impl Idle {
             if let Some(state) = get_new_build_state(creep, harvest_room_data, HarvestState::build) {
                 return Some(state);
             }
-        } 
-        
+        }
+
         if in_delivery_room {
             if state_context.allow_haul {
                 let transfer_queue_data = TransferQueueGeneratorData {
@@ -145,7 +145,7 @@ impl Idle {
             let transfer_queue_data = TransferQueueGeneratorData {
                 cause: "Harvest Idle",
                 room_data: &*tick_context.system_data.room_data,
-            };            
+            };
 
             get_new_delivery_current_resources_state(
                 creep,

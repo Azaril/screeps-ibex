@@ -165,9 +165,10 @@ impl ClaimOperation {
                     if RemoteBuildMission::can_run(&room_data) {
                         let mission_data = system_data.mission_data;
 
-                        let has_remote_build_mission = room_data.get_missions().iter().any(|mission_entity| {
-                            mission_data.get(*mission_entity).as_mission_type::<RemoteBuildMission>().is_some()
-                        });
+                        let has_remote_build_mission = room_data
+                            .get_missions()
+                            .iter()
+                            .any(|mission_entity| mission_data.get(*mission_entity).as_mission_type::<RemoteBuildMission>().is_some());
 
                         //
                         // Spawn a new mission to fill the remote build role if missing.
@@ -202,17 +203,16 @@ impl ClaimOperation {
                     Some((entity, room_data.name, max_level))
                 })
                 .collect::<Vec<_>>();
-                    
+
             for room_entity in needs_remote_build {
                 if let Some(room_data) = system_data.room_data.get_mut(room_entity) {
                     //TODO: Use path distance instead of linear distance.
-                    let home_data_data_with_range =
-                        home_room_data.iter().map(|(entity, home_room_name, max_level)| {
-                            let delta = room_data.name - *home_room_name;
-                            let range = delta.0.abs() as u32 + delta.1.abs() as u32;
+                    let home_data_data_with_range = home_room_data.iter().map(|(entity, home_room_name, max_level)| {
+                        let delta = room_data.name - *home_room_name;
+                        let range = delta.0.abs() as u32 + delta.1.abs() as u32;
 
-                            (entity, home_room_name, max_level, range)
-                        });
+                        (entity, home_room_name, max_level, range)
+                    });
 
                     let nearest_room_entity = home_data_data_with_range
                         .clone()
@@ -376,7 +376,9 @@ impl Operation for ClaimOperation {
             //
 
             if system_data.room_plan_data.get(candidate_room.room_data_entity()).is_none() {
-                system_data.room_plan_queue.request(RoomPlanRequest::new(candidate_room.room_data_entity(), 0.5));
+                system_data
+                    .room_plan_queue
+                    .request(RoomPlanRequest::new(candidate_room.room_data_entity(), 0.5));
 
                 continue;
             }

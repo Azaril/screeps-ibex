@@ -1,16 +1,19 @@
 use super::data::*;
 use super::missionsystem::*;
+use crate::creep::*;
 use crate::jobs::data::*;
 use crate::jobs::harvest::*;
 use crate::jobs::linkmine::*;
 use crate::jobs::staticmine::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
+use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use crate::store::*;
 use crate::transfer::transfersystem::*;
 use itertools::*;
+use lerp::*;
 use screeps::*;
 use screeps_cache::*;
 use serde::{Deserialize, Serialize};
@@ -19,9 +22,6 @@ use specs::*;
 use std::cell::*;
 use std::collections::HashMap;
 use std::rc::*;
-use crate::creep::*;
-use crate::room::visibilitysystem::*;
-use lerp::*;
 
 //TODO: This mission is overloaded and should be split in to separate mission components.
 
@@ -87,7 +87,7 @@ impl LocalSupplyMission {
             source_link_miners: EntityVec::new(),
             mineral_container_miners: EntityVec::new(),
             structure_data: Rc::new(RefCell::new(None)),
-            allow_spawning: true
+            allow_spawning: true,
         }
     }
 
@@ -248,8 +248,16 @@ impl LocalSupplyMission {
                 let nearby_container_id = containers
                     .iter()
                     .map(|container| container.remote_id())
-                    .filter(|container| !sources_to_containers.values().any(|other_containers| other_containers.iter().any(|other_container| other_container == container)))
-                    .filter(|container| !mineral_extractors_to_containers.values().any(|other_containers| other_containers.iter().any(|other_container| other_container == container)))
+                    .filter(|container| {
+                        !sources_to_containers
+                            .values()
+                            .any(|other_containers| other_containers.iter().any(|other_container| other_container == container))
+                    })
+                    .filter(|container| {
+                        !mineral_extractors_to_containers
+                            .values()
+                            .any(|other_containers| other_containers.iter().any(|other_container| other_container == container))
+                    })
                     .find(|container| container.pos().in_range_to(&controller.pos(), 2));
 
                 nearby_container_id.map(|container_id| (**controller, container_id))
@@ -345,9 +353,10 @@ impl LocalSupplyMission {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let has_visibility = room_data.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false);
 
-        let mut structure_data = self
-            .structure_data
-            .maybe_access(|d| game::time() - d.last_updated >= 10 && has_visibility, || Self::create_structure_data(&room_data));
+        let mut structure_data = self.structure_data.maybe_access(
+            |d| game::time() - d.last_updated >= 10 && has_visibility,
+            || Self::create_structure_data(&room_data),
+        );
         let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
         let all_links = structure_data
@@ -389,7 +398,7 @@ impl LocalSupplyMission {
                                     TransferType::Link,
                                     TransferCapacity::Infinite,
                                     link_pos,
-                                    target_filters::link
+                                    target_filters::link,
                                 )
                             })
                             .next();
@@ -422,7 +431,7 @@ impl LocalSupplyMission {
         creep_data: &CreepData,
     ) -> Result<(), String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
-        
+
         let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
         let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
 
@@ -437,9 +446,10 @@ impl LocalSupplyMission {
             && (dynamic_visibility_data.owner().mine() || dynamic_visibility_data.reservation().mine());
         let has_visibility = dynamic_visibility_data.visible();
 
-        let mut structure_data = self
-            .structure_data
-            .maybe_access(|d| game::time() - d.last_updated >= 10 && has_visibility, || Self::create_structure_data(&room_data));
+        let mut structure_data = self.structure_data.maybe_access(
+            |d| game::time() - d.last_updated >= 10 && has_visibility,
+            || Self::create_structure_data(&room_data),
+        );
         let structure_data = structure_data.get();
 
         if structure_data.is_none() {
@@ -528,12 +538,12 @@ impl LocalSupplyMission {
             //
 
             //TODO: Compute the correct time to spawn emergency harvesters.
-            if (source_containers.is_empty() && source_links.is_empty()) || 
-                (room_manhattan_distance == 0 && total_harvesting_creeps == 0) || 
-                (room_manhattan_distance > 0 && !home_room_has_storage) {
-
+            if (source_containers.is_empty() && source_links.is_empty())
+                || (room_manhattan_distance == 0 && total_harvesting_creeps == 0)
+                || (room_manhattan_distance > 0 && !home_room_has_storage)
+            {
                 let current_harvesters = source_harvesters.len();
-                //TODO: Compute correct number of harvesters to use for source.            
+                //TODO: Compute correct number of harvesters to use for source.
                 let desired_harvesters = 4;
 
                 if current_harvesters < desired_harvesters {
@@ -559,7 +569,7 @@ impl LocalSupplyMission {
                         } else {
                             (SPAWN_PRIORITY_LOW, SPAWN_PRIORITY_NONE)
                         };
-            
+
                         let interp = (current_harvesters as f32) / (desired_harvesters as f32);
                         let priority = priority_range.0.lerp_bounded(priority_range.1, interp);
 
@@ -679,7 +689,7 @@ impl LocalSupplyMission {
 
                         let energy_per_tick = (energy_capacity as f32) / (ENERGY_REGEN_TIME as f32);
                         let work_parts_per_tick = (energy_per_tick / (HARVEST_POWER as f32)).ceil() as usize;
-                        
+
                         let body_definition = if container.pos().room_name() == home_room_data.name {
                             SpawnBodyDefinition {
                                 maximum_energy: home_room.energy_capacity_available(),
@@ -1179,8 +1189,10 @@ impl LocalSupplyMission {
             let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
             let has_visibility = room_data.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false);
 
-            let mut structure_data =
-                structure_data.maybe_access(|d| game::time() - d.last_updated >= 10 && has_visibility, || Self::create_structure_data(&room_data));
+            let mut structure_data = structure_data.maybe_access(
+                |d| game::time() - d.last_updated >= 10 && has_visibility,
+                || Self::create_structure_data(&room_data),
+            );
             let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
             Self::request_transfer_for_spawns(transfer, &structure_data.spawns);
@@ -1203,8 +1215,10 @@ impl LocalSupplyMission {
             let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
             let has_visibility = room_data.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false);
 
-            let mut structure_data =
-                structure_data.maybe_access(|d| game::time() - d.last_updated >= 10 && has_visibility, || Self::create_structure_data(&room_data));
+            let mut structure_data = structure_data.maybe_access(
+                |d| game::time() - d.last_updated >= 10 && has_visibility,
+                || Self::create_structure_data(&room_data),
+            );
             let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
             Self::request_transfer_for_source_links(transfer, &structure_data);
@@ -1262,7 +1276,7 @@ impl Mission for LocalSupplyMission {
             TransferTypeFlags::HAUL,
             Self::transfer_request_haul_generator(self.room_data, self.structure_data.clone()),
         );
-        
+
         system_data.transfer_queue.register_generator(
             room_data.name,
             TransferTypeFlags::LINK,

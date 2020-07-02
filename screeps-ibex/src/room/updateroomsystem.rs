@@ -1,7 +1,7 @@
 use super::data::*;
+use crate::visualize::*;
 use screeps::*;
 use specs::prelude::*;
-use crate::visualize::*;
 
 #[derive(SystemData)]
 pub struct UpdateRoomDataSystemData<'a> {
