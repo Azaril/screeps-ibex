@@ -12,6 +12,7 @@ use screeps_machine::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+use screeps_rover::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct DismantleJobContext {
@@ -173,7 +174,7 @@ impl FinishedDelivery {
 
 impl MoveToRoom {
     fn tick(&mut self, _state_context: &mut DismantleJobContext, tick_context: &mut JobTickContext) -> Option<DismantleState> {
-        tick_move_to_room(tick_context, self.room_name, None, DismantleState::idle)
+        tick_move_to_room(tick_context, self.room_name, Some(RoomOptions::new(HostileBehavior::HighCost)), DismantleState::idle)
     }
 }
 

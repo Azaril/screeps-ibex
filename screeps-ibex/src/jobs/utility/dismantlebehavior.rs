@@ -5,6 +5,7 @@ use crate::jobs::context::*;
 use crate::room::data::*;
 use crate::structureidentifier::*;
 use screeps::*;
+use screeps_rover::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_dismantle_state<F, R>(creep: &Creep, dismantle_room: &RoomData, ignore_storage: bool, state_map: F) -> Option<R>
@@ -14,34 +15,37 @@ where
     //TODO: Add bypass for energy check.
     if creep.store_capacity(Some(ResourceType::Energy)) == 0 || creep.store_free_capacity(Some(ResourceType::Energy)) > 0 {
         //TODO: This requires visibility and could fail?
-        if let Some(structures) = dismantle_room.get_structures() {
-            //TODO: Don't collect here when range check is fixed.
-            let dismantle_structures = structures
-                .all()
+        let structures = dismantle_room.get_structures()?;
+        let static_visibility_data = dismantle_room.get_static_visibility_data()?;
+        let sources = static_visibility_data.sources();
+
+        //TODO: Don't collect here when range check is fixed.
+        let dismantle_structures = structures
+            .all()
+            .into_iter()
+            .filter(|s| ignore_for_dismantle(*s, sources))
+            .filter(|s| can_dismantle(*s))
+            .filter(|s| ignore_storage || has_empty_storage(*s))
+            .collect::<Vec<_>>();
+
+        let creep_pos = creep.pos();
+
+        //TODO: Fix this hack which is a workaround for range of 1 pathfinding returning empty path.
+        let mut best_structure: Option<Structure> = dismantle_structures
+            .iter()
+            .find(|s| s.pos().get_range_to(&creep_pos) <= 1)
+            .map(|&s| s.clone());
+
+        if best_structure.is_none() {
+            best_structure = dismantle_structures
                 .into_iter()
-                .filter(|s| can_dismantle(*s))
-                .filter(|s| ignore_storage || has_empty_storage(*s))
-                .collect::<Vec<_>>();
+                .cloned()
+                //TODO: Remove clone when find_nearest is fixed.
+                .find_nearest_from(creep_pos, PathFinderHelpers::same_room_ignore_creeps_range_1);
+        }
 
-            let creep_pos = creep.pos();
-
-            //TODO: Fix this hack which is a workaround for range of 1 pathfinding returning empty path.
-            let mut best_structure: Option<Structure> = dismantle_structures
-                .iter()
-                .find(|s| s.pos().get_range_to(&creep_pos) <= 1)
-                .map(|&s| s.clone());
-
-            if best_structure.is_none() {
-                best_structure = dismantle_structures
-                    .into_iter()
-                    .cloned()
-                    //TODO: Remove clone when find_nearest is fixed.
-                    .find_nearest_from(creep_pos, PathFinderHelpers::same_room_ignore_creeps_range_1);
-            }
-
-            if let Some(structure) = best_structure {
-                return Some(state_map(RemoteStructureIdentifier::new(&structure)));
-            }
+        if let Some(structure) = best_structure {
+            return Some(state_map(RemoteStructureIdentifier::new(&structure)));
         }
     }
 
@@ -93,7 +97,8 @@ where
                 .runtime_data
                 .movement
                 .move_to(tick_context.runtime_data.creep_entity, target_position)
-                .range(1);
+                .range(1)
+                .room_options(RoomOptions::new(HostileBehavior::HighCost));
         }
 
         return None;

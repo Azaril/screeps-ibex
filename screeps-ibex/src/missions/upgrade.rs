@@ -103,12 +103,13 @@ impl Mission for UpgradeMission {
     }
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
-        //TODO: Limit upgraders to 15 total work parts upgrading across all creeps.
+        //TODO: Limit upgraders to 15 total work parts upgrading across all creeps at RCL 8.
 
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
         let structures = room_data.get_structures().ok_or("Expected structure data")?;
         let creeps = room_data.get_creeps().ok_or("Expected creeps")?;
+        let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
 
         let controllers = structures.controllers();
 
@@ -175,8 +176,17 @@ impl Mission for UpgradeMission {
                 let work_parts = (work_parts_per_tick / (max_upgraders as f32)).ceil();
 
                 Some(work_parts as usize)
-            } else {
+            } else if has_excess_energy {
                 None
+            } else {
+                let sources = static_visibility_data.sources();
+
+                let energy_per_second = ((SOURCE_ENERGY_CAPACITY * sources.len() as u32) as f32) / (ENERGY_REGEN_TIME as f32);
+                let upgrade_per_second = energy_per_second / (UPGRADE_CONTROLLER_POWER as f32);
+
+                let parts_per_upgrader = ((upgrade_per_second / 2.0) / max_upgraders as f32).floor().max(1.0) as usize;
+
+                Some(parts_per_upgrader)
             };
 
             let downgrade_risk = controllers
