@@ -17,7 +17,12 @@ where
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn tick_move_to_room<F, R>(tick_context: &mut JobTickContext, room_name: RoomName, room_options: Option<RoomOptions>, next_state: F) -> Option<R>
+pub fn tick_move_to_room<F, R>(
+    tick_context: &mut JobTickContext,
+    room_name: RoomName,
+    room_options: Option<RoomOptions>,
+    next_state: F,
+) -> Option<R>
 where
     F: Fn() -> R,
 {
@@ -31,7 +36,13 @@ where
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn tick_move_to_position<F, R>(tick_context: &mut JobTickContext, position: RoomPosition, range: u32, room_options: Option<RoomOptions>, next_state: F) -> Option<R>
+pub fn tick_move_to_position<F, R>(
+    tick_context: &mut JobTickContext,
+    position: RoomPosition,
+    range: u32,
+    room_options: Option<RoomOptions>,
+    next_state: F,
+) -> Option<R>
 where
     F: Fn() -> R,
 {

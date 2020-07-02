@@ -1,6 +1,6 @@
+use crate::remoteobjectid::*;
 use screeps::*;
 use std::borrow::*;
-use crate::remoteobjectid::*;
 
 pub fn ignore_for_dismantle<T>(structure: T, sources: &[RemoteObjectId<Source>]) -> bool
 where
@@ -11,8 +11,8 @@ where
             let pos = c.pos();
 
             sources.iter().any(|s| s.pos().in_range_to(&pos, 1))
-        },
-        _ => false
+        }
+        _ => false,
     }
 }
 
@@ -20,7 +20,11 @@ pub fn can_dismantle<T>(structure: T) -> bool
 where
     T: Borrow<Structure>,
 {
-    structure.borrow().as_attackable().map(|a| a.hits() > 0 && a.hits_max() > 0).unwrap_or(false)
+    structure
+        .borrow()
+        .as_attackable()
+        .map(|a| a.hits() > 0 && a.hits_max() > 0)
+        .unwrap_or(false)
 }
 
 pub fn has_empty_storage<T>(structure: T) -> bool

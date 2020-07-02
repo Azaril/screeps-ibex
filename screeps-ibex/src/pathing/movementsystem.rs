@@ -4,12 +4,11 @@ use crate::room::data::*;
 use screeps::*;
 use screeps_rover::*;
 use serde::*;
+use shrinkwraprs::*;
 use specs::prelude::*;
 use specs::*;
-use shrinkwraprs::*;
 
-#[derive(Shrinkwrap, Component, Serialize, Deserialize, Clone)]
-#[derive(Default)]
+#[derive(Shrinkwrap, Component, Serialize, Deserialize, Clone, Default)]
 #[shrinkwrap(mutable)]
 #[serde(transparent)]
 pub struct CreepRoverData(pub CreepMovementData);
@@ -46,15 +45,13 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
             let _ = self.creep_movement_data.insert(entity, CreepRoverData::default());
         }
 
-        self.creep_movement_data.get_mut(entity).map(|m| &mut m.0).ok_or("Failed to get creep movement data".to_owned())
+        self.creep_movement_data
+            .get_mut(entity)
+            .map(|m| &mut m.0)
+            .ok_or("Failed to get creep movement data".to_owned())
     }
 
-    fn get_room_cost(
-        &self,
-        from_room_name: RoomName,
-        to_room_name: RoomName,
-        room_options: &RoomOptions,
-    ) -> Option<f64> {
+    fn get_room_cost(&self, from_room_name: RoomName, to_room_name: RoomName, room_options: &RoomOptions) -> Option<f64> {
         if !can_traverse_between_rooms(from_room_name, to_room_name) {
             return None;
         }
@@ -63,15 +60,15 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
         let target_room_data = self.room_data.get(target_room_entity)?;
 
         if let Some(dynamic_visibility_data) = target_room_data.get_dynamic_visibility_data() {
-            let is_hostile = dynamic_visibility_data.source_keeper() || 
-                dynamic_visibility_data.owner().hostile() || 
-                dynamic_visibility_data.reservation().hostile() ||
-                dynamic_visibility_data.hostile_creeps() ||
-                dynamic_visibility_data.hostile_structures();
+            let is_hostile = dynamic_visibility_data.source_keeper()
+                || dynamic_visibility_data.owner().hostile()
+                || dynamic_visibility_data.reservation().hostile()
+                || dynamic_visibility_data.hostile_creeps()
+                || dynamic_visibility_data.hostile_structures();
 
             if is_hostile {
                 match room_options.hostile_behavior() {
-                    HostileBehavior::Allow => {},
+                    HostileBehavior::Allow => {}
                     HostileBehavior::HighCost => return Some(10.0),
                     HostileBehavior::Deny => return None,
                 }

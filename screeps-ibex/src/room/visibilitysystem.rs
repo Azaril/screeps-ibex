@@ -187,21 +187,19 @@ impl VisibilityQueueSystem {
                             if let Some(room_data) = system_data.room_data.get_mut(room_entity) {
                                 let mission_data_storage = &system_data.mission_data;
 
-                                let updated_scout_mission =
-                                    room_data
-                                        .get_missions()
-                                        .iter()
-                                        .any(|mission_entity| {
-                                            if let Some(mut scout_mission) = mission_data_storage.get(*mission_entity).as_mission_type_mut::<ScoutMission>() {
-                                                let max_priority = scout_mission.get_priority().max(**priority);
+                                let updated_scout_mission = room_data.get_missions().iter().any(|mission_entity| {
+                                    if let Some(mut scout_mission) =
+                                        mission_data_storage.get(*mission_entity).as_mission_type_mut::<ScoutMission>()
+                                    {
+                                        let max_priority = scout_mission.get_priority().max(**priority);
 
-                                                scout_mission.set_priority(max_priority);
+                                        scout_mission.set_priority(max_priority);
 
-                                                true
-                                            } else {
-                                                false
-                                            }
-                                        });
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                });
 
                                 //
                                 // Spawn a new mission to fill the scout role if missing.

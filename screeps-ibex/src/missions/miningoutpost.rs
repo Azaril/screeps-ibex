@@ -1,14 +1,14 @@
 use super::data::*;
 use super::defend::*;
 use super::dismantle::*;
+use super::haul::*;
+use super::localsupply::*;
 use super::missionsystem::*;
 use super::raid::*;
-use super::localsupply::*;
 use super::reserve::*;
 use crate::componentaccess::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
-use super::haul::*;
 use log::*;
 use screeps_machine::*;
 use serde::{Deserialize, Serialize};
@@ -158,14 +158,18 @@ impl Scout {
 
             Ok(None)
         } else {
-            if outpost_room_data.get_dynamic_visibility_data().map(|v| v.owner().mine() || v.reservation().mine()).unwrap_or(false) {
+            if outpost_room_data
+                .get_dynamic_visibility_data()
+                .map(|v| v.owner().mine() || v.reservation().mine())
+                .unwrap_or(false)
+            {
                 info!("Completed scouting of room - room owned or reserved - transitioning to mining");
 
                 Ok(Some(MiningOutpostState::mine(None.into(), None.into(), None.into(), None.into())))
             } else {
                 info!("Completed scouting of room - transitioning to cleanup");
 
-                Ok(Some(MiningOutpostState::cleanup(None.into(), None.into(), None.into())))    
+                Ok(Some(MiningOutpostState::cleanup(None.into(), None.into(), None.into())))
             }
         }
     }
@@ -381,7 +385,9 @@ impl Cleanup {
             .get(state_context.outpost_room_data)
             .ok_or("Expected outpost room")?;
 
-        let static_visibility_data = outpost_room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
+        let static_visibility_data = outpost_room_data
+            .get_static_visibility_data()
+            .ok_or("Expected static visibility data")?;
 
         if let Some(structures) = outpost_room_data.get_structures() {
             let requires_dismantling = DismantleMission::requires_dismantling(structures.all(), static_visibility_data.sources());
@@ -425,11 +431,21 @@ impl Cleanup {
 
 impl Mine {
     fn get_children_internal(&self) -> [&Option<Entity>; 4] {
-        [&self.supply_mission, &self.haul_mission, &self.reserve_mission, &self.defend_mission]
+        [
+            &self.supply_mission,
+            &self.haul_mission,
+            &self.reserve_mission,
+            &self.defend_mission,
+        ]
     }
 
     fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 4] {
-        [&mut self.supply_mission, &mut self.haul_mission, &mut self.reserve_mission, &mut self.defend_mission]
+        [
+            &mut self.supply_mission,
+            &mut self.haul_mission,
+            &mut self.reserve_mission,
+            &mut self.defend_mission,
+        ]
     }
 
     fn tick(
@@ -541,11 +557,7 @@ impl Mine {
             supply_mission.allow_spawning(room_is_safe);
         }
 
-        if let Some(mut haul_mission) = system_data
-            .missions
-            .try_get(self.haul_mission)
-            .as_mission_type_mut::<HaulMission>()
-        {
+        if let Some(mut haul_mission) = system_data.missions.try_get(self.haul_mission).as_mission_type_mut::<HaulMission>() {
             haul_mission.allow_spawning(room_is_safe);
         }
 

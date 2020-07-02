@@ -49,7 +49,7 @@ impl HaulMission {
             home_room_data,
             haulers: EntityVec::new(),
             stats: None,
-            allow_spawning: true
+            allow_spawning: true,
         }
     }
 
@@ -57,7 +57,13 @@ impl HaulMission {
         self.allow_spawning = allow
     }
 
-    fn create_handle_hauler_spawn(mission_entity: Entity, pickup_rooms: &[Entity], delivery_rooms: &[Entity], allow_repair: bool, storage_delivery_only: bool) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    fn create_handle_hauler_spawn(
+        mission_entity: Entity,
+        pickup_rooms: &[Entity],
+        delivery_rooms: &[Entity],
+        allow_repair: bool,
+        storage_delivery_only: bool,
+    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
         let pickup_rooms = pickup_rooms.to_vec();
         let delivery_rooms = delivery_rooms.to_vec();
 
@@ -86,12 +92,13 @@ impl HaulMission {
         transfer_queue: &mut TransferQueue,
         transfer_queue_data: &TransferQueueGeneratorData<'a, 's, RD>,
         pickup_rooms: &[RoomName],
-        delivery_rooms: &[RoomName]
+        delivery_rooms: &[RoomName],
     ) -> HaulingStats
     where
         RD: std::ops::Deref<Target = specs::storage::MaskedStorage<RoomData>>,
     {
-        let unfufilled = transfer_queue.total_unfufilled_resources(transfer_queue_data, pickup_rooms, delivery_rooms, TransferType::Haul.into());
+        let unfufilled =
+            transfer_queue.total_unfufilled_resources(transfer_queue_data, pickup_rooms, delivery_rooms, TransferType::Haul.into());
 
         let total_unfufilled: u32 = unfufilled.values().sum();
 

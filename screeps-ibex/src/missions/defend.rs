@@ -57,7 +57,9 @@ impl Idle {
             .get(state_context.defend_room_data)
             .ok_or("Expected defend room data")?;
 
-        let dynamic_visibility_data = defend_room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility")?;
+        let dynamic_visibility_data = defend_room_data
+            .get_dynamic_visibility_data()
+            .ok_or("Expected dynamic visibility")?;
 
         if dynamic_visibility_data.visible() && (dynamic_visibility_data.hostile_creeps() || dynamic_visibility_data.hostile_structures()) {
             return Ok(Some(DefendState::active(EntityVec::new(), None)));
@@ -99,7 +101,9 @@ impl Active {
             .get(state_context.defend_room_data)
             .ok_or("Expected defend room data")?;
 
-        let dynamic_visibility_data = defend_room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility")?;
+        let dynamic_visibility_data = defend_room_data
+            .get_dynamic_visibility_data()
+            .ok_or("Expected dynamic visibility")?;
 
         if dynamic_visibility_data.visible() {
             if dynamic_visibility_data.hostile_creeps() || dynamic_visibility_data.hostile_structures() {

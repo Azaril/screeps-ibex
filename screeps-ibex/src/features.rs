@@ -97,7 +97,7 @@ pub mod construction {
     pub fn execute() -> bool {
         ::screeps::memory::root().path_bool("_features.construction.execute")
     }
-    
+
     pub fn cleanup() -> bool {
         ::screeps::memory::root().path_bool("_features.construction.cleanup")
     }

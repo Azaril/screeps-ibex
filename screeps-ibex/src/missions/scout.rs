@@ -2,9 +2,9 @@ use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
 use crate::jobs::scout::*;
+use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
-use crate::room::visibilitysystem::*;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -73,7 +73,8 @@ impl ScoutMission {
 
                     mission_data.spawned_scouts += 1;
 
-                    let next_spawn_time = std::cmp::min(mission_data.spawned_scouts * (CREEP_LIFE_TIME / 4), CREEP_LIFE_TIME * 3) + game::time();
+                    let next_spawn_time =
+                        std::cmp::min(mission_data.spawned_scouts * (CREEP_LIFE_TIME / 4), CREEP_LIFE_TIME * 3) + game::time();
 
                     mission_data.next_spawn = Some(next_spawn_time);
                 }
@@ -112,9 +113,19 @@ impl Mission for ScoutMission {
             })
             .unwrap_or(0);
 
-        let home_room_name = system_data.room_data.get(self.home_room_data).map(|d| d.name.to_string()).unwrap_or_else(|| "Unknown".to_owned());
+        let home_room_name = system_data
+            .room_data
+            .get(self.home_room_data)
+            .map(|d| d.name.to_string())
+            .unwrap_or_else(|| "Unknown".to_owned());
 
-        format!("Scout - Priority: {} - Scouts: {} - Home Room: {} - Next spawn: {}", self.priority, self.scouts.len(), home_room_name, next_spawn)
+        format!(
+            "Scout - Priority: {} - Scouts: {} - Home Room: {} - Next spawn: {}",
+            self.priority,
+            self.scouts.len(),
+            home_room_name,
+            next_spawn
+        )
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
@@ -147,7 +158,10 @@ impl Mission for ScoutMission {
         }
 
         if self.spawned_scouts >= 4 && self.scouts.is_empty() {
-            return Err(format!("Failed scout mission - unable to scout room after {} attempts", self.spawned_scouts));
+            return Err(format!(
+                "Failed scout mission - unable to scout room after {} attempts",
+                self.spawned_scouts
+            ));
         }
 
         let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
@@ -169,7 +183,7 @@ impl Mission for ScoutMission {
             if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                 let priority = if self.priority >= VISIBILITY_PRIORITY_CRITICAL {
                     SPAWN_PRIORITY_HIGH
-                }  else if self.priority >= VISIBILITY_PRIORITY_HIGH {
+                } else if self.priority >= VISIBILITY_PRIORITY_HIGH {
                     SPAWN_PRIORITY_MEDIUM
                 } else if self.priority >= VISIBILITY_PRIORITY_MEDIUM {
                     SPAWN_PRIORITY_LOW

@@ -141,7 +141,7 @@ impl Mission for ReserveMission {
             post_body: &[],
         };
 
-        if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {        
+        if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
             let alive_reservers = self
                 .reservers
                 .iter()
@@ -191,6 +191,6 @@ impl Mission for ReserveMission {
             }
         }
 
-        Ok(MissionResult::Running)        
+        Ok(MissionResult::Running)
     }
 }

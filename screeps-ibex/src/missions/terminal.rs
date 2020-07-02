@@ -1,11 +1,11 @@
 use super::data::*;
 use super::missionsystem::*;
 use crate::remoteobjectid::*;
+use crate::room::data::*;
 use crate::serialize::*;
 use crate::transfer::ordersystem::*;
 use crate::transfer::transfersystem::*;
 use crate::transfer::utility::*;
-use crate::room::data::*;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -120,18 +120,21 @@ impl TerminalMission {
         }
     }
 
-    fn get_known_resources_types(storage_resource_types: &[ResourceType], terminal_resource_types: &[ResourceType]) -> HashSet<ResourceType> {
+    fn get_known_resources_types(
+        storage_resource_types: &[ResourceType],
+        terminal_resource_types: &[ResourceType],
+    ) -> HashSet<ResourceType> {
         let base_resources = [
-            ResourceType::Energy, 
-            ResourceType::Power, 
-            ResourceType::Hydrogen, 
-            ResourceType::Oxygen, 
-            ResourceType::Utrium, 
-            ResourceType::Lemergium, 
-            ResourceType::Keanium, 
-            ResourceType::Zynthium, 
-            ResourceType::Catalyst, 
-            ResourceType::Ghodium, 
+            ResourceType::Energy,
+            ResourceType::Power,
+            ResourceType::Hydrogen,
+            ResourceType::Oxygen,
+            ResourceType::Utrium,
+            ResourceType::Lemergium,
+            ResourceType::Keanium,
+            ResourceType::Zynthium,
+            ResourceType::Catalyst,
+            ResourceType::Ghodium,
         ];
 
         storage_resource_types
