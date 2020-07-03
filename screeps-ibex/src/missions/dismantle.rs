@@ -78,7 +78,7 @@ impl DismantleMission {
         structures
             .iter()
             .filter(|s| s.structure_type() != StructureType::Road)
-            .filter(|s| ignore_for_dismantle(*s, sources))
+            .filter(|s| !ignore_for_dismantle(*s, sources))
             .filter(|s| can_dismantle(*s))
             .filter(|s| has_empty_storage(*s))
             .next()
@@ -127,13 +127,13 @@ impl Mission for DismantleMission {
             return Err("Room is owned by ourselves or a friendly".to_string());
         }
 
-        if self.dismantlers.is_empty() {
-            if let Some(structures) = room_data.get_structures() {
-                let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
+        if let Some(structures) = room_data.get_structures() {
+            let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
 
-                if !Self::requires_dismantling(structures.all(), static_visibility_data.sources()) {
-                    return Ok(MissionResult::Success);
-                }
+            if !Self::requires_dismantling(structures.all(), static_visibility_data.sources()) {
+                //TODO: Clean up dismantlers - recyle them?
+
+                return Ok(MissionResult::Success);
             }
         }
 

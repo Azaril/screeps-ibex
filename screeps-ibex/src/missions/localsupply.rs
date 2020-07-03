@@ -762,18 +762,19 @@ impl LocalSupplyMission {
             });
 
             //
-            // Spawn container miners.
+            // Spawn mineral container miners.
             //
 
             for container in available_containers_for_miners {
                 //TODO: Compute correct body type.
+                //TODO: Base this on road presence.
                 let body_definition = if container.pos().room_name() == home_room_data.name {
                     SpawnBodyDefinition {
                         maximum_energy: home_room.energy_capacity_available(),
                         minimum_repeat: Some(1),
                         maximum_repeat: None,
-                        pre_body: &[Part::Move],
-                        repeat_body: &[Part::Work],
+                        pre_body: &[],
+                        repeat_body: &[Part::Work, Part::Work, Part::Move],
                         post_body: &[],
                     }
                 } else {
