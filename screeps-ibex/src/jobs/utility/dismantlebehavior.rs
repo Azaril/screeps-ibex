@@ -23,7 +23,7 @@ where
         let dismantle_structures = structures
             .all()
             .into_iter()
-            .filter(|s| ignore_for_dismantle(*s, sources))
+            .filter(|s| !ignore_for_dismantle(*s, sources))
             .filter(|s| can_dismantle(*s))
             .filter(|s| ignore_storage || has_empty_storage(*s))
             .collect::<Vec<_>>();

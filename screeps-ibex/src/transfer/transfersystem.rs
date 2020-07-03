@@ -1629,14 +1629,14 @@ impl TransferQueue {
         data: &dyn TransferRequestSystemData,
         rooms: &[RoomName],
         transfer_type: TransferType,
-        withdrawl_priority: TransferPriority,
+        withdrawl_priorities: TransferPriorityFlags,
     ) -> HashMap<ResourceType, u32> {
         let mut available_resources: HashMap<_, u32> = HashMap::new();
 
         for room_name in rooms {
             if let Some(room) = self.try_get_room(data, *room_name, transfer_type.into()) {
                 for (key, stats) in &room.stats().withdrawl_resource_stats {
-                    if key.priority == withdrawl_priority && key.allowed_type == transfer_type {
+                    if withdrawl_priorities.contains(key.priority.into()) && key.allowed_type == transfer_type {
                         let unfufilled_amount = stats.unfufilled_amount();
 
                         if unfufilled_amount > 0 {
@@ -1685,8 +1685,8 @@ impl TransferQueue {
         data: &dyn TransferRequestSystemData,
         pickup_rooms: &[RoomName],
         delivery_rooms: &[RoomName],
-        pickup_priority: TransferPriority,
-        delivery_priority: TransferPriority,
+        pickup_priorities: TransferPriorityFlags,
+        delivery_priorities: TransferPriorityFlags,
         transfer_type: TransferType,
         current_position: RoomPosition,
         available_capacity: TransferCapacity,
@@ -1700,7 +1700,7 @@ impl TransferQueue {
         }
 
         let global_available_resources =
-            self.get_available_withdrawl_totals_by_priority(data, pickup_rooms, transfer_type, pickup_priority);
+            self.get_available_withdrawl_totals_by_priority(data, pickup_rooms, transfer_type, pickup_priorities);
 
         if global_available_resources.is_empty() {
             return None;
@@ -1709,7 +1709,7 @@ impl TransferQueue {
         self.select_deliveries(
             data,
             delivery_rooms,
-            delivery_priority.into(),
+            delivery_priorities,
             transfer_type.into(),
             &global_available_resources,
             available_capacity,
@@ -1731,7 +1731,7 @@ impl TransferQueue {
             let pickups = self.select_pickups(
                 data,
                 pickup_rooms,
-                pickup_priority.into(),
+                pickup_priorities,
                 transfer_type.into(),
                 &delivery_resources,
                 available_capacity,
@@ -2040,13 +2040,13 @@ impl TransferQueue {
     {
         let priorities = generate_active_priorities(allowed_priorities, allowed_priorities);
 
-        for (pickup_priority, delivery_priority) in priorities {
+        for (pickup_priorities, delivery_priorities) in priorities {
             if let Some((pickup_ticket, delivery_ticket)) = self.select_best_delivery(
                 data,
                 pickup_rooms,
                 delivery_rooms,
-                pickup_priority,
-                delivery_priority,
+                pickup_priorities,
+                delivery_priorities,
                 transfer_type,
                 current_position,
                 available_capacity,

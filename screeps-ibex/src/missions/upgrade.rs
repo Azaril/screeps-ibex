@@ -177,7 +177,7 @@ impl Mission for UpgradeMission {
 
                 Some(work_parts as usize)
             } else if has_excess_energy {
-                None
+                Some(10)
             } else {
                 let sources = static_visibility_data.sources();
 
