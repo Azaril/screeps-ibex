@@ -404,8 +404,8 @@ impl LocalSupplyMission {
                             .next();
 
                         if let Some((pickup, delivery)) = best_transfer {
-                            transfer_queue.register_pickup(&pickup, TransferType::Link);
-                            transfer_queue.register_delivery(&delivery, TransferType::Link);
+                            transfer_queue.register_pickup(&pickup);
+                            transfer_queue.register_delivery(&delivery);
 
                             //TODO: Validate there isn't non-energy in here?
                             let transfer_amount = delivery
@@ -1105,7 +1105,7 @@ impl LocalSupplyMission {
                     ResourceType::Energy,
                     TransferPriority::None,
                     used_capacity,
-                    TransferType::Haul,
+                    TransferType::Use,
                 );
 
                 transfer.request_withdraw(transfer_request);

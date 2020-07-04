@@ -493,8 +493,8 @@ impl Mission for TerminalMission {
                 .next();
 
             if let Some((pickup, delivery)) = best_transfer {
-                transfer_queue.register_pickup(&pickup, TransferType::Terminal);
-                transfer_queue.register_delivery(&delivery, TransferType::Terminal);
+                transfer_queue.register_pickup(&pickup);
+                transfer_queue.register_delivery(&delivery);
 
                 if let Some((transfer_resource, transfer_amount)) = delivery
                     .resources()
