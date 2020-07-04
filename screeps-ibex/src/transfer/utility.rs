@@ -94,6 +94,6 @@ pub fn generate_active_priorities(
         next_pickup_priority: Some(TransferPriority::High),
         next_delivery_priority: Some(TransferPriority::High),
 
-        state: ActivePriorityGeneratorState::Pickup
+        state: ActivePriorityGeneratorState::Delivery
     }
 }

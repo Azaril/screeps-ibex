@@ -200,7 +200,7 @@ impl LocalSupplyMission {
         let controller_links: Vec<_> = controller
             .iter()
             .filter_map(|controller| {
-                let nearby_link = links.iter().find(|link| link.pos().in_range_to(&controller.pos(), 2));
+                let nearby_link = links.iter().find(|link| link.pos().in_range_to(&controller.pos(), 3));
 
                 nearby_link.map(|link| link.remote_id())
             })
