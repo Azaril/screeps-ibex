@@ -390,6 +390,7 @@ impl RoomData {
             .iter()
             .flat_map(|s| s.all())
             .filter_map(|s| s.as_owned())
+            .filter(|s| s.is_active())
             .any(|s| s.has_owner() && !s.my());
 
         RoomDynamicVisibilityData {
