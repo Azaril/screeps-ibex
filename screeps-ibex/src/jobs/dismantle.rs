@@ -133,7 +133,7 @@ impl Delivery {
 
     fn gather_data(&self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         for delivery_ticket in self.deposits.iter() {
-            runtime_data.transfer_queue.register_delivery(&delivery_ticket, TransferType::Haul);
+            runtime_data.transfer_queue.register_delivery(&delivery_ticket);
         }
     }
 

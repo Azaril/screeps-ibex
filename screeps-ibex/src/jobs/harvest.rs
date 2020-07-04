@@ -207,10 +207,10 @@ impl Pickup {
     }
 
     fn gather_data(&self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
-        runtime_data.transfer_queue.register_pickup(&self.withdrawl, TransferType::Haul);
+        runtime_data.transfer_queue.register_pickup(&self.withdrawl);
 
         for delivery_ticket in self.deposits.iter() {
-            runtime_data.transfer_queue.register_delivery(&delivery_ticket, TransferType::Haul);
+            runtime_data.transfer_queue.register_delivery(&delivery_ticket);
         }
     }
 
@@ -228,7 +228,7 @@ impl Delivery {
 
     fn gather_data(&self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         for delivery_ticket in self.deposits.iter() {
-            runtime_data.transfer_queue.register_delivery(&delivery_ticket, TransferType::Haul);
+            runtime_data.transfer_queue.register_delivery(&delivery_ticket);
         }
     }
 

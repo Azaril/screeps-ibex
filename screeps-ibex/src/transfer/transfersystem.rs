@@ -60,7 +60,7 @@ where
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum TransferType {
     Haul = 0,
     Link = 1,
@@ -540,14 +540,13 @@ impl TransferNode {
     pub fn register_pickup(
         &mut self,
         withdrawls: &HashMap<ResourceType, Vec<TransferWithdrawlTicketResourceEntry>>,
-        pickup_type: TransferType,
     ) {
         for (resource, resource_entries) in withdrawls {
             for resource_entry in resource_entries {
                 let key = TransferWithdrawlKey {
                     resource: *resource,
                     priority: resource_entry.priority,
-                    allowed_type: pickup_type,
+                    allowed_type: resource_entry.transfer_type,
                 };
 
                 let current = self.pending_withdrawls.entry(key).or_insert(0);
@@ -560,14 +559,13 @@ impl TransferNode {
     pub fn register_delivery(
         &mut self,
         deposits: &HashMap<ResourceType, Vec<TransferDepositTicketResourceEntry>>,
-        delivery_type: TransferType,
     ) {
         for resource_entries in deposits.values() {
             for resource_entry in resource_entries {
                 let key = TransferDepositKey {
                     resource: resource_entry.target_resource,
                     priority: resource_entry.priority,
-                    allowed_type: delivery_type,
+                    allowed_type: resource_entry.transfer_type,
                 };
 
                 let current = self.pending_deposits.entry(key).or_insert(0);
@@ -605,6 +603,7 @@ impl TransferNode {
                                 .or_insert_with(Vec::new)
                                 .push(TransferWithdrawlTicketResourceEntry {
                                     amount: pickup_amount as u32,
+                                    transfer_type: key.allowed_type,
                                     priority: key.priority,
                                 });
 
@@ -648,6 +647,7 @@ impl TransferNode {
                                 .or_insert_with(Vec::new)
                                 .push(TransferWithdrawlTicketResourceEntry {
                                     amount: pickup_amount as u32,
+                                    transfer_type: key.allowed_type,
                                     priority: key.priority,
                                 });
 
@@ -690,6 +690,7 @@ impl TransferNode {
                             .push(TransferDepositTicketResourceEntry {
                                 target_resource: Some(*resource),
                                 amount: delivery_amount as u32,
+                                transfer_type: key.allowed_type,
                                 priority: key.priority,
                             });
 
@@ -732,6 +733,7 @@ impl TransferNode {
                             .push(TransferDepositTicketResourceEntry {
                                 target_resource: None,
                                 amount: delivery_amount as u32,
+                                transfer_type: key.allowed_type,
                                 priority: key.priority,
                             });
 
@@ -782,6 +784,7 @@ impl TransferNode {
                             .push(TransferDepositTicketResourceEntry {
                                 target_resource: Some(*resource),
                                 amount: delivery_amount as u32,
+                                transfer_type: key.allowed_type,
                                 priority: key.priority,
                             });
 
@@ -862,12 +865,17 @@ impl TransferWithdrawRequest {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct TransferWithdrawlTicketResourceEntry {
     amount: u32,
+    transfer_type: TransferType,
     priority: TransferPriority,
 }
 
 impl TransferWithdrawlTicketResourceEntry {
     pub fn amount(&self) -> u32 {
         self.amount
+    }
+
+    pub fn transfer_type(&self) -> TransferType {
+        self.transfer_type
     }
 
     pub fn priority(&self) -> TransferPriority {
@@ -970,6 +978,7 @@ impl TransferDepositRequest {
 pub struct TransferDepositTicketResourceEntry {
     target_resource: Option<ResourceType>,
     amount: u32,
+    transfer_type: TransferType,
     priority: TransferPriority,
 }
 
@@ -980,6 +989,10 @@ impl TransferDepositTicketResourceEntry {
 
     pub fn amount(&self) -> u32 {
         self.amount
+    }
+
+    pub fn transfer_type(&self) -> TransferType {
+        self.transfer_type
     }
 
     pub fn priority(&self) -> TransferPriority {
@@ -1216,9 +1229,9 @@ pub trait TransferRequestSystem {
 
     fn request_deposit(&mut self, deposit_request: TransferDepositRequest);
 
-    fn register_pickup(&mut self, ticket: &TransferWithdrawTicket, pickup_type: TransferType);
+    fn register_pickup(&mut self, ticket: &TransferWithdrawTicket);
 
-    fn register_delivery(&mut self, ticket: &TransferDepositTicket, delivery_type: TransferType);
+    fn register_delivery(&mut self, ticket: &TransferDepositTicket);
 }
 
 pub struct TransferQueueGeneratorData<'a, 's, RD>
@@ -1380,7 +1393,7 @@ impl TransferRequestSystem for LazyTransferQueueRooms {
         node.request_deposit(key, deposit_request.amount);
     }
 
-    fn register_pickup(&mut self, ticket: &TransferWithdrawTicket, pickup_type: TransferType) {
+    fn register_pickup(&mut self, ticket: &TransferWithdrawTicket) {
         let room = self.get_room_no_flush(ticket.target.pos().room_name());
 
         for (resource, entries) in ticket.resources() {
@@ -1388,7 +1401,7 @@ impl TransferRequestSystem for LazyTransferQueueRooms {
                 let key = TransferWithdrawlKey {
                     resource: *resource,
                     priority: entry.priority,
-                    allowed_type: pickup_type,
+                    allowed_type: entry.transfer_type,
                 };
 
                 let resource_stats = room.get_mut_withdrawl_stats(key);
@@ -1397,10 +1410,10 @@ impl TransferRequestSystem for LazyTransferQueueRooms {
         }
 
         let node = room.get_node(&ticket.target);
-        node.register_pickup(&ticket.resources, pickup_type);
+        node.register_pickup(&ticket.resources);
     }
 
-    fn register_delivery(&mut self, ticket: &TransferDepositTicket, delivery_type: TransferType) {
+    fn register_delivery(&mut self, ticket: &TransferDepositTicket) {
         let room = self.get_room_no_flush(ticket.target.pos().room_name());
 
         for entries in ticket.resources().values() {
@@ -1408,7 +1421,7 @@ impl TransferRequestSystem for LazyTransferQueueRooms {
                 let key = TransferDepositKey {
                     resource: entry.target_resource,
                     priority: entry.priority,
-                    allowed_type: delivery_type,
+                    allowed_type: entry.transfer_type,
                 };
 
                 let resource_stats = room.get_mut_deposit_stats(key);
@@ -1417,7 +1430,7 @@ impl TransferRequestSystem for LazyTransferQueueRooms {
         }
 
         let node = room.get_node(&ticket.target);
-        node.register_delivery(&ticket.resources, delivery_type);
+        node.register_delivery(&ticket.resources);
     }
 }
 
@@ -1435,12 +1448,12 @@ impl TransferRequestSystem for TransferQueue {
         self.rooms.request_deposit(deposit_request)
     }
 
-    fn register_pickup(&mut self, ticket: &TransferWithdrawTicket, pickup_type: TransferType) {
-        self.rooms.register_pickup(ticket, pickup_type)
+    fn register_pickup(&mut self, ticket: &TransferWithdrawTicket) {
+        self.rooms.register_pickup(ticket)
     }
 
-    fn register_delivery(&mut self, ticket: &TransferDepositTicket, delivery_type: TransferType) {
-        self.rooms.register_delivery(ticket, delivery_type)
+    fn register_delivery(&mut self, ticket: &TransferDepositTicket) {
+        self.rooms.register_delivery(ticket)
     }
 }
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]

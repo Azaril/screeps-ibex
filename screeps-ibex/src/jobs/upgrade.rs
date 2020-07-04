@@ -102,7 +102,7 @@ impl Harvest {
 
 impl Pickup {
     fn gather_data(&self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
-        runtime_data.transfer_queue.register_pickup(&self.ticket, TransferType::Haul);
+        runtime_data.transfer_queue.register_pickup(&self.ticket);
     }
 
     pub fn tick(&mut self, _state_context: &UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState> {

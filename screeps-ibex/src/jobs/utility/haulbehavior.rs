@@ -49,7 +49,7 @@ where
             .into_iter()
             .find_nearest_linear_by(creep.pos(), |ticket| ticket.target().pos())
         {
-            transfer_queue.register_pickup(&pickup, TransferType::Haul);
+            transfer_queue.register_pickup(&pickup);
 
             return Some(state_map(pickup));
         }
@@ -97,7 +97,7 @@ where
             .into_iter()
             .find_nearest_linear_by(creep.pos(), |ticket| ticket.target().pos())
         {
-            transfer_queue.register_delivery(&delivery, TransferType::Haul);
+            transfer_queue.register_delivery(&delivery);
 
             let deliveries = vec![delivery];
 
@@ -142,8 +142,8 @@ where
             available_capacity,
             target_filter,
         ) {
-            transfer_queue.register_pickup(&pickup, transfer_type);
-            transfer_queue.register_delivery(&delivery, transfer_type);
+            transfer_queue.register_pickup(&pickup);
+            transfer_queue.register_delivery(&delivery);
 
             let mut deliveries = vec![delivery];
 
@@ -226,10 +226,10 @@ pub fn get_additional_deliveries<TF>(
                     last_delivery_pos,
                     target_filter,
                 ) {
-                    transfer_queue.register_pickup(&additional_pickup, transfer_type);
+                    transfer_queue.register_pickup(&additional_pickup);
                     pickup.combine_with(&additional_pickup);
 
-                    transfer_queue.register_delivery(&additional_delivery, transfer_type);
+                    transfer_queue.register_delivery(&additional_delivery);
 
                     for entries in additional_pickup.resources().values() {
                         for entry in entries {
