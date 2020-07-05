@@ -1,6 +1,7 @@
 use crate::entitymappingsystem::*;
 use crate::room::data::*;
 use crate::room::roomplansystem::*;
+use crate::missions::utility::*;
 use screeps::*;
 use screeps_rover::*;
 use specs::*;
@@ -93,7 +94,19 @@ pub struct GatherSystemData<'a, 'b> {
     pub room_plan_data: &'b ReadStorage<'a, RoomPlanData>,
 }
 
-pub fn gather_candidate_rooms<F>(system_data: &GatherSystemData, min_rcl: u32, max_distance: u32, candidate_generator: F) -> GatherRoomData
+pub fn gather_home_rooms(system_data: &GatherSystemData, min_rcl: u32) -> Vec<Entity> {
+    (&*system_data.entities, &*system_data.room_data).join()
+        .filter(|(_, room_data)| !is_valid_home_room(room_data))
+        .filter(|(_, room_data)| {
+            let rcl = room_data.get_structures().iter().flat_map(|s| s.controllers()).map(|c| c.level()).max().unwrap_or(0);
+
+            rcl >= min_rcl
+        })
+        .map(|(entity, _)| entity)
+        .collect()
+}
+
+pub fn gather_candidate_rooms<F>(system_data: &GatherSystemData, seed_rooms: &[Entity], max_distance: u32, candidate_generator: F) -> GatherRoomData
 where
     F: Fn(&GatherSystemData, RoomName) -> Option<CandidateRoomData>,
 {
@@ -102,41 +115,34 @@ where
     let mut visited_rooms: HashMap<RoomName, VisitedRoomData> = HashMap::new();
     let mut expansion_rooms: HashMap<RoomName, HashSet<Entity>> = HashMap::new();
 
-    for (entity, room_data) in (&*system_data.entities, &*system_data.room_data).join() {
-        if let Some(room) = game::rooms::get(room_data.name) {
-            let seed_room = room
-                .controller()
-                .map(|controller| controller.my() && controller.level() >= min_rcl)
-                .unwrap_or(false);
+    for entity in seed_rooms {
+        if let Some(room_data) = system_data.room_data.get(*entity) {
+            let visited_room = VisitedRoomData {
+                room_data_entity: *entity,
+                home_room_data_entities: vec![*entity],
+                distance: 0,
+                viable: false,
+                can_expand: true,
+            };
 
-            if seed_room {
-                let visited_room = VisitedRoomData {
-                    room_data_entity: entity,
-                    home_room_data_entities: vec![entity],
-                    distance: 0,
-                    viable: false,
-                    can_expand: true,
-                };
+            if visited_room.can_expand {
+                let room_exits = game::map::describe_exits(room_data.name);
 
-                if visited_room.can_expand {
-                    let room_exits = game::map::describe_exits(room_data.name);
+                let source_room_status = game::map::get_room_status(room_data.name);
 
-                    let source_room_status = game::map::get_room_status(room_data.name);
+                for expansion_room in room_exits.values() {
+                    let expansion_room_status = game::map::get_room_status(*expansion_room);
 
-                    for expansion_room in room_exits.values() {
-                        let expansion_room_status = game::map::get_room_status(*expansion_room);
+                    if can_traverse_between_room_status(&source_room_status, &expansion_room_status) {
+                        let rooms = expansion_rooms.entry(*expansion_room)
+                            .or_insert_with(HashSet::new);
 
-                        if can_traverse_between_room_status(&source_room_status, &expansion_room_status) {
-                            let rooms = expansion_rooms.entry(*expansion_room)
-                                .or_insert_with(HashSet::new);
-
-                            rooms.insert(entity);
-                        }
+                        rooms.insert(*entity);
                     }
                 }
-
-                visited_rooms.insert(room_data.name, visited_room);
             }
+
+            visited_rooms.insert(room_data.name, visited_room);
         }
     }
 

@@ -306,7 +306,9 @@ impl Operation for ClaimOperation {
             room_plan_data: system_data.room_plan_data,
         };
 
-        let gathered_data = gather_candidate_rooms(&gather_system_data, 3, 4, Self::gather_candidate_room_data);
+        let home_rooms = gather_home_rooms(&gather_system_data, 3);
+
+        let gathered_data = gather_candidate_rooms(&gather_system_data, &home_rooms, 4, Self::gather_candidate_room_data);
 
         //
         // Request visibility for all rooms that are going stale or have not had visibility.
