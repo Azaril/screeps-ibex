@@ -1,5 +1,6 @@
 use super::data::*;
 use super::missionsystem::*;
+use super::utility::*;
 use crate::jobs::data::*;
 use crate::jobs::scout::*;
 use crate::room::visibilitysystem::*;
@@ -10,12 +11,13 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+use itertools::*;
 
 #[derive(ConvertSaveload)]
 pub struct ScoutMission {
     owner: EntityOption<Entity>,
     room_data: Entity,
-    home_room_data: Entity,
+    home_room_datas: EntityVec<Entity>,
     priority: f32,
     scouts: EntityVec<Entity>,
     next_spawn: Option<u32>,
@@ -24,26 +26,32 @@ pub struct ScoutMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl ScoutMission {
-    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_data: Entity, priority: f32) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_datas: &[Entity], priority: f32) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = ScoutMission::new(owner, room_data, home_room_data, priority);
+        let mission = ScoutMission::new(owner, room_data, home_room_datas, priority);
 
         builder
             .with(MissionData::Scout(EntityRefCell::new(mission)))
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_data: Entity, priority: f32) -> ScoutMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_datas: &[Entity], priority: f32) -> ScoutMission {
         ScoutMission {
             owner: owner.into(),
             room_data,
-            home_room_data,
+            home_room_datas: home_room_datas.to_owned().into(),
             priority,
             scouts: EntityVec::new(),
             next_spawn: None,
             spawned_scouts: 0,
+        }
+    }
+
+    pub fn set_home_rooms(&mut self, home_room_datas: &[Entity]) {
+        if self.home_room_datas.as_slice() != home_room_datas {
+            self.home_room_datas = home_room_datas.to_owned().into();
         }
     }
 
@@ -113,18 +121,17 @@ impl Mission for ScoutMission {
             })
             .unwrap_or(0);
 
-        let home_room_name = system_data
-            .room_data
-            .get(self.home_room_data)
+        let home_room_names = self.home_room_datas.iter()
+            .filter_map(|e| system_data.room_data.get(*e))        
             .map(|d| d.name.to_string())
-            .unwrap_or_else(|| "Unknown".to_owned());
+            .join("/");
 
         format!(
-            "Scout - Priority: {} - Scouts: {} - Home Room: {} - Next spawn: {}",
+            "Scout - Priority: {} - Scouts: {} - Next spawn: {} - Home Rooms: {}",
             self.priority,
             self.scouts.len(),
-            home_room_name,
-            next_spawn
+            next_spawn,
+            home_room_names
         )
     }
 
@@ -135,6 +142,22 @@ impl Mission for ScoutMission {
 
         self.scouts
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
+
+        //
+        // Cleanup home rooms that no longer exist.
+        //
+
+        self.home_room_datas
+            .retain(|entity| {
+                system_data.room_data
+                    .get(*entity)
+                    .map(is_valid_home_room)
+                    .unwrap_or(false)
+            });
+
+        if self.home_room_datas.is_empty() {
+            return Err("No home rooms for scout mission".to_owned());
+        }
 
         Ok(())
     }
@@ -164,41 +187,46 @@ impl Mission for ScoutMission {
             ));
         }
 
-        let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
-        let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
-
         let should_spawn = self.next_spawn.map(|t| game::time() >= t).unwrap_or(true) && game::cpu::bucket() > 5000;
 
-        if self.scouts.is_empty() && should_spawn {
-            //TODO: Compute best body parts to use.
-            let body_definition = crate::creep::SpawnBodyDefinition {
-                maximum_energy: home_room.energy_capacity_available(),
-                minimum_repeat: Some(1),
-                maximum_repeat: Some(1),
-                pre_body: &[],
-                repeat_body: &[Part::Move],
-                post_body: &[],
-            };
+        let token = system_data.spawn_queue.token();
 
-            if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                let priority = if self.priority >= VISIBILITY_PRIORITY_CRITICAL {
-                    SPAWN_PRIORITY_HIGH
-                } else if self.priority >= VISIBILITY_PRIORITY_HIGH {
-                    SPAWN_PRIORITY_MEDIUM
-                } else if self.priority >= VISIBILITY_PRIORITY_MEDIUM {
-                    SPAWN_PRIORITY_LOW
-                } else {
-                    SPAWN_PRIORITY_NONE
+        for home_room_entity in self.home_room_datas.iter() {
+            let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
+            let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+
+            if self.scouts.is_empty() && should_spawn {
+                //TODO: Compute best body parts to use.
+                let body_definition = crate::creep::SpawnBodyDefinition {
+                    maximum_energy: home_room.energy_capacity_available(),
+                    minimum_repeat: None,
+                    maximum_repeat: None,
+                    pre_body: &[Part::Move],
+                    repeat_body: &[],
+                    post_body: &[],
                 };
 
-                let spawn_request = SpawnRequest::new(
-                    format!("Scout - Target Room: {}", room_data.name),
-                    &body,
-                    priority,
-                    Self::create_handle_scout_spawn(mission_entity, room_data.name),
-                );
+                if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
+                    let priority = if self.priority >= VISIBILITY_PRIORITY_CRITICAL {
+                        SPAWN_PRIORITY_HIGH
+                    } else if self.priority >= VISIBILITY_PRIORITY_HIGH {
+                        SPAWN_PRIORITY_MEDIUM
+                    } else if self.priority >= VISIBILITY_PRIORITY_MEDIUM {
+                        SPAWN_PRIORITY_LOW
+                    } else {
+                        SPAWN_PRIORITY_NONE
+                    };
 
-                system_data.spawn_queue.request(self.home_room_data, spawn_request);
+                    let spawn_request = SpawnRequest::new(
+                        format!("Scout - Target Room: {}", room_data.name),
+                        &body,
+                        priority,
+                        Some(token),
+                        Self::create_handle_scout_spawn(mission_entity, room_data.name),
+                    );
+
+                    system_data.spawn_queue.request(*home_room_entity, spawn_request);
+                }
             }
         }
 

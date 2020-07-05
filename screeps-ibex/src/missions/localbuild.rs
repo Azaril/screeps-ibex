@@ -230,6 +230,7 @@ impl Mission for LocalBuildMission {
                     "Local Builder".to_string(),
                     &body,
                     spawn_priority,
+                    None,
                     Self::create_handle_builder_spawn(mission_entity, self.room_data, allow_harvest),
                 );
 
