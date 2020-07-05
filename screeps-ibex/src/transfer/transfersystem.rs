@@ -905,7 +905,7 @@ impl TransferWithdrawTicket {
                 .entry(*resource)
                 .and_modify(|existing| {
                     for entry in entries {
-                        if let Some(withdrawl_resource_entry) = existing.iter_mut().find(|oe| oe.priority == entry.priority) {
+                        if let Some(withdrawl_resource_entry) = existing.iter_mut().find(|oe| oe.priority == entry.priority && oe.transfer_type == entry.transfer_type) {
                             withdrawl_resource_entry.amount += entry.amount;
                         } else {
                             existing.push(entry.clone());
@@ -1024,7 +1024,7 @@ impl TransferDepositTicket {
                     for entry in entries {
                         if let Some(deposit_resource_entry) = existing
                             .iter_mut()
-                            .find(|oe| oe.target_resource == entry.target_resource && oe.priority == entry.priority)
+                            .find(|oe| oe.target_resource == entry.target_resource && oe.priority == entry.priority && oe.transfer_type == entry.transfer_type)
                         {
                             deposit_resource_entry.amount += entry.amount;
                         } else {
