@@ -114,7 +114,7 @@ impl Mission for UpgradeMission {
         let controllers = structures.controllers();
 
         if !Self::can_run(&room_data) {
-            return Err("Room not owned by user".to_string());
+            return Err("Upgrade room not owned by user".to_string());
         }
 
         let controller_level = controllers.iter().map(|c| c.level()).max().ok_or("Expected controller level")?;
