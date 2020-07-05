@@ -13,7 +13,7 @@ pub const SPAWN_PRIORITY_MEDIUM: f32 = 50.0;
 pub const SPAWN_PRIORITY_LOW: f32 = 25.0;
 pub const SPAWN_PRIORITY_NONE: f32 = 0.0;
 
-#[derive(Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct SpawnToken(u32);
 
 pub struct SpawnRequest {

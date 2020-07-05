@@ -156,7 +156,7 @@ impl Mission for ScoutMission {
             });
 
         if self.home_room_datas.is_empty() {
-            return Err("No home rooms for mission".to_owned());
+            return Err("No home rooms for scout mission".to_owned());
         }
 
         Ok(())

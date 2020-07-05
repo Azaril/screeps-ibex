@@ -66,6 +66,7 @@ impl RaidMission {
 
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
+            let delivery_rooms = delivery_rooms.clone();
 
             spawn_system_data.updater.exec_mut(move |world| {
                 let creep_job = JobData::Haul(HaulJob::new(&[raid_room], &delivery_rooms, false, false));
@@ -158,7 +159,7 @@ impl Mission for RaidMission {
             });
 
         if self.home_room_datas.is_empty() {
-            return Err("No home rooms for mission".to_owned());
+            return Err("No home rooms for raid mission".to_owned());
         }            
 
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;

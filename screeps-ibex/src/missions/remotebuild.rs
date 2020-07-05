@@ -140,7 +140,7 @@ impl Mission for RemoteBuildMission {
             });
 
         if self.home_room_datas.is_empty() {
-            return Err("No home rooms for mission".to_owned());
+            return Err("No home rooms for remote build mission".to_owned());
         }            
 
         Ok(())
