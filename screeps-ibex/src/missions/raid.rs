@@ -1,5 +1,6 @@
 use super::data::*;
 use super::missionsystem::*;
+use super::utility::*;
 use crate::creep::*;
 use crate::jobs::data::*;
 use crate::jobs::haul::*;
@@ -18,31 +19,37 @@ use std::convert::*;
 pub struct RaidMission {
     owner: EntityOption<Entity>,
     room_data: Entity,
-    home_room_data: Entity,
+    home_room_datas: EntityVec<Entity>,
     raiders: EntityVec<Entity>,
     allow_spawning: bool,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl RaidMission {
-    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_datas: &[Entity]) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = RaidMission::new(owner, room_data, home_room_data);
+        let mission = RaidMission::new(owner, room_data, home_room_datas);
 
         builder
             .with(MissionData::Raid(EntityRefCell::new(mission)))
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> RaidMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_datas: &[Entity]) -> RaidMission {
         RaidMission {
             owner: owner.into(),
             room_data,
-            home_room_data,
+            home_room_datas: home_room_datas.to_owned().into(),
             raiders: EntityVec::new(),
             allow_spawning: true,
+        }
+    }
+
+    pub fn set_home_rooms(&mut self, home_room_datas: &[Entity]) {
+        if self.home_room_datas.as_slice() != home_room_datas {
+            self.home_room_datas = home_room_datas.to_owned().into();
         }
     }
 
@@ -53,13 +60,15 @@ impl RaidMission {
     fn create_handle_raider_spawn(
         mission_entity: Entity,
         raid_room: Entity,
-        delivery_room: Entity,
+        delivery_rooms: &[Entity],
     ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+        let delivery_rooms = delivery_rooms.to_owned();
+
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Haul(HaulJob::new(&[raid_room], &[delivery_room], false, false));
+                let creep_job = JobData::Haul(HaulJob::new(&[raid_room], &delivery_rooms, false, false));
 
                 let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
@@ -136,6 +145,22 @@ impl Mission for RaidMission {
         self.raiders
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
+        //
+        // Cleanup home rooms that no longer exist.
+        //
+
+        self.home_room_datas
+            .retain(|entity| {
+                system_data.room_data
+                    .get(*entity)
+                    .map(is_valid_home_room)
+                    .unwrap_or(false)
+            });
+
+        if self.home_room_datas.is_empty() {
+            return Err("No home rooms for mission".to_owned());
+        }            
+
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
         let room_data_entity = self.room_data;
@@ -171,40 +196,45 @@ impl Mission for RaidMission {
             }
         }
 
-        let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
-        let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
-
         //TODO: Add better dynamic cpu adaptation.
         let bucket = game::cpu::bucket();
-        let can_spawn = bucket > 9000 && crate::features::raid() && self.allow_spawning;
+        let can_spawn = bucket > 9000 && crate::features::raid() && self.allow_spawning;        
 
         if !can_spawn {
             return Ok(MissionResult::Running);
-        }
+        }        
 
-        let desired_raiders = 2;
+        let token = system_data.spawn_queue.token();
 
-        if self.raiders.len() < desired_raiders {
-            let priority = SPAWN_PRIORITY_LOW;
+        for home_room_entity in self.home_room_datas.iter() {
+            let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
+            let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
 
-            let body_definition = SpawnBodyDefinition {
-                maximum_energy: home_room.energy_capacity_available(),
-                minimum_repeat: Some(1),
-                maximum_repeat: None,
-                pre_body: &[],
-                repeat_body: &[Part::Carry, Part::Move],
-                post_body: &[],
-            };
+            let desired_raiders = 2;
 
-            if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                let spawn_request = SpawnRequest::new(
-                    format!("Raider - Target Room: {}", room_data.name),
-                    &body,
-                    priority,
-                    Self::create_handle_raider_spawn(mission_entity, self.room_data, self.home_room_data),
-                );
+            if self.raiders.len() < desired_raiders {
+                let priority = SPAWN_PRIORITY_LOW;
 
-                system_data.spawn_queue.request(self.home_room_data, spawn_request);
+                let body_definition = SpawnBodyDefinition {
+                    maximum_energy: home_room.energy_capacity_available(),
+                    minimum_repeat: Some(1),
+                    maximum_repeat: None,
+                    pre_body: &[],
+                    repeat_body: &[Part::Carry, Part::Move],
+                    post_body: &[],
+                };
+
+                if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
+                    let spawn_request = SpawnRequest::new(
+                        format!("Raider - Target Room: {}", room_data.name),
+                        &body,
+                        priority,
+                        Some(token),
+                        Self::create_handle_raider_spawn(mission_entity, self.room_data, &self.home_room_datas),
+                    );
+
+                    system_data.spawn_queue.request(*home_room_entity, spawn_request);
+                }
             }
         }
 

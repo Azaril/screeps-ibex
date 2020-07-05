@@ -24,7 +24,7 @@ impl CandidateRoomData {
 
 pub struct CandidateRoom {
     room_data_entity: Entity,
-    home_room_data_entity: Entity,
+    home_room_data_entities: Vec<Entity>,
     distance: u32,
 }
 
@@ -33,8 +33,8 @@ impl CandidateRoom {
         self.room_data_entity
     }
 
-    pub fn home_room_data_entity(&self) -> Entity {
-        self.home_room_data_entity
+    pub fn home_room_data_entities(&self) -> &Vec<Entity> {
+        &self.home_room_data_entities
     }
 
     pub fn distance(&self) -> u32 {
@@ -44,7 +44,7 @@ impl CandidateRoom {
 
 pub struct UnknownRoom {
     room_name: RoomName,
-    home_room_data_entity: Entity,
+    home_room_data_entities: Vec<Entity>,
     distance: u32,
 }
 
@@ -53,8 +53,8 @@ impl UnknownRoom {
         self.room_name
     }
 
-    pub fn home_room_data_entity(&self) -> Entity {
-        self.home_room_data_entity
+    pub fn home_room_data_entities(&self) -> &Vec<Entity> {
+        &self.home_room_data_entities
     }
 
     pub fn distance(&self) -> u32 {
@@ -79,7 +79,7 @@ impl GatherRoomData {
 
 struct VisitedRoomData {
     room_data_entity: Entity,
-    home_room_data_entity: Entity,
+    home_room_data_entities: Vec<Entity>,
     distance: u32,
     viable: bool,
     can_expand: bool,
@@ -99,7 +99,7 @@ where
     let mut unknown_rooms = HashMap::new();
 
     let mut visited_rooms: HashMap<RoomName, VisitedRoomData> = HashMap::new();
-    let mut expansion_rooms: HashMap<RoomName, Entity> = HashMap::new();
+    let mut expansion_rooms: HashMap<RoomName, Vec<Entity>> = HashMap::new();
 
     for (entity, room_data) in (&*system_data.entities, &*system_data.room_data).join() {
         if let Some(room) = game::rooms::get(room_data.name) {
@@ -111,7 +111,7 @@ where
             if seed_room {
                 let visited_room = VisitedRoomData {
                     room_data_entity: entity,
-                    home_room_data_entity: entity,
+                    home_room_data_entities: vec![entity],
                     distance: 0,
                     viable: false,
                     can_expand: true,
@@ -126,7 +126,10 @@ where
                         let expansion_room_status = game::map::get_room_status(*expansion_room);
 
                         if can_traverse_between_room_status(&source_room_status, &expansion_room_status) {
-                            expansion_rooms.insert(*expansion_room, entity);
+                            let rooms = expansion_rooms.entry(*expansion_room)
+                                .or_insert_with(Vec::new);
+
+                            rooms.push(entity);
                         }
                     }
                 }
@@ -139,38 +142,41 @@ where
     let mut distance = 1;
 
     while !expansion_rooms.is_empty() && distance <= max_distance {
-        let next_rooms: HashMap<RoomName, Entity> = std::mem::replace(&mut expansion_rooms, HashMap::new());
+        let next_rooms: HashMap<RoomName, Vec<Entity>> = std::mem::replace(&mut expansion_rooms, HashMap::new());
 
-        for (source_room_name, home_room_entity) in next_rooms.iter() {
-            if !visited_rooms.contains_key(source_room_name) {
-                let candiate_room_data = (candidate_generator)(system_data, *source_room_name);
+        for (source_room_name, home_room_entities) in next_rooms.into_iter() {
+            if visited_rooms.get(&source_room_name).map(|v| v.distance == distance).unwrap_or(true) {
+                let candiate_room_data = (candidate_generator)(system_data, source_room_name);
 
                 if let Some(candidate_room_data) = candiate_room_data {
                     let visited_room = VisitedRoomData {
                         room_data_entity: candidate_room_data.room_data_entity,
-                        home_room_data_entity: *home_room_entity,
+                        home_room_data_entities: home_room_entities,
                         distance,
                         viable: candidate_room_data.viable,
                         can_expand: candidate_room_data.can_expand,
                     };
 
                     if visited_room.can_expand {
-                        let room_exits = game::map::describe_exits(*source_room_name);
+                        let room_exits = game::map::describe_exits(source_room_name);
 
-                        let source_room_status = game::map::get_room_status(*source_room_name);
+                        let source_room_status = game::map::get_room_status(source_room_name);
 
                         for expansion_room in room_exits.values() {
                             let expansion_room_status = game::map::get_room_status(*expansion_room);
 
                             if can_traverse_between_room_status(&source_room_status, &expansion_room_status) {
-                                expansion_rooms.insert(*expansion_room, *home_room_entity);
+                                let rooms = expansion_rooms.entry(*expansion_room)
+                                    .or_insert_with(Vec::new);
+
+                                rooms.extend(home_room_entities);
                             }
                         }
                     }
 
-                    visited_rooms.insert(*source_room_name, visited_room);
+                    visited_rooms.insert(source_room_name, visited_room);
                 } else {
-                    unknown_rooms.insert(*source_room_name, (*home_room_entity, distance));
+                    unknown_rooms.insert(source_room_name, (home_room_entities, distance));
                 }
             }
         }
@@ -183,16 +189,16 @@ where
         .filter(|v| v.viable)
         .map(|v| CandidateRoom {
             room_data_entity: v.room_data_entity,
-            home_room_data_entity: v.home_room_data_entity,
+            home_room_data_entities: v.home_room_data_entities,
             distance: v.distance,
         })
         .collect();
 
     let returned_unknown_rooms = unknown_rooms
         .into_iter()
-        .map(|(room_name, (home_room_data_entity, distance))| UnknownRoom {
+        .map(|(room_name, (home_room_data_entities, distance))| UnknownRoom {
             room_name,
-            home_room_data_entity,
+            home_room_data_entities,
             distance,
         })
         .collect();

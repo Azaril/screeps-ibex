@@ -15,28 +15,28 @@ use specs::*;
 pub struct ClaimMission {
     owner: EntityOption<Entity>,
     room_data: Entity,
-    home_room_data: Entity,
+    home_room_datas: EntityVec<Entity>,
     claimers: EntityVec<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl ClaimMission {
-    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_datas: &[Entity]) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = ClaimMission::new(owner, room_data, home_room_data);
+        let mission = ClaimMission::new(owner, room_data, home_room_datas);
 
         builder
             .with(MissionData::Claim(EntityRefCell::new(mission)))
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> ClaimMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_datas: &[Entity]) -> ClaimMission {
         ClaimMission {
             owner: owner.into(),
             room_data,
-            home_room_data,
+            home_room_datas: home_room_datas.into(),
             claimers: EntityVec::new(),
         }
     }
@@ -121,28 +121,34 @@ impl Mission for ClaimMission {
 
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
         let controller = static_visibility_data.controller().ok_or("Expected target controller")?;
-        let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
-        let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
 
-        if self.claimers.is_empty() {
-            let body_definition = crate::creep::SpawnBodyDefinition {
-                maximum_energy: home_room.energy_capacity_available(),
-                minimum_repeat: None,
-                maximum_repeat: None,
-                pre_body: &[Part::Claim, Part::Move],
-                repeat_body: &[],
-                post_body: &[],
-            };
+        let token = system_data.spawn_queue.token();
 
-            if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                let spawn_request = SpawnRequest::new(
-                    "Claimer".to_string(),
-                    &body,
-                    SPAWN_PRIORITY_MEDIUM,
-                    Self::create_handle_claimer_spawn(mission_entity, *controller),
-                );
+        for home_room_data_entity in self.home_room_datas.iter() {
+            let home_room_data = system_data.room_data.get(*home_room_data_entity).ok_or("Expected home room data")?;
+            let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
 
-                system_data.spawn_queue.request(self.home_room_data, spawn_request);
+            if self.claimers.is_empty() {
+                let body_definition = crate::creep::SpawnBodyDefinition {
+                    maximum_energy: home_room.energy_capacity_available(),
+                    minimum_repeat: None,
+                    maximum_repeat: None,
+                    pre_body: &[Part::Claim, Part::Move],
+                    repeat_body: &[],
+                    post_body: &[],
+                };
+
+                if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
+                    let spawn_request = SpawnRequest::new(
+                        "Claimer".to_string(),
+                        &body,
+                        SPAWN_PRIORITY_MEDIUM,
+                        Some(token),
+                        Self::create_handle_claimer_spawn(mission_entity, *controller),
+                    );
+
+                    system_data.spawn_queue.request(*home_room_data_entity, spawn_request);
+                }
             }
         }
 

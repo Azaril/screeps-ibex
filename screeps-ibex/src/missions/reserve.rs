@@ -1,5 +1,6 @@
 use super::data::*;
 use super::missionsystem::*;
+use super::utility::*;
 use crate::jobs::data::*;
 use crate::jobs::reserve::*;
 use crate::remoteobjectid::*;
@@ -14,31 +15,37 @@ use specs::*;
 pub struct ReserveMission {
     owner: EntityOption<Entity>,
     room_data: Entity,
-    home_room_data: Entity,
+    home_room_datas: EntityVec<Entity>,
     reservers: EntityVec<Entity>,
     allow_spawning: bool,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl ReserveMission {
-    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_datas: &[Entity]) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = ReserveMission::new(owner, room_data, home_room_data);
+        let mission = ReserveMission::new(owner, room_data, home_room_datas);
 
         builder
             .with(MissionData::Reserve(EntityRefCell::new(mission)))
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> ReserveMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_datas: &[Entity]) -> ReserveMission {
         ReserveMission {
             owner: owner.into(),
             room_data,
-            home_room_data,
+            home_room_datas: home_room_datas.to_owned().into(),
             reservers: EntityVec::new(),
             allow_spawning: true,
+        }
+    }
+
+    pub fn set_home_rooms(&mut self, home_room_datas: &[Entity]) {
+        if self.home_room_datas.as_slice() != home_room_datas {
+            self.home_room_datas = home_room_datas.to_owned().into();
         }
     }
 
@@ -98,6 +105,22 @@ impl Mission for ReserveMission {
         self.reservers
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
+        //
+        // Cleanup home rooms that no longer exist.
+        //
+
+        self.home_room_datas
+            .retain(|entity| {
+                system_data.room_data
+                    .get(*entity)
+                    .map(is_valid_home_room)
+                    .unwrap_or(false)
+            });
+
+        if self.home_room_datas.is_empty() {
+            return Err("No home rooms for mission".to_owned());
+        }
+
         Ok(())
     }
 
@@ -121,9 +144,6 @@ impl Mission for ReserveMission {
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
         let controller_id = static_visibility_data.controller().ok_or("Expected a controller")?;
 
-        let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
-        let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
-
         //TODO: Add better dynamic cpu adaptation.
         let bucket = game::cpu::bucket();
         let can_spawn = bucket > 9000 && crate::features::remote_mine::reserve() && self.allow_spawning;
@@ -132,62 +152,70 @@ impl Mission for ReserveMission {
             return Ok(MissionResult::Running);
         }
 
-        let body_definition = crate::creep::SpawnBodyDefinition {
-            maximum_energy: home_room.energy_capacity_available(),
-            minimum_repeat: Some(1),
-            maximum_repeat: Some(2),
-            pre_body: &[],
-            repeat_body: &[Part::Claim, Part::Move],
-            post_body: &[],
-        };
+        //TODO: Use visibility data to estimate amount thas has ticked down.
+        let controller_has_sufficient_reservation = game::rooms::get(room_data.name)
+            .and_then(|r| r.controller())
+            .and_then(|c| c.reservation())
+            .map(|r| r.ticks_to_end > 1000)
+            .unwrap_or(false);
 
-        if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-            let alive_reservers = self
-                .reservers
-                .iter()
-                .filter(|entity| {
-                    system_data.creep_spawning.get(**entity).is_some()
-                        || system_data
-                            .creep_owner
-                            .get(**entity)
-                            .and_then(|creep_owner| creep_owner.owner.resolve())
-                            .and_then(|creep| creep.ticks_to_live().ok())
-                            .map(|count| count > 100)
-                            .unwrap_or(false)
-                })
-                .count();
+        if controller_has_sufficient_reservation {
+            return Ok(MissionResult::Running);
+        }
 
-            //TODO: Use visibility data to estimate amount thas has ticked down.
-            let controller_has_sufficient_reservation = game::rooms::get(room_data.name)
-                .and_then(|r| r.controller())
-                .and_then(|c| c.reservation())
-                .map(|r| r.ticks_to_end > 1000)
-                .unwrap_or(false);
+        let alive_reservers: Vec<_> = self
+            .reservers
+            .iter()
+            .filter(|entity| {
+                system_data.creep_spawning.get(**entity).is_some()
+                    || system_data
+                        .creep_owner
+                        .get(**entity)
+                        .and_then(|creep_owner| creep_owner.owner.resolve())
+                        .and_then(|creep| creep.ticks_to_live().ok())
+                        .map(|count| count > 100)
+                        .unwrap_or(false)
+            })
+            .collect();
 
-            let claim_parts = body.iter().filter(|p| **p == Part::Claim).count();
-            let desired_reservers = if controller_has_sufficient_reservation {
-                0
-            } else if claim_parts > 1 {
-                1
-            } else {
-                2
-            };
+        // TODO: Total claim parts - target > 2 total.
+        //let claim_parts = body.iter().filter(|p| **p == Part::Claim).count();
 
-            if alive_reservers < desired_reservers {
-                let priority = if alive_reservers > 0 {
-                    SPAWN_PRIORITY_LOW
-                } else {
-                    SPAWN_PRIORITY_MEDIUM
+        let desired_reservers = 2;
+
+        if alive_reservers.len() < desired_reservers {
+            let token = system_data.spawn_queue.token();
+
+            for home_room_entity in self.home_room_datas.iter() {
+                let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
+                let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+
+                let body_definition = crate::creep::SpawnBodyDefinition {
+                    maximum_energy: home_room.energy_capacity_available(),
+                    minimum_repeat: Some(1),
+                    maximum_repeat: Some(2),
+                    pre_body: &[],
+                    repeat_body: &[Part::Claim, Part::Move],
+                    post_body: &[],
                 };
-
-                let spawn_request = SpawnRequest::new(
-                    format!("Reserver - Target Room: {}", room_data.name),
-                    &body,
-                    priority,
-                    Self::create_handle_reserver_spawn(mission_entity, *controller_id),
-                );
-
-                system_data.spawn_queue.request(self.home_room_data, spawn_request);
+        
+                if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {          
+                    let priority = if alive_reservers.is_empty() {
+                        SPAWN_PRIORITY_MEDIUM
+                    } else {
+                        SPAWN_PRIORITY_LOW                            
+                    };
+    
+                    let spawn_request = SpawnRequest::new(
+                        format!("Reserver - Target Room: {}", room_data.name),
+                        &body,
+                        priority,
+                        Some(token),
+                        Self::create_handle_reserver_spawn(mission_entity, *controller_id),
+                    );
+    
+                    system_data.spawn_queue.request(*home_room_entity, spawn_request);
+                }            
             }
         }
 

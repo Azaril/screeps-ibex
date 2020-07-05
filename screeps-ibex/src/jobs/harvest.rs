@@ -343,6 +343,10 @@ impl HarvestJob {
     pub fn harvest_target(&self) -> &RemoteObjectId<Source> {
         &self.context.harvest_target
     }
+
+    pub fn delivery_room(&self) -> Entity {
+        self.context.delivery_room
+    }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]

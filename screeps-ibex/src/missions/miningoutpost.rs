@@ -6,6 +6,7 @@ use super::localsupply::*;
 use super::missionsystem::*;
 use super::raid::*;
 use super::reserve::*;
+use super::utility::*;
 use crate::componentaccess::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
@@ -17,7 +18,7 @@ use specs::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct MiningOutpostMissionContext {
-    home_room_data: Entity,
+    home_room_datas: EntityVec<Entity>,
     outpost_room_data: Entity,
 }
 
@@ -84,19 +85,6 @@ fn can_run_mission(
     _mission_entity: Entity,
     state_context: &mut MiningOutpostMissionContext,
 ) -> Result<bool, String> {
-    let home_room_data = system_data
-        .room_data
-        .get(state_context.home_room_data)
-        .ok_or("Expected home room data")?;
-
-    let home_room_dynamic_visibility_data = home_room_data
-        .get_dynamic_visibility_data()
-        .ok_or("Expected home room visibility")?;
-
-    if !home_room_dynamic_visibility_data.visible() || !home_room_dynamic_visibility_data.owner().mine() {
-        return Ok(false);
-    }
-
     let outpost_room_data = system_data
         .room_data
         .get(state_context.outpost_room_data)
@@ -281,9 +269,9 @@ impl Cleanup {
         mission_entity: Entity,
         state_context: &mut MiningOutpostMissionContext,
     ) -> Result<(), String> {
-        let has_raid = self.raid_mission.map(|e| system_data.entities.is_alive(e)).unwrap_or(false);
-
-        if !has_raid {
+        if let Some(raid_mission) = self.raid_mission.and_then(|e| system_data.missions.get_mut(e)).as_mission_type::<RaidMission>() {
+            raid_mission.set_home_rooms(&state_context.home_room_datas);
+        } else {
             let needs_raiding = self.requires_raiding(system_data, mission_entity, state_context)?;
 
             if needs_raiding.unwrap_or(false) {
@@ -296,7 +284,7 @@ impl Cleanup {
                     system_data.updater.create_entity(system_data.entities),
                     Some(mission_entity),
                     state_context.outpost_room_data,
-                    state_context.home_room_data,
+                    &state_context.home_room_datas,
                 )
                 .build();
 
@@ -345,9 +333,9 @@ impl Cleanup {
         mission_entity: Entity,
         state_context: &mut MiningOutpostMissionContext,
     ) -> Result<(), String> {
-        let has_dismantle = self.dismantle_mission.map(|e| system_data.entities.is_alive(e)).unwrap_or(false);
-
-        if !has_dismantle {
+        if let Some(dismantle_mission) = self.dismantle_mission.and_then(|e| system_data.missions.get_mut(e)).as_mission_type::<DismantleMission>() {
+            dismantle_mission.set_home_rooms(&state_context.home_room_datas);
+        } else {
             let needs_dismantling = self.requires_dismantling(system_data, mission_entity, state_context)?;
 
             if needs_dismantling.unwrap_or(false) {
@@ -360,7 +348,7 @@ impl Cleanup {
                     system_data.updater.create_entity(system_data.entities),
                     Some(mission_entity),
                     state_context.outpost_room_data,
-                    state_context.home_room_data,
+                    &state_context.home_room_datas,
                     false,
                 )
                 .build();
@@ -404,9 +392,9 @@ impl Cleanup {
         mission_entity: Entity,
         state_context: &mut MiningOutpostMissionContext,
     ) -> Result<(), String> {
-        let has_defend = self.defend_mission.map(|e| system_data.entities.is_alive(e)).unwrap_or(false);
-
-        if !has_defend {
+        if let Some(defend_mission) = self.defend_mission.and_then(|e| system_data.missions.get_mut(e)).as_mission_type::<DefendMission>() {
+            defend_mission.set_home_rooms(&state_context.home_room_datas);
+        } else {
             let outpost_room_data = system_data
                 .room_data
                 .get_mut(state_context.outpost_room_data)
@@ -416,7 +404,7 @@ impl Cleanup {
                 system_data.updater.create_entity(system_data.entities),
                 Some(mission_entity),
                 state_context.outpost_room_data,
-                state_context.home_room_data,
+                &state_context.home_room_datas,
             )
             .build();
 
@@ -458,9 +446,9 @@ impl Mine {
             return Err("Mission cannot run in current room state".to_string());
         }
 
-        let has_supply = self.supply_mission.map(|e| system_data.entities.is_alive(e)).unwrap_or(false);
-
-        if !has_supply {
+        if let Some(supply_mission) = self.supply_mission.and_then(|e| system_data.missions.get_mut(e)).as_mission_type::<LocalSupplyMission>() {
+            supply_mission.set_home_rooms(&state_context.home_room_datas);
+        } else {
             let outpost_room_data = system_data
                 .room_data
                 .get_mut(state_context.outpost_room_data)
@@ -470,7 +458,7 @@ impl Mine {
                 system_data.updater.create_entity(system_data.entities),
                 Some(mission_entity),
                 state_context.outpost_room_data,
-                state_context.home_room_data,
+                &state_context.home_room_datas,
             )
             .build();
 
@@ -479,9 +467,9 @@ impl Mine {
             self.supply_mission = Some(mission_entity).into();
         }
 
-        let has_haul = self.haul_mission.map(|e| system_data.entities.is_alive(e)).unwrap_or(false);
-
-        if !has_haul {
+        if let Some(haul_mission) = self.haul_mission.and_then(|e| system_data.missions.get_mut(e)).as_mission_type::<HaulMission>() {
+            haul_mission.set_home_rooms(&state_context.home_room_datas);
+        } else {
             let outpost_room_data = system_data
                 .room_data
                 .get_mut(state_context.outpost_room_data)
@@ -491,7 +479,7 @@ impl Mine {
                 system_data.updater.create_entity(system_data.entities),
                 Some(mission_entity),
                 state_context.outpost_room_data,
-                state_context.home_room_data,
+                &state_context.home_room_datas,
             )
             .build();
 
@@ -500,9 +488,9 @@ impl Mine {
             self.haul_mission = Some(mission_entity).into();
         }
 
-        let has_reserve = self.reserve_mission.map(|e| system_data.entities.is_alive(e)).unwrap_or(false);
-
-        if !has_reserve {
+        if let Some(reserve_mission) = self.reserve_mission.and_then(|e| system_data.missions.get_mut(e)).as_mission_type::<ReserveMission>() {
+            reserve_mission.set_home_rooms(&state_context.home_room_datas);
+        } else {
             let outpost_room_data = system_data
                 .room_data
                 .get_mut(state_context.outpost_room_data)
@@ -512,7 +500,7 @@ impl Mine {
                 system_data.updater.create_entity(system_data.entities),
                 Some(mission_entity),
                 state_context.outpost_room_data,
-                state_context.home_room_data,
+                &state_context.home_room_datas,
             )
             .build();
 
@@ -521,9 +509,9 @@ impl Mine {
             self.reserve_mission = Some(mission_entity).into();
         }
 
-        let has_defend = self.defend_mission.map(|e| system_data.entities.is_alive(e)).unwrap_or(false);
-
-        if !has_defend {
+        if let Some(defend_mission) = self.defend_mission.and_then(|e| system_data.missions.get_mut(e)).as_mission_type::<DefendMission>() {
+            defend_mission.set_home_rooms(&state_context.home_room_datas);
+        } else {
             let outpost_room_data = system_data
                 .room_data
                 .get_mut(state_context.outpost_room_data)
@@ -533,7 +521,7 @@ impl Mine {
                 system_data.updater.create_entity(system_data.entities),
                 Some(mission_entity),
                 state_context.outpost_room_data,
-                state_context.home_room_data,
+                &state_context.home_room_datas,
             )
             .build();
 
@@ -582,25 +570,31 @@ pub struct MiningOutpostMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl MiningOutpostMission {
-    pub fn build<B>(builder: B, owner: Option<Entity>, outpost_room_data: Entity, home_room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, outpost_room_data: Entity, home_room_datas: &[Entity]) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = MiningOutpostMission::new(owner, outpost_room_data, home_room_data);
+        let mission = MiningOutpostMission::new(owner, outpost_room_data, home_room_datas);
 
         builder
             .with(MissionData::MiningOutpost(EntityRefCell::new(mission)))
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<Entity>, outpost_room_data: Entity, home_room_data: Entity) -> MiningOutpostMission {
+    pub fn new(owner: Option<Entity>, outpost_room_data: Entity, home_room_datas: &[Entity]) -> MiningOutpostMission {
         MiningOutpostMission {
             owner: owner.into(),
             context: MiningOutpostMissionContext {
-                home_room_data,
+                home_room_datas: home_room_datas.to_owned().into(),
                 outpost_room_data,
             },
             state: MiningOutpostState::scout(std::marker::PhantomData),
+        }
+    }
+
+    pub fn set_home_rooms(&mut self, home_room_datas: &[Entity]) {
+        if self.context.home_room_datas.as_slice() != home_room_datas {
+            self.context.home_room_datas = home_room_datas.to_owned().into();
         }
     }
 }
@@ -634,6 +628,19 @@ impl Mission for MiningOutpostMission {
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<(), String> {
+        self.context
+            .home_room_datas
+            .retain(|entity| {
+                system_data.room_data
+                    .get(*entity)
+                    .map(is_valid_home_room)
+                    .unwrap_or(false)
+            });
+
+        if self.context.home_room_datas.is_empty() {
+            return Err("No home rooms available".to_owned());
+        }
+            
         self.state.gather_data(system_data, mission_entity);
 
         Ok(())

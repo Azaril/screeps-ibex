@@ -45,6 +45,15 @@ impl<T> std::ops::DerefMut for EntityVec<T> {
     }
 }
 
+impl<T> From<Vec<T>> for EntityVec<T>
+where
+    T: Clone,
+{
+    fn from(other: Vec<T>) -> EntityVec<T> {
+        EntityVec(other)
+    }
+}
+
 impl<T> From<&[T]> for EntityVec<T>
 where
     T: Clone,

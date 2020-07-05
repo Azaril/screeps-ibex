@@ -237,6 +237,7 @@ impl Mission for UpgradeMission {
                     "Upgrader".to_string(),
                     &body,
                     priority,
+                    None,
                     Self::create_handle_upgrader_spawn(mission_entity, self.room_data, allow_harvest),
                 );
 

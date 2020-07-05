@@ -1,5 +1,6 @@
 use super::data::*;
 use super::missionsystem::*;
+use super::utility::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use screeps::*;
@@ -10,7 +11,7 @@ use specs::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct DefendMissionContext {
-    home_room_data: Entity,
+    home_room_datas: EntityVec<Entity>,
     defend_room_data: Entity,
 }
 
@@ -130,25 +131,31 @@ pub struct DefendMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl DefendMission {
-    pub fn build<B>(builder: B, owner: Option<Entity>, defend_room_data: Entity, home_room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, defend_room_data: Entity, home_room_datas: &[Entity]) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = DefendMission::new(owner, defend_room_data, home_room_data);
+        let mission = DefendMission::new(owner, defend_room_data, home_room_datas);
 
         builder
             .with(MissionData::Defend(EntityRefCell::new(mission)))
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<Entity>, defend_room_data: Entity, home_room_data: Entity) -> DefendMission {
+    pub fn new(owner: Option<Entity>, defend_room_data: Entity, home_room_datas: &[Entity]) -> DefendMission {
         DefendMission {
             owner: owner.into(),
             context: DefendMissionContext {
                 defend_room_data,
-                home_room_data,
+                home_room_datas: home_room_datas.to_owned().into(),
             },
             state: DefendState::idle(std::marker::PhantomData),
+        }
+    }
+
+    pub fn set_home_rooms(&mut self, home_room_datas: &[Entity]) {
+        if self.context.home_room_datas.as_slice() != home_room_datas {
+            self.context.home_room_datas = home_room_datas.to_owned().into();
         }
     }
 
@@ -179,6 +186,22 @@ impl Mission for DefendMission {
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<(), String> {
         self.state.gather_data(system_data, mission_entity);
+
+        //
+        // Cleanup home rooms that no longer exist.
+        //
+
+        self.context.home_room_datas
+            .retain(|entity| {
+                system_data.room_data
+                    .get(*entity)
+                    .map(is_valid_home_room)
+                    .unwrap_or(false)
+            });
+
+        if self.context.home_room_datas.is_empty() {
+            return Err("No home rooms for mission".to_owned());
+        }
 
         Ok(())
     }
