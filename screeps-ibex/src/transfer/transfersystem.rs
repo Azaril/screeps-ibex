@@ -684,20 +684,22 @@ impl TransferNode {
                     if remaining_amount > 0 {
                         let delivery_amount = remaining_capacity.clamp((remaining_amount as u32).min(*amount));
 
-                        delivery_resources
-                            .entry(*resource)
-                            .or_insert_with(Vec::new)
-                            .push(TransferDepositTicketResourceEntry {
-                                target_resource: Some(*resource),
-                                amount: delivery_amount as u32,
-                                transfer_type: key.allowed_type,
-                                priority: key.priority,
-                            });
+                        if delivery_amount > 0 {
+                            delivery_resources
+                                .entry(*resource)
+                                .or_insert_with(Vec::new)
+                                .push(TransferDepositTicketResourceEntry {
+                                    target_resource: Some(*resource),
+                                    amount: delivery_amount as u32,
+                                    transfer_type: key.allowed_type,
+                                    priority: key.priority,
+                                });
 
-                        remaining_capacity.consume(delivery_amount);
+                            remaining_capacity.consume(delivery_amount);
 
-                        if remaining_capacity.empty() {
-                            break;
+                            if remaining_capacity.empty() {
+                                break;
+                            }
                         }
                     }
                 }
@@ -727,21 +729,23 @@ impl TransferNode {
                     if unconsumed_remaining_amount > 0 {
                         let delivery_amount = remaining_none_amount.clamp(remaining_capacity.clamp(unconsumed_remaining_amount as u32));
 
-                        delivery_resources
-                            .entry(*resource)
-                            .or_insert_with(Vec::new)
-                            .push(TransferDepositTicketResourceEntry {
-                                target_resource: None,
-                                amount: delivery_amount as u32,
-                                transfer_type: key.allowed_type,
-                                priority: key.priority,
-                            });
+                        if delivery_amount > 0 {
+                            delivery_resources
+                                .entry(*resource)
+                                .or_insert_with(Vec::new)
+                                .push(TransferDepositTicketResourceEntry {
+                                    target_resource: None,
+                                    amount: delivery_amount as u32,
+                                    transfer_type: key.allowed_type,
+                                    priority: key.priority,
+                                });
 
-                        remaining_capacity.consume(delivery_amount);
-                        remaining_none_amount.consume(delivery_amount);
+                            remaining_capacity.consume(delivery_amount);
+                            remaining_none_amount.consume(delivery_amount);
 
-                        if remaining_capacity.empty() || remaining_none_amount.empty() {
-                            break;
+                            if remaining_capacity.empty() || remaining_none_amount.empty() {
+                                break;
+                            }
                         }
                     }
                 }
@@ -778,20 +782,22 @@ impl TransferNode {
                     if remaining_amount > 0 {
                         let delivery_amount = remaining_capacity.clamp((remaining_amount as u32).min(*amount));
 
-                        delivery_resources
-                            .entry(*resource)
-                            .or_insert_with(Vec::new)
-                            .push(TransferDepositTicketResourceEntry {
-                                target_resource: Some(*resource),
-                                amount: delivery_amount as u32,
-                                transfer_type: key.allowed_type,
-                                priority: key.priority,
-                            });
+                        if delivery_amount > 0 {
+                            delivery_resources
+                                .entry(*resource)
+                                .or_insert_with(Vec::new)
+                                .push(TransferDepositTicketResourceEntry {
+                                    target_resource: Some(*resource),
+                                    amount: delivery_amount as u32,
+                                    transfer_type: key.allowed_type,
+                                    priority: key.priority,
+                                });
 
-                        remaining_capacity.consume(delivery_amount);
+                            remaining_capacity.consume(delivery_amount);
 
-                        if remaining_capacity.empty() {
-                            break;
+                            if remaining_capacity.empty() {
+                                break;
+                            }
                         }
                     }
                 }
