@@ -1,5 +1,6 @@
 use super::data::*;
 use super::missionsystem::*;
+use super::utility::*;
 use crate::creep::*;
 use crate::jobs::build::*;
 use crate::jobs::data::*;
@@ -10,34 +11,41 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+use lerp::*;
 
 #[derive(ConvertSaveload)]
 pub struct RemoteBuildMission {
     owner: EntityOption<Entity>,
     room_data: Entity,
-    home_room_data: Entity,
+    home_room_datas: EntityVec<Entity>,
     builders: EntityVec<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl RemoteBuildMission {
-    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_datas: &[Entity]) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = RemoteBuildMission::new(owner, room_data, home_room_data);
+        let mission = RemoteBuildMission::new(owner, room_data, home_room_datas);
 
         builder
             .with(MissionData::RemoteBuild(EntityRefCell::new(mission)))
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_data: Entity) -> RemoteBuildMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_datas: &[Entity]) -> RemoteBuildMission {
         RemoteBuildMission {
             owner: owner.into(),
             room_data,
-            home_room_data,
+            home_room_datas: home_room_datas.to_owned().into(),
             builders: EntityVec::new(),
+        }
+    }
+
+    pub fn set_home_rooms(&mut self, home_room_datas: &[Entity]) {
+        if self.home_room_datas.as_slice() != home_room_datas {
+            self.home_room_datas = home_room_datas.to_owned().into();
         }
     }
 
@@ -119,6 +127,22 @@ impl Mission for RemoteBuildMission {
         self.builders
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
+        //
+        // Cleanup home rooms that no longer exist.
+        //
+
+        self.home_room_datas
+            .retain(|entity| {
+                system_data.room_data
+                    .get(*entity)
+                    .map(is_valid_home_room)
+                    .unwrap_or(false)
+            });
+
+        if self.home_room_datas.is_empty() {
+            return Err("No home rooms for remote build mission".to_owned());
+        }            
+
         Ok(())
     }
 
@@ -129,38 +153,40 @@ impl Mission for RemoteBuildMission {
             return Ok(MissionResult::Success);
         }
 
-        let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
-        let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
-        let home_room_controller = home_room.controller().ok_or("Expected controller")?;
-
-        let desired_builders = if home_room_controller.level() <= 3 { 4 } else { 2 };
+        let desired_builders = 4;
 
         if self.builders.len() < desired_builders {
-            let priority = if self.builders.is_empty() {
-                (SPAWN_PRIORITY_HIGH + SPAWN_PRIORITY_MEDIUM) / 2.0
-            } else {
-                SPAWN_PRIORITY_LOW
-            };
+            let interp = (self.builders.len() as f32) / (desired_builders as f32);
 
-            let body_definition = SpawnBodyDefinition {
-                maximum_energy: home_room.energy_capacity_available(),
-                minimum_repeat: Some(1),
-                maximum_repeat: None,
-                pre_body: &[],
-                repeat_body: &[Part::Carry, Part::Work, Part::Move, Part::Move],
-                post_body: &[],
-            };
+            let priority = SPAWN_PRIORITY_HIGH.lerp_bounded(SPAWN_PRIORITY_LOW, interp);
 
-            //TODO: Pass in home room if in close proximity (i.e. adjacent) to allow hauling from storage.
-            if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                let spawn_request = SpawnRequest::new(
-                    format!("Remote Builder - Target Room: {}", room_data.name),
-                    &body,
-                    priority,
-                    Self::create_handle_builder_spawn(mission_entity, self.room_data, true),
-                );
+            let token = system_data.spawn_queue.token();
 
-                system_data.spawn_queue.request(self.home_room_data, spawn_request);
+            for home_room_entity in self.home_room_datas.iter() {
+                let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
+                let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+
+                let body_definition = SpawnBodyDefinition {
+                    maximum_energy: home_room.energy_capacity_available(),
+                    minimum_repeat: Some(1),
+                    maximum_repeat: None,
+                    pre_body: &[],
+                    repeat_body: &[Part::Carry, Part::Work, Part::Move, Part::Move],
+                    post_body: &[],
+                };
+
+                //TODO: Pass in home room if in close proximity (i.e. adjacent) to allow hauling from storage.
+                if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
+                    let spawn_request = SpawnRequest::new(
+                        format!("Remote Builder - Target Room: {}", room_data.name),
+                        &body,
+                        priority,
+                        Some(token),
+                        Self::create_handle_builder_spawn(mission_entity, self.room_data, true),
+                    );
+
+                    system_data.spawn_queue.request(*home_room_entity, spawn_request);
+                }
             }
         }
 

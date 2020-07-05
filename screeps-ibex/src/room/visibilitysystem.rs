@@ -185,6 +185,19 @@ impl VisibilityQueueSystem {
                     if game::time() - *last_visible >= 20 {
                         if let Some(room_entity) = system_data.mapping.get_room(&unknown_room_name) {
                             if let Some(room_data) = system_data.room_data.get_mut(room_entity) {
+                                //TODO: Use path distance instead of linear distance.
+                                let home_room_entities: Vec<_> = home_room_data.iter().map(|(entity, home_room_name, max_level, _)| {
+                                    let delta = room_data.name - *home_room_name;
+                                    let range = delta.0.abs() as u32 + delta.1.abs() as u32;
+
+                                    (entity, home_room_name, max_level, range)
+                                })
+                                    .filter(|(_, _, max_level, _)| **max_level >= 2)
+                                    .filter(|(_, _, _, range)| *range <= 5)
+                                    .map(|(entity, _, _, _)| *entity)
+                                    .collect();
+                                    
+
                                 let mission_data_storage = &system_data.mission_data;
 
                                 let updated_scout_mission = room_data.get_missions().iter().any(|mission_entity| {
@@ -194,6 +207,7 @@ impl VisibilityQueueSystem {
                                         let max_priority = scout_mission.get_priority().max(**priority);
 
                                         scout_mission.set_priority(max_priority);
+                                        scout_mission.set_home_rooms(&home_room_entities);
 
                                         true
                                     } else {
@@ -201,45 +215,23 @@ impl VisibilityQueueSystem {
                                     }
                                 });
 
-                                //
-                                // Spawn a new mission to fill the scout role if missing.
-                                //
+                                if !home_room_entities.is_empty() && !updated_scout_mission {                                
+                                    //
+                                    // Spawn a new mission to fill the scout role if missing.
+                                    //
 
-                                if !updated_scout_mission {
-                                    //TODO: Use path distance instead of linear distance.
-                                    let home_data_data_with_range =
-                                        home_room_data.iter().map(|(entity, home_room_name, max_level, observers)| {
-                                            let delta = room_data.name - *home_room_name;
-                                            let range = delta.0.abs() as u32 + delta.1.abs() as u32;
+                                    info!("Starting scout mission for room: {}", room_data.name);
 
-                                            (entity, home_room_name, max_level, observers, range)
-                                        });
+                                    let mission_entity = ScoutMission::build(
+                                        system_data.updater.create_entity(&system_data.entities),
+                                        None,
+                                        room_entity,
+                                        &home_room_entities,
+                                        **priority,
+                                    )
+                                    .build();
 
-                                    let nearest_room_entity = home_data_data_with_range
-                                        .clone()
-                                        .filter(|(_, _, max_level, _, _)| **max_level >= 2)
-                                        .max_by(|(_, _, max_level_a, _, range_a), (_, _, max_level_b, _, range_b)| {
-                                            let max_level_a = (**max_level_a).min(3);
-                                            let max_level_b = (**max_level_b).min(3);
-
-                                            max_level_a.cmp(&max_level_b).then_with(|| range_a.cmp(range_b).reverse())
-                                        })
-                                        .map(|(entity, _, _, _, _)| entity);
-
-                                    if let Some(nearest_room_entity) = nearest_room_entity {
-                                        info!("Starting scout mission for room: {}", room_data.name);
-
-                                        let mission_entity = ScoutMission::build(
-                                            system_data.updater.create_entity(&system_data.entities),
-                                            None,
-                                            room_entity,
-                                            *nearest_room_entity,
-                                            **priority,
-                                        )
-                                        .build();
-
-                                        room_data.add_mission(mission_entity);
-                                    }
+                                    room_data.add_mission(mission_entity);
                                 }
                             }
                         }

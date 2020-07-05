@@ -6,6 +6,7 @@ use crate::jobs::utility::dismantle::*;
 use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use super::utility::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
@@ -15,7 +16,7 @@ use specs::*;
 pub struct DismantleMission {
     owner: EntityOption<Entity>,
     room_data: Entity,
-    home_room_data: Entity,
+    home_room_datas: EntityVec<Entity>,
     ignore_storage: bool,
     dismantlers: EntityVec<Entity>,
     allow_spawning: bool,
@@ -23,22 +24,22 @@ pub struct DismantleMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl DismantleMission {
-    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_data: Entity, ignore_storage: bool) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, room_data: Entity, home_room_datas: &[Entity], ignore_storage: bool) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = DismantleMission::new(owner, room_data, home_room_data, ignore_storage);
+        let mission = DismantleMission::new(owner, room_data, home_room_datas, ignore_storage);
 
         builder
             .with(MissionData::Dismantle(EntityRefCell::new(mission)))
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_data: Entity, ignore_storage: bool) -> DismantleMission {
+    pub fn new(owner: Option<Entity>, room_data: Entity, home_room_datas: &[Entity], ignore_storage: bool) -> DismantleMission {
         DismantleMission {
             owner: owner.into(),
             room_data,
-            home_room_data,
+            home_room_datas: home_room_datas.to_owned().into(),
             ignore_storage,
             dismantlers: EntityVec::new(),
             allow_spawning: true,
@@ -47,6 +48,12 @@ impl DismantleMission {
 
     pub fn allow_spawning(&mut self, allow: bool) {
         self.allow_spawning = allow
+    }
+
+    pub fn set_home_rooms(&mut self, home_room_datas: &[Entity]) {
+        if self.home_room_datas.as_slice() != home_room_datas {
+            self.home_room_datas = home_room_datas.to_owned().into();
+        }
     }
 
     fn create_handle_dismantler_spawn(
@@ -114,6 +121,22 @@ impl Mission for DismantleMission {
         self.dismantlers
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
+        //
+        // Cleanup home rooms that no longer exist.
+        //
+
+        self.home_room_datas
+            .retain(|entity| {
+                system_data.room_data
+                    .get(*entity)
+                    .map(is_valid_home_room)
+                    .unwrap_or(false)
+            });
+
+        if self.home_room_datas.is_empty() {
+            return Err("No home rooms for dismantle mission".to_owned());
+        }
+
         Ok(())
     }
 
@@ -145,54 +168,59 @@ impl Mission for DismantleMission {
             return Ok(MissionResult::Running);
         }
 
-        let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
-        let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
-
         let desired_dismantlers = 1;
 
         if self.dismantlers.len() < desired_dismantlers {
-            let body_definition = if home_room_data.get_structures().map(|s| !s.storages().is_empty()).unwrap_or(false) {
-                crate::creep::SpawnBodyDefinition {
-                    maximum_energy: home_room.energy_capacity_available(),
-                    minimum_repeat: None,
-                    maximum_repeat: None,
-                    pre_body: &[Part::Move, Part::Move, Part::Work, Part::Work],
-                    repeat_body: &[
-                        Part::Work,
-                        Part::Work,
-                        Part::Move,
-                        Part::Move,
-                        Part::Carry,
-                        Part::Carry,
-                        Part::Move,
-                        Part::Move,
-                        Part::Carry,
-                        Part::Carry,
-                        Part::Move,
-                        Part::Move,
-                    ],
-                    post_body: &[],
-                }
-            } else {
-                crate::creep::SpawnBodyDefinition {
-                    maximum_energy: home_room.energy_capacity_available(),
-                    minimum_repeat: Some(1),
-                    maximum_repeat: None,
-                    pre_body: &[],
-                    repeat_body: &[Part::Move, Part::Work],
-                    post_body: &[],
-                }
-            };
+            let token = system_data.spawn_queue.token();
 
-            if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                let spawn_request = SpawnRequest::new(
-                    "Dismantler".to_string(),
-                    &body,
-                    SPAWN_PRIORITY_LOW,
-                    Self::create_handle_dismantler_spawn(mission_entity, self.room_data, self.home_room_data, self.ignore_storage),
-                );
+            for home_room_data_entity in self.home_room_datas.iter() {
+                let home_room_data = system_data.room_data.get(*home_room_data_entity).ok_or("Expected home room data")?;
+                let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
 
-                system_data.spawn_queue.request(self.home_room_data, spawn_request);
+                let body_definition = if home_room_data.get_structures().map(|s| !s.storages().is_empty()).unwrap_or(false) {
+                    crate::creep::SpawnBodyDefinition {
+                        maximum_energy: home_room.energy_capacity_available(),
+                        minimum_repeat: None,
+                        maximum_repeat: None,
+                        pre_body: &[Part::Move, Part::Move, Part::Work, Part::Work],
+                        repeat_body: &[
+                            Part::Work,
+                            Part::Work,
+                            Part::Move,
+                            Part::Move,
+                            Part::Carry,
+                            Part::Carry,
+                            Part::Move,
+                            Part::Move,
+                            Part::Carry,
+                            Part::Carry,
+                            Part::Move,
+                            Part::Move,
+                        ],
+                        post_body: &[],
+                    }
+                } else {
+                    crate::creep::SpawnBodyDefinition {
+                        maximum_energy: home_room.energy_capacity_available(),
+                        minimum_repeat: Some(1),
+                        maximum_repeat: None,
+                        pre_body: &[],
+                        repeat_body: &[Part::Move, Part::Work],
+                        post_body: &[],
+                    }
+                };
+
+                if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
+                    let spawn_request = SpawnRequest::new(
+                        "Dismantler".to_string(),
+                        &body,
+                        SPAWN_PRIORITY_LOW,
+                        Some(token),
+                        Self::create_handle_dismantler_spawn(mission_entity, self.room_data, *home_room_data_entity, self.ignore_storage),
+                    );
+
+                    system_data.spawn_queue.request(*home_room_data_entity, spawn_request);
+                }
             }
         }
 
