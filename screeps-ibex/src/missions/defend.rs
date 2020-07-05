@@ -200,7 +200,7 @@ impl Mission for DefendMission {
             });
 
         if self.context.home_room_datas.is_empty() {
-            return Err("No home rooms for mission".to_owned());
+            return Err("No home rooms for defend mission".to_owned());
         }
 
         Ok(())

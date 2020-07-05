@@ -134,7 +134,7 @@ impl Mission for DismantleMission {
             });
 
         if self.home_room_datas.is_empty() {
-            return Err("No home rooms for mission".to_owned());
+            return Err("No home rooms for dismantle mission".to_owned());
         }
 
         Ok(())

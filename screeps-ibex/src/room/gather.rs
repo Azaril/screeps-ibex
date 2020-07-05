@@ -5,6 +5,7 @@ use screeps::*;
 use screeps_rover::*;
 use specs::*;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 pub struct CandidateRoomData {
     room_data_entity: Entity,
@@ -99,7 +100,7 @@ where
     let mut unknown_rooms = HashMap::new();
 
     let mut visited_rooms: HashMap<RoomName, VisitedRoomData> = HashMap::new();
-    let mut expansion_rooms: HashMap<RoomName, Vec<Entity>> = HashMap::new();
+    let mut expansion_rooms: HashMap<RoomName, HashSet<Entity>> = HashMap::new();
 
     for (entity, room_data) in (&*system_data.entities, &*system_data.room_data).join() {
         if let Some(room) = game::rooms::get(room_data.name) {
@@ -127,9 +128,9 @@ where
 
                         if can_traverse_between_room_status(&source_room_status, &expansion_room_status) {
                             let rooms = expansion_rooms.entry(*expansion_room)
-                                .or_insert_with(Vec::new);
+                                .or_insert_with(HashSet::new);
 
-                            rooms.push(entity);
+                            rooms.insert(entity);
                         }
                     }
                 }
@@ -142,7 +143,7 @@ where
     let mut distance = 1;
 
     while !expansion_rooms.is_empty() && distance <= max_distance {
-        let next_rooms: HashMap<RoomName, Vec<Entity>> = std::mem::replace(&mut expansion_rooms, HashMap::new());
+        let next_rooms: HashMap<RoomName, HashSet<Entity>> = std::mem::replace(&mut expansion_rooms, HashMap::new());
 
         for (source_room_name, home_room_entities) in next_rooms.into_iter() {
             if visited_rooms.get(&source_room_name).map(|v| v.distance == distance).unwrap_or(true) {
@@ -151,7 +152,7 @@ where
                 if let Some(candidate_room_data) = candiate_room_data {
                     let visited_room = VisitedRoomData {
                         room_data_entity: candidate_room_data.room_data_entity,
-                        home_room_data_entities: home_room_entities,
+                        home_room_data_entities: home_room_entities.iter().copied().collect(),
                         distance,
                         viable: candidate_room_data.viable,
                         can_expand: candidate_room_data.can_expand,
@@ -167,9 +168,9 @@ where
 
                             if can_traverse_between_room_status(&source_room_status, &expansion_room_status) {
                                 let rooms = expansion_rooms.entry(*expansion_room)
-                                    .or_insert_with(Vec::new);
+                                    .or_insert_with(HashSet::new);
 
-                                rooms.extend(home_room_entities);
+                                rooms.extend(home_room_entities.iter().copied());
                             }
                         }
                     }
@@ -189,7 +190,7 @@ where
         .filter(|v| v.viable)
         .map(|v| CandidateRoom {
             room_data_entity: v.room_data_entity,
-            home_room_data_entities: v.home_room_data_entities,
+            home_room_data_entities: v.home_room_data_entities.clone(),
             distance: v.distance,
         })
         .collect();
@@ -198,7 +199,7 @@ where
         .into_iter()
         .map(|(room_name, (home_room_data_entities, distance))| UnknownRoom {
             room_name,
-            home_room_data_entities,
+            home_room_data_entities: home_room_data_entities.iter().copied().collect(),
             distance,
         })
         .collect();

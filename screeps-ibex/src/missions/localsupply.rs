@@ -452,12 +452,6 @@ impl LocalSupplyMission {
     ) -> Result<(), String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
-        let home_room_data = system_data.room_data.get(self.home_room_data).ok_or("Expected home room data")?;
-        let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
-
-        let home_room_structures = home_room_data.get_structures().ok_or("Expected home room structures")?;
-        let home_room_has_storage = !home_room_structures.storages().is_empty();
-
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility")?;
         let sources = static_visibility_data.sources();
 
@@ -555,6 +549,7 @@ impl LocalSupplyMission {
             // Spawn harvesters
             //
 
+            /*
             //TODO: Compute the correct time to spawn emergency harvesters.
             if (source_containers.is_empty() && source_links.is_empty())
                 || (room_manhattan_distance == 0 && total_harvesting_creeps == 0)
@@ -610,9 +605,10 @@ impl LocalSupplyMission {
                     }
                 }
             } 
+            */
 
-            for home_roome_entity in self.home_room_datas.iter() {
-                let home_room_data = system_data.room_data.get(*home_roome_entity).ok_or("Expected home room data")?;
+            for home_room_entity in self.home_room_datas.iter() {
+                let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
                 let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
         
                 let home_room_structures = home_room_data.get_structures().ok_or("Expected home room structures")?;
@@ -622,12 +618,56 @@ impl LocalSupplyMission {
                 let room_offset_distance = home_room_data.name - source_id.pos().room_name();
                 let room_manhattan_distance = room_offset_distance.0.abs() + room_offset_distance.1.abs();
 
-                if (room_manhattan_distance == 0 && total_harvesting_creeps == 0) || (room_manhattan_distance > 0 && !home_room_has_storage) {
-                    let current_harvesters = source_harvesters.len();
+                if (source_containers.is_empty() && source_links.is_empty()) || 
+                    (room_manhattan_distance == 0 && total_harvesting_creeps == 0) || 
+                    (room_manhattan_distance > 0 && !home_room_has_storage) {
+
+                    let current_source_room_harvesters = creep_data.home_rooms_to_harvesters
+                        .get(home_room_entity)
+                        .iter()
+                        .flat_map(|e| e.iter())
+                        .filter(|e| source_harvesters.contains(e))
+                        .count();
+                        
                     //TODO: Compute correct number of harvesters to use for source.
                     let desired_harvesters = 4;
     
-                    if current_harvesters < desired_harvesters {
+                    if current_source_room_harvesters < desired_harvesters {
+                        let body_definition = SpawnBodyDefinition {
+                            maximum_energy: if total_harvesting_creeps == 0 {
+                                home_room.energy_available().max(SPAWN_ENERGY_CAPACITY)
+                            } else {
+                                home_room.energy_capacity_available()
+                            },
+                            minimum_repeat: Some(1),
+                            maximum_repeat: Some(5),
+                            pre_body: &[],
+                            repeat_body: &[Part::Move, Part::Move, Part::Carry, Part::Work],
+                            post_body: &[],
+                        };
+
+                        if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
+                            let priority_range = if room_manhattan_distance == 0 {
+                                (SPAWN_PRIORITY_CRITICAL, SPAWN_PRIORITY_HIGH)
+                            } else if room_manhattan_distance <= 1 {
+                                (SPAWN_PRIORITY_MEDIUM, SPAWN_PRIORITY_NONE)
+                            } else {
+                                (SPAWN_PRIORITY_LOW, SPAWN_PRIORITY_NONE)
+                            };
+
+                            let interp = (current_source_room_harvesters as f32) / (desired_harvesters as f32);
+                            let priority = priority_range.0.lerp_bounded(priority_range.1, interp);
+
+                            let spawn_request = SpawnRequest::new(
+                                format!("Harvester - Source: {}", source_id.id()),
+                                &body,
+                                priority,
+                                None,
+                                Self::create_handle_harvester_spawn(mission_entity, *source_id, *home_room_entity),
+                            );
+
+                            system_data.spawn_queue.request(*home_room_entity, spawn_request);
+                        }
                     }
                 }
             }

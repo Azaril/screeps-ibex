@@ -57,9 +57,11 @@ impl HaulMission {
     pub fn allow_spawning(&mut self, allow: bool) {
         self.allow_spawning = allow
     }
-
+    
     pub fn set_home_rooms(&mut self, home_room_datas: &[Entity]) {
-        self.home_room_datas = home_room_datas.to_owned().into();
+        if self.home_room_datas.as_slice() != home_room_datas {
+            self.home_room_datas = home_room_datas.to_owned().into();
+        }
     }
 
     fn create_handle_hauler_spawn(
@@ -155,7 +157,7 @@ impl Mission for HaulMission {
             });
 
         if self.home_room_datas.is_empty() {
-            return Err("No home rooms for mission".to_owned());
+            return Err("No home rooms for haul mission".to_owned());
         }
 
         Ok(())
@@ -205,7 +207,10 @@ impl Mission for HaulMission {
             let room = game::rooms::get(home_room_data.name)?;
             let controller = room.controller()?;
 
-            Some((entity, room, room_manhattan_distance, controller.level(), room.energy_available().max(SPAWN_ENERGY_CAPACITY), room.energy_capacity_available()))
+            let current_energy = room.energy_available().max(SPAWN_ENERGY_CAPACITY);
+            let max_energy = room.energy_capacity_available();
+
+            Some((entity, room, room_manhattan_distance, controller.level(), current_energy, max_energy))
         })
         .collect();
 
@@ -280,7 +285,7 @@ impl Mission for HaulMission {
                 let allow_repair = max_distance > 0;
                 let storage_delivery_only = max_distance > 0;
     
-                for (entity, room, distance, controller_level, current_energy, max_energy) in home_room_spawn_info {                    
+                for (entity, _, _, _, _, _) in home_room_spawn_info {                    
                     //TODO: Make sure there is handling for starvation/bootstrap mode.
                     let spawn_request = SpawnRequest::new(
                         format!("Haul - Target Room: {}", room_data.name),
