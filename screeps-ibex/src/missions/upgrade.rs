@@ -146,9 +146,9 @@ impl Mission for UpgradeMission {
             1
         } else if has_excess_energy {
             if controller_level <= 3 {
-                5
+                4
             } else {
-                3
+                2
             }
         } else {
             1
@@ -177,7 +177,7 @@ impl Mission for UpgradeMission {
 
                 Some(work_parts as usize)
             } else if has_excess_energy {
-                Some(10)
+                Some(20)
             } else {
                 let sources = static_visibility_data.sources();
 
