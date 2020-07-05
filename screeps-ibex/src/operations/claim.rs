@@ -207,32 +207,25 @@ impl ClaimOperation {
             for room_entity in needs_remote_build {
                 if let Some(room_data) = system_data.room_data.get_mut(room_entity) {
                     //TODO: Use path distance instead of linear distance.
-                    let home_data_data_with_range = home_room_data.iter().map(|(entity, home_room_name, max_level)| {
+                    let home_room_entities: Vec<_> = home_room_data.iter().map(|(entity, home_room_name, max_level)| {
                         let delta = room_data.name - *home_room_name;
                         let range = delta.0.abs() as u32 + delta.1.abs() as u32;
 
                         (entity, home_room_name, max_level, range)
-                    });
-
-                    let nearest_room_entity = home_data_data_with_range
-                        .clone()
+                    })
                         .filter(|(_, _, max_level, _)| **max_level >= 2)
-                        .max_by(|(_, _, max_level_a, range_a), (_, _, max_level_b, range_b)| {
-                            let max_level_a = (**max_level_a).min(3);
-                            let max_level_b = (**max_level_b).min(3);
+                        .filter(|(_, _, _, range)| *range <= 5)
+                        .map(|(entity, _, _, _)| *entity)
+                        .collect();
 
-                            max_level_a.cmp(&max_level_b).then_with(|| range_a.cmp(range_b).reverse())
-                        })
-                        .map(|(entity, _, _, _)| entity);
-
-                    if let Some(nearest_room_entity) = nearest_room_entity {
+                    if !home_room_entities.is_empty() {
                         info!("Starting remote build mission for room: {}", room_data.name);
 
                         let mission_entity = RemoteBuildMission::build(
                             system_data.updater.create_entity(&system_data.entities),
                             Some(runtime_data.entity),
                             room_entity,
-                            *nearest_room_entity,
+                            &home_room_entities,
                         )
                         .build();
 
@@ -402,7 +395,7 @@ impl Operation for ClaimOperation {
                     system_data.updater.create_entity(system_data.entities),
                     Some(runtime_data.entity),
                     candidate_room.room_data_entity(),
-                    candidate_room.home_room_data_entity(),
+                    candidate_room.home_room_data_entities(),
                 )
                 .build();
 

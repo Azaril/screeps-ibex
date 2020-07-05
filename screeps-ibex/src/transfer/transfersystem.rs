@@ -420,7 +420,7 @@ pub struct TransferWithdrawlKey {
 
 impl TransferWithdrawlKey {
     pub fn matches(&self, resource: ResourceType, allowed_priorities: TransferPriorityFlags, allowed_types: TransferTypeFlags) -> bool {
-        self.resource == resource && allowed_priorities.contains(self.priority.into()) && allowed_types.contains(self.allowed_type.into())
+        self.resource == resource && allowed_priorities.intersects(self.priority.into()) && allowed_types.intersects(self.allowed_type.into())
     }
 }
 
@@ -438,7 +438,7 @@ impl TransferDepositKey {
         allowed_priorities: TransferPriorityFlags,
         allowed_types: TransferTypeFlags,
     ) -> bool {
-        self.resource == resource && allowed_priorities.contains(self.priority.into()) && allowed_types.contains(self.allowed_type.into())
+        self.resource == resource && allowed_priorities.intersects(self.priority.into()) && allowed_types.intersects(self.allowed_type.into())
     }
 }
 
@@ -493,7 +493,7 @@ impl TransferNode {
         let mut available_resources: u32 = 0;
 
         for key in self.withdrawls.keys().filter(|key| {
-            allowed_priorities.contains(key.priority.into()) && transfer_types.contains(key.allowed_type.into()) && key.resource == resource
+            allowed_priorities.intersects(key.priority.into()) && transfer_types.intersects(key.allowed_type.into()) && key.resource == resource
         }) {
             available_resources += self.get_available_withdrawl(key);
         }
@@ -511,7 +511,7 @@ impl TransferNode {
         for key in self
             .withdrawls
             .keys()
-            .filter(|key| allowed_priorities.contains(key.priority.into()) && transfer_types.contains(key.allowed_type.into()))
+            .filter(|key| allowed_priorities.intersects(key.priority.into()) && transfer_types.intersects(key.allowed_type.into()))
         {
             let available = self.get_available_withdrawl(key);
 
@@ -629,7 +629,7 @@ impl TransferNode {
             let mut remaining_none_amount = TransferCapacity::Finite(fill_none_amount);
 
             for key in self.withdrawls.keys() {
-                if allowed_priorities.contains(key.priority.into()) && pickup_types.contains(key.allowed_type.into()) {
+                if allowed_priorities.intersects(key.priority.into()) && pickup_types.intersects(key.allowed_type.into()) {
                     let remaining_amount = self.get_available_withdrawl(key);
 
                     if remaining_amount > 0 {
@@ -708,7 +708,7 @@ impl TransferNode {
         }
 
         let none_deposits = self.deposits.keys().filter(|key| {
-            key.resource == None && delivery_types.contains(key.allowed_type.into()) && allowed_priorities.contains(key.priority.into())
+            key.resource == None && delivery_types.intersects(key.allowed_type.into()) && allowed_priorities.intersects(key.priority.into())
         });
 
         for key in none_deposits {
@@ -768,8 +768,8 @@ impl TransferNode {
             for key in self.deposits.keys() {
                 if key.matches(Some(*resource), allowed_priorities, delivery_types)
                     || (key.resource == None
-                        && delivery_types.contains(key.allowed_type.into())
-                        && allowed_priorities.contains(key.priority.into()))
+                        && delivery_types.intersects(key.allowed_type.into())
+                        && allowed_priorities.intersects(key.priority.into()))
                 {
                     let remaining_amount = self.get_available_deposit(key);
 
@@ -1339,7 +1339,7 @@ impl TransferRequestSystem for LazyTransferQueueRooms {
         let priority_flag = withdraw_request.priority.into();
         room.stats.withdrawl_priorities |= priority_flag;
 
-        if TransferPriorityFlags::ACTIVE.contains(priority_flag) {
+        if TransferPriorityFlags::ACTIVE.intersects(priority_flag) {
             room.stats.total_active_withdrawl += withdraw_request.amount;
         }
 
@@ -1363,7 +1363,7 @@ impl TransferRequestSystem for LazyTransferQueueRooms {
         let priority_flag = deposit_request.priority.into();
         room.stats.deposit_priorities |= priority_flag;
 
-        if TransferPriorityFlags::ACTIVE.contains(priority_flag) {
+        if TransferPriorityFlags::ACTIVE.intersects(priority_flag) {
             room.stats.total_active_deposit += deposit_request.amount;
         }
 
@@ -1636,7 +1636,7 @@ impl TransferQueue {
         for room_name in rooms {
             if let Some(room) = self.try_get_room(data, *room_name, transfer_type.into()) {
                 for (key, stats) in &room.stats().withdrawl_resource_stats {
-                    if withdrawl_priorities.contains(key.priority.into()) && key.allowed_type == transfer_type {
+                    if withdrawl_priorities.intersects(key.priority.into()) && key.allowed_type == transfer_type {
                         let unfufilled_amount = stats.unfufilled_amount();
 
                         if unfufilled_amount > 0 {
@@ -2092,7 +2092,7 @@ impl TransferQueue {
                     if key.allowed_type == transfer_type {
                         let resource_entry = withdrawls.entry(key.resource).or_insert(StatsEntry { active: 0, inactive: 0 });
 
-                        if TransferPriorityFlags::ACTIVE.contains(key.priority.into()) {
+                        if TransferPriorityFlags::ACTIVE.intersects(key.priority.into()) {
                             resource_entry.active += stats.unfufilled_amount().max(0) as u32;
                         } else {
                             resource_entry.inactive += stats.unfufilled_amount().max(0) as u32;
@@ -2108,7 +2108,7 @@ impl TransferQueue {
                     if key.allowed_type == transfer_type {
                         let resource_entry = deposits.entry(key.resource).or_insert(StatsEntry { active: 0, inactive: 0 });
 
-                        if TransferPriorityFlags::ACTIVE.contains(key.priority.into()) {
+                        if TransferPriorityFlags::ACTIVE.intersects(key.priority.into()) {
                             resource_entry.active += stats.unfufilled_amount().max(0) as u32;
                         } else {
                             resource_entry.inactive += stats.unfufilled_amount().max(0) as u32;

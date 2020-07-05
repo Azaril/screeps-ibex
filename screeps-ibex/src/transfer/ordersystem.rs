@@ -224,6 +224,7 @@ impl OrderQueueSystem {
         terminal: &StructureTerminal,
         order_cache: &mut OrderCache,
         active_orders: &[ActiveSellOrderParameters],
+        my_orders: &HashMap<String, MyOrder>
     ) -> bool {
         if terminal.cooldown() > 0 {
             return true;
@@ -240,6 +241,7 @@ impl OrderQueueSystem {
                     .iter()
                     .filter(|o| o.order_type == OrderType::Buy)
                     .filter(|o| o.remaining_amount > params.minimum_sale_amount && o.price >= params.minimum_price)
+                    .filter(|o| !my_orders.contains_key(&o.id))
                     .filter_map(|o| {
                         o.room_name.and_then(|order_room_name| {
                             let transfer_amount = o.remaining_amount.min(params.amount);
@@ -341,6 +343,10 @@ impl<'a> System<'a> for OrderQueueSystem {
             if !data.order_queue.rooms.is_empty() {
                 let mut resource_history = HashMap::new();
 
+                let can_trust_history = |history: &OrderHistoryRecord| { 
+                    history.transactions > 100 && history.volume > 1000 && (history.stddev_price <= history.avg_price * 0.25)
+                };
+
                 for (room_name, room_data) in &data.order_queue.rooms {
                     if let Some(terminal) = game::rooms::get(*room_name).and_then(|r| r.terminal()) {
                         if can_sell {
@@ -359,16 +365,18 @@ impl<'a> System<'a> for OrderQueueSystem {
                                 //TODO: Need better pricing calculations.
 
                                 if let Some(latest_resource_history) = resource_history.get(&market_resource).unwrap().last() {
-                                    Self::sell_passive_order(
-                                        &my_orders,
-                                        PassiveOrderParameters {
-                                            room_name: *room_name,
-                                            resource: entry.resource,
-                                            amount: entry.amount,
-                                            minimum_amount: 2000,
-                                            price: latest_resource_history.avg_price + (latest_resource_history.stddev_price * 0.1),
-                                        },
-                                    );
+                                    if can_trust_history(latest_resource_history) {
+                                        Self::sell_passive_order(
+                                            &my_orders,
+                                            PassiveOrderParameters {
+                                                room_name: *room_name,
+                                                resource: entry.resource,
+                                                amount: entry.amount,
+                                                minimum_amount: 2000,
+                                                price: latest_resource_history.avg_price + (latest_resource_history.stddev_price * 0.1),
+                                            },
+                                        );
+                                    }
                                 }
                             }
 
@@ -394,16 +402,18 @@ impl<'a> System<'a> for OrderQueueSystem {
 
                                     if let Some(latest_resource_history) = resource_history.get(&market_resource).unwrap().last() {
                                         if let Some(latest_energy_history) = resource_history.get(&energy_market_resource).unwrap().last() {
-                                            return Some(ActiveSellOrderParameters {
-                                                resource: entry.resource,
-                                                amount: entry.amount,
-                                                minimum_sale_amount: 2000,
-                                                minimum_price: latest_resource_history.avg_price
-                                                    - (latest_resource_history.stddev_price * 0.2),
-                                                available_transfer_energy: entry.available_transfer_energy,
-                                                maximum_transfer_energy: OrderQueue::maximum_transfer_energy(),
-                                                energy_cost: latest_energy_history.avg_price - (latest_energy_history.stddev_price * 0.2),
-                                            });
+                                            if can_trust_history(latest_resource_history) && can_trust_history(latest_energy_history) {
+                                                return Some(ActiveSellOrderParameters {
+                                                    resource: entry.resource,
+                                                    amount: entry.amount,
+                                                    minimum_sale_amount: 2000,
+                                                    minimum_price: latest_resource_history.avg_price
+                                                        - (latest_resource_history.stddev_price * 0.2),
+                                                    available_transfer_energy: entry.available_transfer_energy,
+                                                    maximum_transfer_energy: OrderQueue::maximum_transfer_energy(),
+                                                    energy_cost: latest_energy_history.avg_price - (latest_energy_history.stddev_price * 0.2),
+                                                });
+                                            }
                                         }
                                     }
 
@@ -411,7 +421,7 @@ impl<'a> System<'a> for OrderQueueSystem {
                                 })
                                 .collect();
 
-                            let _terminal_busy = Self::sell_active_orders(*room_name, &terminal, &mut order_cache, &active_orders);
+                            let _terminal_busy = Self::sell_active_orders(*room_name, &terminal, &mut order_cache, &active_orders, &my_orders);
                         }
 
                         if can_buy {
@@ -430,16 +440,18 @@ impl<'a> System<'a> for OrderQueueSystem {
                                 //TODO: Need better pricing calculations.
 
                                 if let Some(latest_resource_history) = resource_history.get(&market_resource).unwrap().last() {
-                                    Self::buy_passive_order(
-                                        &my_orders,
-                                        PassiveOrderParameters {
-                                            room_name: *room_name,
-                                            resource: entry.resource,
-                                            amount: entry.amount,
-                                            minimum_amount: 2000,
-                                            price: latest_resource_history.avg_price + (latest_resource_history.stddev_price * 0.1),
-                                        },
-                                    );
+                                    if can_trust_history(latest_resource_history) {
+                                        Self::buy_passive_order(
+                                            &my_orders,
+                                            PassiveOrderParameters {
+                                                room_name: *room_name,
+                                                resource: entry.resource,
+                                                amount: entry.amount,
+                                                minimum_amount: 2000,
+                                                price: latest_resource_history.avg_price + (latest_resource_history.stddev_price * 0.1),
+                                            },
+                                        );
+                                    }
                                 }
                             }
                         }

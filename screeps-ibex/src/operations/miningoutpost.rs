@@ -145,7 +145,7 @@ impl Operation for MiningOutpostOperation {
                         system_data.updater.create_entity(system_data.entities),
                         Some(runtime_data.entity),
                         candidate_room.room_data_entity(),
-                        candidate_room.home_room_data_entity(),
+                        candidate_room.home_room_data_entities(),
                     )
                     .build();
 
