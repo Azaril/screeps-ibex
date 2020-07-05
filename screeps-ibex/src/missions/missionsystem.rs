@@ -203,7 +203,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 let cleanup_mission = match mission.pre_run_mission(&mut system_data, entity) {
                     Ok(()) => false,
                     Err(error) => {
-                        info!("Mission failed, cleaning up. Error: {}", error);
+                        info!("Mission pre-run failed, cleaning up. Error: {}", error);
 
                         true
                     }
@@ -260,7 +260,7 @@ impl<'a> System<'a> for RunMissionSystem {
                         true
                     }
                     Err(error) => {
-                        info!("Mission failed, cleaning up. Error: {}", error);
+                        info!("Mission run failed, cleaning up. Error: {}", error);
                         true
                     }
                 };
