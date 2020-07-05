@@ -96,7 +96,7 @@ pub struct GatherSystemData<'a, 'b> {
 
 pub fn gather_home_rooms(system_data: &GatherSystemData, min_rcl: u32) -> Vec<Entity> {
     (&*system_data.entities, &*system_data.room_data).join()
-        .filter(|(_, room_data)| !is_valid_home_room(room_data))
+        .filter(|(_, room_data)| is_valid_home_room(room_data))
         .filter(|(_, room_data)| {
             let rcl = room_data.get_structures().iter().flat_map(|s| s.controllers()).map(|c| c.level()).max().unwrap_or(0);
 
