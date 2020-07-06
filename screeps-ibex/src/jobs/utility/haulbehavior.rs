@@ -502,10 +502,6 @@ pub fn visualize_delivery(describe_data: &mut JobDescribeData, tickets: &Vec<Tra
     let pos = describe_data.owner.pos();
 
     visualize_delivery_from(describe_data, tickets, pos);
-
-    let delivery_sum: u32 = tickets.iter().flat_map(|t| t.resources().values()).flat_map(|e| e).map(|re| re.amount()).sum();
-
-    describe_data.visualizer.get_room(pos.room_name()).text(pos.x() as f32, pos.y() as f32, format!("D: {}", delivery_sum), None);
 }
 
 pub fn visualize_delivery_from(describe_data: &mut JobDescribeData, tickets: &Vec<TransferDepositTicket>, from: RoomPosition) {
