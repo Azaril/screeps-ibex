@@ -113,6 +113,7 @@ impl Mission for UpgradeMission {
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
 
         let controllers = structures.controllers();
+        let storages = structures.storages();
 
         if !Self::can_run(&room_data) {
             return Err("Upgrade room not owned by user".to_string());
@@ -149,9 +150,9 @@ impl Mission for UpgradeMission {
             1
         } else if has_excess_energy {
             if controller_level <= 3 {
-                4
+                5
             } else {
-                2
+                3
             }
         } else {
             1
@@ -228,10 +229,16 @@ impl Mission for UpgradeMission {
                     SPAWN_PRIORITY_HIGH
                 } else if self.upgraders.is_empty() {
                     SPAWN_PRIORITY_HIGH
-                } else {
-                    let interp = (alive_upgraders as f32) / (max_upgraders as f32);
+                } else if has_excess_energy && !storages.is_empty() && max_upgraders > 1 {
+                    let interp = (alive_upgraders as f32) / ((max_upgraders - 1) as f32);
+
+                    SPAWN_PRIORITY_HIGH.lerp_bounded(SPAWN_PRIORITY_MEDIUM, interp)
+                } else if max_upgraders > 1 {
+                    let interp = (alive_upgraders as f32) / ((max_upgraders - 1) as f32);
 
                     SPAWN_PRIORITY_MEDIUM.lerp_bounded(SPAWN_PRIORITY_LOW, interp)
+                } else {
+                    SPAWN_PRIORITY_MEDIUM
                 };
 
                 let allow_harvest = controller_level <= 3;
