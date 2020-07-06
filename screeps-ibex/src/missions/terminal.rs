@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 use std::collections::HashSet;
+use super::constants::*;
 
 #[derive(ConvertSaveload)]
 pub struct TerminalMission {
@@ -47,13 +48,6 @@ impl TerminalMission {
         match resource {
             ResourceType::Energy => OrderQueue::maximum_transfer_energy(),
             _ => 0,
-        }
-    }
-
-    fn get_desired_storage_amount(resource: ResourceType) -> u32 {
-        match resource {
-            ResourceType::Energy => 150_000,
-            _ => 10_000,
         }
     }
 
@@ -93,7 +87,7 @@ impl TerminalMission {
     }
 
     fn get_resource_thresholds(resource: ResourceType) -> ResourceThresholds {
-        let desired_storage_amount = Self::get_desired_storage_amount(resource);
+        let desired_storage_amount = get_desired_storage_amount(resource);
 
         let desired_reserve_terminal_amount = Self::get_desired_reserve_terminal_amount(resource);
         let desired_transfer_outgoing_terminal_amount = Self::get_desired_transfer_outgoing_terminal_amount(resource);
