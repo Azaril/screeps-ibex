@@ -13,6 +13,7 @@ use specs::saveload::*;
 use specs::*;
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use super::constants::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct LabsMissionContext {
@@ -186,47 +187,47 @@ impl Idle {
         Ok(Some(LabsState::wait(20)))
     }
 
-    fn desired_resources() -> &'static [(ResourceType, u32)] {
+    fn desired_resources() -> &'static [ResourceType] {
         &[
             //
             // Tier 1 boosts
             //
-            (ResourceType::UtriumHydride, 1000),
-            (ResourceType::UtriumOxide, 1000),
-            (ResourceType::KeaniumHydride, 1000),
-            (ResourceType::KeaniumOxide, 1000),
-            (ResourceType::LemergiumHydride, 1000),
-            (ResourceType::LemergiumOxide, 1000),
-            (ResourceType::ZynthiumHydride, 1000),
-            (ResourceType::ZynthiumOxide, 1000),
-            (ResourceType::GhodiumHydride, 1000),
-            (ResourceType::GhodiumOxide, 1000),
+            ResourceType::UtriumHydride,
+            ResourceType::UtriumOxide,
+            ResourceType::KeaniumHydride,
+            ResourceType::KeaniumOxide,
+            ResourceType::LemergiumHydride,
+            ResourceType::LemergiumOxide,
+            ResourceType::ZynthiumHydride,
+            ResourceType::ZynthiumOxide,
+            ResourceType::GhodiumHydride,
+            ResourceType::GhodiumOxide,
             //
             // Tier 2 boosts
             //
-            (ResourceType::UtriumAcid, 1000),
-            (ResourceType::UtriumAlkalide, 1000),
-            (ResourceType::KeaniumAcid, 1000),
-            (ResourceType::KeaniumAlkalide, 1000),
-            (ResourceType::LemergiumAcid, 1000),
-            (ResourceType::LemergiumAlkalide, 1000),
-            (ResourceType::ZynthiumAcid, 1000),
-            (ResourceType::ZynthiumAlkalide, 1000),
-            (ResourceType::GhodiumAcid, 1000),
-            (ResourceType::GhodiumAlkalide, 1000),
+            ResourceType::UtriumAcid,
+            ResourceType::UtriumAlkalide,
+            ResourceType::KeaniumAcid,
+            ResourceType::KeaniumAlkalide,
+            ResourceType::LemergiumAcid,
+            ResourceType::LemergiumAlkalide,
+            ResourceType::ZynthiumAcid,
+            ResourceType::ZynthiumAlkalide,
+            ResourceType::GhodiumAcid,
+            ResourceType::GhodiumAlkalide,
             //
             // Tier 3 boosts
             //
-            (ResourceType::CatalyzedUtriumAcid, 1000),
-            (ResourceType::CatalyzedUtriumAlkalide, 1000),
-            (ResourceType::CatalyzedKeaniumAcid, 1000),
-            (ResourceType::CatalyzedKeaniumAlkalide, 1000),
-            (ResourceType::CatalyzedLemergiumAcid, 1000),
-            (ResourceType::CatalyzedLemergiumAlkalide, 1000),
-            (ResourceType::CatalyzedZynthiumAcid, 1000),
-            (ResourceType::CatalyzedZynthiumAlkalide, 1000),
-            (ResourceType::CatalyzedGhodiumAcid, 1000),
-            (ResourceType::CatalyzedGhodiumAlkalide, 1000),
+            ResourceType::CatalyzedUtriumAcid,
+            ResourceType::CatalyzedUtriumAlkalide,
+            ResourceType::CatalyzedKeaniumAcid,
+            ResourceType::CatalyzedKeaniumAlkalide,
+            ResourceType::CatalyzedLemergiumAcid,
+            ResourceType::CatalyzedLemergiumAlkalide,
+            ResourceType::CatalyzedZynthiumAcid,
+            ResourceType::CatalyzedZynthiumAlkalide,
+            ResourceType::CatalyzedGhodiumAcid,
+            ResourceType::CatalyzedGhodiumAlkalide,
         ]
     }
 
@@ -248,7 +249,10 @@ impl Idle {
 
         let mut all_available_reactions: HashMap<ResourceType, u32> = HashMap::new();
 
-        let mut target_resources = Self::desired_resources().to_vec();
+        let mut target_resources: Vec<_> = Self::desired_resources()
+            .iter()
+            .map(|resource| (*resource, get_desired_storage_amount(*resource)))
+            .collect();
 
         while let Some((target_resource, desired_amount)) = target_resources.pop() {
             let needed_amount = {

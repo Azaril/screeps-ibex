@@ -148,14 +148,6 @@ impl Mission for HaulMission {
         // Cleanup home rooms that no longer exist.
         //
 
-        for home_room_entity in self.home_room_datas.iter() {
-            if let Some(home_room_data) = system_data.room_data.get(*home_room_entity) {
-                if !is_valid_home_room(home_room_data) {
-                    log::info!("Invalid home room: {}", home_room_data.name);
-                }
-            }
-        }
-
         self.home_room_datas
             .retain(|entity| {
                 system_data.room_data
