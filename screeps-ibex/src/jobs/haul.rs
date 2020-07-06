@@ -124,6 +124,7 @@ impl Idle {
                 &delivery_rooms,
                 TransferPriorityFlags::ALL,
                 TransferPriorityFlags::ALL,
+                10,
                 TransferType::Haul,
                 tick_context.runtime_data.transfer_queue,
                 target_filter,
@@ -209,6 +210,7 @@ impl Pickup {
                 &mut self.withdrawl,
                 &mut self.deposits,
                 target_filter,
+                10
             );
         }
 

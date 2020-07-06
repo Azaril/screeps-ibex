@@ -218,10 +218,10 @@ impl Mission for HaulMission {
 
         let token = system_data.spawn_queue.token();
 
-        let energy_to_use = if self.haulers.is_empty() && is_multi_room {
+        let energy_to_use = if self.haulers.is_empty() {
             home_room_spawn_info.iter().map(|(_, _, _, _, current_energy, _)| *current_energy).max()
         } else {
-            home_room_spawn_info.iter().map(|(_, _, _, _, current_energy, _)| *current_energy).min()            
+            home_room_spawn_info.iter().map(|(_, _, _, _, _, max_energy)| *max_energy).min()
         }.unwrap_or(SPAWN_ENERGY_CAPACITY);
 
         let max_distance = home_room_spawn_info.iter().map(|(_, _, distance, _, _, _)| *distance).max().unwrap_or(0);

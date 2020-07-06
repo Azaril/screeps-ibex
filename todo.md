@@ -20,6 +20,7 @@
 - Order system needs better analysis of price history and hard guards on price manipulation.
 - Squad system for military. (Goals?)
 - Military units.
+- Shared, predicted storage capacity for the tick. (Allow for haulers to not wait for a tick at the end of their delivery tickets.)
 
 # Medium Priority
 
