@@ -5,6 +5,7 @@ use crate::jobs::upgrade::*;
 use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use super::constants::*;
 use lerp::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -114,17 +115,19 @@ impl Mission for UpgradeMission {
         let controllers = structures.controllers();
 
         if !Self::can_run(&room_data) {
-            return Err("Room not owned by user".to_string());
+            return Err("Upgrade room not owned by user".to_string());
         }
 
         let controller_level = controllers.iter().map(|c| c.level()).max().ok_or("Expected controller level")?;
+
+        let desired_storage_energy = get_desired_storage_amount(ResourceType::Energy) / 2;
 
         let has_excess_energy = {
             if !structures.storages().is_empty() {
                 structures
                     .storages()
                     .iter()
-                    .any(|container| container.store_of(ResourceType::Energy) >= 100_000)
+                    .any(|container| container.store_of(ResourceType::Energy) >= desired_storage_energy)
             } else if !structures.containers().is_empty() {
                 structures
                     .containers()
@@ -146,9 +149,9 @@ impl Mission for UpgradeMission {
             1
         } else if has_excess_energy {
             if controller_level <= 3 {
-                5
+                4
             } else {
-                3
+                2
             }
         } else {
             1
@@ -177,7 +180,7 @@ impl Mission for UpgradeMission {
 
                 Some(work_parts as usize)
             } else if has_excess_energy {
-                Some(10)
+                Some(20)
             } else {
                 let sources = static_visibility_data.sources();
 

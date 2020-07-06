@@ -1327,15 +1327,16 @@ impl Mission for LocalSupplyMission {
 
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
+        //TODO: Split generators in to single flag.
         system_data.transfer_queue.register_generator(
             room_data.name,
-            TransferTypeFlags::HAUL,
+            TransferTypeFlags::HAUL | TransferTypeFlags::USE,
             Self::transfer_request_haul_generator(self.room_data, self.structure_data.clone()),
         );
 
         system_data.transfer_queue.register_generator(
             room_data.name,
-            TransferTypeFlags::LINK,
+            TransferTypeFlags::HAUL | TransferTypeFlags::LINK | TransferTypeFlags::USE,
             Self::transfer_request_link_generator(self.room_data, self.structure_data.clone()),
         );
 

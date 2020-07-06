@@ -1,5 +1,6 @@
 use super::data::*;
 use super::missionsystem::*;
+use super::constants::*;
 use crate::creep::*;
 use crate::jobs::build::*;
 use crate::jobs::data::*;
@@ -178,12 +179,14 @@ impl Mission for LocalBuildMission {
         let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
         let structure_data = room_data.get_structures().ok_or("Expected structure data")?;
 
+        let desired_storage_energy = get_desired_storage_amount(ResourceType::Energy) / 4;
+
         let has_sufficient_energy = {
             if !structure_data.storages().is_empty() {
                 structure_data
                     .storages()
                     .iter()
-                    .any(|container| container.store_of(ResourceType::Energy) >= 50_000)
+                    .any(|container| container.store_of(ResourceType::Energy) >= desired_storage_energy)
             } else {
                 structure_data
                     .containers()
