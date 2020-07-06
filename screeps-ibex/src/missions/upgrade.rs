@@ -5,6 +5,7 @@ use crate::jobs::upgrade::*;
 use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use super::constants::*;
 use lerp::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -119,12 +120,14 @@ impl Mission for UpgradeMission {
 
         let controller_level = controllers.iter().map(|c| c.level()).max().ok_or("Expected controller level")?;
 
+        let desired_storage_energy = get_desired_storage_amount(ResourceType::Energy) / 2;
+
         let has_excess_energy = {
             if !structures.storages().is_empty() {
                 structures
                     .storages()
                     .iter()
-                    .any(|container| container.store_of(ResourceType::Energy) >= 100_000)
+                    .any(|container| container.store_of(ResourceType::Energy) >= desired_storage_energy)
             } else if !structures.containers().is_empty() {
                 structures
                     .containers()
