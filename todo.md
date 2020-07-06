@@ -3,15 +3,14 @@
 - Fix partial hauls due to damage causing return to harvesting source. (Stay stick with delivery once started.)
 - Remote upgrade mission/role.
 - Add stuck detection and response for creeps.
-- Use 'local supply' mission for both local supply and remote mine.
 - Add lost creep recovery - i.e. memory is lost.
 1. Gather haul requests/providers/state.
 2. Gather visibility requests and missions in progress to gather visibility.
-- Add remote mining capability. (Static + container mining needed. Switch from remote harvesting.)
+- Add remote mining container building.
+- Add road system - gather nodes and generate connectivity.
 - Computer number of hauler/harvester parts needed based on path distance.
-- Add heuristics for which rooms to claim next. (Number of sources, source proximity, amount of swamp, etc.)
 - Factory usage.
-- Lab usage.
+- Boost usage.
 - Add CPU analysis.
 1. Prevent additional remote mining, reserving or claiming of new rooms without sufficient CPU.
 - Post-process for room planner. (Remove roads not needed, fix RCL for links etc. based on distance, prioritize storage.)
