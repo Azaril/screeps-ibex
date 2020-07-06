@@ -253,7 +253,7 @@ impl Mission for HaulMission {
             let range_multiplier = 1.0 - ((max_distance.min(3) as f32 / 3.0) * 0.5);
             let base_amount = max_level as f32 * carry_parts as f32 * CARRY_CAPACITY as f32 * range_multiplier;
 
-            let max_haulers = 4 + (max_distance * 2);
+            let max_haulers = 4 + (max_distance * 4);
 
             let desired_haulers_for_unfufilled = stats.unfufilled_hauling as f32 / base_amount as f32;
             let desired_haulers_for_unfufilled = if max_distance == 0 {
