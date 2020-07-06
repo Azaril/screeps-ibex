@@ -70,31 +70,32 @@ impl MissionRequests {
             if let Some(mission_data) = system_data.missions.get(mission_entity) {
                 let mut mission = mission_data.as_mission_mut();
 
-                mission.complete(system_data, mission_entity);
-            }
+                let owner = mission.get_owner().clone();
+                let children = mission.get_children();
+                let room = mission.get_room();
 
-            Self::queue_cleanup_mission(&system_data.updater, mission_entity);
+                mission.complete(system_data, mission_entity);
+
+                Self::queue_cleanup_mission(&system_data.updater, mission_entity, owner.clone(), children, room);
+            }
         }
     }
 
-    fn queue_cleanup_mission(updater: &LazyUpdate, mission_entity: Entity) {
+    fn queue_cleanup_mission(updater: &LazyUpdate, mission_entity: Entity, owner: Option<Entity>, children: Vec<Entity>, room: Entity) {
         updater.exec_mut(move |world| {
             if world.entities().is_alive(mission_entity) {
-                let (owner, children) = if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(mission_entity) {
-                    let mission = mission_data.as_mission();
 
-                    let room_data_entity = mission.get_room();
+                //
+                // Remove mission from room.
+                //
 
-                    let room_data_storage = &mut world.write_storage::<RoomData>();
+                if let Some(room_data) = world.write_storage::<RoomData>().get_mut(room) {
+                    room_data.remove_mission(mission_entity);
+                }
 
-                    if let Some(room_data) = room_data_storage.get_mut(room_data_entity) {
-                        room_data.remove_mission(mission_entity);
-                    }
-
-                    (mission.get_owner().clone(), mission.get_children())
-                } else {
-                    (None, Vec::new())
-                };
+                //
+                // Notify children of termination.
+                //
 
                 for child_entity in children {
                     if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(child_entity) {
@@ -105,6 +106,10 @@ impl MissionRequests {
                         mission_data.as_mission_mut().owner_complete(mission_entity);
                     }
                 }
+
+                //
+                // Notify owner of termination.
+                //
 
                 if let Some(owner) = owner {
                     if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(owner) {
