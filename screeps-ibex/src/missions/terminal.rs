@@ -127,6 +127,7 @@ impl TerminalMission {
         let base_resources = [
             ResourceType::Energy,
             ResourceType::Power,
+            ResourceType::Ops,
             ResourceType::Hydrogen,
             ResourceType::Oxygen,
             ResourceType::Utrium,
