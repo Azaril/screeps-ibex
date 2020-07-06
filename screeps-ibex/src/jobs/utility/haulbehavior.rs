@@ -118,6 +118,7 @@ pub fn get_new_pickup_and_delivery_state<TF, F, R>(
     delivery_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
     allowed_secondary_priorities: TransferPriorityFlags,
+    allowed_secondary_range: u32,
     transfer_type: TransferType,
     available_capacity: TransferCapacity,
     transfer_queue: &mut TransferQueue,
@@ -165,6 +166,7 @@ where
                 &mut pickup,
                 &mut deliveries,
                 target_filter,
+                allowed_secondary_range
             );
 
             return Some(state_map(pickup, deliveries));
@@ -185,6 +187,7 @@ pub fn get_additional_deliveries<TF>(
     pickup: &mut TransferWithdrawTicket,
     deliveries: &mut Vec<TransferDepositTicket>,
     target_filter: TF,
+    additional_delivery_range: u32,
 ) where
     TF: Fn(&TransferTarget) -> bool + Copy,
 {
@@ -224,7 +227,15 @@ pub fn get_additional_deliveries<TF>(
                     transfer_type,
                     remaining_capacity,
                     last_delivery_pos,
-                    target_filter,
+                    |target| {
+                        if target_filter(target) {
+                            let target_pos = target.pos();
+
+                            deliveries.iter().any(|d| d.target().pos().get_range_to(&target_pos) <= additional_delivery_range)
+                        } else {
+                            false
+                        }
+                    },
                 ) {
                     transfer_queue.register_pickup(&additional_pickup);
                     pickup.combine_with(&additional_pickup);
@@ -285,6 +296,7 @@ pub fn get_new_pickup_and_delivery_full_capacity_state<TF, F, R>(
     delivery_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
     allowed_secondary_priorities: TransferPriorityFlags,
+    allowed_secondary_range: u32,
     transfer_type: TransferType,
     transfer_queue: &mut TransferQueue,
     target_filter: TF,
@@ -307,6 +319,7 @@ where
         delivery_rooms,
         allowed_priorities,
         allowed_secondary_priorities,
+        allowed_secondary_range,
         transfer_type,
         TransferCapacity::Finite(available_capacity),
         transfer_queue,
@@ -407,6 +420,7 @@ where
             available_capacity,
             resource_type,
         ) {
+            tick_context.runtime_data.transfer_queue.register_pickup(&additional_withdrawl);            
             ticket.combine_with(&additional_withdrawl);
         }
     }
@@ -435,6 +449,8 @@ where
     let creep = tick_context.runtime_data.owner;
     let creep_pos = creep.pos();
 
+    let mut transfered = false;
+
     while let Some(ticket) = tickets.first_mut() {
         //TODO: Use visibility to query if target should be visible.
         if ticket.target().is_valid() && ticket.get_next_deposit().is_some() {
@@ -458,6 +474,8 @@ where
 
                     if ticket.target().creep_transfer_resource_amount(creep, resource, amount) == ReturnCode::Ok {
                         tick_context.action_flags.insert(SimultaneousActionFlags::TRANSFER);
+
+                        transfered = true;
                         break;
                     }
                 } else {
@@ -469,13 +487,25 @@ where
         }
     }
 
-    Some(next_state())
+    if transfered {
+        //
+        // NOTE: Delay further execution by a tick as inventory cannot be trusted. (Needs predicted storage that can be shared across systems.)
+        //
+
+        None
+    } else {
+        Some(next_state())
+    }
 }
 
 pub fn visualize_delivery(describe_data: &mut JobDescribeData, tickets: &Vec<TransferDepositTicket>) {
     let pos = describe_data.owner.pos();
 
     visualize_delivery_from(describe_data, tickets, pos);
+
+    let delivery_sum: u32 = tickets.iter().flat_map(|t| t.resources().values()).flat_map(|e| e).map(|re| re.amount()).sum();
+
+    describe_data.visualizer.get_room(pos.room_name()).text(pos.x() as f32, pos.y() as f32, format!("D: {}", delivery_sum), None);
 }
 
 pub fn visualize_delivery_from(describe_data: &mut JobDescribeData, tickets: &Vec<TransferDepositTicket>, from: RoomPosition) {
