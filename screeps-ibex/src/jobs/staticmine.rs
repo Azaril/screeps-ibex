@@ -77,13 +77,31 @@ impl MoveToContainer {
 
 impl Harvest {
     fn tick(&mut self, state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
+        if let Some(container) = state_context.container_target.resolve() {
+            let creep = tick_context.runtime_data.owner;
+            let work_parts = creep.body().iter().filter(|p| p.part == Part::Work).count() as u32;
+
+            let mining_power = match state_context.mine_target {
+                StaticMineTarget::Source(_) => HARVEST_POWER,
+                StaticMineTarget::Mineral(_, _) => HARVEST_MINERAL_POWER
+            };
+
+            let resources_harvested = work_parts * mining_power;
+
+            if resources_harvested as i32 > container.store_free_capacity(None) {
+                return Some(StaticMineState::wait(1));
+            }
+        }
+
         match state_context.mine_target {
             StaticMineTarget::Source(source_id) => {
                 tick_opportunistic_repair(tick_context, Some(RepairPriority::Low));
 
                 tick_harvest(tick_context, source_id, true, false, || StaticMineState::wait(1))
             }
-            StaticMineTarget::Mineral(mineral_id, _) => tick_harvest(tick_context, mineral_id, true, false, || StaticMineState::wait(1)),
+            StaticMineTarget::Mineral(mineral_id, _) => {
+                tick_harvest(tick_context, mineral_id, true, false, || StaticMineState::wait(1))
+            }
         }
     }
 }
