@@ -52,7 +52,7 @@ machine!(
 
         * => fn visualize(&self, _system_data: &MissionExecutionSystemData, _mission_entity: Entity) {}
 
-        Wait => fn gather_data(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity, _state_context: &mut LabsMissionContext) {}
+        _ => fn gather_data(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity, _state_context: &mut LabsMissionContext);
 
         _ => fn tick(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity, state_context: &mut LabsMissionContext) -> Result<Option<LabsState>, String>;
     }
@@ -61,6 +61,34 @@ machine!(
 enum ReactionType {
     Forward,
     Reverse,
+}
+
+fn unload_labs_transfer_generator(room_entity: Entity) -> TransferQueueGenerator {
+    Box::new(move |system, transfer, _room_name| {
+        let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
+        let structures = room_data.get_structures().ok_or("Expected structures")?;
+        let labs = structures.labs();
+
+        for lab in labs.iter() {
+            let current_store = lab.store_types();
+
+            for unwanted_resource in current_store.iter().filter(|r| **r != ResourceType::Energy) {
+                let amount = lab.store_of(*unwanted_resource);
+
+                let transfer_request = TransferWithdrawRequest::new(
+                    TransferTarget::Lab(lab.remote_id()),
+                    *unwanted_resource,
+                    TransferPriority::Medium,
+                    amount,
+                    TransferType::Haul,
+                );
+
+                transfer.request_withdraw(transfer_request);
+            }
+        }
+
+        Ok(())
+    })
 }
 
 impl Idle {
@@ -73,37 +101,9 @@ impl Idle {
             system_data.transfer_queue.register_generator(
                 room_data.name,
                 TransferTypeFlags::HAUL,
-                Self::transfer_generator(state_context.room_data),
+                unload_labs_transfer_generator(state_context.room_data),
             );
         }
-    }
-
-    fn transfer_generator(room_entity: Entity) -> TransferQueueGenerator {
-        Box::new(move |system, transfer, _room_name| {
-            let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
-            let structures = room_data.get_structures().ok_or("Expected structures")?;
-            let labs = structures.labs();
-
-            for lab in labs.iter() {
-                let current_store = lab.store_types();
-
-                for unwanted_resource in current_store.iter().filter(|r| **r != ResourceType::Energy) {
-                    let amount = lab.store_of(*unwanted_resource);
-
-                    let transfer_request = TransferWithdrawRequest::new(
-                        TransferTarget::Lab(lab.remote_id()),
-                        *unwanted_resource,
-                        TransferPriority::Medium,
-                        amount,
-                        TransferType::Haul,
-                    );
-
-                    transfer.request_withdraw(transfer_request);
-                }
-            }
-
-            Ok(())
-        })
     }
 
     fn get_labs(
@@ -344,6 +344,16 @@ impl Idle {
 impl Wait {
     fn status_description(&self) -> String {
         format!("Wait - {}", self.ticks)
+    }
+
+    fn gather_data(&self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity, state_context: &mut LabsMissionContext) {
+        if let Some(room_data) = system_data.room_data.get(state_context.room_data) {
+            system_data.transfer_queue.register_generator(
+                room_data.name,
+                TransferTypeFlags::HAUL,
+                unload_labs_transfer_generator(state_context.room_data),
+            );
+        }
     }
 
     fn tick(
