@@ -111,7 +111,7 @@ impl<'a> PlannerRoomDataSource for RoomDataPlannerDataSource<'a> {
 
     fn get_controllers(&mut self) -> &[PlanLocation] {
         if self.controllers.is_none() {
-            let controllers = self
+            let mut controllers: Vec<_> = self
                 .static_visibility
                 .controller()
                 .iter()
@@ -121,6 +121,8 @@ impl<'a> PlannerRoomDataSource for RoomDataPlannerDataSource<'a> {
                 })
                 .collect();
 
+            controllers.sort_by(|a, b| a.x().cmp(&b.x()).then_with(|| a.y().cmp(&b.y())));
+
             self.controllers = Some(controllers);
         }
 
@@ -129,7 +131,7 @@ impl<'a> PlannerRoomDataSource for RoomDataPlannerDataSource<'a> {
 
     fn get_sources(&mut self) -> &[PlanLocation] {
         if self.sources.is_none() {
-            let sources = self
+            let mut sources: Vec<_> = self
                 .static_visibility
                 .sources()
                 .iter()
@@ -139,6 +141,8 @@ impl<'a> PlannerRoomDataSource for RoomDataPlannerDataSource<'a> {
                 })
                 .collect();
 
+            sources.sort_by(|a, b| a.x().cmp(&b.x()).then_with(|| a.y().cmp(&b.y())));
+
             self.sources = Some(sources);
         }
 
@@ -147,7 +151,7 @@ impl<'a> PlannerRoomDataSource for RoomDataPlannerDataSource<'a> {
 
     fn get_minerals(&mut self) -> &[PlanLocation] {
         if self.minerals.is_none() {
-            let minerals = self
+            let mut minerals: Vec<_> = self
                 .static_visibility
                 .minerals()
                 .iter()
@@ -156,6 +160,8 @@ impl<'a> PlannerRoomDataSource for RoomDataPlannerDataSource<'a> {
                     PlanLocation::new(pos.x() as i8, pos.y() as i8)
                 })
                 .collect();
+
+            minerals.sort_by(|a, b| a.x().cmp(&b.x()).then_with(|| a.y().cmp(&b.y())));
 
             self.minerals = Some(minerals);
         }

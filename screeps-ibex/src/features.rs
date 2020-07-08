@@ -28,7 +28,9 @@ pub mod js {
                     market: {
                         buy: true,
                         sell: true,
-                        credit_reserve: 10000000
+                        credit_reserve: 10000000,
+                        buy_energy: true,
+                        buy_minerals: true,
                     },
                     transfer: {
                         visualize: {
@@ -133,6 +135,14 @@ pub mod market {
             .path_f64("_features.market.credit_reserve")
             .unwrap_or(None)
             .unwrap_or(10_000_000.0)
+    }
+
+    pub fn buy_energy() -> bool {
+        ::screeps::memory::root().path_bool("_features.market.buy_energy")
+    }
+
+    pub fn buy_minerals() -> bool {
+        ::screeps::memory::root().path_bool("_features.market.buy_minerals")
     }
 }
 

@@ -104,12 +104,6 @@ fn main() -> Result<(), String> {
         }
     }
 
-    /*
-    for room in rooms {
-        run_room(shard, &room, maximum_seconds, maximum_batch_seconds)?;
-    }
-    */
-
     Ok(())
 }
 

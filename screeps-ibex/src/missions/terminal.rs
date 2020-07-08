@@ -79,9 +79,12 @@ impl TerminalMission {
         }
     }
 
+    //TODO: Add filter for selling resources.
+
     fn can_purchase_resource(resource: ResourceType) -> bool {
         match resource {
-            ResourceType::Energy => true,
+            ResourceType::Energy => crate::features::market::buy_energy(),
+            ResourceType::Hydrogen | ResourceType::Oxygen | ResourceType::Utrium | ResourceType::Lemergium | ResourceType::Keanium | ResourceType::Zynthium | ResourceType::Catalyst => crate::features::market::buy_minerals(),
             _ => false,
         }
     }
@@ -211,7 +214,7 @@ impl Mission for TerminalMission {
                     let transfer_amount = transfer_amount.min(terminal_free_amount);
 
                     if transfer_amount > 0 {
-                        if Self::can_purchase_resource(resource_type) {
+                        if Self::can_purchase_resource(resource_type) && current_total_amount < total_reserve_amount / 2 {
                             //TODO: Only purchase when transfer is not available.
                             //TODO: Need to correctly figure out how much
                             let purchase_amount = transfer_amount / 4;
