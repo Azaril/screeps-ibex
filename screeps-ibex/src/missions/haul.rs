@@ -225,7 +225,6 @@ impl Mission for HaulMission {
         }.unwrap_or(SPAWN_ENERGY_CAPACITY);
 
         let max_distance = home_room_spawn_info.iter().map(|(_, _, distance, _, _, _)| *distance).max().unwrap_or(0);
-        let max_level = home_room_spawn_info.iter().map(|(_, _, _, controller_level, _, _)| *controller_level).max().unwrap_or(0);
 
         let body_definition = if is_multi_room {
             crate::creep::SpawnBodyDefinition {
@@ -250,17 +249,13 @@ impl Mission for HaulMission {
         if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
             let carry_parts = body.iter().filter(|p| **p == Part::Carry).count();
 
-            let range_multiplier = 1.0 - ((max_distance.min(3) as f32 / 3.0) * 0.5);
-            let base_amount = max_level as f32 * carry_parts as f32 * CARRY_CAPACITY as f32 * range_multiplier;
+            let range_multiplier = 1.0 / ((max_distance as f32 * 2.0) + 1.0);
+            let efficiency_mutliplier = 0.75;
+            let base_amount = carry_parts as f32 * CARRY_CAPACITY as f32 * range_multiplier * efficiency_mutliplier;
 
-            let max_haulers = 4 + (max_distance * 4);
+            let max_haulers = 3 + (max_distance * 3);
 
-            let desired_haulers_for_unfufilled = stats.unfufilled_hauling as f32 / base_amount as f32;
-            let desired_haulers_for_unfufilled = if max_distance == 0 {
-                desired_haulers_for_unfufilled.ceil()
-            } else {
-                desired_haulers_for_unfufilled.floor()
-            } as u32;
+            let desired_haulers_for_unfufilled = (stats.unfufilled_hauling as f32 / base_amount as f32) as u32;
             let desired_haulers = desired_haulers_for_unfufilled.min(max_haulers) as usize;
 
             let should_spawn = self.haulers.len() < desired_haulers && self.allow_spawning;        
