@@ -250,8 +250,7 @@ impl Mission for HaulMission {
             let carry_parts = body.iter().filter(|p| **p == Part::Carry).count();
 
             let range_multiplier = 1.0 / ((max_distance as f32 * 2.0) + 1.0);
-            let efficiency_mutliplier = 0.75;
-            let base_amount = carry_parts as f32 * CARRY_CAPACITY as f32 * range_multiplier * efficiency_mutliplier;
+            let base_amount = carry_parts as f32 * CARRY_CAPACITY as f32 * range_multiplier;
 
             let max_haulers = 3 + (max_distance * 3);
 

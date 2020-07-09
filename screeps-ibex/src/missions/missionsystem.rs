@@ -76,7 +76,7 @@ impl MissionRequests {
 
                 mission.complete(system_data, mission_entity);
 
-                Self::queue_cleanup_mission(&system_data.updater, mission_entity, owner.clone(), children, room);
+                Self::queue_cleanup_mission(&system_data.updater, mission_entity, owner, children, room);
             }
         }
     }
