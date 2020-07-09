@@ -344,7 +344,7 @@ impl<'a> System<'a> for OrderQueueSystem {
                 let mut resource_history = HashMap::new();
 
                 let can_trust_history = |history: &OrderHistoryRecord| { 
-                    history.transactions > 100 && history.volume > 1000 && (history.stddev_price <= history.avg_price * 0.25)
+                    history.transactions > 100 && history.volume > 1000 && (history.stddev_price <= history.avg_price * 0.5)
                 };
 
                 for (room_name, room_data) in &data.order_queue.rooms {

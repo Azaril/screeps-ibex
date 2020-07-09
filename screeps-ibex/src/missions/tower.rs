@@ -105,13 +105,23 @@ impl Mission for TowerMission {
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let structures = room_data.get_structures().ok_or("Expected structures")?;
+        let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility data")?;
         let creeps = room_data.get_creeps().ok_or("Expected creeps")?;
 
         let towers = structures.towers();
+       
+        //TODO: Include power creeps?        
+        let weakest_dangerous_hostile_creep = creeps.hostile()
+            .iter()
+            .filter(|c| c.body().iter().any(|p| match p.part {
+                Part::Attack | Part::RangedAttack | Part::Work => true,
+                _ => false,
+            }))
+            .min_by_key(|creep| creep.hits());
 
-        let hostile_creeps = creeps.hostile();
-        let are_hostile_creeps = !hostile_creeps.is_empty();
-        let weakest_hostile_creep = hostile_creeps.into_iter().min_by_key(|creep| creep.hits());
+        let weakest_hostile_creep = creeps.hostile()
+            .iter()
+            .min_by_key(|creep| creep.hits());            
 
         let weakest_friendly_creep = creeps
             .friendly()
@@ -119,7 +129,7 @@ impl Mission for TowerMission {
             .filter(|creep| creep.hits() < creep.hits_max())
             .min_by_key(|creep| creep.hits());
 
-        let minimum_repair_priority = if are_hostile_creeps {
+        let minimum_repair_priority = if dynamic_visibility_data.hostile_creeps() {
             Some(RepairPriority::Medium)
         } else {
             Some(RepairPriority::Low)
@@ -130,7 +140,7 @@ impl Mission for TowerMission {
         //TODO: Partition targets between towers. (Don't over damage, heal or repair.)
 
         for tower in towers {
-            if let Some(creep) = weakest_hostile_creep {
+            if let Some(creep) = weakest_dangerous_hostile_creep.or(weakest_hostile_creep) {
                 tower.attack(creep);
                 continue;
             }
