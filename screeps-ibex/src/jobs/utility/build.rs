@@ -2,13 +2,13 @@ use screeps::*;
 use screeps_foreman::planner::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn select_construction_site(creep: &Creep, construction_sites: &[ConstructionSite]) -> Option<ConstructionSite> {
+pub fn select_construction_site(creep: &Creep, construction_sites: &[ConstructionSite], current_rcl: u32) -> Option<ConstructionSite> {
     let creep_pos = creep.pos();
 
     construction_sites
         .iter()
         .filter(|s| s.my())
-        .map(|s| (s, get_build_priority(s.structure_type())))
+        .map(|s| (s, get_build_priority(s.structure_type(), current_rcl)))
         .max_by(|(a, a_priority), (b, b_priority)| {
             a_priority
                 .cmp(b_priority)
