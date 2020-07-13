@@ -9,7 +9,7 @@ struct Opts {
     #[clap(short, long)]
     password: String,
     #[clap(long)]
-    path: String,
+    path: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -20,7 +20,7 @@ struct AuthData {
 
 #[derive(Serialize)]
 struct RemoveData {
-    path: String,
+    path: Option<String>,
 }
 
 #[tokio::main]
