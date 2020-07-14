@@ -158,7 +158,7 @@ impl Mission for RemoteBuildMission {
         if self.builders.len() < desired_builders {
             let interp = (self.builders.len() as f32) / (desired_builders as f32);
 
-            let priority = SPAWN_PRIORITY_HIGH.lerp_bounded(SPAWN_PRIORITY_LOW, interp);
+            let priority = SPAWN_PRIORITY_MEDIUM.lerp_bounded(SPAWN_PRIORITY_LOW, interp);
 
             let token = system_data.spawn_queue.token();
 

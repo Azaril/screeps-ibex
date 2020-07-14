@@ -12,6 +12,7 @@ use specs::*;
 #[derive(Clone, ConvertSaveload)]
 pub struct ColonyOperation {
     owner: EntityOption<Entity>,
+    last_run: Option<u32>
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -26,7 +27,7 @@ impl ColonyOperation {
     }
 
     pub fn new(owner: Option<Entity>) -> ColonyOperation {
-        ColonyOperation { owner: owner.into() }
+        ColonyOperation { owner: owner.into(), last_run: None }
     }
 }
 
@@ -53,9 +54,13 @@ impl Operation for ColonyOperation {
         system_data: &mut OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
-        if game::time() % 50 != 15 {
+        let should_run = self.last_run.map(|t| game::time() - t >= 50).unwrap_or(true);
+
+        if !should_run {
             return Ok(OperationResult::Running);
         }
+
+        self.last_run = Some(game::time());
 
         for (entity, room_data) in (&*system_data.entities, &mut *system_data.room_data).join() {
             let needs_colony = ColonyMission::can_run(&room_data);

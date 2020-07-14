@@ -317,7 +317,7 @@ impl Operation for ClaimOperation {
         for unknown_room in gathered_data.unknown_rooms().iter() {
             system_data.visibility.request(VisibilityRequest::new(
                 unknown_room.room_name(),
-                VISIBILITY_PRIORITY_MEDIUM,
+                VISIBILITY_PRIORITY_CRITICAL,
                 VisibilityRequestFlags::ALL,
             ));
         }
@@ -329,7 +329,7 @@ impl Operation for ClaimOperation {
             if dynamic_visibility_data.age() > Self::VISIBILITY_TIMEOUT / 2 {
                 system_data.visibility.request(VisibilityRequest::new(
                     room_data.name,
-                    VISIBILITY_PRIORITY_MEDIUM,
+                    VISIBILITY_PRIORITY_HIGH,
                     VisibilityRequestFlags::ALL,
                 ));
             }
