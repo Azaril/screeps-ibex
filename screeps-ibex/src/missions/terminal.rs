@@ -475,7 +475,6 @@ impl Mission for TerminalMission {
 
             let priorities = generate_active_priorities(TransferPriorityFlags::ALL, TransferPriorityFlags::ALL);
 
-            //TODO: Potentially use active priority pairs to iterate here. Currently relies on there never being a None -> None priority request.
             let best_transfer = priorities
                 .filter_map(|(pickup_priority, delivery_priority)| {
                     transfer_queue.get_terminal_delivery_from_target(

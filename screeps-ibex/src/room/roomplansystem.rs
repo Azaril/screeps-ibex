@@ -264,153 +264,155 @@ impl<'a> System<'a> for RoomPlanSystem {
 
         data.memory_arbiter.request(MEMORY_SEGMENT);
 
-        if let Some(max_cpu) = Self::get_cpu_budget() {
-            if data.memory_arbiter.is_active(MEMORY_SEGMENT) {
-                let planner_data = data.memory_arbiter.get(MEMORY_SEGMENT).unwrap();
+        if crate::features::construction::plan() {
+            if let Some(max_cpu) = Self::get_cpu_budget() {
+                if data.memory_arbiter.is_active(MEMORY_SEGMENT) {
+                    let planner_data = data.memory_arbiter.get(MEMORY_SEGMENT).unwrap();
 
-                let mut planner_state = if !planner_data.is_empty() {
-                    match crate::serialize::decode_from_string(&planner_data) {
-                        Ok(state) => state,
-                        Err(err) => {
-                            info!("Failed to decode planner state, resetting. Err: {}", err);
-                            RoomPlannerData::default()
-                        }
-                    }
-                } else {
-                    RoomPlannerData::default()
-                };
-
-                if planner_state.running_state.is_none() {
-                    let can_plan = |room: Entity| -> bool {
-                        if let Some(plan_data) = data.room_plan_data.get(room) {
-                            match plan_data.state {
-                                RoomPlanState::Valid(_) => crate::features::construction::force_plan(),
-                                RoomPlanState::Failed { time } => {
-                                    game::time() >= time + 2000 && crate::features::construction::allow_replan()
-                                }
+                    let mut planner_state = if !planner_data.is_empty() {
+                        match crate::serialize::decode_from_string(&planner_data) {
+                            Ok(state) => state,
+                            Err(err) => {
+                                info!("Failed to decode planner state, resetting. Err: {}", err);
+                                RoomPlannerData::default()
                             }
-                        } else {
-                            true
                         }
+                    } else {
+                        RoomPlannerData::default()
                     };
 
-                    let request = data
-                        .room_plan_queue
-                        .requests
-                        .iter()
-                        .filter(|request| can_plan(request.room))
-                        .filter(|request| data.room_data.get(request.room).is_some())
-                        .max_by(|a, b| a.priority.partial_cmp(&b.priority).unwrap())
-                        .cloned();
-
-                    if let Some(request) = request {
-                        if let Some(room_data) = data.room_data.get(request.room) {
-                            match RoomPlannerRunningData::seed(&room_data) {
-                                Ok(PlanSeedResult::Running(state)) => {
-                                    info!("Seeding complete for room plan. Room: {}", room_data.name);
-
-                                    planner_state.running_state = Some(RoomPlannerRunningData {
-                                        room_name: room_data.name,
-                                        planner_state: state,
-                                    });
-                                }
-                                Ok(PlanSeedResult::Complete(Some(plan))) => {
-                                    info!("Seeding complete and viable plan found. Room: {}", room_data.name);
-
-                                    if let Err(err) =
-                                        Self::attach_plan_state(&mut data.room_plan_data, request.room, RoomPlanState::Valid(plan))
-                                    {
-                                        info!("Failed to attach plan to room! Room: {} - Err: {}", room_data.name, err);
+                    if planner_state.running_state.is_none() {
+                        let can_plan = |room: Entity| -> bool {
+                            if let Some(plan_data) = data.room_plan_data.get(room) {
+                                match plan_data.state {
+                                    RoomPlanState::Valid(_) => crate::features::construction::force_plan(),
+                                    RoomPlanState::Failed { time } => {
+                                        game::time() >= time + 2000 && crate::features::construction::allow_replan()
                                     }
                                 }
-                                Ok(PlanSeedResult::Complete(None)) => {
-                                    info!("Seeding complete but no viable plan found. Room: {}", room_data.name);
+                            } else {
+                                true
+                            }
+                        };
 
-                                    if let Err(err) = Self::attach_plan_state(
-                                        &mut data.room_plan_data,
-                                        request.room,
-                                        RoomPlanState::Failed { time: game::time() },
-                                    ) {
-                                        info!("Failed to attach plan to room! Room: {} - Err: {}", room_data.name, err);
+                        let request = data
+                            .room_plan_queue
+                            .requests
+                            .iter()
+                            .filter(|request| can_plan(request.room))
+                            .filter(|request| data.room_data.get(request.room).is_some())
+                            .max_by(|a, b| a.priority.partial_cmp(&b.priority).unwrap())
+                            .cloned();
+
+                        if let Some(request) = request {
+                            if let Some(room_data) = data.room_data.get(request.room) {
+                                match RoomPlannerRunningData::seed(&room_data) {
+                                    Ok(PlanSeedResult::Running(state)) => {
+                                        info!("Seeding complete for room plan. Room: {}", room_data.name);
+
+                                        planner_state.running_state = Some(RoomPlannerRunningData {
+                                            room_name: room_data.name,
+                                            planner_state: state,
+                                        });
                                     }
-                                }
-                                Err(err) => {
-                                    info!("Seeding failure! Room: {} - Error: {}", room_data.name, err);
+                                    Ok(PlanSeedResult::Complete(Some(plan))) => {
+                                        info!("Seeding complete and viable plan found. Room: {}", room_data.name);
+
+                                        if let Err(err) =
+                                            Self::attach_plan_state(&mut data.room_plan_data, request.room, RoomPlanState::Valid(plan))
+                                        {
+                                            info!("Failed to attach plan to room! Room: {} - Err: {}", room_data.name, err);
+                                        }
+                                    }
+                                    Ok(PlanSeedResult::Complete(None)) => {
+                                        info!("Seeding complete but no viable plan found. Room: {}", room_data.name);
+
+                                        if let Err(err) = Self::attach_plan_state(
+                                            &mut data.room_plan_data,
+                                            request.room,
+                                            RoomPlanState::Failed { time: game::time() },
+                                        ) {
+                                            info!("Failed to attach plan to room! Room: {} - Err: {}", room_data.name, err);
+                                        }
+                                    }
+                                    Err(err) => {
+                                        info!("Seeding failure! Room: {} - Error: {}", room_data.name, err);
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                let is_complete = if let Some(running_state) = planner_state.running_state.as_mut() {
-                    if let Some(room_entity) = data.mapping.get_room(&running_state.room_name) {
-                        if let Some(room_data) = data.room_data.get(room_entity) {
-                            info!("Planning for room: {}", room_data.name);
+                    let is_complete = if let Some(running_state) = planner_state.running_state.as_mut() {
+                        if let Some(room_entity) = data.mapping.get_room(&running_state.room_name) {
+                            if let Some(room_data) = data.room_data.get(room_entity) {
+                                info!("Planning for room: {}", room_data.name);
 
-                            match running_state.process(&room_data, max_cpu) {
-                                Ok(PlanEvaluationResult::Running()) => false,
-                                Ok(PlanEvaluationResult::Complete(Some(plan))) => {
-                                    info!("Planning complete and viable plan found. Room: {}", room_data.name);
+                                match running_state.process(&room_data, max_cpu) {
+                                    Ok(PlanEvaluationResult::Running()) => false,
+                                    Ok(PlanEvaluationResult::Complete(Some(plan))) => {
+                                        info!("Planning complete and viable plan found. Room: {}", room_data.name);
 
-                                    if let Err(err) =
-                                        Self::attach_plan_state(&mut data.room_plan_data, room_entity, RoomPlanState::Valid(plan))
-                                    {
-                                        info!("Failed to attach plan to room! Room: {} - Error: {}", room_data.name, err);
+                                        if let Err(err) =
+                                            Self::attach_plan_state(&mut data.room_plan_data, room_entity, RoomPlanState::Valid(plan))
+                                        {
+                                            info!("Failed to attach plan to room! Room: {} - Error: {}", room_data.name, err);
+                                        }
+
+                                        true
                                     }
+                                    Ok(PlanEvaluationResult::Complete(None)) => {
+                                        info!("Planning complete but no viable plan found. Room: {}", room_data.name);
 
-                                    true
-                                }
-                                Ok(PlanEvaluationResult::Complete(None)) => {
-                                    info!("Planning complete but no viable plan found. Room: {}", room_data.name);
+                                        if let Err(err) = Self::attach_plan_state(
+                                            &mut data.room_plan_data,
+                                            room_entity,
+                                            RoomPlanState::Failed { time: game::time() },
+                                        ) {
+                                            info!("Failed to attach plan to room! Room: {} - Error: {}", room_data.name, err);
+                                        }
 
-                                    if let Err(err) = Self::attach_plan_state(
-                                        &mut data.room_plan_data,
-                                        room_entity,
-                                        RoomPlanState::Failed { time: game::time() },
-                                    ) {
-                                        info!("Failed to attach plan to room! Room: {} - Error: {}", room_data.name, err);
+                                        true
                                     }
+                                    Err(err) => {
+                                        info!("Planning failure! Room: {} - Error: {}", room_data.name, err);
 
-                                    true
+                                        true
+                                    }
                                 }
-                                Err(err) => {
-                                    info!("Planning failure! Room: {} - Error: {}", room_data.name, err);
-
-                                    true
-                                }
+                            } else {
+                                true
                             }
                         } else {
                             true
                         }
                     } else {
                         true
+                    };
+
+                    if is_complete {
+                        planner_state.running_state = None;
                     }
-                } else {
-                    true
-                };
 
-                if is_complete {
-                    planner_state.running_state = None;
-                }
+                    if crate::features::construction::visualize() {
+                        if let Some(running_state) = &planner_state.running_state {
+                            if let Some(visualizer) = &mut data.visualizer {
+                                let room_visualizer = visualizer.get_room(running_state.room_name);
 
-                if crate::features::construction::visualize() {
-                    if let Some(running_state) = &planner_state.running_state {
-                        if let Some(visualizer) = &mut data.visualizer {
-                            let room_visualizer = visualizer.get_room(running_state.room_name);
+                                if crate::features::construction::visualize_planner() {
+                                    running_state.planner_state.visualize(room_visualizer);
+                                }
 
-                            if crate::features::construction::visualize_planner() {
-                                running_state.planner_state.visualize(room_visualizer);
-                            }
-
-                            if crate::features::construction::visualize_planner_best() {
-                                running_state.planner_state.visualize_best(room_visualizer);
+                                if crate::features::construction::visualize_planner_best() {
+                                    running_state.planner_state.visualize_best(room_visualizer);
+                                }
                             }
                         }
                     }
-                }
 
-                if let Ok(output_planner_data) = crate::serialize::encode_to_string(&planner_state) {
-                    data.memory_arbiter.set(MEMORY_SEGMENT, &output_planner_data);
+                    if let Ok(output_planner_data) = crate::serialize::encode_to_string(&planner_state) {
+                        data.memory_arbiter.set(MEMORY_SEGMENT, &output_planner_data);
+                    }
                 }
             }
         }

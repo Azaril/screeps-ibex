@@ -98,7 +98,7 @@ impl Idle {
                 &transfer_queue_data,
                 &[delivery_room_data],
                 &[delivery_room_data],
-                TransferPriorityFlags::HIGH,
+                TransferPriorityFlags::HIGH | TransferPriorityFlags::NONE,
                 TransferPriorityFlags::ALL,
                 10,
                 TransferType::Haul,
@@ -132,7 +132,7 @@ impl Idle {
                     &transfer_queue_data,
                     &[delivery_room_data],
                     &[delivery_room_data],
-                    TransferPriorityFlags::MEDIUM | TransferPriorityFlags::LOW,
+                    TransferPriorityFlags::MEDIUM | TransferPriorityFlags::LOW | TransferPriorityFlags::NONE,
                     TransferPriorityFlags::ALL,
                     10,
                     TransferType::Haul,
@@ -196,7 +196,7 @@ impl Idle {
 
 impl Harvest {
     fn tick(&mut self, state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
-        tick_opportunistic_repair(tick_context, Some(RepairPriority::Low));
+        tick_opportunistic_repair(tick_context, Some(RepairPriority::Medium));
 
         tick_harvest(tick_context, state_context.harvest_target, false, true, HarvestState::idle)
     }
