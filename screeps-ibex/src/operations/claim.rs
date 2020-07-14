@@ -60,8 +60,8 @@ impl ClaimOperation {
         }
 
         let can_claim = dynamic_visibility_data.owner().neutral()
-            && (dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().neutral());
-        let hostile = dynamic_visibility_data.owner().hostile() || dynamic_visibility_data.source_keeper();
+            && (dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().neutral()) && !dynamic_visibility_data.source_keeper();
+        let hostile = dynamic_visibility_data.owner().hostile();
 
         let can_plan = gather_system_data
             .room_plan_data
@@ -117,7 +117,7 @@ impl ClaimOperation {
             1 => Some(0.5),
             2 => Some(0.75),
             3 => Some(1.0),
-            4 => Some(0.75),
+            4 => Some(1.0),
             _ => Some(0.5),
         }?;
 
@@ -306,7 +306,7 @@ impl Operation for ClaimOperation {
             room_plan_data: system_data.room_plan_data,
         };
 
-        let home_rooms = gather_home_rooms(&gather_system_data, 3);
+        let home_rooms = gather_home_rooms(&gather_system_data, 1);
 
         let gathered_data = gather_candidate_rooms(&gather_system_data, &home_rooms, 4, Self::gather_candidate_room_data);
 
@@ -338,7 +338,7 @@ impl Operation for ClaimOperation {
         if gathered_data
             .unknown_rooms()
             .iter()
-            .any(|unknown_room| unknown_room.distance() <= 3)
+            .any(|unknown_room| unknown_room.distance() <= 4)
         {
             return Ok(OperationResult::Running);
         }
