@@ -391,6 +391,10 @@ impl RoomData {
             .flat_map(|s| s.all())
             .filter_map(|s| s.as_owned())
             .filter(|s| s.is_active())
+            .filter(|s| match s.structure_type() {
+                StructureType::KeeperLair => false,
+                _ => true,
+            })
             .any(|s| s.has_owner() && !s.my());
 
         RoomDynamicVisibilityData {

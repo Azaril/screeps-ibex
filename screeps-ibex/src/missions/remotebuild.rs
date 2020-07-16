@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 use lerp::*;
+use itertools::*;
 
 #[derive(ConvertSaveload)]
 pub struct RemoteBuildMission {
@@ -115,8 +116,13 @@ impl Mission for RemoteBuildMission {
         self.room_data
     }
 
-    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
-        format!("Remote Build - Builders: {}", self.builders.len())
+    fn describe_state(&self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
+        let home_room_names = self.home_room_datas.iter()
+            .filter_map(|e| system_data.room_data.get(*e))        
+            .map(|d| d.name.to_string())
+            .join("/");
+
+        format!("Remote Build - Builders: {} - Home rooms: {}", self.builders.len(), home_room_names)
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {

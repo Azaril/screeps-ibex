@@ -549,20 +549,35 @@ impl LocalSupplyMission {
             // Spawn harvesters
             //
 
+            let any_home_room_has_storage = self.home_room_datas.iter().filter_map(|home_room_entity| {
+                let home_room_data = system_data.room_data.get(*home_room_entity)?;
+                let home_room_structures = home_room_data.get_structures()?;
+                
+                Some(!home_room_structures.storages().is_empty())
+            })
+            .any(|has_storage| has_storage);
+
+            let min_home_room_distance = self.home_room_datas.iter().filter_map(|home_room_entity| {
+                let home_room_data = system_data.room_data.get(*home_room_entity)?;
+                let room_offset_distance = home_room_data.name - source_id.pos().room_name();
+                let room_manhattan_distance = room_offset_distance.0.abs() + room_offset_distance.1.abs();
+                
+                Some(room_manhattan_distance)
+            })
+            .min()
+            .unwrap_or(0);
+
             for home_room_entity in self.home_room_datas.iter() {
                 let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
                 let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
         
-                let home_room_structures = home_room_data.get_structures().ok_or("Expected home room structures")?;
-                let home_room_has_storage = !home_room_structures.storages().is_empty();
-
                 //TODO: Use find route plus cache.
                 let room_offset_distance = home_room_data.name - source_id.pos().room_name();
                 let room_manhattan_distance = room_offset_distance.0.abs() + room_offset_distance.1.abs();
 
                 if (source_containers.is_empty() && source_links.is_empty()) || 
                     (room_manhattan_distance == 0 && total_harvesting_creeps == 0) || 
-                    (room_manhattan_distance > 0 && !home_room_has_storage) {
+                    (room_manhattan_distance > 0 && !any_home_room_has_storage) {
 
                     let current_source_room_harvesters = creep_data.home_rooms_to_harvesters
                         .get(home_room_entity)
@@ -614,158 +629,156 @@ impl LocalSupplyMission {
                 }
             }
             
-            if !source_containers.is_empty() {
-                //TODO: Correctly compute time needed to spawn + get to source.
+            //TODO: Correctly compute time needed to spawn + get to source.
 
-                let alive_source_miners = source_container_miners
-                    .iter()
-                    .chain(source_link_miners.iter())
-                    .filter(|entity| {
-                        system_data.creep_spawning.get(***entity).is_some()
-                            || system_data
-                                .creep_owner
-                                .get(***entity)
-                                .and_then(|creep_owner| creep_owner.owner.resolve())
-                                .and_then(|creep| creep.ticks_to_live().ok())
-                                .map(|count| count > 50)
-                                .unwrap_or(false)
-                    })
-                    .map(|entity| **entity)
-                    .collect_vec();
+            let alive_source_miners = source_container_miners
+                .iter()
+                .chain(source_link_miners.iter())
+                .filter(|entity| {
+                    system_data.creep_spawning.get(***entity).is_some()
+                        || system_data
+                            .creep_owner
+                            .get(***entity)
+                            .and_then(|creep_owner| creep_owner.owner.resolve())
+                            .and_then(|creep| creep.ticks_to_live().ok())
+                            .map(|count| count > 50)
+                            .unwrap_or(false)
+                })
+                .map(|entity| **entity)
+                .collect_vec();
 
-                if !source_links.is_empty() {
-                    //
-                    // Spawn link miners.
-                    //
+            if !source_links.is_empty() {
+                //
+                // Spawn link miners.
+                //
 
-                    let mut available_containers_for_source_miners = source_containers.iter().filter(|container| {
-                        creep_data
-                            .containers_to_source_miners
-                            .get(container)
-                            .map(|miners| !miners.iter().any(|miner| alive_source_miners.contains(miner)))
-                            .unwrap_or(true)
-                    });
+                let mut available_containers_for_source_miners = source_containers.iter().filter(|container| {
+                    creep_data
+                        .containers_to_source_miners
+                        .get(container)
+                        .map(|miners| !miners.iter().any(|miner| alive_source_miners.contains(miner)))
+                        .unwrap_or(true)
+                });
 
-                    let available_links_for_source_miners = source_links.iter().filter(|link| {
-                        creep_data
-                            .links_to_source_miners
-                            .get(link)
-                            .map(|miners| !miners.iter().any(|miner| alive_source_miners.contains(miner)))
-                            .unwrap_or(true)
-                    });
+                let available_links_for_source_miners = source_links.iter().filter(|link| {
+                    creep_data
+                        .links_to_source_miners
+                        .get(link)
+                        .map(|miners| !miners.iter().any(|miner| alive_source_miners.contains(miner)))
+                        .unwrap_or(true)
+                });
 
-                    for link in available_links_for_source_miners {
-                        let token = system_data.spawn_queue.token();
+                for link in available_links_for_source_miners {
+                    let token = system_data.spawn_queue.token();
 
-                        for home_room_entity in self.home_room_datas.iter() {
-                            let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
-                            let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+                    for home_room_entity in self.home_room_datas.iter() {
+                        let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
+                        let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
 
-                            let energy_capacity = if likely_owned_room {
-                                SOURCE_ENERGY_CAPACITY
-                            } else {
-                                SOURCE_ENERGY_NEUTRAL_CAPACITY
-                            };
+                        let energy_capacity = if likely_owned_room {
+                            SOURCE_ENERGY_CAPACITY
+                        } else {
+                            SOURCE_ENERGY_NEUTRAL_CAPACITY
+                        };
 
-                            let energy_per_tick = (energy_capacity as f32) / (ENERGY_REGEN_TIME as f32);
-                            let work_parts_per_tick = (energy_per_tick / (HARVEST_POWER as f32)).ceil() as usize;
+                        let energy_per_tick = (energy_capacity as f32) / (ENERGY_REGEN_TIME as f32);
+                        let work_parts_per_tick = (energy_per_tick / (HARVEST_POWER as f32)).ceil() as usize;
 
-                            let body_definition = if link.pos().room_name() == home_room_data.name {
-                                SpawnBodyDefinition {
-                                    maximum_energy: home_room.energy_capacity_available(),
-                                    minimum_repeat: Some(1),
-                                    maximum_repeat: Some(work_parts_per_tick),
-                                    pre_body: &[Part::Move, Part::Carry],
-                                    repeat_body: &[Part::Work],
-                                    post_body: &[],
-                                }
-                            } else {
-                                SpawnBodyDefinition {
-                                    maximum_energy: home_room.energy_capacity_available(),
-                                    minimum_repeat: Some(1),
-                                    maximum_repeat: Some(work_parts_per_tick),
-                                    pre_body: &[Part::Carry],
-                                    repeat_body: &[Part::Move, Part::Work],
-                                    post_body: &[],
-                                }
-                            };
-
-                            if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                                //TODO: Should the container be removed from the available ones?
-                                let target_container = available_containers_for_source_miners.next();
-
-                                let spawn_request = SpawnRequest::new(
-                                    format!("Link Miner - Source: {}", source_id.id()),
-                                    &body,
-                                    SPAWN_PRIORITY_HIGH,
-                                    Some(token),
-                                    Self::create_handle_link_miner_spawn(mission_entity, *source_id, *link, target_container.cloned()),
-                                );
-
-                                system_data.spawn_queue.request(*home_room_entity, spawn_request);
+                        let body_definition = if link.pos().room_name() == home_room_data.name {
+                            SpawnBodyDefinition {
+                                maximum_energy: home_room.energy_capacity_available(),
+                                minimum_repeat: Some(1),
+                                maximum_repeat: Some(work_parts_per_tick),
+                                pre_body: &[Part::Move, Part::Carry],
+                                repeat_body: &[Part::Work],
+                                post_body: &[],
                             }
+                        } else {
+                            SpawnBodyDefinition {
+                                maximum_energy: home_room.energy_capacity_available(),
+                                minimum_repeat: Some(1),
+                                maximum_repeat: Some(work_parts_per_tick),
+                                pre_body: &[Part::Carry],
+                                repeat_body: &[Part::Move, Part::Work],
+                                post_body: &[],
+                            }
+                        };
+
+                        if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
+                            //TODO: Should the container be removed from the available ones?
+                            let target_container = available_containers_for_source_miners.next();
+
+                            let spawn_request = SpawnRequest::new(
+                                format!("Link Miner - Source: {}", source_id.id()),
+                                &body,
+                                SPAWN_PRIORITY_HIGH,
+                                Some(token),
+                                Self::create_handle_link_miner_spawn(mission_entity, *source_id, *link, target_container.cloned()),
+                            );
+
+                            system_data.spawn_queue.request(*home_room_entity, spawn_request);
                         }
                     }
-                } else if !source_containers.is_empty() {
-                    //
-                    // Spawn container miners.
-                    //
+                }
+            } else if !source_containers.is_empty() && (min_home_room_distance == 0 || any_home_room_has_storage) {
+                //
+                // Spawn container miners.
+                //
 
-                    let available_containers_for_source_miners = source_containers.iter().filter(|container| {
-                        creep_data
-                            .containers_to_source_miners
-                            .get(container)
-                            .map(|miners| !miners.iter().any(|miner| alive_source_miners.contains(miner)))
-                            .unwrap_or(true)
-                    });
+                let available_containers_for_source_miners = source_containers.iter().filter(|container| {
+                    creep_data
+                        .containers_to_source_miners
+                        .get(container)
+                        .map(|miners| !miners.iter().any(|miner| alive_source_miners.contains(miner)))
+                        .unwrap_or(true)
+                });
 
-                    for container in available_containers_for_source_miners {
-                        let token = system_data.spawn_queue.token();
+                for container in available_containers_for_source_miners {
+                    let token = system_data.spawn_queue.token();
 
-                        for home_room_entity in self.home_room_datas.iter() {
-                            let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
-                            let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+                    for home_room_entity in self.home_room_datas.iter() {
+                        let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
+                        let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
 
-                            let energy_capacity = if likely_owned_room {
-                                SOURCE_ENERGY_CAPACITY
-                            } else {
-                                SOURCE_ENERGY_NEUTRAL_CAPACITY
-                            };
+                        let energy_capacity = if likely_owned_room {
+                            SOURCE_ENERGY_CAPACITY
+                        } else {
+                            SOURCE_ENERGY_NEUTRAL_CAPACITY
+                        };
 
-                            let energy_per_tick = (energy_capacity as f32) / (ENERGY_REGEN_TIME as f32);
-                            let work_parts_per_tick = (energy_per_tick / (HARVEST_POWER as f32)).ceil() as usize;
+                        let energy_per_tick = (energy_capacity as f32) / (ENERGY_REGEN_TIME as f32);
+                        let work_parts_per_tick = (energy_per_tick / (HARVEST_POWER as f32)).ceil() as usize;
 
-                            let body_definition = if container.pos().room_name() == home_room_data.name {
-                                SpawnBodyDefinition {
-                                    maximum_energy: home_room.energy_capacity_available(),
-                                    minimum_repeat: Some(1),
-                                    maximum_repeat: Some(work_parts_per_tick),
-                                    pre_body: &[Part::Move],
-                                    repeat_body: &[Part::Work],
-                                    post_body: &[],
-                                }
-                            } else {
-                                SpawnBodyDefinition {
-                                    maximum_energy: home_room.energy_capacity_available(),
-                                    minimum_repeat: Some(1),
-                                    maximum_repeat: Some(work_parts_per_tick + 1),
-                                    pre_body: &[Part::Carry],
-                                    repeat_body: &[Part::Move, Part::Work],
-                                    post_body: &[],
-                                }
-                            };
-
-                            if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                                let spawn_request = SpawnRequest::new(
-                                    format!("Container Miner - Source: {}", source_id.id()),
-                                    &body,
-                                    SPAWN_PRIORITY_HIGH,
-                                    Some(token),
-                                    Self::create_handle_container_miner_spawn(mission_entity, StaticMineTarget::Source(*source_id), *container),
-                                );
-
-                                system_data.spawn_queue.request(*home_room_entity, spawn_request);
+                        let body_definition = if container.pos().room_name() == home_room_data.name {
+                            SpawnBodyDefinition {
+                                maximum_energy: home_room.energy_capacity_available(),
+                                minimum_repeat: Some(1),
+                                maximum_repeat: Some(work_parts_per_tick),
+                                pre_body: &[Part::Move],
+                                repeat_body: &[Part::Work],
+                                post_body: &[],
                             }
+                        } else {
+                            SpawnBodyDefinition {
+                                maximum_energy: home_room.energy_capacity_available(),
+                                minimum_repeat: Some(1),
+                                maximum_repeat: Some(work_parts_per_tick + 1),
+                                pre_body: &[Part::Carry],
+                                repeat_body: &[Part::Move, Part::Work],
+                                post_body: &[],
+                            }
+                        };
+
+                        if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
+                            let spawn_request = SpawnRequest::new(
+                                format!("Container Miner - Source: {}", source_id.id()),
+                                &body,
+                                SPAWN_PRIORITY_HIGH,
+                                Some(token),
+                                Self::create_handle_container_miner_spawn(mission_entity, StaticMineTarget::Source(*source_id), *container),
+                            );
+
+                            system_data.spawn_queue.request(*home_room_entity, spawn_request);
                         }
                     }
                 }
