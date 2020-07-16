@@ -10,6 +10,7 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+use itertools::*;
 
 #[derive(ConvertSaveload)]
 pub struct ClaimMission {
@@ -81,8 +82,13 @@ impl Mission for ClaimMission {
         self.room_data
     }
 
-    fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
-        format!("Claim - Claimers: {}", self.claimers.len())
+    fn describe_state(&self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
+        let home_room_names = self.home_room_datas.iter()
+            .filter_map(|e| system_data.room_data.get(*e))        
+            .map(|d| d.name.to_string())
+            .join("/");
+
+        format!("Claim - Claimers: {} - Home rooms: {}", self.claimers.len(), home_room_names)
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {

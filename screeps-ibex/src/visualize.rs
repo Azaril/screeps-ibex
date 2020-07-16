@@ -119,6 +119,10 @@ impl ListVisualizerState {
     pub fn new(pos: (f32, f32), pos_offset: (f32, f32), style: Option<TextStyle>) -> ListVisualizerState {
         ListVisualizerState { pos, pos_offset, style }
     }
+
+    pub fn get_default_style(&self) -> TextStyle {
+        self.style.clone().unwrap_or_default()
+    }
 }
 
 pub struct ListVisualizer<'a, 'b> {
@@ -135,5 +139,9 @@ impl<'a, 'b> ListVisualizer<'a, 'b> {
 
         state.pos.0 += state.pos_offset.0;
         state.pos.1 += state.pos_offset.1;
+    }
+
+    pub fn get_default_style(&self) -> TextStyle {
+        self.state.get_default_style()
     }
 }

@@ -7,11 +7,13 @@ use crate::room::gather::*;
 use crate::room::roomplansystem::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
+use crate::missions::missionsystem::*;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+use itertools::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ClaimOperation {
@@ -253,9 +255,26 @@ impl Operation for ClaimOperation {
         self.claim_missions.retain(|e| *e != child);
     }
 
-    fn describe(&mut self, _system_data: &mut OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
+    fn describe(&mut self, system_data: &mut OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
-            global_ui.operations().add_text("Claim".to_string(), None);
+            let mission_data = &*system_data.mission_data;
+            let room_data = &*system_data.room_data;
+
+            if self.claim_missions.is_empty() {
+                global_ui.operations().add_text("Claim".to_string(), None);
+            } else {
+                let rooms = self.claim_missions.iter().filter_map(|claim_mission| {
+                        mission_data.get(*claim_mission).as_mission_type_mut::<ClaimMission>().map(|m| m.get_room())
+                    }).filter_map(|owning_room| {
+                        room_data.get(owning_room)
+                    })
+                    .map(|room_data| room_data.name.to_string())
+                    .join(" / ");
+
+                let style = global_ui.operations().get_default_style().color("Green");
+
+                global_ui.operations().add_text(format!("Claim - Rooms: {}", rooms), Some(style));
+            }            
         })
     }
 
@@ -296,6 +315,12 @@ impl Operation for ClaimOperation {
         let available_rooms = maximum_rooms - active_rooms.min(maximum_rooms);
 
         if active_rooms >= maximum_rooms {
+            return Ok(OperationResult::Running);
+        }
+
+        const MAXIMUM_CLAIM_MISSIONS: usize = 1;
+
+        if self.claim_missions.len() >= MAXIMUM_CLAIM_MISSIONS {
             return Ok(OperationResult::Running);
         }
 
