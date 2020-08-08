@@ -385,6 +385,31 @@ impl Operation for ClaimOperation {
         scored_candidate_rooms.sort_by(|(_, score_a), (_, score_b)| score_a.partial_cmp(&score_b).unwrap().reverse());
 
         //
+        // Get home rooms
+        //
+
+        let home_room_data = (&*system_data.entities, &*system_data.room_data)
+            .join()
+            .filter_map(|(entity, room_data)| {
+                let dynamic_visibility_data = room_data.get_dynamic_visibility_data()?;
+
+                if !dynamic_visibility_data.owner().mine() {
+                    return None;
+                }
+
+                let structures = room_data.get_structures()?;
+
+                if structures.spawns().is_empty() {
+                    return None;
+                }
+
+                let max_level = structures.controllers().iter().map(|c| c.level()).max()?;
+
+                Some((entity, room_data.name, max_level))
+            })
+            .collect::<Vec<_>>();
+
+        //
         // Plan or claim best rooms up to the number of available rooms.
         //
 
@@ -416,22 +441,36 @@ impl Operation for ClaimOperation {
             //
 
             if !has_claim_mission {
-                info!("Starting claim for room. Room: {}", room_data.name);
+                //TODO: Use path distance instead of linear distance.
+                let home_room_entities: Vec<_> = home_room_data.iter().map(|(entity, home_room_name, max_level)| {
+                    let delta = room_data.name - *home_room_name;
+                    let range = delta.0.abs() as u32 + delta.1.abs() as u32;
 
-                let mission_entity = ClaimMission::build(
-                    system_data.updater.create_entity(system_data.entities),
-                    Some(runtime_data.entity),
-                    candidate_room.room_data_entity(),
-                    candidate_room.home_room_data_entities(),
-                )
-                .build();
+                    (entity, home_room_name, max_level, range)
+                })
+                    .filter(|(_, _, max_level, _)| **max_level >= 2)
+                    .filter(|(_, _, _, range)| *range <= 5)
+                    .map(|(entity, _, _, _)| *entity)
+                    .collect();
 
-                room_data.add_mission(mission_entity);
+                if !home_room_entities.is_empty() {
+                    info!("Starting claim for room. Room: {}", room_data.name);
 
-                self.claim_missions.push(mission_entity);
+                    let mission_entity = ClaimMission::build(
+                        system_data.updater.create_entity(system_data.entities),
+                        Some(runtime_data.entity),
+                        candidate_room.room_data_entity(),
+                        &home_room_entities,
+                    )
+                    .build();
 
-                if currently_owned_rooms + self.claim_missions.len() >= maximum_rooms as usize {
-                    break;
+                    room_data.add_mission(mission_entity);
+
+                    self.claim_missions.push(mission_entity);
+
+                    if currently_owned_rooms + self.claim_missions.len() >= maximum_rooms as usize {
+                        break;
+                    }
                 }
             }
         }
