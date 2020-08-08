@@ -56,10 +56,11 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
             return None;
         }
 
-        let target_room_entity = self.mapping.get_room(&to_room_name)?;
-        let target_room_data = self.room_data.get(target_room_entity)?;
+        let dynamic_visibility_data = self.mapping.get_room(&to_room_name)
+            .and_then(|target_room_entity| self.room_data.get(target_room_entity))
+            .and_then(|target_room_data| target_room_data.get_dynamic_visibility_data());
 
-        if let Some(dynamic_visibility_data) = target_room_data.get_dynamic_visibility_data() {
+        if let Some(dynamic_visibility_data) = dynamic_visibility_data {
             let is_hostile = dynamic_visibility_data.source_keeper()
                 || dynamic_visibility_data.owner().hostile()
                 || dynamic_visibility_data.reservation().hostile()
@@ -75,15 +76,15 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
             }
 
             if dynamic_visibility_data.owner().mine() || dynamic_visibility_data.owner().friendly() {
-                Some(1.0)
+                return Some(1.0)
             } else if dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().friendly() {
-                Some(1.0)
+                return Some(1.0)
             } else {
-                Some(2.0)
+                return Some(2.0)
             }
-        } else {
-            Some(2.0)
         }
+
+        Some(2.0)
     }
 }
 
