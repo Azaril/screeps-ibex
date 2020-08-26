@@ -9,6 +9,7 @@ use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use crate::transfer::transfersystem::*;
+use super::constants::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
@@ -197,9 +198,7 @@ impl Mission for RaidMission {
             }
         }
 
-        //TODO: Add better dynamic cpu adaptation.
-        let bucket = game::cpu::bucket();
-        let can_spawn = bucket > 9000 && crate::features::raid() && self.allow_spawning;        
+        let can_spawn = can_execute_cpu(CpuBar::LowPriority) && self.allow_spawning;        
 
         if !can_spawn {
             return Ok(MissionResult::Running);

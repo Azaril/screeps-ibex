@@ -7,6 +7,7 @@ use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use super::utility::*;
+use super::constants::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
@@ -161,8 +162,7 @@ impl Mission for DismantleMission {
         }
 
         //TODO: Add better dynamic cpu adaptation.
-        let bucket = game::cpu::bucket();
-        let can_spawn = bucket > 9500 && crate::features::dismantle() && self.allow_spawning;
+        let can_spawn = crate::features::dismantle() && self.allow_spawning && can_execute_cpu(CpuBar::LowPriority);
 
         if !can_spawn {
             return Ok(MissionResult::Running);

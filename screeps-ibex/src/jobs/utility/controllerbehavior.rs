@@ -68,13 +68,17 @@ where
         return None;
     }
 
-    if let Some(controller) = controller_id.resolve() {
-        match creep.upgrade_controller(&controller) {
-            ReturnCode::Ok => None,
-            _ => Some(next_state()),
+    if action_flags.consume(SimultaneousActionFlags::UPGRADE_CONTROLLER) {
+        if let Some(controller) = controller_id.resolve() {
+            match creep.upgrade_controller(&controller) {
+                ReturnCode::Ok => None,
+                _ => Some(next_state()),
+            }
+        } else {
+            Some(next_state())
         }
     } else {
-        Some(next_state())
+        None
     }
 }
 
