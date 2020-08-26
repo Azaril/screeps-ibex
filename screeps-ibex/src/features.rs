@@ -44,6 +44,7 @@ pub mod js {
                         reserve: true
                     },
                     raid: true,
+                    claim: true,
                     dismantle: true,
                     pathing: {
                         custom: true,
@@ -176,6 +177,10 @@ pub mod remote_mine {
 
 pub fn raid() -> bool {
     ::screeps::memory::root().path_bool("_features.raid")
+}
+
+pub fn claim() -> bool {
+    ::screeps::memory::root().path_bool("_features.claim")
 }
 
 pub fn dismantle() -> bool {

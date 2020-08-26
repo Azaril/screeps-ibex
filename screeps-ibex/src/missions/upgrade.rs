@@ -121,14 +121,15 @@ impl Mission for UpgradeMission {
 
         let controller_level = controllers.iter().map(|c| c.level()).max().ok_or("Expected controller level")?;
 
-        let desired_storage_energy = get_desired_storage_amount(ResourceType::Energy) / 2;
-
         let has_excess_energy = {
             if !structures.storages().is_empty() {
-                structures
+                let energy: u32 = structures
                     .storages()
                     .iter()
-                    .any(|container| container.store_of(ResourceType::Energy) >= desired_storage_energy)
+                    .map(|storage| storage.store_of(ResourceType::Energy))
+                    .sum();
+
+                energy >= get_desired_storage_amount(ResourceType::Energy) / 2
             } else if !structures.containers().is_empty() {
                 structures
                     .containers()
@@ -142,17 +143,19 @@ impl Mission for UpgradeMission {
         let are_hostile_creeps = !creeps.hostile().is_empty();
 
         //TODO: Need better calculation for maximum number of upgraders.
-        let max_upgraders = if game::cpu::bucket() < game::cpu::tick_limit() * 2 {
-            1
-        } else if are_hostile_creeps {
-            1
-        } else if controller_level >= 8 {
-            1
-        } else if has_excess_energy {
-            if controller_level <= 3 {
-                5
+        let max_upgraders = if can_execute_cpu(CpuBar::MediumPriority) {
+            if are_hostile_creeps {
+                1
+            } else if controller_level >= 8 {
+                1
+            } else if has_excess_energy {
+                if controller_level <= 3 {
+                    5
+                } else {
+                    3
+                }
             } else {
-                3
+                1
             }
         } else {
             1

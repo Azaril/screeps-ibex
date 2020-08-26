@@ -6,6 +6,7 @@ use crate::jobs::scout::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use super::constants::*;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -187,7 +188,7 @@ impl Mission for ScoutMission {
             ));
         }
 
-        let should_spawn = self.next_spawn.map(|t| game::time() >= t).unwrap_or(true) && game::cpu::bucket() > 5000;
+        let should_spawn = can_execute_cpu(CpuBar::LowPriority) && self.next_spawn.map(|t| game::time() >= t).unwrap_or(true);
 
         let token = system_data.spawn_queue.token();
 

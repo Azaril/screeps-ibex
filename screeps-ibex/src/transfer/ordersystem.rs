@@ -2,6 +2,7 @@ use super::utility::*;
 use crate::room::data::*;
 use crate::ui::*;
 use crate::visualize::*;
+use crate::missions::constants::*;
 use log::*;
 use screeps::game::market::*;
 use screeps::*;
@@ -327,7 +328,7 @@ impl<'a> System<'a> for OrderQueueSystem {
         let can_buy = crate::features::market::buy() && game::market::credits() > crate::features::market::credit_reserve();
         let can_sell = crate::features::market::sell();
 
-        let can_run = game::time() % 20 == 0 && game::cpu::bucket() >= game::cpu::tick_limit() && (can_buy || can_sell);
+        let can_run = game::time() % 20 == 0 && can_execute_cpu(CpuBar::HighPriority) && (can_buy || can_sell);
 
         if can_run {
             let mut order_cache = OrderCache::new();

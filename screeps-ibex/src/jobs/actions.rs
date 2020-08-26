@@ -26,6 +26,8 @@ bitflags! {
 
         const SIGN = 1u8 << 3;
 
+        const UPGRADE_CONTROLLER = 1u8 << 4;
+
         //TODO: Handle overlapping priorities.
     }
 }

@@ -6,6 +6,7 @@ use crate::jobs::reserve::*;
 use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use super::constants::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
@@ -144,9 +145,7 @@ impl Mission for ReserveMission {
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
         let controller_id = static_visibility_data.controller().ok_or("Expected a controller")?;
 
-        //TODO: Add better dynamic cpu adaptation.
-        let bucket = game::cpu::bucket();
-        let can_spawn = bucket > 9000 && crate::features::remote_mine::reserve() && self.allow_spawning;
+        let can_spawn = can_execute_cpu(CpuBar::MediumPriority) && crate::features::remote_mine::reserve() && self.allow_spawning;
 
         if !can_spawn {
             return Ok(MissionResult::Running);

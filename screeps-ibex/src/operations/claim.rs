@@ -314,7 +314,7 @@ impl Operation for ClaimOperation {
         let active_rooms = (currently_owned_rooms + self.claim_missions.len()) as u32;
         let available_rooms = maximum_rooms - active_rooms.min(maximum_rooms);
 
-        if active_rooms >= maximum_rooms {
+        if active_rooms >= maximum_rooms || !crate::features::claim() {
             return Ok(OperationResult::Running);
         }
 
