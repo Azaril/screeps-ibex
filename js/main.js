@@ -1,69 +1,58 @@
 "use strict";
-let stdweb_vars = null;
+
+function console_error(...args) {
+    console.log(...args);
+    Game.notify(args.join(' '));
+}
+
 let wasm_module = null;
-let wasm_instance = null;
-let initialized_stdweb_vars = false;
+let initialized = false;
 
 function wasm_reset() {
-    wasm_module = null;
-    stdweb_vars = null;
-    wasm_instance = null;
-    initialized_stdweb_vars = false;
+    //wasm_module = null;
+    initialized = false;
 
     module.exports.loop = wasm_initialize;
 }
 
 function wasm_initialize() {
-    if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
-        return;
-    }
+    try {    
+        if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
+            return;
+        }
 
-    if (stdweb_vars == null) {
-        stdweb_vars = wasm_create_stdweb_vars();
+        if (wasm_module == null) {
+            console.log("Reset!");
 
-        return;
-    }
+            wasm_module = require("screeps-starter-rust");
+        }
 
-    if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
-        return;
-    }
+        if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
+            return;
+        }    
 
-    if (wasm_module == null) {
-        const wasm_bytes = wasm_fetch_module_bytes();
-        console.log("Reset! Code length: " + wasm_bytes.length);
+        if (!initialized) {
+            wasm_module.initialize_instance();
+
+            wasm_module.setup();
+
+            initialized = true;
+        }
         
         if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
             return;
         }
 
-        wasm_module = new WebAssembly.Module(wasm_bytes);
+        module.exports.tick();
+    } catch(error) {
+        console_error("Caught exception:", error);
+        if (error.stack) {
+            console_error("Stack trace:", error.stack);
+        }
+        console_error("Resetting VM next tick.");
+        
+        module.exports.loop = wasm_reset;
     }
-
-    if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
-        return;
-    }
-
-    if (wasm_instance == null) {
-        wasm_instance = new WebAssembly.Instance(wasm_module, stdweb_vars.imports);
-    }
-    
-    if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
-        return;
-    }
-
-    if (!initialized_stdweb_vars) {
-        stdweb_vars.initialize(wasm_instance);
-
-        initialized_stdweb_vars = true;
-
-        return;
-    }
-    
-    if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
-        return;
-    }
-
-    module.exports.loop();
 }
 
 module.exports.loop = wasm_initialize;

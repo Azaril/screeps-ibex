@@ -12,23 +12,22 @@ impl log::Log for JsLog {
     fn enabled(&self, _: &log::Metadata) -> bool {
         true
     }
-    fn log(&self, record: &log::Record) {
-        let message = format!("{}", record.args());
-        js! {
-            console.log(@{message});
-        }
+
+    fn log(&self, record: &log::Record<'_>) {
+        console::log_1(&JsString::from(format!("{}", record.args())));
     }
+
     fn flush(&self) {}
 }
+
 impl log::Log for JsNotify {
     fn enabled(&self, _: &log::Metadata) -> bool {
         true
     }
     fn log(&self, record: &log::Record) {
         let message = format!("{}", record.args());
-        js! {
-            Game.notify(@{message});
-        }
+
+        Game::notify(&JsString::from(format!("{}", record.args())), None);
     }
     fn flush(&self) {}
 }
@@ -42,7 +41,7 @@ pub fn setup_logging(verbosity: log::LevelFilter) {
             fern::Dispatch::new()
                 .level(log::LevelFilter::Warn)
                 .format(|out, message, _record| {
-                    let time = screeps::game::time();
+                    let time = unsafe { screeps::game::time() };
                     out.finish(format_args!("[{}] {}", time, message))
                 })
                 .chain(Box::new(JsNotify) as Box<dyn log::Log>),

@@ -35,35 +35,13 @@ mod visualize;
 use log::*;
 use stdweb::*;
 
-fn main() {
-    stdweb::initialize();
-
+#[wasm_bindgen]
+pub fn setup() {
     logging::setup_logging(logging::Info);
-
-    js! {
-        var main_loop = @{main_loop};
-
-        module.exports.loop = function() {
-            // Provide actual error traces.
-            try {
-                main_loop();
-            } catch (error) {
-                // console_error function provided by 'screeps-game-api'
-                console_error("caught exception:", error);
-                if (error.stack) {
-                    console_error("stack trace:", error.stack);
-                }
-                console_error("resetting VM next tick.");
-                // reset the VM since we don't know if everything was cleaned up and don't
-                // want an inconsistent state.
-                module.exports.loop = wasm_reset;
-                //TODO: Halting here seems to cause more problems than it solves.
-            }
-        }
-    }
 }
 
-fn main_loop() {
+#[wasm_bindgen]
+fn tick() {
     #[cfg(feature = "profile")]
     {
         screeps_timing::start_trace(Box::new(|| (screeps::game::cpu::get_used() * 1000.0) as u64));

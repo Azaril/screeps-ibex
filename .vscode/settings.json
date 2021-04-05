@@ -3,4 +3,8 @@
     "rust-analyzer.cargo.target": "wasm32-unknown-unknown",
     "rust-analyzer.checkOnSave.allFeatures": false,
     "rust-analyzer.checkOnSave.allTargets": false,
+    "rust-analyzer.procMacro.enable": true,
+    "rust-analyzer.diagnostics.disabled": [
+        "missing-unsafe"
+    ]
 }

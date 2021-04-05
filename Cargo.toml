@@ -6,9 +6,8 @@ members = [
     "screeps-timing",
     "screeps-timing-annotate",
     "screeps-foreman",
-    "screeps-plus-stats",
 ]
-exclude = ["screeps-foreman-bench"]
+exclude = ["screeps-foreman-bench", "screeps-plus-stats"]
 
 [profile.release]
 panic = "abort"
@@ -17,7 +16,8 @@ lto = true
 codegen-units = 1
 
 [patch.crates-io]
-screeps-game-api = { git = "https://github.com/Azaril/screeps-game-api" }
+#screeps-game-api = { git = "https://github.com/Azaril/screeps-game-api", branch = "bindgen" }
+screeps-game-api = { path = "../screeps-game-api" }
 
 [patch.'https://github.com/Azaril/screeps-cache']
 screeps-cache = { path = "screeps-cache" }
