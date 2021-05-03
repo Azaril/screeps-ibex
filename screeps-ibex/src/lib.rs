@@ -32,8 +32,8 @@ mod transfer;
 mod ui;
 mod visualize;
 
+use wasm_bindgen::prelude::*;
 use log::*;
-use stdweb::*;
 
 #[wasm_bindgen]
 pub fn setup() {
@@ -41,7 +41,7 @@ pub fn setup() {
 }
 
 #[wasm_bindgen]
-fn tick() {
+pub fn tick() {
     #[cfg(feature = "profile")]
     {
         screeps_timing::start_trace(Box::new(|| (screeps::game::cpu::get_used() * 1000.0) as u64));

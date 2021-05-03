@@ -31,12 +31,12 @@ use specs::{
     prelude::*,
     saveload::{DeserializeComponents, SerializeComponents},
 };
-use std::collections::HashSet;
+use std::{collections::HashSet, error::Error};
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-fn serialize_world(world: &World, segments: &[u32]) {
+fn serialize_world(world: &World, segments: &[u8]) {
     struct Serialize<'a> {
-        segments: &'a [u32],
+        segments: &'a [u8],
     }
 
     #[derive(SystemData)]
@@ -86,25 +86,26 @@ fn serialize_world(world: &World, segments: &[u32]) {
 
             let mut segments = self.segments.iter();
 
-            for chunk in encoded_data.as_bytes().chunks(1024 * 50) {
+            for chunk in encoded_data.as_bytes().chunks(MEMORY_SEGMENT_SIZE_LIMIT as usize) {
                 if let Some(segment) = segments.next() {
                     //
                     // NOTE: This relies on not using multi-byte characters for encoding. (This is valid from base64 encoding.)
                     //
                     let chunk_str = unsafe { std::str::from_utf8_unchecked(chunk) };
 
-                    data.memory_arbiter.set(*segment, chunk_str);
+                    //TODO: wiarchbe: Fix conversion to owned string...
+                    data.memory_arbiter.set(*segment, chunk_str.to_owned());
                 } else {
                     error!(
                         "Not enough segments available to store all state. Segment count: {} - Needed segments: {}",
                         self.segments.len(),
-                        encoded_data.len() as f32 / (1024.0 * 50.0)
+                        encoded_data.len() as f32 / MEMORY_SEGMENT_SIZE_LIMIT as f32
                     );
                 }
             }
 
             for segment in segments {
-                data.memory_arbiter.set(*segment, &"");
+                data.memory_arbiter.set(*segment, "".to_owned());
             }
         }
     }
@@ -115,9 +116,9 @@ fn serialize_world(world: &World, segments: &[u32]) {
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-fn deserialize_world(world: &World, segments: &[u32]) {
+fn deserialize_world(world: &World, segments: &[u8]) {
     struct Deserialize<'a> {
-        segments: &'a [u32],
+        segments: &'a [u8],
     }
 
     #[derive(SystemData)]
@@ -195,7 +196,7 @@ struct GameEnvironment<'a, 'b, 'c, 'd> {
 
 static mut ENVIRONMENT: Option<GameEnvironment> = None;
 
-const COST_MATRIX_SYSTEM_SEGMENT: u32 = 55;
+const COST_MATRIX_SYSTEM_SEGMENT: u8 = 55;
 
 fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
     info!("Initializing game environment");
@@ -282,7 +283,7 @@ pub fn tick() {
 
     let current_time = game::time();
 
-    const COMPONENT_SEGMENTS: &[u32] = &[50, 51, 52];
+    const COMPONENT_SEGMENTS: &[u8] = &[50, 51, 52];
 
     if crate::features::reset::reset_environment()
         || unsafe { ENVIRONMENT.as_ref() }
@@ -297,8 +298,10 @@ pub fn tick() {
     if crate::features::reset::reset_memory() {
         info!("Resetting memory");
 
-        for segment in COMPONENT_SEGMENTS.iter() {
-            raw_memory::set_segment(*segment, "");
+        let segments = RawMemory::segments();
+
+        for segment_index in COMPONENT_SEGMENTS.iter() {
+            segments.set(*segment_index, "".into());
         }
     }
 
@@ -359,16 +362,19 @@ pub fn tick() {
     // Prepare globals
     //
 
-    let username = game::rooms::values()
-        .iter()
+    let username = game::rooms()
+        .values()
         .filter_map(|room| {
             if let Some(controller) = room.controller() {
                 if controller.my() {
-                    return controller.owner_name();
+                    if let Some(owner) = controller.owner() {
+                        return Some(owner.username());
+                    }
                 }
             }
             None
         })
+        .map(|username| String::from(username))
         .next();
 
     if let Some(username) = username {
@@ -398,22 +404,23 @@ pub fn tick() {
     serialize_world(&world, COMPONENT_SEGMENTS);
 }
 
-fn cleanup_memory() -> Result<(), Box<dyn (::std::error::Error)>> {
-    let alive_creeps: HashSet<String> = screeps::game::creeps::keys().into_iter().collect();
+fn cleanup_memory() -> Result<(), Box<dyn (Error)>> {
+    let _alive_creeps: HashSet<String> = game::creeps().keys().collect();
 
-    let screeps_memory = match screeps::memory::root().dict("creeps")? {
-        Some(v) => v,
-        None => {
-            return Ok(());
-        }
-    };
+    //TODO: wiarchbe: Re-enable.
+    // let screeps_memory = match screeps::memory::root().dict("creeps")? {
+    //     Some(v) => v,
+    //     None => {
+    //         return Ok(());
+    //     }
+    // };
 
-    for mem_name in screeps_memory.keys() {
-        if !alive_creeps.contains(&mem_name) {
-            debug!("cleaning up creep memory of dead creep {}", mem_name);
-            screeps_memory.del(&mem_name);
-        }
-    }
+    // for mem_name in screeps_memory.keys() {
+    //     if !alive_creeps.contains(&mem_name) {
+    //         debug!("cleaning up creep memory of dead creep {}", mem_name);
+    //         screeps_memory.del(&mem_name);
+    //     }
+    // }
 
     Ok(())
 }

@@ -56,7 +56,7 @@ impl Mission for ConstructionMission {
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
-        let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
+        let room = game::rooms().get(room_data.name).ok_or("Expected room")?;
 
         let request_plan = if let Some(room_plan_data) = system_data.room_plan_data.get(self.room_data) {
             if let Some(plan) = room_plan_data.plan() {

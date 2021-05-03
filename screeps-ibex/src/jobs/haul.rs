@@ -6,7 +6,7 @@ use super::utility::movebehavior::*;
 use super::utility::repair::*;
 use super::utility::repairbehavior::*;
 use super::utility::waitbehavior::*;
-use crate::serialize::*;
+use crate::{serialize::*, store::HasExpensiveStore};
 use crate::transfer::transfersystem::*;
 use itertools::*;
 use screeps::*;
@@ -179,12 +179,8 @@ impl Pickup {
                 .filter_map(|e| tick_context.system_data.room_data.get(*e))
                 .collect_vec();
 
-            let capacity = creep.store_capacity(None);
-            let store_types = creep.store_types();
-            let used_capacity = store_types.iter().map(|r| creep.store_used_capacity(Some(*r))).sum::<u32>();
             //TODO: Fix this when double resource counting bug is fixed.
-            //let used_capacity = creep.store_used_capacity(None);
-            let free_capacity = capacity - used_capacity;
+            let free_capacity = creep.store().expensive_free_capacity();
 
             let mut available_capacity = TransferCapacity::Finite(free_capacity);
 

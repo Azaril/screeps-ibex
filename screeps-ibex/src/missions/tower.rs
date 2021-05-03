@@ -81,7 +81,8 @@ impl Mission for TowerMission {
                 };
 
                 for tower in towers {
-                    let tower_free_capacity = tower.store_free_capacity(Some(ResourceType::Energy));
+                    let tower_store = tower.store();
+                    let tower_free_capacity = tower_store.get_free_capacity(Some(ResourceType::Energy));
                     if tower_free_capacity > 0 {
                         let transfer_request = TransferDepositRequest::new(
                             TransferTarget::Tower(tower.remote_id()),
@@ -113,7 +114,7 @@ impl Mission for TowerMission {
         //TODO: Include power creeps?        
         let weakest_dangerous_hostile_creep = creeps.hostile()
             .iter()
-            .filter(|c| c.body().iter().any(|p| match p.part {
+            .filter(|c| c.body().iter().any(|p| match p.part() {
                 Part::Attack | Part::RangedAttack | Part::Work => true,
                 _ => false,
             }))
@@ -151,7 +152,7 @@ impl Mission for TowerMission {
             }
 
             if let Some(structure) = repair_structure.as_ref() {
-                tower.repair(structure);
+                tower.repair(structure.as_structure());
                 continue;
             }
         }

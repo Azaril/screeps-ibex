@@ -157,7 +157,7 @@ impl UISystem {
 
         room_ui.jobs().add_text("Jobs".to_string(), None);
 
-        if let Some(room) = game::rooms::get(room_name) {
+        if let Some(room) = game::rooms().get(room_name) {
             room_ui.spawn_queue().add_text(
                 format!(
                     "Spawn Queue - Energy {} / {}",

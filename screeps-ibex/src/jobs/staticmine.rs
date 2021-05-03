@@ -79,7 +79,7 @@ impl Harvest {
     fn tick(&mut self, state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
         if let Some(container) = state_context.container_target.resolve() {
             let creep = tick_context.runtime_data.owner;
-            let work_parts = creep.body().iter().filter(|p| p.part == Part::Work).count() as u32;
+            let work_parts = creep.body().iter().filter(|p| p.part() == Part::Work).count() as u32;
 
             let mining_power = match state_context.mine_target {
                 StaticMineTarget::Source(_) => HARVEST_POWER,
@@ -88,7 +88,7 @@ impl Harvest {
 
             let resources_harvested = work_parts * mining_power;
 
-            if resources_harvested as i32 > container.store_free_capacity(None) {
+            if resources_harvested as i32 > container.store().get_free_capacity(None) {
                 return Some(StaticMineState::wait(1));
             }
         }

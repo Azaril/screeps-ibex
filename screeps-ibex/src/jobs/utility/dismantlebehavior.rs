@@ -1,52 +1,41 @@
 use super::dismantle::*;
-use crate::findnearest::*;
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
 use crate::room::data::*;
 use crate::structureidentifier::*;
 use screeps::*;
 use screeps_rover::*;
+use crate::findnearest::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn get_new_dismantle_state<F, R>(creep: &Creep, dismantle_room: &RoomData, ignore_storage: bool, state_map: F) -> Option<R>
+pub fn get_new_dismantle_state<F, R>(creep: &Creep, dismantle_room: &RoomData, cost_matrix_system: &mut CostMatrixSystem, ignore_storage: bool, state_map: F) -> Option<R>
 where
     F: Fn(RemoteStructureIdentifier) -> R,
 {
+    let creep_store = creep.store();
+
     //TODO: Add bypass for energy check.
-    if creep.store_capacity(Some(ResourceType::Energy)) == 0 || creep.store_free_capacity(Some(ResourceType::Energy)) > 0 {
+    if creep_store.get_capacity(Some(ResourceType::Energy)) == 0 || creep_store.get_free_capacity(Some(ResourceType::Energy)) > 0 {
         //TODO: This requires visibility and could fail?
         let structures = dismantle_room.get_structures()?;
         let static_visibility_data = dismantle_room.get_static_visibility_data()?;
         let sources = static_visibility_data.sources();
 
-        //TODO: Don't collect here when range check is fixed.
-        let dismantle_structures = structures
+        let best_structure = structures
             .all()
             .into_iter()
             .filter(|s| !ignore_for_dismantle(*s, sources))
             .filter(|s| can_dismantle(*s))
             .filter(|s| ignore_storage || has_empty_storage(*s))
-            .collect::<Vec<_>>();
-
-        let creep_pos = creep.pos();
-
-        //TODO: Fix this hack which is a workaround for range of 1 pathfinding returning empty path.
-        let mut best_structure: Option<Structure> = dismantle_structures
-            .iter()
-            .find(|s| s.pos().get_range_to(&creep_pos) <= 1)
-            .map(|&s| s.clone());
-
-        if best_structure.is_none() {
-            best_structure = dismantle_structures
-                .into_iter()
-                .cloned()
-                //TODO: Remove clone when find_nearest is fixed.
-                .find_nearest_from(creep_pos, PathFinderHelpers::same_room_ignore_creeps_range_1);
-        }
+            //TODO: wiarchbe: Remove clone and make find_nearest work.
+            //.map(|s| *s)
+            .cloned()
+            //TODO: wiarchbe: Sanity check cost matrix options.
+            .find_nearest_from(creep.pos(), 1, cost_matrix_system, &CostMatrixOptions::default());
 
         if let Some(structure) = best_structure {
             return Some(state_map(RemoteStructureIdentifier::new(&structure)));
-        }
+        }            
     }
 
     None
@@ -62,8 +51,9 @@ where
     F: Fn() -> R,
 {
     let creep = tick_context.runtime_data.owner;
+    let creep_store = creep.store();
 
-    if creep.store_capacity(Some(ResourceType::Energy)) > 0 && creep.store_free_capacity(Some(ResourceType::Energy)) == 0 {
+    if creep_store.get_capacity(Some(ResourceType::Energy)) > 0 && creep_store.get_free_capacity(Some(ResourceType::Energy)) == 0 {
         return Some(next_state());
     }
 
@@ -91,7 +81,7 @@ where
         return Some(next_state());
     }
 
-    if !creep_pos.in_range_to(&target_position, 1) {
+    if !creep_pos.in_range_to(target_position, 1) {
         if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
@@ -105,10 +95,14 @@ where
     }
 
     if let Some(structure) = dismantle_target.as_ref() {
-        if tick_context.action_flags.consume(SimultaneousActionFlags::DISMANTLE) {
-            match creep.dismantle(structure) {
-                ReturnCode::Ok => None,
-                _ => Some(next_state()),
+        if let Some(target) = structure.as_dismantleable() {
+            if tick_context.action_flags.consume(SimultaneousActionFlags::DISMANTLE) {
+                match creep.dismantle(target) {
+                    ReturnCode::Ok => None,
+                    _ => Some(next_state()),
+                }
+            } else {
+                None
             }
         } else {
             None

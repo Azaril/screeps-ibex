@@ -26,19 +26,19 @@ pub fn tick_move_to_room<F, R>(
 where
     F: Fn() -> R,
 {
-    let room_half_width = ROOM_WIDTH as u32 / 2;
-    let room_half_height = ROOM_HEIGHT as u32 / 2;
+    let room_half_width = ROOM_WIDTH / 2;
+    let room_half_height = ROOM_HEIGHT / 2;
     let range = room_half_width.max(room_half_height) - 2;
 
-    let target_pos = RoomPosition::new(room_half_width, room_half_height, room_name);
+    let target_pos = Position::new(room_half_width, room_half_height, room_name);
 
-    tick_move_to_position(tick_context, target_pos, range, room_options, next_state)
+    tick_move_to_position(tick_context, target_pos, range as u32, room_options, next_state)
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn tick_move_to_position<F, R>(
     tick_context: &mut JobTickContext,
-    position: RoomPosition,
+    position: Position,
     range: u32,
     room_options: Option<RoomOptions>,
     next_state: F,
@@ -48,7 +48,7 @@ where
 {
     let creep = tick_context.runtime_data.owner;
 
-    if creep.pos().in_range_to(&position, range) {
+    if creep.pos().in_range_to(position, range) {
         return Some(next_state());
     }
 

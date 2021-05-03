@@ -18,10 +18,10 @@ impl<'a> System<'a> for UpdateRoomDataSystem {
     type SystemData = UpdateRoomDataSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        let rooms = game::rooms::hashmap();
+        let rooms = game::rooms();
 
         for (_entity, room_data) in (&data.entities, &mut data.room_data).join() {
-            if let Some(room) = rooms.get(&room_data.name) {
+            if let Some(room) = rooms.get(room_data.name) {
                 room_data.update(&room);
             }
         }

@@ -1,10 +1,10 @@
-use crate::findnearest::*;
+use crate::{findnearest::*, store::HasExpensiveStore};
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
 use crate::jobs::jobsystem::*;
 use crate::room::data::*;
 use crate::transfer::transfersystem::*;
-use itertools::*;
+use itertools::Itertools;
 use screeps::*;
 use std::collections::HashMap;
 
@@ -22,12 +22,8 @@ pub fn get_new_pickup_state_fill_resource<F, R>(
 where
     F: Fn(TransferWithdrawTicket) -> R,
 {
-    let capacity = creep.store_capacity(None);
-    let store_types = creep.store_types();
-    let used_capacity = store_types.iter().map(|r| creep.store_used_capacity(Some(*r))).sum::<u32>();
     //TODO: Fix this when double resource counting bug is fixed.
-    //let used_capacity = creep.store_used_capacity(None);
-    let free_capacity = capacity - used_capacity;
+    let free_capacity = creep.store().expensive_free_capacity();
 
     if free_capacity > 0 {
         let mut desired_resources = HashMap::new();
@@ -73,10 +69,12 @@ where
     TF: Fn(&TransferTarget) -> bool,
     F: Fn(Vec<TransferDepositTicket>) -> R,
 {
-    let available_resources: HashMap<ResourceType, u32> = creep
+    let creep_store = creep.store();
+
+    let available_resources: HashMap<ResourceType, u32> = creep_store
         .store_types()
         .into_iter()
-        .map(|r| (r, creep.store_used_capacity(Some(r))))
+        .map(|r| (r, creep_store.get_used_capacity(Some(r))))
         .collect();
     let available_capacity = TransferCapacity::Finite(available_resources.values().sum());
 
@@ -231,7 +229,7 @@ pub fn get_additional_deliveries<TF>(
                         if target_filter(target) {
                             let target_pos = target.pos();
 
-                            deliveries.iter().any(|d| d.target().pos().get_range_to(&target_pos) <= additional_delivery_range)
+                            deliveries.iter().any(|d| d.target().pos().get_range_to(target_pos) <= additional_delivery_range)
                         } else {
                             false
                         }
@@ -270,7 +268,7 @@ pub fn get_additional_deliveries<TF>(
                         while let Some(nearest_index) = destinations
                             .iter()
                             .enumerate()
-                            .min_by_key(|(_, delivery)| delivery.target().pos().get_range_to(&start_pos))
+                            .min_by_key(|(_, delivery)| delivery.target().pos().get_range_to(start_pos))
                             .map(|(index, _)| index)
                         {
                             deliveries.push(destinations.remove(nearest_index));
@@ -306,11 +304,8 @@ where
     F: Fn(TransferWithdrawTicket, Vec<TransferDepositTicket>) -> R,
     TF: Fn(&TransferTarget) -> bool + Copy,
 {
-    let capacity = creep.store_capacity(None);
-    let store_types = creep.store_types();
-    let used_capacity = store_types.iter().map(|r| creep.store_used_capacity(Some(*r))).sum::<u32>();
-    //let used_capacity = creep.store_used_capacity(None);
-    let available_capacity = capacity - used_capacity;
+    //TODO: Fix this when double resource counting bug is fixed.
+    let free_capacity = creep.store().expensive_free_capacity();
 
     get_new_pickup_and_delivery_state(
         creep,
@@ -321,7 +316,7 @@ where
         allowed_secondary_priorities,
         allowed_secondary_range,
         transfer_type,
-        TransferCapacity::Finite(available_capacity),
+        TransferCapacity::Finite(free_capacity),
         transfer_queue,
         target_filter,
         state_map,
@@ -342,7 +337,7 @@ where
     let action_flags = &mut tick_context.action_flags;
     let pos = ticket.target().pos();
 
-    if !creep.pos().is_near_to(&pos) {
+    if !creep.pos().is_near_to(pos) {
         if action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
@@ -389,6 +384,7 @@ where
     //
 
     //TODO: Factor this in to common code.
+    //TODO: wiarchbe: Perhaps don't limit this?
     if game::time() % 5 == 0 {
         let creep = tick_context.runtime_data.owner;
 
@@ -397,12 +393,8 @@ where
             room_data: &*tick_context.system_data.room_data,
         };
 
-        let capacity = creep.store_capacity(None);
-        let store_types = creep.store_types();
-        let used_capacity = store_types.iter().map(|r| creep.store_used_capacity(Some(*r))).sum::<u32>();
         //TODO: Fix this when double resource counting bug is fixed.
-        //let used_capacity = creep.store_used_capacity(None);
-        let free_capacity = capacity - used_capacity;
+        let free_capacity = creep.store().expensive_free_capacity();
 
         let mut available_capacity = TransferCapacity::Finite(free_capacity);
 
@@ -456,7 +448,7 @@ where
         if ticket.target().is_valid() && ticket.get_next_deposit().is_some() {
             let pos = ticket.target().pos();
 
-            if !creep_pos.is_near_to(&pos) {
+            if !creep_pos.is_near_to(pos) {
                 if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
                     tick_context
                         .runtime_data
@@ -504,7 +496,7 @@ pub fn visualize_delivery(describe_data: &mut JobDescribeData, tickets: &Vec<Tra
     visualize_delivery_from(describe_data, tickets, pos);
 }
 
-pub fn visualize_delivery_from(describe_data: &mut JobDescribeData, tickets: &Vec<TransferDepositTicket>, from: RoomPosition) {
+pub fn visualize_delivery_from(describe_data: &mut JobDescribeData, tickets: &Vec<TransferDepositTicket>, from: Position) {
     let mut last_pos = from;
 
     for ticket in tickets.iter() {
@@ -535,7 +527,7 @@ where
 
         let pos = target.pos();
 
-        if !creep_pos.is_near_to(&pos) {
+        if !creep_pos.is_near_to(pos) {
             if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
                 tick_context
                     .runtime_data
@@ -547,11 +539,13 @@ where
             return None;
         }
 
-        let store_types = creep.store_types();
+        let creep_store = creep.store();
+
+        let store_types = creep_store.store_types();
 
         if let Some(resource) = store_types.first() {
             if tick_context.action_flags.consume(SimultaneousActionFlags::TRANSFER) {
-                let amount = creep.store_used_capacity(Some(*resource));
+                let amount = creep_store.get_used_capacity(Some(*resource));
 
                 if target.creep_transfer_resource_amount(creep, *resource, amount) == ReturnCode::Ok {
                     if store_types.len() == 1 {

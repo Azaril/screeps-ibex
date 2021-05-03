@@ -42,10 +42,14 @@ impl<'a> System<'a> for WaitForSpawnSystem {
     fn run(&mut self, (entities, mut creep_spawning, mut creep_owner): Self::SystemData) {
         let mut ready_creeps = Vec::new();
 
+        let creeps = game::creeps();
+
         for (entity, spawning) in (&entities, &creep_spawning).join() {
-            if let Some(creep) = game::creeps::get(&spawning.name) {
+            if let Some(creep) = creeps.get(spawning.name.clone()) {
                 if !creep.spawning() {
-                    ready_creeps.push((entity, creep.id()));
+                    if let Some(id) = creep.try_id() {
+                        ready_creeps.push((entity, id));
+                    }
                 }
             } else {
                 warn!("Deleting entity for spawning creep as it no longer exists. Name: {}", spawning.name);

@@ -82,13 +82,13 @@ impl DismantleMission {
         })
     }
 
-    pub fn requires_dismantling(structures: &[Structure], sources: &[RemoteObjectId<Source>]) -> bool {
+    pub fn requires_dismantling(structures: &[StructureObject], sources: &[RemoteObjectId<Source>]) -> bool {
         structures
             .iter()
             .filter(|s| s.structure_type() != StructureType::Road)
-            .filter(|s| !ignore_for_dismantle(*s, sources))
-            .filter(|s| can_dismantle(*s))
-            .filter(|s| has_empty_storage(*s))
+            .filter(|s| !ignore_for_dismantle(s, sources))
+            .filter(|s| can_dismantle(s))
+            .filter(|s| has_empty_storage(s))
             .next()
             .is_some()
     }
@@ -175,7 +175,7 @@ impl Mission for DismantleMission {
 
             for home_room_data_entity in self.home_room_datas.iter() {
                 let home_room_data = system_data.room_data.get(*home_room_data_entity).ok_or("Expected home room data")?;
-                let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+                let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
 
                 let body_definition = if home_room_data.get_structures().map(|s| !s.storages().is_empty()).unwrap_or(false) {
                     crate::creep::SpawnBodyDefinition {

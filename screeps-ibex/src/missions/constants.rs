@@ -16,5 +16,5 @@ pub enum CpuBar {
 }
 
 pub fn can_execute_cpu(bar: CpuBar) -> bool {
-    game::cpu::bucket() >= (game::cpu::tick_limit() * bar as u32)
+    game::cpu::bucket() as f64 >= (game::cpu::tick_limit() * (bar as u32 as f64))
 }

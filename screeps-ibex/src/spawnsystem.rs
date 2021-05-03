@@ -115,7 +115,7 @@ impl SpawnQueueSystem {
 
     fn process_room_spawns(data: &SpawnQueueSystemData, room_entity: Entity, requests: &Vec<SpawnRequest>, spawned_tokens: &mut HashSet<SpawnToken>) -> Result<(), String> {
         let room_data = data.room_data.get(room_entity).ok_or("Expected room data")?;
-        let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
+        let room = game::rooms().get(room_data.name).ok_or("Expected room")?;
         let structures = room_data.get_structures().ok_or("Expected structures")?;
 
         let mut spawns = structures.spawns().iter().map(|s| s).collect::<Vec<_>>();
@@ -127,7 +127,7 @@ impl SpawnQueueSystem {
 
         for request in requests {
             if request.token.map(|t| !spawned_tokens.contains(&t)).unwrap_or(true) {
-                if let Some(pos) = spawns.iter().position(|spawn| spawn.is_active() && !spawn.is_spawning()) {
+                if let Some(pos) = spawns.iter().position(|spawn| spawn.is_active() && spawn.spawning().is_none()) {
                     let spawn = &spawns[pos];
                     
                     let body_cost: u32 = request.body.iter().map(|p| p.cost()).sum();

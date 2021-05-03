@@ -313,9 +313,10 @@ impl Cleanup {
 
             let has_resources = structures.iter().any(|structure| {
                 if let Some(store) = structure.as_has_store() {
+                    let store = store.store();
                     let store_types = store.store_types();
 
-                    return store_types.iter().any(|t| store.store_used_capacity(Some(*t)) > 0);
+                    return store_types.iter().any(|t| store.get_used_capacity(Some(*t)) > 0);
                 }
 
                 false

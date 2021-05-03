@@ -4,8 +4,8 @@ use specs::prelude::*;
 use std::collections::HashSet;
 
 pub struct MemoryArbiter {
-    active: Option<HashSet<u32>>,
-    requests: HashSet<u32>,
+    active: Option<HashSet<u8>>,
+    requests: HashSet<u8>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -17,26 +17,26 @@ impl MemoryArbiter {
         }
     }
 
-    pub fn request(&mut self, segment: u32) {
+    pub fn request(&mut self, segment: u8) {
         self.requests.insert(segment);
     }
 
-    pub fn is_active(&mut self, active: u32) -> bool {
+    pub fn is_active(&mut self, active: u8) -> bool {
         self.active
-            .get_or_insert_with(|| raw_memory::get_active_segments().into_iter().collect())
+            .get_or_insert_with(|| RawMemory::segments().keys().collect())
             .contains(&active)
     }
 
-    pub fn get(&self, segment: u32) -> Option<String> {
-        raw_memory::get_segment(segment)
+    pub fn get(&self, segment: u8) -> Option<String> {
+        RawMemory::segments().get(segment).into()
     }
 
-    pub fn set(&mut self, segment: u32, data: &str) {
-        if data.len() > 50 * 1024 {
+    pub fn set(&mut self, segment: u8, data: String) {
+        if data.len() > MEMORY_SEGMENT_SIZE_LIMIT as usize {
             error!("Memory segment too large - Segment: {} - Data: {}", segment, data);
         }
 
-        raw_memory::set_segment(segment, data);
+        RawMemory::segments().set(segment, data);
     }
 
     pub fn clear(&mut self) {
@@ -59,7 +59,7 @@ impl<'a> System<'a> for MemoryArbiterSystem {
     fn run(&mut self, mut data: Self::SystemData) {
         let segments: Vec<_> = data.memory_arbiter.requests.iter().cloned().collect();
 
-        raw_memory::set_active_segments(&segments);
+        RawMemory::set_active_segments(&segments);
 
         data.memory_arbiter.clear();
     }

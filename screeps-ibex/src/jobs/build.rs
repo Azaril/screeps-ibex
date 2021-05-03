@@ -37,7 +37,7 @@ machine!(
 
     impl {
         * => fn describe(&self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
-            let room = { describe_data.owner.room() };
+            let room = describe_data.owner.room();
 
             if let Some(room) = room {
                 let name = describe_data.owner.name();

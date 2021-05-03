@@ -103,7 +103,7 @@ impl<'a> PlannerRoomDataSource for RoomDataPlannerDataSource<'a> {
             let room_terrain = game::map::get_room_terrain(self.room_name);
             let terrain_data = room_terrain.get_raw_buffer();
 
-            self.terrain = Some(FastRoomTerrain::new(terrain_data))
+            self.terrain = Some(FastRoomTerrain::new(terrain_data.to_vec()))
         }
 
         self.terrain.as_ref().unwrap()
@@ -225,7 +225,7 @@ impl RoomPlanSystem {
         let bucket = game::cpu::bucket();
         let tick_limit = game::cpu::tick_limit();
 
-        if bucket >= tick_limit * 2 {
+        if bucket as f64 >= tick_limit * 2.0 {
             let current_cpu = game::cpu::get_used();
             let remaining_cpu = tick_limit as f64 - current_cpu;
             let max_cpu = (remaining_cpu * 0.25).min(tick_limit as f64 / 2.0);
@@ -260,7 +260,7 @@ impl<'a> System<'a> for RoomPlanSystem {
     type SystemData = RoomPlanSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        const MEMORY_SEGMENT: u32 = 60;
+        const MEMORY_SEGMENT: u8 = 60;
 
         data.memory_arbiter.request(MEMORY_SEGMENT);
 
@@ -411,7 +411,7 @@ impl<'a> System<'a> for RoomPlanSystem {
                     }
 
                     if let Ok(output_planner_data) = crate::serialize::encode_to_string(&planner_state) {
-                        data.memory_arbiter.set(MEMORY_SEGMENT, &output_planner_data);
+                        data.memory_arbiter.set(MEMORY_SEGMENT, output_planner_data);
                     }
                 }
             }

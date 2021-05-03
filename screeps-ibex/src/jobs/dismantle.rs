@@ -74,7 +74,7 @@ impl Idle {
 
         if in_dismantle_room {
             if let Some(state) =
-                get_new_dismantle_state(creep, &dismantle_room_data, state_context.ignore_storage, DismantleState::dismantle)
+                get_new_dismantle_state(creep, &dismantle_room_data, tick_context.runtime_data.cost_matrix, state_context.ignore_storage, DismantleState::dismantle)
             {
                 return Some(state);
             }
@@ -96,7 +96,7 @@ impl Idle {
             DismantleState::delivery,
         )
         .or_else(|| {
-            if creep.store_used_capacity(None) == 0 {
+            if creep.store().get_used_capacity(None) == 0 {
                 get_new_move_to_room_state(creep, dismantle_room_data.name, DismantleState::move_to_room)
             } else {
                 None
@@ -119,6 +119,7 @@ impl FinishedDismantle {
         get_new_dismantle_state(
             tick_context.runtime_data.owner,
             &dismantle_room_data,
+            tick_context.runtime_data.cost_matrix,
             state_context.ignore_storage,
             DismantleState::dismantle,
         )

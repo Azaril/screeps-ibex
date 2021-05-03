@@ -10,15 +10,16 @@ pub fn get_new_build_state<F, R>(creep: &Creep, build_room: &RoomData, state_map
 where
     F: Fn(RemoteObjectId<ConstructionSite>) -> R,
 {
-    if creep.store_used_capacity(Some(ResourceType::Energy)) > 0 {
+    if creep.store().get_used_capacity(Some(ResourceType::Energy)) > 0 {
         let current_rcl = build_room.get_structures().iter().flat_map(|s| s.controllers()).map(|c| c.level()).max().unwrap_or(0);
 
         //TODO: This requires visibility and could fail?
-        if let Some(construction_site) = build_room
+        let id = build_room
             .get_construction_sites()
-            .and_then(|construction_sites| select_construction_site(&creep, &construction_sites, current_rcl))
-        {
-            return Some(state_map(construction_site.remote_id()));
+            .and_then(|construction_sites| select_construction_site(&creep, &construction_sites, current_rcl).and_then(|c| c.try_remote_id()));
+
+        if let Some(id) = id {
+            return Some(state_map(id));
         }
     }
 
@@ -54,7 +55,7 @@ where
         return Some(next_state());
     }
 
-    if !creep_pos.in_range_to(&target_position, 3) {
+    if !creep_pos.in_range_to(target_position, 3) {
         if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data

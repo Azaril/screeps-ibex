@@ -2,7 +2,7 @@ use screeps::*;
 use screeps_foreman::planner::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn select_construction_site(creep: &Creep, construction_sites: &[ConstructionSite], current_rcl: u32) -> Option<ConstructionSite> {
+pub fn select_construction_site<'a>(creep: &Creep, construction_sites: &'a [ConstructionSite], current_rcl: u8) -> Option<&'a ConstructionSite> {
     let creep_pos = creep.pos();
 
     construction_sites
@@ -13,7 +13,7 @@ pub fn select_construction_site(creep: &Creep, construction_sites: &[Constructio
             a_priority
                 .cmp(b_priority)
                 .then_with(|| a.progress().cmp(&b.progress()))
-                .then_with(|| creep_pos.get_range_to(&a.pos()).cmp(&creep_pos.get_range_to(&b.pos())).reverse())
+                .then_with(|| creep_pos.get_range_to(a.pos()).cmp(&creep_pos.get_range_to(b.pos())).reverse())
         })
-        .map(|(s, _)| s.clone())
+        .map(|(s, _)| s)
 }

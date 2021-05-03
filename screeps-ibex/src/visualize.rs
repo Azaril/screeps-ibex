@@ -1,7 +1,6 @@
 use screeps::*;
 use specs::prelude::*;
 use std::collections::HashMap;
-use stdweb::*;
 
 pub struct RoomVisualizer {
     visuals: Vec<Visual>,
@@ -38,15 +37,7 @@ impl RoomVisualizer {
     }
 
     fn draw_multi_fast(room_name: Option<RoomName>, visuals: &[Visual]) {
-        if !visuals.is_empty() {
-            if let Some(data) = serde_json::to_string(visuals).ok() {
-                js! {
-                    let visuals = JSON.parse(@{data});
-
-                    visuals.forEach(function(v) { console.addVisual(@{room_name}, v); });
-                };
-            }
-        }
+        RoomVisual::new(room_name).draw_multi(visuals);
     }
 }
 

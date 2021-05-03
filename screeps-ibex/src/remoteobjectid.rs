@@ -3,7 +3,6 @@ use serde::de::*;
 use serde::ser::*;
 use std::hash::*;
 
-#[derive(Eq)]
 pub struct RemoteObjectId<T> {
     position: Position,
     id: ObjectId<T>,
@@ -16,7 +15,7 @@ impl<T> RemoteObjectId<T> {
 
     pub fn new(obj: &T) -> RemoteObjectId<T>
     where
-        T: RoomObjectProperties + HasId,
+        T: HasId + HasPosition,
     {
         RemoteObjectId {
             id: obj.id(),
@@ -34,7 +33,7 @@ impl<T> RemoteObjectId<T> {
 
     pub fn resolve(self) -> Option<T>
     where
-        T: HasId + SizedRoomObject,
+        T: Resolvable
     {
         self.id.resolve()
     }
@@ -105,6 +104,8 @@ impl<T> Clone for RemoteObjectId<T> {
     }
 }
 
+impl<T> Eq for RemoteObjectId<T> {}
+
 impl<T> PartialEq for RemoteObjectId<T> {
     fn eq(&self, o: &RemoteObjectId<T>) -> bool {
         self.id.eq(&o.id) && self.position.eq(&o.position)
@@ -120,16 +121,32 @@ impl<T> Hash for RemoteObjectId<T> {
 
 pub trait HasRemoteObjectId<T>
 where
-    T: Sized + HasId,
+    T: Sized + HasTypedId<T> + HasPosition,
 {
     fn remote_id(&self) -> RemoteObjectId<T>;
 }
 
-impl<T: Sized + HasId> HasRemoteObjectId<T> for T {
+impl<T> HasRemoteObjectId<T> for T where T: Sized + HasTypedId<T> + HasPosition {
     fn remote_id(&self) -> RemoteObjectId<Self> {
         RemoteObjectId {
             id: self.id(),
             position: self.pos(),
         }
+    }
+}
+
+pub trait MaybeHasRemoteObjectId<T>
+where
+    T: Sized + MaybeHasTypedId<T> + HasPosition,
+{
+    fn try_remote_id(&self) -> Option<RemoteObjectId<T>>;
+}
+
+impl<T> MaybeHasRemoteObjectId<T> for T where T: Sized + MaybeHasTypedId<T> + HasPosition {
+    fn try_remote_id(&self) -> Option<RemoteObjectId<Self>> {
+        Some(RemoteObjectId {
+            id: self.try_id()?,
+            position: self.pos(),
+        })
     }
 }

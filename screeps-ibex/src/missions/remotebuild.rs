@@ -170,7 +170,7 @@ impl Mission for RemoteBuildMission {
 
             for home_room_entity in self.home_room_datas.iter() {
                 let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
-                let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+                let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
 
                 let body_definition = SpawnBodyDefinition {
                     maximum_energy: home_room.energy_capacity_available(),

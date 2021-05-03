@@ -1,10 +1,11 @@
-use super::utility::*;
+//TODO: wiarchbe: Re-enable order system when market support.
+//use super::utility::*;
 use crate::room::data::*;
 use crate::ui::*;
 use crate::visualize::*;
 use crate::missions::constants::*;
-use log::*;
-use screeps::game::market::*;
+//use log::*;
+//use screeps::game::market::*;
 use screeps::*;
 use specs::prelude::{Entities, LazyUpdate, Read, ResourceId, System, SystemData, World, Write, WriteStorage};
 use std::collections::HashMap;
@@ -124,6 +125,8 @@ pub struct OrderQueueSystem;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl OrderQueueSystem {
+    //TODO: wiarchbe: Re-enable order system when market support.
+    /*
     fn sell_passive_order(my_orders: &HashMap<String, MyOrder>, params: PassiveOrderParameters) {
         if params.amount < params.minimum_amount {
             //TODO: Handle order in progress, cancel etc.?
@@ -134,10 +137,10 @@ impl OrderQueueSystem {
 
         let mut current_orders = my_orders
             .values()
-            .filter(|o| o.order_type == OrderType::Sell && o.resource_type == market_resource_type)
-            .filter(|o| o.remaining_amount > 0)
+            .filter(|o| o.order_type() == OrderType::Sell && o.resource_type() == market_resource_type)
+            .filter(|o| o.remaining_amount() > 0)
             .filter(|o| {
-                o.room_name
+                o.room_name()
                     .map(|order_room_name| order_room_name == params.room_name)
                     .unwrap_or(false)
             });
@@ -172,7 +175,7 @@ impl OrderQueueSystem {
         }
     }
 
-    fn buy_passive_order(my_orders: &HashMap<String, MyOrder>, params: PassiveOrderParameters) {
+    fn buy_passive_order(my_orders: &JsHashMap<String, MyOrder>, params: PassiveOrderParameters) {
         if params.amount < params.minimum_amount {
             //TODO: Handle order in progress, cancel etc.?
             return;
@@ -182,10 +185,10 @@ impl OrderQueueSystem {
 
         let mut current_orders = my_orders
             .values()
-            .filter(|o| o.order_type == OrderType::Buy && o.resource_type == market_resource_type)
-            .filter(|o| o.remaining_amount > 0)
+            .filter(|o| o.order_type() == OrderType::Buy && o.resource_type() == market_resource_type)
+            .filter(|o| o.remaining_amount() > 0)
             .filter(|o| {
-                o.room_name
+                o.room_name()
                     .map(|order_room_name| order_room_name == params.room_name)
                     .unwrap_or(false)
             });
@@ -240,17 +243,17 @@ impl OrderQueueSystem {
             .flat_map(move |params| {
                 order_cache.get_orders(MarketResourceType::Resource(params.resource))
                     .iter()
-                    .filter(|o| o.order_type == OrderType::Buy)
-                    .filter(|o| o.remaining_amount > params.minimum_sale_amount && o.price >= params.minimum_price)
+                    .filter(|o| o.order_type() == OrderType::Buy)
+                    .filter(|o| o.remaining_amount() > params.minimum_sale_amount && o.price() >= params.minimum_price)
                     .filter(|o| !my_orders.contains_key(&o.id))
                     .filter_map(|o| {
-                        o.room_name.and_then(|order_room_name| {
-                            let transfer_amount = o.remaining_amount.min(params.amount);
+                        o.room_name().and_then(|order_room_name| {
+                            let transfer_amount = o.remaining_amount().min(params.amount);
 
                             if transfer_amount > 0 {
                                 let transfer_cost_per_unit = calc_transaction_cost_fractional(source_room_name, order_room_name);
                                 let energy_transfer_cost_per_unit = transfer_cost_per_unit * params.energy_cost;
-                                let effective_price_per_unit = o.price - energy_transfer_cost_per_unit;
+                                let effective_price_per_unit = o.price() - energy_transfer_cost_per_unit;
 
                                 if effective_price_per_unit >= params.minimum_price {
                                     let available_transfer_energy = params.maximum_transfer_energy.min(params.available_transfer_energy);
@@ -262,7 +265,7 @@ impl OrderQueueSystem {
                                     if transferable_units >= params.minimum_sale_amount {
                                         let transfer_cost = (energy_transfer_cost_per_unit * transferable_units as f64).ceil();
 
-                                        return Some((o.id.to_owned(), o.price, params.resource, transfer_amount, transfer_cost, effective_price_per_unit));
+                                        return Some((o.id().to_owned(), o.price(), params.resource, transfer_amount, transfer_cost, effective_price_per_unit));
                                     }
                                 }
                             }
@@ -296,8 +299,11 @@ impl OrderQueueSystem {
             })
             .unwrap_or(false)
     }
+    */
 }
 
+//TODO: wiarchbe: Re-enable order system when market support.
+/*
 struct OrderCache {
     orders: HashMap<MarketResourceType, Vec<Order>>,
 }
@@ -313,6 +319,7 @@ impl OrderCache {
             .or_insert_with(|| game::market::get_all_orders(Some(resource_type)))
     }
 }
+*/
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for OrderQueueSystem {
@@ -331,25 +338,28 @@ impl<'a> System<'a> for OrderQueueSystem {
         let can_run = game::time() % 20 == 0 && can_execute_cpu(CpuBar::HighPriority) && (can_buy || can_sell);
 
         if can_run {
-            let mut order_cache = OrderCache::new();
+            //TODO: wiarchbe: Re-enable order system when market support.
+            //let mut order_cache = OrderCache::new();
 
             let my_orders = game::market::orders();
 
-            let complete_orders = my_orders.values().filter(|order| order.remaining_amount == 0);
+            let complete_orders = my_orders.values().filter(|order| order.remaining_amount() == 0);
 
             for order in complete_orders {
-                game::market::cancel_order(&order.id);
+                game::market::cancel_order(&order.id());
             }
 
+            //TODO: wiarchbe: Re-enable order system when market support.
+            /*
             if !data.order_queue.rooms.is_empty() {
                 let mut resource_history = HashMap::new();
 
                 let can_trust_history = |history: &OrderHistoryRecord| { 
-                    history.transactions > 100 && history.volume > 1000 && (history.stddev_price <= history.avg_price * 0.5)
+                    history.transactions() > 100 && history.volume() > 1000 && (history.stddev_price() <= history.avg_price() * 0.5)
                 };
 
                 for (room_name, room_data) in &data.order_queue.rooms {
-                    if let Some(terminal) = game::rooms::get(*room_name).and_then(|r| r.terminal()) {
+                    if let Some(terminal) = game::rooms().get(*room_name).and_then(|r| r.terminal()) {
                         if can_sell {
                             for entry in &room_data.outgoing_passive_requests {
                                 //
@@ -374,7 +384,7 @@ impl<'a> System<'a> for OrderQueueSystem {
                                                 resource: entry.resource,
                                                 amount: entry.amount,
                                                 minimum_amount: 2000,
-                                                price: latest_resource_history.avg_price + (latest_resource_history.stddev_price * 0.1),
+                                                price: latest_resource_history.avg_price() + (latest_resource_history.stddev_price() * 0.1),
                                             },
                                         );
                                     }
@@ -408,11 +418,11 @@ impl<'a> System<'a> for OrderQueueSystem {
                                                     resource: entry.resource,
                                                     amount: entry.amount,
                                                     minimum_sale_amount: 2000,
-                                                    minimum_price: latest_resource_history.avg_price
-                                                        - (latest_resource_history.stddev_price * 0.2),
+                                                    minimum_price: latest_resource_history.avg_price()
+                                                        - (latest_resource_history.stddev_price() * 0.2),
                                                     available_transfer_energy: entry.available_transfer_energy,
                                                     maximum_transfer_energy: OrderQueue::maximum_transfer_energy(),
-                                                    energy_cost: latest_energy_history.avg_price - (latest_energy_history.stddev_price * 0.2),
+                                                    energy_cost: latest_energy_history.avg_price() - (latest_energy_history.stddev_price() * 0.2),
                                                 });
                                             }
                                         }
@@ -449,7 +459,7 @@ impl<'a> System<'a> for OrderQueueSystem {
                                                 resource: entry.resource,
                                                 amount: entry.amount,
                                                 minimum_amount: 2000,
-                                                price: latest_resource_history.avg_price + (latest_resource_history.stddev_price * 0.1),
+                                                price: latest_resource_history.avg_price() + (latest_resource_history.stddev_price() * 0.1),
                                             },
                                         );
                                     }
@@ -459,6 +469,7 @@ impl<'a> System<'a> for OrderQueueSystem {
                     }
                 }
             }
+            */
         }
 
         data.order_queue.clear();

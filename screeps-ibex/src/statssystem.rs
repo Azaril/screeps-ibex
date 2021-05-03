@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 #[derive(Serialize)]
 pub struct CpuStats {
-    bucket: u32,
+    bucket: i32,
     limit: u32,
     used: f64,
 }
@@ -37,6 +37,7 @@ fn to_structure_name(val: StructureType) -> &'static str {
         StructureType::Nuker => "nuker",
         StructureType::Factory => "factory",
         StructureType::InvaderCore => "invaderCore",
+        _ => "unknown",
     }
 }
 
@@ -126,6 +127,8 @@ fn to_resource_name(val: ResourceType) -> &'static str {
         ResourceType::Spirit => "spirit",
         ResourceType::Emanation => "emanation",
         ResourceType::Essence => "essence",
+        //TODO: wiarchbe: Add score resource types.
+        _ => "unknown"
     }
 }
 
@@ -180,7 +183,7 @@ pub struct RoomStats {
 
     controller_progress: u32,
     controller_progress_total: u32,
-    controller_level: u32,
+    controller_level: u8,
 }
 
 #[derive(Serialize)]
@@ -239,7 +242,7 @@ impl StatsSystem {
                     .unwrap_or(false)
             })
             .filter_map(|(_, room_data)| {
-                if let Some(room) = game::rooms::get(room_data.name) {
+                if let Some(room) = game::rooms().get(room_data.name) {
                     let controller = room.controller()?;
 
                     let structures = room_data.get_structures()?;
@@ -249,10 +252,11 @@ impl StatsSystem {
                         let structure_type = structure.structure_type();
 
                         if let Some(store) = structure.as_has_store() {
+                            let store = store.store();
                             let structure_storage = storage.entry(structure_type).or_insert_with(StorageResource::default);
 
                             for resource_type in store.store_types() {
-                                let amount = store.store_of(resource_type);
+                                let amount = store.get_used_capacity(Some(resource_type));
 
                                 structure_storage
                                     .entry(resource_type)
@@ -268,8 +272,8 @@ impl StatsSystem {
 
                         storage,
 
-                        controller_progress: controller.progress().unwrap_or(0),
-                        controller_progress_total: controller.progress_total().unwrap_or(0),
+                        controller_progress: controller.progress(),
+                        controller_progress_total: controller.progress_total(),
                         controller_level: controller.level(),
                     };
 
@@ -300,7 +304,7 @@ impl StatsSystem {
     fn get_shards_stats(data: &StatsSystemData) -> HashMap<String, ShardStats> {
         let mut shards = HashMap::new();
 
-        shards.insert(game::shards::name(), Self::get_shard_stats(data));
+        shards.insert(game::shard::name(), Self::get_shard_stats(data));
 
         shards
     }
@@ -326,7 +330,7 @@ impl<'a> System<'a> for StatsSystem {
             };
 
             if let Ok(stats_data) = serde_json::to_string(&stats) {
-                data.memory_arbiter.set(99, &stats_data);
+                data.memory_arbiter.set(99, stats_data);
             }
         }
     }

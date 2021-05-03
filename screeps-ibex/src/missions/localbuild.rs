@@ -176,7 +176,7 @@ impl Mission for LocalBuildMission {
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data_storage = &*system_data.room_data;
         let room_data = room_data_storage.get(self.room_data).ok_or("Expected room data")?;
-        let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
+        let room = game::rooms().get(room_data.name).ok_or("Expected room")?;
         let structure_data = room_data.get_structures().ok_or("Expected structure data")?;
 
         let desired_storage_energy = get_desired_storage_amount(ResourceType::Energy) / 4;
@@ -186,12 +186,12 @@ impl Mission for LocalBuildMission {
                 structure_data
                     .storages()
                     .iter()
-                    .any(|container| container.store_of(ResourceType::Energy) >= desired_storage_energy)
+                    .any(|container| container.store().get_used_capacity(Some(ResourceType::Energy)) >= desired_storage_energy)
             } else {
                 structure_data
                     .containers()
                     .iter()
-                    .any(|container| container.store_of(ResourceType::Energy) as f32 / CONTAINER_CAPACITY as f32 > 0.50)
+                    .any(|container| container.store().get_used_capacity(Some(ResourceType::Energy)) as f32 / CONTAINER_CAPACITY as f32 > 0.50)
             }
         };
 

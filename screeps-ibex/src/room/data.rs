@@ -329,7 +329,7 @@ impl RoomData {
         let mineral_ids = room.find(find::MINERALS).into_iter().map(|s| s.remote_id()).collect();
 
         let terrain = room.get_terrain();
-        let terrain = FastRoomTerrain::new(terrain.get_raw_buffer());
+        let terrain = FastRoomTerrain::new(terrain.get_raw_buffer().to_vec());
         let terrain_statistics = RoomTerrainStatistics::from_terrain(&terrain);
 
         RoomStaticVisibilityData {
@@ -359,15 +359,15 @@ impl RoomData {
     fn create_dynamic_visibility_data(&self, room: &Room) -> RoomDynamicVisibilityData {
         let controller = room.controller();
 
-        let controller_owner_name = controller.as_ref().and_then(|c| c.owner_name());
+        let controller_owner_name = controller.as_ref().and_then(|c| c.owner()).map(|o| o.username());
         let controller_owner_disposition = Self::name_option_to_disposition(controller_owner_name);
 
-        let controller_reservation_name = controller.as_ref().and_then(|c| c.reservation()).map(|r| r.username);
+        let controller_reservation_name = controller.as_ref().and_then(|c| c.reservation()).map(|r| r.username());
         let controller_reservation_disposition = Self::name_option_to_disposition(controller_reservation_name);
 
         let sign = controller.as_ref().and_then(|c| c.sign()).map(|s| RoomSign {
-            user: Self::name_to_disposition(s.username),
-            message: s.text,
+            user: Self::name_to_disposition(s.username()),
+            message: s.text(),
         });
 
         let structures = self.get_structures();
@@ -376,12 +376,13 @@ impl RoomData {
         let source_keeper = structures.as_ref().map(|s| !s.keeper_lairs().is_empty()).unwrap_or(false);
 
         //TODO: Include power creeps?
+        //TODO: Include scout/move creeps? They can stomp construction sites?
         let hostile_creeps = self
             .get_creeps()
             .iter()
             .flat_map(|c| c.hostile())
             .flat_map(|c| c.body())
-            .any(|p| match p.part {
+            .any(|p| match p.part() {
                 Part::Attack | Part::RangedAttack | Part::Work => true,
                 _ => false,
             });
@@ -389,13 +390,12 @@ impl RoomData {
         let hostile_structures = structures
             .iter()
             .flat_map(|s| s.all())
-            .filter_map(|s| s.as_owned())
-            .filter(|s| s.is_active())
+            .filter(|s| s.as_owned().map(|o| !o.my()).unwrap_or(false))
             .filter(|s| match s.structure_type() {
                 StructureType::KeeperLair => false,
                 _ => true,
-            })
-            .any(|s| s.has_owner() && !s.my());
+            })            
+            .any(|s| s.is_active());
 
         RoomDynamicVisibilityData {
             update_tick: game::time(),
@@ -422,7 +422,7 @@ impl RoomData {
         self.room_structure_data
             .maybe_access(
                 |s| game::time() != s.last_updated,
-                move || game::rooms::get(name).as_ref().map(|room| RoomStructureData::new(room)),
+                move || game::rooms().get(name).as_ref().map(|room| RoomStructureData::new(room)),
             )
             .take()
     }
@@ -433,7 +433,7 @@ impl RoomData {
         self.room_construction_sites_data
             .maybe_access(
                 |s| game::time() != s.last_updated,
-                move || game::rooms::get(name).as_ref().map(|room| ConstructionSiteData::new(room)),
+                move || game::rooms().get(name).as_ref().map(|room| ConstructionSiteData::new(room)),
             )
             .take()
             .map(|s| Ref::map(s, |o| &o.construction_sites))
@@ -445,7 +445,7 @@ impl RoomData {
         self.room_creep_data
             .maybe_access(
                 |s| game::time() != s.last_updated,
-                move || game::rooms::get(name).as_ref().map(|room| CreepData::new(room)),
+                move || game::rooms().get(name).as_ref().map(|room| CreepData::new(room)),
             )
             .take()
     }
@@ -454,7 +454,7 @@ impl RoomData {
 #[derive(Clone)]
 pub struct RoomStructureData {
     last_updated: u32,
-    structures: Vec<Structure>,
+    structures: Vec<StructureObject>,
 
     containers: Vec<StructureContainer>,
     controllers: Vec<StructureController>,
@@ -507,27 +507,27 @@ impl RoomStructureData {
 
         for structure in structures.iter() {
             match structure {
-                Structure::Container(data) => containers.push(data.clone()),
-                Structure::Controller(data) => controllers.push(data.clone()),
-                Structure::Extension(data) => extensions.push(data.clone()),
-                Structure::Extractor(data) => extractors.push(data.clone()),
-                Structure::Factory(data) => factories.push(data.clone()),
-                Structure::InvaderCore(data) => invader_cores.push(data.clone()),
-                Structure::KeeperLair(data) => keeper_lairs.push(data.clone()),
-                Structure::Lab(data) => labs.push(data.clone()),
-                Structure::Link(data) => links.push(data.clone()),
-                Structure::Nuker(data) => nukers.push(data.clone()),
-                Structure::Observer(data) => observers.push(data.clone()),
-                Structure::PowerBank(data) => power_banks.push(data.clone()),
-                Structure::PowerSpawn(data) => power_spawns.push(data.clone()),
-                Structure::Portal(data) => portals.push(data.clone()),
-                Structure::Rampart(data) => ramparts.push(data.clone()),
-                Structure::Road(data) => roads.push(data.clone()),
-                Structure::Spawn(data) => spawns.push(data.clone()),
-                Structure::Storage(data) => storages.push(data.clone()),
-                Structure::Terminal(data) => terminals.push(data.clone()),
-                Structure::Tower(data) => towers.push(data.clone()),
-                Structure::Wall(data) => walls.push(data.clone()),
+                StructureObject::StructureContainer(data) => containers.push(data.clone()),
+                StructureObject::StructureController(data) => controllers.push(data.clone()),
+                StructureObject::StructureExtension(data) => extensions.push(data.clone()),
+                StructureObject::StructureExtractor(data) => extractors.push(data.clone()),
+                StructureObject::StructureFactory(data) => factories.push(data.clone()),
+                StructureObject::StructureInvaderCore(data) => invader_cores.push(data.clone()),
+                StructureObject::StructureKeeperLair(data) => keeper_lairs.push(data.clone()),
+                StructureObject::StructureLab(data) => labs.push(data.clone()),
+                StructureObject::StructureLink(data) => links.push(data.clone()),
+                StructureObject::StructureNuker(data) => nukers.push(data.clone()),
+                StructureObject::StructureObserver(data) => observers.push(data.clone()),
+                StructureObject::StructurePowerBank(data) => power_banks.push(data.clone()),
+                StructureObject::StructurePowerSpawn(data) => power_spawns.push(data.clone()),
+                StructureObject::StructurePortal(data) => portals.push(data.clone()),
+                StructureObject::StructureRampart(data) => ramparts.push(data.clone()),
+                StructureObject::StructureRoad(data) => roads.push(data.clone()),
+                StructureObject::StructureSpawn(data) => spawns.push(data.clone()),
+                StructureObject::StructureStorage(data) => storages.push(data.clone()),
+                StructureObject::StructureTerminal(data) => terminals.push(data.clone()),
+                StructureObject::StructureTower(data) => towers.push(data.clone()),
+                StructureObject::StructureWall(data) => walls.push(data.clone()),
             }
         }
 
@@ -560,7 +560,7 @@ impl RoomStructureData {
         }
     }
 
-    pub fn all(&self) -> &[Structure] {
+    pub fn all(&self) -> &[StructureObject] {
         &self.structures
     }
 

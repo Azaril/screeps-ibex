@@ -70,10 +70,11 @@ fn unload_labs_transfer_generator(room_entity: Entity) -> TransferQueueGenerator
         let labs = structures.labs();
 
         for lab in labs.iter() {
-            let current_store = lab.store_types();
+            let lab_store = lab.store();
+            let current_store = lab_store.store_types();
 
             for unwanted_resource in current_store.iter().filter(|r| **r != ResourceType::Energy) {
-                let amount = lab.store_of(*unwanted_resource);
+                let amount = lab_store.get_used_capacity(Some(*unwanted_resource));
 
                 let transfer_request = TransferWithdrawRequest::new(
                     TransferTarget::Lab(lab.remote_id()),
@@ -117,12 +118,12 @@ impl Idle {
 
         let labs = structures.labs();
 
-        let inputs: Vec<_> = labs
+        let inputs: Vec<ObjectId<StructureLab>> = labs
             .iter()
             .filter(|lab| {
                 let pos = lab.pos();
 
-                labs.iter().all(|other_lab| other_lab.pos().get_range_to(&pos) <= 2)
+                labs.iter().all(|other_lab| other_lab.pos().get_range_to(pos) <= 2)
             })
             .take(input_labs)
             .map(|l| l.id())
@@ -397,11 +398,11 @@ impl RunReaction {
 
             for (lab, input_resource) in input.iter() {
                 let lab = lab.resolve().ok_or("Expected lab")?;
-
-                let current_store = lab.store_types();
+                let lab_store = lab.store();
+                let current_store = lab_store.store_types();
 
                 for unwanted_resource in current_store.iter().filter(|r| **r != ResourceType::Energy && *r != input_resource) {
-                    let unwanted_amount = lab.store_of(*unwanted_resource);
+                    let unwanted_amount = lab_store.get_used_capacity(Some(*unwanted_resource));
 
                     let transfer_request = TransferWithdrawRequest::new(
                         TransferTarget::Lab(lab.remote_id()),
@@ -414,8 +415,8 @@ impl RunReaction {
                     transfer.request_withdraw(transfer_request);
                 }
 
-                let current_resource_amount = lab.store_of(*input_resource);
-                let free_capacity = lab.store_free_capacity(Some(*input_resource));
+                let current_resource_amount = lab_store.get_used_capacity(Some(*input_resource));
+                let free_capacity = lab_store.get_free_capacity(Some(*input_resource));
 
                 let deposit_amount = (reaction_amount as i32 - current_resource_amount as i32).min(free_capacity);
 
@@ -438,11 +439,11 @@ impl RunReaction {
 
             for lab in output.iter() {
                 let lab = lab.resolve().ok_or("Expected lab")?;
-
-                let current_store = lab.store_types();
+                let lab_store = lab.store();
+                let current_store = lab_store.store_types();
 
                 for unwanted_resource in current_store.iter().filter(|r| **r != ResourceType::Energy) {
-                    let amount = lab.store_of(*unwanted_resource);
+                    let amount = lab_store.get_used_capacity(Some(*unwanted_resource));
 
                     //TODO: Add priority calculation.
 
@@ -476,11 +477,13 @@ impl RunReaction {
 
         let (input_1, input_1_resource) = self.input.get(0).ok_or("Expected first input lab")?;
         let input_1 = input_1.resolve().ok_or("Expected to resolve first input lab")?;
-        let mut input_1_resource_amount = input_1.store_of(*input_1_resource);
+        let input_1_store = input_1.store();
+        let mut input_1_resource_amount = input_1_store.get_used_capacity(Some(*input_1_resource));
 
         let (input_2, input_2_resource) = self.input.get(1).ok_or("Expected second input lab")?;
         let input_2 = input_2.resolve().ok_or("Expected to resolve second input lab")?;
-        let mut input_2_resource_amount = input_2.store_of(*input_2_resource);
+        let input_2_store = input_2.store();
+        let mut input_2_resource_amount = input_2_store.get_used_capacity(Some(*input_2_resource));
 
         for output in self.output.iter() {
             if input_1_resource_amount < LAB_REACTION_AMOUNT || input_2_resource_amount < LAB_REACTION_AMOUNT {
@@ -493,7 +496,9 @@ impl RunReaction {
                 continue;
             }
 
-            if lab.store_free_capacity(Some(self.reaction)) < LAB_REACTION_AMOUNT as i32 {
+            let lab_store = lab.store();
+
+            if lab_store.get_free_capacity(Some(self.reaction)) < LAB_REACTION_AMOUNT as i32 {
                 continue;
             }
 
@@ -553,14 +558,14 @@ impl RunReverseReaction {
 
             for (index, lab) in input.iter().enumerate() {
                 let lab = lab.resolve().ok_or("Expected lab")?;
-
-                let current_store = lab.store_types();
+                let lab_store = lab.store();
+                let current_store = lab_store.store_types();
 
                 for unwanted_resource in current_store
                     .iter()
                     .filter(|r| **r != ResourceType::Energy && **r != reaction_resource)
                 {
-                    let unwanted_amount = lab.store_of(*unwanted_resource);
+                    let unwanted_amount = lab_store.get_used_capacity(Some(*unwanted_resource));
 
                     let transfer_request = TransferWithdrawRequest::new(
                         TransferTarget::Lab(lab.remote_id()),
@@ -573,8 +578,8 @@ impl RunReverseReaction {
                     transfer.request_withdraw(transfer_request);
                 }
 
-                let current_resource_amount = lab.store_of(reaction_resource);
-                let free_capacity = lab.store_free_capacity(Some(reaction_resource));
+                let current_resource_amount = lab_store.get_used_capacity(Some(reaction_resource));
+                let free_capacity = lab_store.get_free_capacity(Some(reaction_resource));
 
                 let desired_reactions = if (index as u32) < additional_reactions {
                     input_reactions + 1
@@ -605,11 +610,11 @@ impl RunReverseReaction {
 
             for lab in output.iter() {
                 let lab = lab.resolve().ok_or("Expected lab")?;
-
-                let current_store = lab.store_types();
+                let lab_store = lab.store();
+                let current_store = lab_store.store_types();
 
                 for unwanted_resource in current_store.iter().filter(|r| **r != ResourceType::Energy) {
-                    let amount = lab.store_of(*unwanted_resource);
+                    let amount = lab_store.get_used_capacity(Some(*unwanted_resource));
 
                     //TODO: Add priority calculation.
 
@@ -644,23 +649,27 @@ impl RunReverseReaction {
         let output_1 = self.output.get(0).ok_or("Expected first output lab")?;
         let output_1 = output_1.resolve().ok_or("Expected to resolve first output lab")?;
 
-        let output_1_resources = output_1.store_types();
+        let output_1_store = output_1.store();
+
+        let output_1_resources = output_1_store.store_types();
         let mut output_1_free_capacity = output_1_resources
             .iter()
             .filter(|r| **r != ResourceType::Energy)
             .next()
-            .map(|r| output_1.store_free_capacity(Some(*r)))
+            .map(|r| output_1_store.get_free_capacity(Some(*r)))
             .unwrap_or(LAB_MINERAL_CAPACITY as i32);
 
         let output_2 = self.output.get(1).ok_or("Expected second output lab")?;
         let output_2 = output_2.resolve().ok_or("Expected to resolve second output lab")?;
 
-        let output_2_resources = output_2.store_types();
+        let output_2_store = output_2.store();        
+
+        let output_2_resources = output_2_store.store_types();
         let mut output_2_free_capacity = output_2_resources
             .iter()
             .filter(|r| **r != ResourceType::Energy)
             .next()
-            .map(|r| output_2.store_free_capacity(Some(*r)))
+            .map(|r| output_2_store.get_free_capacity(Some(*r)))
             .unwrap_or(LAB_MINERAL_CAPACITY as i32);
 
         for input in self.input.iter() {
@@ -674,7 +683,9 @@ impl RunReverseReaction {
                 continue;
             }
 
-            if lab.store_of(self.reaction) < LAB_REACTION_AMOUNT {
+            let lab_store = lab.store();
+
+            if lab_store.get_used_capacity(Some(self.reaction)) < LAB_REACTION_AMOUNT {
                 continue;
             }
 
@@ -691,8 +702,8 @@ impl RunReverseReaction {
                     info!("Inputs: {:?}", self.input);
                     info!("Outputs: {:?}", self.output);
 
-                    info!("Output 1 resources: {:?}", output_1.store_types());
-                    info!("Output 2 resources: {:?}", output_2.store_types());
+                    info!("Output 1 resources: {:?}", output_1_resources);
+                    info!("Output 2 resources: {:?}", output_2_resources);
                 }
             }
 

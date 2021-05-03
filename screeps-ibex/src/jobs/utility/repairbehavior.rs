@@ -11,7 +11,7 @@ pub fn get_new_repair_state<F, R>(creep: &Creep, build_room: &RoomData, minimum_
 where
     F: Fn(RemoteStructureIdentifier) -> R,
 {
-    if creep.store_used_capacity(Some(ResourceType::Energy)) > 0 {
+    if creep.store().get_used_capacity(Some(ResourceType::Energy)) > 0 {
         if let Some(structure) = select_repair_structure(&build_room, minimum_priority, true) {
             return Some(state_map(RemoteStructureIdentifier::new(&structure)));
         }
@@ -51,7 +51,7 @@ where
         return Some(next_state());
     }
 
-    if !creep_pos.in_range_to(&target_position, 3) {
+    if !creep_pos.in_range_to(target_position, 3) {
         if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
@@ -71,7 +71,7 @@ where
         }
 
         if tick_context.action_flags.consume(SimultaneousActionFlags::REPAIR) {
-            match creep.repair(structure) {
+            match creep.repair(structure.as_structure()) {
                 ReturnCode::Ok => None,
                 _ => Some(next_state()),
             }
@@ -88,10 +88,10 @@ pub fn tick_opportunistic_repair(tick_context: &mut JobTickContext, minimum_prio
     if !tick_context.action_flags.intersects(SimultaneousActionFlags::REPAIR) {
         let creep = tick_context.runtime_data.owner;
 
-        let available_energy = creep.store_of(ResourceType::Energy);
+        let available_energy = creep.store().get_used_capacity(Some(ResourceType::Energy));
 
         if available_energy > 0 {
-            let work_body_parts = creep.body().iter().filter(|p| p.part == Part::Work).count() as u32;
+            let work_body_parts = creep.body().iter().filter(|p| p.part() == Part::Work).count() as u32;
 
             if work_body_parts > 0 {
                 let creep_pos = creep.pos();
@@ -103,12 +103,12 @@ pub fn tick_opportunistic_repair(tick_context: &mut JobTickContext, minimum_prio
 
                 let repair_structure = get_prioritized_repair_targets(structures.all(), None, false, false)
                     .filter(|(priority, _)| minimum_priority.map(|p| *priority >= p).unwrap_or(true))
-                    .filter(|(_, structure)| structure.pos().in_range_to(&creep_pos, 3))
+                    .filter(|(_, structure)| structure.pos().in_range_to(creep_pos, 3))
                     .max_by_key(|(priority, _)| *priority);
 
                 if let Some((_, repair_structure)) = repair_structure {
                     if tick_context.action_flags.consume(SimultaneousActionFlags::REPAIR) {
-                        match creep.repair(repair_structure) {
+                        match creep.repair(repair_structure.as_structure()) {
                             ReturnCode::Ok => {
                                 let max_energy_consumed = work_body_parts.min(available_energy);
                                 let (hits, hits_max) = repair_structure.as_attackable().map(|a| (a.hits(), a.hits_max())).unwrap_or((0, 0));

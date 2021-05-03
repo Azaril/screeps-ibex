@@ -152,10 +152,10 @@ impl Mission for ReserveMission {
         }
 
         //TODO: Use visibility data to estimate amount thas has ticked down.
-        let controller_has_sufficient_reservation = game::rooms::get(room_data.name)
+        let controller_has_sufficient_reservation = game::rooms().get(room_data.name)
             .and_then(|r| r.controller())
             .and_then(|c| c.reservation())
-            .map(|r| r.ticks_to_end > 1000)
+            .map(|r| r.ticks_to_end() > 1000)
             .unwrap_or(false);
 
         if controller_has_sufficient_reservation {
@@ -171,7 +171,7 @@ impl Mission for ReserveMission {
                         .creep_owner
                         .get(**entity)
                         .and_then(|creep_owner| creep_owner.owner.resolve())
-                        .and_then(|creep| creep.ticks_to_live().ok())
+                        .map(|creep| creep.ticks_to_live())
                         .map(|count| count > 100)
                         .unwrap_or(false)
             })
@@ -187,7 +187,7 @@ impl Mission for ReserveMission {
 
             for home_room_entity in self.home_room_datas.iter() {
                 let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
-                let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+                let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
 
                 let body_definition = crate::creep::SpawnBodyDefinition {
                     maximum_energy: home_room.energy_capacity_available(),

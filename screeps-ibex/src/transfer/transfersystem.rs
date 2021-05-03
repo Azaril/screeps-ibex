@@ -4,7 +4,7 @@ use crate::room::data::*;
 use crate::ui::*;
 use crate::visualize::*;
 use bitflags::*;
-use itertools::*;
+use itertools::Itertools;
 use log::*;
 use screeps::*;
 use serde::*;
@@ -115,9 +115,9 @@ pub enum TransferTarget {
 impl TransferTarget {
     fn is_valid_from_id<T>(target: &RemoteObjectId<T>) -> bool
     where
-        T: HasId + SizedRoomObject,
+        T: Resolvable
     {
-        if game::rooms::get(target.pos().room_name()).is_some() {
+        if game::rooms().get(target.pos().room_name()).is_some() {
             target.resolve().is_some()
         } else {
             true
@@ -143,7 +143,7 @@ impl TransferTarget {
         }
     }
 
-    pub fn pos(&self) -> RoomPosition {
+    pub fn pos(&self) -> Position {
         match self {
             TransferTarget::Container(id) => id.pos(),
             TransferTarget::Spawn(id) => id.pos(),
@@ -164,12 +164,12 @@ impl TransferTarget {
 
     fn withdraw_resource_amount_from_id<T>(target: &RemoteObjectId<T>, creep: &Creep, resource: ResourceType, amount: u32) -> ReturnCode
     where
-        T: Withdrawable + HasStore + HasId + SizedRoomObject,
+        T: Withdrawable + HasStore + Resolvable,
     {
         if let Some(obj) = target.resolve() {
-            let withdraw_amount = obj.store_used_capacity(Some(resource)).min(amount);
+            let withdraw_amount = obj.store().get_used_capacity(Some(resource)).min(amount);
 
-            creep.withdraw_amount(&obj, resource, withdraw_amount)
+            creep.withdraw(&obj, resource, Some(withdraw_amount))
         } else {
             ReturnCode::NotFound
         }
@@ -205,13 +205,13 @@ impl TransferTarget {
 
     fn creep_transfer_resource_amount_to_id<T>(target: &RemoteObjectId<T>, creep: &Creep, resource: ResourceType, amount: u32) -> ReturnCode
     where
-        T: Transferable + HasStore + HasId + SizedRoomObject,
+        T: Transferable + HasStore + Resolvable,
     {
         if let Some(obj) = target.resolve() {
-            let transfer_amount = obj.store_free_capacity(Some(resource)).min(amount as i32);
+            let transfer_amount = obj.store().get_free_capacity(Some(resource)).min(amount as i32);
 
             if transfer_amount > 0 {
-                creep.transfer_amount(&obj, resource, transfer_amount as u32)
+                creep.transfer(&obj, resource, Some(transfer_amount as u32))
             } else {
                 ReturnCode::InvalidArgs
             }
@@ -242,7 +242,7 @@ impl TransferTarget {
 
     fn link_transfer_energy_amount_to_id(target: &RemoteObjectId<StructureLink>, link: &StructureLink, amount: u32) -> ReturnCode {
         if let Some(obj) = target.resolve() {
-            let transfer_amount = obj.store_free_capacity(Some(ResourceType::Energy)).min(amount as i32);
+            let transfer_amount = obj.store().get_free_capacity(Some(ResourceType::Energy)).min(amount as i32);
 
             if transfer_amount > 0 {
                 link.transfer_energy(&obj, Some(transfer_amount as u32))
@@ -306,22 +306,22 @@ pub mod target_filters {
     }
 }
 
-impl std::convert::TryFrom<&Structure> for TransferTarget {
+impl std::convert::TryFrom<&StructureObject> for TransferTarget {
     type Error = ();
 
-    fn try_from(val: &Structure) -> Result<TransferTarget, ()> {
+    fn try_from(val: &StructureObject) -> Result<TransferTarget, ()> {
         match val {
-            Structure::Container(s) => Ok(s.into()),
-            Structure::Spawn(s) => Ok(s.into()),
-            Structure::Extension(s) => Ok(s.into()),
-            Structure::Storage(s) => Ok(s.into()),
-            Structure::Tower(s) => Ok(s.into()),
-            Structure::Link(s) => Ok(s.into()),
-            Structure::Terminal(s) => Ok(s.into()),
-            Structure::Lab(s) => Ok(s.into()),
-            Structure::Factory(s) => Ok(s.into()),
-            Structure::Nuker(s) => Ok(s.into()),
-            Structure::PowerSpawn(s) => Ok(s.into()),
+            StructureObject::StructureContainer(s) => Ok(s.into()),
+            StructureObject::StructureSpawn(s) => Ok(s.into()),
+            StructureObject::StructureExtension(s) => Ok(s.into()),
+            StructureObject::StructureStorage(s) => Ok(s.into()),
+            StructureObject::StructureTower(s) => Ok(s.into()),
+            StructureObject::StructureLink(s) => Ok(s.into()),
+            StructureObject::StructureTerminal(s) => Ok(s.into()),
+            StructureObject::StructureLab(s) => Ok(s.into()),
+            StructureObject::StructureFactory(s) => Ok(s.into()),
+            StructureObject::StructureNuker(s) => Ok(s.into()),
+            StructureObject::StructurePowerSpawn(s) => Ok(s.into()),
             _ => Err(()),
         }
     }
@@ -810,7 +810,7 @@ impl TransferNode {
             .map(|(r, e)| (r, e))
     }
 
-    pub fn visualize(&self, visualizer: &mut RoomVisualizer, pos: RoomPosition) {
+    pub fn visualize(&self, visualizer: &mut RoomVisualizer, pos: Position) {
         let withdraw_text = self
             .withdrawls
             .iter()
@@ -1707,7 +1707,7 @@ impl TransferQueue {
         pickup_priorities: TransferPriorityFlags,
         delivery_priorities: TransferPriorityFlags,
         transfer_type: TransferType,
-        current_position: RoomPosition,
+        current_position: Position,
         available_capacity: TransferCapacity,
         target_filter: TF,
     ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)>
@@ -1763,9 +1763,9 @@ impl TransferQueue {
 
             pickups.into_iter().map(move |pickup| {
                 let pickup_pos = pickup.target.pos();
-                let pickup_length = current_position.get_range_to(&pickup_pos);
+                let pickup_length = current_position.get_range_to(pickup_pos);
 
-                let delivery_length = pickup_pos.get_range_to(&delivery_pos);
+                let delivery_length = pickup_pos.get_range_to(delivery_pos);
 
                 let resources = pickup
                     .resources
@@ -1896,7 +1896,7 @@ impl TransferQueue {
         allowed_delivery_priorities: TransferPriorityFlags,
         delivery_type: TransferType,
         available_capacity: TransferCapacity,
-        anchor_location: RoomPosition,
+        anchor_location: Position,
         target_filter: TF,
     ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)>
     where
@@ -1961,7 +1961,7 @@ impl TransferQueue {
         delivery_types: TransferTypeFlags,
         available_resources: &HashMap<ResourceType, u32>,
         available_capacity: TransferCapacity,
-        anchor_location: RoomPosition,
+        anchor_location: Position,
         target_filter: TF,
     ) -> Option<TransferDepositTicket>
     where
@@ -1988,7 +1988,7 @@ impl TransferQueue {
                 .flat_map(|(_, entries)| entries.iter().map(|e| e.amount))
                 .sum::<u32>();
 
-            let length = anchor_location.get_range_to(&delivery.target.pos());
+            let length = anchor_location.get_range_to(delivery.target.pos());
             let value = (resources as f32) / (length as f32);
 
             (delivery, value)
@@ -2050,7 +2050,7 @@ impl TransferQueue {
         delivery_rooms: &[RoomName],
         allowed_priorities: TransferPriorityFlags,
         transfer_type: TransferType,
-        current_position: RoomPosition,
+        current_position: Position,
         available_capacity: TransferCapacity,
         target_filter: TF,
     ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)>
@@ -2088,7 +2088,7 @@ impl TransferQueue {
         struct StatsEntry {
             active: u32,
             inactive: u32,
-        };
+        }
 
         let mut withdrawls: HashMap<ResourceType, StatsEntry> = HashMap::new();
         let mut deposits: HashMap<Option<ResourceType>, StatsEntry> = HashMap::new();

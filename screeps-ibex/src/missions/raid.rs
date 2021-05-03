@@ -95,8 +95,9 @@ impl RaidMission {
 
         for structure in structures.all().iter() {
             if let Some(store) = structure.as_has_store() {
+                let store = store.store();
                 for resource in store.store_types() {
-                    let resource_amount = store.store_used_capacity(Some(resource));
+                    let resource_amount = store.get_used_capacity(Some(resource));
 
                     if resource_amount > 0 {
                         if let Ok(transfer_target) = structure.try_into() {
@@ -208,7 +209,7 @@ impl Mission for RaidMission {
 
         for home_room_entity in self.home_room_datas.iter() {
             let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
-            let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+            let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
 
             let desired_raiders = 2;
 

@@ -5,11 +5,11 @@ use crate::room::data::*;
 use screeps::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn get_new_upgrade_state<F, R>(creep: &Creep, upgrade_room: &RoomData, state_map: F, max_rcl: Option<u32>) -> Option<R>
+pub fn get_new_upgrade_state<F, R>(creep: &Creep, upgrade_room: &RoomData, state_map: F, max_rcl: Option<u8>) -> Option<R>
 where
     F: Fn(RemoteObjectId<StructureController>) -> R,
 {
-    if creep.store_used_capacity(Some(ResourceType::Energy)) > 0 {
+    if creep.store().get_used_capacity(Some(ResourceType::Energy)) > 0 {
         let dynamic_visibility_data = upgrade_room.get_dynamic_visibility_data()?;
 
         if dynamic_visibility_data.visible() && dynamic_visibility_data.owner().mine() {
@@ -56,7 +56,7 @@ where
 
     //TODO: Check visibility cache and cancel if controller doesn't exist or isn't owned?
 
-    if !creep_pos.in_range_to(&target_position, 3) {
+    if !creep_pos.in_range_to(target_position, 3) {
         if action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
@@ -95,7 +95,7 @@ where
 
     //TODO: Check visibility cache and cancel if controller doesn't exist or is owned?
 
-    if !creep_pos.is_near_to(&target_position) {
+    if !creep_pos.is_near_to(target_position) {
         if action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
@@ -130,7 +130,7 @@ where
 
     //TODO: Check visibility cache and cancel if controller doesn't exist or is owned?
 
-    if !creep_pos.is_near_to(&target_position) {
+    if !creep_pos.is_near_to(target_position) {
         if action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
@@ -145,10 +145,10 @@ where
     if let Some(controller) = controller_id.resolve() {
         if let Some(reservation) = controller.reservation() {
             let body = creep.body();
-            let claim_parts = body.iter().filter(|b| b.part == Part::Claim).count();
+            let claim_parts = body.iter().filter(|b| b.part() == Part::Claim).count();
             let claim_amount = claim_parts as u32 * CONTROLLER_RESERVE;
 
-            if reservation.ticks_to_end + claim_amount > CONTROLLER_RESERVE_MAX {
+            if reservation.ticks_to_end() + claim_amount > CONTROLLER_RESERVE_MAX {
                 return Some(next_state());
             }
         }
@@ -180,7 +180,7 @@ where
 
     //TODO: Check visibility cache and cancel if controller doesn't exist or is owned?
 
-    if !creep_pos.is_near_to(&target_position) {
+    if !creep_pos.is_near_to(target_position) {
         if action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data

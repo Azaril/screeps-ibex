@@ -181,7 +181,7 @@ impl Idle {
             })
             .or_else(|| get_new_upgrade_state(creep, delivery_room_data, HarvestState::upgrade, None))
             .or_else(|| {
-                if creep.store_used_capacity(None) == 0 {
+                if creep.store().get_used_capacity(None) == 0 {
                     get_new_move_to_room_state(creep, state_context.harvest_target.pos().room_name(), HarvestState::move_to_room)
                 } else {
                     None

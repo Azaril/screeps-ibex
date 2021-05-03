@@ -21,6 +21,18 @@
 - Military units.
 - Shared, predicted storage capacity for the tick. (Allow for haulers to not wait for a tick at the end of their delivery tickets.)
 
+- Late 'expensive' validation on whether or not to spawn a unit. (i.e. can't pathfind to harvesting source)
+- Move missions/jobs/operations to their own data types. (Solve internal mutation problems...)
+- Scout as part of defend mission (gets stuck without vision on room)
+- Mark movement as 'blocked' or unavailable on movement data.
+- Allow harvesters to use work parts to break down walls in the way to objective. (Maybe make a state for this? i.e. raid + moveto)
+
+- Transfer stats graphing.
+
+- Have plan apply components/meta-data to buildings. (i.e. link is transfer in/out)
+
+- Ping-pong plan pathing with creep avoidance? May not need with congestion control?
+
 # Medium Priority
 
 - Pathfinding solution. (Use built in path finder.)
