@@ -32,9 +32,7 @@ machine!(
             format!("Defend - {}", self.status_description())
         }
 
-        * => fn status_description(&self) -> String {
-            std::any::type_name::<Self>().to_string()
-        }
+        _ => fn status_description(&self) -> String;
 
         * => fn visualize(&self, _system_data: &MissionExecutionSystemData, _mission_entity: Entity, _state_context: &DefendMissionContext) {}
 
@@ -47,6 +45,10 @@ machine!(
 );
 
 impl Idle {
+    fn status_description(&self) -> String {
+        "Idle".to_owned()
+    }
+
     fn tick(
         &mut self,
         system_data: &mut MissionExecutionSystemData,
@@ -91,6 +93,10 @@ impl Idle {
 }
 
 impl Active {
+    fn status_description(&self) -> String {
+        format!("Last hostiles: {:?}", self.last_hostiles.map(|t| game::time() - t))
+    }
+
     fn tick(
         &mut self,
         system_data: &mut MissionExecutionSystemData,
@@ -111,6 +117,22 @@ impl Active {
                 self.last_hostiles = Some(game::time());
             } else if self.last_hostiles.map(|last| game::time() - last >= 20).unwrap_or(false) {
                 return Ok(Some(DefendState::idle(std::marker::PhantomData)));
+            }
+        } else {
+            let visibility_age = dynamic_visibility_data.age();
+
+            if visibility_age >= 100 {
+                system_data.visibility.request(VisibilityRequest::new(
+                    defend_room_data.name,
+                    VISIBILITY_PRIORITY_MEDIUM,
+                    VisibilityRequestFlags::ALL,
+                ));
+            } else if visibility_age >= 20 {
+                system_data.visibility.request(VisibilityRequest::new(
+                    defend_room_data.name,
+                    VISIBILITY_PRIORITY_MEDIUM,
+                    VisibilityRequestFlags::OBSERVE,
+                ));
             }
         }
 

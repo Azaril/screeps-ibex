@@ -30,7 +30,11 @@ where
     let room_half_height = ROOM_HEIGHT / 2;
     let range = room_half_width.max(room_half_height) - 2;
 
-    let target_pos = Position::new(room_half_width, room_half_height, room_name);
+    let target_pos = Position::new(
+        unsafe { RoomCoordinate::unchecked_new(room_half_width) },
+        unsafe { RoomCoordinate::unchecked_new(room_half_height) }, 
+        room_name
+    );
 
     tick_move_to_position(tick_context, target_pos, range as u32, room_options, next_state)
 }

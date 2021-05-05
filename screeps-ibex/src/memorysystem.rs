@@ -28,7 +28,7 @@ impl MemoryArbiter {
     }
 
     pub fn get(&self, segment: u8) -> Option<String> {
-        RawMemory::segments().get(segment).into()
+        RawMemory::segments().get(segment)
     }
 
     pub fn set(&mut self, segment: u8, data: String) {

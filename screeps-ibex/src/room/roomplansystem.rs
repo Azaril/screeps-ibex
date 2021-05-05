@@ -117,7 +117,7 @@ impl<'a> PlannerRoomDataSource for RoomDataPlannerDataSource<'a> {
                 .iter()
                 .map(|id| {
                     let pos = id.pos();
-                    PlanLocation::new(pos.x() as i8, pos.y() as i8)
+                    PlanLocation::new(pos.x().u8() as i8, pos.y().u8() as i8)
                 })
                 .collect();
 
@@ -137,7 +137,7 @@ impl<'a> PlannerRoomDataSource for RoomDataPlannerDataSource<'a> {
                 .iter()
                 .map(|id| {
                     let pos = id.pos();
-                    PlanLocation::new(pos.x() as i8, pos.y() as i8)
+                    PlanLocation::new(pos.x().u8() as i8, pos.y().u8() as i8)
                 })
                 .collect();
 
@@ -157,7 +157,7 @@ impl<'a> PlannerRoomDataSource for RoomDataPlannerDataSource<'a> {
                 .iter()
                 .map(|id| {
                     let pos = id.pos();
-                    PlanLocation::new(pos.x() as i8, pos.y() as i8)
+                    PlanLocation::new(pos.x().u8() as i8, pos.y().u8() as i8)
                 })
                 .collect();
 

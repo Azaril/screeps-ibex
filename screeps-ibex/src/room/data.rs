@@ -329,7 +329,8 @@ impl RoomData {
         let mineral_ids = room.find(find::MINERALS).into_iter().map(|s| s.remote_id()).collect();
 
         let terrain = room.get_terrain();
-        let terrain = FastRoomTerrain::new(terrain.get_raw_buffer().to_vec());
+        let buf = terrain.get_raw_buffer().to_vec();
+        let terrain = FastRoomTerrain::new(buf);
         let terrain_statistics = RoomTerrainStatistics::from_terrain(&terrain);
 
         RoomStaticVisibilityData {
@@ -390,7 +391,7 @@ impl RoomData {
         let hostile_structures = structures
             .iter()
             .flat_map(|s| s.all())
-            .filter(|s| s.as_owned().map(|o| !o.my()).unwrap_or(false))
+            .filter(|s| s.as_owned().map(|o| !o.my() && o.owner().is_some()).unwrap_or(false))
             .filter(|s| match s.structure_type() {
                 StructureType::KeeperLair => false,
                 _ => true,

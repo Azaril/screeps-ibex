@@ -8,7 +8,6 @@ impl CostMatrixStorage for CostMatrixStorageInterface {
     fn get_cache(&self, segment: u8) -> Result<CostMatrixCache, String> {
         let segments = RawMemory::segments();
         let raw_data = segments.get(segment).ok_or("Cost matrix memory segment not active")?;
-        let raw_data: String = raw_data.into();
 
         let res = crate::serialize::decode_from_string(&raw_data)?;
 

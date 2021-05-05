@@ -1,10 +1,5 @@
 "use strict";
 
-function console_error(...args) {
-    console.log(...args);
-    Game.notify(args.join(' '));
-}
-
 let wasm_module = null;
 let initialized = false;
 
@@ -14,11 +9,12 @@ function wasm_reset() {
 }
 
 module.exports.loop = function() {
-    try {    
-        // GIANT HACK TO FIX TIME
-        Game._time = Game.time;
-        Game.time = function() { return Game._time; };
+    //TODO: Fix this so the panic hook can log normally?
+    console.error = function(...args) {
+        console.log(...args);
+    }
 
+    try {    
         if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
             return;
         }
@@ -47,11 +43,12 @@ module.exports.loop = function() {
 
         wasm_module.tick();
     } catch(error) {
-        console_error("Caught exception:", error);
+        console.error("Caught exception:", error);
         if (error.stack) {
-            console_error("Stack trace:", error.stack);
+            console.error("Stack trace:", error.stack);
         }
-        console_error("Resetting VM next tick.");
+
+        console.error("Resetting VM!");
         
         wasm_reset();
     }

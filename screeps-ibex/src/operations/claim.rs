@@ -84,11 +84,12 @@ impl ClaimOperation {
         let static_visibility_data = room_data.get_static_visibility_data()?;
         let sources = static_visibility_data.sources().len();
 
-        if sources == 0 {
-            return None;
-        }
-
-        let score = sources.min(2) as f32 / 2.0;
+        let score = match sources {
+            0 => None,
+            1 => Some(0.25),
+            x if x >= 2 => Some(1.0),
+            _ => None
+        }?;
 
         Some((score, 4.0))
     }
@@ -116,14 +117,14 @@ impl ClaimOperation {
     fn distance_score(_system_data: &mut OperationExecutionSystemData, candidate: &CandidateRoom) -> Option<(f32, f32)> {
         let score = match candidate.distance() {
             0 => None,
-            1 => Some(0.5),
+            1 => Some(0.25),
             2 => Some(0.75),
             3 => Some(1.0),
             4 => Some(1.0),
             _ => Some(0.5),
         }?;
 
-        Some((score, 0.5))
+        Some((score, 2.0))
     }
 
     fn score_candidate_room(system_data: &mut OperationExecutionSystemData, candidate: &CandidateRoom) -> Option<f32> {
@@ -305,22 +306,19 @@ impl Operation for ClaimOperation {
         // Only allow as many missions in progress as would reach GCL/CPU cap.
         //
 
+        let maximum_claim_missions = (currently_owned_rooms as f32).log2().max(1.0) as u32;
+
         //TODO: Need better dynamic estimation of room cost.
         const ESTIMATED_ROOM_CPU_COST: u32 = 10;
         let cpu_limit = game::cpu::limit();
 
         let current_gcl = game::gcl::level();
         let maximum_rooms = ((cpu_limit / ESTIMATED_ROOM_CPU_COST) as u32).min(current_gcl);
-        let active_rooms = (currently_owned_rooms + self.claim_missions.len()) as u32;
+        let active_rooms = (currently_owned_rooms + self.claim_missions.len()) as u32;        
         let available_rooms = maximum_rooms - active_rooms.min(maximum_rooms);
+        let available_rooms = available_rooms.min(maximum_claim_missions);
 
-        if active_rooms >= maximum_rooms || !crate::features::claim() {
-            return Ok(OperationResult::Running);
-        }
-
-        const MAXIMUM_CLAIM_MISSIONS: usize = 1;
-
-        if self.claim_missions.len() >= MAXIMUM_CLAIM_MISSIONS {
+        if available_rooms == 0 || !crate::features::claim() {
             return Ok(OperationResult::Running);
         }
 
@@ -365,6 +363,12 @@ impl Operation for ClaimOperation {
             .iter()
             .any(|unknown_room| unknown_room.distance() <= 4)
         {
+            /*
+            for room in gathered_data.unknown_rooms().iter().filter(|unknown_room| unknown_room.distance() <= 4) {
+                log::info!("Unknown room: {}", room.room_name());
+            }
+            */
+
             return Ok(OperationResult::Running);
         }
 
@@ -467,10 +471,6 @@ impl Operation for ClaimOperation {
                     room_data.add_mission(mission_entity);
 
                     self.claim_missions.push(mission_entity);
-
-                    if currently_owned_rooms + self.claim_missions.len() >= maximum_rooms as usize {
-                        break;
-                    }
                 }
             }
         }

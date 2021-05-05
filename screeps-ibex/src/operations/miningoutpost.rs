@@ -95,6 +95,7 @@ impl Operation for MiningOutpostOperation {
 
         let home_rooms = gather_home_rooms(&gather_system_data, 2);
 
+        //TODO: wiarchbe: Increase this to 2 when efficiency makes it worth it.
         let gathered_data = gather_candidate_rooms(&gather_system_data, &home_rooms, 1, Self::gather_candidate_room_data);
 
         for unknown_room in gathered_data.unknown_rooms().iter() {

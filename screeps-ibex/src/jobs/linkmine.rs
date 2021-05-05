@@ -165,7 +165,7 @@ impl LinkMineJob {
                     //TODO: wiarchbe: Come up with better conversion method here.
                     use num_traits::*;
 
-                    match Terrain::from_u8(terrain.get(position.x(), position.y())).expect("expected terrain type") {
+                    match Terrain::from_u8(terrain.get(position.x().into(), position.y().into())).expect("expected terrain type") {
                         Terrain::Plain => true,
                         Terrain::Wall => false,
                         Terrain::Swamp => true,

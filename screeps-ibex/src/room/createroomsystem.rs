@@ -1,6 +1,5 @@
 use super::data::*;
 use crate::serialize::*;
-use log::*;
 use screeps::*;
 use specs::saveload::*;
 use specs::*;
@@ -38,8 +37,6 @@ impl<'a> System<'a> for CreateRoomDataSystem {
             .collect();
 
         for room in missing_rooms {
-            info!("Creating room data for room: {}", room);
-
             updater
                 .create_entity(&entities)
                 .marked::<SerializeMarker>()

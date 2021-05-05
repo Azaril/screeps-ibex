@@ -24,7 +24,7 @@ impl log::Log for JsNotify {
         true
     }
     fn log(&self, record: &log::Record) {
-        game::notify(&JsString::from(format!("{}", record.args())), None);
+        game::notify(&format!("{}", record.args()), None);
     }
     fn flush(&self) {}
 }

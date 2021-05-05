@@ -32,12 +32,16 @@ mod transfer;
 mod ui;
 mod visualize;
 
+use std::panic;
+
 use wasm_bindgen::prelude::*;
 use log::*;
 
 #[wasm_bindgen]
 pub fn setup() {
     logging::setup_logging(logging::Info);
+
+    panic::set_hook(Box::new(console_error_panic_hook::hook));
 }
 
 #[wasm_bindgen]

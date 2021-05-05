@@ -199,8 +199,6 @@ static mut ENVIRONMENT: Option<GameEnvironment> = None;
 const COST_MATRIX_SYSTEM_SEGMENT: u8 = 55;
 
 fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
-    info!("Initializing game environment");
-
     crate::features::js::prepare();
 
     let mut world = World::new();
@@ -329,7 +327,7 @@ pub fn tick() {
     };
 
     if !is_data_ready {
-        info!("Component data is not ready, delaying execution");
+        warn!("Component data is not ready, delaying execution");
 
         MemoryArbiterSystem.run_now(world);
 
@@ -349,8 +347,6 @@ pub fn tick() {
     }
 
     if !*loaded {
-        info!("Deserializing world state to environment");
-
         deserialize_world(&world, COMPONENT_SEGMENTS);
 
         *loaded = true;
@@ -374,7 +370,6 @@ pub fn tick() {
             }
             None
         })
-        .map(|username| String::from(username))
         .next();
 
     if let Some(username) = username {

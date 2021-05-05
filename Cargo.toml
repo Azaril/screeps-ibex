@@ -10,10 +10,11 @@ members = [
 exclude = ["screeps-foreman-bench", "screeps-plus-stats"]
 
 [profile.release]
-panic = "abort"
-opt-level = "z"
-lto = true
-codegen-units = 1
+#panic = "abort"
+#opt-level = "z"
+#lto = true
+#codegen-units = 1
+#debug = true
 
 [patch.crates-io]
 #screeps-game-api = { git = "https://github.com/Azaril/screeps-game-api", branch = "bindgen" }

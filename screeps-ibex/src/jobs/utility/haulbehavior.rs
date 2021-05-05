@@ -426,8 +426,8 @@ pub fn visualize_pickup(describe_data: &mut JobDescribeData, ticket: &TransferWi
 
     if pos.room_name() == to.room_name() {
         describe_data.visualizer.get_room(pos.room_name()).line(
-            (pos.x() as f32, pos.y() as f32),
-            (to.x() as f32, to.y() as f32),
+            (pos.x().u8() as f32, pos.y().u8() as f32),
+            (to.x().u8() as f32, to.y().u8() as f32),
             Some(LineStyle::default().color("blue")),
         );
     }
@@ -507,8 +507,8 @@ pub fn visualize_delivery_from(describe_data: &mut JobDescribeData, tickets: &Ve
         }
 
         describe_data.visualizer.get_room(delivery_pos.room_name()).line(
-            (last_pos.x() as f32, last_pos.y() as f32),
-            (delivery_pos.x() as f32, delivery_pos.y() as f32),
+            (last_pos.x().u8() as f32, last_pos.y().u8() as f32),
+            (delivery_pos.x().u8() as f32, delivery_pos.y().u8() as f32),
             Some(LineStyle::default().color("green")),
         );
 

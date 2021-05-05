@@ -41,3 +41,5 @@ screeps-rover = { git = "https://github.com/Azaril/screeps-rover" }
 screeps-foreman = { git = "https://github.com/Azaril/screeps-foreman" }
 screeps-timing = { git = "https://github.com/Azaril/screeps-timing", optional = true }
 screeps-timing-annotate = { git = "https://github.com/Azaril/screeps-timing-annotate", optional = true }
+
+console_error_panic_hook = "0.1.6"
