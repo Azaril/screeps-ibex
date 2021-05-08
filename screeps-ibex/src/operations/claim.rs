@@ -10,6 +10,7 @@ use crate::serialize::*;
 use crate::missions::missionsystem::*;
 use log::*;
 use screeps::*;
+use screeps_rover::can_traverse_between_rooms;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
@@ -63,7 +64,7 @@ impl ClaimOperation {
 
         let can_claim = dynamic_visibility_data.owner().neutral()
             && (dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().neutral()) && !dynamic_visibility_data.source_keeper();
-        let hostile = dynamic_visibility_data.owner().hostile();
+        let hostile = dynamic_visibility_data.owner().hostile() || dynamic_visibility_data.hostile_structures() || dynamic_visibility_data.source_keeper();
 
         let can_plan = gather_system_data
             .room_plan_data
@@ -107,7 +108,7 @@ impl ClaimOperation {
 
         let plains_ratio = statistics.plain_tiles() as f32 / statistics.walkable_tiles() as f32;
 
-        if plains_ratio < 0.75 {
+        if plains_ratio < 0.7 {
             return None;
         }
 
@@ -209,7 +210,8 @@ impl ClaimOperation {
 
             for room_entity in needs_remote_build {
                 if let Some(room_data) = system_data.room_data.get_mut(room_entity) {
-                    //TODO: Use path distance instead of linear distance.
+                    const MAX_ROOM_DISTANCE: u32 = 6;
+
                     let home_room_entities: Vec<_> = home_room_data.iter().map(|(entity, home_room_name, max_level)| {
                         let delta = room_data.name - *home_room_name;
                         let range = delta.0.abs() as u32 + delta.1.abs() as u32;
@@ -217,7 +219,27 @@ impl ClaimOperation {
                         (entity, home_room_name, max_level, range)
                     })
                         .filter(|(_, _, max_level, _)| **max_level >= 2)
-                        .filter(|(_, _, _, range)| *range <= 5)
+                        .filter(|(_, _, _, range)| *range <= MAX_ROOM_DISTANCE)
+                        .filter(|(_, home_room_name, _, _)| {
+                            let options = map::FindRouteOptions::new()
+                                .room_callback(|to_room_name, from_room_name| {
+                                    if !can_traverse_between_rooms(from_room_name, to_room_name) {
+                                        return f64::INFINITY;
+                                    }
+                                    
+                                    //TODO: Need to include hostile rooms.
+                            
+                                    1.0
+                                });
+                
+                            if let Ok(room_path) = game::map::find_route(room_data.name, **home_room_name, Some(options)) {
+                                if room_path.len() as u32 <= MAX_ROOM_DISTANCE {
+                                    return true;
+                                }
+                            }
+
+                            false
+                        })                        
                         .map(|(entity, _, _, _)| *entity)
                         .collect();
 
@@ -331,7 +353,7 @@ impl Operation for ClaimOperation {
 
         let home_rooms = gather_home_rooms(&gather_system_data, 1);
 
-        let gathered_data = gather_candidate_rooms(&gather_system_data, &home_rooms, 4, Self::gather_candidate_room_data);
+        let gathered_data = gather_candidate_rooms(&gather_system_data, &home_rooms, 6, Self::gather_candidate_room_data);
 
         //
         // Request visibility for all rooms that are going stale or have not had visibility.
@@ -361,7 +383,7 @@ impl Operation for ClaimOperation {
         if gathered_data
             .unknown_rooms()
             .iter()
-            .any(|unknown_room| unknown_room.distance() <= 4)
+            .any(|unknown_room| unknown_room.distance() <= 5)
         {
             /*
             for room in gathered_data.unknown_rooms().iter().filter(|unknown_room| unknown_room.distance() <= 4) {
@@ -445,7 +467,8 @@ impl Operation for ClaimOperation {
             //
 
             if !has_claim_mission {
-                //TODO: Use path distance instead of linear distance.
+                const MAX_ROOM_DISTANCE: u32 = (CREEP_CLAIM_LIFE_TIME as f32 / (ROOM_SIZE as f32 * 1.5)) as u32;
+
                 let home_room_entities: Vec<_> = home_room_data.iter().map(|(entity, home_room_name, max_level)| {
                     let delta = room_data.name - *home_room_name;
                     let range = delta.0.abs() as u32 + delta.1.abs() as u32;
@@ -453,7 +476,27 @@ impl Operation for ClaimOperation {
                     (entity, home_room_name, max_level, range)
                 })
                     .filter(|(_, _, max_level, _)| **max_level >= 2)
-                    .filter(|(_, _, _, range)| *range <= 5)
+                    .filter(|(_, _, _, range)| *range <= MAX_ROOM_DISTANCE)
+                    .filter(|(_, home_room_name, _, _)| {
+                        let options = map::FindRouteOptions::new()
+                            .room_callback(|to_room_name, from_room_name| {
+                                if !can_traverse_between_rooms(from_room_name, to_room_name) {
+                                    return f64::INFINITY;
+                                }
+
+                                //TODO: Need to include hostile rooms.
+                        
+                                1.0
+                            });
+            
+                        if let Ok(room_path) = game::map::find_route(room_data.name, **home_room_name, Some(options)) {
+                            if room_path.len() as u32 <= MAX_ROOM_DISTANCE {
+                                return true;
+                            }
+                        }
+
+                        false
+                    })                    
                     .map(|(entity, _, _, _)| *entity)
                     .collect();
 

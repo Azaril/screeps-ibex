@@ -201,7 +201,9 @@ impl Mission for UpgradeMission {
                 .filter_map(|controller| controller_downgrade(controller.level()).map(|ticks| controller.ticks_to_downgrade() < ticks / 2))
                 .any(|risk| risk);
 
-            let maximum_energy = if self.upgraders.is_empty() && downgrade_risk {
+            let priority_spawn = self.upgraders.is_empty() && (downgrade_risk || controller_level <= 1);
+
+            let maximum_energy = if priority_spawn {
                 room.energy_available().max(SPAWN_ENERGY_CAPACITY)
             } else {
                 room.energy_capacity_available()
@@ -210,8 +212,8 @@ impl Mission for UpgradeMission {
             let body_definition = if controller_level <= 3 {
                 crate::creep::SpawnBodyDefinition {
                     maximum_energy,
-                    minimum_repeat: Some(1),
-                    maximum_repeat: work_parts_per_upgrader,
+                    minimum_repeat: None,
+                    maximum_repeat: work_parts_per_upgrader.map(|p| p - 1),
                     pre_body: &[Part::Work, Part::Carry, Part::Move, Part::Move],
                     repeat_body: &[Part::Work, Part::Move],
                     post_body: &[],
@@ -228,7 +230,7 @@ impl Mission for UpgradeMission {
             };
 
             if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                let priority = if self.upgraders.is_empty() && (downgrade_risk || controller_level <= 1) {
+                let priority = if priority_spawn {
                     SPAWN_PRIORITY_HIGH
                 } else if self.upgraders.is_empty() {
                     SPAWN_PRIORITY_HIGH

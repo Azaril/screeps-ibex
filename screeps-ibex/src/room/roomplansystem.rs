@@ -441,7 +441,7 @@ impl screeps_foreman::RoomVisualizer for RoomVisualizer {
                     self,
                     location.x() as f32,
                     location.y() as f32,
-                    Some(CircleStyle::default().fill("green").opacity(1.0)),
+                    Some(CircleStyle::default().fill("Green").opacity(1.0)),
                 );
             }
             StructureType::Extension => {
@@ -449,7 +449,7 @@ impl screeps_foreman::RoomVisualizer for RoomVisualizer {
                     self,
                     location.x() as f32,
                     location.y() as f32,
-                    Some(CircleStyle::default().fill("purple").opacity(1.0)),
+                    Some(CircleStyle::default().fill("Purple").opacity(1.0)),
                 );
             }
             StructureType::Container => {
@@ -457,7 +457,7 @@ impl screeps_foreman::RoomVisualizer for RoomVisualizer {
                     self,
                     location.x() as f32,
                     location.y() as f32,
-                    Some(CircleStyle::default().fill("blue").opacity(1.0)),
+                    Some(CircleStyle::default().fill("Blue").opacity(1.0)),
                 );
             }
             StructureType::Storage => {
@@ -465,7 +465,7 @@ impl screeps_foreman::RoomVisualizer for RoomVisualizer {
                     self,
                     location.x() as f32,
                     location.y() as f32,
-                    Some(CircleStyle::default().fill("red").opacity(1.0)),
+                    Some(CircleStyle::default().fill("Red").opacity(1.0)),
                 );
             }
             StructureType::Link => {
@@ -473,7 +473,7 @@ impl screeps_foreman::RoomVisualizer for RoomVisualizer {
                     self,
                     location.x() as f32,
                     location.y() as f32,
-                    Some(CircleStyle::default().fill("orange").opacity(1.0)),
+                    Some(CircleStyle::default().fill("Orange").opacity(1.0)),
                 );
             }
             StructureType::Terminal => {
@@ -481,7 +481,7 @@ impl screeps_foreman::RoomVisualizer for RoomVisualizer {
                     self,
                     location.x() as f32,
                     location.y() as f32,
-                    Some(CircleStyle::default().fill("pink").opacity(1.0)),
+                    Some(CircleStyle::default().fill("Pink").opacity(1.0)),
                 );
             }
             StructureType::Nuker => {
@@ -489,7 +489,7 @@ impl screeps_foreman::RoomVisualizer for RoomVisualizer {
                     self,
                     location.x() as f32,
                     location.y() as f32,
-                    Some(CircleStyle::default().fill("black").opacity(1.0)),
+                    Some(CircleStyle::default().fill("Black").opacity(1.0)),
                 );
             }
             StructureType::Lab => {
@@ -497,7 +497,7 @@ impl screeps_foreman::RoomVisualizer for RoomVisualizer {
                     self,
                     location.x() as f32,
                     location.y() as f32,
-                    Some(CircleStyle::default().fill("aqua").opacity(1.0)),
+                    Some(CircleStyle::default().fill("Aqua").opacity(1.0)),
                 );
             }
             StructureType::PowerSpawn => {
@@ -539,7 +539,7 @@ impl screeps_foreman::RoomVisualizer for RoomVisualizer {
                     self,
                     location.x() as f32,
                     location.y() as f32,
-                    Some(CircleStyle::default().fill("yellow").opacity(1.0)),
+                    Some(CircleStyle::default().fill("Yellow").opacity(1.0)),
                 );
             }
         }

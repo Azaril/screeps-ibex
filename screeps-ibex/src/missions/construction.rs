@@ -60,11 +60,11 @@ impl Mission for ConstructionMission {
 
         let request_plan = if let Some(room_plan_data) = system_data.room_plan_data.get(self.room_data) {
             if let Some(plan) = room_plan_data.plan() {
-                if game::time() % 50 == 0 {
+                if game::time() % 10 == 0 {
                     if crate::features::construction::execute() {
                         let construction_sites = room_data.get_construction_sites().ok_or("Expected construction sites")?;
 
-                        const MAX_CONSTRUCTION_SITES: i32 = 10;
+                        const MAX_CONSTRUCTION_SITES: i32 = 2;
 
                         let max_placement = MAX_CONSTRUCTION_SITES - (construction_sites.len() as i32);
 

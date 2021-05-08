@@ -61,16 +61,22 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
             .and_then(|target_room_data| target_room_data.get_dynamic_visibility_data());
 
         if let Some(dynamic_visibility_data) = dynamic_visibility_data {
-            let is_hostile = dynamic_visibility_data.source_keeper()
-                || dynamic_visibility_data.owner().hostile()
-                || dynamic_visibility_data.reservation().hostile()
-                || dynamic_visibility_data.hostile_creeps()
-                || dynamic_visibility_data.hostile_structures();
-
-            if is_hostile {
+            if dynamic_visibility_data.hostile_structures() {
                 match room_options.hostile_behavior() {
                     HostileBehavior::Allow => {}
                     HostileBehavior::HighCost => return Some(10.0),
+                    HostileBehavior::Deny => return None,
+                }
+            }
+
+            let owned_hostile = dynamic_visibility_data.source_keeper()
+                || dynamic_visibility_data.owner().hostile()
+                || dynamic_visibility_data.reservation().hostile();
+
+            if owned_hostile {
+                match room_options.hostile_behavior() {
+                    HostileBehavior::Allow => {}
+                    HostileBehavior::HighCost => return Some(5.0),
                     HostileBehavior::Deny => return None,
                 }
             }

@@ -45,7 +45,7 @@ fn main() -> Result<(), String> {
     std::fs::create_dir_all("output").map_err(|err| format!("Failed to create output folder: {}", err))?;
 
     info!("Loading map data...");
-    let shard = "shard1";    
+    let shard = "shard2";    
     let map_data = load_map_data(format!("resources/map-mmo-{}.json", shard))?;
     info!("Finished loading map data");
 
@@ -69,7 +69,7 @@ fn main() -> Result<(), String> {
         //map_data.get_room("E11N1")?,
         //map_data.get_room("E29S11")?,
 
-        map_data.get_room("W3S52")?,
+        map_data.get_room("E21S44")?,
     ];
 
     let maximum_seconds = Some(60.0);

@@ -28,7 +28,7 @@ where
 {
     let room_half_width = ROOM_WIDTH / 2;
     let room_half_height = ROOM_HEIGHT / 2;
-    let range = room_half_width.max(room_half_height) - 2;
+    let range = room_half_width.max(room_half_height).max(2) - 2;
 
     let target_pos = Position::new(
         unsafe { RoomCoordinate::unchecked_new(room_half_width) },

@@ -95,7 +95,7 @@ impl Mission for ReserveMission {
     }
 
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
-        format!("Reserve - Reservers: {}", self.reservers.len())
+        format!("Reserve - Reservers: {} - Can spawn: {}", self.reservers.len(), self.allow_spawning)
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {

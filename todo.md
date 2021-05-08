@@ -33,11 +33,15 @@
 
 - Ping-pong plan pathing with creep avoidance? May not need with congestion control?
 
+- Have claim mission time out (when no claimers exist?). Notify owning operation and blacklist location for duration.
+
 # Medium Priority
 
 - Pathfinding solution. (Use built in path finder.)
 - Add per-room stats (i.e. energy available over X minutes) to use for predicting needed roles.
 - Allow scouts to find multiple rooms. (Use a goal system?)
+
+- Convert to LinearCostMatrix and SparseCostMatrix from central code.
 
 # Low priority
 

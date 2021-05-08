@@ -10,7 +10,7 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use itertools::*;
+use itertools::Itertools;
 
 #[derive(ConvertSaveload)]
 pub struct ClaimMission {
@@ -98,6 +98,20 @@ impl Mission for ClaimMission {
 
         self.claimers
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
+
+        let mid_point_coordinate = unsafe{ RoomCoordinate::unchecked_new(ROOM_SIZE / 2) };
+
+        let home_room_positions = self.home_room_datas.iter()
+            .filter_map(|e| system_data.room_data.get(*e))        
+            .map(|room| Position::new(mid_point_coordinate, mid_point_coordinate, room.name));
+
+        let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;            
+
+        let target_position = Position::new(mid_point_coordinate, mid_point_coordinate, room_data.name);
+
+        for home_room_position in home_room_positions {
+            MapVisual::line(home_room_position, target_position, Some(LineStyle::default().color("Purple")));
+        }            
 
         Ok(())
     }

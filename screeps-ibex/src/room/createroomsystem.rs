@@ -17,22 +17,18 @@ impl<'a> System<'a> for CreateRoomDataSystem {
             .map(|(_, room_data)| room_data.name)
             .collect::<std::collections::HashSet<RoomName>>();
 
-        //TODO: wiarchbe: Re-enable flags and construction sites.
-        /*
-        let flags = screeps::game::flags::values();
-        let flag_rooms = flags.iter().map(|flag| flag.pos().room_name());
+        let flag_rooms = screeps::game::flags()
+            .values()
+            .map(|flag| flag.pos().room_name());
 
-        let construction_sites = screeps::game::construction_sites::values();
-        let construction_site_rooms = construction_sites
-            .iter()
+        let construction_site_rooms = screeps::game::construction_sites()
+            .values()
             .map(|construction_site| construction_site.pos().room_name());
-        */
 
         let missing_rooms: HashSet<_> = game::rooms()
             .keys()
-            //TODO: wiarchbe: Re-enable flags and construction sites.
-            //.chain(flag_rooms)
-            //.chain(construction_site_rooms)
+            .chain(flag_rooms)
+            .chain(construction_site_rooms)
             .filter(|name| !existing_rooms.contains(name))
             .collect();
 

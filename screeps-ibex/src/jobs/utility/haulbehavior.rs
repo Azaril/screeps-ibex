@@ -428,7 +428,7 @@ pub fn visualize_pickup(describe_data: &mut JobDescribeData, ticket: &TransferWi
         describe_data.visualizer.get_room(pos.room_name()).line(
             (pos.x().u8() as f32, pos.y().u8() as f32),
             (to.x().u8() as f32, to.y().u8() as f32),
-            Some(LineStyle::default().color("blue")),
+            Some(LineStyle::default().color("Blue")),
         );
     }
 }
@@ -509,7 +509,7 @@ pub fn visualize_delivery_from(describe_data: &mut JobDescribeData, tickets: &Ve
         describe_data.visualizer.get_room(delivery_pos.room_name()).line(
             (last_pos.x().u8() as f32, last_pos.y().u8() as f32),
             (delivery_pos.x().u8() as f32, delivery_pos.y().u8() as f32),
-            Some(LineStyle::default().color("green")),
+            Some(LineStyle::default().color("Green")),
         );
 
         last_pos = delivery_pos;

@@ -152,10 +152,8 @@ where
         let next_rooms: HashMap<RoomName, HashSet<Entity>> = std::mem::replace(&mut expansion_rooms, HashMap::new());
 
         for (source_room_name, home_room_entities) in next_rooms.into_iter() {
-            if visited_rooms.get(&source_room_name).map(|v| v.distance == distance).unwrap_or(true) {
-                let candiate_room_data = (candidate_generator)(system_data, source_room_name);
-
-                if let Some(candidate_room_data) = candiate_room_data {
+            if !visited_rooms.contains_key(&source_room_name) {
+                if let Some(candidate_room_data) = candidate_generator(system_data, source_room_name) {
                     let visited_room = VisitedRoomData {
                         room_data_entity: candidate_room_data.room_data_entity,
                         home_room_data_entities: home_room_entities.iter().copied().collect(),

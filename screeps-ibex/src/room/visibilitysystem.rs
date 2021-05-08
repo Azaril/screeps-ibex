@@ -6,6 +6,7 @@ use crate::serialize::*;
 use bitflags::*;
 use log::*;
 use screeps::*;
+use screeps_rover::can_traverse_between_rooms;
 use specs::prelude::*;
 use specs::saveload::*;
 use std::collections::HashMap;
@@ -177,6 +178,14 @@ impl VisibilityQueueSystem {
                     }
                 }
 
+                fn get_room_cost(to_room_name: RoomName, from_room_name: RoomName) -> f64 {
+                    if !can_traverse_between_rooms(from_room_name, to_room_name) {
+                        return f64::INFINITY;
+                    }
+            
+                    1.0
+                }
+
                 //
                 // Use scout mission after a short period of time.
                 //
@@ -185,7 +194,8 @@ impl VisibilityQueueSystem {
                     if game::time() - *last_visible >= 20 {
                         if let Some(room_entity) = system_data.mapping.get_room(&unknown_room_name) {
                             if let Some(room_data) = system_data.room_data.get_mut(room_entity) {
-                                //TODO: Use path distance instead of linear distance.
+                                const MAX_ROOM_DISTANCE: u32 = 6;
+
                                 let home_room_entities: Vec<_> = home_room_data.iter().map(|(entity, home_room_name, max_level, _)| {
                                     let delta = room_data.name - *home_room_name;
                                     let range = delta.0.abs() as u32 + delta.1.abs() as u32;
@@ -193,7 +203,27 @@ impl VisibilityQueueSystem {
                                     (entity, home_room_name, max_level, range)
                                 })
                                     .filter(|(_, _, max_level, _)| **max_level >= 2)
-                                    .filter(|(_, _, _, range)| *range <= 5)
+                                    .filter(|(_, _, _, range)| *range <= MAX_ROOM_DISTANCE)
+                                    .filter(|(_, home_room_name, _, _)| {
+                                        let options = map::FindRouteOptions::new()
+                                            .room_callback(|to_room_name, from_room_name| {
+                                                if !can_traverse_between_rooms(from_room_name, to_room_name) {
+                                                    return f64::INFINITY;
+                                                }
+                                                
+                                                //TODO: Need to include hostile rooms.
+                                        
+                                                1.0
+                                            });
+                            
+                                        if let Ok(room_path) = game::map::find_route(room_data.name, **home_room_name, Some(options)) {
+                                            if room_path.len() as u32 <= MAX_ROOM_DISTANCE {
+                                                return true;
+                                            }
+                                        }
+
+                                        false
+                                    })
                                     .map(|(entity, _, _, _)| *entity)
                                     .collect();
                                     
