@@ -1490,7 +1490,7 @@ impl TransferQueue {
         self.rooms.try_get_room(data, room, transfer_types)
     }
 
-    pub fn select_pickups(
+    pub fn select_pickups<PF>(
         &mut self,
         data: &dyn TransferRequestSystemData,
         pickup_rooms: &[RoomName],
@@ -1498,20 +1498,24 @@ impl TransferQueue {
         pickup_types: TransferTypeFlags,
         desired_resources: &HashMap<Option<ResourceType>, u32>,
         available_capacity: TransferCapacity,
-    ) -> Vec<TransferWithdrawTicket> {
+        pickup_filter: PF,
+    ) -> Vec<TransferWithdrawTicket> where
+        PF: Fn(&TransferTarget) -> bool, {
         let mut tickets = Vec::new();
 
         for pickup_room in pickup_rooms.iter() {
             if let Some(room) = self.try_get_room(data, *pickup_room, pickup_types) {
                 if room.stats.withdrawl_priorities.intersects(allowed_priorities) {
                     for (target, node) in room.nodes.iter() {
-                        let pickup_resources = node.select_pickup(allowed_priorities, pickup_types, desired_resources, available_capacity);
+                        if pickup_filter(target) {
+                            let pickup_resources = node.select_pickup(allowed_priorities, pickup_types, desired_resources, available_capacity);
 
-                        if !pickup_resources.is_empty() {
-                            tickets.push(TransferWithdrawTicket {
-                                target: *target,
-                                resources: pickup_resources,
-                            })
+                            if !pickup_resources.is_empty() {
+                                tickets.push(TransferWithdrawTicket {
+                                    target: *target,
+                                    resources: pickup_resources,
+                                })
+                            }
                         }
                     }
                 }
@@ -1578,7 +1582,7 @@ impl TransferQueue {
         tickets
     }
 
-    pub fn select_deliveries<TF>(
+    pub fn select_deliveries<DF>(
         &mut self,
         data: &dyn TransferRequestSystemData,
         delivery_rooms: &[RoomName],
@@ -1586,10 +1590,10 @@ impl TransferQueue {
         delivery_types: TransferTypeFlags,
         available_resources: &HashMap<ResourceType, u32>,
         available_capacity: TransferCapacity,
-        target_filter: TF,
+        delivery_filter: DF,
     ) -> Vec<TransferDepositTicket>
     where
-        TF: Fn(&TransferTarget) -> bool,
+        DF: Fn(&TransferTarget) -> bool,
     {
         let mut tickets = Vec::new();
 
@@ -1597,7 +1601,7 @@ impl TransferQueue {
             if let Some(room) = self.try_get_room(data, *delivery_room, delivery_types) {
                 if room.stats.deposit_priorities.intersects(allowed_priorities) {
                     for (target, node) in room.nodes.iter() {
-                        if target_filter(target) {
+                        if delivery_filter(target) {
                             let delivery_resources =
                                 node.select_delivery(allowed_priorities, delivery_types, available_resources, available_capacity);
 
@@ -1699,7 +1703,7 @@ impl TransferQueue {
         available_resources
     }
 
-    pub fn select_best_delivery<TF>(
+    pub fn select_best_delivery<PF, DF>(
         &mut self,
         data: &dyn TransferRequestSystemData,
         pickup_rooms: &[RoomName],
@@ -1709,10 +1713,12 @@ impl TransferQueue {
         transfer_type: TransferType,
         current_position: Position,
         available_capacity: TransferCapacity,
-        target_filter: TF,
+        pickup_filter: PF,
+        delivery_filter: DF,
     ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)>
     where
-        TF: Fn(&TransferTarget) -> bool,
+        PF: Fn(&TransferTarget) -> bool,
+        DF: Fn(&TransferTarget) -> bool,
     {
         if available_capacity.empty() {
             return None;
@@ -1725,6 +1731,8 @@ impl TransferQueue {
             return None;
         }
 
+        let pickup_filter = &pickup_filter;
+
         self.select_deliveries(
             data,
             delivery_rooms,
@@ -1732,10 +1740,10 @@ impl TransferQueue {
             transfer_type.into(),
             &global_available_resources,
             available_capacity,
-            target_filter,
+            delivery_filter,
         )
         .iter()
-        .map(|delivery| {
+        .map(move |delivery| {
             let mut delivery_resources = HashMap::new();
 
             for entries in delivery.resources.values() {
@@ -1754,6 +1762,7 @@ impl TransferQueue {
                 transfer_type.into(),
                 &delivery_resources,
                 available_capacity,
+                pickup_filter,
             );
 
             (pickups, delivery)
@@ -2043,7 +2052,7 @@ impl TransferQueue {
             .map(|(delivery, _)| delivery.clone())
     }
 
-    pub fn select_pickup_and_delivery<TF>(
+    pub fn select_pickup_and_delivery<PF, DF>(
         &mut self,
         data: &dyn TransferRequestSystemData,
         pickup_rooms: &[RoomName],
@@ -2052,10 +2061,12 @@ impl TransferQueue {
         transfer_type: TransferType,
         current_position: Position,
         available_capacity: TransferCapacity,
-        target_filter: TF,
+        pickup_filter: PF,
+        delivery_filter: DF,
     ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)>
     where
-        TF: Fn(&TransferTarget) -> bool + Copy,
+        PF: Fn(&TransferTarget) -> bool,
+        DF: Fn(&TransferTarget) -> bool,
     {
         let priorities = generate_active_priorities(allowed_priorities, allowed_priorities);
 
@@ -2069,7 +2080,8 @@ impl TransferQueue {
                 transfer_type,
                 current_position,
                 available_capacity,
-                target_filter,
+                &pickup_filter,
+                &delivery_filter,
             ) {
                 return Some((pickup_ticket, delivery_ticket));
             }

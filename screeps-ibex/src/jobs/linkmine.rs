@@ -162,10 +162,7 @@ impl LinkMineJob {
                 .filter(|position| {
                     let terrain = game::map::get_room_terrain(position.room_name());
 
-                    //TODO: wiarchbe: Come up with better conversion method here.
-                    use num_traits::*;
-
-                    match Terrain::from_u8(terrain.get(position.x().into(), position.y().into())).expect("expected terrain type") {
+                    match terrain.get(position.x().into(), position.y().into()) {
                         Terrain::Plain => true,
                         Terrain::Wall => false,
                         Terrain::Swamp => true,

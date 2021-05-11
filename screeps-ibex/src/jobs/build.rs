@@ -87,6 +87,7 @@ impl Idle {
                     TransferTypeFlags::HAUL | TransferTypeFlags::USE,
                     ResourceType::Energy,
                     tick_context.runtime_data.transfer_queue,
+                    target_filters::all,
                     BuildState::pickup,
                 )
             })
@@ -139,6 +140,7 @@ impl FinishedPickup {
             TransferTypeFlags::HAUL | TransferTypeFlags::USE,
             ResourceType::Energy,
             tick_context.runtime_data.transfer_queue,
+            target_filters::all,
             BuildState::pickup,
         )
         .or_else(|| Some(BuildState::idle()))

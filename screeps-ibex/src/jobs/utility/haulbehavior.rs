@@ -9,7 +9,7 @@ use screeps::*;
 use std::collections::HashMap;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn get_new_pickup_state_fill_resource<F, R>(
+pub fn get_new_pickup_state_fill_resource<PF, F, R>(
     creep: &Creep,
     data: &dyn TransferRequestSystemData,
     pickup_rooms: &[&RoomData],
@@ -17,9 +17,11 @@ pub fn get_new_pickup_state_fill_resource<F, R>(
     transfer_types: TransferTypeFlags,
     desired_resource: ResourceType,
     transfer_queue: &mut TransferQueue,
+    pickup_filter: PF,
     state_map: F,
 ) -> Option<R>
 where
+    PF: Fn(&TransferTarget) -> bool,
     F: Fn(TransferWithdrawTicket) -> R,
 {
     //TODO: Fix this when double resource counting bug is fixed.
@@ -39,6 +41,7 @@ where
             transfer_types,
             &desired_resources,
             TransferCapacity::Infinite,
+            pickup_filter
         );
 
         if let Some(pickup) = pickups
@@ -55,18 +58,18 @@ where
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn get_new_delivery_current_resources_state<TF, F, R>(
+pub fn get_new_delivery_current_resources_state<DF, F, R>(
     creep: &Creep,
     data: &dyn TransferRequestSystemData,
     delivery_rooms: &[&RoomData],
     allowed_priorities: TransferPriorityFlags,
     transfer_types: TransferTypeFlags,
     transfer_queue: &mut TransferQueue,
-    target_filter: TF,
+    delivery_filter: DF,
     state_map: F,
 ) -> Option<R>
 where
-    TF: Fn(&TransferTarget) -> bool,
+    DF: Fn(&TransferTarget) -> bool,
     F: Fn(Vec<TransferDepositTicket>) -> R,
 {
     let creep_store = creep.store();
@@ -88,7 +91,7 @@ where
             transfer_types,
             &available_resources,
             available_capacity,
-            target_filter,
+            delivery_filter,
         );
 
         if let Some(delivery) = deliveries
@@ -109,7 +112,7 @@ where
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn get_new_pickup_and_delivery_state<TF, F, R>(
+pub fn get_new_pickup_and_delivery_state<PF, DF, F, R>(
     creep: &Creep,
     data: &dyn TransferRequestSystemData,
     pickup_rooms: &[&RoomData],
@@ -120,12 +123,14 @@ pub fn get_new_pickup_and_delivery_state<TF, F, R>(
     transfer_type: TransferType,
     available_capacity: TransferCapacity,
     transfer_queue: &mut TransferQueue,
-    target_filter: TF,
+    pickup_filter: PF,
+    delivery_filter: DF,
     state_map: F,
 ) -> Option<R>
 where
+    PF: Fn(&TransferTarget) -> bool + Copy,    
+    DF: Fn(&TransferTarget) -> bool + Copy,    
     F: Fn(TransferWithdrawTicket, Vec<TransferDepositTicket>) -> R,
-    TF: Fn(&TransferTarget) -> bool + Copy,
 {
     if !available_capacity.empty() {
         let pickup_room_names = pickup_rooms.iter().map(|r| r.name).collect_vec();
@@ -139,7 +144,8 @@ where
             transfer_type,
             creep.pos(),
             available_capacity,
-            target_filter,
+            pickup_filter,
+            delivery_filter
         ) {
             transfer_queue.register_pickup(&pickup);
             transfer_queue.register_delivery(&delivery);
@@ -163,7 +169,7 @@ where
                 transfer_queue,
                 &mut pickup,
                 &mut deliveries,
-                target_filter,
+                delivery_filter,
                 allowed_secondary_range
             );
 
@@ -287,43 +293,6 @@ pub fn get_additional_deliveries<TF>(
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn get_new_pickup_and_delivery_full_capacity_state<TF, F, R>(
-    creep: &Creep,
-    data: &dyn TransferRequestSystemData,
-    pickup_rooms: &[&RoomData],
-    delivery_rooms: &[&RoomData],
-    allowed_priorities: TransferPriorityFlags,
-    allowed_secondary_priorities: TransferPriorityFlags,
-    allowed_secondary_range: u32,
-    transfer_type: TransferType,
-    transfer_queue: &mut TransferQueue,
-    target_filter: TF,
-    state_map: F,
-) -> Option<R>
-where
-    F: Fn(TransferWithdrawTicket, Vec<TransferDepositTicket>) -> R,
-    TF: Fn(&TransferTarget) -> bool + Copy,
-{
-    //TODO: Fix this when double resource counting bug is fixed.
-    let free_capacity = creep.store().expensive_free_capacity();
-
-    get_new_pickup_and_delivery_state(
-        creep,
-        data,
-        pickup_rooms,
-        delivery_rooms,
-        allowed_priorities,
-        allowed_secondary_priorities,
-        allowed_secondary_range,
-        transfer_type,
-        TransferCapacity::Finite(free_capacity),
-        transfer_queue,
-        target_filter,
-        state_map,
-    )
-}
-
-#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn tick_pickup<F, R>(tick_context: &mut JobTickContext, ticket: &mut TransferWithdrawTicket, next_state: F) -> Option<R>
 where
     F: FnOnce() -> R,
@@ -441,40 +410,85 @@ where
     let creep = tick_context.runtime_data.owner;
     let creep_pos = creep.pos();
 
-    let mut transfered = false;
+    //
+    // Transfer to any adjacent delivery targets.
+    //
+
+    let mut expired_tickets = Vec::new();
+
+    let mut adjacent_tickets = tickets
+        .iter_mut()
+        .enumerate()
+        .filter(|(_, ticket)| creep_pos.is_near_to(ticket.target().pos()))
+        .filter(|(_, ticket)| ticket.target().is_valid());
+    
+    let transfered = if !tick_context.action_flags.intersects(SimultaneousActionFlags::TRANSFER) {
+        while let Some((ticket_index, ticket)) = adjacent_tickets.next() {
+            while let Some((resource, amount)) = ticket.get_next_deposit() {
+                ticket.consume_deposit(resource, amount);
+
+                if ticket.target().creep_transfer_resource_amount(creep, resource, amount) == ReturnCode::Ok {
+                    tick_context.action_flags.insert(SimultaneousActionFlags::TRANSFER);
+                }
+
+                if tick_context.action_flags.intersects(SimultaneousActionFlags::TRANSFER) {
+                    break;
+                }                
+            }
+
+            expired_tickets.push(ticket_index);
+
+            if tick_context.action_flags.intersects(SimultaneousActionFlags::TRANSFER) {
+                break;
+            }
+        }
+
+        tick_context.action_flags.intersects(SimultaneousActionFlags::TRANSFER)
+    } else {
+        false
+    };
+
+    //
+    // Allow movement only if there is not another adjacent delivery.
+    //
+
+    let can_move = adjacent_tickets.next().is_none();
+
+    //
+    // Remove all tickets that have expired.
+    //
+
+    for ticket_index in expired_tickets.into_iter().rev() {
+        tickets.remove(ticket_index);
+    }
+
+    //
+    // Move towards first ticket (assumed to be already sorted for pathing.)
+    //
 
     while let Some(ticket) = tickets.first_mut() {
+        //
+        // Ensure the ticket is valid and has a deposit, otherwise expire it.
+        //
+
         //TODO: Use visibility to query if target should be visible.
         if ticket.target().is_valid() && ticket.get_next_deposit().is_some() {
             let pos = ticket.target().pos();
 
-            if !creep_pos.is_near_to(pos) {
-                if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
-                    tick_context
-                        .runtime_data
-                        .movement
-                        .move_to(tick_context.runtime_data.creep_entity, pos)
-                        .range(1);
-                }
-
-                return None;
+            if can_move && !creep_pos.is_near_to(pos) && tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
+                tick_context
+                    .runtime_data
+                    .movement
+                    .move_to(tick_context.runtime_data.creep_entity, pos)
+                    .range(1);
             }
 
-            while let Some((resource, amount)) = ticket.get_next_deposit() {
-                if !tick_context.action_flags.intersects(SimultaneousActionFlags::TRANSFER) {
-                    ticket.consume_deposit(resource, amount);
-
-                    if ticket.target().creep_transfer_resource_amount(creep, resource, amount) == ReturnCode::Ok {
-                        tick_context.action_flags.insert(SimultaneousActionFlags::TRANSFER);
-
-                        transfered = true;
-                        break;
-                    }
-                } else {
-                    return None;
-                }
-            }
+            return None;
         } else {
+            //
+            // Ticket was not valid or has no remaining deposits so expire it.
+            //
+
             tickets.remove(0);
         }
     }
@@ -483,6 +497,8 @@ where
         //
         // NOTE: Delay further execution by a tick as inventory cannot be trusted. (Needs predicted storage that can be shared across systems.)
         //
+
+        //TODO: wiarchbe: Potentially just rely on action flags as a stop gap?
 
         None
     } else {

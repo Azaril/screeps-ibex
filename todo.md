@@ -21,6 +21,8 @@
 - Military units.
 - Shared, predicted storage capacity for the tick. (Allow for haulers to not wait for a tick at the end of their delivery tickets.)
 
+- Limit claimers to number of spots open next to controller.
+
 - Late 'expensive' validation on whether or not to spawn a unit. (i.e. can't pathfind to harvesting source)
 - Move missions/jobs/operations to their own data types. (Solve internal mutation problems...)
 - Scout as part of defend mission (gets stuck without vision on room)

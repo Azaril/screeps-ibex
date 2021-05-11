@@ -26,7 +26,6 @@ machine!(
         Idle,
         Harvest { target: RemoteObjectId<Source> },
         Pickup { ticket: TransferWithdrawTicket },
-        FinishedPickup,
         Sign { target: RemoteObjectId<StructureController> },
         Upgrade { target: RemoteObjectId<StructureController> },
         Wait { ticks: u32 }
@@ -54,9 +53,9 @@ machine!(
             std::any::type_name::<Self>().to_string()
         }
 
-        Idle, Harvest, FinishedPickup, Sign, Upgrade, Wait => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
+        Idle, Harvest, Sign, Upgrade, Wait => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
 
-        Idle, Harvest, FinishedPickup, Sign, Upgrade, Wait => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
+        Idle, Harvest, Sign, Upgrade, Wait => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
 
         _ => fn tick(&mut self, state_context: &mut UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState>;
     }
@@ -71,6 +70,30 @@ impl Idle {
             room_data: &*tick_context.system_data.room_data,
         };
 
+        //TODO: Only allow long movement if set up for it.
+        //TODO: wiarchbe: Need transfer pickup filter for range.
+        let (move_parts, non_move_parts) = tick_context.runtime_data.owner.body()
+            .iter()
+            .fold((0, 0), |(m, nm), part| {
+                if part.part() == Part::Move {
+                    (m + 1, nm)
+                } else {
+                    (m, nm + 1)
+                }
+            });
+
+        let allow_movement = move_parts >= non_move_parts;
+
+        let creep_pos = tick_context.runtime_data.owner.pos();
+
+        let pickup_filter = |target: &TransferTarget| {
+            if !allow_movement {
+                creep_pos.get_range_to(target.pos()) <= 5
+            } else {
+                true
+            }
+        };
+
         get_new_pickup_state_fill_resource(
             &tick_context.runtime_data.owner,
             &transfer_queue_data,
@@ -79,6 +102,7 @@ impl Idle {
             TransferTypeFlags::HAUL | TransferTypeFlags::USE,
             ResourceType::Energy,
             tick_context.runtime_data.transfer_queue,
+            pickup_filter,
             UpgradeState::pickup,
         )
         .or_else(|| {
@@ -112,35 +136,12 @@ impl Pickup {
             ResourceType::Energy,
             TransferTypeFlags::HAUL | TransferTypeFlags::USE,
             TransferPriorityFlags::ALL,
-            UpgradeState::finished_pickup,
+            UpgradeState::idle,
         )
     }
 
     pub fn visualize(&self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
         visualize_pickup(describe_data, &self.ticket);
-    }
-}
-
-impl FinishedPickup {
-    pub fn tick(&self, state_context: &UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState> {
-        let home_room_data = tick_context.system_data.room_data.get(state_context.home_room)?;
-
-        let transfer_queue_data = TransferQueueGeneratorData {
-            cause: "Upgrade Finished Pickup",
-            room_data: &*tick_context.system_data.room_data,
-        };
-
-        get_new_pickup_state_fill_resource(
-            &tick_context.runtime_data.owner,
-            &transfer_queue_data,
-            &[home_room_data],
-            TransferPriorityFlags::ALL,
-            TransferTypeFlags::HAUL | TransferTypeFlags::USE,
-            ResourceType::Energy,
-            tick_context.runtime_data.transfer_queue,
-            UpgradeState::pickup,
-        )
-        .or_else(|| Some(UpgradeState::idle()))
     }
 }
 

@@ -83,10 +83,29 @@ impl Idle {
             room_data: &*tick_context.system_data.room_data,
         };
 
-        let target_filter = if state_context.storage_delivery_only {
-            target_filters::storage
-        } else {
-            target_filters::all
+        let room_mapping = tick_context.runtime_data.mapping;
+        let room_data_system = tick_context.system_data.room_data;
+
+        let delivery_filter = |target: &TransferTarget| {
+            if state_context.storage_delivery_only {
+                let target_room = target.pos().room_name();
+                if let Some(target_room) = room_mapping.get_room(&target_room) {
+                    let has_storage = room_data_system
+                        .get(target_room)
+                        .and_then(|r| r.get_structures())
+                        .map(|r| !r.storages().is_empty())
+                        .unwrap_or(false);
+
+                    return match target {
+                        TransferTarget::Container(_) => !has_storage,
+                        TransferTarget::Storage(_) => true,
+                        TransferTarget::Terminal(_) => true,
+                        _ => false,
+                    };
+                }
+            }
+
+            true
         };
 
         get_new_delivery_current_resources_state(
@@ -96,7 +115,7 @@ impl Idle {
             TransferPriorityFlags::ACTIVE,
             TransferTypeFlags::HAUL,
             tick_context.runtime_data.transfer_queue,
-            target_filter,
+            delivery_filter,
             HaulState::delivery,
         )
         .or_else(|| {
@@ -107,7 +126,7 @@ impl Idle {
                 TransferPriorityFlags::NONE,
                 TransferTypeFlags::HAUL,
                 tick_context.runtime_data.transfer_queue,
-                target_filter,
+                delivery_filter,
                 HaulState::delivery,
             )
         })
@@ -117,7 +136,7 @@ impl Idle {
                 room_data: &*tick_context.system_data.room_data,
             };
 
-            get_new_pickup_and_delivery_full_capacity_state(
+            get_new_pickup_and_delivery_state(
                 creep,
                 &transfer_queue_data,
                 &pickup_rooms,
@@ -126,8 +145,10 @@ impl Idle {
                 TransferPriorityFlags::ALL,
                 10,
                 TransferType::Haul,
+                TransferCapacity::Finite(creep.store().expensive_free_capacity()),
                 tick_context.runtime_data.transfer_queue,
-                target_filter,
+                target_filters::all,
+                delivery_filter,
                 HaulState::pickup,
             )
         })
@@ -190,10 +211,29 @@ impl Pickup {
                 }
             }
 
-            let target_filter = if state_context.storage_delivery_only {
-                target_filters::storage
-            } else {
-                target_filters::all
+            let room_mapping = tick_context.runtime_data.mapping;
+            let room_data_system = tick_context.system_data.room_data;
+
+            let target_filter = |target: &TransferTarget| {
+                if state_context.storage_delivery_only {
+                    let target_room = target.pos().room_name();
+                    if let Some(target_room) = room_mapping.get_room(&target_room) {
+                        let has_storage = room_data_system
+                            .get(target_room)
+                            .and_then(|r| r.get_structures())
+                            .map(|r| !r.storages().is_empty())
+                            .unwrap_or(false);
+    
+                        return match target {
+                            TransferTarget::Container(_) => !has_storage,
+                            TransferTarget::Storage(_) => true,
+                            TransferTarget::Terminal(_) => true,
+                            _ => false,
+                        };
+                    }
+                }
+    
+                true
             };
 
             get_additional_deliveries(

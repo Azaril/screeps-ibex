@@ -9,7 +9,7 @@ use super::utility::movebehavior::*;
 use super::utility::repair::*;
 use super::utility::repairbehavior::*;
 use super::utility::waitbehavior::*;
-use crate::remoteobjectid::*;
+use crate::{remoteobjectid::*, store::HasExpensiveStore};
 use crate::structureidentifier::*;
 use crate::transfer::transfersystem::*;
 use screeps::*;
@@ -93,7 +93,7 @@ impl Idle {
                 room_data: &*tick_context.system_data.room_data,
             };
 
-            if let Some(state) = get_new_pickup_and_delivery_full_capacity_state(
+            if let Some(state) = get_new_pickup_and_delivery_state(
                 creep,
                 &transfer_queue_data,
                 &[delivery_room_data],
@@ -102,9 +102,11 @@ impl Idle {
                 TransferPriorityFlags::ALL,
                 10,
                 TransferType::Haul,
+                TransferCapacity::Finite(creep.store().expensive_free_capacity()),
                 tick_context.runtime_data.transfer_queue,
                 target_filters::all,
-                HarvestState::pickup,
+                target_filters::all,
+                HarvestState::pickup
             ) {
                 return Some(state);
             }
@@ -127,7 +129,7 @@ impl Idle {
                     room_data: &*tick_context.system_data.room_data,
                 };
 
-                if let Some(state) = get_new_pickup_and_delivery_full_capacity_state(
+                if let Some(state) = get_new_pickup_and_delivery_state(
                     creep,
                     &transfer_queue_data,
                     &[delivery_room_data],
@@ -136,7 +138,9 @@ impl Idle {
                     TransferPriorityFlags::ALL,
                     10,
                     TransferType::Haul,
+                    TransferCapacity::Finite(creep.store().expensive_free_capacity()),
                     tick_context.runtime_data.transfer_queue,
+                    target_filters::all,
                     target_filters::all,
                     HarvestState::pickup,
                 ) {

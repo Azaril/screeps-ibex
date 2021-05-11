@@ -891,26 +891,45 @@ impl LocalSupplyMission {
                     if container_used_capacity > 0 {
                         let container_store_capacity = container_store.get_capacity(None);
 
-                        let storage_fraction = (container_used_capacity as f32) / (container_store_capacity as f32);
-                        let priority = if storage_fraction > 0.75 {
-                            TransferPriority::Medium
-                        } else if storage_fraction > 0.5 {
-                            TransferPriority::Low
-                        } else {
-                            TransferPriority::None
-                        };
+                        let chunks = container_store_capacity / 4;
+
+                        let override_ranges = [
+                            (TransferPriority::Medium, chunks * 3),
+                        ];
+
+                        let override_priority = override_ranges
+                            .iter()
+                            .rev()
+                            .find(|(_, min)| container_used_capacity >= *min)
+                            .map(|(priority, _)| *priority)
+                            .unwrap_or(TransferPriority::None);
+
+                        let ranges = [
+                            (TransferPriority::Low, chunks * 0),
+                            (TransferPriority::Medium, chunks * 2),
+                            (TransferPriority::High, chunks * 3),
+                        ];
 
                         for resource in container_store.store_types() {
                             let resource_amount = container_store.get_used_capacity(Some(resource));
-                            let transfer_request = TransferWithdrawRequest::new(
-                                TransferTarget::Container(*container_id),
-                                resource,
-                                priority,
-                                resource_amount,
-                                TransferType::Haul,
-                            );
 
-                            transfer.request_withdraw(transfer_request);
+                            for (priority, min_amount) in &ranges {
+                                if resource_amount > *min_amount {
+                                    let priority_amount = resource_amount - min_amount;
+                                    // NOTE: Min here means highest priority due to ordering.
+                                    let effective_priority = (*priority).min(override_priority);
+
+                                    let transfer_request = TransferWithdrawRequest::new(
+                                        TransferTarget::Container(*container_id),
+                                        resource,
+                                        effective_priority,
+                                        priority_amount,
+                                        TransferType::Haul,
+                                    );
+        
+                                    transfer.request_withdraw(transfer_request);
+                                }
+                            }
                         }
                     }
                 }
