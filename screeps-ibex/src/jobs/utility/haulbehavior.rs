@@ -1,9 +1,9 @@
-use crate::{findnearest::*, store::HasExpensiveStore};
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
 use crate::jobs::jobsystem::*;
 use crate::room::data::*;
 use crate::transfer::transfersystem::*;
+use crate::{findnearest::*, store::HasExpensiveStore};
 use itertools::Itertools;
 use screeps::*;
 use std::collections::HashMap;
@@ -41,7 +41,7 @@ where
             transfer_types,
             &desired_resources,
             TransferCapacity::Infinite,
-            pickup_filter
+            pickup_filter,
         );
 
         if let Some(pickup) = pickups
@@ -128,8 +128,8 @@ pub fn get_new_pickup_and_delivery_state<PF, DF, F, R>(
     state_map: F,
 ) -> Option<R>
 where
-    PF: Fn(&TransferTarget) -> bool + Copy,    
-    DF: Fn(&TransferTarget) -> bool + Copy,    
+    PF: Fn(&TransferTarget) -> bool + Copy,
+    DF: Fn(&TransferTarget) -> bool + Copy,
     F: Fn(TransferWithdrawTicket, Vec<TransferDepositTicket>) -> R,
 {
     if !available_capacity.empty() {
@@ -145,7 +145,7 @@ where
             creep.pos(),
             available_capacity,
             pickup_filter,
-            delivery_filter
+            delivery_filter,
         ) {
             transfer_queue.register_pickup(&pickup);
             transfer_queue.register_delivery(&delivery);
@@ -170,7 +170,7 @@ where
                 &mut pickup,
                 &mut deliveries,
                 delivery_filter,
-                allowed_secondary_range
+                allowed_secondary_range,
             );
 
             return Some(state_map(pickup, deliveries));
@@ -235,7 +235,9 @@ pub fn get_additional_deliveries<TF>(
                         if target_filter(target) {
                             let target_pos = target.pos();
 
-                            deliveries.iter().any(|d| d.target().pos().get_range_to(target_pos) <= additional_delivery_range)
+                            deliveries
+                                .iter()
+                                .any(|d| d.target().pos().get_range_to(target_pos) <= additional_delivery_range)
                         } else {
                             false
                         }
@@ -381,7 +383,7 @@ where
             available_capacity,
             resource_type,
         ) {
-            tick_context.runtime_data.transfer_queue.register_pickup(&additional_withdrawl);            
+            tick_context.runtime_data.transfer_queue.register_pickup(&additional_withdrawl);
             ticket.combine_with(&additional_withdrawl);
         }
     }
@@ -421,7 +423,7 @@ where
         .enumerate()
         .filter(|(_, ticket)| creep_pos.is_near_to(ticket.target().pos()))
         .filter(|(_, ticket)| ticket.target().is_valid());
-    
+
     let transfered = if !tick_context.action_flags.intersects(SimultaneousActionFlags::TRANSFER) {
         while let Some((ticket_index, ticket)) = adjacent_tickets.next() {
             while let Some((resource, amount)) = ticket.get_next_deposit() {
@@ -433,7 +435,7 @@ where
 
                 if tick_context.action_flags.intersects(SimultaneousActionFlags::TRANSFER) {
                     break;
-                }                
+                }
             }
 
             expired_tickets.push(ticket_index);

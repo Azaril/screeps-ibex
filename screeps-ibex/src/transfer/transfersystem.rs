@@ -115,7 +115,7 @@ pub enum TransferTarget {
 impl TransferTarget {
     fn is_valid_from_id<T>(target: &RemoteObjectId<T>) -> bool
     where
-        T: Resolvable
+        T: Resolvable,
     {
         if game::rooms().get(target.pos().room_name()).is_some() {
             target.resolve().is_some()
@@ -420,7 +420,9 @@ pub struct TransferWithdrawlKey {
 
 impl TransferWithdrawlKey {
     pub fn matches(&self, resource: ResourceType, allowed_priorities: TransferPriorityFlags, allowed_types: TransferTypeFlags) -> bool {
-        self.resource == resource && allowed_priorities.intersects(self.priority.into()) && allowed_types.intersects(self.allowed_type.into())
+        self.resource == resource
+            && allowed_priorities.intersects(self.priority.into())
+            && allowed_types.intersects(self.allowed_type.into())
     }
 }
 
@@ -438,7 +440,9 @@ impl TransferDepositKey {
         allowed_priorities: TransferPriorityFlags,
         allowed_types: TransferTypeFlags,
     ) -> bool {
-        self.resource == resource && allowed_priorities.intersects(self.priority.into()) && allowed_types.intersects(self.allowed_type.into())
+        self.resource == resource
+            && allowed_priorities.intersects(self.priority.into())
+            && allowed_types.intersects(self.allowed_type.into())
     }
 }
 
@@ -493,7 +497,9 @@ impl TransferNode {
         let mut available_resources: u32 = 0;
 
         for key in self.withdrawls.keys().filter(|key| {
-            allowed_priorities.intersects(key.priority.into()) && transfer_types.intersects(key.allowed_type.into()) && key.resource == resource
+            allowed_priorities.intersects(key.priority.into())
+                && transfer_types.intersects(key.allowed_type.into())
+                && key.resource == resource
         }) {
             available_resources += self.get_available_withdrawl(key);
         }
@@ -537,10 +543,7 @@ impl TransferNode {
         *current += amount;
     }
 
-    pub fn register_pickup(
-        &mut self,
-        withdrawls: &HashMap<ResourceType, Vec<TransferWithdrawlTicketResourceEntry>>,
-    ) {
+    pub fn register_pickup(&mut self, withdrawls: &HashMap<ResourceType, Vec<TransferWithdrawlTicketResourceEntry>>) {
         for (resource, resource_entries) in withdrawls {
             for resource_entry in resource_entries {
                 let key = TransferWithdrawlKey {
@@ -556,10 +559,7 @@ impl TransferNode {
         }
     }
 
-    pub fn register_delivery(
-        &mut self,
-        deposits: &HashMap<ResourceType, Vec<TransferDepositTicketResourceEntry>>,
-    ) {
+    pub fn register_delivery(&mut self, deposits: &HashMap<ResourceType, Vec<TransferDepositTicketResourceEntry>>) {
         for resource_entries in deposits.values() {
             for resource_entry in resource_entries {
                 let key = TransferDepositKey {
@@ -838,7 +838,12 @@ impl TransferNode {
             .join("\n");
 
         //TODO: Use priority and color to visualize.
-        visualizer.text(pos.x().u8() as f32, pos.y().u8() as f32, full_text, Some(TextStyle::default().font(0.3)));
+        visualizer.text(
+            pos.x().u8() as f32,
+            pos.y().u8() as f32,
+            full_text,
+            Some(TextStyle::default().font(0.3)),
+        );
     }
 }
 
@@ -911,7 +916,10 @@ impl TransferWithdrawTicket {
                 .entry(*resource)
                 .and_modify(|existing| {
                     for entry in entries {
-                        if let Some(withdrawl_resource_entry) = existing.iter_mut().find(|oe| oe.priority == entry.priority && oe.transfer_type == entry.transfer_type) {
+                        if let Some(withdrawl_resource_entry) = existing
+                            .iter_mut()
+                            .find(|oe| oe.priority == entry.priority && oe.transfer_type == entry.transfer_type)
+                        {
                             withdrawl_resource_entry.amount += entry.amount;
                         } else {
                             existing.push(entry.clone());
@@ -1028,10 +1036,11 @@ impl TransferDepositTicket {
                 .entry(*resource)
                 .and_modify(|existing| {
                     for entry in entries {
-                        if let Some(deposit_resource_entry) = existing
-                            .iter_mut()
-                            .find(|oe| oe.target_resource == entry.target_resource && oe.priority == entry.priority && oe.transfer_type == entry.transfer_type)
-                        {
+                        if let Some(deposit_resource_entry) = existing.iter_mut().find(|oe| {
+                            oe.target_resource == entry.target_resource
+                                && oe.priority == entry.priority
+                                && oe.transfer_type == entry.transfer_type
+                        }) {
                             deposit_resource_entry.amount += entry.amount;
                         } else {
                             existing.push(entry.clone());
@@ -1499,8 +1508,10 @@ impl TransferQueue {
         desired_resources: &HashMap<Option<ResourceType>, u32>,
         available_capacity: TransferCapacity,
         pickup_filter: PF,
-    ) -> Vec<TransferWithdrawTicket> where
-        PF: Fn(&TransferTarget) -> bool, {
+    ) -> Vec<TransferWithdrawTicket>
+    where
+        PF: Fn(&TransferTarget) -> bool,
+    {
         let mut tickets = Vec::new();
 
         for pickup_room in pickup_rooms.iter() {
@@ -1508,7 +1519,8 @@ impl TransferQueue {
                 if room.stats.withdrawl_priorities.intersects(allowed_priorities) {
                     for (target, node) in room.nodes.iter() {
                         if pickup_filter(target) {
-                            let pickup_resources = node.select_pickup(allowed_priorities, pickup_types, desired_resources, available_capacity);
+                            let pickup_resources =
+                                node.select_pickup(allowed_priorities, pickup_types, desired_resources, available_capacity);
 
                             if !pickup_resources.is_empty() {
                                 tickets.push(TransferWithdrawTicket {

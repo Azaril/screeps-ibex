@@ -122,7 +122,7 @@ impl<'a> System<'a> for RunJobSystem {
                     mapping: &mut data.mapping,
                     transfer_queue: &mut data.transfer_queue,
                     movement: &mut data.movement,
-                    cost_matrix: &mut data.cost_matrix
+                    cost_matrix: &mut data.cost_matrix,
                 };
 
                 job_data.as_job().run_job(&system_data, &mut runtime_data);

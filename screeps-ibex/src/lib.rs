@@ -34,8 +34,8 @@ mod visualize;
 
 use std::panic;
 
-use wasm_bindgen::prelude::*;
 use log::*;
+use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub fn setup() {

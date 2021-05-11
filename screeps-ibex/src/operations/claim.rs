@@ -2,19 +2,19 @@ use super::data::*;
 use super::operationsystem::*;
 use crate::missions::claim::*;
 use crate::missions::data::*;
+use crate::missions::missionsystem::*;
 use crate::missions::remotebuild::*;
 use crate::room::gather::*;
 use crate::room::roomplansystem::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
-use crate::missions::missionsystem::*;
+use itertools::*;
 use log::*;
 use screeps::*;
 use screeps_rover::can_traverse_between_rooms;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use itertools::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ClaimOperation {
@@ -63,8 +63,11 @@ impl ClaimOperation {
         }
 
         let can_claim = dynamic_visibility_data.owner().neutral()
-            && (dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().neutral()) && !dynamic_visibility_data.source_keeper();
-        let hostile = dynamic_visibility_data.owner().hostile() || dynamic_visibility_data.hostile_structures() || dynamic_visibility_data.source_keeper();
+            && (dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().neutral())
+            && !dynamic_visibility_data.source_keeper();
+        let hostile = dynamic_visibility_data.owner().hostile()
+            || dynamic_visibility_data.hostile_structures()
+            || dynamic_visibility_data.source_keeper();
 
         let can_plan = gather_system_data
             .room_plan_data
@@ -89,7 +92,7 @@ impl ClaimOperation {
             0 => None,
             1 => Some(0.25),
             x if x >= 2 => Some(1.0),
-            _ => None
+            _ => None,
         }?;
 
         Some((score, 4.0))
@@ -212,26 +215,27 @@ impl ClaimOperation {
                 if let Some(room_data) = system_data.room_data.get_mut(room_entity) {
                     const MAX_ROOM_DISTANCE: u32 = 6;
 
-                    let home_room_entities: Vec<_> = home_room_data.iter().map(|(entity, home_room_name, max_level)| {
-                        let delta = room_data.name - *home_room_name;
-                        let range = delta.0.abs() as u32 + delta.1.abs() as u32;
+                    let home_room_entities: Vec<_> = home_room_data
+                        .iter()
+                        .map(|(entity, home_room_name, max_level)| {
+                            let delta = room_data.name - *home_room_name;
+                            let range = delta.0.abs() as u32 + delta.1.abs() as u32;
 
-                        (entity, home_room_name, max_level, range)
-                    })
+                            (entity, home_room_name, max_level, range)
+                        })
                         .filter(|(_, _, max_level, _)| **max_level >= 2)
                         .filter(|(_, _, _, range)| *range <= MAX_ROOM_DISTANCE)
                         .filter(|(_, home_room_name, _, _)| {
-                            let options = map::FindRouteOptions::new()
-                                .room_callback(|to_room_name, from_room_name| {
-                                    if !can_traverse_between_rooms(from_room_name, to_room_name) {
-                                        return f64::INFINITY;
-                                    }
-                                    
-                                    //TODO: Need to include hostile rooms.
-                            
-                                    1.0
-                                });
-                
+                            let options = map::FindRouteOptions::new().room_callback(|to_room_name, from_room_name| {
+                                if !can_traverse_between_rooms(from_room_name, to_room_name) {
+                                    return f64::INFINITY;
+                                }
+
+                                //TODO: Need to include hostile rooms.
+
+                                1.0
+                            });
+
                             if let Ok(room_path) = game::map::find_route(room_data.name, **home_room_name, Some(options)) {
                                 if room_path.len() as u32 <= MAX_ROOM_DISTANCE {
                                     return true;
@@ -239,7 +243,7 @@ impl ClaimOperation {
                             }
 
                             false
-                        })                        
+                        })
                         .map(|(entity, _, _, _)| *entity)
                         .collect();
 
@@ -286,18 +290,23 @@ impl Operation for ClaimOperation {
             if self.claim_missions.is_empty() {
                 global_ui.operations().add_text("Claim".to_string(), None);
             } else {
-                let rooms = self.claim_missions.iter().filter_map(|claim_mission| {
-                        mission_data.get(*claim_mission).as_mission_type_mut::<ClaimMission>().map(|m| m.get_room())
-                    }).filter_map(|owning_room| {
-                        room_data.get(owning_room)
+                let rooms = self
+                    .claim_missions
+                    .iter()
+                    .filter_map(|claim_mission| {
+                        mission_data
+                            .get(*claim_mission)
+                            .as_mission_type_mut::<ClaimMission>()
+                            .map(|m| m.get_room())
                     })
+                    .filter_map(|owning_room| room_data.get(owning_room))
                     .map(|room_data| room_data.name.to_string())
                     .join(" / ");
 
                 let style = global_ui.operations().get_default_style().color("Green");
 
                 global_ui.operations().add_text(format!("Claim - Rooms: {}", rooms), Some(style));
-            }            
+            }
         })
     }
 
@@ -336,7 +345,7 @@ impl Operation for ClaimOperation {
 
         let current_gcl = game::gcl::level();
         let maximum_rooms = ((cpu_limit / ESTIMATED_ROOM_CPU_COST) as u32).min(current_gcl);
-        let active_rooms = (currently_owned_rooms + self.claim_missions.len()) as u32;        
+        let active_rooms = (currently_owned_rooms + self.claim_missions.len()) as u32;
         let available_rooms = maximum_rooms - active_rooms.min(maximum_rooms);
         let available_rooms = available_rooms.min(maximum_claim_missions);
 
@@ -469,26 +478,27 @@ impl Operation for ClaimOperation {
             if !has_claim_mission {
                 const MAX_ROOM_DISTANCE: u32 = (CREEP_CLAIM_LIFE_TIME as f32 / (ROOM_SIZE as f32 * 1.5)) as u32;
 
-                let home_room_entities: Vec<_> = home_room_data.iter().map(|(entity, home_room_name, max_level)| {
-                    let delta = room_data.name - *home_room_name;
-                    let range = delta.0.abs() as u32 + delta.1.abs() as u32;
+                let home_room_entities: Vec<_> = home_room_data
+                    .iter()
+                    .map(|(entity, home_room_name, max_level)| {
+                        let delta = room_data.name - *home_room_name;
+                        let range = delta.0.abs() as u32 + delta.1.abs() as u32;
 
-                    (entity, home_room_name, max_level, range)
-                })
+                        (entity, home_room_name, max_level, range)
+                    })
                     .filter(|(_, _, max_level, _)| **max_level >= 2)
                     .filter(|(_, _, _, range)| *range <= MAX_ROOM_DISTANCE)
                     .filter(|(_, home_room_name, _, _)| {
-                        let options = map::FindRouteOptions::new()
-                            .room_callback(|to_room_name, from_room_name| {
-                                if !can_traverse_between_rooms(from_room_name, to_room_name) {
-                                    return f64::INFINITY;
-                                }
+                        let options = map::FindRouteOptions::new().room_callback(|to_room_name, from_room_name| {
+                            if !can_traverse_between_rooms(from_room_name, to_room_name) {
+                                return f64::INFINITY;
+                            }
 
-                                //TODO: Need to include hostile rooms.
-                        
-                                1.0
-                            });
-            
+                            //TODO: Need to include hostile rooms.
+
+                            1.0
+                        });
+
                         if let Ok(room_path) = game::map::find_route(room_data.name, **home_room_name, Some(options)) {
                             if room_path.len() as u32 <= MAX_ROOM_DISTANCE {
                                 return true;
@@ -496,7 +506,7 @@ impl Operation for ClaimOperation {
                         }
 
                         false
-                    })                    
+                    })
                     .map(|(entity, _, _, _)| *entity)
                     .collect();
 

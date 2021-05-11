@@ -1,3 +1,4 @@
+use super::constants::*;
 use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
@@ -5,7 +6,6 @@ use crate::jobs::upgrade::*;
 use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
-use super::constants::*;
 use lerp::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -131,10 +131,9 @@ impl Mission for UpgradeMission {
 
                 energy >= get_desired_storage_amount(ResourceType::Energy) / 2
             } else if !structures.containers().is_empty() {
-                structures
-                    .containers()
-                    .iter()
-                    .any(|container| container.store().get_used_capacity(Some(ResourceType::Energy)) as f32 / CONTAINER_CAPACITY as f32 > 0.75)
+                structures.containers().iter().any(|container| {
+                    container.store().get_used_capacity(Some(ResourceType::Energy)) as f32 / CONTAINER_CAPACITY as f32 > 0.75
+                })
             } else {
                 true
             }

@@ -182,7 +182,7 @@ impl VisibilityQueueSystem {
                     if !can_traverse_between_rooms(from_room_name, to_room_name) {
                         return f64::INFINITY;
                     }
-            
+
                     1.0
                 }
 
@@ -196,26 +196,27 @@ impl VisibilityQueueSystem {
                             if let Some(room_data) = system_data.room_data.get_mut(room_entity) {
                                 const MAX_ROOM_DISTANCE: u32 = 6;
 
-                                let home_room_entities: Vec<_> = home_room_data.iter().map(|(entity, home_room_name, max_level, _)| {
-                                    let delta = room_data.name - *home_room_name;
-                                    let range = delta.0.abs() as u32 + delta.1.abs() as u32;
+                                let home_room_entities: Vec<_> = home_room_data
+                                    .iter()
+                                    .map(|(entity, home_room_name, max_level, _)| {
+                                        let delta = room_data.name - *home_room_name;
+                                        let range = delta.0.abs() as u32 + delta.1.abs() as u32;
 
-                                    (entity, home_room_name, max_level, range)
-                                })
+                                        (entity, home_room_name, max_level, range)
+                                    })
                                     .filter(|(_, _, max_level, _)| **max_level >= 2)
                                     .filter(|(_, _, _, range)| *range <= MAX_ROOM_DISTANCE)
                                     .filter(|(_, home_room_name, _, _)| {
-                                        let options = map::FindRouteOptions::new()
-                                            .room_callback(|to_room_name, from_room_name| {
-                                                if !can_traverse_between_rooms(from_room_name, to_room_name) {
-                                                    return f64::INFINITY;
-                                                }
-                                                
-                                                //TODO: Need to include hostile rooms.
-                                        
-                                                1.0
-                                            });
-                            
+                                        let options = map::FindRouteOptions::new().room_callback(|to_room_name, from_room_name| {
+                                            if !can_traverse_between_rooms(from_room_name, to_room_name) {
+                                                return f64::INFINITY;
+                                            }
+
+                                            //TODO: Need to include hostile rooms.
+
+                                            1.0
+                                        });
+
                                         if let Ok(room_path) = game::map::find_route(room_data.name, **home_room_name, Some(options)) {
                                             if room_path.len() as u32 <= MAX_ROOM_DISTANCE {
                                                 return true;
@@ -226,7 +227,6 @@ impl VisibilityQueueSystem {
                                     })
                                     .map(|(entity, _, _, _)| *entity)
                                     .collect();
-                                    
 
                                 let mission_data_storage = &system_data.mission_data;
 
@@ -245,7 +245,7 @@ impl VisibilityQueueSystem {
                                     }
                                 });
 
-                                if !home_room_entities.is_empty() && !updated_scout_mission {                                
+                                if !home_room_entities.is_empty() && !updated_scout_mission {
                                     //
                                     // Spawn a new mission to fill the scout role if missing.
                                     //

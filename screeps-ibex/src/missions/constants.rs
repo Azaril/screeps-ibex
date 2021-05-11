@@ -12,7 +12,7 @@ pub enum CpuBar {
     LowPriority = 5,
     MediumPriority = 4,
     HighPriority = 3,
-    CriticalPriority = 2
+    CriticalPriority = 2,
 }
 
 pub fn can_execute_cpu(bar: CpuBar) -> bool {

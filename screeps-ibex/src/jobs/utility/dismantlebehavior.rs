@@ -1,14 +1,20 @@
 use super::dismantle::*;
+use crate::findnearest::*;
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
 use crate::room::data::*;
 use crate::structureidentifier::*;
 use screeps::*;
 use screeps_rover::*;
-use crate::findnearest::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn get_new_dismantle_state<F, R>(creep: &Creep, dismantle_room: &RoomData, cost_matrix_system: &mut CostMatrixSystem, ignore_storage: bool, state_map: F) -> Option<R>
+pub fn get_new_dismantle_state<F, R>(
+    creep: &Creep,
+    dismantle_room: &RoomData,
+    cost_matrix_system: &mut CostMatrixSystem,
+    ignore_storage: bool,
+    state_map: F,
+) -> Option<R>
 where
     F: Fn(RemoteStructureIdentifier) -> R,
 {
@@ -35,7 +41,7 @@ where
 
         if let Some(structure) = best_structure {
             return Some(state_map(RemoteStructureIdentifier::new(&structure)));
-        }            
+        }
     }
 
     None

@@ -6,8 +6,8 @@ use super::utility::movebehavior::*;
 use super::utility::repair::*;
 use super::utility::repairbehavior::*;
 use super::utility::waitbehavior::*;
-use crate::{serialize::*, store::HasExpensiveStore};
 use crate::transfer::transfersystem::*;
+use crate::{serialize::*, store::HasExpensiveStore};
 use itertools::*;
 use screeps::*;
 use screeps_machine::*;
@@ -223,7 +223,7 @@ impl Pickup {
                             .and_then(|r| r.get_structures())
                             .map(|r| !r.storages().is_empty())
                             .unwrap_or(false);
-    
+
                         return match target {
                             TransferTarget::Container(_) => !has_storage,
                             TransferTarget::Storage(_) => true,
@@ -232,7 +232,7 @@ impl Pickup {
                         };
                     }
                 }
-    
+
                 true
             };
 
@@ -246,7 +246,7 @@ impl Pickup {
                 &mut self.withdrawl,
                 &mut self.deposits,
                 target_filter,
-                10
+                10,
             );
         }
 

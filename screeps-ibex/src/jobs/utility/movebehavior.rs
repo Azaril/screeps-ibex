@@ -32,8 +32,8 @@ where
 
     let target_pos = Position::new(
         unsafe { RoomCoordinate::unchecked_new(room_half_width) },
-        unsafe { RoomCoordinate::unchecked_new(room_half_height) }, 
-        room_name
+        unsafe { RoomCoordinate::unchecked_new(room_half_height) },
+        room_name,
     );
 
     tick_move_to_position(tick_context, target_pos, range as u32, room_options, next_state)

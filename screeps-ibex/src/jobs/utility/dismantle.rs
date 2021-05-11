@@ -2,8 +2,7 @@ use crate::remoteobjectid::*;
 use screeps::*;
 use std::borrow::*;
 
-pub fn ignore_for_dismantle(structure: &StructureObject, sources: &[RemoteObjectId<Source>]) -> bool
-{
+pub fn ignore_for_dismantle(structure: &StructureObject, sources: &[RemoteObjectId<Source>]) -> bool {
     match structure {
         StructureObject::StructureContainer(c) => {
             let pos = c.pos();
@@ -14,8 +13,7 @@ pub fn ignore_for_dismantle(structure: &StructureObject, sources: &[RemoteObject
     }
 }
 
-pub fn can_dismantle(structure: &StructureObject) -> bool
-{
+pub fn can_dismantle(structure: &StructureObject) -> bool {
     structure
         .borrow()
         .as_attackable()
@@ -23,8 +21,7 @@ pub fn can_dismantle(structure: &StructureObject) -> bool
         .unwrap_or(false)
 }
 
-pub fn has_empty_storage(structure: &StructureObject) -> bool
-{
+pub fn has_empty_storage(structure: &StructureObject) -> bool {
     if let Some(store) = structure.borrow().as_has_store() {
         let store = store.store();
         let store_types = store.store_types();

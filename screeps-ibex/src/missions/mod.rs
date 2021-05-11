@@ -1,5 +1,6 @@
 pub mod claim;
 pub mod colony;
+pub mod constants;
 pub mod construction;
 pub mod data;
 pub mod defend;
@@ -19,4 +20,3 @@ pub mod terminal;
 pub mod tower;
 pub mod upgrade;
 pub mod utility;
-pub mod constants;

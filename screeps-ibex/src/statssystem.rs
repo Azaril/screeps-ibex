@@ -128,7 +128,7 @@ fn to_resource_name(val: ResourceType) -> &'static str {
         ResourceType::Emanation => "emanation",
         ResourceType::Essence => "essence",
         //TODO: wiarchbe: Add score resource types.
-        _ => "unknown"
+        _ => "unknown",
     }
 }
 

@@ -1,13 +1,13 @@
+use super::constants::*;
 use super::data::*;
 use super::missionsystem::*;
+use super::utility::*;
 use crate::jobs::data::*;
 use crate::jobs::dismantle::*;
 use crate::jobs::utility::dismantle::*;
 use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
-use super::utility::*;
-use super::constants::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
@@ -127,12 +127,7 @@ impl Mission for DismantleMission {
         //
 
         self.home_room_datas
-            .retain(|entity| {
-                system_data.room_data
-                    .get(*entity)
-                    .map(is_valid_home_room)
-                    .unwrap_or(false)
-            });
+            .retain(|entity| system_data.room_data.get(*entity).map(is_valid_home_room).unwrap_or(false));
 
         if self.home_room_datas.is_empty() {
             return Err("No home rooms for dismantle mission".to_owned());

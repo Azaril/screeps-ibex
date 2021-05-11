@@ -12,7 +12,7 @@ use specs::*;
 #[derive(Clone, ConvertSaveload)]
 pub struct ColonyOperation {
     owner: EntityOption<Entity>,
-    last_run: Option<u32>
+    last_run: Option<u32>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -27,7 +27,10 @@ impl ColonyOperation {
     }
 
     pub fn new(owner: Option<Entity>) -> ColonyOperation {
-        ColonyOperation { owner: owner.into(), last_run: None }
+        ColonyOperation {
+            owner: owner.into(),
+            last_run: None,
+        }
     }
 }
 

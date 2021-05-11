@@ -83,7 +83,7 @@ impl Harvest {
 
             let mining_power = match state_context.mine_target {
                 StaticMineTarget::Source(_) => HARVEST_POWER,
-                StaticMineTarget::Mineral(_, _) => HARVEST_MINERAL_POWER
+                StaticMineTarget::Mineral(_, _) => HARVEST_MINERAL_POWER,
             };
 
             let resources_harvested = work_parts * mining_power;
@@ -99,9 +99,7 @@ impl Harvest {
 
                 tick_harvest(tick_context, source_id, true, false, || StaticMineState::wait(1))
             }
-            StaticMineTarget::Mineral(mineral_id, _) => {
-                tick_harvest(tick_context, mineral_id, true, false, || StaticMineState::wait(1))
-            }
+            StaticMineTarget::Mineral(mineral_id, _) => tick_harvest(tick_context, mineral_id, true, false, || StaticMineState::wait(1)),
         }
     }
 }

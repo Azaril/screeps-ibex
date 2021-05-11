@@ -100,7 +100,9 @@ fn map_structure_repair_priority(
         StructureObject::StructureTower(_) => map_high_value_priority(hits, hits_max),
         StructureObject::StructureContainer(_) => map_high_value_priority(hits, hits_max),
         StructureObject::StructureWall(_) => map_defense_priority(StructureType::Wall, hits, hits_max, available_energy, under_attack),
-        StructureObject::StructureRampart(_) => map_defense_priority(StructureType::Rampart, hits, hits_max, available_energy, under_attack),
+        StructureObject::StructureRampart(_) => {
+            map_defense_priority(StructureType::Rampart, hits, hits_max, available_energy, under_attack)
+        }
         _ => map_normal_priority(hits, hits_max),
     }
 }
@@ -175,6 +177,10 @@ pub fn select_repair_structure_and_priority(
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn select_repair_structure(room_data: &RoomData, minimum_priority: Option<RepairPriority>, allow_walls: bool) -> Option<StructureObject> {
+pub fn select_repair_structure(
+    room_data: &RoomData,
+    minimum_priority: Option<RepairPriority>,
+    allow_walls: bool,
+) -> Option<StructureObject> {
     select_repair_structure_and_priority(room_data, minimum_priority, allow_walls).map(|(_, structure)| structure)
 }

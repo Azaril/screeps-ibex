@@ -1,3 +1,4 @@
+use super::constants::*;
 use super::data::*;
 use super::missionsystem::*;
 use super::utility::*;
@@ -6,13 +7,12 @@ use crate::jobs::scout::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
-use super::constants::*;
+use itertools::Itertools;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
-use itertools::Itertools;
 
 #[derive(ConvertSaveload)]
 pub struct ScoutMission {
@@ -122,8 +122,10 @@ impl Mission for ScoutMission {
             })
             .unwrap_or(0);
 
-        let home_room_names = self.home_room_datas.iter()
-            .filter_map(|e| system_data.room_data.get(*e))        
+        let home_room_names = self
+            .home_room_datas
+            .iter()
+            .filter_map(|e| system_data.room_data.get(*e))
             .map(|d| d.name.to_string())
             .join("/");
 
@@ -149,24 +151,21 @@ impl Mission for ScoutMission {
         //
 
         self.home_room_datas
-            .retain(|entity| {
-                system_data.room_data
-                    .get(*entity)
-                    .map(is_valid_home_room)
-                    .unwrap_or(false)
-            });
+            .retain(|entity| system_data.room_data.get(*entity).map(is_valid_home_room).unwrap_or(false));
 
         if self.home_room_datas.is_empty() {
             return Err("No home rooms for scout mission".to_owned());
         }
 
-        let mid_point_coordinate = unsafe{ RoomCoordinate::unchecked_new(ROOM_SIZE / 2) };
+        let mid_point_coordinate = unsafe { RoomCoordinate::unchecked_new(ROOM_SIZE / 2) };
 
-        let home_room_positions = self.home_room_datas.iter()
-            .filter_map(|e| system_data.room_data.get(*e))        
+        let home_room_positions = self
+            .home_room_datas
+            .iter()
+            .filter_map(|e| system_data.room_data.get(*e))
             .map(|room| Position::new(mid_point_coordinate, mid_point_coordinate, room.name));
 
-        let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;            
+        let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
         let target_position = Position::new(mid_point_coordinate, mid_point_coordinate, room_data.name);
 

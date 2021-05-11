@@ -1,3 +1,4 @@
+use super::constants::*;
 use super::data::*;
 use super::missionsystem::*;
 use crate::remoteobjectid::*;
@@ -12,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
 use std::collections::HashSet;
-use super::constants::*;
 
 #[derive(ConvertSaveload)]
 pub struct TerminalMission {
@@ -84,7 +84,13 @@ impl TerminalMission {
     fn can_purchase_resource(resource: ResourceType) -> bool {
         match resource {
             ResourceType::Energy => crate::features::market::buy_energy(),
-            ResourceType::Hydrogen | ResourceType::Oxygen | ResourceType::Utrium | ResourceType::Lemergium | ResourceType::Keanium | ResourceType::Zynthium | ResourceType::Catalyst => crate::features::market::buy_minerals(),
+            ResourceType::Hydrogen
+            | ResourceType::Oxygen
+            | ResourceType::Utrium
+            | ResourceType::Lemergium
+            | ResourceType::Keanium
+            | ResourceType::Zynthium
+            | ResourceType::Catalyst => crate::features::market::buy_minerals(),
             _ => false,
         }
     }

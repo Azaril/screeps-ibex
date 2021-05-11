@@ -72,15 +72,17 @@ impl Idle {
 
         //TODO: Only allow long movement if set up for it.
         //TODO: wiarchbe: Need transfer pickup filter for range.
-        let (move_parts, non_move_parts) = tick_context.runtime_data.owner.body()
-            .iter()
-            .fold((0, 0), |(m, nm), part| {
-                if part.part() == Part::Move {
-                    (m + 1, nm)
-                } else {
-                    (m, nm + 1)
-                }
-            });
+        let (move_parts, non_move_parts) =
+            tick_context.runtime_data.owner.body().iter().fold(
+                (0, 0),
+                |(m, nm), part| {
+                    if part.part() == Part::Move {
+                        (m + 1, nm)
+                    } else {
+                        (m, nm + 1)
+                    }
+                },
+            );
 
         let allow_movement = move_parts >= non_move_parts;
 

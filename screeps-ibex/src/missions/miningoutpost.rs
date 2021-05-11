@@ -334,7 +334,11 @@ impl Cleanup {
         mission_entity: Entity,
         state_context: &mut MiningOutpostMissionContext,
     ) -> Result<(), String> {
-        if let Some(mut dismantle_mission) = system_data.missions.try_get(self.dismantle_mission).as_mission_type_mut::<DismantleMission>() {
+        if let Some(mut dismantle_mission) = system_data
+            .missions
+            .try_get(self.dismantle_mission)
+            .as_mission_type_mut::<DismantleMission>()
+        {
             dismantle_mission.set_home_rooms(&state_context.home_room_datas);
         } else if self.dismantle_mission.is_none() {
             let needs_dismantling = self.requires_dismantling(system_data, mission_entity, state_context)?;
@@ -393,7 +397,11 @@ impl Cleanup {
         mission_entity: Entity,
         state_context: &mut MiningOutpostMissionContext,
     ) -> Result<(), String> {
-        if let Some(mut defend_mission) = system_data.missions.try_get(self.defend_mission).as_mission_type_mut::<DefendMission>() {
+        if let Some(mut defend_mission) = system_data
+            .missions
+            .try_get(self.defend_mission)
+            .as_mission_type_mut::<DefendMission>()
+        {
             defend_mission.set_home_rooms(&state_context.home_room_datas);
         } else if self.defend_mission.is_none() {
             let outpost_room_data = system_data
@@ -447,7 +455,11 @@ impl Mine {
             return Err("Mission cannot run in current room state".to_string());
         }
 
-        if let Some(mut supply_mission) = system_data.missions.try_get(self.supply_mission).as_mission_type_mut::<LocalSupplyMission>() {
+        if let Some(mut supply_mission) = system_data
+            .missions
+            .try_get(self.supply_mission)
+            .as_mission_type_mut::<LocalSupplyMission>()
+        {
             supply_mission.set_home_rooms(&state_context.home_room_datas);
         } else if self.supply_mission.is_none() {
             let outpost_room_data = system_data
@@ -489,7 +501,11 @@ impl Mine {
             self.haul_mission = Some(mission_entity).into();
         }
 
-        if let Some(mut reserve_mission) = system_data.missions.try_get(self.reserve_mission).as_mission_type_mut::<ReserveMission>() {
+        if let Some(mut reserve_mission) = system_data
+            .missions
+            .try_get(self.reserve_mission)
+            .as_mission_type_mut::<ReserveMission>()
+        {
             reserve_mission.set_home_rooms(&state_context.home_room_datas);
         } else if self.reserve_mission.is_none() {
             let outpost_room_data = system_data
@@ -510,7 +526,11 @@ impl Mine {
             self.reserve_mission = Some(mission_entity).into();
         }
 
-        if let Some(mut defend_mission) = system_data.missions.try_get(self.defend_mission).as_mission_type_mut::<DefendMission>() {
+        if let Some(mut defend_mission) = system_data
+            .missions
+            .try_get(self.defend_mission)
+            .as_mission_type_mut::<DefendMission>()
+        {
             defend_mission.set_home_rooms(&state_context.home_room_datas);
         } else if self.defend_mission.is_none() {
             let outpost_room_data = system_data
@@ -631,17 +651,12 @@ impl Mission for MiningOutpostMission {
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<(), String> {
         self.context
             .home_room_datas
-            .retain(|entity| {
-                system_data.room_data
-                    .get(*entity)
-                    .map(is_valid_home_room)
-                    .unwrap_or(false)
-            });
+            .retain(|entity| system_data.room_data.get(*entity).map(is_valid_home_room).unwrap_or(false));
 
         if self.context.home_room_datas.is_empty() {
             return Err("No home rooms available for mining outpost".to_owned());
         }
-            
+
         self.state.gather_data(system_data, mission_entity);
 
         Ok(())

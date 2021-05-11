@@ -1,3 +1,4 @@
+use super::constants::*;
 use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::utility::waitbehavior::*;
@@ -13,7 +14,6 @@ use specs::saveload::*;
 use specs::*;
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use super::constants::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct LabsMissionContext {
@@ -662,7 +662,7 @@ impl RunReverseReaction {
         let output_2 = self.output.get(1).ok_or("Expected second output lab")?;
         let output_2 = output_2.resolve().ok_or("Expected to resolve second output lab")?;
 
-        let output_2_store = output_2.store();        
+        let output_2_store = output_2.store();
 
         let output_2_resources = output_2_store.store_types();
         let mut output_2_free_capacity = output_2_resources

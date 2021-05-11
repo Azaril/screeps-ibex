@@ -19,7 +19,7 @@ impl CostMatrixStorage for CostMatrixStorageInterface {
         let encoded = encoded.into();
 
         let segments = RawMemory::segments();
-        
+
         segments.set(segment, encoded);
 
         Ok(())

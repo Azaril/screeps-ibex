@@ -544,52 +544,57 @@ impl LocalSupplyMission {
                 .flat_map(|m| m.iter())
                 .collect_vec();
 
-
-
             //
             // Spawn harvesters
             //
 
-            let any_home_room_has_storage = self.home_room_datas.iter().filter_map(|home_room_entity| {
-                let home_room_data = system_data.room_data.get(*home_room_entity)?;
-                let home_room_structures = home_room_data.get_structures()?;
-                
-                Some(!home_room_structures.storages().is_empty())
-            })
-            .any(|has_storage| has_storage);
+            let any_home_room_has_storage = self
+                .home_room_datas
+                .iter()
+                .filter_map(|home_room_entity| {
+                    let home_room_data = system_data.room_data.get(*home_room_entity)?;
+                    let home_room_structures = home_room_data.get_structures()?;
 
-            let min_home_room_distance = self.home_room_datas.iter().filter_map(|home_room_entity| {
-                let home_room_data = system_data.room_data.get(*home_room_entity)?;
-                let room_offset_distance = home_room_data.name - source_id.pos().room_name();
-                let room_manhattan_distance = room_offset_distance.0.abs() + room_offset_distance.1.abs();
-                
-                Some(room_manhattan_distance)
-            })
-            .min()
-            .unwrap_or(0);
+                    Some(!home_room_structures.storages().is_empty())
+                })
+                .any(|has_storage| has_storage);
+
+            let min_home_room_distance = self
+                .home_room_datas
+                .iter()
+                .filter_map(|home_room_entity| {
+                    let home_room_data = system_data.room_data.get(*home_room_entity)?;
+                    let room_offset_distance = home_room_data.name - source_id.pos().room_name();
+                    let room_manhattan_distance = room_offset_distance.0.abs() + room_offset_distance.1.abs();
+
+                    Some(room_manhattan_distance)
+                })
+                .min()
+                .unwrap_or(0);
 
             for home_room_entity in self.home_room_datas.iter() {
                 let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
                 let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
-        
+
                 //TODO: Use find route plus cache.
                 let room_offset_distance = home_room_data.name - source_id.pos().room_name();
                 let room_manhattan_distance = room_offset_distance.0.abs() + room_offset_distance.1.abs();
 
-                if (source_containers.is_empty() && source_links.is_empty()) || 
-                    (room_manhattan_distance == 0 && total_harvesting_creeps == 0) || 
-                    (room_manhattan_distance > 0 && !any_home_room_has_storage) {
-
-                    let current_source_room_harvesters = creep_data.home_rooms_to_harvesters
+                if (source_containers.is_empty() && source_links.is_empty())
+                    || (room_manhattan_distance == 0 && total_harvesting_creeps == 0)
+                    || (room_manhattan_distance > 0 && !any_home_room_has_storage)
+                {
+                    let current_source_room_harvesters = creep_data
+                        .home_rooms_to_harvesters
                         .get(home_room_entity)
                         .iter()
                         .flat_map(|e| e.iter())
                         .filter(|e| source_harvesters.contains(e))
                         .count();
-                        
+
                     //TODO: Compute correct number of harvesters to use for source.
                     let desired_harvesters = 4;
-    
+
                     if current_source_room_harvesters < desired_harvesters {
                         let body_definition = SpawnBodyDefinition {
                             maximum_energy: if total_harvesting_creeps == 0 {
@@ -629,7 +634,7 @@ impl LocalSupplyMission {
                     }
                 }
             }
-            
+
             //TODO: Correctly compute time needed to spawn + get to source.
 
             let alive_source_miners = source_container_miners
@@ -893,9 +898,7 @@ impl LocalSupplyMission {
 
                         let chunks = container_store_capacity / 4;
 
-                        let override_ranges = [
-                            (TransferPriority::Medium, chunks * 3),
-                        ];
+                        let override_ranges = [(TransferPriority::Medium, chunks * 3)];
 
                         let override_priority = override_ranges
                             .iter()
@@ -926,7 +929,7 @@ impl LocalSupplyMission {
                                         priority_amount,
                                         TransferType::Haul,
                                     );
-        
+
                                     transfer.request_withdraw(transfer_request);
                                 }
                             }

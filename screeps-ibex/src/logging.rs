@@ -1,6 +1,6 @@
 use js_sys::JsString;
-use web_sys::console;
 use screeps::*;
+use web_sys::console;
 
 pub use log::LevelFilter::*;
 
@@ -32,14 +32,7 @@ impl log::Log for JsNotify {
 pub fn setup_logging(verbosity: log::LevelFilter) {
     fern::Dispatch::new()
         .level(verbosity)
-        .format(|out, message, record| {
-            out.finish(format_args!(
-                "({}) {}: {}",
-                record.level(),
-                record.target(),
-                message
-            ))
-        })
+        .format(|out, message, record| out.finish(format_args!("({}) {}: {}", record.level(), record.target(), message)))
         .chain(Box::new(JsLog) as Box<dyn log::Log>)
         .chain(
             fern::Dispatch::new()

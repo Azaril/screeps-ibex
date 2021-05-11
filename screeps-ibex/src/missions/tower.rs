@@ -110,19 +110,20 @@ impl Mission for TowerMission {
         let creeps = room_data.get_creeps().ok_or("Expected creeps")?;
 
         let towers = structures.towers();
-       
-        //TODO: Include power creeps?        
-        let weakest_dangerous_hostile_creep = creeps.hostile()
+
+        //TODO: Include power creeps?
+        let weakest_dangerous_hostile_creep = creeps
+            .hostile()
             .iter()
-            .filter(|c| c.body().iter().any(|p| match p.part() {
-                Part::Attack | Part::RangedAttack | Part::Work => true,
-                _ => false,
-            }))
+            .filter(|c| {
+                c.body().iter().any(|p| match p.part() {
+                    Part::Attack | Part::RangedAttack | Part::Work => true,
+                    _ => false,
+                })
+            })
             .min_by_key(|creep| creep.hits());
 
-        let weakest_hostile_creep = creeps.hostile()
-            .iter()
-            .min_by_key(|creep| creep.hits());            
+        let weakest_hostile_creep = creeps.hostile().iter().min_by_key(|creep| creep.hits());
 
         let weakest_friendly_creep = creeps
             .friendly()

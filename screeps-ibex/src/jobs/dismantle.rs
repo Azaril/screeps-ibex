@@ -73,9 +73,13 @@ impl Idle {
         let in_dismantle_room = creep.room().map(|r| r.name() == dismantle_room_data.name).unwrap_or(false);
 
         if in_dismantle_room {
-            if let Some(state) =
-                get_new_dismantle_state(creep, &dismantle_room_data, tick_context.runtime_data.cost_matrix, state_context.ignore_storage, DismantleState::dismantle)
-            {
+            if let Some(state) = get_new_dismantle_state(
+                creep,
+                &dismantle_room_data,
+                tick_context.runtime_data.cost_matrix,
+                state_context.ignore_storage,
+                DismantleState::dismantle,
+            ) {
                 return Some(state);
             }
         }

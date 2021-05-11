@@ -9,9 +9,9 @@ use super::utility::movebehavior::*;
 use super::utility::repair::*;
 use super::utility::repairbehavior::*;
 use super::utility::waitbehavior::*;
-use crate::{remoteobjectid::*, store::HasExpensiveStore};
 use crate::structureidentifier::*;
 use crate::transfer::transfersystem::*;
+use crate::{remoteobjectid::*, store::HasExpensiveStore};
 use screeps::*;
 use screeps_machine::*;
 use serde::{Deserialize, Serialize};
@@ -106,7 +106,7 @@ impl Idle {
                 tick_context.runtime_data.transfer_queue,
                 target_filters::all,
                 target_filters::all,
-                HarvestState::pickup
+                HarvestState::pickup,
             ) {
                 return Some(state);
             }

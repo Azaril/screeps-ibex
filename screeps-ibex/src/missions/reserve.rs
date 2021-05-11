@@ -1,3 +1,4 @@
+use super::constants::*;
 use super::data::*;
 use super::missionsystem::*;
 use super::utility::*;
@@ -6,7 +7,6 @@ use crate::jobs::reserve::*;
 use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
-use super::constants::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
@@ -111,12 +111,7 @@ impl Mission for ReserveMission {
         //
 
         self.home_room_datas
-            .retain(|entity| {
-                system_data.room_data
-                    .get(*entity)
-                    .map(is_valid_home_room)
-                    .unwrap_or(false)
-            });
+            .retain(|entity| system_data.room_data.get(*entity).map(is_valid_home_room).unwrap_or(false));
 
         if self.home_room_datas.is_empty() {
             return Err("No home rooms for reserve mission".to_owned());
@@ -152,7 +147,8 @@ impl Mission for ReserveMission {
         }
 
         //TODO: Use visibility data to estimate amount thas has ticked down.
-        let controller_has_sufficient_reservation = game::rooms().get(room_data.name)
+        let controller_has_sufficient_reservation = game::rooms()
+            .get(room_data.name)
             .and_then(|r| r.controller())
             .and_then(|c| c.reservation())
             .map(|r| r.ticks_to_end() > 1000)
@@ -197,14 +193,14 @@ impl Mission for ReserveMission {
                     repeat_body: &[Part::Claim, Part::Move],
                     post_body: &[],
                 };
-        
-                if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {          
+
+                if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                     let priority = if alive_reservers.is_empty() {
                         SPAWN_PRIORITY_MEDIUM
                     } else {
-                        SPAWN_PRIORITY_LOW                            
+                        SPAWN_PRIORITY_LOW
                     };
-    
+
                     let spawn_request = SpawnRequest::new(
                         format!("Reserver - Target Room: {}", room_data.name),
                         &body,
@@ -212,9 +208,9 @@ impl Mission for ReserveMission {
                         Some(token),
                         Self::create_handle_reserver_spawn(mission_entity, *controller_id),
                     );
-    
+
                     system_data.spawn_queue.request(*home_room_entity, spawn_request);
-                }            
+                }
             }
         }
 

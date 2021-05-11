@@ -48,7 +48,17 @@ impl PathFinderHelpers {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub trait FindNearestItertools: Iterator {
-    fn find_nearest_from<V>(self, start_pos: Position, range: u32, cost_matrix_system: &mut CostMatrixSystem, cost_matrix_options: &CostMatrixOptions) -> Option<V> where Self: Iterator<Item = V> + Sized, V: HasPosition {
+    fn find_nearest_from<V>(
+        self,
+        start_pos: Position,
+        range: u32,
+        cost_matrix_system: &mut CostMatrixSystem,
+        cost_matrix_options: &CostMatrixOptions,
+    ) -> Option<V>
+    where
+        Self: Iterator<Item = V> + Sized,
+        V: HasPosition,
+    {
         //TODO: Add max rooms!
         //TODO: Add max ops!
 
@@ -60,14 +70,10 @@ pub trait FindNearestItertools: Iterator {
             .swamp_cost(cost_matrix_options.swamp_cost)
             .room_callback(|room_name: RoomName| -> MultiRoomCostResult {
                 let mut cost_matrix = CostMatrix::new();
-        
-                match cost_matrix_system.apply_cost_matrix(
-                    room_name,
-                    &mut cost_matrix,
-                    &cost_matrix_options,
-                ) {
+
+                match cost_matrix_system.apply_cost_matrix(room_name, &mut cost_matrix, &cost_matrix_options) {
                     Ok(()) => MultiRoomCostResult::CostMatrix(cost_matrix),
-                    Err(_err) => MultiRoomCostResult::Impassable
+                    Err(_err) => MultiRoomCostResult::Impassable,
                 }
             });
 
@@ -79,15 +85,9 @@ pub trait FindNearestItertools: Iterator {
             })
             .collect();
 
-        let search_goals = positions
-            .iter()
-            .map(|(_, pos)| SearchGoal::new(*pos, range));
+        let search_goals = positions.iter().map(|(_, pos)| SearchGoal::new(*pos, range));
 
-        let search_result = pathfinder::search_many(
-            start_pos.into(),
-            search_goals,
-            Some(search_options),
-        );
+        let search_result = pathfinder::search_many(start_pos.into(), search_goals, Some(search_options));
 
         if !search_result.incomplete() {
             let path = search_result.path();
@@ -95,14 +95,8 @@ pub trait FindNearestItertools: Iterator {
             if let Some(goal_pos) = path.last() {
                 return positions
                     .into_iter()
-                    .filter_map(|(item, pos)| {
-                        if pos == *goal_pos { 
-                            Some(item)
-                        } else { 
-                            None 
-                        }
-                    })
-                    .next();            
+                    .filter_map(|(item, pos)| if pos == *goal_pos { Some(item) } else { None })
+                    .next();
             }
         }
 

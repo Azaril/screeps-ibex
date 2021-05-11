@@ -213,13 +213,9 @@ impl Mission for DefendMission {
         // Cleanup home rooms that no longer exist.
         //
 
-        self.context.home_room_datas
-            .retain(|entity| {
-                system_data.room_data
-                    .get(*entity)
-                    .map(is_valid_home_room)
-                    .unwrap_or(false)
-            });
+        self.context
+            .home_room_datas
+            .retain(|entity| system_data.room_data.get(*entity).map(is_valid_home_room).unwrap_or(false));
 
         if self.context.home_room_datas.is_empty() {
             return Err("No home rooms for defend mission".to_owned());

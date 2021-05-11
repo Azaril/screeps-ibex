@@ -1,9 +1,9 @@
 //TODO: wiarchbe: Re-enable order system when market support.
 //use super::utility::*;
+use crate::missions::constants::*;
 use crate::room::data::*;
 use crate::ui::*;
 use crate::visualize::*;
-use crate::missions::constants::*;
 //use log::*;
 //use screeps::game::market::*;
 use screeps::*;
@@ -354,7 +354,7 @@ impl<'a> System<'a> for OrderQueueSystem {
             if !data.order_queue.rooms.is_empty() {
                 let mut resource_history = HashMap::new();
 
-                let can_trust_history = |history: &OrderHistoryRecord| { 
+                let can_trust_history = |history: &OrderHistoryRecord| {
                     history.transactions() > 100 && history.volume() > 1000 && (history.stddev_price() <= history.avg_price() * 0.5)
                 };
 

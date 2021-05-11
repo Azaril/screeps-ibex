@@ -84,7 +84,6 @@ impl MissionRequests {
     fn queue_cleanup_mission(updater: &LazyUpdate, mission_entity: Entity, owner: Option<Entity>, children: Vec<Entity>, room: Entity) {
         updater.exec_mut(move |world| {
             if world.entities().is_alive(mission_entity) {
-
                 //
                 // Remove mission from room.
                 //

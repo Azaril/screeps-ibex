@@ -57,7 +57,7 @@ impl HaulMission {
     pub fn allow_spawning(&mut self, allow: bool) {
         self.allow_spawning = allow
     }
-    
+
     pub fn set_home_rooms(&mut self, home_room_datas: &[Entity]) {
         if self.home_room_datas.as_slice() != home_room_datas {
             self.home_room_datas = home_room_datas.to_owned().into();
@@ -149,12 +149,7 @@ impl Mission for HaulMission {
         //
 
         self.home_room_datas
-            .retain(|entity| {
-                system_data.room_data
-                    .get(*entity)
-                    .map(is_valid_home_room)
-                    .unwrap_or(false)
-            });
+            .retain(|entity| system_data.room_data.get(*entity).map(is_valid_home_room).unwrap_or(false));
 
         if self.home_room_datas.is_empty() {
             return Err("No home rooms for haul mission".to_owned());
@@ -175,7 +170,8 @@ impl Mission for HaulMission {
 
         let room_visible = room_data.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false);
 
-        let home_room_datas: Vec<_> = self.home_room_datas
+        let home_room_datas: Vec<_> = self
+            .home_room_datas
             .iter()
             .filter_map(|e| room_data_storage.get(*e).map(|d| (e, d)))
             .collect();
@@ -184,10 +180,7 @@ impl Mission for HaulMission {
             return Err("No home rooms available for hauling".to_owned());
         }
 
-        let home_room_names: Vec<_> = home_room_datas
-            .iter()
-            .map(|(_, r)| r.name)
-            .collect();
+        let home_room_names: Vec<_> = home_room_datas.iter().map(|(_, r)| r.name).collect();
 
         let pickup_rooms = &[room_data.name];
 
@@ -198,33 +191,50 @@ impl Mission for HaulMission {
         let stats = stats.get();
 
         //TODO: Use find route plus cache.
-        let home_room_spawn_info: Vec<_> = home_room_datas.iter().filter_map(|(entity, home_room_data)| {
-            let room_offset_distance = home_room_data.name - room_data.name;
+        let home_room_spawn_info: Vec<_> = home_room_datas
+            .iter()
+            .filter_map(|(entity, home_room_data)| {
+                let room_offset_distance = home_room_data.name - room_data.name;
 
-            let room_manhattan_distance = room_offset_distance.0.abs() as u32 + room_offset_distance.1.abs() as u32;
+                let room_manhattan_distance = room_offset_distance.0.abs() as u32 + room_offset_distance.1.abs() as u32;
 
-            //TODO: Use structure cache?
-            let room = game::rooms().get(home_room_data.name)?;
-            let controller = room.controller()?;
+                //TODO: Use structure cache?
+                let room = game::rooms().get(home_room_data.name)?;
+                let controller = room.controller()?;
 
-            let current_energy = room.energy_available().max(SPAWN_ENERGY_CAPACITY);
-            let max_energy = room.energy_capacity_available();
+                let current_energy = room.energy_available().max(SPAWN_ENERGY_CAPACITY);
+                let max_energy = room.energy_capacity_available();
 
-            Some((entity, room, room_manhattan_distance, controller.level(), current_energy, max_energy))
-        })
-        .collect();
+                Some((
+                    entity,
+                    room,
+                    room_manhattan_distance,
+                    controller.level(),
+                    current_energy,
+                    max_energy,
+                ))
+            })
+            .collect();
 
         let is_multi_room = home_room_spawn_info.iter().any(|(_, _, distance, _, _, _)| *distance > 0);
 
         let token = system_data.spawn_queue.token();
 
         let energy_to_use = if self.haulers.is_empty() {
-            home_room_spawn_info.iter().map(|(_, _, _, _, current_energy, _)| *current_energy).max()
+            home_room_spawn_info
+                .iter()
+                .map(|(_, _, _, _, current_energy, _)| *current_energy)
+                .max()
         } else {
             home_room_spawn_info.iter().map(|(_, _, _, _, _, max_energy)| *max_energy).min()
-        }.unwrap_or(SPAWN_ENERGY_CAPACITY);
+        }
+        .unwrap_or(SPAWN_ENERGY_CAPACITY);
 
-        let max_distance = home_room_spawn_info.iter().map(|(_, _, distance, _, _, _)| *distance).max().unwrap_or(0);
+        let max_distance = home_room_spawn_info
+            .iter()
+            .map(|(_, _, distance, _, _, _)| *distance)
+            .max()
+            .unwrap_or(0);
 
         let body_definition = if is_multi_room {
             crate::creep::SpawnBodyDefinition {
@@ -234,7 +244,7 @@ impl Mission for HaulMission {
                 pre_body: &[Part::Work, Part::Move],
                 repeat_body: &[Part::Carry, Part::Move],
                 post_body: &[],
-            }                
+            }
         } else {
             crate::creep::SpawnBodyDefinition {
                 maximum_energy: energy_to_use,
@@ -243,7 +253,7 @@ impl Mission for HaulMission {
                 pre_body: &[],
                 repeat_body: &[Part::Carry, Part::Move],
                 post_body: &[],
-            }                
+            }
         };
 
         if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
@@ -257,8 +267,8 @@ impl Mission for HaulMission {
             let desired_haulers_for_unfufilled = (stats.unfufilled_hauling as f32 / base_amount as f32) as u32;
             let desired_haulers = desired_haulers_for_unfufilled.min(max_haulers) as usize;
 
-            let should_spawn = self.haulers.len() < desired_haulers && self.allow_spawning;        
-    
+            let should_spawn = self.haulers.len() < desired_haulers && self.allow_spawning;
+
             if should_spawn {
                 let priority = if (self.haulers.len() as f32) < (desired_haulers_for_unfufilled as f32 * 0.75).ceil() {
                     if max_distance == 0 {
@@ -278,20 +288,26 @@ impl Mission for HaulMission {
 
                 let allow_repair = max_distance > 0;
                 let storage_delivery_only = max_distance > 0;
-    
-                for (entity, _, _, _, _, _) in home_room_spawn_info {                    
+
+                for (entity, _, _, _, _, _) in home_room_spawn_info {
                     //TODO: Make sure there is handling for starvation/bootstrap mode.
                     let spawn_request = SpawnRequest::new(
                         format!("Haul - Target Room: {}", room_data.name),
                         &body,
                         priority,
                         Some(token),
-                        Self::create_handle_hauler_spawn(mission_entity, pickup_rooms, &self.home_room_datas, allow_repair, storage_delivery_only),
+                        Self::create_handle_hauler_spawn(
+                            mission_entity,
+                            pickup_rooms,
+                            &self.home_room_datas,
+                            allow_repair,
+                            storage_delivery_only,
+                        ),
                     );
-    
+
                     system_data.spawn_queue.request(**entity, spawn_request);
                 }
-            }            
+            }
         }
 
         Ok(MissionResult::Running)

@@ -33,7 +33,7 @@ impl<T> RemoteObjectId<T> {
 
     pub fn resolve(self) -> Option<T>
     where
-        T: Resolvable
+        T: Resolvable,
     {
         self.id.resolve()
     }
@@ -126,7 +126,10 @@ where
     fn remote_id(&self) -> RemoteObjectId<T>;
 }
 
-impl<T> HasRemoteObjectId<T> for T where T: Sized + HasTypedId<T> + HasPosition {
+impl<T> HasRemoteObjectId<T> for T
+where
+    T: Sized + HasTypedId<T> + HasPosition,
+{
     fn remote_id(&self) -> RemoteObjectId<Self> {
         RemoteObjectId {
             id: self.id(),
@@ -142,7 +145,10 @@ where
     fn try_remote_id(&self) -> Option<RemoteObjectId<T>>;
 }
 
-impl<T> MaybeHasRemoteObjectId<T> for T where T: Sized + MaybeHasTypedId<T> + HasPosition {
+impl<T> MaybeHasRemoteObjectId<T> for T
+where
+    T: Sized + MaybeHasTypedId<T> + HasPosition,
+{
     fn try_remote_id(&self) -> Option<RemoteObjectId<Self>> {
         Some(RemoteObjectId {
             id: self.try_id()?,

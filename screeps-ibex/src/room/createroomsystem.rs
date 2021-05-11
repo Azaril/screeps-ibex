@@ -17,9 +17,7 @@ impl<'a> System<'a> for CreateRoomDataSystem {
             .map(|(_, room_data)| room_data.name)
             .collect::<std::collections::HashSet<RoomName>>();
 
-        let flag_rooms = screeps::game::flags()
-            .values()
-            .map(|flag| flag.pos().room_name());
+        let flag_rooms = screeps::game::flags().values().map(|flag| flag.pos().room_name());
 
         let construction_site_rooms = screeps::game::construction_sites()
             .values()

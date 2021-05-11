@@ -1,6 +1,6 @@
+use super::constants::*;
 use super::data::*;
 use super::missionsystem::*;
-use super::constants::*;
 use crate::creep::*;
 use crate::jobs::build::*;
 use crate::jobs::data::*;
@@ -188,10 +188,9 @@ impl Mission for LocalBuildMission {
                     .iter()
                     .any(|container| container.store().get_used_capacity(Some(ResourceType::Energy)) >= desired_storage_energy)
             } else {
-                structure_data
-                    .containers()
-                    .iter()
-                    .any(|container| container.store().get_used_capacity(Some(ResourceType::Energy)) as f32 / CONTAINER_CAPACITY as f32 > 0.50)
+                structure_data.containers().iter().any(|container| {
+                    container.store().get_used_capacity(Some(ResourceType::Energy)) as f32 / CONTAINER_CAPACITY as f32 > 0.50
+                })
             }
         };
 

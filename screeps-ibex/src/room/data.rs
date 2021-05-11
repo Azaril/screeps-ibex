@@ -395,7 +395,7 @@ impl RoomData {
             .filter(|s| match s.structure_type() {
                 StructureType::KeeperLair => false,
                 _ => true,
-            })            
+            })
             .any(|s| s.is_active());
 
         RoomDynamicVisibilityData {
