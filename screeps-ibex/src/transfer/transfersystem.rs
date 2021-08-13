@@ -1918,7 +1918,7 @@ impl TransferQueue {
         delivery_type: TransferType,
         available_capacity: TransferCapacity,
         anchor_location: Position,
-        target_filter: TF,
+        delivery_filter: TF,
     ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)>
     where
         TF: Fn(&TransferTarget) -> bool,
@@ -1944,7 +1944,7 @@ impl TransferQueue {
             &available_resources,
             available_capacity,
             anchor_location,
-            target_filter,
+            delivery_filter,
         )?;
 
         let delivery_resources = delivery
@@ -1983,7 +1983,7 @@ impl TransferQueue {
         available_resources: &HashMap<ResourceType, u32>,
         available_capacity: TransferCapacity,
         anchor_location: Position,
-        target_filter: TF,
+        delivery_filter: TF,
     ) -> Option<TransferDepositTicket>
     where
         TF: Fn(&TransferTarget) -> bool,
@@ -1999,7 +1999,7 @@ impl TransferQueue {
             delivery_types,
             &available_resources,
             available_capacity,
-            target_filter,
+            delivery_filter,
         )
         .iter()
         .map(|delivery| {

@@ -15,33 +15,37 @@ module.exports.loop = function() {
     }
 
     try {    
-        if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
-            return;
-        }
-
         if (wasm_module == null) {
+            //if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
+                //return;
+            //}
+
             console.log("Reset!");
 
             wasm_module = require("screeps-ibex");
         }
 
-        if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
-            return;
-        }    
+        if (wasm_module != null && !initialized) {
+            //if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
+                //return;
+            //}
 
-        if (!initialized) {
+            console.log("Initializing!");
+
             wasm_module.initialize_instance();
 
             wasm_module.setup();
 
             initialized = true;
+
+            //if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
+                //return;
+            //}
         }
         
-        if (Game.cpu.bucket < 500 || Game.cpu.getUsed() > 100) {
-            return;
+        if (initialized) {
+            wasm_module.tick();
         }
-
-        wasm_module.tick();
     } catch(error) {
         console.error("Caught exception:", error);
         if (error.stack) {

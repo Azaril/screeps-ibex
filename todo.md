@@ -37,6 +37,8 @@
 
 - Have claim mission time out (when no claimers exist?). Notify owning operation and blacklist location for duration.
 
+- Tickets can change priority causing them to mismatch between hauler and source/sink. Need to either cascade priority or stablize priority.
+
 # Medium Priority
 
 - Pathfinding solution. (Use built in path finder.)

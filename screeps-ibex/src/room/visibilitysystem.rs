@@ -178,14 +178,6 @@ impl VisibilityQueueSystem {
                     }
                 }
 
-                fn get_room_cost(to_room_name: RoomName, from_room_name: RoomName) -> f64 {
-                    if !can_traverse_between_rooms(from_room_name, to_room_name) {
-                        return f64::INFINITY;
-                    }
-
-                    1.0
-                }
-
                 //
                 // Use scout mission after a short period of time.
                 //

@@ -190,7 +190,7 @@ pub fn get_additional_deliveries<TF>(
     transfer_queue: &mut TransferQueue,
     pickup: &mut TransferWithdrawTicket,
     deliveries: &mut Vec<TransferDepositTicket>,
-    target_filter: TF,
+    delivery_filter: TF,
     additional_delivery_range: u32,
 ) where
     TF: Fn(&TransferTarget) -> bool + Copy,
@@ -232,7 +232,7 @@ pub fn get_additional_deliveries<TF>(
                     remaining_capacity,
                     last_delivery_pos,
                     |target| {
-                        if target_filter(target) {
+                        if delivery_filter(target) {
                             let target_pos = target.pos();
 
                             deliveries
@@ -243,6 +243,9 @@ pub fn get_additional_deliveries<TF>(
                         }
                     },
                 ) {
+                    //log::info!("Got additional pickup: {:?}", additional_pickup);
+                    //log::info!("Got additional delivery: {:?}", additional_delivery);
+
                     transfer_queue.register_pickup(&additional_pickup);
                     pickup.combine_with(&additional_pickup);
 
@@ -394,6 +397,12 @@ where
 pub fn visualize_pickup(describe_data: &mut JobDescribeData, ticket: &TransferWithdrawTicket) {
     let pos = describe_data.owner.pos();
     let to = ticket.target().pos();
+
+    /*
+    describe_data.visualizer
+        .get_room(pos.room_name())
+        .text(pos.x().u8() as f32, pos.y().u8() as f32, format!("{:?}", ticket.resources()), Some(TextStyle::default().font(0.5)));
+    */
 
     if pos.room_name() == to.room_name() {
         describe_data.visualizer.get_room(pos.room_name()).line(

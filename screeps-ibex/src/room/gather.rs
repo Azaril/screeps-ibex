@@ -116,11 +116,10 @@ pub fn gather_home_rooms(system_data: &GatherSystemData, min_rcl: u8) -> Vec<Ent
 pub fn gather_candidate_rooms<F>(
     system_data: &GatherSystemData,
     seed_rooms: &[Entity],
-    max_distance: u32,
     candidate_generator: F,
 ) -> GatherRoomData
 where
-    F: Fn(&GatherSystemData, RoomName) -> Option<CandidateRoomData>,
+    F: Fn(&GatherSystemData, RoomName, &HashSet<Entity>, u32) -> Option<CandidateRoomData>,
 {
     let mut unknown_rooms = HashMap::new();
 
@@ -159,12 +158,12 @@ where
 
     let mut distance = 1;
 
-    while !expansion_rooms.is_empty() && distance <= max_distance {
+    while !expansion_rooms.is_empty() {
         let next_rooms: HashMap<RoomName, HashSet<Entity>> = std::mem::replace(&mut expansion_rooms, HashMap::new());
 
         for (source_room_name, home_room_entities) in next_rooms.into_iter() {
             if !visited_rooms.contains_key(&source_room_name) {
-                if let Some(candidate_room_data) = candidate_generator(system_data, source_room_name) {
+                if let Some(candidate_room_data) = candidate_generator(system_data, source_room_name, &home_room_entities, distance) {
                     let visited_room = VisitedRoomData {
                         room_data_entity: candidate_room_data.room_data_entity,
                         home_room_data_entities: home_room_entities.iter().copied().collect(),

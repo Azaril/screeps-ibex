@@ -283,16 +283,6 @@ pub fn tick() {
 
     const COMPONENT_SEGMENTS: &[u8] = &[50, 51, 52];
 
-    if crate::features::reset::reset_environment()
-        || unsafe { ENVIRONMENT.as_ref() }
-            .and_then(|e| e.tick)
-            .map(|t| t + 1 != current_time)
-            .unwrap_or(false)
-    {
-        info!("Resetting environment");
-        unsafe { ENVIRONMENT = None };
-    }
-
     if crate::features::reset::reset_memory() {
         info!("Resetting memory");
 
@@ -301,6 +291,24 @@ pub fn tick() {
         for segment_index in COMPONENT_SEGMENTS.iter() {
             segments.set(*segment_index, "".into());
         }
+    }    
+
+    let expected_time = unsafe { ENVIRONMENT.as_ref() }
+        .and_then(|e| e.tick)
+        .map(|t| t + 1);
+
+    let is_expected_tick = expected_time
+        .map(|t| t == current_time)
+        .unwrap_or(false);
+
+    if !is_expected_tick {
+        info!("Unexpected tick time - may have multiple globals. Actual: {} - Expected: {:?}", current_time, expected_time);
+    }
+
+    if crate::features::reset::reset_environment() || !is_expected_tick {
+        info!("Resetting environment");
+
+        unsafe { ENVIRONMENT = None };
     }
 
     crate::features::reset::clear();
@@ -311,7 +319,9 @@ pub fn tick() {
         main_pass_dispatcher,
         loaded,
         tick,
-    } = unsafe { ENVIRONMENT.get_or_insert_with(|| create_environment()) };
+    } = unsafe { ENVIRONMENT.get_or_insert_with(create_environment) };
+
+    *tick = Some(current_time);
 
     let is_data_ready = {
         let mut memory_arbiter = world.write_resource::<MemoryArbiter>();
@@ -346,13 +356,15 @@ pub fn tick() {
         world.remove::<UISystem>();
     }
 
+    //
+    // Load state if not yet loaded.
+    //
+
     if !*loaded {
         deserialize_world(&world, COMPONENT_SEGMENTS);
 
         *loaded = true;
     }
-
-    *tick = Some(current_time);
 
     //
     // Prepare globals

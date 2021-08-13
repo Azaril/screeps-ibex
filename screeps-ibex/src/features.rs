@@ -102,7 +102,7 @@ pub mod construction {
 
     pub fn allow_replan() -> bool {
         //::screeps::memory::root().path_bool("_features.construction.allow_replan")
-        false
+        true
     }
 
     pub fn execute() -> bool {

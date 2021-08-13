@@ -10,6 +10,7 @@ use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
+use std::collections::HashSet;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct MiningOutpostOperation {
@@ -31,12 +32,39 @@ impl MiningOutpostOperation {
         MiningOutpostOperation { owner: owner.into() }
     }
 
-    fn gather_candidate_room_data(gather_system_data: &GatherSystemData, room_name: RoomName) -> Option<CandidateRoomData> {
+    fn gather_candidate_room_data(gather_system_data: &GatherSystemData, room_name: RoomName, home_rooms: &HashSet<Entity>, distance: u32) -> Option<CandidateRoomData> {
         let search_room_entity = gather_system_data.mapping.get_room(&room_name)?;
-        let search_room_data = gather_system_data.room_data.get(search_room_entity)?;
+
+        let search_room_data = gather_system_data.room_data.get(search_room_entity)?;        
 
         let static_visibility_data = search_room_data.get_static_visibility_data()?;
         let dynamic_visibility_data = search_room_data.get_dynamic_visibility_data()?;
+
+        let max_level = home_rooms
+            .iter()
+            .filter_map(|home_room_entity| gather_system_data.room_data.get(*home_room_entity))
+            .filter_map(|home_room_data| 
+                home_room_data
+                    .get_structures()
+                    .and_then(|structures| 
+                        structures.controllers()
+                            .iter()
+                            .map(|c| c.level())
+                            .max()
+                    )
+            )
+            .max()
+            .unwrap_or(0);
+
+        let max_distance = if max_level >= 4 {
+            2
+        } else {
+            1
+        };
+
+        if distance > max_distance {
+            return Some(CandidateRoomData::new(search_room_entity, false, false));
+        }
 
         let has_sources = !static_visibility_data.sources().is_empty();
 
@@ -95,8 +123,7 @@ impl Operation for MiningOutpostOperation {
 
         let home_rooms = gather_home_rooms(&gather_system_data, 2);
 
-        //TODO: wiarchbe: Increase this to 2 when efficiency makes it worth it.
-        let gathered_data = gather_candidate_rooms(&gather_system_data, &home_rooms, 1, Self::gather_candidate_room_data);
+        let gathered_data = gather_candidate_rooms(&gather_system_data, &home_rooms, Self::gather_candidate_room_data);
 
         for unknown_room in gathered_data.unknown_rooms().iter() {
             system_data.visibility.request(VisibilityRequest::new(

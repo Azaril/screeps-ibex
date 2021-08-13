@@ -2,50 +2,6 @@ use screeps::*;
 use screeps_rover::{CostMatrixOptions, CostMatrixSystem};
 use std::ops::*;
 
-pub struct PathFinderHelpers;
-
-#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-impl PathFinderHelpers {
-    /*
-    pub fn same_room_ignore_creeps(start_pos: RoomPosition, end_pos: RoomPosition) -> Path {
-        let find_options = FindOptions::new().max_rooms(1).ignore_creeps(true);
-
-        start_pos.find_path_to(&end_pos, find_options)
-    }
-
-    pub fn same_room_ignore_creeps_range_1(start_pos: RoomPosition, end_pos: RoomPosition) -> Path {
-        let find_options = FindOptions::new().max_rooms(1).ignore_creeps(true).range(1);
-
-        start_pos.find_path_to(&end_pos, find_options)
-    }
-
-    pub fn same_room_ignore_creeps_range_3(start_pos: RoomPosition, end_pos: RoomPosition) -> Path {
-        let find_options = FindOptions::new().max_rooms(1).ignore_creeps(true).range(3);
-
-        start_pos.find_path_to(&end_pos, find_options)
-    }
-
-    pub fn same_room_ignore_creeps_and_structures(start_pos: RoomPosition, end_pos: RoomPosition) -> Path {
-        let find_options = FindOptions::new()
-            .max_rooms(1)
-            .ignore_creeps(true)
-            .ignore_destructible_structures(true);
-
-        start_pos.find_path_to(&end_pos, find_options)
-    }
-
-    pub fn same_room_ignore_creeps_and_structures_range_1(start_pos: RoomPosition, end_pos: RoomPosition) -> Path {
-        let find_options = FindOptions::new()
-            .max_rooms(1)
-            .ignore_creeps(true)
-            .ignore_destructible_structures(true)
-            .range(1);
-
-        start_pos.find_path_to(&end_pos, find_options)
-    }
-    */
-}
-
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub trait FindNearestItertools: Iterator {
     fn find_nearest_from<V>(
@@ -65,7 +21,7 @@ pub trait FindNearestItertools: Iterator {
         //TODO: Add search options customization?
         let search_options = SearchOptions::new()
             //.max_rooms(1)
-            //.max_ops(max_ops)
+            .max_ops(2000)
             .plain_cost(cost_matrix_options.plains_cost)
             .swamp_cost(cost_matrix_options.swamp_cost)
             .room_callback(|room_name: RoomName| -> MultiRoomCostResult {

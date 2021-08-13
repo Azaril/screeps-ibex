@@ -176,7 +176,18 @@ impl Mission for ReserveMission {
         // TODO: Total claim parts - target > 2 total.
         //let claim_parts = body.iter().filter(|p| **p == Part::Claim).count();
 
+        let terrain = game::map::get_room_terrain(room_data.name);
+
+        const ONE_OFFSET_SQUARE: &[(i32, i32)] = &[(-1, -1), (-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1)];
+
+        let max_reserve_locations = ONE_OFFSET_SQUARE.iter()
+            .map(|offset| controller_id.pos() + *offset)
+            .filter(|pos| pos.room_name() == controller_id.pos().room_name())
+            .filter(|pos| terrain.get(pos.x().into(), pos.y().into()) != Terrain::Wall)
+            .count();
+
         let desired_reservers = 2;
+        let desired_reservers = desired_reservers.min(max_reserve_locations);
 
         if alive_reservers.len() < desired_reservers {
             let token = system_data.spawn_queue.token();

@@ -259,10 +259,9 @@ impl Mission for HaulMission {
         if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
             let carry_parts = body.iter().filter(|p| **p == Part::Carry).count();
 
-            let range_multiplier = 1.0 / ((max_distance as f32 * 2.0) + 1.0);
-            let base_amount = carry_parts as f32 * CARRY_CAPACITY as f32 * range_multiplier;
+            let base_amount = carry_parts as f32 * CARRY_CAPACITY as f32;
 
-            let max_haulers = 3 + (max_distance * 3);
+            let max_haulers = 3 + (max_distance * 2);
 
             let desired_haulers_for_unfufilled = (stats.unfufilled_hauling as f32 / base_amount as f32) as u32;
             let desired_haulers = desired_haulers_for_unfufilled.min(max_haulers) as usize;

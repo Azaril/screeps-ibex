@@ -8,6 +8,7 @@ use crate::room::gather::*;
 use crate::room::roomplansystem::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
+use std::collections::HashSet;
 use itertools::*;
 use log::*;
 use screeps::*;
@@ -42,8 +43,13 @@ impl ClaimOperation {
 
     const VISIBILITY_TIMEOUT: u32 = 20000;
 
-    fn gather_candidate_room_data(gather_system_data: &GatherSystemData, room_name: RoomName) -> Option<CandidateRoomData> {
+    fn gather_candidate_room_data(gather_system_data: &GatherSystemData, room_name: RoomName, _home_rooms: &HashSet<Entity>, distance: u32) -> Option<CandidateRoomData> {
         let search_room_entity = gather_system_data.mapping.get_room(&room_name)?;
+
+        if distance > 6 {
+            return Some(CandidateRoomData::new(search_room_entity, false, false));
+        }
+
         let search_room_data = gather_system_data.room_data.get(search_room_entity)?;
 
         let static_visibility_data = search_room_data.get_static_visibility_data()?;
@@ -362,7 +368,7 @@ impl Operation for ClaimOperation {
 
         let home_rooms = gather_home_rooms(&gather_system_data, 1);
 
-        let gathered_data = gather_candidate_rooms(&gather_system_data, &home_rooms, 6, Self::gather_candidate_room_data);
+        let gathered_data = gather_candidate_rooms(&gather_system_data, &home_rooms, Self::gather_candidate_room_data);
 
         //
         // Request visibility for all rooms that are going stale or have not had visibility.

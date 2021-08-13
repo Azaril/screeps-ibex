@@ -1,4 +1,4 @@
-use super::actions::*;
+use super::{actions::*, data::JobData};
 use super::context::*;
 use super::jobsystem::*;
 use super::utility::haulbehavior::*;
@@ -6,7 +6,7 @@ use super::utility::movebehavior::*;
 use super::utility::repair::*;
 use super::utility::repairbehavior::*;
 use super::utility::waitbehavior::*;
-use crate::transfer::transfersystem::*;
+use crate::{entitymappingsystem::EntityMappingData, room::data::RoomData, transfer::transfersystem::*};
 use crate::{serialize::*, store::HasExpensiveStore};
 use itertools::*;
 use screeps::*;
@@ -57,7 +57,7 @@ machine!(
 
         Idle, MoveToRoom, Wait => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
 
-        Idle, MoveToRoom, Wait => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
+        Idle, MoveToRoom, Wait => fn pre_run_job(&self, _state_context: &mut HaulJobContext, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
 
         _ => fn tick(&mut self, state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState>;
     }
@@ -173,83 +173,100 @@ impl Pickup {
         visualize_delivery_from(describe_data, &self.deposits, self.withdrawl.target().pos());
     }
 
-    fn gather_data(&self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
+    fn pre_run_job(&self, state_context: &mut HaulJobContext, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
+        //
+        // Register existing pickup and delivery.
+        //
+
         runtime_data.transfer_queue.register_pickup(&self.withdrawl);
 
         for delivery_ticket in self.deposits.iter() {
             runtime_data.transfer_queue.register_delivery(&delivery_ticket);
         }
-    }
 
-    fn tick(&mut self, state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
         //
-        // NOTE: All haulers run this at the same time so that transfer data is only hydrated on this tick.
+        // Get additional delivery
         //
 
-        if game::time() % 5 == 0 {
-            let creep = tick_context.runtime_data.owner;
+        let creep_entity = runtime_data.creep_entity;
+        let creep = runtime_data.owner;
+        //TODO: Fix this when double resource counting bug is fixed.
+        let free_capacity = creep.store().expensive_free_capacity();
 
-            let transfer_queue_data = TransferQueueGeneratorData {
-                cause: "Pickup Tick",
-                room_data: &*tick_context.system_data.room_data,
-            };
+        let mut available_capacity = TransferCapacity::Finite(free_capacity);
 
-            let delivery_rooms = state_context
-                .delivery_rooms
-                .iter()
-                .filter_map(|e| tick_context.system_data.room_data.get(*e))
-                .collect_vec();
-
-            //TODO: Fix this when double resource counting bug is fixed.
-            let free_capacity = creep.store().expensive_free_capacity();
-
-            let mut available_capacity = TransferCapacity::Finite(free_capacity);
-
-            for entries in self.withdrawl.resources().values() {
-                for entry in entries {
-                    available_capacity.consume(entry.amount());
-                }
+        for entries in self.withdrawl.resources().values() {
+            for entry in entries {
+                available_capacity.consume(entry.amount());
             }
-
-            let room_mapping = tick_context.runtime_data.mapping;
-            let room_data_system = tick_context.system_data.room_data;
-
-            let target_filter = |target: &TransferTarget| {
-                if state_context.storage_delivery_only {
-                    let target_room = target.pos().room_name();
-                    if let Some(target_room) = room_mapping.get_room(&target_room) {
-                        let has_storage = room_data_system
-                            .get(target_room)
-                            .and_then(|r| r.get_structures())
-                            .map(|r| !r.storages().is_empty())
-                            .unwrap_or(false);
-
-                        return match target {
-                            TransferTarget::Container(_) => !has_storage,
-                            TransferTarget::Storage(_) => true,
-                            TransferTarget::Terminal(_) => true,
-                            _ => false,
-                        };
-                    }
-                }
-
-                true
-            };
-
-            get_additional_deliveries(
-                &transfer_queue_data,
-                &delivery_rooms,
-                TransferPriorityFlags::ALL,
-                TransferType::Haul,
-                available_capacity,
-                tick_context.runtime_data.transfer_queue,
-                &mut self.withdrawl,
-                &mut self.deposits,
-                target_filter,
-                10,
-            );
         }
 
+        if !available_capacity.empty() {
+            let delivery_rooms = state_context.delivery_rooms.clone();
+            let storage_delivery_only = state_context.storage_delivery_only;
+
+            system_data.updater.exec_mut(move |world| {
+                let room_data = world.read_storage::<RoomData>();
+
+                let delivery_rooms = delivery_rooms
+                    .iter()
+                    .filter_map(|e| room_data.get(*e))
+                    .collect_vec();
+
+                let room_mapping = world.read_resource::<EntityMappingData>();
+
+                let target_filter = |target: &TransferTarget| {
+                    if storage_delivery_only {
+                        let target_room = target.pos().room_name();
+                        if let Some(target_room) = room_mapping.get_room(&target_room) {
+                            let has_storage = room_data
+                                .get(target_room)
+                                .and_then(|r| r.get_structures())
+                                .map(|r| !r.storages().is_empty())
+                                .unwrap_or(false);
+
+                            return match target {
+                                TransferTarget::Container(_) => !has_storage,
+                                TransferTarget::Storage(_) => true,
+                                TransferTarget::Terminal(_) => true,
+                                _ => false,
+                            };
+                        }
+                    }
+
+                    true
+                };
+
+                let mut transfer_queue = world.write_resource::<TransferQueue>();
+
+                let transfer_queue_data = TransferQueueGeneratorData {
+                    cause: "Pickup Tick",
+                    room_data: &room_data,
+                };                
+
+                let mut job_data = world.write_storage::<JobData>();
+
+                if let Some(JobData::Haul(haul_job)) = job_data.get_mut(creep_entity) {
+                    if let HaulState::Pickup(pickup_state) = &mut haul_job.state {
+                        get_additional_deliveries(
+                            &transfer_queue_data,
+                            &delivery_rooms,
+                            TransferPriorityFlags::ALL,
+                            TransferType::Haul,
+                            available_capacity,
+                            &mut *transfer_queue,
+                            &mut pickup_state.withdrawl,
+                            &mut pickup_state.deposits,
+                            target_filter,
+                            10,
+                        );
+                    }
+                }
+            });
+        }     
+    }
+
+    fn tick(&mut self, _state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
         let deposits = &self.deposits;
 
         tick_pickup(tick_context, &mut self.withdrawl, move || HaulState::delivery(deposits.clone()))
@@ -261,7 +278,7 @@ impl Delivery {
         visualize_delivery(describe_data, &self.deposits);
     }
 
-    fn gather_data(&self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
+    fn pre_run_job(&self, _state_context: &mut HaulJobContext, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         for delivery_ticket in self.deposits.iter() {
             runtime_data.transfer_queue.register_delivery(&delivery_ticket);
         }
@@ -323,7 +340,7 @@ impl Job for HaulJob {
     }
 
     fn pre_run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
-        self.state.gather_data(system_data, runtime_data);
+        self.state.pre_run_job(&mut self.context, system_data, runtime_data);
     }
 
     fn run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
