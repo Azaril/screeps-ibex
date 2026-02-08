@@ -1,18 +1,24 @@
 [submodule "screeps-cache"]
 	path = screeps-cache
 	url = https://github.com/Azaril/screeps-cache.git
+	branch = master
 [submodule "screeps-machine"]
 	path = screeps-machine
 	url = https://github.com/Azaril/screeps-machine.git
+	branch = master
 [submodule "screeps-rover"]
 	path = screeps-rover
 	url = https://github.com/Azaril/screeps-rover.git
+	branch = master
 [submodule "screeps-timing"]
 	path = screeps-timing
 	url = https://github.com/Azaril/screeps-timing.git
+	branch = master
 [submodule "screeps-timing-annotate"]
 	path = screeps-timing-annotate
 	url = https://github.com/Azaril/screeps-timing-annotate.git
+	branch = master
 [submodule "screeps-foreman"]
 	path = screeps-foreman
 	url = https://github.com/Azaril/screeps-foreman.git
+	branch = master
