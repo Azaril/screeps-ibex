@@ -1,4 +1,5 @@
 [workspace]
+resolver = "2"
 members = [
     "screeps-ibex",
     "screeps-cache",
@@ -6,18 +7,13 @@ members = [
     "screeps-timing",
     "screeps-timing-annotate",
     "screeps-foreman",
-    "screeps-plus-stats",
 ]
 exclude = ["screeps-foreman-bench"]
 
 [profile.release]
 panic = "abort"
-opt-level = "z"
+opt-level = 3
 lto = true
-codegen-units = 1
-
-[patch.crates-io]
-screeps-game-api = { git = "https://github.com/Azaril/screeps-game-api" }
 
 [patch.'https://github.com/Azaril/screeps-cache']
 screeps-cache = { path = "screeps-cache" }
@@ -36,3 +32,6 @@ screeps-timing-annotate = { path = "screeps-timing-annotate" }
 
 [patch.'https://github.com/Azaril/screeps-foreman']
 screeps-foreman = { path = "screeps-foreman" }
+
+[patch.crates-io]
+screeps-game-api = { path = "../screeps-game-api" }

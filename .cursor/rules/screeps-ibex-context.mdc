@@ -1,0 +1,28 @@
+---
+description: Project context and conventions for screeps-ibex (Screeps MMORTS Rust/WASM bot)
+alwaysApply: true
+---
+
+# screeps-ibex project context
+
+**Read `AGENTS.md` at the repo root first.** It contains the authoritative project context: domain (Screeps MMORTS, tick-based, VM reloads), tech stack (Rust/WASM, specs ECS, screeps-game-api), repository layout, tick flow, memory/serialization, and where to find each subsystem.
+
+## Quick reference
+
+- **Main crate:** `screeps-ibex/` (bot logic). Entry: `lib.rs` → `game_loop::tick()` in `game_loop.rs`.
+- **Layers:** Operations → Missions → Jobs; room data and entity mapping; pathing (screeps-rover); transfer/order queues. State that must survive VM reload is serialized into RawMemory segments (see `memorysystem.rs`, `serialize.rs`, `game_loop.rs`).
+- **screeps-game-api:** Patched from `../screeps-game-api`. Keep changes minimal and upstream-quality.
+- **Submodules:** screeps-cache, screeps-machine, screeps-rover, screeps-timing, screeps-timing-annotate, screeps-foreman — patched via root `Cargo.toml`; respect their API boundaries.
+
+## Conventions
+
+- Avoid panics in tick-critical paths; handle errors and log. Code runs unattended.
+- All persistent state must go through Memory/RawMemory; do not rely on Rust heap across VM reloads.
+- Run `cargo clippy` and `cargo fmt` in the main crate; follow existing `clippy.toml` / `rustfmt.toml`.
+- When adding serialized state, extend the component list and (de)serialization in `game_loop.rs` and ensure `SerializeMarker` / `ConvertSaveload` are implemented (see `serialize.rs`).
+
+## Serialization (critical)
+
+- **Format and data changes across ticks are high-risk.** Losing memory state is costly to recover from; there is **no programmatic recovery from deserialization errors** other than a full reset. Do not change the serialized format or the set of serialized types in a way that breaks existing segment data unless a full reset is acceptable.
+- **New fields need defaults.** When adding fields to serialized components or structs, old data in RawMemory does not contain them. Use `Default`, `#[serde(default)]`, or equivalent so old payloads still deserialize and new fields get sensible default values.
+- **Breaking memory-layout changes: prompt the user.** If you must make a breaking change to memory layout or serialization (e.g. non–backward-compatible format or field changes), **ask the user to confirm that this is okay** before implementing. The bot may be reset and compatibility debt may be unacceptable; do not assume—prompt.

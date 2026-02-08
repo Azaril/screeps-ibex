@@ -17,13 +17,14 @@ pub const VISIBILITY_PRIORITY_LOW: f32 = 25.0;
 pub const VISIBILITY_PRIORITY_NONE: f32 = 0.0;
 
 bitflags! {
+    #[derive(Copy, Clone)]
     pub struct VisibilityRequestFlags: u8 {
         const UNSET = 0;
 
         const OBSERVE = 1u8;
         const SCOUT = 1u8 << 1;
 
-        const ALL = Self::OBSERVE.bits | Self::SCOUT.bits;
+        const ALL = Self::OBSERVE.bits() | Self::SCOUT.bits();
     }
 }
 
@@ -111,7 +112,7 @@ impl VisibilityQueueSystem {
             unknown_rooms.sort_by(|(_, priority_a, _, last_visible_a), (_, priority_b, _, last_visible_b)| {
                 priority_a
                     .partial_cmp(priority_b)
-                    .unwrap()
+                    .unwrap_or(std::cmp::Ordering::Equal)
                     .reverse()
                     .then_with(|| last_visible_a.cmp(last_visible_b))
             });
@@ -169,8 +170,8 @@ impl VisibilityQueueSystem {
 
                     if let Some(observer) = observer {
                         match observer.observe_room(**unknown_room_name) {
-                            ReturnCode::Ok => {}
-                            err => info!("Failed to observe: {:?}", err),
+                            Ok(()) => {}
+                            Err(err) => info!("Failed to observe: {:?}", err),
                         }
 
                         continue;

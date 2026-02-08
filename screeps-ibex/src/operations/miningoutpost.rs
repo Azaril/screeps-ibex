@@ -8,6 +8,8 @@ use crate::serialize::*;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 
@@ -107,7 +109,9 @@ impl Operation for MiningOutpostOperation {
 
         for candidate_room in gathered_data.candidate_rooms().iter() {
             let room_data_storage = &mut *system_data.room_data;
-            let room_data = room_data_storage.get_mut(candidate_room.room_data_entity()).unwrap();
+            let Some(room_data) = room_data_storage.get_mut(candidate_room.room_data_entity()) else {
+                continue;
+            };
             let dynamic_visibility_data = room_data.get_dynamic_visibility_data();
 
             //

@@ -3,6 +3,7 @@ use bitflags::*;
 //TODO: This needs a better API. It also needs to correctly represent pipelines.
 
 bitflags! {
+    #[derive(Copy, Clone)]
     pub struct SimultaneousActionFlags: u8 {
         const UNSET = 0;
 

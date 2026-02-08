@@ -2,6 +2,7 @@ use crate::room::data::*;
 use crate::ui::*;
 use crate::visualize::*;
 use log::*;
+use screeps::action_error_codes::SpawnCreepErrorCode;
 use screeps::*;
 use specs::prelude::*;
 use std::collections::HashMap;
@@ -66,7 +67,7 @@ impl SpawnQueue {
         let requests = self.requests.entry(room).or_insert_with(Vec::new);
 
         let pos = requests
-            .binary_search_by(|probe| spawn_request.priority.partial_cmp(&probe.priority).unwrap())
+            .binary_search_by(|probe| spawn_request.priority.partial_cmp(&probe.priority).unwrap_or(std::cmp::Ordering::Equal))
             .unwrap_or_else(|e| e);
 
         requests.insert(pos, spawn_request);
@@ -96,26 +97,27 @@ pub struct SpawnQueueSystem;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl SpawnQueueSystem {
-    fn spawn_creep(spawn: &StructureSpawn, parts: &[Part]) -> Result<String, ReturnCode> {
+    fn spawn_creep(spawn: &StructureSpawn, parts: &[Part]) -> Result<String, SpawnCreepErrorCode> {
         let time = screeps::game::time();
         let mut additional = 0;
         loop {
             let name = format!("{}-{}", time, additional);
-            let res = spawn.spawn_creep(&parts, &name);
-
-            if res == ReturnCode::NameExists {
-                additional += 1;
-            } else if res == ReturnCode::Ok {
-                return Ok(name);
-            } else {
-                return Err(res);
+            match spawn.spawn_creep(&parts, &name) {
+                Ok(()) => return Ok(name),
+                Err(e) => {
+                    if e == SpawnCreepErrorCode::NameExists {
+                        additional += 1;
+                    } else {
+                        return Err(e);
+                    }
+                }
             }
         }
     }
 
     fn process_room_spawns(data: &SpawnQueueSystemData, room_entity: Entity, requests: &Vec<SpawnRequest>, spawned_tokens: &mut HashSet<SpawnToken>) -> Result<(), String> {
         let room_data = data.room_data.get(room_entity).ok_or("Expected room data")?;
-        let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
+        let room = game::rooms().get(room_data.name).ok_or("Expected room")?;
         let structures = room_data.get_structures().ok_or("Expected structures")?;
 
         let mut spawns = structures.spawns().iter().map(|s| s).collect::<Vec<_>>();
@@ -127,7 +129,7 @@ impl SpawnQueueSystem {
 
         for request in requests {
             if request.token.map(|t| !spawned_tokens.contains(&t)).unwrap_or(true) {
-                if let Some(pos) = spawns.iter().position(|spawn| spawn.is_active() && !spawn.is_spawning()) {
+                if let Some(pos) = spawns.iter().position(|spawn| spawn.is_active() && spawn.spawning().is_none()) {
                     let spawn = &spawns[pos];
                     
                     let body_cost: u32 = request.body.iter().map(|p| p.cost()).sum();
@@ -159,7 +161,7 @@ impl SpawnQueueSystem {
 
                             available_energy -= body_cost;
                         }
-                        Err(ReturnCode::NotEnough) => {
+                        Err(SpawnCreepErrorCode::NotEnoughEnergy) => {
                             //
                             // If there was not enough energy available for the highest priority request,
                             // continue waiting for energy and don't allow any other spawns to occur.

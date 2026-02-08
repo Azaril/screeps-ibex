@@ -6,6 +6,8 @@ use crate::serialize::*;
 use crate::transfer::transfersystem::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 
@@ -83,7 +85,7 @@ impl Mission for PowerSpawnMission {
                 let power_spawns = structures.power_spawns();
 
                 for power_spawn in power_spawns.iter() {
-                    let required_energy = power_spawn.store_free_capacity(Some(ResourceType::Energy));
+                    let required_energy = power_spawn.store().get_free_capacity(Some(ResourceType::Energy));
 
                     let map_priority = |fraction: f32| {
                         if fraction < 0.25 {
@@ -96,7 +98,7 @@ impl Mission for PowerSpawnMission {
                     };
 
                     if required_energy > 0 {
-                        let maximum_energy = power_spawn.store_capacity(Some(ResourceType::Energy));
+                        let maximum_energy = power_spawn.store().get_capacity(Some(ResourceType::Energy));
                         let energy_fraction = (required_energy as f32) / (maximum_energy as f32);
 
                         let deposit_request = TransferDepositRequest::new(
@@ -110,10 +112,10 @@ impl Mission for PowerSpawnMission {
                         transfer.request_deposit(deposit_request);
                     }
 
-                    let required_power = power_spawn.store_free_capacity(Some(ResourceType::Power));
+                    let required_power = power_spawn.store().get_free_capacity(Some(ResourceType::Power));
 
                     if required_power > 0 {
-                        let maximum_power = power_spawn.store_capacity(Some(ResourceType::Power));
+                        let maximum_power = power_spawn.store().get_capacity(Some(ResourceType::Power));
                         let power_fraction = (required_power as f32) / (maximum_power as f32);
 
                         let deposit_request = TransferDepositRequest::new(
@@ -146,11 +148,11 @@ impl Mission for PowerSpawnMission {
         }
 
         for power_spawn in power_spawns.iter() {
-            let available_energy = power_spawn.store_of(ResourceType::Energy);
-            let available_power = power_spawn.store_of(ResourceType::Power);
+            let available_energy = power_spawn.store().get(ResourceType::Energy).unwrap_or(0);
+            let available_power = power_spawn.store().get(ResourceType::Power).unwrap_or(0);
 
             if available_energy > POWER_SPAWN_ENERGY_RATIO && available_power > 0 {
-                power_spawn.process_power();
+                let _ = power_spawn.process_power();
             }
         }
 

@@ -11,6 +11,8 @@ use screeps::*;
 use screeps_machine::*;
 use screeps_rover::*;
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 
@@ -96,7 +98,7 @@ impl Idle {
             DismantleState::delivery,
         )
         .or_else(|| {
-            if creep.store_used_capacity(None) == 0 {
+            if creep.store().get_used_capacity(None) == 0 {
                 get_new_move_to_room_state(creep, dismantle_room_data.name, DismantleState::move_to_room)
             } else {
                 None

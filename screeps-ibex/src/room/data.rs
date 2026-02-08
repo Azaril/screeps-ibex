@@ -7,6 +7,8 @@ use screeps_cache::*;
 use screeps_foreman::constants::*;
 use screeps_foreman::planner::{FastRoomTerrain, TerrainFlags};
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use std::{cell::*, fmt::Display};
@@ -125,12 +127,12 @@ impl Display for RoomDisposition {
 }
 
 impl RoomDisposition {
-    pub fn name(&self) -> Option<&str> {
+    pub fn name(&self) -> Option<String> {
         match self {
             RoomDisposition::Neutral => None,
             RoomDisposition::Mine => Some(crate::globals::user::name()),
-            RoomDisposition::Friendly(name) => Some(name),
-            RoomDisposition::Hostile(name) => Some(name),
+            RoomDisposition::Friendly(name) => Some(name.clone()),
+            RoomDisposition::Hostile(name) => Some(name.clone()),
         }
     }
 
@@ -256,25 +258,69 @@ impl RoomDynamicVisibilityData {
     }
 }
 
-#[derive(Component, ConvertSaveload)]
+#[derive(Component)]
 pub struct RoomData {
-    #[convert_save_load_attr(serde(rename = "n"))]
     pub name: RoomName,
-    #[convert_save_load_attr(serde(rename = "m"))]
     missions: EntityVec<Entity>,
-    #[convert_save_load_attr(serde(rename = "s"))]
     static_visibility_data: Option<RoomStaticVisibilityData>,
-    #[convert_save_load_attr(serde(rename = "d"))]
     dynamic_visibility_data: Option<RoomDynamicVisibilityData>,
-    #[convert_save_load_skip_convert]
-    #[convert_save_load_attr(serde(skip))]
     room_structure_data: RefCell<Option<RoomStructureData>>,
-    #[convert_save_load_skip_convert]
-    #[convert_save_load_attr(serde(skip))]
     room_construction_sites_data: RefCell<Option<ConstructionSiteData>>,
-    #[convert_save_load_skip_convert]
-    #[convert_save_load_attr(serde(skip))]
     room_creep_data: RefCell<Option<CreepData>>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(bound = "MA: Marker")]
+pub struct RoomDataSaveloadData<MA>
+where
+    MA: Marker + Serialize,
+    for<'deser> MA: Deserialize<'deser>,
+{
+    #[serde(rename = "n")]
+    pub name: <RoomName as ConvertSaveload<MA>>::Data,
+    #[serde(rename = "m")]
+    missions: <EntityVec<Entity> as ConvertSaveload<MA>>::Data,
+    #[serde(rename = "s")]
+    static_visibility_data: <Option<RoomStaticVisibilityData> as ConvertSaveload<MA>>::Data,
+    #[serde(rename = "d")]
+    dynamic_visibility_data: <Option<RoomDynamicVisibilityData> as ConvertSaveload<MA>>::Data,
+}
+
+impl<MA> ConvertSaveload<MA> for RoomData
+where
+    MA: Marker + Serialize,
+    for<'deser> MA: Deserialize<'deser>,
+{
+    type Data = RoomDataSaveloadData<MA>;
+    #[allow(deprecated)]
+    type Error = NoError;
+
+    fn convert_into<F>(&self, mut ids: F) -> Result<Self::Data, Self::Error>
+    where
+        F: FnMut(Entity) -> Option<MA>,
+    {
+        Ok(RoomDataSaveloadData {
+            name: ConvertSaveload::convert_into(&self.name, &mut ids)?,
+            missions: ConvertSaveload::convert_into(&self.missions, &mut ids)?,
+            static_visibility_data: ConvertSaveload::convert_into(&self.static_visibility_data, &mut ids)?,
+            dynamic_visibility_data: ConvertSaveload::convert_into(&self.dynamic_visibility_data, &mut ids)?,
+        })
+    }
+
+    fn convert_from<F>(data: Self::Data, mut ids: F) -> Result<Self, Self::Error>
+    where
+        F: FnMut(MA) -> Option<Entity>,
+    {
+        Ok(RoomData {
+            name: ConvertSaveload::convert_from(data.name, &mut ids)?,
+            missions: ConvertSaveload::convert_from(data.missions, &mut ids)?,
+            static_visibility_data: ConvertSaveload::convert_from(data.static_visibility_data, &mut ids)?,
+            dynamic_visibility_data: ConvertSaveload::convert_from(data.dynamic_visibility_data, &mut ids)?,
+            room_structure_data: RefCell::new(None),
+            room_construction_sites_data: RefCell::new(None),
+            room_creep_data: RefCell::new(None),
+        })
+    }
 }
 
 impl RoomData {
@@ -325,11 +371,11 @@ impl RoomData {
 
     fn create_static_visibility_data(room: &Room) -> RoomStaticVisibilityData {
         let controller_id = room.controller().map(|c| c.remote_id());
-        let source_ids = room.find(find::SOURCES).into_iter().map(|s| s.remote_id()).collect();
-        let mineral_ids = room.find(find::MINERALS).into_iter().map(|s| s.remote_id()).collect();
+        let source_ids = room.find(find::SOURCES, None).into_iter().map(|s| s.remote_id()).collect();
+        let mineral_ids = room.find(find::MINERALS, None).into_iter().map(|s| s.remote_id()).collect();
 
         let terrain = room.get_terrain();
-        let terrain = FastRoomTerrain::new(terrain.get_raw_buffer());
+        let terrain = FastRoomTerrain::new(terrain.get_raw_buffer().to_vec());
         let terrain_statistics = RoomTerrainStatistics::from_terrain(&terrain);
 
         RoomStaticVisibilityData {
@@ -359,15 +405,15 @@ impl RoomData {
     fn create_dynamic_visibility_data(&self, room: &Room) -> RoomDynamicVisibilityData {
         let controller = room.controller();
 
-        let controller_owner_name = controller.as_ref().and_then(|c| c.owner_name());
+        let controller_owner_name = controller.as_ref().and_then(|c| c.owner().map(|o| o.username()));
         let controller_owner_disposition = Self::name_option_to_disposition(controller_owner_name);
 
-        let controller_reservation_name = controller.as_ref().and_then(|c| c.reservation()).map(|r| r.username);
+        let controller_reservation_name = controller.as_ref().and_then(|c| c.reservation()).map(|r| r.username());
         let controller_reservation_disposition = Self::name_option_to_disposition(controller_reservation_name);
 
         let sign = controller.as_ref().and_then(|c| c.sign()).map(|s| RoomSign {
-            user: Self::name_to_disposition(s.username),
-            message: s.text,
+            user: Self::name_to_disposition(s.username()),
+            message: s.text(),
         });
 
         let structures = self.get_structures();
@@ -381,7 +427,7 @@ impl RoomData {
             .iter()
             .flat_map(|c| c.hostile())
             .flat_map(|c| c.body())
-            .any(|p| match p.part {
+            .any(|p| match p.part() {
                 Part::Attack | Part::RangedAttack | Part::Work => true,
                 _ => false,
             });
@@ -389,13 +435,12 @@ impl RoomData {
         let hostile_structures = structures
             .iter()
             .flat_map(|s| s.all())
-            .filter_map(|s| s.as_owned())
-            .filter(|s| s.is_active())
             .filter(|s| match s.structure_type() {
                 StructureType::KeeperLair => false,
                 _ => true,
             })
-            .any(|s| s.has_owner() && !s.my());
+            .filter_map(|s| s.as_owned())
+            .any(|s| s.owner().is_some() && !s.my());
 
         RoomDynamicVisibilityData {
             update_tick: game::time(),
@@ -416,72 +461,125 @@ impl RoomData {
         self.dynamic_visibility_data.as_ref()
     }
 
-    pub fn get_structures(&self) -> Option<Ref<RoomStructureData>> {
+    pub fn get_structures(&self) -> Option<Ref<'_, RoomStructureData>> {
         let name = self.name;
 
         self.room_structure_data
             .maybe_access(
                 |s| game::time() != s.last_updated,
-                move || game::rooms::get(name).as_ref().map(|room| RoomStructureData::new(room)),
+                move || game::rooms().get(name).as_ref().map(|room| RoomStructureData::new(room)),
             )
             .take()
     }
 
-    pub fn get_construction_sites(&self) -> Option<Ref<Vec<ConstructionSite>>> {
+    pub fn get_construction_sites(&self) -> Option<Ref<'_, Vec<ConstructionSite>>> {
         let name = self.name;
 
         self.room_construction_sites_data
             .maybe_access(
                 |s| game::time() != s.last_updated,
-                move || game::rooms::get(name).as_ref().map(|room| ConstructionSiteData::new(room)),
+                move || game::rooms().get(name).as_ref().map(|room| ConstructionSiteData::new(room)),
             )
             .take()
             .map(|s| Ref::map(s, |o| &o.construction_sites))
     }
 
-    pub fn get_creeps(&self) -> Option<Ref<CreepData>> {
+    pub fn get_creeps(&self) -> Option<Ref<'_, CreepData>> {
         let name = self.name;
 
         self.room_creep_data
             .maybe_access(
                 |s| game::time() != s.last_updated,
-                move || game::rooms::get(name).as_ref().map(|room| CreepData::new(room)),
+                move || game::rooms().get(name).as_ref().map(|room| CreepData::new(room)),
             )
             .take()
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RoomStructureData {
+    #[serde(skip)]
     last_updated: u32,
-    structures: Vec<Structure>,
+    #[serde(skip)]
+    structures: Vec<StructureObject>,
 
+    #[serde(skip)]
     containers: Vec<StructureContainer>,
+    #[serde(skip)]
     controllers: Vec<StructureController>,
+    #[serde(skip)]
     extensions: Vec<StructureExtension>,
+    #[serde(skip)]
     extractors: Vec<StructureExtractor>,
+    #[serde(skip)]
     factories: Vec<StructureFactory>,
+    #[serde(skip)]
     invader_cores: Vec<StructureInvaderCore>,
+    #[serde(skip)]
     keeper_lairs: Vec<StructureKeeperLair>,
+    #[serde(skip)]
     labs: Vec<StructureLab>,
+    #[serde(skip)]
     links: Vec<StructureLink>,
+    #[serde(skip)]
     nukers: Vec<StructureNuker>,
+    #[serde(skip)]
     observers: Vec<StructureObserver>,
+    #[serde(skip)]
     power_banks: Vec<StructurePowerBank>,
+    #[serde(skip)]
     power_spawns: Vec<StructurePowerSpawn>,
+    #[serde(skip)]
     portals: Vec<StructurePortal>,
+    #[serde(skip)]
     ramparts: Vec<StructureRampart>,
+    #[serde(skip)]
     roads: Vec<StructureRoad>,
+    #[serde(skip)]
     spawns: Vec<StructureSpawn>,
+    #[serde(skip)]
     storages: Vec<StructureStorage>,
+    #[serde(skip)]
     terminals: Vec<StructureTerminal>,
+    #[serde(skip)]
     towers: Vec<StructureTower>,
+    #[serde(skip)]
     walls: Vec<StructureWall>,
+}
+
+impl Default for RoomStructureData {
+    fn default() -> Self {
+        RoomStructureData {
+            last_updated: 0,
+            structures: Vec::new(),
+            containers: Vec::new(),
+            controllers: Vec::new(),
+            extensions: Vec::new(),
+            extractors: Vec::new(),
+            factories: Vec::new(),
+            invader_cores: Vec::new(),
+            keeper_lairs: Vec::new(),
+            labs: Vec::new(),
+            links: Vec::new(),
+            nukers: Vec::new(),
+            observers: Vec::new(),
+            power_banks: Vec::new(),
+            power_spawns: Vec::new(),
+            portals: Vec::new(),
+            ramparts: Vec::new(),
+            roads: Vec::new(),
+            spawns: Vec::new(),
+            storages: Vec::new(),
+            terminals: Vec::new(),
+            towers: Vec::new(),
+            walls: Vec::new(),
+        }
+    }
 }
 
 impl RoomStructureData {
     fn new(room: &Room) -> RoomStructureData {
-        let structures = room.find(find::STRUCTURES);
+        let structures = room.find(find::STRUCTURES, None);
 
         let mut containers = Vec::new();
         let mut controllers = Vec::new();
@@ -507,27 +605,27 @@ impl RoomStructureData {
 
         for structure in structures.iter() {
             match structure {
-                Structure::Container(data) => containers.push(data.clone()),
-                Structure::Controller(data) => controllers.push(data.clone()),
-                Structure::Extension(data) => extensions.push(data.clone()),
-                Structure::Extractor(data) => extractors.push(data.clone()),
-                Structure::Factory(data) => factories.push(data.clone()),
-                Structure::InvaderCore(data) => invader_cores.push(data.clone()),
-                Structure::KeeperLair(data) => keeper_lairs.push(data.clone()),
-                Structure::Lab(data) => labs.push(data.clone()),
-                Structure::Link(data) => links.push(data.clone()),
-                Structure::Nuker(data) => nukers.push(data.clone()),
-                Structure::Observer(data) => observers.push(data.clone()),
-                Structure::PowerBank(data) => power_banks.push(data.clone()),
-                Structure::PowerSpawn(data) => power_spawns.push(data.clone()),
-                Structure::Portal(data) => portals.push(data.clone()),
-                Structure::Rampart(data) => ramparts.push(data.clone()),
-                Structure::Road(data) => roads.push(data.clone()),
-                Structure::Spawn(data) => spawns.push(data.clone()),
-                Structure::Storage(data) => storages.push(data.clone()),
-                Structure::Terminal(data) => terminals.push(data.clone()),
-                Structure::Tower(data) => towers.push(data.clone()),
-                Structure::Wall(data) => walls.push(data.clone()),
+                StructureObject::StructureContainer(data) => containers.push(data.clone()),
+                StructureObject::StructureController(data) => controllers.push(data.clone()),
+                StructureObject::StructureExtension(data) => extensions.push(data.clone()),
+                StructureObject::StructureExtractor(data) => extractors.push(data.clone()),
+                StructureObject::StructureFactory(data) => factories.push(data.clone()),
+                StructureObject::StructureInvaderCore(data) => invader_cores.push(data.clone()),
+                StructureObject::StructureKeeperLair(data) => keeper_lairs.push(data.clone()),
+                StructureObject::StructureLab(data) => labs.push(data.clone()),
+                StructureObject::StructureLink(data) => links.push(data.clone()),
+                StructureObject::StructureNuker(data) => nukers.push(data.clone()),
+                StructureObject::StructureObserver(data) => observers.push(data.clone()),
+                StructureObject::StructurePowerBank(data) => power_banks.push(data.clone()),
+                StructureObject::StructurePowerSpawn(data) => power_spawns.push(data.clone()),
+                StructureObject::StructurePortal(data) => portals.push(data.clone()),
+                StructureObject::StructureRampart(data) => ramparts.push(data.clone()),
+                StructureObject::StructureRoad(data) => roads.push(data.clone()),
+                StructureObject::StructureSpawn(data) => spawns.push(data.clone()),
+                StructureObject::StructureStorage(data) => storages.push(data.clone()),
+                StructureObject::StructureTerminal(data) => terminals.push(data.clone()),
+                StructureObject::StructureTower(data) => towers.push(data.clone()),
+                StructureObject::StructureWall(data) => walls.push(data.clone()),
             }
         }
 
@@ -560,7 +658,7 @@ impl RoomStructureData {
         }
     }
 
-    pub fn all(&self) -> &[Structure] {
+    pub fn all(&self) -> &[StructureObject] {
         &self.structures
     }
 
@@ -649,15 +747,26 @@ impl RoomStructureData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct ConstructionSiteData {
+    #[serde(skip)]
     last_updated: u32,
+    #[serde(skip)]
     construction_sites: Vec<ConstructionSite>,
+}
+
+impl Default for ConstructionSiteData {
+    fn default() -> Self {
+        ConstructionSiteData {
+            last_updated: 0,
+            construction_sites: Vec::new(),
+        }
+    }
 }
 
 impl ConstructionSiteData {
     fn new(room: &Room) -> ConstructionSiteData {
-        let construction_sites = room.find(find::CONSTRUCTION_SITES);
+        let construction_sites = room.find(find::CONSTRUCTION_SITES, None);
 
         ConstructionSiteData {
             last_updated: game::time(),
@@ -666,18 +775,33 @@ impl ConstructionSiteData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CreepData {
+    #[serde(skip)]
     last_updated: u32,
+    #[serde(skip)]
     creeps: Vec<Creep>,
 
+    #[serde(skip)]
     friendly: Vec<Creep>,
+    #[serde(skip)]
     hostile: Vec<Creep>,
+}
+
+impl Default for CreepData {
+    fn default() -> Self {
+        CreepData {
+            last_updated: 0,
+            creeps: Vec::new(),
+            friendly: Vec::new(),
+            hostile: Vec::new(),
+        }
+    }
 }
 
 impl CreepData {
     fn new(room: &Room) -> CreepData {
-        let creeps = room.find(find::CREEPS);
+        let creeps = room.find(find::CREEPS, None);
 
         let (friendly, hostile) = creeps.iter().cloned().partition(|c| c.my());
 

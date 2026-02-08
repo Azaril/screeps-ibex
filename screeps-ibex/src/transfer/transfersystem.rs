@@ -32,6 +32,7 @@ pub const ALL_TRANSFER_PRIORITIES: &[TransferPriority] = &[
 ];
 
 bitflags! {
+    #[derive(Copy, Clone)]
     pub struct TransferPriorityFlags: u8 {
         const UNSET = 0;
 
@@ -40,8 +41,8 @@ bitflags! {
         const LOW = 1u8 << (TransferPriority::Low as u8);
         const NONE = 1u8 << (TransferPriority::None as u8);
 
-        const ALL = Self::HIGH.bits | Self::MEDIUM.bits | Self::LOW.bits | Self::NONE.bits;
-        const ACTIVE = Self::HIGH.bits | Self::MEDIUM.bits | Self::LOW.bits;
+        const ALL = Self::HIGH.bits() | Self::MEDIUM.bits() | Self::LOW.bits() | Self::NONE.bits();
+        const ACTIVE = Self::HIGH.bits() | Self::MEDIUM.bits() | Self::LOW.bits();
     }
 }
 
@@ -69,6 +70,7 @@ pub enum TransferType {
 }
 
 bitflags! {
+    #[derive(Copy, Clone)]
     pub struct TransferTypeFlags: u8 {
         const UNSET = 0;
 
@@ -115,9 +117,9 @@ pub enum TransferTarget {
 impl TransferTarget {
     fn is_valid_from_id<T>(target: &RemoteObjectId<T>) -> bool
     where
-        T: HasId + SizedRoomObject,
+        T: HasId + wasm_bindgen::JsCast,
     {
-        if game::rooms::get(target.pos().room_name()).is_some() {
+        if game::rooms().get(target.pos().room_name()).is_some() {
             target.resolve().is_some()
         } else {
             true
@@ -145,45 +147,45 @@ impl TransferTarget {
 
     pub fn pos(&self) -> RoomPosition {
         match self {
-            TransferTarget::Container(id) => id.pos(),
-            TransferTarget::Spawn(id) => id.pos(),
-            TransferTarget::Extension(id) => id.pos(),
-            TransferTarget::Storage(id) => id.pos(),
-            TransferTarget::Tower(id) => id.pos(),
-            TransferTarget::Link(id) => id.pos(),
-            TransferTarget::Ruin(id) => id.pos(),
-            TransferTarget::Tombstone(id) => id.pos(),
-            TransferTarget::Resource(id) => id.pos(),
-            TransferTarget::Terminal(id) => id.pos(),
-            TransferTarget::Lab(id) => id.pos(),
-            TransferTarget::Factory(id) => id.pos(),
-            TransferTarget::Nuker(id) => id.pos(),
-            TransferTarget::PowerSpawn(id) => id.pos(),
+            TransferTarget::Container(id) => id.pos().into(),
+            TransferTarget::Spawn(id) => id.pos().into(),
+            TransferTarget::Extension(id) => id.pos().into(),
+            TransferTarget::Storage(id) => id.pos().into(),
+            TransferTarget::Tower(id) => id.pos().into(),
+            TransferTarget::Link(id) => id.pos().into(),
+            TransferTarget::Ruin(id) => id.pos().into(),
+            TransferTarget::Tombstone(id) => id.pos().into(),
+            TransferTarget::Resource(id) => id.pos().into(),
+            TransferTarget::Terminal(id) => id.pos().into(),
+            TransferTarget::Lab(id) => id.pos().into(),
+            TransferTarget::Factory(id) => id.pos().into(),
+            TransferTarget::Nuker(id) => id.pos().into(),
+            TransferTarget::PowerSpawn(id) => id.pos().into(),
         }
     }
 
-    fn withdraw_resource_amount_from_id<T>(target: &RemoteObjectId<T>, creep: &Creep, resource: ResourceType, amount: u32) -> ReturnCode
+    fn withdraw_resource_amount_from_id<T>(target: &RemoteObjectId<T>, creep: &Creep, resource: ResourceType, amount: u32) -> Result<(), ErrorCode>
     where
-        T: Withdrawable + HasStore + HasId + SizedRoomObject,
+        T: Withdrawable + HasStore + HasId + wasm_bindgen::JsCast,
     {
         if let Some(obj) = target.resolve() {
-            let withdraw_amount = obj.store_used_capacity(Some(resource)).min(amount);
+            let withdraw_amount = obj.store().get_used_capacity(Some(resource)).min(amount);
 
-            creep.withdraw_amount(&obj, resource, withdraw_amount)
+            creep.withdraw(&obj, resource, Some(withdraw_amount)).map_err(Into::into)
         } else {
-            ReturnCode::NotFound
+            Err(ErrorCode::NotFound)
         }
     }
 
-    fn pickup_resource_from_id(target: &RemoteObjectId<Resource>, creep: &Creep) -> ReturnCode {
+    fn pickup_resource_from_id(target: &RemoteObjectId<Resource>, creep: &Creep) -> Result<(), ErrorCode> {
         if let Some(obj) = target.resolve() {
-            creep.pickup(&obj)
+            creep.pickup(&obj).map_err(Into::into)
         } else {
-            ReturnCode::NotFound
+            Err(ErrorCode::NotFound)
         }
     }
 
-    pub fn withdraw_resource_amount(&self, creep: &Creep, resource: ResourceType, amount: u32) -> ReturnCode {
+    pub fn withdraw_resource_amount(&self, creep: &Creep, resource: ResourceType, amount: u32) -> Result<(), ErrorCode> {
         match self {
             TransferTarget::Container(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
             TransferTarget::Spawn(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
@@ -203,24 +205,24 @@ impl TransferTarget {
         }
     }
 
-    fn creep_transfer_resource_amount_to_id<T>(target: &RemoteObjectId<T>, creep: &Creep, resource: ResourceType, amount: u32) -> ReturnCode
+    fn creep_transfer_resource_amount_to_id<T>(target: &RemoteObjectId<T>, creep: &Creep, resource: ResourceType, amount: u32) -> Result<(), ErrorCode>
     where
-        T: Transferable + HasStore + HasId + SizedRoomObject,
+        T: Transferable + HasStore + HasId + wasm_bindgen::JsCast,
     {
         if let Some(obj) = target.resolve() {
-            let transfer_amount = obj.store_free_capacity(Some(resource)).min(amount as i32);
+            let transfer_amount = obj.store().get_free_capacity(Some(resource)).min(amount as i32);
 
             if transfer_amount > 0 {
-                creep.transfer_amount(&obj, resource, transfer_amount as u32)
+                creep.transfer(&obj, resource, Some(transfer_amount as u32)).map_err(Into::into)
             } else {
-                ReturnCode::InvalidArgs
+                Err(ErrorCode::InvalidArgs)
             }
         } else {
-            ReturnCode::NotFound
+            Err(ErrorCode::NotFound)
         }
     }
 
-    pub fn creep_transfer_resource_amount(&self, creep: &Creep, resource: ResourceType, amount: u32) -> ReturnCode {
+    pub fn creep_transfer_resource_amount(&self, creep: &Creep, resource: ResourceType, amount: u32) -> Result<(), ErrorCode> {
         match self {
             TransferTarget::Container(id) => Self::creep_transfer_resource_amount_to_id(id, creep, resource, amount),
             TransferTarget::Spawn(id) => Self::creep_transfer_resource_amount_to_id(id, creep, resource, amount),
@@ -240,22 +242,22 @@ impl TransferTarget {
         }
     }
 
-    fn link_transfer_energy_amount_to_id(target: &RemoteObjectId<StructureLink>, link: &StructureLink, amount: u32) -> ReturnCode {
+    fn link_transfer_energy_amount_to_id(target: &RemoteObjectId<StructureLink>, link: &StructureLink, amount: u32) -> Result<(), ErrorCode> {
         if let Some(obj) = target.resolve() {
-            let transfer_amount = obj.store_free_capacity(Some(ResourceType::Energy)).min(amount as i32);
+            let transfer_amount = obj.store().get_free_capacity(Some(ResourceType::Energy)).min(amount as i32);
 
             if transfer_amount > 0 {
-                link.transfer_energy(&obj, Some(transfer_amount as u32))
+                link.transfer_energy(&obj, Some(transfer_amount as u32)).map_err(Into::into)
             } else {
-                ReturnCode::InvalidArgs
+                Err(ErrorCode::InvalidArgs)
             }
         } else {
-            ReturnCode::NotFound
+            Err(ErrorCode::NotFound)
         }
     }
 
     //TODO: This is a bad API.
-    pub fn link_transfer_energy_amount(&self, link: &StructureLink, amount: u32) -> ReturnCode {
+    pub fn link_transfer_energy_amount(&self, link: &StructureLink, amount: u32) -> Result<(), ErrorCode> {
         match self {
             TransferTarget::Container(_) => panic!("Attempting to link transfer resources to a container!"),
             TransferTarget::Spawn(_) => panic!("Attempting to link transfer resources to a spawn!"),
@@ -306,22 +308,22 @@ pub mod target_filters {
     }
 }
 
-impl std::convert::TryFrom<&Structure> for TransferTarget {
+impl std::convert::TryFrom<&StructureObject> for TransferTarget {
     type Error = ();
 
-    fn try_from(val: &Structure) -> Result<TransferTarget, ()> {
+    fn try_from(val: &StructureObject) -> Result<TransferTarget, ()> {
         match val {
-            Structure::Container(s) => Ok(s.into()),
-            Structure::Spawn(s) => Ok(s.into()),
-            Structure::Extension(s) => Ok(s.into()),
-            Structure::Storage(s) => Ok(s.into()),
-            Structure::Tower(s) => Ok(s.into()),
-            Structure::Link(s) => Ok(s.into()),
-            Structure::Terminal(s) => Ok(s.into()),
-            Structure::Lab(s) => Ok(s.into()),
-            Structure::Factory(s) => Ok(s.into()),
-            Structure::Nuker(s) => Ok(s.into()),
-            Structure::PowerSpawn(s) => Ok(s.into()),
+            StructureObject::StructureContainer(s) => Ok(s.into()),
+            StructureObject::StructureSpawn(s) => Ok(s.into()),
+            StructureObject::StructureExtension(s) => Ok(s.into()),
+            StructureObject::StructureStorage(s) => Ok(s.into()),
+            StructureObject::StructureTower(s) => Ok(s.into()),
+            StructureObject::StructureLink(s) => Ok(s.into()),
+            StructureObject::StructureTerminal(s) => Ok(s.into()),
+            StructureObject::StructureLab(s) => Ok(s.into()),
+            StructureObject::StructureFactory(s) => Ok(s.into()),
+            StructureObject::StructureNuker(s) => Ok(s.into()),
+            StructureObject::StructurePowerSpawn(s) => Ok(s.into()),
             _ => Err(()),
         }
     }
@@ -1760,6 +1762,7 @@ impl TransferQueue {
         })
         .flat_map(|(pickups, delivery)| {
             let delivery_pos = delivery.target().pos();
+            let current_position = current_position.clone();
 
             pickups.into_iter().map(move |pickup| {
                 let pickup_pos = pickup.target.pos();
@@ -1777,7 +1780,7 @@ impl TransferQueue {
                 (pickup, delivery, value)
             })
         })
-        .max_by(|(_, _, a), (_, _, b)| a.partial_cmp(b).unwrap())
+        .max_by(|(_, _, a), (_, _, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(pickup, delivery, _)| (pickup, delivery.clone()))
     }
 
@@ -1993,7 +1996,7 @@ impl TransferQueue {
 
             (delivery, value)
         })
-        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(delivery, _)| delivery.clone())
     }
 
@@ -2039,7 +2042,7 @@ impl TransferQueue {
 
                 (delivery, value)
             })
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(delivery, _)| delivery.clone())
     }
 
@@ -2067,7 +2070,7 @@ impl TransferQueue {
                 pickup_priorities,
                 delivery_priorities,
                 transfer_type,
-                current_position,
+                current_position.clone(),
                 available_capacity,
                 target_filter,
             ) {
@@ -2088,7 +2091,7 @@ impl TransferQueue {
         struct StatsEntry {
             active: u32,
             inactive: u32,
-        };
+        }
 
         let mut withdrawls: HashMap<ResourceType, StatsEntry> = HashMap::new();
         let mut deposits: HashMap<Option<ResourceType>, StatsEntry> = HashMap::new();
@@ -2235,7 +2238,7 @@ impl TransferQueue {
     }
 
     fn visualize(&mut self, data: &dyn TransferRequestSystemData, ui: &mut UISystem, visualizer: &mut Visualizer) {
-        if crate::features::transfer::visualize_demand() {
+        if crate::features::features().transfer.visualize.demand() {
             let room_names = self.rooms.get_all_rooms();
 
             for room_name in room_names.iter() {

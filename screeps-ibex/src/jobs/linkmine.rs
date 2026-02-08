@@ -22,7 +22,7 @@ pub struct LinkMineJobContext {
 machine!(
     #[derive(Clone, Serialize, Deserialize)]
     enum LinkMineState {
-        MoveToPosition { target: RoomPosition },
+        MoveToPosition { target: Position },
         Idle,
         Harvest,
         DepositLink,
@@ -62,7 +62,7 @@ machine!(
 
 impl MoveToPosition {
     pub fn tick(&mut self, _state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
-        tick_move_to_position(tick_context, self.target, 0, None, LinkMineState::idle)
+        tick_move_to_position(tick_context, self.target.into(), 0, None, LinkMineState::idle)
     }
 }
 
@@ -79,10 +79,10 @@ impl Idle {
             return Some(state);
         }
 
-        if creep.store_used_capacity(Some(ResourceType::Energy)) > 0 {
+        if creep.store().get_used_capacity(Some(ResourceType::Energy)) > 0 {
             if let Some(link) = state_context.link_target.resolve() {
-                let capacity = link.store_capacity(Some(ResourceType::Energy));
-                let used_capacity = link.store_used_capacity(Some(ResourceType::Energy));
+                let capacity = link.store().get_capacity(Some(ResourceType::Energy));
+                let used_capacity = link.store().get_used_capacity(Some(ResourceType::Energy));
 
                 if used_capacity < capacity {
                     return Some(LinkMineState::deposit_link());
@@ -90,9 +90,9 @@ impl Idle {
             }
 
             if let Some(container) = state_context.container_target.and_then(|id| id.resolve()) {
-                let capacity = container.store_capacity(None);
-                let store_types = container.store_types();
-                let used_capacity = store_types.iter().map(|r| container.store_used_capacity(Some(*r))).sum::<u32>();
+                let capacity = container.store().get_capacity(None);
+                let store_types = container.store().store_types();
+                let used_capacity = store_types.iter().map(|r| container.store().get_used_capacity(Some(*r))).sum::<u32>();
 
                 if used_capacity < capacity {
                     return Some(LinkMineState::deposit_container());
@@ -118,9 +118,12 @@ impl DepositLink {
 
 impl DepositContainer {
     pub fn tick(&mut self, state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
+        let Some(container_id) = state_context.container_target else {
+            return Some(LinkMineState::idle);
+        };
         tick_deposit_all_resources_state(
             tick_context,
-            TransferTarget::Container(state_context.container_target.unwrap()),
+            TransferTarget::Container(container_id),
             LinkMineState::idle,
         )
     }
@@ -158,12 +161,14 @@ impl LinkMineJob {
                     position.pos().room_name() == mine_target.pos().room_name() && position.pos().room_name() == link_id.pos().room_name()
                 })
                 .filter(|position| {
-                    let terrain = game::map::get_room_terrain(position.room_name());
-
-                    match terrain.get(position.x(), position.y()) {
-                        Terrain::Plain => true,
-                        Terrain::Wall => false,
-                        Terrain::Swamp => true,
+                    if let Some(terrain) = game::map::get_room_terrain(position.room_name()) {
+                        match terrain.get(position.x().u8(), position.y().u8()) {
+                            Terrain::Plain => true,
+                            Terrain::Wall => false,
+                            Terrain::Swamp => true,
+                        }
+                    } else {
+                        false
                     }
                 })
                 .cloned()

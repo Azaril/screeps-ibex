@@ -1,7 +1,7 @@
 use fern;
 use log;
 use screeps;
-use stdweb::*;
+use wasm_bindgen::JsValue;
 
 pub use log::LevelFilter::*;
 
@@ -14,9 +14,7 @@ impl log::Log for JsLog {
     }
     fn log(&self, record: &log::Record) {
         let message = format!("{}", record.args());
-        js! {
-            console.log(@{message});
-        }
+        web_sys::console::log_1(&JsValue::from_str(&message));
     }
     fn flush(&self) {}
 }
@@ -26,9 +24,7 @@ impl log::Log for JsNotify {
     }
     fn log(&self, record: &log::Record) {
         let message = format!("{}", record.args());
-        js! {
-            Game.notify(@{message});
-        }
+        screeps::game::notify(&message, None);
     }
     fn flush(&self) {}
 }

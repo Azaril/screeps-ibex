@@ -107,13 +107,15 @@ impl<'a> System<'a> for MovementUpdateSystem {
 
         let mut system = MovementSystem::new(&mut *data.cost_matrix);
 
-        if crate::features::pathing::visualize() {
+        let features = crate::features::features();
+
+        if features.pathing.visualize(features.visualize.on) {
             system.set_default_visualization_style(PolyStyle::default());
         }
 
         system.set_reuse_path_length(5);
 
-        if crate::features::pathing::custom() {
+        if features.pathing.custom {
             system.process(&mut external, movement_data);
         } else {
             system.process_inbuilt(&mut external, movement_data);

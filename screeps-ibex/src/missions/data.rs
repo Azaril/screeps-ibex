@@ -1,6 +1,8 @@
 use super::missionsystem::*;
 use crate::serialize::*;
 use serde::*;
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use std::cell::*;
@@ -29,7 +31,7 @@ pub enum MissionData {
 }
 
 impl MissionData {
-    pub fn as_mission(&self) -> Ref<dyn Mission> {
+    pub fn as_mission(&self) -> Ref<'_, dyn Mission> {
         match self {
             MissionData::LocalSupply(data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::Upgrade(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
@@ -52,7 +54,7 @@ impl MissionData {
         }
     }
 
-    pub fn as_mission_mut(&self) -> RefMut<dyn Mission> {
+    pub fn as_mission_mut(&self) -> RefMut<'_, dyn Mission> {
         match self {
             MissionData::LocalSupply(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::Upgrade(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),

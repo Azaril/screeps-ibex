@@ -31,6 +31,7 @@ use specs::{
     prelude::*,
     saveload::{DeserializeComponents, SerializeComponents},
 };
+use std::cell::RefCell;
 use std::collections::HashSet;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -82,7 +83,13 @@ fn serialize_world(world: &World, segments: &[u32]) {
             .map_err(|e| e.to_string())
             .unwrap_or_else(|e| error!("Failed serialization: {}", e));
 
-            let encoded_data = encode_buffer_to_string(&serialized_data).unwrap();
+            let encoded_data = match encode_buffer_to_string(&serialized_data) {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("Encode failed: {}", e);
+                    return;
+                }
+            };
 
             let mut segments = self.segments.iter();
 
@@ -114,6 +121,8 @@ fn serialize_world(world: &World, segments: &[u32]) {
     sys.run_now(&world);
 }
 
+/// Loads world state from RawMemory segments. On deserialization failure we log and continue;
+/// the only supported recovery is a full reset (environment and optionally memory via reset flags).
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 fn deserialize_world(world: &World, segments: &[u32]) {
     struct Deserialize<'a> {
@@ -193,14 +202,16 @@ struct GameEnvironment<'a, 'b, 'c, 'd> {
     tick: Option<u32>,
 }
 
-static mut ENVIRONMENT: Option<GameEnvironment> = None;
+thread_local! {
+    static ENVIRONMENT: RefCell<Option<GameEnvironment<'static, 'static, 'static, 'static>>> = RefCell::new(None);
+}
 
 const COST_MATRIX_SYSTEM_SEGMENT: u32 = 55;
 
 fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
     info!("Initializing game environment");
 
-    crate::features::js::prepare();
+    crate::features::prepare();
 
     let mut world = World::new();
 
@@ -277,6 +288,12 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn tick() {
     //
+    // Handle reset flags (before feature cache or environment are touched).
+    //
+
+    let reset = crate::features::load_reset();
+
+    //
     // Deserialize world state.
     //
 
@@ -284,134 +301,148 @@ pub fn tick() {
 
     const COMPONENT_SEGMENTS: &[u32] = &[50, 51, 52];
 
-    if crate::features::reset::reset_environment()
-        || unsafe { ENVIRONMENT.as_ref() }
-            .and_then(|e| e.tick)
-            .map(|t| t + 1 != current_time)
-            .unwrap_or(false)
-    {
+    let should_reset = reset.environment
+        || ENVIRONMENT.with(|e| {
+            e.borrow()
+                .as_ref()
+                .and_then(|env| env.tick)
+                .map(|t| t + 1 != current_time)
+                .unwrap_or(false)
+        });
+
+    if should_reset {
         info!("Resetting environment");
-        unsafe { ENVIRONMENT = None };
+        ENVIRONMENT.with(|e| *e.borrow_mut() = None);
     }
 
-    if crate::features::reset::reset_memory() {
+    if reset.memory {
         info!("Resetting memory");
 
         for segment in COMPONENT_SEGMENTS.iter() {
-            raw_memory::set_segment(*segment, "");
+            raw_memory::segments().set(*segment as u8, String::new());
         }
     }
 
-    crate::features::reset::clear();
-
-    let GameEnvironment {
-        world,
-        pre_pass_dispatcher,
-        main_pass_dispatcher,
-        loaded,
-        tick,
-    } = unsafe { ENVIRONMENT.get_or_insert_with(|| create_environment()) };
-
-    let is_data_ready = {
-        let mut memory_arbiter = world.write_resource::<MemoryArbiter>();
-
-        for segment in COMPONENT_SEGMENTS.iter() {
-            memory_arbiter.request(*segment);
-        }
-
-        //TODO: Remove this load from here.
-        memory_arbiter.request(COST_MATRIX_SYSTEM_SEGMENT);
-
-        COMPONENT_SEGMENTS.iter().all(|segment| memory_arbiter.is_active(*segment))
-    };
-
-    if !is_data_ready {
-        info!("Component data is not ready, delaying execution");
-
-        MemoryArbiterSystem.run_now(world);
-
-        return;
-    }
+    crate::features::clear_reset();
 
     //
-    // Add dynamic resources.
+    // Load feature flags from Memory into per-tick cache
+    // (after resets, so the cache reflects any prepare() defaults).
     //
 
-    if crate::features::visualize::on() {
-        world.insert(Visualizer::new());
-        world.insert(UISystem::new());
-    } else {
-        world.remove::<Visualizer>();
-        world.remove::<UISystem>();
-    }
+    crate::features::load();
+    let features = crate::features::features();
 
-    if !*loaded {
-        info!("Deserializing world state to environment");
+    ENVIRONMENT.with(|env_cell| {
+        let mut env_ref = env_cell.borrow_mut();
+        let env = env_ref.get_or_insert_with(|| create_environment());
 
-        deserialize_world(&world, COMPONENT_SEGMENTS);
+        let is_data_ready = {
+            let mut memory_arbiter = env.world.write_resource::<MemoryArbiter>();
 
-        *loaded = true;
-    }
-
-    *tick = Some(current_time);
-
-    //
-    // Prepare globals
-    //
-
-    let username = game::rooms::values()
-        .iter()
-        .filter_map(|room| {
-            if let Some(controller) = room.controller() {
-                if controller.my() {
-                    return controller.owner_name();
-                }
+            for segment in COMPONENT_SEGMENTS.iter() {
+                memory_arbiter.request(*segment);
             }
-            None
-        })
-        .next();
 
-    if let Some(username) = username {
-        user::set_name(&username);
-    }
+            //TODO: Remove this load from here.
+            memory_arbiter.request(COST_MATRIX_SYSTEM_SEGMENT);
 
-    //
-    // Execution
-    //
+            COMPONENT_SEGMENTS.iter().all(|segment| memory_arbiter.is_active(*segment))
+        };
 
-    pre_pass_dispatcher.dispatch(&world);
-    world.maintain();
+        if !is_data_ready {
+            info!("Component data is not ready, delaying execution");
 
-    main_pass_dispatcher.dispatch(&world);
-    world.maintain();
+            MemoryArbiterSystem.run_now(&env.world);
 
-    //
-    // Cleanup memory.
-    //
+            return;
+        }
 
-    cleanup_memory().expect("expected Memory.creeps format to be a regular memory object");
+        //
+        // Add dynamic resources.
+        //
 
-    //
-    // Serialize world state.
-    //
+        if features.visualize.on {
+            env.world.insert(Visualizer::new());
+            env.world.insert(UISystem::new());
+        } else {
+            env.world.remove::<Visualizer>();
+            env.world.remove::<UISystem>();
+        }
 
-    serialize_world(&world, COMPONENT_SEGMENTS);
+        if !env.loaded {
+            info!("Deserializing world state to environment");
+
+            deserialize_world(&env.world, COMPONENT_SEGMENTS);
+
+            env.loaded = true;
+        }
+
+        env.tick = Some(current_time);
+
+        //
+        // Prepare globals
+        //
+
+        let username = game::rooms().values()
+            .filter_map(|room| {
+                if let Some(controller) = room.controller() {
+                    if controller.my() {
+                        return controller.owner().map(|o| o.username());
+                    }
+                }
+                None
+            })
+            .next();
+
+        if let Some(username) = username {
+            user::set_name(&username);
+        }
+
+        //
+        // Execution
+        //
+
+        env.pre_pass_dispatcher.dispatch(&env.world);
+        env.world.maintain();
+
+        env.main_pass_dispatcher.dispatch(&env.world);
+        env.world.maintain();
+
+        //
+        // Cleanup memory.
+        //
+
+        if let Err(e) = cleanup_memory() {
+            warn!("cleanup_memory: {}", e);
+        }
+
+        //
+        // Serialize world state.
+        //
+
+        serialize_world(&env.world, COMPONENT_SEGMENTS);
+    });
 }
 
-fn cleanup_memory() -> Result<(), Box<dyn (::std::error::Error)>> {
-    let alive_creeps: HashSet<String> = screeps::game::creeps::keys().into_iter().collect();
+fn cleanup_memory() -> Result<(), Box<dyn ::std::error::Error>> {
+    let alive_creeps: HashSet<String> = screeps::game::creeps()
+        .keys()
+        .into_iter()
+        .map(|k| k.to_string())
+        .collect();
 
-    let screeps_memory = match screeps::memory::root().dict("creeps")? {
+    let screeps_memory = match crate::memory_helper::dict("creeps") {
         Some(v) => v,
         None => {
             return Ok(());
         }
     };
 
-    for mem_name in screeps_memory.keys() {
+    for mem_name in crate::memory_helper::keys(&screeps_memory) {
         if !alive_creeps.contains(&mem_name) {
             debug!("cleaning up creep memory of dead creep {}", mem_name);
-            screeps_memory.del(&mem_name);
+            crate::memory_helper::del(&screeps_memory, &mem_name);
         }
     }
 

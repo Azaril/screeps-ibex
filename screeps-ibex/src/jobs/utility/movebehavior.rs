@@ -30,7 +30,7 @@ where
     let room_half_height = ROOM_HEIGHT as u32 / 2;
     let range = room_half_width.max(room_half_height) - 2;
 
-    let target_pos = RoomPosition::new(room_half_width, room_half_height, room_name);
+    let target_pos = RoomPosition::new(room_half_width as u8, room_half_height as u8, room_name);
 
     tick_move_to_position(tick_context, target_pos, range, room_options, next_state)
 }
@@ -48,7 +48,7 @@ where
 {
     let creep = tick_context.runtime_data.owner;
 
-    if creep.pos().in_range_to(&position, range) {
+    if creep.pos().in_range_to(position.clone().into(), range) {
         return Some(next_state());
     }
 
@@ -57,7 +57,7 @@ where
         let mut builder = tick_context
             .runtime_data
             .movement
-            .move_to(tick_context.runtime_data.creep_entity, position);
+            .move_to(tick_context.runtime_data.creep_entity, position.into());
 
         builder.range(range);
 

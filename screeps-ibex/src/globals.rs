@@ -1,13 +1,15 @@
-static mut USERNAME: String = String::new();
+use std::cell::RefCell;
+
+thread_local! {
+    static USERNAME: RefCell<String> = RefCell::new(String::new());
+}
 
 pub mod user {
-    pub fn name() -> &'static str {
-        unsafe { &super::USERNAME }
+    pub fn name() -> String {
+        super::USERNAME.with(|u| u.borrow().clone())
     }
 
     pub fn set_name(name: &str) {
-        unsafe {
-            super::USERNAME = name.to_string();
-        }
+        super::USERNAME.with(|u| *u.borrow_mut() = name.to_string());
     }
 }

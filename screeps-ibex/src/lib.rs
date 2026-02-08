@@ -1,13 +1,11 @@
 #![recursion_limit = "256"]
 #![allow(dead_code)]
 #![warn(clippy::all)]
-#![feature(const_fn)]
 
-#[cfg(feature = "wee_alloc")]
+#[cfg(target_arch = "wasm32")]
 #[global_allocator]
-static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
+static ALLOC: talc::TalckWasm = unsafe { talc::TalckWasm::new_global() };
 
-mod componentaccess;
 mod constants;
 mod creep;
 mod entitymappingsystem;
@@ -18,6 +16,8 @@ mod globals;
 mod jobs;
 mod logging;
 mod memorysystem;
+mod panic;
+mod memory_helper;
 mod missions;
 mod operations;
 mod pathing;
@@ -33,34 +33,17 @@ mod ui;
 mod visualize;
 
 use log::*;
-use stdweb::*;
+use wasm_bindgen::prelude::*;
 
-fn main() {
-    stdweb::initialize();
-
+#[wasm_bindgen(js_name = setup)]
+pub fn setup() {
     logging::setup_logging(logging::Info);
+    panic::setup_panic_hook();
+}
 
-    js! {
-        var main_loop = @{main_loop};
-
-        module.exports.loop = function() {
-            // Provide actual error traces.
-            try {
-                main_loop();
-            } catch (error) {
-                // console_error function provided by 'screeps-game-api'
-                console_error("caught exception:", error);
-                if (error.stack) {
-                    console_error("stack trace:", error.stack);
-                }
-                console_error("resetting VM next tick.");
-                // reset the VM since we don't know if everything was cleaned up and don't
-                // want an inconsistent state.
-                module.exports.loop = wasm_reset;
-                //TODO: Halting here seems to cause more problems than it solves.
-            }
-        }
-    }
+#[wasm_bindgen(js_name = game_loop)]
+pub fn game_loop_export() {
+    main_loop();
 }
 
 fn main_loop() {

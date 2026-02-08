@@ -1,3 +1,4 @@
+use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 use specs::saveload::*;
 use specs::*;
@@ -326,7 +327,7 @@ pub fn encode_buffer_to_string(data: &[u8]) -> Result<String, String> {
 
     let compressed_data = compressor.finish().map_err(|e| e.to_string())?;
 
-    let encoded_data = base64::encode(&compressed_data);
+    let encoded_data = BASE64_STANDARD.encode(&compressed_data);
 
     Ok(encoded_data)
 }
@@ -346,7 +347,7 @@ pub fn decode_buffer_from_string(data: &str) -> Result<Vec<u8>, String> {
     use flate2::read::*;
     use std::io::prelude::*;
 
-    let decoded_data = base64::decode(data).map_err(|e| e.to_string())?;
+    let decoded_data = BASE64_STANDARD.decode(data).map_err(|e| e.to_string())?;
 
     let mut decompressor = GzDecoder::new(decoded_data.as_slice());
 

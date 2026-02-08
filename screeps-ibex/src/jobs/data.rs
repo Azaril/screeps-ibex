@@ -1,5 +1,7 @@
 use super::jobsystem::*;
 use serde::*;
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 

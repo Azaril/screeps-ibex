@@ -1,10 +1,16 @@
 # Compiled source #
 ###################
 target
+dist
+pkg
 
 # Build Files #
 ###############
 Cargo.lock
+
+# Dependencies #
+################
+node_modules
 
 # Packages #
 ############
@@ -37,5 +43,8 @@ nbproject
 *.iws
 *.sublime-project
 *.sublime-workspace
-screeps.toml
 *.code-workspace
+
+# Config w/ secrets #
+#####################
+.screeps.yaml

@@ -2,8 +2,8 @@ use screeps::*;
 use serde::de::*;
 use serde::ser::*;
 use std::hash::*;
+use wasm_bindgen::JsCast;
 
-#[derive(Eq)]
 pub struct RemoteObjectId<T> {
     position: Position,
     id: ObjectId<T>,
@@ -16,7 +16,7 @@ impl<T> RemoteObjectId<T> {
 
     pub fn new(obj: &T) -> RemoteObjectId<T>
     where
-        T: RoomObjectProperties + HasId,
+        T: HasPosition + HasId + JsCast,
     {
         RemoteObjectId {
             id: obj.id(),
@@ -34,7 +34,7 @@ impl<T> RemoteObjectId<T> {
 
     pub fn resolve(self) -> Option<T>
     where
-        T: HasId + SizedRoomObject,
+        T: MaybeHasId + JsCast,
     {
         self.id.resolve()
     }
@@ -111,6 +111,8 @@ impl<T> PartialEq for RemoteObjectId<T> {
     }
 }
 
+impl<T> Eq for RemoteObjectId<T> {}
+
 impl<T> Hash for RemoteObjectId<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id.hash(state);
@@ -120,12 +122,12 @@ impl<T> Hash for RemoteObjectId<T> {
 
 pub trait HasRemoteObjectId<T>
 where
-    T: Sized + HasId,
+    T: Sized + HasId + JsCast,
 {
     fn remote_id(&self) -> RemoteObjectId<T>;
 }
 
-impl<T: Sized + HasId> HasRemoteObjectId<T> for T {
+impl<T: Sized + HasId + JsCast + HasPosition> HasRemoteObjectId<T> for T {
     fn remote_id(&self) -> RemoteObjectId<Self> {
         RemoteObjectId {
             id: self.id(),

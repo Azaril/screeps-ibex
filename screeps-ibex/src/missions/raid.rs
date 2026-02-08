@@ -12,6 +12,8 @@ use crate::transfer::transfersystem::*;
 use super::constants::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use std::convert::*;
@@ -95,8 +97,8 @@ impl RaidMission {
 
         for structure in structures.all().iter() {
             if let Some(store) = structure.as_has_store() {
-                for resource in store.store_types() {
-                    let resource_amount = store.store_used_capacity(Some(resource));
+                for resource in store.store().store_types() {
+                    let resource_amount = store.store().get_used_capacity(Some(resource));
 
                     if resource_amount > 0 {
                         if let Ok(transfer_target) = structure.try_into() {
@@ -208,7 +210,7 @@ impl Mission for RaidMission {
 
         for home_room_entity in self.home_room_datas.iter() {
             let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
-            let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+            let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
 
             let desired_raiders = 2;
 

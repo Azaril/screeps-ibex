@@ -10,15 +10,17 @@ pub fn get_new_build_state<F, R>(creep: &Creep, build_room: &RoomData, state_map
 where
     F: Fn(RemoteObjectId<ConstructionSite>) -> R,
 {
-    if creep.store_used_capacity(Some(ResourceType::Energy)) > 0 {
+    if creep.store().get_used_capacity(Some(ResourceType::Energy)) > 0 {
         let current_rcl = build_room.get_structures().iter().flat_map(|s| s.controllers()).map(|c| c.level()).max().unwrap_or(0);
 
         //TODO: This requires visibility and could fail?
         if let Some(construction_site) = build_room
             .get_construction_sites()
-            .and_then(|construction_sites| select_construction_site(&creep, &construction_sites, current_rcl))
+            .and_then(|construction_sites| select_construction_site(&creep, &construction_sites, current_rcl.into()))
         {
-            return Some(state_map(construction_site.remote_id()));
+            if let Some(id) = construction_site.try_id() {
+                return Some(state_map(RemoteObjectId::new_from_components(id, construction_site.pos())));
+            }
         }
     }
 
@@ -54,7 +56,7 @@ where
         return Some(next_state());
     }
 
-    if !creep_pos.in_range_to(&target_position, 3) {
+    if !creep_pos.in_range_to(target_position, 3) {
         if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
@@ -69,8 +71,8 @@ where
     if let Some(construction_site) = construction_site {
         if tick_context.action_flags.consume(SimultaneousActionFlags::BUILD) {
             match creep.build(&construction_site) {
-                ReturnCode::Ok => None,
-                _ => Some(next_state()),
+                Ok(()) => None,
+                Err(_) => Some(next_state()),
             }
         } else {
             None

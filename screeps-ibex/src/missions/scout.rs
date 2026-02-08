@@ -10,6 +10,8 @@ use super::constants::*;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use itertools::*;
@@ -194,7 +196,7 @@ impl Mission for ScoutMission {
 
         for home_room_entity in self.home_room_datas.iter() {
             let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
-            let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+            let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
 
             if self.scouts.is_empty() && should_spawn {
                 //TODO: Compute best body parts to use.
