@@ -37,6 +37,7 @@ fn to_structure_name(val: StructureType) -> &'static str {
         StructureType::Nuker => "nuker",
         StructureType::Factory => "factory",
         StructureType::InvaderCore => "invaderCore",
+        _ => "unknown",
     }
 }
 
@@ -126,6 +127,7 @@ fn to_resource_name(val: ResourceType) -> &'static str {
         ResourceType::Spirit => "spirit",
         ResourceType::Emanation => "emanation",
         ResourceType::Essence => "essence",
+        _ => "unknown",
     }
 }
 
@@ -223,7 +225,7 @@ impl StatsSystem {
 
     fn get_cpu_stats() -> CpuStats {
         CpuStats {
-            bucket: game::cpu::bucket(),
+            bucket: game::cpu::bucket() as u32,
             limit: game::cpu::limit(),
             used: game::cpu::get_used(),
         }
@@ -239,7 +241,7 @@ impl StatsSystem {
                     .unwrap_or(false)
             })
             .filter_map(|(_, room_data)| {
-                if let Some(room) = game::rooms::get(room_data.name) {
+                if let Some(room) = game::rooms().get(room_data.name) {
                     let controller = room.controller()?;
 
                     let structures = room_data.get_structures()?;
@@ -251,8 +253,8 @@ impl StatsSystem {
                         if let Some(store) = structure.as_has_store() {
                             let structure_storage = storage.entry(structure_type).or_insert_with(StorageResource::default);
 
-                            for resource_type in store.store_types() {
-                                let amount = store.store_of(resource_type);
+                            for resource_type in store.store().store_types() {
+                                let amount = store.store().get(resource_type).unwrap_or(0);
 
                                 structure_storage
                                     .entry(resource_type)
@@ -270,7 +272,7 @@ impl StatsSystem {
 
                         controller_progress: controller.progress().unwrap_or(0),
                         controller_progress_total: controller.progress_total().unwrap_or(0),
-                        controller_level: controller.level(),
+                        controller_level: controller.level() as u32,
                     };
 
                     Some((room_data.name, stats))
@@ -300,7 +302,7 @@ impl StatsSystem {
     fn get_shards_stats(data: &StatsSystemData) -> HashMap<String, ShardStats> {
         let mut shards = HashMap::new();
 
-        shards.insert(game::shards::name(), Self::get_shard_stats(data));
+        shards.insert(game::shard::name(), Self::get_shard_stats(data));
 
         shards
     }

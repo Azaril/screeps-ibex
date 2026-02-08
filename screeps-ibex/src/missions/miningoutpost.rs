@@ -7,12 +7,13 @@ use super::missionsystem::*;
 use super::raid::*;
 use super::reserve::*;
 use super::utility::*;
-use crate::componentaccess::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use log::*;
 use screeps_machine::*;
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 
@@ -187,20 +188,18 @@ impl Cleanup {
         self.tick_dismantling(system_data, mission_entity, state_context)?;
         self.tick_defend(system_data, mission_entity, state_context)?;
 
-        let room_is_safe = system_data
-            .missions
-            .try_get(self.defend_mission)
+        let room_is_safe = self.defend_mission
+            .and_then(|e| system_data.missions.get(e))
             .as_mission_type::<DefendMission>()
             .map(|d| d.is_room_safe())
             .unwrap_or(true);
 
-        if let Some(mut raid_mission) = system_data.missions.try_get(self.raid_mission).as_mission_type_mut::<RaidMission>() {
+        if let Some(mut raid_mission) = self.raid_mission.and_then(|e| system_data.missions.get(e)).as_mission_type_mut::<RaidMission>() {
             raid_mission.allow_spawning(room_is_safe);
         }
 
-        if let Some(mut dismantle_mission) = system_data
-            .missions
-            .try_get(self.dismantle_mission)
+        if let Some(mut dismantle_mission) = self.dismantle_mission
+            .and_then(|e| system_data.missions.get(e))
             .as_mission_type_mut::<DismantleMission>()
         {
             dismantle_mission.allow_spawning(room_is_safe);
@@ -269,7 +268,7 @@ impl Cleanup {
         mission_entity: Entity,
         state_context: &mut MiningOutpostMissionContext,
     ) -> Result<(), String> {
-        if let Some(mut raid_mission) = system_data.missions.try_get(self.raid_mission).as_mission_type_mut::<RaidMission>() {
+        if let Some(mut raid_mission) = self.raid_mission.and_then(|e| system_data.missions.get(e)).as_mission_type_mut::<RaidMission>() {
             raid_mission.set_home_rooms(&state_context.home_room_datas);
         } else if self.raid_mission.is_none() {
             let needs_raiding = self.requires_raiding(system_data, mission_entity, state_context)?;
@@ -313,9 +312,9 @@ impl Cleanup {
 
             let has_resources = structures.iter().any(|structure| {
                 if let Some(store) = structure.as_has_store() {
-                    let store_types = store.store_types();
+                    let store_types = store.store().store_types();
 
-                    return store_types.iter().any(|t| store.store_used_capacity(Some(*t)) > 0);
+                    return store_types.iter().any(|t| store.store().get_used_capacity(Some(*t)) > 0);
                 }
 
                 false
@@ -333,7 +332,7 @@ impl Cleanup {
         mission_entity: Entity,
         state_context: &mut MiningOutpostMissionContext,
     ) -> Result<(), String> {
-        if let Some(mut dismantle_mission) = system_data.missions.try_get(self.dismantle_mission).as_mission_type_mut::<DismantleMission>() {
+        if let Some(mut dismantle_mission) = self.dismantle_mission.and_then(|e| system_data.missions.get(e)).as_mission_type_mut::<DismantleMission>() {
             dismantle_mission.set_home_rooms(&state_context.home_room_datas);
         } else if self.dismantle_mission.is_none() {
             let needs_dismantling = self.requires_dismantling(system_data, mission_entity, state_context)?;
@@ -392,7 +391,7 @@ impl Cleanup {
         mission_entity: Entity,
         state_context: &mut MiningOutpostMissionContext,
     ) -> Result<(), String> {
-        if let Some(mut defend_mission) = system_data.missions.try_get(self.defend_mission).as_mission_type_mut::<DefendMission>() {
+        if let Some(mut defend_mission) = self.defend_mission.and_then(|e| system_data.missions.get(e)).as_mission_type_mut::<DefendMission>() {
             defend_mission.set_home_rooms(&state_context.home_room_datas);
         } else if self.defend_mission.is_none() {
             let outpost_room_data = system_data
@@ -446,7 +445,7 @@ impl Mine {
             return Err("Mission cannot run in current room state".to_string());
         }
 
-        if let Some(mut supply_mission) = system_data.missions.try_get(self.supply_mission).as_mission_type_mut::<LocalSupplyMission>() {
+        if let Some(mut supply_mission) = self.supply_mission.and_then(|e| system_data.missions.get(e)).as_mission_type_mut::<LocalSupplyMission>() {
             supply_mission.set_home_rooms(&state_context.home_room_datas);
         } else if self.supply_mission.is_none() {
             let outpost_room_data = system_data
@@ -467,7 +466,7 @@ impl Mine {
             self.supply_mission = Some(mission_entity).into();
         }
 
-        if let Some(mut haul_mission) = system_data.missions.try_get(self.haul_mission).as_mission_type_mut::<HaulMission>() {
+        if let Some(mut haul_mission) = self.haul_mission.and_then(|e| system_data.missions.get(e)).as_mission_type_mut::<HaulMission>() {
             haul_mission.set_home_rooms(&state_context.home_room_datas);
         } else if self.haul_mission.is_none() {
             let outpost_room_data = system_data
@@ -488,7 +487,7 @@ impl Mine {
             self.haul_mission = Some(mission_entity).into();
         }
 
-        if let Some(mut reserve_mission) = system_data.missions.try_get(self.reserve_mission).as_mission_type_mut::<ReserveMission>() {
+        if let Some(mut reserve_mission) = self.reserve_mission.and_then(|e| system_data.missions.get(e)).as_mission_type_mut::<ReserveMission>() {
             reserve_mission.set_home_rooms(&state_context.home_room_datas);
         } else if self.reserve_mission.is_none() {
             let outpost_room_data = system_data
@@ -509,7 +508,7 @@ impl Mine {
             self.reserve_mission = Some(mission_entity).into();
         }
 
-        if let Some(mut defend_mission) = system_data.missions.try_get(self.defend_mission).as_mission_type_mut::<DefendMission>() {
+        if let Some(mut defend_mission) = self.defend_mission.and_then(|e| system_data.missions.get(e)).as_mission_type_mut::<DefendMission>() {
             defend_mission.set_home_rooms(&state_context.home_room_datas);
         } else if self.defend_mission.is_none() {
             let outpost_room_data = system_data
@@ -530,28 +529,25 @@ impl Mine {
             self.defend_mission = Some(mission_entity).into();
         }
 
-        let room_is_safe = system_data
-            .missions
-            .try_get(self.defend_mission)
+        let room_is_safe = self.defend_mission
+            .and_then(|e| system_data.missions.get(e))
             .as_mission_type::<DefendMission>()
             .map(|d| d.is_room_safe())
             .unwrap_or(true);
 
-        if let Some(mut supply_mission) = system_data
-            .missions
-            .try_get(self.supply_mission)
+        if let Some(mut supply_mission) = self.supply_mission
+            .and_then(|e| system_data.missions.get(e))
             .as_mission_type_mut::<LocalSupplyMission>()
         {
             supply_mission.allow_spawning(room_is_safe);
         }
 
-        if let Some(mut haul_mission) = system_data.missions.try_get(self.haul_mission).as_mission_type_mut::<HaulMission>() {
+        if let Some(mut haul_mission) = self.haul_mission.and_then(|e| system_data.missions.get(e)).as_mission_type_mut::<HaulMission>() {
             haul_mission.allow_spawning(room_is_safe);
         }
 
-        if let Some(mut reserve_mission) = system_data
-            .missions
-            .try_get(self.reserve_mission)
+        if let Some(mut reserve_mission) = self.reserve_mission
+            .and_then(|e| system_data.missions.get(e))
             .as_mission_type_mut::<ReserveMission>()
         {
             reserve_mission.allow_spawning(room_is_safe);

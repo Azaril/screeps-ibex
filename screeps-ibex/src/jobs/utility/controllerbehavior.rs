@@ -9,7 +9,7 @@ pub fn get_new_upgrade_state<F, R>(creep: &Creep, upgrade_room: &RoomData, state
 where
     F: Fn(RemoteObjectId<StructureController>) -> R,
 {
-    if creep.store_used_capacity(Some(ResourceType::Energy)) > 0 {
+    if creep.store().get_used_capacity(Some(ResourceType::Energy)) > 0 {
         let dynamic_visibility_data = upgrade_room.get_dynamic_visibility_data()?;
 
         if dynamic_visibility_data.visible() && dynamic_visibility_data.owner().mine() {
@@ -17,7 +17,7 @@ where
             let controller_id = static_visibility_data.controller()?;
             let controller = controller_id.resolve()?;
 
-            if max_rcl.map(|max_rcl| controller.level() < max_rcl).unwrap_or(true) {
+            if max_rcl.map(|max_rcl| (controller.level() as u32) < max_rcl).unwrap_or(true) {
                 return Some(state_map(*controller_id));
             }
         }
@@ -56,7 +56,7 @@ where
 
     //TODO: Check visibility cache and cancel if controller doesn't exist or isn't owned?
 
-    if !creep_pos.in_range_to(&target_position, 3) {
+    if !creep_pos.in_range_to(target_position, 3) {
         if action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
@@ -71,8 +71,8 @@ where
     if action_flags.consume(SimultaneousActionFlags::UPGRADE_CONTROLLER) {
         if let Some(controller) = controller_id.resolve() {
             match creep.upgrade_controller(&controller) {
-                ReturnCode::Ok => None,
-                _ => Some(next_state()),
+                Ok(()) => None,
+                Err(_) => Some(next_state()),
             }
         } else {
             Some(next_state())
@@ -95,7 +95,7 @@ where
 
     //TODO: Check visibility cache and cancel if controller doesn't exist or is owned?
 
-    if !creep_pos.is_near_to(&target_position) {
+    if !creep_pos.is_near_to(target_position) {
         if action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
@@ -109,8 +109,8 @@ where
 
     if let Some(controller) = controller_id.resolve() {
         match creep.claim_controller(&controller) {
-            ReturnCode::Ok => None,
-            _ => Some(next_state()),
+            Ok(()) => None,
+            Err(_) => Some(next_state()),
         }
     } else {
         Some(next_state())
@@ -130,7 +130,7 @@ where
 
     //TODO: Check visibility cache and cancel if controller doesn't exist or is owned?
 
-    if !creep_pos.is_near_to(&target_position) {
+    if !creep_pos.is_near_to(target_position) {
         if action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
@@ -145,17 +145,17 @@ where
     if let Some(controller) = controller_id.resolve() {
         if let Some(reservation) = controller.reservation() {
             let body = creep.body();
-            let claim_parts = body.iter().filter(|b| b.part == Part::Claim).count();
+            let claim_parts = body.iter().filter(|b| b.part() == Part::Claim).count();
             let claim_amount = claim_parts as u32 * CONTROLLER_RESERVE;
 
-            if reservation.ticks_to_end + claim_amount > CONTROLLER_RESERVE_MAX {
+            if reservation.ticks_to_end() + claim_amount > CONTROLLER_RESERVE_MAX {
                 return Some(next_state());
             }
         }
 
         match creep.reserve_controller(&controller) {
-            ReturnCode::Ok => None,
-            _ => Some(next_state()),
+            Ok(()) => None,
+            Err(_) => Some(next_state()),
         }
     } else {
         Some(next_state())
@@ -180,7 +180,7 @@ where
 
     //TODO: Check visibility cache and cancel if controller doesn't exist or is owned?
 
-    if !creep_pos.is_near_to(&target_position) {
+    if !creep_pos.is_near_to(target_position) {
         if action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
@@ -194,7 +194,7 @@ where
 
     if let Some(controller) = controller_id.resolve() {
         if action_flags.consume(SimultaneousActionFlags::SIGN) {
-            creep.sign_controller(&controller, message);
+            let _ = creep.sign_controller(&controller, message);
         }
     }
 

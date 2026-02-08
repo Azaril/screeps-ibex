@@ -19,15 +19,15 @@ impl<'a> RoomUI<'a> {
         self.room_visualizer
     }
 
-    pub fn missions(&mut self) -> ListVisualizer {
+    pub fn missions(&mut self) -> ListVisualizer<'_, '_> {
         self.room_state.missions.visualize(&mut self.room_visualizer)
     }
 
-    pub fn spawn_queue(&mut self) -> ListVisualizer {
+    pub fn spawn_queue(&mut self) -> ListVisualizer<'_, '_> {
         self.room_state.spawn_queue.visualize(&mut self.room_visualizer)
     }
 
-    pub fn jobs(&mut self) -> ListVisualizer {
+    pub fn jobs(&mut self) -> ListVisualizer<'_, '_> {
         self.room_state.jobs.visualize(&mut self.room_visualizer)
     }
 }
@@ -62,7 +62,7 @@ impl<'a> GlobalUI<'a> {
         self.global_visualizer
     }
 
-    pub fn operations(&mut self) -> ListVisualizer {
+    pub fn operations(&mut self) -> ListVisualizer<'_, '_> {
         self.global_state.operations.visualize(&mut self.global_visualizer)
     }
 }
@@ -111,8 +111,11 @@ impl UISystem {
             self.global_state = Some(GlobalUIState::new())
         }
 
+        let Some(global_state) = self.global_state.as_mut() else {
+            return;
+        };
         let mut global_ui = GlobalUI {
-            global_state: &mut self.global_state.as_mut().unwrap(),
+            global_state,
             global_visualizer: &mut global_visualizer,
         };
 
@@ -157,7 +160,7 @@ impl UISystem {
 
         room_ui.jobs().add_text("Jobs".to_string(), None);
 
-        if let Some(room) = game::rooms::get(room_name) {
+        if let Some(room) = game::rooms().get(room_name) {
             room_ui.spawn_queue().add_text(
                 format!(
                     "Spawn Queue - Energy {} / {}",

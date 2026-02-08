@@ -10,6 +10,8 @@ use crate::transfer::transfersystem::*;
 use screeps::*;
 use screeps_cache::*;
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 
@@ -204,7 +206,7 @@ impl Mission for HaulMission {
             let room_manhattan_distance = room_offset_distance.0.abs() as u32 + room_offset_distance.1.abs() as u32;
 
             //TODO: Use structure cache?
-            let room = game::rooms::get(home_room_data.name)?;
+            let room = game::rooms().get(home_room_data.name)?;
             let controller = room.controller()?;
 
             let current_energy = room.energy_available().max(SPAWN_ENERGY_CAPACITY);

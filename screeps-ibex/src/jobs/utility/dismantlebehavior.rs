@@ -13,7 +13,7 @@ where
     F: Fn(RemoteStructureIdentifier) -> R,
 {
     //TODO: Add bypass for energy check.
-    if creep.store_capacity(Some(ResourceType::Energy)) == 0 || creep.store_free_capacity(Some(ResourceType::Energy)) > 0 {
+    if creep.store().get_capacity(Some(ResourceType::Energy)) == 0 || creep.store().get_free_capacity(Some(ResourceType::Energy)) > 0 {
         //TODO: This requires visibility and could fail?
         let structures = dismantle_room.get_structures()?;
         let static_visibility_data = dismantle_room.get_static_visibility_data()?;
@@ -31,9 +31,9 @@ where
         let creep_pos = creep.pos();
 
         //TODO: Fix this hack which is a workaround for range of 1 pathfinding returning empty path.
-        let mut best_structure: Option<Structure> = dismantle_structures
+        let mut best_structure: Option<StructureObject> = dismantle_structures
             .iter()
-            .find(|s| s.pos().get_range_to(&creep_pos) <= 1)
+            .find(|s| s.pos().get_range_to(creep_pos) <= 1)
             .map(|&s| s.clone());
 
         if best_structure.is_none() {
@@ -43,6 +43,7 @@ where
                 //TODO: Remove clone when find_nearest is fixed.
                 .find_nearest_from(creep_pos, PathFinderHelpers::same_room_ignore_creeps_range_1);
         }
+
 
         if let Some(structure) = best_structure {
             return Some(state_map(RemoteStructureIdentifier::new(&structure)));
@@ -63,7 +64,7 @@ where
 {
     let creep = tick_context.runtime_data.owner;
 
-    if creep.store_capacity(Some(ResourceType::Energy)) > 0 && creep.store_free_capacity(Some(ResourceType::Energy)) == 0 {
+    if creep.store().get_capacity(Some(ResourceType::Energy)) > 0 && creep.store().get_free_capacity(Some(ResourceType::Energy)) == 0 {
         return Some(next_state());
     }
 
@@ -91,7 +92,7 @@ where
         return Some(next_state());
     }
 
-    if !creep_pos.in_range_to(&target_position, 1) {
+    if !creep_pos.in_range_to(target_position, 1) {
         if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
@@ -106,9 +107,13 @@ where
 
     if let Some(structure) = dismantle_target.as_ref() {
         if tick_context.action_flags.consume(SimultaneousActionFlags::DISMANTLE) {
-            match creep.dismantle(structure) {
-                ReturnCode::Ok => None,
-                _ => Some(next_state()),
+            if let Some(dismantleable) = structure.as_dismantleable() {
+                match creep.dismantle(dismantleable) {
+                    Ok(()) => None,
+                    Err(_) => Some(next_state()),
+                }
+            } else {
+                Some(next_state())
             }
         } else {
             None

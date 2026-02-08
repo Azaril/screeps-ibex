@@ -13,7 +13,7 @@ pub fn select_construction_site(creep: &Creep, construction_sites: &[Constructio
             a_priority
                 .cmp(b_priority)
                 .then_with(|| a.progress().cmp(&b.progress()))
-                .then_with(|| creep_pos.get_range_to(&a.pos()).cmp(&creep_pos.get_range_to(&b.pos())).reverse())
+                .then_with(|| creep_pos.get_range_to(a.pos()).cmp(&creep_pos.get_range_to(b.pos())).reverse())
         })
         .map(|(s, _)| s.clone())
 }

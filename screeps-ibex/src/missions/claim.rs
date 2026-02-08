@@ -8,6 +8,8 @@ use crate::serialize::*;
 use crate::spawnsystem::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use itertools::*;
@@ -132,7 +134,7 @@ impl Mission for ClaimMission {
 
         for home_room_data_entity in self.home_room_datas.iter() {
             let home_room_data = system_data.room_data.get(*home_room_data_entity).ok_or("Expected home room data")?;
-            let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+            let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
 
             if self.claimers.is_empty() {
                 let body_definition = crate::creep::SpawnBodyDefinition {

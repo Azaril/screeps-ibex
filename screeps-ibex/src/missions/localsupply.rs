@@ -17,6 +17,8 @@ use lerp::*;
 use screeps::*;
 use screeps_cache::*;
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use std::cell::*;
@@ -25,7 +27,6 @@ use std::rc::*;
 
 //TODO: This mission is overloaded and should be split in to separate mission components.
 
-#[derive(ConvertSaveload)]
 pub struct LocalSupplyMission {
     owner: EntityOption<Entity>,
     room_data: Entity,
@@ -34,15 +35,73 @@ pub struct LocalSupplyMission {
     source_container_miners: EntityVec<Entity>,
     source_link_miners: EntityVec<Entity>,
     mineral_container_miners: EntityVec<Entity>,
-    #[convert_save_load_attr(serde(skip))]
-    #[convert_save_load_skip_convert]
     structure_data: Rc<RefCell<Option<StructureData>>>,
     allow_spawning: bool,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(bound = "MA: Marker")]
+pub struct LocalSupplyMissionSaveloadData<MA>
+where
+    MA: Marker + Serialize,
+    for<'deser> MA: Deserialize<'deser>,
+{
+    owner: <EntityOption<Entity> as ConvertSaveload<MA>>::Data,
+    room_data: <Entity as ConvertSaveload<MA>>::Data,
+    home_room_datas: <EntityVec<Entity> as ConvertSaveload<MA>>::Data,
+    harvesters: <EntityVec<Entity> as ConvertSaveload<MA>>::Data,
+    source_container_miners: <EntityVec<Entity> as ConvertSaveload<MA>>::Data,
+    source_link_miners: <EntityVec<Entity> as ConvertSaveload<MA>>::Data,
+    mineral_container_miners: <EntityVec<Entity> as ConvertSaveload<MA>>::Data,
+    allow_spawning: <bool as ConvertSaveload<MA>>::Data,
+}
+
+impl<MA> ConvertSaveload<MA> for LocalSupplyMission
+where
+    MA: Marker + Serialize,
+    for<'deser> MA: Deserialize<'deser>,
+{
+    type Data = LocalSupplyMissionSaveloadData<MA>;
+    #[allow(deprecated)]
+    type Error = NoError;
+
+    fn convert_into<F>(&self, mut ids: F) -> Result<Self::Data, Self::Error>
+    where
+        F: FnMut(Entity) -> Option<MA>,
+    {
+        Ok(LocalSupplyMissionSaveloadData {
+            owner: ConvertSaveload::convert_into(&self.owner, &mut ids)?,
+            room_data: ConvertSaveload::convert_into(&self.room_data, &mut ids)?,
+            home_room_datas: ConvertSaveload::convert_into(&self.home_room_datas, &mut ids)?,
+            harvesters: ConvertSaveload::convert_into(&self.harvesters, &mut ids)?,
+            source_container_miners: ConvertSaveload::convert_into(&self.source_container_miners, &mut ids)?,
+            source_link_miners: ConvertSaveload::convert_into(&self.source_link_miners, &mut ids)?,
+            mineral_container_miners: ConvertSaveload::convert_into(&self.mineral_container_miners, &mut ids)?,
+            allow_spawning: ConvertSaveload::convert_into(&self.allow_spawning, &mut ids)?,
+        })
+    }
+
+    fn convert_from<F>(data: Self::Data, mut ids: F) -> Result<Self, Self::Error>
+    where
+        F: FnMut(MA) -> Option<Entity>,
+    {
+        Ok(LocalSupplyMission {
+            owner: ConvertSaveload::convert_from(data.owner, &mut ids)?,
+            room_data: ConvertSaveload::convert_from(data.room_data, &mut ids)?,
+            home_room_datas: ConvertSaveload::convert_from(data.home_room_datas, &mut ids)?,
+            harvesters: ConvertSaveload::convert_from(data.harvesters, &mut ids)?,
+            source_container_miners: ConvertSaveload::convert_from(data.source_container_miners, &mut ids)?,
+            source_link_miners: ConvertSaveload::convert_from(data.source_link_miners, &mut ids)?,
+            mineral_container_miners: ConvertSaveload::convert_from(data.mineral_container_miners, &mut ids)?,
+            structure_data: Rc::new(RefCell::new(None)),
+            allow_spawning: ConvertSaveload::convert_from(data.allow_spawning, &mut ids)?,
+        })
+    }
+}
+
 type MineralExtractorPair = (RemoteObjectId<Mineral>, RemoteObjectId<StructureExtractor>);
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct StructureData {
     last_updated: u32,
     sources_to_containers: HashMap<RemoteObjectId<Source>, Vec<RemoteObjectId<StructureContainer>>>,
@@ -195,7 +254,7 @@ impl LocalSupplyMission {
         let sources_to_containers = sources
             .iter()
             .filter_map(|source| {
-                let nearby_container = containers.iter().find(|container| container.pos().is_near_to(&source.pos()));
+                let nearby_container = containers.iter().find(|container| container.pos().is_near_to(source.pos()));
 
                 nearby_container.map(|container| (*source, container.remote_id()))
             })
@@ -207,7 +266,7 @@ impl LocalSupplyMission {
         let controller_links: Vec<_> = controller
             .iter()
             .filter_map(|controller| {
-                let nearby_link = links.iter().find(|link| link.pos().in_range_to(&controller.pos(), 3));
+                let nearby_link = links.iter().find(|link| link.pos().in_range_to(controller.pos(), 3));
 
                 nearby_link.map(|link| link.remote_id())
             })
@@ -219,7 +278,7 @@ impl LocalSupplyMission {
             .iter()
             .filter_map(|extractor| {
                 if let Some(mineral) = minerals.iter().find(|m| m.pos() == extractor.pos()) {
-                    let nearby_container = containers.iter().find(|container| container.pos().is_near_to(&extractor.pos()));
+                    let nearby_container = containers.iter().find(|container| container.pos().is_near_to(extractor.pos()));
 
                     nearby_container.map(|container| ((*mineral, extractor.remote_id()), container.remote_id()))
                 } else {
@@ -236,7 +295,7 @@ impl LocalSupplyMission {
             .flat_map(|&source| {
                 links
                     .iter()
-                    .filter(move |link| link.pos().in_range_to(&source.pos(), 2))
+                    .filter(move |link| link.pos().in_range_to(source.pos(), 2))
                     .map(|link| link.remote_id())
                     .filter(|id| !controller_links.contains(id))
                     .map(move |id| (source, id))
@@ -245,7 +304,7 @@ impl LocalSupplyMission {
 
         let storage_links = links
             .into_iter()
-            .filter(|link| storages.iter().any(|storage| link.pos().in_range_to(&storage.pos(), 2)))
+            .filter(|link| storages.iter().any(|storage| link.pos().in_range_to(storage.pos(), 2)))
             .map(|link| link.remote_id())
             .collect();
 
@@ -265,7 +324,7 @@ impl LocalSupplyMission {
                             .values()
                             .any(|other_containers| other_containers.iter().any(|other_container| other_container == container))
                     })
-                    .find(|container| container.pos().in_range_to(&controller.pos(), 2));
+                    .find(|container| container.pos().in_range_to(controller.pos(), 2));
 
                 nearby_container_id.map(|container_id| (**controller, container_id))
             })
@@ -401,7 +460,7 @@ impl LocalSupplyMission {
 
             for link_id in all_links {
                 if let Some(link) = link_id.resolve() {
-                    if link.cooldown() == 0 && link.store_of(ResourceType::Energy) > 0 {
+                    if link.cooldown() == 0 && link.store().get(ResourceType::Energy).unwrap_or(0) > 0 {
                         let link_pos = link.pos();
                         let room_name = link_pos.room_name();
 
@@ -417,7 +476,7 @@ impl LocalSupplyMission {
                                     priority.into(),
                                     TransferType::Link,
                                     TransferCapacity::Infinite,
-                                    link_pos,
+                                    link_pos.into(),
                                     target_filters::link,
                                 )
                             })
@@ -434,7 +493,7 @@ impl LocalSupplyMission {
                                 .map(|entries| entries.iter().map(|entry| entry.amount()).sum())
                                 .unwrap_or(0);
 
-                            delivery.target().link_transfer_energy_amount(&link, transfer_amount);
+                            let _ = delivery.target().link_transfer_energy_amount(&link, transfer_amount);
                         }
                     }
                 }
@@ -569,7 +628,7 @@ impl LocalSupplyMission {
 
             for home_room_entity in self.home_room_datas.iter() {
                 let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
-                let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+                let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
         
                 //TODO: Use find route plus cache.
                 let room_offset_distance = home_room_data.name - source_id.pos().room_name();
@@ -640,7 +699,7 @@ impl LocalSupplyMission {
                             .creep_owner
                             .get(***entity)
                             .and_then(|creep_owner| creep_owner.owner.resolve())
-                            .and_then(|creep| creep.ticks_to_live().ok())
+                            .and_then(|creep| creep.ticks_to_live())
                             .map(|count| count > 50)
                             .unwrap_or(false)
                 })
@@ -673,7 +732,7 @@ impl LocalSupplyMission {
 
                     for home_room_entity in self.home_room_datas.iter() {
                         let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
-                        let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+                        let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
 
                         let energy_capacity = if likely_owned_room {
                             SOURCE_ENERGY_CAPACITY
@@ -738,7 +797,7 @@ impl LocalSupplyMission {
 
                     for home_room_entity in self.home_room_datas.iter() {
                         let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
-                        let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+                        let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
 
                         let energy_capacity = if likely_owned_room {
                             SOURCE_ENERGY_CAPACITY
@@ -806,7 +865,7 @@ impl LocalSupplyMission {
                             .creep_owner
                             .get(***entity)
                             .and_then(|creep_owner| creep_owner.owner.resolve())
-                            .and_then(|creep| creep.ticks_to_live().ok())
+                            .and_then(|creep| creep.ticks_to_live())
                             .map(|count| count > 50)
                             .unwrap_or(false)
                 })
@@ -830,7 +889,7 @@ impl LocalSupplyMission {
 
                 for home_room_entity in self.home_room_datas.iter() {
                     let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
-                    let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+                    let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
 
                     //TODO: Compute correct body type.
                     //TODO: Base this on road presence.
@@ -885,9 +944,9 @@ impl LocalSupplyMission {
         for containers in provider_containers {
             for container_id in containers {
                 if let Some(container) = container_id.resolve() {
-                    let container_used_capacity = container.store_total();
+                    let container_used_capacity = container.store().get_used_capacity(None);
                     if container_used_capacity > 0 {
-                        let container_store_capacity = container.store_capacity(None);
+                        let container_store_capacity = container.store().get_capacity(None);
 
                         let storage_fraction = (container_used_capacity as f32) / (container_store_capacity as f32);
                         let priority = if storage_fraction > 0.75 {
@@ -898,8 +957,8 @@ impl LocalSupplyMission {
                             TransferPriority::None
                         };
 
-                        for resource in container.store_types() {
-                            let resource_amount = container.store_used_capacity(Some(resource));
+                        for resource in container.store().store_types() {
+                            let resource_amount = container.store().get_used_capacity(Some(resource));
                             let transfer_request = TransferWithdrawRequest::new(
                                 TransferTarget::Container(*container_id),
                                 resource,
@@ -918,8 +977,8 @@ impl LocalSupplyMission {
         for containers in structure_data.controllers_to_containers.values() {
             for container_id in containers {
                 if let Some(container) = container_id.resolve() {
-                    let container_used_capacity = container.store_used_capacity(Some(ResourceType::Energy));
-                    let container_available_capacity = container.store_capacity(Some(ResourceType::Energy));
+                    let container_used_capacity = container.store().get_used_capacity(Some(ResourceType::Energy));
+                    let container_available_capacity = container.store().get_capacity(Some(ResourceType::Energy));
                     let container_free_capacity = container_available_capacity - container_used_capacity;
 
                     let storage_fraction = container_used_capacity as f32 / container_available_capacity as f32;
@@ -942,7 +1001,7 @@ impl LocalSupplyMission {
                         transfer.request_deposit(transfer_request);
                     }
 
-                    let container_used_capacity = container.store_used_capacity(Some(ResourceType::Energy));
+                    let container_used_capacity = container.store().get_used_capacity(Some(ResourceType::Energy));
                     if container_used_capacity > 0 {
                         let transfer_request = TransferWithdrawRequest::new(
                             TransferTarget::Container(*container_id),
@@ -982,8 +1041,8 @@ impl LocalSupplyMission {
                     transfer.request_deposit(transfer_request);
                 }
 
-                for resource in container.store_types() {
-                    let resource_amount = container.store_used_capacity(Some(resource));
+                for resource in container.store().store_types() {
+                    let resource_amount = container.store().get_used_capacity(Some(resource));
                     let transfer_request = TransferWithdrawRequest::new(
                         TransferTarget::Container(*container_id),
                         resource,
@@ -1001,7 +1060,7 @@ impl LocalSupplyMission {
     fn request_transfer_for_spawns(transfer: &mut dyn TransferRequestSystem, spawns: &[RemoteObjectId<StructureSpawn>]) {
         for spawn_id in spawns.iter() {
             if let Some(spawn) = spawn_id.resolve() {
-                let free_capacity = spawn.store_free_capacity(Some(ResourceType::Energy));
+                let free_capacity = spawn.store().get_free_capacity(Some(ResourceType::Energy));
                 if free_capacity > 0 {
                     let transfer_request = TransferDepositRequest::new(
                         TransferTarget::Spawn(*spawn_id),
@@ -1020,7 +1079,7 @@ impl LocalSupplyMission {
     fn request_transfer_for_extension(transfer: &mut dyn TransferRequestSystem, extensions: &[RemoteObjectId<StructureExtension>]) {
         for extension_id in extensions.iter() {
             if let Some(extension) = extension_id.resolve() {
-                let free_capacity = extension.store_free_capacity(Some(ResourceType::Energy));
+                let free_capacity = extension.store().get_free_capacity(Some(ResourceType::Energy));
                 if free_capacity > 0 {
                     let transfer_request = TransferDepositRequest::new(
                         TransferTarget::Extension(*extension_id),
@@ -1041,8 +1100,8 @@ impl LocalSupplyMission {
             if let Some(storage) = storage_id.resolve() {
                 let mut used_capacity = 0;
 
-                for resource in storage.store_types() {
-                    let resource_amount = storage.store_used_capacity(Some(resource));
+                for resource in storage.store().store_types() {
+                    let resource_amount = storage.store().get_used_capacity(Some(resource));
                     let transfer_request = TransferWithdrawRequest::new(
                         TransferTarget::Storage(*storage_id),
                         resource,
@@ -1056,7 +1115,7 @@ impl LocalSupplyMission {
                     used_capacity += resource_amount;
                 }
 
-                let free_capacity = storage.store_capacity(None) - used_capacity;
+                let free_capacity = storage.store().get_capacity(None) - used_capacity;
 
                 if free_capacity > 0 {
                     let transfer_request = TransferDepositRequest::new(
@@ -1076,7 +1135,7 @@ impl LocalSupplyMission {
     fn request_transfer_for_storage_links(transfer: &mut dyn TransferRequestSystem, structure_data: &StructureData) {
         for link_id in &structure_data.storage_links {
             if let Some(link) = link_id.resolve() {
-                let free_capacity = link.store_free_capacity(Some(ResourceType::Energy));
+                let free_capacity = link.store().get_free_capacity(Some(ResourceType::Energy));
 
                 if free_capacity > 1 {
                     let transfer_request = TransferDepositRequest::new(
@@ -1090,10 +1149,10 @@ impl LocalSupplyMission {
                     transfer.request_deposit(transfer_request);
                 }
 
-                let used_capacity = link.store_used_capacity(Some(ResourceType::Energy));
+                let used_capacity = link.store().get_used_capacity(Some(ResourceType::Energy));
 
                 if used_capacity > 0 {
-                    let available_capacity = link.store_capacity(Some(ResourceType::Energy));
+                    let available_capacity = link.store().get_capacity(Some(ResourceType::Energy));
                     let storage_fraction = (used_capacity as f32) / (available_capacity as f32);
 
                     let priority = if storage_fraction > 0.5 {
@@ -1121,10 +1180,10 @@ impl LocalSupplyMission {
     fn request_transfer_for_source_links(transfer: &mut dyn TransferRequestSystem, structure_data: &StructureData) {
         for link_id in structure_data.sources_to_links.values().flatten() {
             if let Some(link) = link_id.resolve() {
-                let used_capacity = link.store_used_capacity(Some(ResourceType::Energy));
+                let used_capacity = link.store().get_used_capacity(Some(ResourceType::Energy));
 
                 if used_capacity > 0 {
-                    let available_capacity = link.store_capacity(Some(ResourceType::Energy));
+                    let available_capacity = link.store().get_capacity(Some(ResourceType::Energy));
                     let storage_fraction = (used_capacity as f32) / (available_capacity as f32);
 
                     let priority = if storage_fraction > 0.5 {
@@ -1152,7 +1211,7 @@ impl LocalSupplyMission {
     fn request_transfer_for_controller_links(transfer: &mut dyn TransferRequestSystem, structure_data: &StructureData) {
         for link_id in &structure_data.controller_links {
             if let Some(link) = link_id.resolve() {
-                let free_capacity = link.store_free_capacity(Some(ResourceType::Energy));
+                let free_capacity = link.store().get_free_capacity(Some(ResourceType::Energy));
 
                 if free_capacity > 1 {
                     let transfer_request = TransferDepositRequest::new(
@@ -1166,7 +1225,7 @@ impl LocalSupplyMission {
                     transfer.request_deposit(transfer_request);
                 }
 
-                let used_capacity = link.store_used_capacity(Some(ResourceType::Energy));
+                let used_capacity = link.store().get_used_capacity(Some(ResourceType::Energy));
 
                 let transfer_request = TransferWithdrawRequest::new(
                     TransferTarget::Link(link.remote_id()),
@@ -1182,11 +1241,11 @@ impl LocalSupplyMission {
     }
 
     fn request_transfer_for_ruins(transfer: &mut dyn TransferRequestSystem, room: &Room) {
-        for ruin in room.find(find::RUINS) {
+        for ruin in room.find(find::RUINS, None) {
             let ruin_id = ruin.remote_id();
 
-            for resource in ruin.store_types() {
-                let resource_amount = ruin.store_used_capacity(Some(resource));
+            for resource in ruin.store().store_types() {
+                let resource_amount = ruin.store().get_used_capacity(Some(resource));
                 let transfer_request = TransferWithdrawRequest::new(
                     TransferTarget::Ruin(ruin_id),
                     resource,
@@ -1201,11 +1260,11 @@ impl LocalSupplyMission {
     }
 
     fn request_transfer_for_tombstones(transfer: &mut dyn TransferRequestSystem, room: &Room) {
-        for tombstone in room.find(find::TOMBSTONES) {
+        for tombstone in room.find(find::TOMBSTONES, None) {
             let tombstone_id = tombstone.remote_id();
 
-            for resource in tombstone.store_types() {
-                let resource_amount = tombstone.store_used_capacity(Some(resource));
+            for resource in tombstone.store().store_types() {
+                let resource_amount = tombstone.store().get_used_capacity(Some(resource));
 
                 //TODO: Only apply this if no hostiles in the room?
                 let priority = if resource_amount > 200 || resource != ResourceType::Energy {
@@ -1228,7 +1287,7 @@ impl LocalSupplyMission {
     }
 
     fn request_transfer_for_dropped_resources(transfer: &mut dyn TransferRequestSystem, room: &Room) {
-        for dropped_resource in room.find(find::DROPPED_RESOURCES) {
+        for dropped_resource in room.find(find::DROPPED_RESOURCES, None) {
             let dropped_resource_id = dropped_resource.remote_id();
 
             let resource = dropped_resource.resource_type();
@@ -1269,7 +1328,7 @@ impl LocalSupplyMission {
             Self::request_transfer_for_storage(transfer, &structure_data.storage);
             Self::request_transfer_for_containers(transfer, &structure_data);
 
-            if let Some(room) = game::rooms::get(room_data.name) {
+            if let Some(room) = game::rooms().get(room_data.name) {
                 Self::request_transfer_for_ruins(transfer, &room);
                 Self::request_transfer_for_tombstones(transfer, &room);
                 Self::request_transfer_for_dropped_resources(transfer, &room);

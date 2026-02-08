@@ -11,6 +11,8 @@ use crate::missions::missionsystem::*;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use itertools::*;
@@ -314,7 +316,7 @@ impl Operation for ClaimOperation {
         let active_rooms = (currently_owned_rooms + self.claim_missions.len()) as u32;
         let available_rooms = maximum_rooms - active_rooms.min(maximum_rooms);
 
-        if active_rooms >= maximum_rooms || !crate::features::claim() {
+        if active_rooms >= maximum_rooms || !crate::features::features().claim {
             return Ok(OperationResult::Running);
         }
 
@@ -382,7 +384,7 @@ impl Operation for ClaimOperation {
             })
             .collect::<Vec<_>>();
 
-        scored_candidate_rooms.sort_by(|(_, score_a), (_, score_b)| score_a.partial_cmp(&score_b).unwrap().reverse());
+        scored_candidate_rooms.sort_by(|(_, score_a), (_, score_b)| score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal).reverse());
 
         //
         // Get home rooms

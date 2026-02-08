@@ -6,6 +6,8 @@ use crate::serialize::*;
 use screeps::*;
 use screeps_machine::*;
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 

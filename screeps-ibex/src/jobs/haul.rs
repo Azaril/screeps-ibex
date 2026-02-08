@@ -12,6 +12,8 @@ use itertools::*;
 use screeps::*;
 use screeps_machine::*;
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 
@@ -179,11 +181,11 @@ impl Pickup {
                 .filter_map(|e| tick_context.system_data.room_data.get(*e))
                 .collect_vec();
 
-            let capacity = creep.store_capacity(None);
-            let store_types = creep.store_types();
-            let used_capacity = store_types.iter().map(|r| creep.store_used_capacity(Some(*r))).sum::<u32>();
+            let capacity = creep.store().get_capacity(None);
+            let store_types = creep.store().store_types();
+            let used_capacity = store_types.iter().map(|r| creep.store().get_used_capacity(Some(*r))).sum::<u32>();
             //TODO: Fix this when double resource counting bug is fixed.
-            //let used_capacity = creep.store_used_capacity(None);
+            //let used_capacity = creep.store().get_used_capacity(None);
             let free_capacity = capacity - used_capacity;
 
             let mut available_capacity = TransferCapacity::Finite(free_capacity);

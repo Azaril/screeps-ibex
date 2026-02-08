@@ -4,6 +4,8 @@ use crate::room::roomplansystem::*;
 use crate::serialize::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 
@@ -56,12 +58,12 @@ impl Mission for ConstructionMission {
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
-        let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
+        let room = game::rooms().get(room_data.name).ok_or("Expected room")?;
 
         let request_plan = if let Some(room_plan_data) = system_data.room_plan_data.get(self.room_data) {
             if let Some(plan) = room_plan_data.plan() {
                 if game::time() % 50 == 0 {
-                    if crate::features::construction::execute() {
+                    if crate::features::features().construction.execute {
                         let construction_sites = room_data.get_construction_sites().ok_or("Expected construction sites")?;
 
                         const MAX_CONSTRUCTION_SITES: i32 = 10;
@@ -73,7 +75,7 @@ impl Mission for ConstructionMission {
                         }
                     }
 
-                    if crate::features::construction::cleanup() {
+                    if crate::features::features().construction.cleanup {
                         let structures = room_data.get_structures().ok_or("Expected structures")?;
 
                         plan.cleanup(structures.all());
@@ -82,13 +84,13 @@ impl Mission for ConstructionMission {
 
                 false
             } else {
-                crate::features::construction::allow_replan()
+                crate::features::features().construction.allow_replan
             }
         } else {
             true
         };
 
-        if request_plan || crate::features::construction::force_plan() {
+        if request_plan || crate::features::features().construction.force_plan {
             system_data.room_plan_queue.request(RoomPlanRequest::new(self.room_data, 1.0));
         }
 

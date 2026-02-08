@@ -9,6 +9,8 @@ use crate::transfer::utility::*;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use std::collections::HashSet;
@@ -83,8 +85,8 @@ impl TerminalMission {
 
     fn can_purchase_resource(resource: ResourceType) -> bool {
         match resource {
-            ResourceType::Energy => crate::features::market::buy_energy(),
-            ResourceType::Hydrogen | ResourceType::Oxygen | ResourceType::Utrium | ResourceType::Lemergium | ResourceType::Keanium | ResourceType::Zynthium | ResourceType::Catalyst => crate::features::market::buy_minerals(),
+            ResourceType::Energy => crate::features::features().market.buy_energy,
+            ResourceType::Hydrogen | ResourceType::Oxygen | ResourceType::Utrium | ResourceType::Lemergium | ResourceType::Keanium | ResourceType::Zynthium | ResourceType::Catalyst => crate::features::features().market.buy_minerals,
             _ => false,
         }
     }
@@ -180,14 +182,14 @@ impl Mission for TerminalMission {
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
-        let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
+        let room = game::rooms().get(room_data.name).ok_or("Expected room")?;
         let terminal = room.terminal().ok_or("Expected terminal")?;
 
         if let Some(storage) = room.storage() {
-            let current_terminal_energy = terminal.store_of(ResourceType::Energy);
+            let current_terminal_energy = terminal.store().get(ResourceType::Energy).unwrap_or(0);
             let available_transfer_energy = Self::get_desired_reserve_terminal_amount(ResourceType::Energy).min(current_terminal_energy);
 
-            let known_resource_types = Self::get_known_resources_types(&storage.store_types(), &terminal.store_types());
+            let known_resource_types = Self::get_known_resources_types(&storage.store().store_types(), &terminal.store().store_types());
 
             //TODO: Include resources that are requested by transport system but don't exist in the room.
 
@@ -196,8 +198,8 @@ impl Mission for TerminalMission {
             //
 
             for resource_type in known_resource_types {
-                let current_storage_amount = storage.store_used_capacity(Some(resource_type));
-                let current_terminal_amount = terminal.store_used_capacity(Some(resource_type));
+                let current_storage_amount = storage.store().get_used_capacity(Some(resource_type));
+                let current_terminal_amount = terminal.store().get_used_capacity(Some(resource_type));
                 let current_total_amount = current_storage_amount + current_terminal_amount;
 
                 let thresholds = Self::get_resource_thresholds(resource_type);
@@ -210,7 +212,7 @@ impl Mission for TerminalMission {
 
                 if current_total_amount < total_reserve_amount {
                     let transfer_amount = total_reserve_amount - current_total_amount;
-                    let terminal_free_amount = terminal.store_free_capacity(None).max(0) as u32;
+                    let terminal_free_amount = terminal.store().get_free_capacity(None).max(0) as u32;
                     let transfer_amount = transfer_amount.min(terminal_free_amount);
 
                     if transfer_amount > 0 {
@@ -295,17 +297,17 @@ impl Mission for TerminalMission {
             room_data.name,
             TransferTypeFlags::HAUL,
             Box::new(move |_system, transfer, room_name| {
-                let room = game::rooms::get(room_name).ok_or("Expected room")?;
+                let room = game::rooms().get(room_name).ok_or("Expected room")?;
                 let terminal = room.terminal().ok_or("Expected terminal")?;
 
                 let terminal_id = terminal.remote_id();
 
                 if let Some(storage) = room.storage() {
-                    let known_resource_types = Self::get_known_resources_types(&storage.store_types(), &terminal.store_types());
+                    let known_resource_types = Self::get_known_resources_types(&storage.store().store_types(), &terminal.store().store_types());
 
                     for resource_type in known_resource_types {
-                        let current_storage_amount = storage.store_used_capacity(Some(resource_type));
-                        let current_terminal_amount = terminal.store_used_capacity(Some(resource_type));
+                        let current_storage_amount = storage.store().get_used_capacity(Some(resource_type));
+                        let current_terminal_amount = terminal.store().get_used_capacity(Some(resource_type));
 
                         let thresholds = Self::get_resource_thresholds(resource_type);
 
@@ -451,7 +453,7 @@ impl Mission for TerminalMission {
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
-        let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
+        let room = game::rooms().get(room_data.name).ok_or("Expected room")?;
 
         let terminal = room.terminal().ok_or("Expected terminal")?;
 
@@ -464,7 +466,7 @@ impl Mission for TerminalMission {
             };
 
             let thresholds = Self::get_resource_thresholds(ResourceType::Energy);
-            let current_terminal_energy = terminal.store_of(ResourceType::Energy);
+            let current_terminal_energy = terminal.store().get(ResourceType::Energy).unwrap_or(0);
 
             let available_transfer_energy = if current_terminal_energy >= *thresholds.terminal_reserve_threshold.start() {
                 let max_amount = *thresholds.terminal_reserve_threshold.end() - *thresholds.terminal_reserve_threshold.start();
@@ -507,7 +509,7 @@ impl Mission for TerminalMission {
                         transfer_amount
                     );
 
-                    terminal.send(*transfer_resource, transfer_amount, delivery.target().pos().room_name(), None);
+                    let _ = terminal.send(*transfer_resource, transfer_amount, delivery.target().pos().room_name(), None);
                 }
             }
         }

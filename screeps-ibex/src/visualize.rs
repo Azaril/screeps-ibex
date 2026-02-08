@@ -1,7 +1,8 @@
+use js_sys::JsString;
 use screeps::*;
 use specs::prelude::*;
 use std::collections::HashMap;
-use stdweb::*;
+use wasm_bindgen::JsValue;
 
 pub struct RoomVisualizer {
     visuals: Vec<Visual>,
@@ -39,13 +40,14 @@ impl RoomVisualizer {
 
     fn draw_multi_fast(room_name: Option<RoomName>, visuals: &[Visual]) {
         if !visuals.is_empty() {
-            if let Some(data) = serde_json::to_string(visuals).ok() {
-                js! {
-                    let visuals = JSON.parse(@{data});
+            let target = room_name.map(|name| JsString::from(name.to_string()));
+            let data: String = visuals
+                .iter()
+                .filter_map(|v| serde_json::to_string(v).ok())
+                .collect::<Vec<_>>()
+                .join("\n");
 
-                    visuals.forEach(function(v) { console.addVisual(@{room_name}, v); });
-                };
-            }
+            screeps::console::add_visual(target.as_ref(), &JsValue::from_str(&data));
         }
     }
 }

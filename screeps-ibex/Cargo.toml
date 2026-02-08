@@ -2,35 +2,56 @@
 name = "screeps-ibex"
 version = "0.0.1"
 authors = []
-edition = "2018"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["wee_alloc"]
+default = []
 profile = ["screeps-timing", "screeps-timing-annotate"]
-wee-alloc = ["wee_alloc"]
+sim = ["screeps-game-api/sim"]
+mmo = ["screeps-game-api/mmo"]
 
 [dependencies]
-stdweb = "0.4"
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["console"] }
 log = "0.4"
-fern = "0.5"
-serde = { version = "1.0", features = ["rc"] }
+fern = "0.6"
+serde = { version = "1.0", features = ["rc", "derive"] }
 serde_json = "1.0"
-#specs = { version = "0.16", default-features = false, features = ["serde", "shred-derive"] }
-specs = { git = "https://github.com/amethyst/specs", default-features = false, features = ["serde", "derive"] }
-itertools = "0.8"
-bitflags = "1.2.1"
+serde-wasm-bindgen = "0.6"
+specs = { version = "0.20", default-features = false, features = ["serde", "derive"] }
+itertools = "0.12"
+bitflags = "2"
 uuid = { version = "0.8", features = ["serde"] }
-wee_alloc = { version = "0.4", optional = true }
-pathfinding = { version = "2.0" }
+pathfinding = "4"
 bincode = "1.2"
-base64 = "0.2"
+base64 = "0.22"
 flate2 = "1.0"
 shrinkwraprs = "0.3.0"
-lerp = "0.2"
-screeps-game-api = { version = "0.8" }
+lerp = "0.5"
+screeps-game-api = "0.23"
 screeps-machine = { git = "https://github.com/Azaril/screeps-machine" }
 screeps-cache = { git = "https://github.com/Azaril/screeps-cache" }
 screeps-rover = { git = "https://github.com/Azaril/screeps-rover" }
 screeps-foreman = { git = "https://github.com/Azaril/screeps-foreman" }
+talc = { version = "4", features = ["lock_api"] }
 screeps-timing = { git = "https://github.com/Azaril/screeps-timing", optional = true }
 screeps-timing-annotate = { git = "https://github.com/Azaril/screeps-timing-annotate", optional = true }
+
+[package.metadata.wasm-pack.profile.dev]
+# Skip heavy optimizations for faster builds.
+# --signext-lowering - removes opcodes that the screeps servers can't load (see
+# https://github.com/rustyscreeps/screeps-game-api/issues/391)
+wasm-opt = ["--signext-lowering"]
+
+[package.metadata.wasm-pack.profile.release]
+# See wasm-opt for full available options; handy examples:
+# -O4 - optimize aggressively for performance
+# -Oz - optimize aggressively for code size
+# -g - leave debug info in place, allowing for more descriptive stack traces on panic
+# --signext-lowering - removes opcodes that the screeps servers can't load (see
+# https://github.com/rustyscreeps/screeps-game-api/issues/391)
+wasm-opt = ["-O4", "--signext-lowering"]

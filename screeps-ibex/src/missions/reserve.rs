@@ -9,6 +9,8 @@ use crate::spawnsystem::*;
 use super::constants::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 
@@ -145,17 +147,17 @@ impl Mission for ReserveMission {
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
         let controller_id = static_visibility_data.controller().ok_or("Expected a controller")?;
 
-        let can_spawn = can_execute_cpu(CpuBar::MediumPriority) && crate::features::remote_mine::reserve() && self.allow_spawning;
+        let can_spawn = can_execute_cpu(CpuBar::MediumPriority) && crate::features::features().remote_mine.reserve && self.allow_spawning;
 
         if !can_spawn {
             return Ok(MissionResult::Running);
         }
 
         //TODO: Use visibility data to estimate amount thas has ticked down.
-        let controller_has_sufficient_reservation = game::rooms::get(room_data.name)
+        let controller_has_sufficient_reservation = game::rooms().get(room_data.name)
             .and_then(|r| r.controller())
             .and_then(|c| c.reservation())
-            .map(|r| r.ticks_to_end > 1000)
+            .map(|r| r.ticks_to_end() > 1000)
             .unwrap_or(false);
 
         if controller_has_sufficient_reservation {
@@ -171,7 +173,7 @@ impl Mission for ReserveMission {
                         .creep_owner
                         .get(**entity)
                         .and_then(|creep_owner| creep_owner.owner.resolve())
-                        .and_then(|creep| creep.ticks_to_live().ok())
+                        .and_then(|creep| creep.ticks_to_live())
                         .map(|count| count > 100)
                         .unwrap_or(false)
             })
@@ -187,7 +189,7 @@ impl Mission for ReserveMission {
 
             for home_room_entity in self.home_room_datas.iter() {
                 let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
-                let home_room = game::rooms::get(home_room_data.name).ok_or("Expected home room")?;
+                let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
 
                 let body_definition = crate::creep::SpawnBodyDefinition {
                     maximum_energy: home_room.energy_capacity_available(),

@@ -6,6 +6,8 @@ use crate::serialize::*;
 use crate::transfer::transfersystem::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 
@@ -81,7 +83,7 @@ impl Mission for TowerMission {
                 };
 
                 for tower in towers {
-                    let tower_free_capacity = tower.store_free_capacity(Some(ResourceType::Energy));
+                    let tower_free_capacity = tower.store().get_free_capacity(Some(ResourceType::Energy));
                     if tower_free_capacity > 0 {
                         let transfer_request = TransferDepositRequest::new(
                             TransferTarget::Tower(tower.remote_id()),
@@ -113,7 +115,7 @@ impl Mission for TowerMission {
         //TODO: Include power creeps?        
         let weakest_dangerous_hostile_creep = creeps.hostile()
             .iter()
-            .filter(|c| c.body().iter().any(|p| match p.part {
+            .filter(|c| c.body().iter().any(|p| match p.part() {
                 Part::Attack | Part::RangedAttack | Part::Work => true,
                 _ => false,
             }))
@@ -141,17 +143,19 @@ impl Mission for TowerMission {
 
         for tower in towers {
             if let Some(creep) = weakest_dangerous_hostile_creep.or(weakest_hostile_creep) {
-                tower.attack(creep);
+                let _ = tower.attack(creep);
                 continue;
             }
 
             if let Some(creep) = weakest_friendly_creep {
-                tower.heal(creep);
+                let _ = tower.heal(creep);
                 continue;
             }
 
             if let Some(structure) = repair_structure.as_ref() {
-                tower.repair(structure);
+                if let Some(repairable) = structure.as_repairable() {
+                    let _ = tower.repair(repairable);
+                }
                 continue;
             }
         }

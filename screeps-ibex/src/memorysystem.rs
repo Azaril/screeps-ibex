@@ -23,12 +23,16 @@ impl MemoryArbiter {
 
     pub fn is_active(&mut self, active: u32) -> bool {
         self.active
-            .get_or_insert_with(|| raw_memory::get_active_segments().into_iter().collect())
+            .get_or_insert_with(|| {
+                // In screeps 0.23, raw_memory::segments() returns a JsHashMap<u8, String>.
+                // The keys of this map are the currently active segments.
+                raw_memory::segments().keys().into_iter().map(|k| k as u32).collect()
+            })
             .contains(&active)
     }
 
     pub fn get(&self, segment: u32) -> Option<String> {
-        raw_memory::get_segment(segment)
+        raw_memory::segments().get(segment as u8)
     }
 
     pub fn set(&mut self, segment: u32, data: &str) {
@@ -36,7 +40,37 @@ impl MemoryArbiter {
             error!("Memory segment too large - Segment: {} - Data: {}", segment, data);
         }
 
-        raw_memory::set_segment(segment, data);
+        // In screeps 0.23, we need to set segment data via JS interop
+        let global = js_sys::global();
+        let raw_memory = match js_sys::Reflect::get(
+            &global,
+            &wasm_bindgen::JsValue::from_str("RawMemory"),
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("Failed to get RawMemory: {:?}", e);
+                return;
+            }
+        };
+
+        let segments_obj = match js_sys::Reflect::get(
+            &raw_memory,
+            &wasm_bindgen::JsValue::from_str("segments"),
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("Failed to get RawMemory.segments: {:?}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = js_sys::Reflect::set(
+            &segments_obj,
+            &wasm_bindgen::JsValue::from_f64(segment as f64),
+            &wasm_bindgen::JsValue::from_str(data),
+        ) {
+            error!("Failed to set segment data: {:?}", e);
+        }
     }
 
     pub fn clear(&mut self) {
@@ -57,7 +91,7 @@ impl<'a> System<'a> for MemoryArbiterSystem {
     type SystemData = MemoryArbiterSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        let segments: Vec<_> = data.memory_arbiter.requests.iter().cloned().collect();
+        let segments: Vec<u8> = data.memory_arbiter.requests.iter().map(|&s| s as u8).collect();
 
         raw_memory::set_active_segments(&segments);
 

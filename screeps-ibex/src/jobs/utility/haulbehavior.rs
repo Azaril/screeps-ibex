@@ -22,11 +22,11 @@ pub fn get_new_pickup_state_fill_resource<F, R>(
 where
     F: Fn(TransferWithdrawTicket) -> R,
 {
-    let capacity = creep.store_capacity(None);
-    let store_types = creep.store_types();
-    let used_capacity = store_types.iter().map(|r| creep.store_used_capacity(Some(*r))).sum::<u32>();
+    let capacity = creep.store().get_capacity(None);
+    let store_types = creep.store().store_types();
+    let used_capacity = store_types.iter().map(|r| creep.store().get_used_capacity(Some(*r))).sum::<u32>();
     //TODO: Fix this when double resource counting bug is fixed.
-    //let used_capacity = creep.store_used_capacity(None);
+    //let used_capacity = creep.store().get_used_capacity(None);
     let free_capacity = capacity - used_capacity;
 
     if free_capacity > 0 {
@@ -47,7 +47,7 @@ where
 
         if let Some(pickup) = pickups
             .into_iter()
-            .find_nearest_linear_by(creep.pos(), |ticket| ticket.target().pos())
+            .find_nearest_linear_by(creep.pos(), |ticket| ticket.target().pos().into())
         {
             transfer_queue.register_pickup(&pickup);
 
@@ -74,9 +74,9 @@ where
     F: Fn(Vec<TransferDepositTicket>) -> R,
 {
     let available_resources: HashMap<ResourceType, u32> = creep
-        .store_types()
+        .store().store_types()
         .into_iter()
-        .map(|r| (r, creep.store_used_capacity(Some(r))))
+        .map(|r| (r, creep.store().get_used_capacity(Some(r))))
         .collect();
     let available_capacity = TransferCapacity::Finite(available_resources.values().sum());
 
@@ -95,7 +95,7 @@ where
 
         if let Some(delivery) = deliveries
             .into_iter()
-            .find_nearest_linear_by(creep.pos(), |ticket| ticket.target().pos())
+            .find_nearest_linear_by(creep.pos(), |ticket| ticket.target().pos().into())
         {
             transfer_queue.register_delivery(&delivery);
 
@@ -139,7 +139,7 @@ where
             &delivery_room_names,
             allowed_priorities,
             transfer_type,
-            creep.pos(),
+            creep.pos().into(),
             available_capacity,
             target_filter,
         ) {
@@ -203,7 +203,10 @@ pub fn get_additional_deliveries<TF>(
 
         for allowed_target_priorities in target_priorities {
             while !remaining_capacity.empty() {
-                let last_delivery_pos = deliveries.last().unwrap().target().pos();
+                let Some(last_delivery) = deliveries.last() else {
+                    break;
+                };
+                let last_delivery_pos = last_delivery.target().pos();
 
                 //
                 // NOTE: Pickup priority is ignored here as it's already known that the delivery priority is allowed. Additionally,
@@ -306,10 +309,10 @@ where
     F: Fn(TransferWithdrawTicket, Vec<TransferDepositTicket>) -> R,
     TF: Fn(&TransferTarget) -> bool + Copy,
 {
-    let capacity = creep.store_capacity(None);
-    let store_types = creep.store_types();
-    let used_capacity = store_types.iter().map(|r| creep.store_used_capacity(Some(*r))).sum::<u32>();
-    //let used_capacity = creep.store_used_capacity(None);
+    let capacity = creep.store().get_capacity(None);
+    let store_types = creep.store().store_types();
+    let used_capacity = store_types.iter().map(|r| creep.store().get_used_capacity(Some(*r))).sum::<u32>();
+    //let used_capacity = creep.store().get_used_capacity(None);
     let available_capacity = capacity - used_capacity;
 
     get_new_pickup_and_delivery_state(
@@ -340,9 +343,9 @@ where
 
     let creep = tick_context.runtime_data.owner;
     let action_flags = &mut tick_context.action_flags;
-    let pos = ticket.target().pos();
+    let pos: screeps::Position = ticket.target().pos().into();
 
-    if !creep.pos().is_near_to(&pos) {
+    if !creep.pos().is_near_to(pos) {
         if action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
@@ -359,7 +362,7 @@ where
             if !action_flags.intersects(SimultaneousActionFlags::TRANSFER) {
                 ticket.consume_withdrawl(resource, amount);
 
-                if ticket.target().withdraw_resource_amount(creep, resource, amount) == ReturnCode::Ok {
+                if ticket.target().withdraw_resource_amount(creep, resource, amount).is_ok() {
                     action_flags.insert(SimultaneousActionFlags::TRANSFER);
                     break None;
                 }
@@ -397,11 +400,11 @@ where
             room_data: &*tick_context.system_data.room_data,
         };
 
-        let capacity = creep.store_capacity(None);
-        let store_types = creep.store_types();
-        let used_capacity = store_types.iter().map(|r| creep.store_used_capacity(Some(*r))).sum::<u32>();
+        let capacity = creep.store().get_capacity(None);
+        let store_types = creep.store().store_types();
+        let used_capacity = store_types.iter().map(|r| creep.store().get_used_capacity(Some(*r))).sum::<u32>();
         //TODO: Fix this when double resource counting bug is fixed.
-        //let used_capacity = creep.store_used_capacity(None);
+        //let used_capacity = creep.store().get_used_capacity(None);
         let free_capacity = capacity - used_capacity;
 
         let mut available_capacity = TransferCapacity::Finite(free_capacity);
@@ -434,7 +437,7 @@ pub fn visualize_pickup(describe_data: &mut JobDescribeData, ticket: &TransferWi
 
     if pos.room_name() == to.room_name() {
         describe_data.visualizer.get_room(pos.room_name()).line(
-            (pos.x() as f32, pos.y() as f32),
+            (pos.x().u8() as f32, pos.y().u8() as f32),
             (to.x() as f32, to.y() as f32),
             Some(LineStyle::default().color("blue")),
         );
@@ -454,9 +457,9 @@ where
     while let Some(ticket) = tickets.first_mut() {
         //TODO: Use visibility to query if target should be visible.
         if ticket.target().is_valid() && ticket.get_next_deposit().is_some() {
-            let pos = ticket.target().pos();
+            let pos: screeps::Position = ticket.target().pos().into();
 
-            if !creep_pos.is_near_to(&pos) {
+            if !creep_pos.is_near_to(pos) {
                 if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
                     tick_context
                         .runtime_data
@@ -472,7 +475,7 @@ where
                 if !tick_context.action_flags.intersects(SimultaneousActionFlags::TRANSFER) {
                     ticket.consume_deposit(resource, amount);
 
-                    if ticket.target().creep_transfer_resource_amount(creep, resource, amount) == ReturnCode::Ok {
+                    if ticket.target().creep_transfer_resource_amount(creep, resource, amount).is_ok() {
                         tick_context.action_flags.insert(SimultaneousActionFlags::TRANSFER);
 
                         transfered = true;
@@ -501,7 +504,7 @@ where
 pub fn visualize_delivery(describe_data: &mut JobDescribeData, tickets: &Vec<TransferDepositTicket>) {
     let pos = describe_data.owner.pos();
 
-    visualize_delivery_from(describe_data, tickets, pos);
+    visualize_delivery_from(describe_data, tickets, pos.into());
 }
 
 pub fn visualize_delivery_from(describe_data: &mut JobDescribeData, tickets: &Vec<TransferDepositTicket>, from: RoomPosition) {
@@ -533,9 +536,9 @@ where
         let creep = tick_context.runtime_data.owner;
         let creep_pos = creep.pos();
 
-        let pos = target.pos();
+        let pos: screeps::Position = target.pos().into();
 
-        if !creep_pos.is_near_to(&pos) {
+        if !creep_pos.is_near_to(pos) {
             if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
                 tick_context
                     .runtime_data
@@ -547,13 +550,13 @@ where
             return None;
         }
 
-        let store_types = creep.store_types();
+        let store_types = creep.store().store_types();
 
         if let Some(resource) = store_types.first() {
             if tick_context.action_flags.consume(SimultaneousActionFlags::TRANSFER) {
-                let amount = creep.store_used_capacity(Some(*resource));
+                let amount = creep.store().get_used_capacity(Some(*resource));
 
-                if target.creep_transfer_resource_amount(creep, *resource, amount) == ReturnCode::Ok {
+                if target.creep_transfer_resource_amount(creep, *resource, amount).is_ok() {
                     if store_types.len() == 1 {
                         return Some(next_state());
                     } else {

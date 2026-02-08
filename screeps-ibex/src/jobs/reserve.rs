@@ -58,7 +58,7 @@ impl MoveToController {
     fn tick(&mut self, state_context: &mut ReserveJobContext, tick_context: &mut JobTickContext) -> Option<ReserveState> {
         tick_move_to_position(
             tick_context,
-            state_context.reserve_target.pos(),
+            state_context.reserve_target.pos().into(),
             1,
             None,
             ReserveState::sign_controller,

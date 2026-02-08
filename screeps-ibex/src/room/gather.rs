@@ -98,7 +98,7 @@ pub fn gather_home_rooms(system_data: &GatherSystemData, min_rcl: u32) -> Vec<En
     (&*system_data.entities, &*system_data.room_data).join()
         .filter(|(_, room_data)| is_valid_home_room(room_data))
         .filter(|(_, room_data)| {
-            let rcl = room_data.get_structures().iter().flat_map(|s| s.controllers()).map(|c| c.level()).max().unwrap_or(0);
+            let rcl = room_data.get_structures().iter().flat_map(|s| s.controllers()).map(|c| c.level() as u32).max().unwrap_or(0);
 
             rcl >= min_rcl
         })
@@ -128,13 +128,13 @@ where
             if visited_room.can_expand {
                 let room_exits = game::map::describe_exits(room_data.name);
 
-                let source_room_status = game::map::get_room_status(room_data.name);
+                let source_room_status = game::map::get_room_status(room_data.name).map(|r| r.status());
 
                 for expansion_room in room_exits.values() {
-                    let expansion_room_status = game::map::get_room_status(*expansion_room);
+                    let expansion_room_status = game::map::get_room_status(expansion_room).map(|r| r.status());
 
-                    if can_traverse_between_room_status(&source_room_status, &expansion_room_status) {
-                        let rooms = expansion_rooms.entry(*expansion_room)
+                    if can_traverse_between_room_status(source_room_status, expansion_room_status) {
+                        let rooms = expansion_rooms.entry(expansion_room)
                             .or_insert_with(HashSet::new);
 
                         rooms.insert(*entity);
@@ -167,13 +167,13 @@ where
                     if visited_room.can_expand {
                         let room_exits = game::map::describe_exits(source_room_name);
 
-                        let source_room_status = game::map::get_room_status(source_room_name);
+                        let source_room_status = game::map::get_room_status(source_room_name).map(|r| r.status());
 
                         for expansion_room in room_exits.values() {
-                            let expansion_room_status = game::map::get_room_status(*expansion_room);
+                            let expansion_room_status = game::map::get_room_status(expansion_room).map(|r| r.status());
 
-                            if can_traverse_between_room_status(&source_room_status, &expansion_room_status) {
-                                let rooms = expansion_rooms.entry(*expansion_room)
+                            if can_traverse_between_room_status(source_room_status, expansion_room_status) {
+                                let rooms = expansion_rooms.entry(expansion_room)
                                     .or_insert_with(HashSet::new);
 
                                 rooms.extend(home_room_entities.iter().copied());

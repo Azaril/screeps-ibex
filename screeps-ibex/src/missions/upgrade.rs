@@ -9,6 +9,8 @@ use super::constants::*;
 use lerp::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 
@@ -107,7 +109,7 @@ impl Mission for UpgradeMission {
         //TODO: Limit upgraders to 15 total work parts upgrading across all creeps at RCL 8.
 
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
-        let room = game::rooms::get(room_data.name).ok_or("Expected room")?;
+        let room = game::rooms().get(room_data.name).ok_or("Expected room")?;
         let structures = room_data.get_structures().ok_or("Expected structure data")?;
         let creeps = room_data.get_creeps().ok_or("Expected creeps")?;
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
@@ -126,7 +128,7 @@ impl Mission for UpgradeMission {
                 let energy: u32 = structures
                     .storages()
                     .iter()
-                    .map(|storage| storage.store_of(ResourceType::Energy))
+                    .map(|storage| storage.store().get(ResourceType::Energy).unwrap_or(0))
                     .sum();
 
                 energy >= get_desired_storage_amount(ResourceType::Energy) / 2
@@ -134,7 +136,7 @@ impl Mission for UpgradeMission {
                 structures
                     .containers()
                     .iter()
-                    .any(|container| container.store_of(ResourceType::Energy) as f32 / CONTAINER_CAPACITY as f32 > 0.75)
+                    .any(|container| container.store().get(ResourceType::Energy).unwrap_or(0) as f32 / CONTAINER_CAPACITY as f32 > 0.75)
             } else {
                 true
             }
@@ -170,7 +172,7 @@ impl Mission for UpgradeMission {
                         .creep_owner
                         .get(**entity)
                         .and_then(|creep_owner| creep_owner.owner.resolve())
-                        .and_then(|creep| creep.ticks_to_live().ok())
+                        .and_then(|creep| creep.ticks_to_live())
                         .map(|count| count > 100)
                         .unwrap_or(false)
             })
@@ -198,7 +200,7 @@ impl Mission for UpgradeMission {
 
             let downgrade_risk = controllers
                 .iter()
-                .filter_map(|controller| controller_downgrade(controller.level()).map(|ticks| controller.ticks_to_downgrade() < ticks / 2))
+                .filter_map(|controller| controller_downgrade(controller.level()).map(|ticks| controller.ticks_to_downgrade().map_or(false, |ttd| ttd < ticks / 2)))
                 .any(|risk| risk);
 
             let maximum_energy = if self.upgraders.is_empty() && downgrade_risk {
