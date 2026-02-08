@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use super::construction::*;
 use super::data::*;
 use super::defend::*;
@@ -75,7 +77,7 @@ machine!(
 
         * => fn complete(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) {
             for mission_child in self.get_children_internal_mut().iter_mut() {
-                mission_child.take().map(|e| system_data.mission_requests.abort(e));
+                if let Some(e) = mission_child.take() { system_data.mission_requests.abort(e) }
             }
         }
     }
@@ -123,7 +125,7 @@ impl Incubate {
             .get_mut(state_context.room_data)
             .ok_or("Expected colony room data")?;
 
-        if !ColonyMission::can_run(&room_data) {
+        if !ColonyMission::can_run(room_data) {
             return Err("Colony room not owned!".to_owned());
         }
 
@@ -181,7 +183,7 @@ impl Incubate {
             self.haul_mission = Some(mission_entity).into();
         }
 
-        if self.terminal_mission.is_none() && TerminalMission::can_run(&room_data) {
+        if self.terminal_mission.is_none() && TerminalMission::can_run(room_data) {
             let mission_entity = TerminalMission::build(
                 system_data.updater.create_entity(system_data.entities),
                 Some(mission_entity),
@@ -207,7 +209,7 @@ impl Incubate {
             self.tower_mission = Some(mission_entity).into();
         }
 
-        if self.upgrade_mission.is_none() && UpgradeMission::can_run(&room_data) {
+        if self.upgrade_mission.is_none() && UpgradeMission::can_run(room_data) {
             let mission_entity = UpgradeMission::build(
                 system_data.updater.create_entity(system_data.entities),
                 Some(mission_entity),
@@ -220,7 +222,7 @@ impl Incubate {
             self.upgrade_mission = Some(mission_entity).into();
         }
 
-        if self.power_spawn_mission.is_none() && PowerSpawnMission::can_run(&room_data) {
+        if self.power_spawn_mission.is_none() && PowerSpawnMission::can_run(room_data) {
             let mission_entity = PowerSpawnMission::build(
                 system_data.updater.create_entity(system_data.entities),
                 Some(mission_entity),
@@ -233,7 +235,7 @@ impl Incubate {
             self.power_spawn_mission = Some(mission_entity).into();
         }
 
-        if self.labs_mission.is_none() && LabsMission::can_run(&room_data) {
+        if self.labs_mission.is_none() && LabsMission::can_run(room_data) {
             let mission_entity = LabsMission::build(
                 system_data.updater.create_entity(system_data.entities),
                 Some(mission_entity),
@@ -355,7 +357,7 @@ impl Mission for ColonyMission {
             self.state = tick_result
         }
 
-        self.state.visualize(system_data, mission_entity, &mut self.context);
+        self.state.visualize(system_data, mission_entity, &self.context);
 
         Ok(MissionResult::Running)
     }

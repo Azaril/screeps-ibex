@@ -138,7 +138,7 @@ impl VisibilityQueueSystem {
 
                     let max_level = structures.controllers().iter().map(|c| c.level()).max()?;
 
-                    let observers = structures.observers().iter().cloned().collect::<Vec<_>>();
+                    let observers = structures.observers().to_vec();
 
                     Some((entity, room_data.name, max_level, observers))
                 })
@@ -182,14 +182,14 @@ impl VisibilityQueueSystem {
                 // Use scout mission after a short period of time.
                 //
 
-                if allowed_types.contains(VisibilityRequestFlags::SCOUT) {
-                    if game::time() - *last_visible >= 20 {
-                        if let Some(room_entity) = system_data.mapping.get_room(&unknown_room_name) {
+                if allowed_types.contains(VisibilityRequestFlags::SCOUT)
+                    && game::time() - *last_visible >= 20 {
+                        if let Some(room_entity) = system_data.mapping.get_room(unknown_room_name) {
                             if let Some(room_data) = system_data.room_data.get_mut(room_entity) {
                                 //TODO: Use path distance instead of linear distance.
                                 let home_room_entities: Vec<_> = home_room_data.iter().map(|(entity, home_room_name, max_level, _)| {
                                     let delta = room_data.name - *home_room_name;
-                                    let range = delta.0.abs() as u32 + delta.1.abs() as u32;
+                                    let range = delta.0.unsigned_abs() + delta.1.unsigned_abs();
 
                                     (entity, home_room_name, max_level, range)
                                 })
@@ -237,7 +237,6 @@ impl VisibilityQueueSystem {
                             }
                         }
                     }
-                }
             }
         }
     }
@@ -253,7 +252,7 @@ impl<'a> System<'a> for VisibilityQueueSystem {
             .map(|(_, room_data)| room_data.name)
             .collect::<std::collections::HashSet<RoomName>>();
 
-        let requests = std::mem::replace(&mut data.visibility_queue.requests, HashMap::new());
+        let requests = std::mem::take(&mut data.visibility_queue.requests);
 
         let missing_rooms = requests.keys().filter(|name| !existing_rooms.contains(name));
 

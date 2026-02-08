@@ -88,7 +88,7 @@ impl<'a> System<'a> for PreRunOperationSystem {
         };
 
         for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
-            let mut runtime_data = OperationExecutionRuntimeData { entity: entity };
+            let mut runtime_data = OperationExecutionRuntimeData { entity };
 
             let operation = operation_data.as_operation();
 
@@ -100,7 +100,7 @@ impl<'a> System<'a> for PreRunOperationSystem {
             if let Some(ui) = &mut data.ui {
                 for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
                     let mut describe_data = OperationDescribeData {
-                        entity: entity,
+                        entity,
                         visualizer,
                         ui,
                     };
@@ -151,7 +151,7 @@ impl<'a> System<'a> for RunOperationSystem {
         };
 
         for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
-            let mut runtime_data = OperationExecutionRuntimeData { entity: entity };
+            let mut runtime_data = OperationExecutionRuntimeData { entity };
 
             let operation = operation_data.as_operation();
 
@@ -172,7 +172,7 @@ impl<'a> System<'a> for RunOperationSystem {
             //TODO: Copy over cleanup semantics from mission code.
 
             if cleanup_operation {
-                queue_cleanup_operation(&data.updater, entity, operation.get_owner().clone());
+                queue_cleanup_operation(&data.updater, entity, *operation.get_owner());
             }
         }
     }

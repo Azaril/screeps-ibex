@@ -165,7 +165,7 @@ impl LocalSupplyMission {
         mission_entity: Entity,
         target: StaticMineTarget,
         container_id: RemoteObjectId<StructureContainer>,
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    ) -> crate::spawnsystem::SpawnQueueCallback {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
@@ -193,7 +193,7 @@ impl LocalSupplyMission {
         source_id: RemoteObjectId<Source>,
         link_id: RemoteObjectId<StructureLink>,
         container_id: Option<RemoteObjectId<StructureContainer>>,
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    ) -> crate::spawnsystem::SpawnQueueCallback {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
@@ -217,7 +217,7 @@ impl LocalSupplyMission {
         mission_entity: Entity,
         source_id: RemoteObjectId<Source>,
         delivery_room: Entity,
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    ) -> crate::spawnsystem::SpawnQueueCallback {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
@@ -303,7 +303,7 @@ impl LocalSupplyMission {
             .into_group_map();
 
         let storage_links = links
-            .into_iter()
+            .iter()
             .filter(|link| storages.iter().any(|storage| link.pos().in_range_to(storage.pos(), 2)))
             .map(|link| link.remote_id())
             .collect();
@@ -382,11 +382,7 @@ impl LocalSupplyMission {
                 if let Some(JobData::StaticMine(miner_data)) = system_data.job_data.get(*miner_entity) {
                     Some((miner_data.context.container_target, *miner_entity))
                 } else if let Some(JobData::LinkMine(miner_data)) = system_data.job_data.get(*miner_entity) {
-                    if let Some(container_target) = miner_data.get_container_target() {
-                        Some((*container_target, *miner_entity))
-                    } else {
-                        None
-                    }
+                    miner_data.get_container_target().as_ref().map(|container_target| (*container_target, *miner_entity))
                 } else {
                     None
                 }
@@ -434,7 +430,7 @@ impl LocalSupplyMission {
 
         let mut structure_data = self.structure_data.maybe_access(
             |d| game::time() - d.last_updated >= 10 && has_visibility,
-            || Self::create_structure_data(&room_data),
+            || Self::create_structure_data(room_data),
         );
         let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
@@ -521,7 +517,7 @@ impl LocalSupplyMission {
 
         let mut structure_data = self.structure_data.maybe_access(
             |d| game::time() - d.last_updated >= 10 && has_visibility,
-            || Self::create_structure_data(&room_data),
+            || Self::create_structure_data(room_data),
         );
         let structure_data = structure_data.get();
 
@@ -1319,14 +1315,14 @@ impl LocalSupplyMission {
 
             let mut structure_data = structure_data.maybe_access(
                 |d| game::time() - d.last_updated >= 10 && has_visibility,
-                || Self::create_structure_data(&room_data),
+                || Self::create_structure_data(room_data),
             );
             let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
             Self::request_transfer_for_spawns(transfer, &structure_data.spawns);
             Self::request_transfer_for_extension(transfer, &structure_data.extensions);
             Self::request_transfer_for_storage(transfer, &structure_data.storage);
-            Self::request_transfer_for_containers(transfer, &structure_data);
+            Self::request_transfer_for_containers(transfer, structure_data);
 
             if let Some(room) = game::rooms().get(room_data.name) {
                 Self::request_transfer_for_ruins(transfer, &room);
@@ -1345,13 +1341,13 @@ impl LocalSupplyMission {
 
             let mut structure_data = structure_data.maybe_access(
                 |d| game::time() - d.last_updated >= 10 && has_visibility,
-                || Self::create_structure_data(&room_data),
+                || Self::create_structure_data(room_data),
             );
             let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
-            Self::request_transfer_for_source_links(transfer, &structure_data);
-            Self::request_transfer_for_storage_links(transfer, &structure_data);
-            Self::request_transfer_for_controller_links(transfer, &structure_data);
+            Self::request_transfer_for_source_links(transfer, structure_data);
+            Self::request_transfer_for_storage_links(transfer, structure_data);
+            Self::request_transfer_for_controller_links(transfer, structure_data);
 
             Ok(())
         })

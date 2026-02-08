@@ -73,9 +73,9 @@ fn map_defense_priority(
         }
     } else if structure_type == StructureType::Rampart && hits <= RAMPART_DECAY_AMOUNT {
         Some(RepairPriority::Critical)
-    } else if structure_type == StructureType::Rampart && hits <= RAMPART_DECAY_AMOUNT * 5 {
-        Some(RepairPriority::High)
-    } else if health_fraction < 0.0001 {
+    } else if (structure_type == StructureType::Rampart && hits <= RAMPART_DECAY_AMOUNT * 5)
+        || health_fraction < 0.0001
+    {
         Some(RepairPriority::High)
     } else if health_fraction < 0.001 {
         Some(RepairPriority::Medium)
@@ -146,7 +146,7 @@ pub fn get_prioritized_repair_targets(
     allow_walls: bool,
 ) -> impl Iterator<Item = (RepairPriority, &StructureObject)> {
     get_repair_targets(structures, allow_walls).filter_map(move |(structure, hits, hits_max)| {
-        map_structure_repair_priority(&structure, hits, hits_max, available_energy, are_hostile_creeps).map(|p| (p, structure))
+        map_structure_repair_priority(structure, hits, hits_max, available_energy, are_hostile_creeps).map(|p| (p, structure))
     })
 }
 

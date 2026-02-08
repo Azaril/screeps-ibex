@@ -53,7 +53,7 @@ impl UpgradeMission {
         mission_entity: Entity,
         home_room: Entity,
         allow_harvest: bool,
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    ) -> crate::spawnsystem::SpawnQueueCallback {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
@@ -117,7 +117,7 @@ impl Mission for UpgradeMission {
         let controllers = structures.controllers();
         let storages = structures.storages();
 
-        if !Self::can_run(&room_data) {
+        if !Self::can_run(room_data) {
             return Err("Upgrade room not owned by user".to_string());
         }
 
@@ -146,9 +146,7 @@ impl Mission for UpgradeMission {
 
         //TODO: Need better calculation for maximum number of upgraders.
         let max_upgraders = if can_execute_cpu(CpuBar::MediumPriority) {
-            if are_hostile_creeps {
-                1
-            } else if controller_level >= 8 {
+            if are_hostile_creeps || controller_level >= 8 {
                 1
             } else if has_excess_energy {
                 if controller_level <= 3 {
@@ -200,7 +198,7 @@ impl Mission for UpgradeMission {
 
             let downgrade_risk = controllers
                 .iter()
-                .filter_map(|controller| controller_downgrade(controller.level()).map(|ticks| controller.ticks_to_downgrade().map_or(false, |ttd| ttd < ticks / 2)))
+                .filter_map(|controller| controller_downgrade(controller.level()).map(|ticks| controller.ticks_to_downgrade().is_some_and(|ttd| ttd < ticks / 2)))
                 .any(|risk| risk);
 
             let maximum_energy = if self.upgraders.is_empty() && downgrade_risk {
@@ -230,9 +228,7 @@ impl Mission for UpgradeMission {
             };
 
             if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                let priority = if self.upgraders.is_empty() && (downgrade_risk || controller_level <= 1) {
-                    SPAWN_PRIORITY_HIGH
-                } else if self.upgraders.is_empty() {
+                let priority = if self.upgraders.is_empty() {
                     SPAWN_PRIORITY_HIGH
                 } else if has_excess_energy && !storages.is_empty() && max_upgraders > 1 {
                     let interp = (alive_upgraders as f32) / ((max_upgraders - 1) as f32);

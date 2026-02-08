@@ -45,7 +45,7 @@ machine!(
 
                 describe_data
                     .ui
-                    .with_room(room_name, &mut describe_data.visualizer, |room_ui| {
+                    .with_room(room_name, describe_data.visualizer, |room_ui| {
                         let description = self.status_description();
 
                         room_ui.jobs().add_text(format!("{} - {}", name, description), None);
@@ -76,7 +76,7 @@ impl Idle {
 
         if in_dismantle_room {
             if let Some(state) =
-                get_new_dismantle_state(creep, &dismantle_room_data, state_context.ignore_storage, DismantleState::dismantle)
+                get_new_dismantle_state(creep, dismantle_room_data, state_context.ignore_storage, DismantleState::dismantle)
             {
                 return Some(state);
             }
@@ -84,7 +84,7 @@ impl Idle {
 
         let transfer_queue_data = TransferQueueGeneratorData {
             cause: "Dismantle Idle",
-            room_data: &*tick_context.system_data.room_data,
+            room_data: tick_context.system_data.room_data,
         };
 
         get_new_delivery_current_resources_state(
@@ -120,7 +120,7 @@ impl FinishedDismantle {
 
         get_new_dismantle_state(
             tick_context.runtime_data.owner,
-            &dismantle_room_data,
+            dismantle_room_data,
             state_context.ignore_storage,
             DismantleState::dismantle,
         )
@@ -135,7 +135,7 @@ impl Delivery {
 
     fn gather_data(&self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         for delivery_ticket in self.deposits.iter() {
-            runtime_data.transfer_queue.register_delivery(&delivery_ticket);
+            runtime_data.transfer_queue.register_delivery(delivery_ticket);
         }
     }
 
@@ -155,7 +155,7 @@ impl FinishedDelivery {
             .filter_map(|priority| {
                 let transfer_queue_data = TransferQueueGeneratorData {
                     cause: "Dismantle Finished Delivery",
-                    room_data: &*tick_context.system_data.room_data,
+                    room_data: tick_context.system_data.room_data,
                 };
 
                 get_new_delivery_current_resources_state(

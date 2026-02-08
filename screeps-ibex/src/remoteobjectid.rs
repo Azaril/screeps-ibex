@@ -98,10 +98,7 @@ impl<T> Copy for RemoteObjectId<T> {}
 
 impl<T> Clone for RemoteObjectId<T> {
     fn clone(&self) -> RemoteObjectId<T> {
-        RemoteObjectId {
-            id: self.id,
-            position: self.position,
-        }
+        *self
     }
 }
 

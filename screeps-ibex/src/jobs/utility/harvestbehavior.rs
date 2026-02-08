@@ -79,11 +79,10 @@ where
 
     //TODO: Check visibility cache and cancel if not reachable etc.?
 
-    if !ignore_creep_capacity {
-        if creep.expensive_store_free_capacity() == 0 && !action_flags.contains(SimultaneousActionFlags::TRANSFER) {
+    if !ignore_creep_capacity
+        && creep.expensive_store_free_capacity() == 0 && !action_flags.contains(SimultaneousActionFlags::TRANSFER) {
             return Some(next_state());
         }
-    }
 
     let target_position = target_id.pos();
 

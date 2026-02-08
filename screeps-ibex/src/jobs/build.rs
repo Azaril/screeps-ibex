@@ -47,7 +47,7 @@ machine!(
 
                 describe_data
                     .ui
-                    .with_room(room_name, &mut describe_data.visualizer, |room_ui| {
+                    .with_room(room_name, describe_data.visualizer, |room_ui| {
                         let description = self.status_description();
 
                         room_ui.jobs().add_text(format!("{} - {}", name, description), None);
@@ -78,7 +78,7 @@ impl Idle {
             .or_else(|| {
                 let transfer_queue_data = TransferQueueGeneratorData {
                     cause: "Build Idle",
-                    room_data: &*tick_context.system_data.room_data,
+                    room_data: tick_context.system_data.room_data,
                 };
 
                 get_new_pickup_state_fill_resource(
@@ -130,11 +130,11 @@ impl FinishedPickup {
 
         let transfer_queue_data = TransferQueueGeneratorData {
             cause: "Build Finished Pickup",
-            room_data: &*tick_context.system_data.room_data,
+            room_data: tick_context.system_data.room_data,
         };
 
         get_new_pickup_state_fill_resource(
-            &tick_context.runtime_data.owner,
+            tick_context.runtime_data.owner,
             &transfer_queue_data,
             &[build_room_data],
             TransferPriorityFlags::ALL,

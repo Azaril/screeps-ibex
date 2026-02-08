@@ -1,4 +1,3 @@
-use js_sys;
 use wasm_bindgen::JsValue;
 
 /// Get the Memory root object from the Screeps global.

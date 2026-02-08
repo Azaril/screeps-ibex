@@ -66,7 +66,7 @@ impl ScoutMission {
         self.priority = priority
     }
 
-    fn create_handle_scout_spawn(mission_entity: Entity, scout_room: RoomName) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    fn create_handle_scout_spawn(mission_entity: Entity, scout_room: RoomName) -> crate::spawnsystem::SpawnQueueCallback {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
@@ -116,11 +116,7 @@ impl Mission for ScoutMission {
             .map(|ready_time| {
                 let time = game::time();
 
-                if time >= ready_time {
-                    0
-                } else {
-                    ready_time - time
-                }
+                ready_time.saturating_sub(time)
             })
             .unwrap_or(0);
 

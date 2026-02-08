@@ -1,0 +1,6 @@
+# Primary build and check target is WASM (screeps-ibex deploys as wasm).
+# Install once: rustup target add wasm32-unknown-unknown
+# Then: cargo clippy -p screeps-ibex  or  npm run clippy
+# Override for host (e.g. tests): cargo build --target <host-triple>
+[build]
+target = "wasm32-unknown-unknown"

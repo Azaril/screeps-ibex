@@ -75,7 +75,7 @@ machine!(
 
         * => fn complete(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) {
             for mission_child in self.get_children_internal_mut().iter_mut() {
-                mission_child.take().map(|e| system_data.mission_requests.abort(e));
+                if let Some(e) = mission_child.take() { system_data.mission_requests.abort(e) }
             }
         }
     }
@@ -212,7 +212,7 @@ impl Cleanup {
                 None.into(),
                 None.into(),
                 None.into(),
-                self.defend_mission.clone(),
+                self.defend_mission,
             )))
         } else {
             Ok(None)

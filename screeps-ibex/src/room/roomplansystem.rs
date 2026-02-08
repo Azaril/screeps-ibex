@@ -312,7 +312,7 @@ impl<'a> System<'a> for RoomPlanSystem {
 
                         if let Some(request) = request {
                             if let Some(room_data) = data.room_data.get(request.room) {
-                                match RoomPlannerRunningData::seed(&room_data) {
+                                match RoomPlannerRunningData::seed(room_data) {
                                     Ok(PlanSeedResult::Running(state)) => {
                                         info!("Seeding complete for room plan. Room: {}", room_data.name);
 
@@ -354,7 +354,7 @@ impl<'a> System<'a> for RoomPlanSystem {
                             if let Some(room_data) = data.room_data.get(room_entity) {
                                 info!("Planning for room: {}", room_data.name);
 
-                                match running_state.process(&room_data, max_cpu) {
+                                match running_state.process(room_data, max_cpu) {
                                     Ok(PlanEvaluationResult::Running()) => false,
                                     Ok(PlanEvaluationResult::Complete(Some(plan))) => {
                                         info!("Planning complete and viable plan found. Room: {}", room_data.name);

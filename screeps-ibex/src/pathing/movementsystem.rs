@@ -75,9 +75,9 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
                 }
             }
 
-            if dynamic_visibility_data.owner().mine() || dynamic_visibility_data.owner().friendly() {
-                return Some(1.0)
-            } else if dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().friendly() {
+            if dynamic_visibility_data.owner().mine() || dynamic_visibility_data.owner().friendly()
+                || dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().friendly()
+            {
                 return Some(1.0)
             } else {
                 return Some(2.0)
@@ -105,7 +105,7 @@ impl<'a> System<'a> for MovementUpdateSystem {
             mapping: &data.mapping,
         };
 
-        let mut system = MovementSystem::new(&mut *data.cost_matrix);
+        let mut system = MovementSystem::new(&mut data.cost_matrix);
 
         let features = crate::features::features();
 

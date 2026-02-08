@@ -26,7 +26,7 @@ impl MemoryArbiter {
             .get_or_insert_with(|| {
                 // In screeps 0.23, raw_memory::segments() returns a JsHashMap<u8, String>.
                 // The keys of this map are the currently active segments.
-                raw_memory::segments().keys().into_iter().map(|k| k as u32).collect()
+                raw_memory::segments().keys().map(|k| k as u32).collect()
             })
             .contains(&active)
     }

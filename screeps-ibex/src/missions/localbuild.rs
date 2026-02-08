@@ -123,7 +123,7 @@ impl LocalBuildMission {
         mission_entity: Entity,
         room_entity: Entity,
         allow_harvest: bool,
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    ) -> crate::spawnsystem::SpawnQueueCallback {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
@@ -200,12 +200,12 @@ impl Mission for LocalBuildMission {
         let mut spawn_count = 0;
         let mut spawn_priority = SPAWN_PRIORITY_NONE;
 
-        if let Some((desired_builders, build_priority)) = self.get_builder_priority(&room_data, has_sufficient_energy) {
+        if let Some((desired_builders, build_priority)) = self.get_builder_priority(room_data, has_sufficient_energy) {
             spawn_count = spawn_count.max(desired_builders);
             spawn_priority = spawn_priority.max(build_priority);
         }
 
-        if let Some((desired_repairers, repair_priority)) = self.get_repairer_priority(&room_data) {
+        if let Some((desired_repairers, repair_priority)) = self.get_repairer_priority(room_data) {
             spawn_count = spawn_count.max(desired_repairers);
             spawn_priority = spawn_priority.max(repair_priority);
         }

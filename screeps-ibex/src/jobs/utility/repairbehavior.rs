@@ -12,7 +12,7 @@ where
     F: Fn(RemoteStructureIdentifier) -> R,
 {
     if creep.store().get_used_capacity(Some(ResourceType::Energy)) > 0 {
-        if let Some(structure) = select_repair_structure(&build_room, minimum_priority, true) {
+        if let Some(structure) = select_repair_structure(build_room, minimum_priority, true) {
             return Some(state_map(RemoteStructureIdentifier::new(&structure)));
         }
     }
@@ -112,9 +112,7 @@ pub fn tick_opportunistic_repair(tick_context: &mut JobTickContext, minimum_prio
 
                 if let Some((_, repair_structure)) = repair_structure {
                     if tick_context.action_flags.consume(SimultaneousActionFlags::REPAIR) {
-                        let Some(repairable) = repair_structure.as_repairable() else {
-                            return None;
-                        };
+                        let repairable = repair_structure.as_repairable()?;
                         match creep.repair(repairable) {
                             Ok(()) => {
                                 let max_energy_consumed = work_body_parts.min(available_energy);

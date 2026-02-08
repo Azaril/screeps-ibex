@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 
-use js_sys;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsValue;
 
@@ -59,6 +58,7 @@ impl Default for VisualizeFeatures {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct ConstructionVisualizeFeatures {
     pub on: bool,
     pub planner: bool,
@@ -66,16 +66,6 @@ pub struct ConstructionVisualizeFeatures {
     pub plan: bool,
 }
 
-impl Default for ConstructionVisualizeFeatures {
-    fn default() -> Self {
-        Self {
-            on: false,
-            planner: false,
-            planner_best: false,
-            plan: false,
-        }
-    }
-}
 
 impl ConstructionVisualizeFeatures {
     /// Returns `planner && on`.
@@ -142,6 +132,7 @@ impl Default for MarketFeatures {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct TransferVisualizeFeatures {
     pub on: bool,
     pub haul: bool,
@@ -149,16 +140,6 @@ pub struct TransferVisualizeFeatures {
     pub orders: bool,
 }
 
-impl Default for TransferVisualizeFeatures {
-    fn default() -> Self {
-        Self {
-            on: false,
-            haul: false,
-            demand: false,
-            orders: false,
-        }
-    }
-}
 
 impl TransferVisualizeFeatures {
     pub fn haul(&self) -> bool {
@@ -176,17 +157,11 @@ impl TransferVisualizeFeatures {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct TransferFeatures {
     pub visualize: TransferVisualizeFeatures,
 }
 
-impl Default for TransferFeatures {
-    fn default() -> Self {
-        Self {
-            visualize: TransferVisualizeFeatures::default(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
@@ -257,6 +232,7 @@ impl RoomFeatures {
 /// feature cache is populated.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct Features {
     pub visualize: VisualizeFeatures,
     pub construction: ConstructionFeatures,
@@ -270,22 +246,6 @@ pub struct Features {
     pub dismantle: bool,
 }
 
-impl Default for Features {
-    fn default() -> Self {
-        Self {
-            visualize: VisualizeFeatures::default(),
-            construction: ConstructionFeatures::default(),
-            market: MarketFeatures::default(),
-            transfer: TransferFeatures::default(),
-            remote_mine: RemoteMineFeatures::default(),
-            pathing: PathingFeatures::default(),
-            room: RoomFeatures::default(),
-            raid: false,
-            claim: false,
-            dismantle: false,
-        }
-    }
-}
 
 // ─── Thread-local cache ────────────────────────────────────────────────────────
 
@@ -362,7 +322,7 @@ pub fn load() {
         let obj = js_sys::Object::new();
         let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("environment"), &JsValue::from_bool(false));
         let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("memory"), &JsValue::from_bool(false));
-        let _ = js_sys::Reflect::set(&js_features.as_ref(), &JsValue::from_str("reset"), &obj);
+        let _ = js_sys::Reflect::set(js_features.as_ref(), &JsValue::from_str("reset"), &obj);
     }
 
     CACHED.with(|c| *c.borrow_mut() = flags);

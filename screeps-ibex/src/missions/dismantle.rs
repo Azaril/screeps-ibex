@@ -64,7 +64,7 @@ impl DismantleMission {
         dismantle_room: Entity,
         delivery_room: Entity,
         ignore_storage: bool,
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    ) -> crate::spawnsystem::SpawnQueueCallback {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
@@ -89,9 +89,7 @@ impl DismantleMission {
             .iter()
             .filter(|s| s.structure_type() != StructureType::Road)
             .filter(|s| !ignore_for_dismantle(*s, sources))
-            .filter(|s| can_dismantle(*s))
-            .filter(|s| has_empty_storage(*s))
-            .next()
+            .filter(|s| can_dismantle(*s)).find(|s| has_empty_storage(*s))
             .is_some()
     }
 }

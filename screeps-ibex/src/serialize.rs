@@ -79,7 +79,7 @@ where
         let mut output = Vec::with_capacity(self.len());
 
         for item in self.iter() {
-            let converted_item = item.convert_into(|entity| ids(entity))?;
+            let converted_item = item.convert_into(&mut ids)?;
 
             output.push(converted_item);
         }
@@ -94,7 +94,7 @@ where
         let mut output: EntityVec<C> = EntityVec::with_capacity(data.len());
 
         for item in data.into_iter() {
-            let converted_item = ConvertSaveload::convert_from(item, |marker| ids(marker))?;
+            let converted_item = ConvertSaveload::convert_from(item, &mut ids)?;
 
             output.push(converted_item);
         }
@@ -142,12 +142,12 @@ where
     type Data = Option<<C as ConvertSaveload<M>>::Data>;
     type Error = <C as ConvertSaveload<M>>::Error;
 
-    fn convert_into<F>(&self, mut ids: F) -> Result<Self::Data, Self::Error>
+    fn convert_into<F>(&self, ids: F) -> Result<Self::Data, Self::Error>
     where
         F: FnMut(Entity) -> Option<M>,
     {
         if let Some(item) = &self.0 {
-            let converted_item = item.convert_into(|entity| ids(entity))?;
+            let converted_item = item.convert_into(ids)?;
 
             Ok(Some(converted_item))
         } else {
@@ -155,12 +155,12 @@ where
         }
     }
 
-    fn convert_from<F>(data: Self::Data, mut ids: F) -> Result<Self, Self::Error>
+    fn convert_from<F>(data: Self::Data, ids: F) -> Result<Self, Self::Error>
     where
         F: FnMut(M) -> Option<Entity>,
     {
         if let Some(item) = data {
-            let converted_item = ConvertSaveload::convert_from(item, |marker| ids(marker))?;
+            let converted_item = ConvertSaveload::convert_from(item, ids)?;
 
             Ok(EntityOption(Some(converted_item)))
         } else {
@@ -206,20 +206,20 @@ where
     type Data = <C as ConvertSaveload<M>>::Data;
     type Error = <C as ConvertSaveload<M>>::Error;
 
-    fn convert_into<F>(&self, mut ids: F) -> Result<Self::Data, Self::Error>
+    fn convert_into<F>(&self, ids: F) -> Result<Self::Data, Self::Error>
     where
         F: FnMut(Entity) -> Option<M>,
     {
-        let converted_item = self.0.borrow().convert_into(|entity| ids(entity))?;
+        let converted_item = self.0.borrow().convert_into(ids)?;
 
         Ok(converted_item)
     }
 
-    fn convert_from<F>(data: Self::Data, mut ids: F) -> Result<Self, Self::Error>
+    fn convert_from<F>(data: Self::Data, ids: F) -> Result<Self, Self::Error>
     where
         F: FnMut(M) -> Option<Entity>,
     {
-        let converted_item = ConvertSaveload::convert_from(data, |marker| ids(marker))?;
+        let converted_item = ConvertSaveload::convert_from(data, ids)?;
 
         Ok(EntityRefCell(RefCell::new(converted_item)))
     }
@@ -265,7 +265,7 @@ where
         let mut output: HashMap<K, <V as ConvertSaveload<M>>::Data> = HashMap::new();
 
         for (key, item) in self.iter() {
-            let converted_item = item.convert_into(|entity| ids(entity))?;
+            let converted_item = item.convert_into(&mut ids)?;
 
             output.insert(key.clone(), converted_item);
         }
@@ -280,7 +280,7 @@ where
         let mut output: EntityHashMap<K, V> = EntityHashMap::new();
 
         for (key, item) in data.into_iter() {
-            let converted_item = ConvertSaveload::convert_from(item, |marker| ids(marker))?;
+            let converted_item = ConvertSaveload::convert_from(item, &mut ids)?;
 
             output.insert(key, converted_item);
         }

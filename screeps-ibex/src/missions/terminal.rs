@@ -482,8 +482,8 @@ impl Mission for TerminalMission {
                     transfer_queue.get_terminal_delivery_from_target(
                         &transfer_queue_data,
                         &TransferTarget::Terminal(terminal.remote_id()),
-                        pickup_priority.into(),
-                        delivery_priority.into(),
+                        pickup_priority,
+                        delivery_priority,
                         TransferType::Terminal,
                         available_transfer_energy,
                         TransferCapacity::Infinite,

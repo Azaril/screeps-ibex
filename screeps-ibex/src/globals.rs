@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 thread_local! {
-    static USERNAME: RefCell<String> = RefCell::new(String::new());
+    static USERNAME: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
 pub mod user {
