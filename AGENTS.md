@@ -91,10 +91,11 @@ Serialized components include: CreepSpawning, CreepOwner, CreepRoverData, RoomDa
 
 ## 8. Conventions and safety
 
+- **Build and validation:** The project can be built and validated with Cargo. Use `cargo build -p screeps-ibex` to compile (default target is `wasm32-unknown-unknown` via `.cargo/config.toml`) and `cargo clippy -p screeps-ibex` to run Clippy for the WASM build. Ensure the target is installed: `rustup target add wasm32-unknown-unknown`. Run these to verify changes before committing.
 - **No panics in the hot path:** Avoid unwrap/expect in tick-critical code; handle errors and log instead. The game keeps running after your code returns.
 - **Idempotent and restart-safe:** Assume any tick can be the first after a VM reload. Rely on serialized state and Memory/segments, not thread_local or static mutable state for correctness.
 - **CPU:** Respect `Game.cpu` limits; avoid unbounded loops or heavy work per tick. Use the optional `profile` feature and screeps-timing to find hot spots.
-- **Rust style:** The crate uses `#![warn(clippy::all)]`, clippy.toml, and rustfmt. New code should pass `cargo clippy` and `cargo fmt`. The project targets WASM: ensure the target is installed (`rustup target add wasm32-unknown-unknown`). The workspace `.cargo/config.toml` sets the default build target to `wasm32-unknown-unknown`, so `cargo clippy -p screeps-ibex` (or `npm run clippy`) runs Clippy for the WASM build.
+- **Rust style:** The crate uses `#![warn(clippy::all)]`, clippy.toml, and rustfmt. New code should pass `cargo clippy` and `cargo fmt` (see build and validation above).
 
 ## 9. Git and workflow
 
