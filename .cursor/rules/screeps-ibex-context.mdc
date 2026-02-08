@@ -5,7 +5,7 @@ alwaysApply: true
 
 # screeps-ibex project context
 
-**Read `AGENTS.md` at the repo root first.** It contains the authoritative project context: domain (Screeps MMORTS, tick-based, VM reloads), tech stack (Rust/WASM, specs ECS, screeps-game-api), repository layout, tick flow, memory/serialization, and where to find each subsystem.
+**Read `AGENTS.md` at the repo root first.** It contains the authoritative project context: domain (Screeps MMORTS, tick-based, VM reloads), tech stack (Rust/WASM, specs ECS, screeps-game-api), repository layout, tick flow, memory/serialization, git/workflow, and where to find each subsystem.
 
 ## Quick reference
 
@@ -16,6 +16,7 @@ alwaysApply: true
 
 ## Conventions
 
+- **Git:** Use feature branches for changes that may need PR review. Commit messages should be an efficient summarization of changes and follow git commit best practices. When committing submodule changes, commit leaf repos first, then update the superproject. For screeps-game-api (shared library at `../screeps-game-api`), use PRs to land changes; local WIP in that folder is fine.
 - Avoid panics in tick-critical paths; handle errors and log. Code runs unattended.
 - All persistent state must go through Memory/RawMemory; do not rely on Rust heap across VM reloads.
 - Run `cargo clippy` and `cargo fmt` in the main crate; follow existing `clippy.toml` / `rustfmt.toml`.
