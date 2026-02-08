@@ -111,14 +111,14 @@ fn serialize_world(world: &World, segments: &[u32]) {
             }
 
             for segment in segments {
-                data.memory_arbiter.set(*segment, &"");
+                data.memory_arbiter.set(*segment, "");
             }
         }
     }
 
     let mut sys = Serialize { segments };
 
-    sys.run_now(&world);
+    sys.run_now(world);
 }
 
 /// Loads world state from RawMemory segments. On deserialization failure we log and continue;
@@ -191,7 +191,7 @@ fn deserialize_world(world: &World, segments: &[u32]) {
 
     let mut sys = Deserialize { segments };
 
-    sys.run_now(&world);
+    sys.run_now(world);
 }
 
 struct GameEnvironment<'a, 'b, 'c, 'd> {
@@ -203,7 +203,7 @@ struct GameEnvironment<'a, 'b, 'c, 'd> {
 }
 
 thread_local! {
-    static ENVIRONMENT: RefCell<Option<GameEnvironment<'static, 'static, 'static, 'static>>> = RefCell::new(None);
+    static ENVIRONMENT: RefCell<Option<GameEnvironment<'static, 'static, 'static, 'static>>> = const { RefCell::new(None) };
 }
 
 const COST_MATRIX_SYSTEM_SEGMENT: u32 = 55;
@@ -335,7 +335,7 @@ pub fn tick() {
 
     ENVIRONMENT.with(|env_cell| {
         let mut env_ref = env_cell.borrow_mut();
-        let env = env_ref.get_or_insert_with(|| create_environment());
+        let env = env_ref.get_or_insert_with(create_environment);
 
         let is_data_ready = {
             let mut memory_arbiter = env.world.write_resource::<MemoryArbiter>();
@@ -428,7 +428,6 @@ pub fn tick() {
 fn cleanup_memory() -> Result<(), Box<dyn ::std::error::Error>> {
     let alive_creeps: HashSet<String> = screeps::game::creeps()
         .keys()
-        .into_iter()
         .map(|k| k.to_string())
         .collect();
 

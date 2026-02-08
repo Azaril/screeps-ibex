@@ -1,6 +1,3 @@
-use fern;
-use log;
-use screeps;
 use wasm_bindgen::JsValue;
 
 pub use log::LevelFilter::*;

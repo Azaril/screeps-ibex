@@ -64,8 +64,8 @@ impl Operation for ColonyOperation {
 
         self.last_run = Some(game::time());
 
-        for (entity, room_data) in (&*system_data.entities, &mut *system_data.room_data).join() {
-            let needs_colony = ColonyMission::can_run(&room_data);
+        for (entity, room_data) in (system_data.entities, &mut *system_data.room_data).join() {
+            let needs_colony = ColonyMission::can_run(room_data);
 
             if needs_colony {
                 //

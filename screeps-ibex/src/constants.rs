@@ -1,1 +1,1 @@
-pub const ROOM_SIGN: &str = &"Rusty robots!";
+pub const ROOM_SIGN: &str = "Rusty robots!";

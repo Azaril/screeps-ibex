@@ -72,7 +72,7 @@ impl HaulMission {
         delivery_rooms: &[Entity],
         allow_repair: bool,
         storage_delivery_only: bool,
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    ) -> crate::spawnsystem::SpawnQueueCallback {
         let pickup_rooms = pickup_rooms.to_vec();
         let delivery_rooms = delivery_rooms.to_vec();
 
@@ -107,7 +107,7 @@ impl HaulMission {
         RD: std::ops::Deref<Target = specs::storage::MaskedStorage<RoomData>>,
     {
         let unfufilled =
-            transfer_queue.total_unfufilled_resources(transfer_queue_data, pickup_rooms, delivery_rooms, TransferType::Haul.into());
+            transfer_queue.total_unfufilled_resources(transfer_queue_data, pickup_rooms, delivery_rooms, TransferType::Haul);
 
         let total_unfufilled: u32 = unfufilled.values().sum();
 
@@ -170,9 +170,9 @@ impl Mission for HaulMission {
         let room_data = room_data_storage.get(self.room_data).ok_or("Expected room data")?;
 
         let transfer_queue = &mut *system_data.transfer_queue;
-        let mut transfer_queue_data = TransferQueueGeneratorData {
+        let transfer_queue_data = TransferQueueGeneratorData {
             cause: "Haul Run Mission",
-            room_data: &*room_data_storage,
+            room_data: room_data_storage,
         };
 
         let room_visible = room_data.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false);
@@ -195,7 +195,7 @@ impl Mission for HaulMission {
 
         let mut stats = self.stats.access(
             |s| game::time() - s.last_updated >= 20 && room_visible,
-            || Self::update_stats(transfer_queue, &mut transfer_queue_data, pickup_rooms, &home_room_names),
+            || Self::update_stats(transfer_queue, &transfer_queue_data, pickup_rooms, &home_room_names),
         );
         let stats = stats.get();
 
@@ -203,7 +203,7 @@ impl Mission for HaulMission {
         let home_room_spawn_info: Vec<_> = home_room_datas.iter().filter_map(|(entity, home_room_data)| {
             let room_offset_distance = home_room_data.name - room_data.name;
 
-            let room_manhattan_distance = room_offset_distance.0.abs() as u32 + room_offset_distance.1.abs() as u32;
+            let room_manhattan_distance = room_offset_distance.0.unsigned_abs() + room_offset_distance.1.unsigned_abs();
 
             //TODO: Use structure cache?
             let room = game::rooms().get(home_room_data.name)?;
@@ -256,7 +256,7 @@ impl Mission for HaulMission {
 
             let max_haulers = 3 + (max_distance * 3);
 
-            let desired_haulers_for_unfufilled = (stats.unfufilled_hauling as f32 / base_amount as f32) as u32;
+            let desired_haulers_for_unfufilled = (stats.unfufilled_hauling as f32 / base_amount) as u32;
             let desired_haulers = desired_haulers_for_unfufilled.min(max_haulers) as usize;
 
             let should_spawn = self.haulers.len() < desired_haulers && self.allow_spawning;        

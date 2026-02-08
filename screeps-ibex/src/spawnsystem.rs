@@ -22,7 +22,7 @@ pub struct SpawnRequest {
     body: Vec<Part>,
     priority: f32,
     token: Option<SpawnToken>,
-    callback: Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)>,
+    callback: SpawnQueueCallback,
 }
 
 impl SpawnRequest {
@@ -31,7 +31,7 @@ impl SpawnRequest {
         body: &[Part],
         priority: f32,
         token: Option<SpawnToken>,
-        callback: Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)>,
+        callback: SpawnQueueCallback,
     ) -> SpawnRequest {
         SpawnRequest {
             description,
@@ -64,7 +64,7 @@ impl SpawnQueue {
     }
 
     pub fn request(&mut self, room: Entity, spawn_request: SpawnRequest) {
-        let requests = self.requests.entry(room).or_insert_with(Vec::new);
+        let requests = self.requests.entry(room).or_default();
 
         let pos = requests
             .binary_search_by(|probe| spawn_request.priority.partial_cmp(&probe.priority).unwrap_or(std::cmp::Ordering::Equal))
@@ -93,6 +93,9 @@ pub struct SpawnQueueExecutionSystemData<'a, 'b> {
     pub updater: &'b Read<'a, LazyUpdate>,
 }
 
+/// Callback invoked when a spawn request completes; used to avoid repeating the long type.
+pub type SpawnQueueCallback = Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)>;
+
 pub struct SpawnQueueSystem;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -102,7 +105,7 @@ impl SpawnQueueSystem {
         let mut additional = 0;
         loop {
             let name = format!("{}-{}", time, additional);
-            match spawn.spawn_creep(&parts, &name) {
+            match spawn.spawn_creep(parts, &name) {
                 Ok(()) => return Ok(name),
                 Err(e) => {
                     if e == SpawnCreepErrorCode::NameExists {
@@ -120,7 +123,7 @@ impl SpawnQueueSystem {
         let room = game::rooms().get(room_data.name).ok_or("Expected room")?;
         let structures = room_data.get_structures().ok_or("Expected structures")?;
 
-        let mut spawns = structures.spawns().iter().map(|s| s).collect::<Vec<_>>();
+        let mut spawns = structures.spawns().iter().collect::<Vec<_>>();
 
         let mut available_energy = room.energy_available();
         let energy_capacity = room.energy_capacity_available();
@@ -149,7 +152,7 @@ impl SpawnQueueSystem {
                         break;
                     }
 
-                    match Self::spawn_creep(&spawn, &request.body) {
+                    match Self::spawn_creep(spawn, &request.body) {
                         Ok(name) => {
                             (*request.callback)(&system_data, &name);
 

@@ -56,7 +56,7 @@ impl RemoteBuildMission {
         mission_entity: Entity,
         build_room_entity: Entity,
         allow_harvest: bool,
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    ) -> crate::spawnsystem::SpawnQueueCallback {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
@@ -157,7 +157,7 @@ impl Mission for RemoteBuildMission {
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
-        if !Self::can_run(&room_data) {
+        if !Self::can_run(room_data) {
             return Ok(MissionResult::Success);
         }
 

@@ -213,7 +213,7 @@ impl Mission for DefendMission {
             self.state = tick_result
         }
 
-        self.state.visualize(system_data, mission_entity, &mut self.context);
+        self.state.visualize(system_data, mission_entity, &self.context);
 
         Ok(MissionResult::Running)
     }

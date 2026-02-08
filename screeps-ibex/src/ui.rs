@@ -20,15 +20,15 @@ impl<'a> RoomUI<'a> {
     }
 
     pub fn missions(&mut self) -> ListVisualizer<'_, '_> {
-        self.room_state.missions.visualize(&mut self.room_visualizer)
+        self.room_state.missions.visualize(self.room_visualizer)
     }
 
     pub fn spawn_queue(&mut self) -> ListVisualizer<'_, '_> {
-        self.room_state.spawn_queue.visualize(&mut self.room_visualizer)
+        self.room_state.spawn_queue.visualize(self.room_visualizer)
     }
 
     pub fn jobs(&mut self) -> ListVisualizer<'_, '_> {
-        self.room_state.jobs.visualize(&mut self.room_visualizer)
+        self.room_state.jobs.visualize(self.room_visualizer)
     }
 }
 
@@ -63,7 +63,7 @@ impl<'a> GlobalUI<'a> {
     }
 
     pub fn operations(&mut self) -> ListVisualizer<'_, '_> {
-        self.global_state.operations.visualize(&mut self.global_visualizer)
+        self.global_state.operations.visualize(self.global_visualizer)
     }
 }
 
@@ -104,7 +104,7 @@ impl UISystem {
     where
         T: Fn(&mut GlobalUI),
     {
-        let mut global_visualizer = visualizer.global();
+        let global_visualizer = visualizer.global();
         let global_initialized = self.global_state.is_some();
 
         if !global_initialized {
@@ -116,7 +116,7 @@ impl UISystem {
         };
         let mut global_ui = GlobalUI {
             global_state,
-            global_visualizer: &mut global_visualizer,
+            global_visualizer,
         };
 
         if !global_initialized {
@@ -130,18 +130,18 @@ impl UISystem {
     where
         T: FnOnce(&mut RoomUI),
     {
-        let mut room_visualizer = visualizer.get_room(room);
+        let room_visualizer = visualizer.get_room(room);
         let room_state_entry = self.room_states.entry(room);
         let room_initialized = match &room_state_entry {
             Entry::Occupied(_) => true,
             Entry::Vacant(_) => false,
         };
 
-        let mut room_state = room_state_entry.or_insert_with(RoomUIState::new);
+        let room_state = room_state_entry.or_insert_with(RoomUIState::new);
 
         let mut room_ui = RoomUI {
-            room_state: &mut room_state,
-            room_visualizer: &mut room_visualizer,
+            room_state,
+            room_visualizer,
         };
 
         if !room_initialized {

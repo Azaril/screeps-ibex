@@ -157,7 +157,7 @@ impl ClaimOperation {
 
         let mut needs_remote_build = Vec::new();
 
-        for (entity, room_data) in (&*system_data.entities, &*system_data.room_data).join() {
+        for (entity, room_data) in (system_data.entities, &*system_data.room_data).join() {
             //TODO: The construction operation will trigger construction sites - this is brittle to rely on.
 
             //
@@ -165,8 +165,8 @@ impl ClaimOperation {
             //
 
             if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
-                if dynamic_visibility_data.visible() && dynamic_visibility_data.owner().mine() {
-                    if RemoteBuildMission::can_run(&room_data) {
+                if dynamic_visibility_data.visible() && dynamic_visibility_data.owner().mine()
+                    && RemoteBuildMission::can_run(room_data) {
                         let mission_data = system_data.mission_data;
 
                         let has_remote_build_mission = room_data
@@ -182,12 +182,11 @@ impl ClaimOperation {
                             needs_remote_build.push(entity);
                         }
                     }
-                }
             }
         }
 
         if !needs_remote_build.is_empty() {
-            let home_room_data = (&*system_data.entities, &*system_data.room_data)
+            let home_room_data = (system_data.entities, &*system_data.room_data)
                 .join()
                 .filter_map(|(entity, room_data)| {
                     let dynamic_visibility_data = room_data.get_dynamic_visibility_data()?;
@@ -213,7 +212,7 @@ impl ClaimOperation {
                     //TODO: Use path distance instead of linear distance.
                     let home_room_entities: Vec<_> = home_room_data.iter().map(|(entity, home_room_name, max_level)| {
                         let delta = room_data.name - *home_room_name;
-                        let range = delta.0.abs() as u32 + delta.1.abs() as u32;
+                        let range = delta.0.unsigned_abs() + delta.1.unsigned_abs();
 
                         (entity, home_room_name, max_level, range)
                     })
@@ -226,7 +225,7 @@ impl ClaimOperation {
                         info!("Starting remote build mission for room: {}", room_data.name);
 
                         let mission_entity = RemoteBuildMission::build(
-                            system_data.updater.create_entity(&system_data.entities),
+                            system_data.updater.create_entity(system_data.entities),
                             Some(runtime_data.entity),
                             room_entity,
                             &home_room_entities,
@@ -259,7 +258,7 @@ impl Operation for ClaimOperation {
 
     fn describe(&mut self, system_data: &mut OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
         describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
-            let mission_data = &*system_data.mission_data;
+            let mission_data = system_data.mission_data;
             let room_data = &*system_data.room_data;
 
             if self.claim_missions.is_empty() {
@@ -295,7 +294,7 @@ impl Operation for ClaimOperation {
 
         let mut currently_owned_rooms = 0;
 
-        for (_, room_data) in (&*system_data.entities, &*system_data.room_data).join() {
+        for (_, room_data) in (system_data.entities, &*system_data.room_data).join() {
             if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
                 if dynamic_visibility_data.visible() && dynamic_visibility_data.owner().mine() {
                     currently_owned_rooms += 1;
@@ -312,7 +311,7 @@ impl Operation for ClaimOperation {
         let cpu_limit = game::cpu::limit();
 
         let current_gcl = game::gcl::level();
-        let maximum_rooms = ((cpu_limit / ESTIMATED_ROOM_CPU_COST) as u32).min(current_gcl);
+        let maximum_rooms = (cpu_limit / ESTIMATED_ROOM_CPU_COST).min(current_gcl);
         let active_rooms = (currently_owned_rooms + self.claim_missions.len()) as u32;
         let available_rooms = maximum_rooms - active_rooms.min(maximum_rooms);
 
@@ -384,13 +383,13 @@ impl Operation for ClaimOperation {
             })
             .collect::<Vec<_>>();
 
-        scored_candidate_rooms.sort_by(|(_, score_a), (_, score_b)| score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal).reverse());
+        scored_candidate_rooms.sort_by(|(_, score_a), (_, score_b)| score_a.partial_cmp(score_b).unwrap_or(std::cmp::Ordering::Equal).reverse());
 
         //
         // Get home rooms
         //
 
-        let home_room_data = (&*system_data.entities, &*system_data.room_data)
+        let home_room_data = (system_data.entities, &*system_data.room_data)
             .join()
             .filter_map(|(entity, room_data)| {
                 let dynamic_visibility_data = room_data.get_dynamic_visibility_data()?;
@@ -446,7 +445,7 @@ impl Operation for ClaimOperation {
                 //TODO: Use path distance instead of linear distance.
                 let home_room_entities: Vec<_> = home_room_data.iter().map(|(entity, home_room_name, max_level)| {
                     let delta = room_data.name - *home_room_name;
-                    let range = delta.0.abs() as u32 + delta.1.abs() as u32;
+                    let range = delta.0.unsigned_abs() + delta.1.unsigned_abs();
 
                     (entity, home_room_name, max_level, range)
                 })

@@ -28,8 +28,8 @@ impl RoomTerrainStatistics {
         let mut plain_tiles = 0;
         let mut wall_tiles = 0;
 
-        for x in 0..ROOM_WIDTH as u8 {
-            for y in 0..ROOM_HEIGHT as u8 {
+        for x in 0..ROOM_WIDTH {
+            for y in 0..ROOM_HEIGHT {
                 let terrain_mask = terrain.get_xy(x, y);
 
                 if terrain_mask.contains(TerrainFlags::WALL) {
@@ -137,35 +137,19 @@ impl RoomDisposition {
     }
 
     pub fn neutral(&self) -> bool {
-        if let RoomDisposition::Neutral = self {
-            true
-        } else {
-            false
-        }
+        matches!(self, RoomDisposition::Neutral)
     }
 
     pub fn mine(&self) -> bool {
-        if let RoomDisposition::Mine = self {
-            true
-        } else {
-            false
-        }
+        matches!(self, RoomDisposition::Mine)
     }
 
     pub fn hostile(&self) -> bool {
-        if let RoomDisposition::Hostile(_) = self {
-            true
-        } else {
-            false
-        }
+        matches!(self, RoomDisposition::Hostile(_))
     }
 
     pub fn friendly(&self) -> bool {
-        if let RoomDisposition::Friendly(_) = self {
-            true
-        } else {
-            false
-        }
+        matches!(self, RoomDisposition::Friendly(_))
     }
 }
 
@@ -363,10 +347,10 @@ impl RoomData {
 
     pub fn update(&mut self, room: &Room) {
         if self.static_visibility_data.is_none() {
-            self.static_visibility_data = Some(Self::create_static_visibility_data(&room));
+            self.static_visibility_data = Some(Self::create_static_visibility_data(room));
         }
 
-        self.dynamic_visibility_data = Some(self.create_dynamic_visibility_data(&room));
+        self.dynamic_visibility_data = Some(self.create_dynamic_visibility_data(room));
     }
 
     fn create_static_visibility_data(room: &Room) -> RoomStaticVisibilityData {
@@ -427,18 +411,12 @@ impl RoomData {
             .iter()
             .flat_map(|c| c.hostile())
             .flat_map(|c| c.body())
-            .any(|p| match p.part() {
-                Part::Attack | Part::RangedAttack | Part::Work => true,
-                _ => false,
-            });
+            .any(|p| matches!(p.part(), Part::Attack | Part::RangedAttack | Part::Work));
 
         let hostile_structures = structures
             .iter()
             .flat_map(|s| s.all())
-            .filter(|s| match s.structure_type() {
-                StructureType::KeeperLair => false,
-                _ => true,
-            })
+            .filter(|s| !matches!(s.structure_type(), StructureType::KeeperLair))
             .filter_map(|s| s.as_owned())
             .any(|s| s.owner().is_some() && !s.my());
 
@@ -467,7 +445,7 @@ impl RoomData {
         self.room_structure_data
             .maybe_access(
                 |s| game::time() != s.last_updated,
-                move || game::rooms().get(name).as_ref().map(|room| RoomStructureData::new(room)),
+                move || game::rooms().get(name).as_ref().map(RoomStructureData::new),
             )
             .take()
     }
@@ -478,7 +456,7 @@ impl RoomData {
         self.room_construction_sites_data
             .maybe_access(
                 |s| game::time() != s.last_updated,
-                move || game::rooms().get(name).as_ref().map(|room| ConstructionSiteData::new(room)),
+                move || game::rooms().get(name).as_ref().map(ConstructionSiteData::new),
             )
             .take()
             .map(|s| Ref::map(s, |o| &o.construction_sites))
@@ -490,13 +468,14 @@ impl RoomData {
         self.room_creep_data
             .maybe_access(
                 |s| game::time() != s.last_updated,
-                move || game::rooms().get(name).as_ref().map(|room| CreepData::new(room)),
+                move || game::rooms().get(name).as_ref().map(CreepData::new),
             )
             .take()
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct RoomStructureData {
     #[serde(skip)]
     last_updated: u32,
@@ -547,35 +526,6 @@ pub struct RoomStructureData {
     walls: Vec<StructureWall>,
 }
 
-impl Default for RoomStructureData {
-    fn default() -> Self {
-        RoomStructureData {
-            last_updated: 0,
-            structures: Vec::new(),
-            containers: Vec::new(),
-            controllers: Vec::new(),
-            extensions: Vec::new(),
-            extractors: Vec::new(),
-            factories: Vec::new(),
-            invader_cores: Vec::new(),
-            keeper_lairs: Vec::new(),
-            labs: Vec::new(),
-            links: Vec::new(),
-            nukers: Vec::new(),
-            observers: Vec::new(),
-            power_banks: Vec::new(),
-            power_spawns: Vec::new(),
-            portals: Vec::new(),
-            ramparts: Vec::new(),
-            roads: Vec::new(),
-            spawns: Vec::new(),
-            storages: Vec::new(),
-            terminals: Vec::new(),
-            towers: Vec::new(),
-            walls: Vec::new(),
-        }
-    }
-}
 
 impl RoomStructureData {
     fn new(room: &Room) -> RoomStructureData {
@@ -748,6 +698,7 @@ impl RoomStructureData {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[derive(Default)]
 struct ConstructionSiteData {
     #[serde(skip)]
     last_updated: u32,
@@ -755,14 +706,6 @@ struct ConstructionSiteData {
     construction_sites: Vec<ConstructionSite>,
 }
 
-impl Default for ConstructionSiteData {
-    fn default() -> Self {
-        ConstructionSiteData {
-            last_updated: 0,
-            construction_sites: Vec::new(),
-        }
-    }
-}
 
 impl ConstructionSiteData {
     fn new(room: &Room) -> ConstructionSiteData {
@@ -776,6 +719,7 @@ impl ConstructionSiteData {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct CreepData {
     #[serde(skip)]
     last_updated: u32,
@@ -788,16 +732,6 @@ pub struct CreepData {
     hostile: Vec<Creep>,
 }
 
-impl Default for CreepData {
-    fn default() -> Self {
-        CreepData {
-            last_updated: 0,
-            creeps: Vec::new(),
-            friendly: Vec::new(),
-            hostile: Vec::new(),
-        }
-    }
-}
 
 impl CreepData {
     fn new(room: &Room) -> CreepData {

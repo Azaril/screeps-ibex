@@ -8,6 +8,7 @@ use itertools::*;
 use screeps::*;
 use std::collections::HashMap;
 
+#[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_pickup_state_fill_resource<F, R>(
     creep: &Creep,
@@ -58,6 +59,7 @@ where
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_delivery_current_resources_state<TF, F, R>(
     creep: &Creep,
@@ -110,6 +112,7 @@ where
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_pickup_and_delivery_state<TF, F, R>(
     creep: &Creep,
@@ -176,6 +179,7 @@ where
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_additional_deliveries<TF>(
     data: &dyn TransferRequestSystemData,
@@ -268,7 +272,7 @@ pub fn get_additional_deliveries<TF>(
 
                         let start_pos = pickup.target().pos();
 
-                        let mut destinations = std::mem::replace(deliveries, Vec::new());
+                        let mut destinations = std::mem::take(deliveries);
 
                         while let Some(nearest_index) = destinations
                             .iter()
@@ -291,6 +295,7 @@ pub fn get_additional_deliveries<TF>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_pickup_and_delivery_full_capacity_state<TF, F, R>(
     creep: &Creep,
@@ -392,12 +397,12 @@ where
     //
 
     //TODO: Factor this in to common code.
-    if game::time() % 5 == 0 {
+    if game::time().is_multiple_of(5) {
         let creep = tick_context.runtime_data.owner;
 
         let transfer_queue_data = TransferQueueGeneratorData {
             cause: "Pickup Tick",
-            room_data: &*tick_context.system_data.room_data,
+            room_data: tick_context.system_data.room_data,
         };
 
         let capacity = creep.store().get_capacity(None);
@@ -501,13 +506,13 @@ where
     }
 }
 
-pub fn visualize_delivery(describe_data: &mut JobDescribeData, tickets: &Vec<TransferDepositTicket>) {
+pub fn visualize_delivery(describe_data: &mut JobDescribeData, tickets: &[TransferDepositTicket]) {
     let pos = describe_data.owner.pos();
 
     visualize_delivery_from(describe_data, tickets, pos.into());
 }
 
-pub fn visualize_delivery_from(describe_data: &mut JobDescribeData, tickets: &Vec<TransferDepositTicket>, from: RoomPosition) {
+pub fn visualize_delivery_from(describe_data: &mut JobDescribeData, tickets: &[TransferDepositTicket], from: RoomPosition) {
     let mut last_pos = from;
 
     for ticket in tickets.iter() {

@@ -285,26 +285,15 @@ pub mod target_filters {
     }
 
     pub fn storage(target: &TransferTarget) -> bool {
-        match target {
-            TransferTarget::Container(_) => true,
-            TransferTarget::Storage(_) => true,
-            TransferTarget::Terminal(_) => true,
-            _ => false,
-        }
+        matches!(target, TransferTarget::Container(_) | TransferTarget::Storage(_) | TransferTarget::Terminal(_))
     }
 
     pub fn link(target: &TransferTarget) -> bool {
-        match target {
-            TransferTarget::Link(_) => true,
-            _ => false,
-        }
+        matches!(target, TransferTarget::Link(_))
     }
 
     pub fn terminal(target: &TransferTarget) -> bool {
-        match target {
-            TransferTarget::Terminal(_) => true,
-            _ => false,
-        }
+        matches!(target, TransferTarget::Terminal(_))
     }
 }
 
@@ -598,13 +587,13 @@ impl TransferNode {
                         let remaining_amount = self.get_available_withdrawl(key);
 
                         if remaining_amount > 0 {
-                            let pickup_amount = remaining_capacity.clamp((remaining_amount as u32).min(*amount));
+                            let pickup_amount = remaining_capacity.clamp(remaining_amount.min(*amount));
 
                             pickup_resources
                                 .entry(*resource)
-                                .or_insert_with(Vec::new)
+                                .or_default()
                                 .push(TransferWithdrawlTicketResourceEntry {
-                                    amount: pickup_amount as u32,
+                                    amount: pickup_amount,
                                     transfer_type: key.allowed_type,
                                     priority: key.priority,
                                 });
@@ -642,13 +631,13 @@ impl TransferNode {
                         let unconsumed_remaining_amount = remaining_amount - pickedup_resources;
 
                         if unconsumed_remaining_amount > 0 {
-                            let pickup_amount = remaining_none_amount.clamp(remaining_capacity.clamp(unconsumed_remaining_amount as u32));
+                            let pickup_amount = remaining_none_amount.clamp(remaining_capacity.clamp(unconsumed_remaining_amount));
 
                             pickup_resources
                                 .entry(key.resource)
-                                .or_insert_with(Vec::new)
+                                .or_default()
                                 .push(TransferWithdrawlTicketResourceEntry {
-                                    amount: pickup_amount as u32,
+                                    amount: pickup_amount,
                                     transfer_type: key.allowed_type,
                                     priority: key.priority,
                                 });
@@ -684,15 +673,15 @@ impl TransferNode {
                     let remaining_amount = self.get_available_deposit(key);
 
                     if remaining_amount > 0 {
-                        let delivery_amount = remaining_capacity.clamp((remaining_amount as u32).min(*amount));
+                        let delivery_amount = remaining_capacity.clamp(remaining_amount.min(*amount));
 
                         if delivery_amount > 0 {
                             delivery_resources
                                 .entry(*resource)
-                                .or_insert_with(Vec::new)
+                                .or_default()
                                 .push(TransferDepositTicketResourceEntry {
                                     target_resource: Some(*resource),
-                                    amount: delivery_amount as u32,
+                                    amount: delivery_amount,
                                     transfer_type: key.allowed_type,
                                     priority: key.priority,
                                 });
@@ -713,7 +702,7 @@ impl TransferNode {
         }
 
         let none_deposits = self.deposits.keys().filter(|key| {
-            key.resource == None && delivery_types.intersects(key.allowed_type.into()) && allowed_priorities.intersects(key.priority.into())
+            key.resource.is_none() && delivery_types.intersects(key.allowed_type.into()) && allowed_priorities.intersects(key.priority.into())
         });
 
         for key in none_deposits {
@@ -729,15 +718,15 @@ impl TransferNode {
                     let unconsumed_remaining_amount = amount - deposited_resources;
 
                     if unconsumed_remaining_amount > 0 {
-                        let delivery_amount = remaining_none_amount.clamp(remaining_capacity.clamp(unconsumed_remaining_amount as u32));
+                        let delivery_amount = remaining_none_amount.clamp(remaining_capacity.clamp(unconsumed_remaining_amount));
 
                         if delivery_amount > 0 {
                             delivery_resources
                                 .entry(*resource)
-                                .or_insert_with(Vec::new)
+                                .or_default()
                                 .push(TransferDepositTicketResourceEntry {
                                     target_resource: None,
-                                    amount: delivery_amount as u32,
+                                    amount: delivery_amount,
                                     transfer_type: key.allowed_type,
                                     priority: key.priority,
                                 });
@@ -775,22 +764,22 @@ impl TransferNode {
 
             for key in self.deposits.keys() {
                 if key.matches(Some(*resource), allowed_priorities, delivery_types)
-                    || (key.resource == None
+                    || (key.resource.is_none()
                         && delivery_types.intersects(key.allowed_type.into())
                         && allowed_priorities.intersects(key.priority.into()))
                 {
                     let remaining_amount = self.get_available_deposit(key);
 
                     if remaining_amount > 0 {
-                        let delivery_amount = remaining_capacity.clamp((remaining_amount as u32).min(*amount));
+                        let delivery_amount = remaining_capacity.clamp(remaining_amount.min(*amount));
 
                         if delivery_amount > 0 {
                             delivery_resources
                                 .entry(*resource)
-                                .or_insert_with(Vec::new)
+                                .or_default()
                                 .push(TransferDepositTicketResourceEntry {
                                     target_resource: Some(*resource),
-                                    amount: delivery_amount as u32,
+                                    amount: delivery_amount,
                                     transfer_type: key.allowed_type,
                                     priority: key.priority,
                                 });
@@ -809,7 +798,6 @@ impl TransferNode {
         delivery_resources
             .into_iter()
             .max_by_key(|(_, entries)| entries.iter().map(|e| e.amount).sum::<u32>())
-            .map(|(r, e)| (r, e))
     }
 
     pub fn visualize(&self, visualizer: &mut RoomVisualizer, pos: RoomPosition) {
@@ -1070,9 +1058,9 @@ impl TransferDepositTicket {
                 e.remove();
             }
 
-            return amount - remaining_amount;
+            amount - remaining_amount
         } else {
-            return 0;
+            0
         }
     }
 }
@@ -1107,7 +1095,7 @@ impl TransferQueueResourceStatsData {
     }
 
     pub fn pending_amount(&self) -> u32 {
-        self.amount
+        self.pending_amount
     }
 
     pub fn unfufilled_amount(&self) -> i32 {
@@ -1289,7 +1277,7 @@ impl LazyTransferQueueRooms {
     fn register_generator(&mut self, room: RoomName, transfer_types: TransferTypeFlags, generator: TransferQueueGenerator) {
         self.generators
             .entry(room)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(GeneratorEntry { transfer_types, generator });
     }
 
@@ -1580,6 +1568,7 @@ impl TransferQueue {
         tickets
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn select_deliveries<TF>(
         &mut self,
         data: &dyn TransferRequestSystemData,
@@ -1701,6 +1690,7 @@ impl TransferQueue {
         available_resources
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn select_best_delivery<TF>(
         &mut self,
         data: &dyn TransferRequestSystemData,
@@ -1784,6 +1774,7 @@ impl TransferQueue {
         .map(|(pickup, delivery, _)| (pickup, delivery.clone()))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn get_terminal_delivery_from_target(
         &mut self,
         data: &dyn TransferRequestSystemData,
@@ -1890,6 +1881,7 @@ impl TransferQueue {
         Some(pickup_ticket)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn get_delivery_from_target<TF>(
         &mut self,
         data: &dyn TransferRequestSystemData,
@@ -1956,6 +1948,7 @@ impl TransferQueue {
         Some((pickup, delivery))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn get_delivery<TF>(
         &mut self,
         data: &dyn TransferRequestSystemData,
@@ -1979,7 +1972,7 @@ impl TransferQueue {
             delivery_rooms,
             allowed_priorities,
             delivery_types,
-            &available_resources,
+            available_resources,
             available_capacity,
             target_filter,
         )
@@ -2000,6 +1993,7 @@ impl TransferQueue {
         .map(|(delivery, _)| delivery.clone())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn get_terminal_delivery(
         &mut self,
         data: &dyn TransferRequestSystemData,
@@ -2046,6 +2040,7 @@ impl TransferQueue {
             .map(|(delivery, _)| delivery.clone())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn select_pickup_and_delivery<TF>(
         &mut self,
         data: &dyn TransferRequestSystemData,
@@ -2146,7 +2141,7 @@ impl TransferQueue {
 
         for (resource, deposit_stats) in &mut deposits {
             if let Some(resource) = resource {
-                if let Some(withdrawl_stats) = withdrawls.get_mut(&resource) {
+                if let Some(withdrawl_stats) = withdrawls.get_mut(resource) {
                     let consume = withdrawl_stats.active.min(deposit_stats.active);
 
                     withdrawl_stats.active -= consume;
@@ -2158,7 +2153,7 @@ impl TransferQueue {
         }
 
         for (resource, deposit_stats) in &mut deposits {
-            if let None = resource {
+            if resource.is_none() {
                 for (other_resource, withdrawl_stats) in &mut withdrawls {
                     let consume = withdrawl_stats.active.min(deposit_stats.active);
 
@@ -2176,7 +2171,7 @@ impl TransferQueue {
 
         for (resource, deposit_stats) in &mut deposits {
             if let Some(resource) = resource {
-                if let Some(withdrawl_stats) = withdrawls.get_mut(&resource) {
+                if let Some(withdrawl_stats) = withdrawls.get_mut(resource) {
                     let consume = withdrawl_stats.inactive.min(deposit_stats.active);
 
                     withdrawl_stats.inactive -= consume;
@@ -2188,7 +2183,7 @@ impl TransferQueue {
         }
 
         for (resource, deposit_stats) in &mut deposits {
-            if let None = resource {
+            if resource.is_none() {
                 for (other_resource, withdrawl_stats) in &mut withdrawls {
                     let consume = withdrawl_stats.inactive.min(deposit_stats.active);
 
@@ -2217,7 +2212,7 @@ impl TransferQueue {
 
         for (resource, withdrawl_stats) in &mut withdrawls {
             for (other_resource, deposit_stats) in &mut deposits {
-                if let None = other_resource {
+                if other_resource.is_none() {
                     let consume = withdrawl_stats.active.min(deposit_stats.inactive);
 
                     withdrawl_stats.active -= consume;

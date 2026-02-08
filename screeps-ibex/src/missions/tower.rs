@@ -115,10 +115,7 @@ impl Mission for TowerMission {
         //TODO: Include power creeps?        
         let weakest_dangerous_hostile_creep = creeps.hostile()
             .iter()
-            .filter(|c| c.body().iter().any(|p| match p.part() {
-                Part::Attack | Part::RangedAttack | Part::Work => true,
-                _ => false,
-            }))
+            .filter(|c| c.body().iter().any(|p| matches!(p.part(), Part::Attack | Part::RangedAttack | Part::Work)))
             .min_by_key(|creep| creep.hits());
 
         let weakest_hostile_creep = creeps.hostile()
@@ -137,7 +134,7 @@ impl Mission for TowerMission {
             Some(RepairPriority::Low)
         };
 
-        let repair_structure = select_repair_structure(&room_data, minimum_repair_priority, false);
+        let repair_structure = select_repair_structure(room_data, minimum_repair_priority, false);
 
         //TODO: Partition targets between towers. (Don't over damage, heal or repair.)
 

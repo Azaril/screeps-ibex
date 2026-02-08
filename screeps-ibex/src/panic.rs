@@ -47,7 +47,7 @@ fn panic_hook(info: &panic::PanicHookInfo) {
         } else {
             // If there was no `__rust_end_short_backtrace` symbol, use the whole stack
             // but skip the first line, it just says Error.
-            let stack = stack.split_once('\n').map(|(_, s)| s).unwrap_or(stack);
+            let stack = stack.split_once('\n').map(|(_, s)| s).unwrap_or(&stack);
             let _ = writeln!(fmt_error, "{}", stack);
         }
     }

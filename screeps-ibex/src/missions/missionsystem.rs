@@ -69,13 +69,13 @@ impl MissionRequests {
             if let Some(mission_data) = system_data.missions.get(mission_entity) {
                 let mut mission = mission_data.as_mission_mut();
 
-                let owner = mission.get_owner().clone();
+                let owner = *mission.get_owner();
                 let children = mission.get_children();
                 let room = mission.get_room();
 
                 mission.complete(system_data, mission_entity);
 
-                Self::queue_cleanup_mission(&system_data.updater, mission_entity, owner, children, room);
+                Self::queue_cleanup_mission(system_data.updater, mission_entity, owner, children, room);
             }
         }
     }

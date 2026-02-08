@@ -59,7 +59,7 @@ impl ReserveMission {
     fn create_handle_reserver_spawn(
         mission_entity: Entity,
         controller_id: RemoteObjectId<StructureController>,
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    ) -> crate::spawnsystem::SpawnQueueCallback {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 

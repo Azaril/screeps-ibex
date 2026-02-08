@@ -47,7 +47,7 @@ impl ClaimMission {
     fn create_handle_claimer_spawn(
         mission_entity: Entity,
         controller_id: RemoteObjectId<StructureController>,
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    ) -> SpawnQueueCallback {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 

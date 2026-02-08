@@ -251,7 +251,7 @@ impl StatsSystem {
                         let structure_type = structure.structure_type();
 
                         if let Some(store) = structure.as_has_store() {
-                            let structure_storage = storage.entry(structure_type).or_insert_with(StorageResource::default);
+                            let structure_storage = storage.entry(structure_type).or_default();
 
                             for resource_type in store.store().store_types() {
                                 let amount = store.store().get(resource_type).unwrap_or(0);

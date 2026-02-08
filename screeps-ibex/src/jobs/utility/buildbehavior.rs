@@ -16,7 +16,7 @@ where
         //TODO: This requires visibility and could fail?
         if let Some(construction_site) = build_room
             .get_construction_sites()
-            .and_then(|construction_sites| select_construction_site(&creep, &construction_sites, current_rcl.into()))
+            .and_then(|construction_sites| select_construction_site(creep, &construction_sites, current_rcl.into()))
         {
             if let Some(id) = construction_site.try_id() {
                 return Some(state_map(RemoteObjectId::new_from_components(id, construction_site.pos())));

@@ -109,7 +109,7 @@ pub mod spawning {
     where
         B: Builder + MarkedBuilder,
     {
-        builder.marked::<SerializeMarker>().with(CreepSpawning::new(&name))
+        builder.marked::<SerializeMarker>().with(CreepSpawning::new(name))
     }
 
     //TODO: Move this to a utility location.
@@ -162,7 +162,7 @@ pub mod spawning {
         let repeat_parts = clamp(
             max_possible_repeat_parts,
             definition.minimum_repeat.unwrap_or(0),
-            definition.maximum_repeat.unwrap_or(usize::max_value()),
+            definition.maximum_repeat.unwrap_or(usize::MAX),
         );
 
         let full_repeat_body = definition

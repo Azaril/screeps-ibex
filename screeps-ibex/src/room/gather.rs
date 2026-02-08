@@ -95,7 +95,7 @@ pub struct GatherSystemData<'a, 'b> {
 }
 
 pub fn gather_home_rooms(system_data: &GatherSystemData, min_rcl: u32) -> Vec<Entity> {
-    (&*system_data.entities, &*system_data.room_data).join()
+    (system_data.entities, &*system_data.room_data).join()
         .filter(|(_, room_data)| is_valid_home_room(room_data))
         .filter(|(_, room_data)| {
             let rcl = room_data.get_structures().iter().flat_map(|s| s.controllers()).map(|c| c.level() as u32).max().unwrap_or(0);
@@ -135,7 +135,7 @@ where
 
                     if can_traverse_between_room_status(source_room_status, expansion_room_status) {
                         let rooms = expansion_rooms.entry(expansion_room)
-                            .or_insert_with(HashSet::new);
+                            .or_default();
 
                         rooms.insert(*entity);
                     }
@@ -149,7 +149,7 @@ where
     let mut distance = 1;
 
     while !expansion_rooms.is_empty() && distance <= max_distance {
-        let next_rooms: HashMap<RoomName, HashSet<Entity>> = std::mem::replace(&mut expansion_rooms, HashMap::new());
+        let next_rooms: HashMap<RoomName, HashSet<Entity>> = std::mem::take(&mut expansion_rooms);
 
         for (source_room_name, home_room_entities) in next_rooms.into_iter() {
             if visited_rooms.get(&source_room_name).map(|v| v.distance == distance).unwrap_or(true) {
@@ -174,7 +174,7 @@ where
 
                             if can_traverse_between_room_status(source_room_status, expansion_room_status) {
                                 let rooms = expansion_rooms.entry(expansion_room)
-                                    .or_insert_with(HashSet::new);
+                                    .or_default();
 
                                 rooms.extend(home_room_entities.iter().copied());
                             }

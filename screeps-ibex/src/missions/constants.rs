@@ -7,6 +7,7 @@ pub fn get_desired_storage_amount(resource: ResourceType) -> u32 {
     }
 }
 
+#[allow(clippy::enum_variant_names)]
 pub enum CpuBar {
     IdlePriority = 7,
     LowPriority = 5,

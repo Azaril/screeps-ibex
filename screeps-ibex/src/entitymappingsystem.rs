@@ -10,7 +10,7 @@ pub struct EntityMappingData {
 
 impl EntityMappingData {
     pub fn get_room(&self, room_name: &RoomName) -> Option<Entity> {
-        self.rooms.get(&room_name).cloned()
+        self.rooms.get(room_name).cloned()
     }
 }
 

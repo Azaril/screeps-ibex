@@ -34,7 +34,7 @@ machine!(
 
                 describe_data
                     .ui
-                    .with_room(room_name, &mut describe_data.visualizer, |room_ui| {
+                    .with_room(room_name, describe_data.visualizer, |room_ui| {
                         let description = self.status_description();
 
                         room_ui.jobs().add_text(format!("{} - {}", name, description), None);

@@ -54,7 +54,7 @@ machine!(
 
                 describe_data
                     .ui
-                    .with_room(room_name, &mut describe_data.visualizer, |room_ui| {
+                    .with_room(room_name, describe_data.visualizer, |room_ui| {
                         let description = self.status_description();
 
                         room_ui.jobs().add_text(format!("{} - {}", name, description), None);
@@ -92,7 +92,7 @@ impl Idle {
         if in_delivery_room && state_context.allow_haul {
             let transfer_queue_data = TransferQueueGeneratorData {
                 cause: "Harvest Idle",
-                room_data: &*tick_context.system_data.room_data,
+                room_data: tick_context.system_data.room_data,
             };
 
             if let Some(state) = get_new_pickup_and_delivery_full_capacity_state(
@@ -126,7 +126,7 @@ impl Idle {
             if state_context.allow_haul {
                 let transfer_queue_data = TransferQueueGeneratorData {
                     cause: "Harvest Idle",
-                    room_data: &*tick_context.system_data.room_data,
+                    room_data: tick_context.system_data.room_data,
                 };
 
                 if let Some(state) = get_new_pickup_and_delivery_full_capacity_state(
@@ -148,7 +148,7 @@ impl Idle {
 
             let transfer_queue_data = TransferQueueGeneratorData {
                 cause: "Harvest Idle",
-                room_data: &*tick_context.system_data.room_data,
+                room_data: tick_context.system_data.room_data,
             };
 
             get_new_delivery_current_resources_state(
@@ -214,7 +214,7 @@ impl Pickup {
         runtime_data.transfer_queue.register_pickup(&self.withdrawl);
 
         for delivery_ticket in self.deposits.iter() {
-            runtime_data.transfer_queue.register_delivery(&delivery_ticket);
+            runtime_data.transfer_queue.register_delivery(delivery_ticket);
         }
     }
 
@@ -232,7 +232,7 @@ impl Delivery {
 
     fn gather_data(&self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         for delivery_ticket in self.deposits.iter() {
-            runtime_data.transfer_queue.register_delivery(&delivery_ticket);
+            runtime_data.transfer_queue.register_delivery(delivery_ticket);
         }
     }
 
@@ -256,7 +256,7 @@ impl FinishedDelivery {
             .filter_map(|priority| {
                 let transfer_queue_data = TransferQueueGeneratorData {
                     cause: "Harvest Finished Delivery",
-                    room_data: &*tick_context.system_data.room_data,
+                    room_data: tick_context.system_data.room_data,
                 };
 
                 get_new_delivery_current_resources_state(

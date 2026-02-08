@@ -17,6 +17,8 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use super::constants::*;
 
+type LabPairResult = Result<(Vec<ObjectId<StructureLab>>, Vec<ObjectId<StructureLab>>), String>;
+
 #[derive(Clone, ConvertSaveload)]
 pub struct LabsMissionContext {
     room_data: Entity,
@@ -95,7 +97,7 @@ fn unload_labs_transfer_generator(room_entity: Entity) -> TransferQueueGenerator
 
 impl Idle {
     fn status_description(&self) -> String {
-        format!("Idle")
+        "Idle".to_string()
     }
 
     fn gather_data(&self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity, state_context: &mut LabsMissionContext) {
@@ -112,7 +114,7 @@ impl Idle {
         system_data: &mut MissionExecutionSystemData,
         state_context: &mut LabsMissionContext,
         input_labs: usize,
-    ) -> Result<(Vec<ObjectId<StructureLab>>, Vec<ObjectId<StructureLab>>), String> {
+    ) -> LabPairResult {
         let room_data = system_data.room_data.get(state_context.room_data).ok_or("Expected room data")?;
 
         let structures = room_data.get_structures().ok_or("Expected structures")?;
@@ -476,7 +478,7 @@ impl RunReaction {
 
         //TODO: Add stuck detection - (i.e. resources go missing).
 
-        let (input_1, input_1_resource) = self.input.get(0).ok_or("Expected first input lab")?;
+        let (input_1, input_1_resource) = self.input.first().ok_or("Expected first input lab")?;
         let input_1 = input_1.resolve().ok_or("Expected to resolve first input lab")?;
         let mut input_1_resource_amount = input_1.store().get(*input_1_resource).unwrap_or(0);
 
@@ -643,14 +645,12 @@ impl RunReverseReaction {
 
         //TODO: Add stuck detection - (i.e. resources go missing).
 
-        let output_1 = self.output.get(0).ok_or("Expected first output lab")?;
+        let output_1 = self.output.first().ok_or("Expected first output lab")?;
         let output_1 = output_1.resolve().ok_or("Expected to resolve first output lab")?;
 
         let output_1_resources = output_1.store().store_types();
         let mut output_1_free_capacity = output_1_resources
-            .iter()
-            .filter(|r| **r != ResourceType::Energy)
-            .next()
+            .iter().find(|r| **r != ResourceType::Energy)
             .map(|r| output_1.store().get_free_capacity(Some(*r)))
             .unwrap_or(LAB_MINERAL_CAPACITY as i32);
 
@@ -659,9 +659,7 @@ impl RunReverseReaction {
 
         let output_2_resources = output_2.store().store_types();
         let mut output_2_free_capacity = output_2_resources
-            .iter()
-            .filter(|r| **r != ResourceType::Energy)
-            .next()
+            .iter().find(|r| **r != ResourceType::Energy)
             .map(|r| output_2.store().get_free_capacity(Some(*r)))
             .unwrap_or(LAB_MINERAL_CAPACITY as i32);
 

@@ -64,7 +64,7 @@ impl RaidMission {
         mission_entity: Entity,
         raid_room: Entity,
         delivery_rooms: &[Entity],
-    ) -> Box<dyn Fn(&SpawnQueueExecutionSystemData, &str)> {
+    ) -> crate::spawnsystem::SpawnQueueCallback {
         let delivery_rooms = delivery_rooms.to_owned();
 
         Box::new(move |spawn_system_data, name| {
@@ -175,7 +175,7 @@ impl Mission for RaidMission {
             Box::new(move |system, transfer, _room_name| {
                 let room_data = system.get_room_data(room_data_entity).ok_or("Expected room")?;
 
-                Self::request_transfer_for_structures(transfer, &room_data)?;
+                Self::request_transfer_for_structures(transfer, room_data)?;
 
                 Ok(())
             }),
@@ -195,7 +195,7 @@ impl Mission for RaidMission {
         }
 
         if let Some(structures) = room_data.get_structures() {
-            if structures.all().iter().all(|s| has_empty_storage(s)) {
+            if structures.all().iter().all(has_empty_storage) {
                 return Ok(MissionResult::Success);
             }
         }

@@ -40,7 +40,7 @@ machine!(
 
                 describe_data
                     .ui
-                    .with_room(room_name, &mut describe_data.visualizer, |room_ui| {
+                    .with_room(room_name, describe_data.visualizer, |room_ui| {
                         let description = self.status_description();
 
                         room_ui.jobs().add_text(format!("{} - {}", name, description), None);
@@ -119,7 +119,7 @@ impl DepositLink {
 impl DepositContainer {
     pub fn tick(&mut self, state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
         let Some(container_id) = state_context.container_target else {
-            return Some(LinkMineState::idle);
+            return Some(LinkMineState::idle());
         };
         tick_deposit_all_resources_state(
             tick_context,

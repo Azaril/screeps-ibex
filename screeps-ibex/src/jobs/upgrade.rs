@@ -44,7 +44,7 @@ machine!(
 
                 describe_data
                     .ui
-                    .with_room(room_name, &mut describe_data.visualizer, |room_ui| {
+                    .with_room(room_name, describe_data.visualizer, |room_ui| {
                         let description = self.status_description();
 
                         room_ui.jobs().add_text(format!("{} - {}", name, description), None);
@@ -70,11 +70,11 @@ impl Idle {
 
         let transfer_queue_data = TransferQueueGeneratorData {
             cause: "Upgrade Idle",
-            room_data: &*tick_context.system_data.room_data,
+            room_data: tick_context.system_data.room_data,
         };
 
         get_new_pickup_state_fill_resource(
-            &tick_context.runtime_data.owner,
+            tick_context.runtime_data.owner,
             &transfer_queue_data,
             &[home_room_data],
             TransferPriorityFlags::ALL,
@@ -85,13 +85,13 @@ impl Idle {
         )
         .or_else(|| {
             if state_context.allow_harvest {
-                get_new_harvest_state(&tick_context.runtime_data.owner, home_room_data, UpgradeState::harvest)
+                get_new_harvest_state(tick_context.runtime_data.owner, home_room_data, UpgradeState::harvest)
             } else {
                 None
             }
         })
         .or_else(|| get_new_sign_state(home_room_data, UpgradeState::sign))
-        .or_else(|| get_new_upgrade_state(&tick_context.runtime_data.owner, home_room_data, UpgradeState::upgrade, None))
+        .or_else(|| get_new_upgrade_state(tick_context.runtime_data.owner, home_room_data, UpgradeState::upgrade, None))
         .or_else(|| Some(UpgradeState::wait(5)))
     }
 }
@@ -129,11 +129,11 @@ impl FinishedPickup {
 
         let transfer_queue_data = TransferQueueGeneratorData {
             cause: "Upgrade Finished Pickup",
-            room_data: &*tick_context.system_data.room_data,
+            room_data: tick_context.system_data.room_data,
         };
 
         get_new_pickup_state_fill_resource(
-            &tick_context.runtime_data.owner,
+            tick_context.runtime_data.owner,
             &transfer_queue_data,
             &[home_room_data],
             TransferPriorityFlags::ALL,

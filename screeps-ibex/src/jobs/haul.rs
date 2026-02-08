@@ -45,7 +45,7 @@ machine!(
 
                 describe_data
                     .ui
-                    .with_room(room_name, &mut describe_data.visualizer, |room_ui| {
+                    .with_room(room_name, describe_data.visualizer, |room_ui| {
                         let description = self.status_description();
 
                         room_ui.jobs().add_text(format!("{} - {}", name, description), None);
@@ -82,7 +82,7 @@ impl Idle {
 
         let transfer_queue_data = TransferQueueGeneratorData {
             cause: "Haul Idle",
-            room_data: &*tick_context.system_data.room_data,
+            room_data: tick_context.system_data.room_data,
         };
 
         let target_filter = if state_context.storage_delivery_only {
@@ -116,7 +116,7 @@ impl Idle {
         .or_else(|| {
             let transfer_queue_data = TransferQueueGeneratorData {
                 cause: "Haul Idle",
-                room_data: &*tick_context.system_data.room_data,
+                room_data: tick_context.system_data.room_data,
             };
 
             get_new_pickup_and_delivery_full_capacity_state(
@@ -158,7 +158,7 @@ impl Pickup {
         runtime_data.transfer_queue.register_pickup(&self.withdrawl);
 
         for delivery_ticket in self.deposits.iter() {
-            runtime_data.transfer_queue.register_delivery(&delivery_ticket);
+            runtime_data.transfer_queue.register_delivery(delivery_ticket);
         }
     }
 
@@ -167,12 +167,12 @@ impl Pickup {
         // NOTE: All haulers run this at the same time so that transfer data is only hydrated on this tick.
         //
 
-        if game::time() % 5 == 0 {
+        if game::time().is_multiple_of(5) {
             let creep = tick_context.runtime_data.owner;
 
             let transfer_queue_data = TransferQueueGeneratorData {
                 cause: "Pickup Tick",
-                room_data: &*tick_context.system_data.room_data,
+                room_data: tick_context.system_data.room_data,
             };
 
             let delivery_rooms = state_context
@@ -229,7 +229,7 @@ impl Delivery {
 
     fn gather_data(&self, _system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {
         for delivery_ticket in self.deposits.iter() {
-            runtime_data.transfer_queue.register_delivery(&delivery_ticket);
+            runtime_data.transfer_queue.register_delivery(delivery_ticket);
         }
     }
 
