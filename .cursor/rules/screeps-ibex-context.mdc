@@ -19,7 +19,7 @@ alwaysApply: true
 - **Git:** Use feature branches for changes that may need PR review. Commit messages should be an efficient summarization of changes and follow git commit best practices. When committing submodule changes, commit leaf repos first, then update the superproject. For screeps-game-api (shared library at `../screeps-game-api`), use PRs to land changes; local WIP in that folder is fine.
 - Avoid panics in tick-critical paths; handle errors and log. Code runs unattended.
 - All persistent state must go through Memory/RawMemory; do not rely on Rust heap across VM reloads.
-- Run `cargo clippy` and `cargo fmt` in the main crate; follow existing `clippy.toml` / `rustfmt.toml`.
+- **Build and validation:** Files can be built and validated using Cargo: `cargo build -p screeps-ibex` for compilation, `cargo clippy -p screeps-ibex` and `cargo fmt` for lint/format; follow existing `clippy.toml` / `rustfmt.toml`.
 - When adding serialized state, extend the component list and (de)serialization in `game_loop.rs` and ensure `SerializeMarker` / `ConvertSaveload` are implemented (see `serialize.rs`).
 
 ## Serialization (critical)
