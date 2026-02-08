@@ -94,9 +94,16 @@ Serialized components include: CreepSpawning, CreepOwner, CreepRoverData, RoomDa
 - **No panics in the hot path:** Avoid unwrap/expect in tick-critical code; handle errors and log instead. The game keeps running after your code returns.
 - **Idempotent and restart-safe:** Assume any tick can be the first after a VM reload. Rely on serialized state and Memory/segments, not thread_local or static mutable state for correctness.
 - **CPU:** Respect `Game.cpu` limits; avoid unbounded loops or heavy work per tick. Use the optional `profile` feature and screeps-timing to find hot spots.
-- **Rust style:** The crate uses `#![warn(clippy::all)]`, clippy.toml, and rustfmt. New code should pass `cargo clippy` and `cargo fmt`.
+- **Rust style:** The crate uses `#![warn(clippy::all)]`, clippy.toml, and rustfmt. New code should pass `cargo clippy` and `cargo fmt`. The project targets WASM: ensure the target is installed (`rustup target add wasm32-unknown-unknown`). The workspace `.cargo/config.toml` sets the default build target to `wasm32-unknown-unknown`, so `cargo clippy -p screeps-ibex` (or `npm run clippy`) runs Clippy for the WASM build.
 
-## 9. Where to look for specific behavior
+## 9. Git and workflow
+
+- **Feature branches:** Do changes on feature branches so they can be reviewed via pull requests when required. Avoid committing directly to the main integration branch (e.g. `master`) for changes that need review.
+- **Commit messages:** Write commit messages that efficiently summarize the change and follow git commit best practices (e.g. imperative mood, clear scope, optional body for why when useful).
+- **Submodules:** The project uses git submodules (screeps-cache, screeps-foreman, screeps-machine, screeps-rover, screeps-timing, etc.). When committing changes that touch both the main repo and submodules, **commit in the correct order**: leaf repos first (e.g. submodule repos), then update the superproject to point to the new submodule commits. This keeps history consistent and avoids broken references.
+- **screeps-game-api:** The `screeps-game-api` directory is a **shared library** (game bindings used by other projects). It is patched from `../screeps-game-api` and is not a submodule of this repo. **Upstream changes must go through pull requests** (e.g. to rustyscreeps/screeps-game-api or the canonical host). Locally, work-in-progress changes in that folder are fine while developing; when landing changes, open or use a PR for the screeps-game-api repo rather than pushing directly to a shared branch.
+
+## 10. Where to look for specific behavior
 
 | Topic | Location |
 |-------|----------|
@@ -109,5 +116,8 @@ Serialized components include: CreepSpawning, CreepOwner, CreepRoverData, RoomDa
 | Movement / pathfinding | `screeps-ibex/src/pathing/`, screeps-rover |
 | Serialization format and markers | `screeps-ibex/src/serialize.rs` |
 | WASM exports | `screeps-ibex/src/lib.rs` |
+| Memory path access, creep cleanup | `screeps-ibex/src/memory_helper.rs` |
+
+**Migration (0.23):** Entry is `lib.rs` (WASM exports `setup`, `game_loop_export`); RawMemory segment writes use JS `Reflect` in `memorysystem.rs`; hot-path unwraps were replaced with log-and-continue or optional handling. See in-code doc on `deserialize_world` in `game_loop.rs` for deserialization failure policy.
 
 Use this document to ground edits in the correct layer (operation vs mission vs job vs room vs movement) and to respect persistence and tick semantics.
