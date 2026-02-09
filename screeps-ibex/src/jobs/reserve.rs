@@ -69,7 +69,8 @@ impl SignController {
 }
 
 impl Wait {
-    pub fn tick(&mut self, _state_context: &ReserveJobContext, _tick_context: &mut JobTickContext) -> Option<ReserveState> {
+    pub fn tick(&mut self, _state_context: &ReserveJobContext, tick_context: &mut JobTickContext) -> Option<ReserveState> {
+        mark_idle(tick_context);
         tick_wait(&mut self.ticks, ReserveState::move_to_controller)
     }
 }

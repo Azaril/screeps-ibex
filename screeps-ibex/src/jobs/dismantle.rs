@@ -169,7 +169,8 @@ impl MoveToRoom {
 }
 
 impl Wait {
-    fn tick(&mut self, _state_context: &mut DismantleJobContext, _tick_context: &mut JobTickContext) -> Option<DismantleState> {
+    fn tick(&mut self, _state_context: &mut DismantleJobContext, tick_context: &mut JobTickContext) -> Option<DismantleState> {
+        mark_idle(tick_context);
         tick_wait(&mut self.ticks, DismantleState::idle)
     }
 }

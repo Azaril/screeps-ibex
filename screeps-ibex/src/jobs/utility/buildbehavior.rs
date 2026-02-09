@@ -1,6 +1,7 @@
 use super::build::*;
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
+use crate::jobs::utility::movebehavior::mark_working;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use screeps::*;
@@ -73,6 +74,9 @@ where
 
         return None;
     }
+
+    // In range — mark as working within range 3 of the construction site.
+    mark_working(tick_context, target_position, 3);
 
     if let Some(construction_site) = construction_site {
         if tick_context.action_flags.consume(SimultaneousActionFlags::BUILD) {

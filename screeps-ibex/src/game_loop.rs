@@ -260,8 +260,10 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
     world.insert(cost_matrix_system);
 
     let movement_data = MovementData::<Entity>::new();
-
     world.insert(movement_data);
+
+    let movement_results = MovementResults::<Entity>::new();
+    world.insert(movement_results);
 
     //
     // Pre-pass update

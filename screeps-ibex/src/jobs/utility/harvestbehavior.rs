@@ -1,6 +1,7 @@
 use crate::findnearest::*;
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
+use crate::jobs::utility::movebehavior::mark_working;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use crate::store::*;
@@ -75,18 +76,20 @@ where
     T: Harvestable + HasId + HarvestableResource + wasm_bindgen::JsCast,
 {
     let creep = tick_context.runtime_data.owner;
-    let action_flags = &mut tick_context.action_flags;
 
     //TODO: Check visibility cache and cancel if not reachable etc.?
 
-    if !ignore_creep_capacity && creep.expensive_store_free_capacity() == 0 && !action_flags.contains(SimultaneousActionFlags::TRANSFER) {
+    if !ignore_creep_capacity
+        && creep.expensive_store_free_capacity() == 0
+        && !tick_context.action_flags.contains(SimultaneousActionFlags::TRANSFER)
+    {
         return Some(next_state());
     }
 
     let target_position = target_id.pos();
 
     if !creep.pos().is_near_to(target_position) {
-        if action_flags.consume(SimultaneousActionFlags::MOVE) {
+        if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
                 .movement
@@ -97,8 +100,12 @@ where
         return None;
     }
 
+    // Creep is in range and will harvest — mark as working so the resolver
+    // may shove it to an adjacent tile but only within range 1 of the source.
+    mark_working(tick_context, target_position, 1);
+
     if let Some(harvest_target) = target_id.resolve() {
-        if action_flags.consume(SimultaneousActionFlags::HARVEST) {
+        if tick_context.action_flags.consume(SimultaneousActionFlags::HARVEST) {
             match creep.harvest(&harvest_target) {
                 Ok(()) => {
                     if optimistic_completion {

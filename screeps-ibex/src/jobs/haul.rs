@@ -235,7 +235,8 @@ impl MoveToRoom {
 }
 
 impl Wait {
-    pub fn tick(&mut self, _state_context: &HaulJobContext, _tick_context: &mut JobTickContext) -> Option<HaulState> {
+    pub fn tick(&mut self, _state_context: &HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
+        mark_idle(tick_context);
         tick_wait(&mut self.ticks, HaulState::idle)
     }
 }

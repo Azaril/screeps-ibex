@@ -2,6 +2,7 @@ use super::dismantle::*;
 use crate::findnearest::*;
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
+use crate::jobs::utility::movebehavior::mark_working;
 use crate::room::data::*;
 use crate::structureidentifier::*;
 use screeps::*;
@@ -103,6 +104,9 @@ where
 
         return None;
     }
+
+    // In range — mark as working within range 1 of the dismantle target.
+    mark_working(tick_context, target_position, 1);
 
     if let Some(structure) = dismantle_target.as_ref() {
         if tick_context.action_flags.consume(SimultaneousActionFlags::DISMANTLE) {

@@ -3,7 +3,7 @@ use super::context::*;
 use super::jobsystem::*;
 use super::utility::harvestbehavior::*;
 use super::utility::haulbehavior::*;
-use super::utility::movebehavior::*;
+use super::utility::movebehavior::{self, *};
 use super::utility::waitbehavior::*;
 use crate::remoteobjectid::*;
 use crate::transfer::transfersystem::*;
@@ -53,6 +53,9 @@ impl MoveToPosition {
 
 impl Idle {
     pub fn tick(&mut self, state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
+        // Link miner is at its mining position — mark as immovable.
+        movebehavior::mark_immovable(tick_context);
+
         let creep = tick_context.runtime_data.owner;
 
         if let Some(state) = get_new_harvest_target_state(
@@ -100,12 +103,18 @@ impl Harvest {
 
 impl DepositLink {
     pub fn tick(&mut self, state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
+        // Link miner deposits from its mining position — mark as immovable.
+        movebehavior::mark_immovable(tick_context);
+
         tick_deposit_all_resources_state(tick_context, TransferTarget::Link(state_context.link_target), LinkMineState::idle)
     }
 }
 
 impl DepositContainer {
     pub fn tick(&mut self, state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
+        // Link miner deposits from its mining position — mark as immovable.
+        movebehavior::mark_immovable(tick_context);
+
         let Some(container_id) = state_context.container_target else {
             return Some(LinkMineState::idle());
         };
@@ -114,7 +123,10 @@ impl DepositContainer {
 }
 
 impl Wait {
-    pub fn tick(&mut self, _state_context: &LinkMineJobContext, _tick_context: &mut JobTickContext) -> Option<LinkMineState> {
+    pub fn tick(&mut self, _state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
+        // Link miner remains at its mining position while waiting.
+        movebehavior::mark_immovable(tick_context);
+
         tick_wait(&mut self.ticks, LinkMineState::idle)
     }
 }

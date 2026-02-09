@@ -56,7 +56,8 @@ impl ClaimController {
 }
 
 impl Wait {
-    pub fn tick(&mut self, _state_context: &ClaimJobContext, _tick_context: &mut JobTickContext) -> Option<ClaimState> {
+    pub fn tick(&mut self, _state_context: &ClaimJobContext, tick_context: &mut JobTickContext) -> Option<ClaimState> {
+        mark_idle(tick_context);
         tick_wait(&mut self.ticks, ClaimState::move_to_controller)
     }
 }

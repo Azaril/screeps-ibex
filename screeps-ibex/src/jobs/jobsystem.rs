@@ -17,6 +17,7 @@ pub struct JobSystemData<'a> {
     transfer_queue: Write<'a, TransferQueue>,
     room_data: ReadStorage<'a, RoomData>,
     movement: WriteExpect<'a, MovementData<Entity>>,
+    movement_results: ReadExpect<'a, MovementResults<Entity>>,
     mapping: Read<'a, EntityMappingData>,
 }
 
@@ -32,6 +33,7 @@ pub struct JobExecutionRuntimeData<'a> {
     pub mapping: &'a EntityMappingData,
     pub transfer_queue: &'a mut TransferQueue,
     pub movement: &'a mut MovementData<Entity>,
+    pub movement_results: &'a MovementResults<Entity>,
 }
 
 pub struct JobDescribeData<'a> {
@@ -74,6 +76,7 @@ impl<'a> System<'a> for PreRunJobSystem {
                     mapping: &data.mapping,
                     transfer_queue: &mut data.transfer_queue,
                     movement: &mut data.movement,
+                    movement_results: &data.movement_results,
                 };
 
                 job_data.as_job().pre_run_job(&system_data, &mut runtime_data);
@@ -103,6 +106,7 @@ impl<'a> System<'a> for RunJobSystem {
                     mapping: &data.mapping,
                     transfer_queue: &mut data.transfer_queue,
                     movement: &mut data.movement,
+                    movement_results: &data.movement_results,
                 };
 
                 job_data.as_job().run_job(&system_data, &mut runtime_data);

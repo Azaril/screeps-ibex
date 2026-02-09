@@ -62,6 +62,9 @@ impl MoveToContainer {
 
 impl Harvest {
     fn tick(&mut self, state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
+        // Static miners sit on their container and should never be shoved.
+        mark_immovable(tick_context);
+
         if let Some(container) = state_context.container_target.resolve() {
             let creep = tick_context.runtime_data.owner;
             let work_parts = creep.body().iter().filter(|p| p.part() == Part::Work).count() as u32;
@@ -90,7 +93,10 @@ impl Harvest {
 }
 
 impl Wait {
-    fn tick(&mut self, _state_context: &mut StaticMineJobContext, _tick_context: &mut JobTickContext) -> Option<StaticMineState> {
+    fn tick(&mut self, _state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
+        // Static miners remain on their container even while waiting.
+        mark_immovable(tick_context);
+
         tick_wait(&mut self.ticks, StaticMineState::harvest)
     }
 }
