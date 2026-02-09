@@ -8,7 +8,7 @@ use itertools::*;
 use log::*;
 use screeps::*;
 use serde::*;
-use specs::prelude::{Entities, Entity, LazyUpdate, Read, ResourceId, System, SystemData, World, Write, WriteStorage};
+use specs::prelude::{Entities, Entity, LazyUpdate, Read, ReadStorage, ResourceId, System, SystemData, World, Write, WriteStorage};
 use std::borrow::*;
 use std::collections::hash_map::*;
 use std::collections::HashMap;
@@ -1212,6 +1212,38 @@ impl TransferQueueRoomData {
     }
 }
 
+// ─── Transfer stats snapshot (for visualization, not serialized) ─────────────
+
+/// Per-resource supply/demand stats for one room.
+#[derive(Debug, Clone, Default)]
+pub struct TransferResourceStats {
+    pub supply: u32,
+    pub supply_pending: u32,
+    /// Supply by priority: [High, Medium, Low, None].
+    pub supply_by_priority: [u32; 4],
+    pub demand: u32,
+    pub demand_pending: u32,
+    /// Demand by priority: [High, Medium, Low, None].
+    pub demand_by_priority: [u32; 4],
+}
+
+/// Per-room snapshot of transfer queue state for one tick.
+#[derive(Debug, Clone, Default)]
+pub struct TransferRoomSnapshot {
+    /// Per-resource stats (keyed by ResourceType).
+    pub resources: HashMap<screeps::ResourceType, TransferResourceStats>,
+    /// Demand from deposits with resource=None ("accept any").
+    pub generic_demand: u32,
+    pub generic_demand_pending: u32,
+    pub generic_demand_by_priority: [u32; 4],
+}
+
+/// All-rooms snapshot of transfer queue state for one tick. World resource (ephemeral).
+#[derive(Debug, Clone, Default)]
+pub struct TransferStatsSnapshot {
+    pub rooms: HashMap<RoomName, TransferRoomSnapshot>,
+}
+
 #[derive(Copy, Clone, Debug)]
 pub enum TransferCapacity {
     Infinite,
@@ -1361,6 +1393,15 @@ impl LazyTransferQueueRooms {
     pub fn get_all_rooms(&self) -> HashSet<RoomName> {
         self.generators.keys().cloned().chain(self.rooms.keys().cloned()).collect()
     }
+
+    /// Flush all generators for all rooms so that every room's transfer requests are populated.
+    /// Use when visualization is on so the snapshot includes all requests; when viz is off, lazy evaluation is unchanged.
+    pub fn flush_all_generators(&mut self, data: &dyn TransferRequestSystemData) {
+        let room_names: Vec<RoomName> = self.get_all_rooms().into_iter().collect();
+        for room in room_names {
+            self.flush_generators(data, room, TransferTypeFlags::all());
+        }
+    }
 }
 
 impl TransferRequestSystem for LazyTransferQueueRooms {
@@ -1492,6 +1533,11 @@ impl TransferQueue {
 
     pub fn get_all_rooms(&self) -> HashSet<RoomName> {
         self.rooms.get_all_rooms()
+    }
+
+    /// Flush all room generators so every room's requests are populated (e.g. for accurate visualization snapshot).
+    pub fn flush_all_generators(&mut self, data: &dyn TransferRequestSystemData) {
+        self.rooms.flush_all_generators(data);
     }
 
     pub fn try_get_room(
@@ -2255,6 +2301,69 @@ impl TransferQueue {
         self.rooms.clear();
     }
 
+    /// Build a snapshot of transfer queue state for visualization (does not clear the queue).
+    /// Requires `&mut self` because `get_room_no_flush` takes `&mut self`.
+    pub fn snapshot_for_visualization(&mut self) -> TransferStatsSnapshot {
+        let all_rooms = self.rooms.get_all_rooms();
+        let mut rooms = HashMap::new();
+
+        for room_name in all_rooms {
+            let room_data = self.rooms.get_room_no_flush(room_name);
+            let stats = &room_data.stats;
+
+            let mut resources: HashMap<screeps::ResourceType, TransferResourceStats> = HashMap::new();
+            let mut generic_demand: u32 = 0;
+            let mut generic_demand_pending: u32 = 0;
+            let mut generic_demand_by_priority = [0u32; 4];
+
+            fn priority_index(p: TransferPriority) -> usize {
+                p as usize
+            }
+
+            // Aggregate withdrawals (supply side): always a concrete resource.
+            for (key, res_stats) in &stats.withdrawl_resource_stats {
+                let amount = res_stats.amount();
+                let pending = res_stats.pending_amount();
+                let idx = priority_index(key.priority).min(3);
+
+                let entry = resources.entry(key.resource).or_default();
+                entry.supply += amount;
+                entry.supply_pending += pending;
+                entry.supply_by_priority[idx] += amount;
+            }
+
+            // Aggregate deposits (demand side): Some(resource) -> per-resource; None -> generic.
+            for (key, res_stats) in &stats.deposit_resource_stats {
+                let amount = res_stats.amount();
+                let pending = res_stats.pending_amount();
+                let idx = priority_index(key.priority).min(3);
+
+                if let Some(resource) = key.resource {
+                    let entry = resources.entry(resource).or_default();
+                    entry.demand += amount;
+                    entry.demand_pending += pending;
+                    entry.demand_by_priority[idx] += amount;
+                } else {
+                    generic_demand += amount;
+                    generic_demand_pending += pending;
+                    generic_demand_by_priority[idx] += amount;
+                }
+            }
+
+            rooms.insert(
+                room_name,
+                TransferRoomSnapshot {
+                    resources,
+                    generic_demand,
+                    generic_demand_pending,
+                    generic_demand_by_priority,
+                },
+            );
+        }
+
+        TransferStatsSnapshot { rooms }
+    }
+
     fn visualize(&mut self, data: &dyn TransferRequestSystemData, ui: &mut UISystem, visualizer: &mut Visualizer) {
         if crate::features::features().transfer.visualize.demand() {
             let room_names = self.rooms.get_all_rooms();
@@ -2270,6 +2379,45 @@ impl TransferQueue {
         }
     }
 }
+
+// ─── Transfer stats snapshot system ──────────────────────────────────────────
+
+#[derive(SystemData)]
+pub struct TransferStatsSnapshotSystemData<'a> {
+    viz_gate: Option<Read<'a, crate::visualization::VisualizationData>>,
+    transfer_queue: Write<'a, TransferQueue>,
+    transfer_stats_snapshot: Option<Write<'a, TransferStatsSnapshot>>,
+    room_data: ReadStorage<'a, RoomData>,
+}
+
+pub struct TransferStatsSnapshotSystem;
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+impl<'a> System<'a> for TransferStatsSnapshotSystem {
+    type SystemData = TransferStatsSnapshotSystemData<'a>;
+
+    fn run(&mut self, mut data: Self::SystemData) {
+        // Only build snapshot when visualization is on.
+        if data.viz_gate.is_none() {
+            return;
+        }
+
+        // Flush all generators so the snapshot includes every room's requests (when viz is off, generators stay lazy).
+        let generator_data = TransferQueueGeneratorData {
+            cause: "transfer_stats_snapshot",
+            room_data: &data.room_data,
+        };
+        data.transfer_queue.flush_all_generators(&generator_data);
+
+        let snapshot = data.transfer_queue.snapshot_for_visualization();
+
+        if let Some(ref mut res) = data.transfer_stats_snapshot {
+            **res = snapshot;
+        }
+    }
+}
+
+// ─── Transfer queue update system ────────────────────────────────────────────
 
 #[derive(SystemData)]
 pub struct TransferQueueUpdateSystemData<'a> {

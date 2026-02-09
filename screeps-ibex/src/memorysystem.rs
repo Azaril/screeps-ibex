@@ -83,9 +83,7 @@ impl MemoryArbiter {
 
     pub fn is_active(&mut self, segment: u32) -> bool {
         self.active
-            .get_or_insert_with(|| {
-                raw_memory::segments().keys().map(|k| k as u32).collect()
-            })
+            .get_or_insert_with(|| raw_memory::segments().keys().map(|k| k as u32).collect())
             .contains(&segment)
     }
 
@@ -150,10 +148,7 @@ impl MemoryArbiter {
 
     /// All registered segment IDs (used by memory-reset to clear them).
     pub fn all_registered_segments(&self) -> Vec<u32> {
-        self.requirements
-            .iter()
-            .flat_map(|r| r.segments.iter().copied())
-            .collect()
+        self.requirements.iter().flat_map(|r| r.segments.iter().copied()).collect()
     }
 
     /// Mark all on_load callbacks as not-yet-run (after a memory reset so they
