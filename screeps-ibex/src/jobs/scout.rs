@@ -45,7 +45,8 @@ impl MoveToRoom {
 }
 
 impl Idle {
-    pub fn tick(&mut self, _state_context: &mut ScoutJobContext, _tick_context: &mut JobTickContext) -> Option<ScoutState> {
+    pub fn tick(&mut self, _state_context: &mut ScoutJobContext, tick_context: &mut JobTickContext) -> Option<ScoutState> {
+        mark_idle(tick_context);
         None
     }
 }

@@ -4,6 +4,7 @@ use super::jobsystem::*;
 use super::utility::buildbehavior::*;
 use super::utility::harvestbehavior::*;
 use super::utility::haulbehavior::*;
+use super::utility::movebehavior::*;
 use super::utility::repair::*;
 use super::utility::repairbehavior::*;
 use super::utility::waitbehavior::*;
@@ -149,7 +150,8 @@ impl Repair {
 }
 
 impl Wait {
-    pub fn tick(&mut self, _state_context: &BuildJobContext, _tick_context: &mut JobTickContext) -> Option<BuildState> {
+    pub fn tick(&mut self, _state_context: &BuildJobContext, tick_context: &mut JobTickContext) -> Option<BuildState> {
+        mark_idle(tick_context);
         tick_wait(&mut self.ticks, BuildState::idle)
     }
 }

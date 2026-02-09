@@ -305,7 +305,8 @@ impl MoveToRoom {
 }
 
 impl Wait {
-    fn tick(&mut self, _state_context: &mut HarvestJobContext, _tick_context: &mut JobTickContext) -> Option<HarvestState> {
+    fn tick(&mut self, _state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
+        mark_idle(tick_context);
         tick_wait(&mut self.ticks, HarvestState::idle)
     }
 }

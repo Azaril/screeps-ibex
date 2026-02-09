@@ -1,5 +1,6 @@
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
+use crate::jobs::utility::movebehavior::mark_working;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use screeps::*;
@@ -49,7 +50,6 @@ where
     F: Fn() -> R,
 {
     let creep = tick_context.runtime_data.owner;
-    let action_flags = &mut tick_context.action_flags;
 
     let creep_pos = creep.pos();
     let target_position = controller_id.pos();
@@ -57,7 +57,7 @@ where
     //TODO: Check visibility cache and cancel if controller doesn't exist or isn't owned?
 
     if !creep_pos.in_range_to(target_position, 3) {
-        if action_flags.consume(SimultaneousActionFlags::MOVE) {
+        if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
                 .movement
@@ -68,7 +68,11 @@ where
         return None;
     }
 
-    if action_flags.consume(SimultaneousActionFlags::UPGRADE_CONTROLLER) {
+    // In range — mark as working so the resolver may rearrange upgraders
+    // within range 3 of the controller to resolve clustering deadlocks.
+    mark_working(tick_context, target_position, 3);
+
+    if tick_context.action_flags.consume(SimultaneousActionFlags::UPGRADE_CONTROLLER) {
         if let Some(controller) = controller_id.resolve() {
             match creep.upgrade_controller(&controller) {
                 Ok(()) => None,
@@ -88,7 +92,6 @@ where
     F: Fn() -> R,
 {
     let creep = tick_context.runtime_data.owner;
-    let action_flags = &mut tick_context.action_flags;
 
     let creep_pos = creep.pos();
     let target_position = controller_id.pos();
@@ -96,7 +99,7 @@ where
     //TODO: Check visibility cache and cancel if controller doesn't exist or is owned?
 
     if !creep_pos.is_near_to(target_position) {
-        if action_flags.consume(SimultaneousActionFlags::MOVE) {
+        if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
                 .movement
@@ -106,6 +109,9 @@ where
 
         return None;
     }
+
+    // In range — mark as working within range 1 of the controller.
+    mark_working(tick_context, target_position, 1);
 
     if let Some(controller) = controller_id.resolve() {
         match creep.claim_controller(&controller) {
@@ -123,7 +129,6 @@ where
     F: Fn() -> R,
 {
     let creep = tick_context.runtime_data.owner;
-    let action_flags = &mut tick_context.action_flags;
 
     let creep_pos = creep.pos();
     let target_position = controller_id.pos();
@@ -131,7 +136,7 @@ where
     //TODO: Check visibility cache and cancel if controller doesn't exist or is owned?
 
     if !creep_pos.is_near_to(target_position) {
-        if action_flags.consume(SimultaneousActionFlags::MOVE) {
+        if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data
                 .movement
@@ -141,6 +146,9 @@ where
 
         return None;
     }
+
+    // In range — mark as working within range 1 of the controller.
+    mark_working(tick_context, target_position, 1);
 
     if let Some(controller) = controller_id.resolve() {
         if let Some(reservation) = controller.reservation() {

@@ -1,6 +1,7 @@
 use super::repair::*;
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
+use crate::jobs::utility::movebehavior::mark_working;
 use crate::room::data::*;
 use crate::structureidentifier::*;
 use log::*;
@@ -62,6 +63,9 @@ where
 
         return None;
     }
+
+    // In range — mark as working within range 3 of the repair target.
+    mark_working(tick_context, target_position, 3);
 
     if let Some(structure) = repair_target.as_ref() {
         if let Some(attackable) = structure.as_attackable() {

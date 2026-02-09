@@ -4,6 +4,7 @@ use super::jobsystem::*;
 use super::utility::controllerbehavior::*;
 use super::utility::harvestbehavior::*;
 use super::utility::haulbehavior::*;
+use super::utility::movebehavior::*;
 use super::utility::waitbehavior::*;
 use crate::constants::*;
 use crate::remoteobjectid::*;
@@ -142,7 +143,8 @@ impl Upgrade {
 }
 
 impl Wait {
-    pub fn tick(&mut self, _state_context: &UpgradeJobContext, _tick_context: &mut JobTickContext) -> Option<UpgradeState> {
+    pub fn tick(&mut self, _state_context: &UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState> {
+        mark_idle(tick_context);
         tick_wait(&mut self.ticks, UpgradeState::idle)
     }
 }

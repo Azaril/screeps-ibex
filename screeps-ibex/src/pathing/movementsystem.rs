@@ -17,6 +17,7 @@ pub struct CreepRoverData(pub CreepMovementData);
 pub struct MovementUpdateSystemData<'a> {
     entities: Entities<'a>,
     movement: WriteExpect<'a, MovementData<Entity>>,
+    movement_results: WriteExpect<'a, MovementResults<Entity>>,
     creep_owner: ReadStorage<'a, CreepOwner>,
     creep_movement_data: WriteStorage<'a, CreepRoverData>,
     room_data: ReadStorage<'a, RoomData>,
@@ -90,6 +91,12 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
 
         Some(2.0)
     }
+
+    fn get_entity_position(&self, entity: Entity) -> Option<Position> {
+        let creep_owner = self.creep_owner.get(entity)?;
+        let creep = creep_owner.id().resolve()?;
+        Some(creep.pos())
+    }
 }
 
 pub struct MovementUpdateSystem;
@@ -119,10 +126,12 @@ impl<'a> System<'a> for MovementUpdateSystem {
 
         system.set_reuse_path_length(5);
 
-        if features.pathing.custom {
-            system.process(&mut external, movement_data);
+        let results = if features.pathing.custom {
+            system.process(&mut external, movement_data)
         } else {
-            system.process_inbuilt(&mut external, movement_data);
-        }
+            system.process_inbuilt(&mut external, movement_data)
+        };
+
+        *data.movement_results = results;
     }
 }
