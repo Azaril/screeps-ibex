@@ -1,5 +1,4 @@
 use super::data::*;
-use crate::visualize::*;
 use screeps::*;
 use specs::prelude::*;
 
@@ -8,7 +7,6 @@ pub struct UpdateRoomDataSystemData<'a> {
     entities: Entities<'a>,
     room_data: WriteStorage<'a, RoomData>,
     updater: Read<'a, LazyUpdate>,
-    visualizer: Option<Write<'a, Visualizer>>,
 }
 
 pub struct UpdateRoomDataSystem;
@@ -23,16 +21,6 @@ impl<'a> System<'a> for UpdateRoomDataSystem {
         for (_entity, room_data) in (&data.entities, &mut data.room_data).join() {
             if let Some(room) = rooms.get(room_data.name) {
                 room_data.update(&room);
-            }
-        }
-
-        if crate::features::features().room.visualize(crate::features::features().visualize.on) {
-            if let Some(visualizer) = &mut data.visualizer {
-                for (_entity, room_data) in (&data.entities, &mut data.room_data).join() {
-                    let room_visualizer = visualizer.get_room(room_data.name);
-
-                    room_data.visualize(room_visualizer);
-                }
             }
         }
     }

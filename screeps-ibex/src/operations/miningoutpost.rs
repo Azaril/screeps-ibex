@@ -5,6 +5,7 @@ use crate::missions::miningoutpost::*;
 use crate::room::gather::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
+use crate::visualization::SummaryContent;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -73,10 +74,8 @@ impl Operation for MiningOutpostOperation {
         self.owner.take();
     }
 
-    fn describe(&mut self, _system_data: &mut OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
-        describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
-            global_ui.operations().add_text("Remote Mine".to_string(), None);
-        })
+    fn describe_operation(&self, _ctx: &OperationDescribeContext) -> SummaryContent {
+        SummaryContent::Text("Remote Mine".to_string())
     }
 
     fn run_operation(

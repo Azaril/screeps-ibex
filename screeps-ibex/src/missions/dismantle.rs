@@ -1,13 +1,13 @@
+use super::constants::*;
 use super::data::*;
 use super::missionsystem::*;
+use super::utility::*;
 use crate::jobs::data::*;
 use crate::jobs::dismantle::*;
 use crate::jobs::utility::dismantle::*;
 use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
-use super::utility::*;
-use super::constants::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 #[allow(deprecated)]
@@ -89,7 +89,8 @@ impl DismantleMission {
             .iter()
             .filter(|s| s.structure_type() != StructureType::Road)
             .filter(|s| !ignore_for_dismantle(*s, sources))
-            .filter(|s| can_dismantle(*s)).find(|s| has_empty_storage(*s))
+            .filter(|s| can_dismantle(*s))
+            .find(|s| has_empty_storage(*s))
             .is_some()
     }
 }
@@ -114,6 +115,10 @@ impl Mission for DismantleMission {
         format!("Dismantle - Dismantlers: {}", self.dismantlers.len())
     }
 
+    fn summarize(&self) -> crate::visualization::SummaryContent {
+        crate::visualization::SummaryContent::Text(format!("Dismantle - Dismantlers: {}", self.dismantlers.len()))
+    }
+
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         //
         // Cleanup dismantlers that no longer exist.
@@ -127,12 +132,7 @@ impl Mission for DismantleMission {
         //
 
         self.home_room_datas
-            .retain(|entity| {
-                system_data.room_data
-                    .get(*entity)
-                    .map(is_valid_home_room)
-                    .unwrap_or(false)
-            });
+            .retain(|entity| system_data.room_data.get(*entity).map(is_valid_home_room).unwrap_or(false));
 
         if self.home_room_datas.is_empty() {
             return Err("No home rooms for dismantle mission".to_owned());

@@ -1,4 +1,5 @@
 use super::operationsystem::*;
+use crate::visualization::SummaryContent;
 use serde::{Deserialize, Serialize};
 #[allow(deprecated)]
 use specs::error::NoError;
@@ -18,6 +19,15 @@ impl OperationData {
             OperationData::MiningOutpost(ref mut data) => data,
             OperationData::Claim(ref mut data) => data,
             OperationData::Colony(ref mut data) => data,
+        }
+    }
+
+    /// Dispatch describe_operation to the concrete operation type (read-only).
+    pub fn describe_operation(&self, ctx: &OperationDescribeContext) -> SummaryContent {
+        match self {
+            OperationData::MiningOutpost(ref data) => data.describe_operation(ctx),
+            OperationData::Claim(ref data) => data.describe_operation(ctx),
+            OperationData::Colony(ref data) => data.describe_operation(ctx),
         }
     }
 }

@@ -8,7 +8,11 @@ pub fn is_valid_home_room(room_data: &RoomData) -> bool {
                 return true;
             }
 
-            if room_data.get_structures().map(|structures| structures.spawns().iter().any(|spawn| spawn.my())).unwrap_or(false) {
+            if room_data
+                .get_structures()
+                .map(|structures| structures.spawns().iter().any(|spawn| spawn.my()))
+                .unwrap_or(false)
+            {
                 return true;
             }
         }

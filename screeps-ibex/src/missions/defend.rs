@@ -186,6 +186,10 @@ impl Mission for DefendMission {
         self.state.describe_state(system_data, mission_entity, &self.context)
     }
 
+    fn summarize(&self) -> crate::visualization::SummaryContent {
+        crate::visualization::SummaryContent::Text(format!("Defend - {}", self.state.status_description()))
+    }
+
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<(), String> {
         self.state.gather_data(system_data, mission_entity);
 
@@ -193,13 +197,9 @@ impl Mission for DefendMission {
         // Cleanup home rooms that no longer exist.
         //
 
-        self.context.home_room_datas
-            .retain(|entity| {
-                system_data.room_data
-                    .get(*entity)
-                    .map(is_valid_home_room)
-                    .unwrap_or(false)
-            });
+        self.context
+            .home_room_datas
+            .retain(|entity| system_data.room_data.get(*entity).map(is_valid_home_room).unwrap_or(false));
 
         if self.context.home_room_datas.is_empty() {
             return Err("No home rooms for defend mission".to_owned());

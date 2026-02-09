@@ -8,8 +8,7 @@ use crate::room::visibilitysystem::*;
 use crate::spawnsystem::*;
 use crate::transfer::ordersystem::*;
 use crate::transfer::transfersystem::*;
-use crate::ui::*;
-use crate::visualize::*;
+use crate::visualization::SummaryContent;
 use log::*;
 use specs::prelude::*;
 
@@ -25,8 +24,6 @@ pub struct MissionSystemData<'a> {
     creep_owner: ReadStorage<'a, CreepOwner>,
     creep_spawning: ReadStorage<'a, CreepSpawning>,
     job_data: WriteStorage<'a, JobData>,
-    visualizer: Option<Write<'a, Visualizer>>,
-    ui: Option<Write<'a, UISystem>>,
     transfer_queue: Write<'a, TransferQueue>,
     order_queue: Write<'a, OrderQueue>,
     visibility: Write<'a, VisibilityQueue>,
@@ -44,8 +41,6 @@ pub struct MissionExecutionSystemData<'a, 'b> {
     pub mission_requests: &'b mut MissionRequests,
     pub spawn_queue: &'b mut SpawnQueue,
     pub room_plan_queue: &'b mut RoomPlanQueue,
-    pub visualizer: Option<&'b mut Visualizer>,
-    pub ui: Option<&'b mut UISystem>,
     pub transfer_queue: &'b mut TransferQueue,
     pub order_queue: &'b mut OrderQueue,
     pub visibility: &'b mut Write<'a, VisibilityQueue>,
@@ -83,7 +78,6 @@ impl MissionRequests {
     fn queue_cleanup_mission(updater: &LazyUpdate, mission_entity: Entity, owner: Option<Entity>, children: Vec<Entity>, room: Entity) {
         updater.exec_mut(move |world| {
             if world.entities().is_alive(mission_entity) {
-
                 //
                 // Remove mission from room.
                 //
@@ -147,21 +141,13 @@ pub trait Mission {
 
     fn child_complete(&mut self, _child: Entity) {}
 
-    fn describe(&self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) {
-        let description = self.describe_state(system_data, mission_entity);
-
-        if let Some(room_data) = system_data.room_data.get(self.get_room()) {
-            if let Some(ui) = system_data.ui.as_deref_mut() {
-                if let Some(visualizer) = system_data.visualizer.as_deref_mut() {
-                    ui.with_room(room_data.name, visualizer, move |room_ui| {
-                        room_ui.missions().add_text(description, None);
-                    })
-                }
-            }
-        }
-    }
-
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> String;
+
+    /// Produce a structured summary for the visualization overlay.
+    /// Reads only `self`; no system data required. Override in concrete missions for richer detail.
+    fn summarize(&self) -> SummaryContent {
+        SummaryContent::Text("Mission".to_string())
+    }
 
     fn pre_run_mission(&mut self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         Ok(())
@@ -181,9 +167,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
     fn run(&mut self, mut data: Self::SystemData) {
         let mut mission_requests = MissionRequests::new();
 
-        let mission_entities: Vec<Entity> = (&data.entities, &data.missions).join()
-            .map(|(e, _)| e)
-            .collect();
+        let mission_entities: Vec<Entity> = (&data.entities, &data.missions).join().map(|(e, _)| e).collect();
 
         for entity in mission_entities {
             let mut system_data = MissionExecutionSystemData {
@@ -198,8 +182,6 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 mission_requests: &mut mission_requests,
                 spawn_queue: &mut data.spawn_queue,
                 room_plan_queue: &mut data.room_plan_queue,
-                visualizer: data.visualizer.as_deref_mut(),
-                ui: data.ui.as_deref_mut(),
                 transfer_queue: &mut data.transfer_queue,
                 order_queue: &mut data.order_queue,
                 visibility: &mut data.visibility,
@@ -219,8 +201,6 @@ impl<'a> System<'a> for PreRunMissionSystem {
 
                 if cleanup_mission {
                     system_data.mission_requests.abort(entity);
-                } else {
-                    mission.describe(&mut system_data, entity);
                 }
             }
 
@@ -238,9 +218,7 @@ impl<'a> System<'a> for RunMissionSystem {
     fn run(&mut self, mut data: Self::SystemData) {
         let mut mission_requests = MissionRequests::new();
 
-        let mission_entities: Vec<Entity> = (&data.entities, &data.missions).join()
-            .map(|(e, _)| e)
-            .collect();
+        let mission_entities: Vec<Entity> = (&data.entities, &data.missions).join().map(|(e, _)| e).collect();
 
         for entity in mission_entities {
             let mut system_data = MissionExecutionSystemData {
@@ -255,8 +233,6 @@ impl<'a> System<'a> for RunMissionSystem {
                 mission_requests: &mut mission_requests,
                 spawn_queue: &mut data.spawn_queue,
                 room_plan_queue: &mut data.room_plan_queue,
-                visualizer: data.visualizer.as_deref_mut(),
-                ui: data.ui.as_deref_mut(),
                 transfer_queue: &mut data.transfer_queue,
                 order_queue: &mut data.order_queue,
                 visibility: &mut data.visibility,

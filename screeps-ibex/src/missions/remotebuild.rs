@@ -7,14 +7,14 @@ use crate::jobs::data::*;
 use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use itertools::*;
+use lerp::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 #[allow(deprecated)]
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
-use lerp::*;
-use itertools::*;
 
 #[derive(ConvertSaveload)]
 pub struct RemoteBuildMission {
@@ -119,12 +119,18 @@ impl Mission for RemoteBuildMission {
     }
 
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
-        let home_room_names = self.home_room_datas.iter()
-            .filter_map(|e| system_data.room_data.get(*e))        
+        let home_room_names = self
+            .home_room_datas
+            .iter()
+            .filter_map(|e| system_data.room_data.get(*e))
             .map(|d| d.name.to_string())
             .join("/");
 
         format!("Remote Build - Builders: {} - Home rooms: {}", self.builders.len(), home_room_names)
+    }
+
+    fn summarize(&self) -> crate::visualization::SummaryContent {
+        crate::visualization::SummaryContent::Text(format!("Remote Build - Builders: {}", self.builders.len()))
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
@@ -140,16 +146,11 @@ impl Mission for RemoteBuildMission {
         //
 
         self.home_room_datas
-            .retain(|entity| {
-                system_data.room_data
-                    .get(*entity)
-                    .map(is_valid_home_room)
-                    .unwrap_or(false)
-            });
+            .retain(|entity| system_data.room_data.get(*entity).map(is_valid_home_room).unwrap_or(false));
 
         if self.home_room_datas.is_empty() {
             return Err("No home rooms for remote build mission".to_owned());
-        }            
+        }
 
         Ok(())
     }

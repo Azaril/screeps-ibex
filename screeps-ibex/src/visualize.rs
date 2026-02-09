@@ -1,8 +1,6 @@
-use js_sys::JsString;
 use screeps::*;
 use specs::prelude::*;
 use std::collections::HashMap;
-use wasm_bindgen::JsValue;
 
 pub struct RoomVisualizer {
     visuals: Vec<Visual>,
@@ -35,20 +33,7 @@ impl RoomVisualizer {
     }
 
     pub fn apply(&self, room_name: Option<RoomName>) {
-        Self::draw_multi_fast(room_name, &self.visuals);
-    }
-
-    fn draw_multi_fast(room_name: Option<RoomName>, visuals: &[Visual]) {
-        if !visuals.is_empty() {
-            let target = room_name.map(|name| JsString::from(name.to_string()));
-            let data: String = visuals
-                .iter()
-                .filter_map(|v| serde_json::to_string(v).ok())
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            screeps::console::add_visual(target.as_ref(), &JsValue::from_str(&data));
-        }
+        screeps::RoomVisual::new(room_name).draw_multi(&self.visuals);
     }
 }
 
@@ -82,15 +67,17 @@ impl Default for Visualizer {
 }
 
 #[derive(SystemData)]
-pub struct VisualizerSystemData<'a> {
+pub struct ApplyVisualsSystemData<'a> {
     visualizer: Option<Write<'a, Visualizer>>,
 }
 
-pub struct VisualizerSystem;
+/// Flushes the Visualizer resource to the game (e.g. console::add_visual).
+/// Named to avoid confusion with "visualization" / RenderSystem.
+pub struct ApplyVisualsSystem;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-impl<'a> System<'a> for VisualizerSystem {
-    type SystemData = VisualizerSystemData<'a>;
+impl<'a> System<'a> for ApplyVisualsSystem {
+    type SystemData = ApplyVisualsSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
         if let Some(visualizer) = &mut data.visualizer {
@@ -102,48 +89,5 @@ impl<'a> System<'a> for VisualizerSystem {
 
             visualizer.rooms.clear();
         }
-    }
-}
-
-pub struct ListVisualizerState {
-    pos: (f32, f32),
-    pos_offset: (f32, f32),
-    style: Option<TextStyle>,
-}
-
-impl ListVisualizerState {
-    pub fn visualize<'a>(&mut self, visualizer: &'a mut RoomVisualizer) -> ListVisualizer<'a, '_> {
-        ListVisualizer { visualizer, state: self }
-    }
-}
-
-impl ListVisualizerState {
-    pub fn new(pos: (f32, f32), pos_offset: (f32, f32), style: Option<TextStyle>) -> ListVisualizerState {
-        ListVisualizerState { pos, pos_offset, style }
-    }
-
-    pub fn get_default_style(&self) -> TextStyle {
-        self.style.clone().unwrap_or_default()
-    }
-}
-
-pub struct ListVisualizer<'a, 'b> {
-    visualizer: &'a mut RoomVisualizer,
-    state: &'b mut ListVisualizerState,
-}
-
-impl<'a, 'b> ListVisualizer<'a, 'b> {
-    pub fn add_text(&mut self, text: String, style: Option<TextStyle>) {
-        let visualizer = &mut self.visualizer;
-        let state = &mut self.state;
-
-        visualizer.text(state.pos.0, state.pos.1, text, style.or_else(|| state.style.clone()));
-
-        state.pos.0 += state.pos_offset.0;
-        state.pos.1 += state.pos_offset.1;
-    }
-
-    pub fn get_default_style(&self) -> TextStyle {
-        self.state.get_default_style()
     }
 }

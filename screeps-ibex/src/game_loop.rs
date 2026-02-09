@@ -21,7 +21,11 @@ use crate::spawnsystem::*;
 use crate::statssystem::*;
 use crate::transfer::ordersystem::*;
 use crate::transfer::transfersystem::*;
-use crate::ui::*;
+use crate::stats_history::StatsHistorySystem;
+use crate::visualization::{
+    AggregateSummarySystem, CpuHistory, CpuTrackingSystem, RenderSystem, SummarizeJobSystem, SummarizeMissionSystem,
+    SummarizeOperationSystem, SummarizeRoomVisibilitySystem, VisualizationData,
+};
 use crate::visualize::*;
 use bincode::{DefaultOptions, Deserializer, Serializer};
 use log::*;
@@ -206,6 +210,10 @@ thread_local! {
     static ENVIRONMENT: RefCell<Option<GameEnvironment<'static, 'static, 'static, 'static>>> = const { RefCell::new(None) };
 }
 
+/// Segment IDs used for ECS component serialization (world state).
+const COMPONENT_SEGMENTS: &[u32] = &[50, 51, 52];
+
+/// Segment ID used for cost matrix cache (screeps-rover).
 const COST_MATRIX_SYSTEM_SEGMENT: u32 = 55;
 
 fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
@@ -215,7 +223,36 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
 
     let mut world = World::new();
 
-    world.insert(MemoryArbiter::new());
+    let mut arbiter = MemoryArbiter::new();
+
+    // ─── Segment requirements ────────────────────────────────────────────────
+    //
+    // Each subsystem declares which segments it needs. The arbiter uses these
+    // to request segments, gate execution on readiness, and run first-load
+    // callbacks — no hardcoded segment IDs in tick().
+
+    // Component segments: core ECS world state. Gate execution — the bot
+    // cannot run until these are available for deserialization.
+    arbiter.register(
+        SegmentRequirement::new("components", COMPONENT_SEGMENTS.to_vec()).gates_execution(true),
+    );
+
+    // Cost matrix cache (screeps-rover): needs segment active so the system
+    // can read/write via raw_memory directly. Not gating.
+    arbiter.register(
+        SegmentRequirement::new("cost_matrix", vec![COST_MATRIX_SYSTEM_SEGMENT]),
+    );
+
+    // Stats history (visualization): persisted across VM restarts. Load
+    // callback deserializes the data into a world resource on first use.
+    arbiter.register(
+        SegmentRequirement::new("stats_history", vec![crate::stats_history::STATS_HISTORY_SEGMENT])
+            .on_load(Box::new(|world: &mut World| {
+                crate::stats_history::load_stats_history(world);
+            })),
+    );
+
+    world.insert(arbiter);
 
     world.insert(SerializeMarkerAllocator::new());
     world.register::<SerializeMarker>();
@@ -260,14 +297,22 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
         .with(MovementUpdateSystem, "movement", &["run_jobs"])
         .with_barrier()
         .with(VisibilityQueueSystem, "visibility_queue", &[])
+        .with(SummarizeOperationSystem, "summarize_operations", &[])
+        .with(SummarizeMissionSystem, "summarize_missions", &[])
+        .with(SummarizeJobSystem, "summarize_jobs", &[])
+        .with(SummarizeRoomVisibilitySystem, "summarize_room_visibility", &[])
         .with(SpawnQueueSystem, "spawn_queue", &[])
         .with(TransferQueueUpdateSystem, "transfer_queue", &[])
         .with(OrderQueueSystem, "order_queue", &[])
         .with_barrier()
+        .with(AggregateSummarySystem, "aggregate_summary", &[])
         .with(RoomPlanSystem, "room_plan", &[])
         .with_barrier()
-        .with(VisualizerSystem, "visualizer", &[])
         .with(StatsSystem, "stats", &[])
+        .with(StatsHistorySystem, "stats_history", &["stats"])
+        .with(CpuTrackingSystem, "cpu_tracking", &[])
+        .with(RenderSystem, "render", &["cpu_tracking", "stats_history"])
+        .with(ApplyVisualsSystem, "apply_visuals", &["render"])
         .with_barrier()
         .with(CostMatrixStoreSystem, "cost_matrix_store", &[])
         .with_barrier()
@@ -299,8 +344,6 @@ pub fn tick() {
 
     let current_time = game::time();
 
-    const COMPONENT_SEGMENTS: &[u32] = &[50, 51, 52];
-
     let should_reset = reset.environment
         || ENVIRONMENT.with(|e| {
             e.borrow()
@@ -315,13 +358,9 @@ pub fn tick() {
         ENVIRONMENT.with(|e| *e.borrow_mut() = None);
     }
 
-    if reset.memory {
-        info!("Resetting memory");
-
-        for segment in COMPONENT_SEGMENTS.iter() {
-            raw_memory::segments().set(*segment as u8, String::new());
-        }
-    }
+    // Memory reset is deferred until we have the MemoryArbiter (inside the
+    // ENVIRONMENT closure). We just remember the flag here.
+    let needs_memory_reset = reset.memory;
 
     crate::features::clear_reset();
 
@@ -337,21 +376,32 @@ pub fn tick() {
         let mut env_ref = env_cell.borrow_mut();
         let env = env_ref.get_or_insert_with(create_environment);
 
-        let is_data_ready = {
-            let mut memory_arbiter = env.world.write_resource::<MemoryArbiter>();
+        //
+        // Memory reset — clear all registered segments.
+        //
 
-            for segment in COMPONENT_SEGMENTS.iter() {
-                memory_arbiter.request(*segment);
+        if needs_memory_reset {
+            info!("Resetting memory");
+
+            let mut arbiter = env.world.write_resource::<MemoryArbiter>();
+            for seg in arbiter.all_registered_segments() {
+                raw_memory::segments().set(seg as u8, String::new());
             }
+            arbiter.reset_load_state();
+        }
 
-            //TODO: Remove this load from here.
-            memory_arbiter.request(COST_MATRIX_SYSTEM_SEGMENT);
+        //
+        // Segment pre-pass: request all registered segments and check readiness gates.
+        //
 
-            COMPONENT_SEGMENTS.iter().all(|segment| memory_arbiter.is_active(*segment))
+        let is_data_ready = {
+            let mut arbiter = env.world.write_resource::<MemoryArbiter>();
+            arbiter.request_registered();
+            arbiter.gates_ready()
         };
 
         if !is_data_ready {
-            info!("Component data is not ready, delaying execution");
+            info!("Segment data is not ready, delaying execution");
 
             MemoryArbiterSystem.run_now(&env.world);
 
@@ -359,15 +409,28 @@ pub fn tick() {
         }
 
         //
+        // Run segment load callbacks (first time only per environment lifecycle).
+        //
+
+        run_pending_segment_loads(&mut env.world);
+
+        //
         // Add dynamic resources.
         //
 
         if features.visualize.on {
+            // Visualizer and VisualizationData are recreated each tick (ephemeral draw state).
             env.world.insert(Visualizer::new());
-            env.world.insert(UISystem::new());
+            env.world.insert(VisualizationData::new());
+            // CpuHistory accumulates across ticks; only create if absent.
+            if env.world.try_fetch::<CpuHistory>().is_none() {
+                env.world.insert(CpuHistory::new());
+            }
         } else {
             env.world.remove::<Visualizer>();
-            env.world.remove::<UISystem>();
+            env.world.remove::<VisualizationData>();
+            env.world.remove::<CpuHistory>();
+            env.world.remove::<crate::stats_history::StatsHistoryData>();
         }
 
         if !env.loaded {
@@ -384,7 +447,8 @@ pub fn tick() {
         // Prepare globals
         //
 
-        let username = game::rooms().values()
+        let username = game::rooms()
+            .values()
             .filter_map(|room| {
                 if let Some(controller) = room.controller() {
                     if controller.my() {
@@ -426,10 +490,7 @@ pub fn tick() {
 }
 
 fn cleanup_memory() -> Result<(), Box<dyn ::std::error::Error>> {
-    let alive_creeps: HashSet<String> = screeps::game::creeps()
-        .keys()
-        .map(|k| k.to_string())
-        .collect();
+    let alive_creeps: HashSet<String> = screeps::game::creeps().keys().map(|k| k.to_string()).collect();
 
     let screeps_memory = match crate::memory_helper::dict("creeps") {
         Some(v) => v,

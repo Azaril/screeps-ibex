@@ -1,3 +1,4 @@
+use super::constants::*;
 use super::data::*;
 use super::missionsystem::*;
 use super::utility::*;
@@ -9,7 +10,6 @@ use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use crate::transfer::transfersystem::*;
-use super::constants::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 #[allow(deprecated)]
@@ -141,6 +141,10 @@ impl Mission for RaidMission {
         format!("Raid - Raiders: {}", self.raiders.len())
     }
 
+    fn summarize(&self) -> crate::visualization::SummaryContent {
+        crate::visualization::SummaryContent::Text(format!("Raid - Raiders: {}", self.raiders.len()))
+    }
+
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         //
         // Cleanup creeps that no longer exist.
@@ -154,16 +158,11 @@ impl Mission for RaidMission {
         //
 
         self.home_room_datas
-            .retain(|entity| {
-                system_data.room_data
-                    .get(*entity)
-                    .map(is_valid_home_room)
-                    .unwrap_or(false)
-            });
+            .retain(|entity| system_data.room_data.get(*entity).map(is_valid_home_room).unwrap_or(false));
 
         if self.home_room_datas.is_empty() {
             return Err("No home rooms for raid mission".to_owned());
-        }            
+        }
 
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
@@ -200,11 +199,11 @@ impl Mission for RaidMission {
             }
         }
 
-        let can_spawn = can_execute_cpu(CpuBar::LowPriority) && self.allow_spawning;        
+        let can_spawn = can_execute_cpu(CpuBar::LowPriority) && self.allow_spawning;
 
         if !can_spawn {
             return Ok(MissionResult::Running);
-        }        
+        }
 
         let token = system_data.spawn_queue.token();
 

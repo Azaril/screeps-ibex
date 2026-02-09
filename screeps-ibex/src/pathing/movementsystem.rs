@@ -56,7 +56,9 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
             return None;
         }
 
-        let dynamic_visibility_data = self.mapping.get_room(&to_room_name)
+        let dynamic_visibility_data = self
+            .mapping
+            .get_room(&to_room_name)
             .and_then(|target_room_entity| self.room_data.get(target_room_entity))
             .and_then(|target_room_data| target_room_data.get_dynamic_visibility_data());
 
@@ -75,12 +77,14 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
                 }
             }
 
-            if dynamic_visibility_data.owner().mine() || dynamic_visibility_data.owner().friendly()
-                || dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().friendly()
+            if dynamic_visibility_data.owner().mine()
+                || dynamic_visibility_data.owner().friendly()
+                || dynamic_visibility_data.reservation().mine()
+                || dynamic_visibility_data.reservation().friendly()
             {
-                return Some(1.0)
+                return Some(1.0);
             } else {
-                return Some(2.0)
+                return Some(2.0);
             }
         }
 
@@ -109,8 +113,8 @@ impl<'a> System<'a> for MovementUpdateSystem {
 
         let features = crate::features::features();
 
-        if features.pathing.visualize(features.visualize.on) {
-            system.set_default_visualization_style(PolyStyle::default());
+        if features.pathing.visualize.enabled(features.visualize.on) {
+            system.set_default_visualization_style(PolyStyle::default().stroke("blue").stroke_width(0.2).opacity(0.5));
         }
 
         system.set_reuse_path_length(5);

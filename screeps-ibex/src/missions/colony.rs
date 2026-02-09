@@ -346,6 +346,10 @@ impl Mission for ColonyMission {
         self.state.describe_state(system_data, mission_entity, &self.context)
     }
 
+    fn summarize(&self) -> crate::visualization::SummaryContent {
+        crate::visualization::SummaryContent::Text(format!("Colony - {}", self.state.status_description()))
+    }
+
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<(), String> {
         self.state.gather_data(system_data, mission_entity);
 

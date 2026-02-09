@@ -1,3 +1,4 @@
+use super::constants::*;
 use super::data::*;
 use super::missionsystem::*;
 use crate::remoteobjectid::*;
@@ -14,7 +15,6 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use std::collections::HashSet;
-use super::constants::*;
 
 #[derive(ConvertSaveload)]
 pub struct TerminalMission {
@@ -86,7 +86,13 @@ impl TerminalMission {
     fn can_purchase_resource(resource: ResourceType) -> bool {
         match resource {
             ResourceType::Energy => crate::features::features().market.buy_energy,
-            ResourceType::Hydrogen | ResourceType::Oxygen | ResourceType::Utrium | ResourceType::Lemergium | ResourceType::Keanium | ResourceType::Zynthium | ResourceType::Catalyst => crate::features::features().market.buy_minerals,
+            ResourceType::Hydrogen
+            | ResourceType::Oxygen
+            | ResourceType::Utrium
+            | ResourceType::Lemergium
+            | ResourceType::Keanium
+            | ResourceType::Zynthium
+            | ResourceType::Catalyst => crate::features::features().market.buy_minerals,
             _ => false,
         }
     }
@@ -178,6 +184,10 @@ impl Mission for TerminalMission {
 
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         "Terminal".to_string()
+    }
+
+    fn summarize(&self) -> crate::visualization::SummaryContent {
+        crate::visualization::SummaryContent::Text("Terminal".to_string())
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
@@ -303,7 +313,8 @@ impl Mission for TerminalMission {
                 let terminal_id = terminal.remote_id();
 
                 if let Some(storage) = room.storage() {
-                    let known_resource_types = Self::get_known_resources_types(&storage.store().store_types(), &terminal.store().store_types());
+                    let known_resource_types =
+                        Self::get_known_resources_types(&storage.store().store_types(), &terminal.store().store_types());
 
                     for resource_type in known_resource_types {
                         let current_storage_amount = storage.store().get_used_capacity(Some(resource_type));

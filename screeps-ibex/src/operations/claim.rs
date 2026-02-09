@@ -7,7 +7,7 @@ use crate::room::gather::*;
 use crate::room::roomplansystem::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
-use crate::missions::missionsystem::*;
+use crate::visualization::SummaryContent;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
-use itertools::*;
 
 #[derive(Clone, ConvertSaveload)]
 pub struct ClaimOperation {
@@ -41,6 +40,10 @@ impl ClaimOperation {
         }
     }
 
+    pub fn claim_missions(&self) -> &EntityVec<Entity> {
+        &self.claim_missions
+    }
+
     const VISIBILITY_TIMEOUT: u32 = 20000;
 
     fn gather_candidate_room_data(gather_system_data: &GatherSystemData, room_name: RoomName) -> Option<CandidateRoomData> {
@@ -64,7 +67,8 @@ impl ClaimOperation {
         }
 
         let can_claim = dynamic_visibility_data.owner().neutral()
-            && (dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().neutral()) && !dynamic_visibility_data.source_keeper();
+            && (dynamic_visibility_data.reservation().mine() || dynamic_visibility_data.reservation().neutral())
+            && !dynamic_visibility_data.source_keeper();
         let hostile = dynamic_visibility_data.owner().hostile();
 
         let can_plan = gather_system_data
@@ -165,23 +169,22 @@ impl ClaimOperation {
             //
 
             if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
-                if dynamic_visibility_data.visible() && dynamic_visibility_data.owner().mine()
-                    && RemoteBuildMission::can_run(room_data) {
-                        let mission_data = system_data.mission_data;
+                if dynamic_visibility_data.visible() && dynamic_visibility_data.owner().mine() && RemoteBuildMission::can_run(room_data) {
+                    let mission_data = system_data.mission_data;
 
-                        let has_remote_build_mission = room_data
-                            .get_missions()
-                            .iter()
-                            .any(|mission_entity| mission_data.get(*mission_entity).as_mission_type::<RemoteBuildMission>().is_some());
+                    let has_remote_build_mission = room_data
+                        .get_missions()
+                        .iter()
+                        .any(|mission_entity| mission_data.get(*mission_entity).as_mission_type::<RemoteBuildMission>().is_some());
 
-                        //
-                        // Spawn a new mission to fill the remote build role if missing.
-                        //
+                    //
+                    // Spawn a new mission to fill the remote build role if missing.
+                    //
 
-                        if !has_remote_build_mission {
-                            needs_remote_build.push(entity);
-                        }
+                    if !has_remote_build_mission {
+                        needs_remote_build.push(entity);
                     }
+                }
             }
         }
 
@@ -210,12 +213,14 @@ impl ClaimOperation {
             for room_entity in needs_remote_build {
                 if let Some(room_data) = system_data.room_data.get_mut(room_entity) {
                     //TODO: Use path distance instead of linear distance.
-                    let home_room_entities: Vec<_> = home_room_data.iter().map(|(entity, home_room_name, max_level)| {
-                        let delta = room_data.name - *home_room_name;
-                        let range = delta.0.unsigned_abs() + delta.1.unsigned_abs();
+                    let home_room_entities: Vec<_> = home_room_data
+                        .iter()
+                        .map(|(entity, home_room_name, max_level)| {
+                            let delta = room_data.name - *home_room_name;
+                            let range = delta.0.unsigned_abs() + delta.1.unsigned_abs();
 
-                        (entity, home_room_name, max_level, range)
-                    })
+                            (entity, home_room_name, max_level, range)
+                        })
                         .filter(|(_, _, max_level, _)| **max_level >= 2)
                         .filter(|(_, _, _, range)| *range <= 5)
                         .map(|(entity, _, _, _)| *entity)
@@ -256,27 +261,26 @@ impl Operation for ClaimOperation {
         self.claim_missions.retain(|e| *e != child);
     }
 
-    fn describe(&mut self, system_data: &mut OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
-        describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
-            let mission_data = system_data.mission_data;
-            let room_data = &*system_data.room_data;
+    fn describe_operation(&self, ctx: &OperationDescribeContext) -> SummaryContent {
+        let rooms: Vec<String> = self
+            .claim_missions
+            .iter()
+            .filter_map(|mission_entity| {
+                let mission = ctx.mission_data.get(*mission_entity)?;
+                let room_entity = mission.as_mission().get_room();
+                let room = ctx.room_data.get(room_entity)?;
+                Some(room.name.to_string())
+            })
+            .collect();
 
-            if self.claim_missions.is_empty() {
-                global_ui.operations().add_text("Claim".to_string(), None);
-            } else {
-                let rooms = self.claim_missions.iter().filter_map(|claim_mission| {
-                        mission_data.get(*claim_mission).as_mission_type_mut::<ClaimMission>().map(|m| m.get_room())
-                    }).filter_map(|owning_room| {
-                        room_data.get(owning_room)
-                    })
-                    .map(|room_data| room_data.name.to_string())
-                    .join(" / ");
-
-                let style = global_ui.operations().get_default_style().color("Green");
-
-                global_ui.operations().add_text(format!("Claim - Rooms: {}", rooms), Some(style));
-            }            
-        })
+        if rooms.is_empty() {
+            SummaryContent::Text("Claim".to_string())
+        } else {
+            SummaryContent::Lines {
+                header: "Claim".to_string(),
+                items: rooms,
+            }
+        }
     }
 
     fn pre_run_operation(&mut self, _system_data: &mut OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {}
@@ -383,7 +387,8 @@ impl Operation for ClaimOperation {
             })
             .collect::<Vec<_>>();
 
-        scored_candidate_rooms.sort_by(|(_, score_a), (_, score_b)| score_a.partial_cmp(score_b).unwrap_or(std::cmp::Ordering::Equal).reverse());
+        scored_candidate_rooms
+            .sort_by(|(_, score_a), (_, score_b)| score_a.partial_cmp(score_b).unwrap_or(std::cmp::Ordering::Equal).reverse());
 
         //
         // Get home rooms
@@ -443,12 +448,14 @@ impl Operation for ClaimOperation {
 
             if !has_claim_mission {
                 //TODO: Use path distance instead of linear distance.
-                let home_room_entities: Vec<_> = home_room_data.iter().map(|(entity, home_room_name, max_level)| {
-                    let delta = room_data.name - *home_room_name;
-                    let range = delta.0.unsigned_abs() + delta.1.unsigned_abs();
+                let home_room_entities: Vec<_> = home_room_data
+                    .iter()
+                    .map(|(entity, home_room_name, max_level)| {
+                        let delta = room_data.name - *home_room_name;
+                        let range = delta.0.unsigned_abs() + delta.1.unsigned_abs();
 
-                    (entity, home_room_name, max_level, range)
-                })
+                        (entity, home_room_name, max_level, range)
+                    })
                     .filter(|(_, _, max_level, _)| **max_level >= 2)
                     .filter(|(_, _, _, range)| *range <= 5)
                     .map(|(entity, _, _, _)| *entity)

@@ -20,22 +20,7 @@ machine!(
     }
 
     impl {
-        * => fn describe(&self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
-            let room = { describe_data.owner.room() };
-
-            if let Some(room) = room {
-                let name = describe_data.owner.name();
-                let room_name = room.name();
-
-                describe_data
-                    .ui
-                    .with_room(room_name, describe_data.visualizer, |room_ui| {
-                        let description = self.status_description();
-
-                        room_ui.jobs().add_text(format!("{} - {}", name, description), None);
-                    });
-            }
-        }
+        * => fn describe(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
 
         * => fn status_description(&self) -> String {
             std::any::type_name::<Self>().to_string()
@@ -83,9 +68,8 @@ impl ScoutJob {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Job for ScoutJob {
-    fn describe(&mut self, system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
-        self.state.describe(system_data, describe_data);
-        self.state.visualize(system_data, describe_data);
+    fn summarize(&self) -> crate::visualization::SummaryContent {
+        crate::visualization::SummaryContent::Text(format!("Scout - {}", self.state.status_description()))
     }
 
     fn pre_run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {

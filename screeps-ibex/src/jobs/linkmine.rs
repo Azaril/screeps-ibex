@@ -31,22 +31,7 @@ machine!(
     }
 
     impl {
-        * => fn describe(&self, _system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
-            let room = { describe_data.owner.room() };
-
-            if let Some(room) = room {
-                let name = describe_data.owner.name();
-                let room_name = room.name();
-
-                describe_data
-                    .ui
-                    .with_room(room_name, describe_data.visualizer, |room_ui| {
-                        let description = self.status_description();
-
-                        room_ui.jobs().add_text(format!("{} - {}", name, description), None);
-                    });
-            }
-        }
+        * => fn describe(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
 
         * => fn status_description(&self) -> String {
             std::any::type_name::<Self>().to_string()
@@ -92,7 +77,10 @@ impl Idle {
             if let Some(container) = state_context.container_target.and_then(|id| id.resolve()) {
                 let capacity = container.store().get_capacity(None);
                 let store_types = container.store().store_types();
-                let used_capacity = store_types.iter().map(|r| container.store().get_used_capacity(Some(*r))).sum::<u32>();
+                let used_capacity = store_types
+                    .iter()
+                    .map(|r| container.store().get_used_capacity(Some(*r)))
+                    .sum::<u32>();
 
                 if used_capacity < capacity {
                     return Some(LinkMineState::deposit_container());
@@ -121,11 +109,7 @@ impl DepositContainer {
         let Some(container_id) = state_context.container_target else {
             return Some(LinkMineState::idle());
         };
-        tick_deposit_all_resources_state(
-            tick_context,
-            TransferTarget::Container(container_id),
-            LinkMineState::idle,
-        )
+        tick_deposit_all_resources_state(tick_context, TransferTarget::Container(container_id), LinkMineState::idle)
     }
 }
 
@@ -206,9 +190,8 @@ impl LinkMineJob {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Job for LinkMineJob {
-    fn describe(&mut self, system_data: &JobExecutionSystemData, describe_data: &mut JobDescribeData) {
-        self.state.describe(system_data, describe_data);
-        self.state.visualize(system_data, describe_data);
+    fn summarize(&self) -> crate::visualization::SummaryContent {
+        crate::visualization::SummaryContent::Text(format!("LinkMine - {}", self.state.status_description()))
     }
 
     fn pre_run_job(&mut self, system_data: &JobExecutionSystemData, runtime_data: &mut JobExecutionRuntimeData) {

@@ -24,8 +24,7 @@ impl<'a> System<'a> for CreateRoomDataSystem {
         let flag_rooms = flags.map(|flag| flag.pos().room_name());
 
         let construction_sites = screeps::game::construction_sites().values();
-        let construction_site_rooms = construction_sites
-            .map(|construction_site| construction_site.pos().room_name());
+        let construction_site_rooms = construction_sites.map(|construction_site| construction_site.pos().room_name());
 
         let missing_rooms: HashSet<_> = visible_rooms
             .into_iter()

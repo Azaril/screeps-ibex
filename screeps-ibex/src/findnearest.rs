@@ -1,6 +1,6 @@
-use screeps::*;
-use screeps::pathfinder;
 use screeps::local::Position;
+use screeps::pathfinder;
+use screeps::*;
 
 pub struct PathFinderHelpers;
 

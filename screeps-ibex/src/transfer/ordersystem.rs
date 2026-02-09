@@ -1,8 +1,8 @@
 use super::utility::*;
+use crate::missions::constants::*;
 use crate::room::data::*;
 use crate::ui::*;
 use crate::visualize::*;
-use crate::missions::constants::*;
 use log::*;
 use screeps::game::market::*;
 use screeps::*;
@@ -98,8 +98,6 @@ pub struct OrderQueueSystemData<'a> {
     updater: Read<'a, LazyUpdate>,
     entities: Entities<'a>,
     room_data: WriteStorage<'a, RoomData>,
-    visualizer: Option<Write<'a, Visualizer>>,
-    ui: Option<Write<'a, UISystem>>,
 }
 
 struct PassiveOrderParameters {
@@ -231,7 +229,7 @@ impl OrderQueueSystem {
         terminal: &StructureTerminal,
         order_cache: &mut OrderCache,
         active_orders: &[ActiveSellOrderParameters],
-        my_orders: &JsHashMap<String, MyOrder>
+        my_orders: &JsHashMap<String, MyOrder>,
     ) -> bool {
         if terminal.cooldown() > 0 {
             return true;
@@ -315,13 +313,11 @@ impl OrderCache {
     }
 
     fn get_orders(&mut self, resource_type: MarketResourceType) -> &Vec<Order> {
-        self.orders
-            .entry(resource_type)
-            .or_insert_with(|| {
-                let filter = LodashFilter::new();
-                filter.resource_type(resource_type);
-                game::market::get_all_orders(Some(&filter))
-            })
+        self.orders.entry(resource_type).or_insert_with(|| {
+            let filter = LodashFilter::new();
+            filter.resource_type(resource_type);
+            game::market::get_all_orders(Some(&filter))
+        })
     }
 }
 
@@ -330,12 +326,6 @@ impl<'a> System<'a> for OrderQueueSystem {
     type SystemData = OrderQueueSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        if let Some(visualizer) = &mut data.visualizer {
-            if let Some(ui) = &mut data.ui {
-                data.order_queue.visualize(ui, visualizer);
-            }
-        }
-
         let features = crate::features::features();
         let can_buy = features.market.buy && game::market::credits() > features.market.credit_reserve;
         let can_sell = features.market.sell;
@@ -356,7 +346,7 @@ impl<'a> System<'a> for OrderQueueSystem {
             if !data.order_queue.rooms.is_empty() {
                 let mut resource_history = HashMap::new();
 
-                let can_trust_history = |history: &OrderHistoryRecord| { 
+                let can_trust_history = |history: &OrderHistoryRecord| {
                     history.transactions() > 100 && history.volume() > 1000 && (history.stddev_price() <= history.avg_price() * 0.5)
                 };
 
@@ -414,7 +404,9 @@ impl<'a> System<'a> for OrderQueueSystem {
                                         .or_insert_with(|| game::market::get_history(Some(ResourceType::Energy)));
 
                                     if let Some(latest_resource_history) = resource_history.get(&market_resource).and_then(|v| v.last()) {
-                                        if let Some(latest_energy_history) = resource_history.get(&energy_market_resource).and_then(|v| v.last()) {
+                                        if let Some(latest_energy_history) =
+                                            resource_history.get(&energy_market_resource).and_then(|v| v.last())
+                                        {
                                             if can_trust_history(latest_resource_history) && can_trust_history(latest_energy_history) {
                                                 return Some(ActiveSellOrderParameters {
                                                     resource: entry.resource,
@@ -424,7 +416,8 @@ impl<'a> System<'a> for OrderQueueSystem {
                                                         - (latest_resource_history.stddev_price() * 0.2),
                                                     available_transfer_energy: entry.available_transfer_energy,
                                                     maximum_transfer_energy: OrderQueue::maximum_transfer_energy(),
-                                                    energy_cost: latest_energy_history.avg_price() - (latest_energy_history.stddev_price() * 0.2),
+                                                    energy_cost: latest_energy_history.avg_price()
+                                                        - (latest_energy_history.stddev_price() * 0.2),
                                                 });
                                             }
                                         }
@@ -434,7 +427,8 @@ impl<'a> System<'a> for OrderQueueSystem {
                                 })
                                 .collect();
 
-                            let _terminal_busy = Self::sell_active_orders(*room_name, &terminal, &mut order_cache, &active_orders, &my_orders);
+                            let _terminal_busy =
+                                Self::sell_active_orders(*room_name, &terminal, &mut order_cache, &active_orders, &my_orders);
                         }
 
                         if can_buy {

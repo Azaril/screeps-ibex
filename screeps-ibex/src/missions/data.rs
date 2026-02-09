@@ -1,5 +1,6 @@
 use super::missionsystem::*;
 use crate::serialize::*;
+use crate::visualization::SummaryContent;
 use serde::*;
 #[allow(deprecated)]
 use specs::error::NoError;
@@ -52,6 +53,11 @@ impl MissionData {
             MissionData::PowerSpawn(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::Labs(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
         }
+    }
+
+    /// Dispatch summarize() to the concrete mission type via the Mission trait.
+    pub fn summarize(&self) -> SummaryContent {
+        self.as_mission().summarize()
     }
 
     pub fn as_mission_mut(&self) -> RefMut<'_, dyn Mission> {

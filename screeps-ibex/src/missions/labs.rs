@@ -1,3 +1,4 @@
+use super::constants::*;
 use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::utility::waitbehavior::*;
@@ -15,7 +16,6 @@ use specs::saveload::*;
 use specs::*;
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use super::constants::*;
 
 type LabPairResult = Result<(Vec<ObjectId<StructureLab>>, Vec<ObjectId<StructureLab>>), String>;
 
@@ -110,11 +110,7 @@ impl Idle {
         }
     }
 
-    fn get_labs(
-        system_data: &mut MissionExecutionSystemData,
-        state_context: &mut LabsMissionContext,
-        input_labs: usize,
-    ) -> LabPairResult {
+    fn get_labs(system_data: &mut MissionExecutionSystemData, state_context: &mut LabsMissionContext, input_labs: usize) -> LabPairResult {
         let room_data = system_data.room_data.get(state_context.room_data).ok_or("Expected room data")?;
 
         let structures = room_data.get_structures().ok_or("Expected structures")?;
@@ -650,7 +646,8 @@ impl RunReverseReaction {
 
         let output_1_resources = output_1.store().store_types();
         let mut output_1_free_capacity = output_1_resources
-            .iter().find(|r| **r != ResourceType::Energy)
+            .iter()
+            .find(|r| **r != ResourceType::Energy)
             .map(|r| output_1.store().get_free_capacity(Some(*r)))
             .unwrap_or(LAB_MINERAL_CAPACITY as i32);
 
@@ -659,7 +656,8 @@ impl RunReverseReaction {
 
         let output_2_resources = output_2.store().store_types();
         let mut output_2_free_capacity = output_2_resources
-            .iter().find(|r| **r != ResourceType::Energy)
+            .iter()
+            .find(|r| **r != ResourceType::Energy)
             .map(|r| output_2.store().get_free_capacity(Some(*r)))
             .unwrap_or(LAB_MINERAL_CAPACITY as i32);
 
@@ -759,6 +757,15 @@ impl Mission for LabsMission {
 
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> String {
         self.state.describe_state(system_data, mission_entity, &self.context)
+    }
+
+    fn summarize(&self) -> crate::visualization::SummaryContent {
+        use crate::visualization::SummaryContent;
+        let status = self.state.status_description();
+        SummaryContent::Lines {
+            header: "Labs".to_string(),
+            items: vec![status],
+        }
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<(), String> {

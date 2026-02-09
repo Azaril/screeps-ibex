@@ -1,7 +1,7 @@
 use crate::entitymappingsystem::*;
+use crate::missions::utility::*;
 use crate::room::data::*;
 use crate::room::roomplansystem::*;
-use crate::missions::utility::*;
 use screeps::*;
 use screeps_rover::*;
 use specs::*;
@@ -95,10 +95,17 @@ pub struct GatherSystemData<'a, 'b> {
 }
 
 pub fn gather_home_rooms(system_data: &GatherSystemData, min_rcl: u32) -> Vec<Entity> {
-    (system_data.entities, &*system_data.room_data).join()
+    (system_data.entities, &*system_data.room_data)
+        .join()
         .filter(|(_, room_data)| is_valid_home_room(room_data))
         .filter(|(_, room_data)| {
-            let rcl = room_data.get_structures().iter().flat_map(|s| s.controllers()).map(|c| c.level() as u32).max().unwrap_or(0);
+            let rcl = room_data
+                .get_structures()
+                .iter()
+                .flat_map(|s| s.controllers())
+                .map(|c| c.level() as u32)
+                .max()
+                .unwrap_or(0);
 
             rcl >= min_rcl
         })
@@ -106,7 +113,12 @@ pub fn gather_home_rooms(system_data: &GatherSystemData, min_rcl: u32) -> Vec<En
         .collect()
 }
 
-pub fn gather_candidate_rooms<F>(system_data: &GatherSystemData, seed_rooms: &[Entity], max_distance: u32, candidate_generator: F) -> GatherRoomData
+pub fn gather_candidate_rooms<F>(
+    system_data: &GatherSystemData,
+    seed_rooms: &[Entity],
+    max_distance: u32,
+    candidate_generator: F,
+) -> GatherRoomData
 where
     F: Fn(&GatherSystemData, RoomName) -> Option<CandidateRoomData>,
 {
@@ -134,8 +146,7 @@ where
                     let expansion_room_status = game::map::get_room_status(expansion_room).map(|r| r.status());
 
                     if can_traverse_between_room_status(source_room_status, expansion_room_status) {
-                        let rooms = expansion_rooms.entry(expansion_room)
-                            .or_default();
+                        let rooms = expansion_rooms.entry(expansion_room).or_default();
 
                         rooms.insert(*entity);
                     }
@@ -173,8 +184,7 @@ where
                             let expansion_room_status = game::map::get_room_status(expansion_room).map(|r| r.status());
 
                             if can_traverse_between_room_status(source_room_status, expansion_room_status) {
-                                let rooms = expansion_rooms.entry(expansion_room)
-                                    .or_default();
+                                let rooms = expansion_rooms.entry(expansion_room).or_default();
 
                                 rooms.extend(home_room_entities.iter().copied());
                             }

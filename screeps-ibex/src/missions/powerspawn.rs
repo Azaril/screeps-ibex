@@ -65,6 +65,10 @@ impl Mission for PowerSpawnMission {
         "PowerSpawn".to_string()
     }
 
+    fn summarize(&self) -> crate::visualization::SummaryContent {
+        crate::visualization::SummaryContent::Text("PowerSpawn".to_string())
+    }
+
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 

@@ -164,7 +164,12 @@ impl TransferTarget {
         }
     }
 
-    fn withdraw_resource_amount_from_id<T>(target: &RemoteObjectId<T>, creep: &Creep, resource: ResourceType, amount: u32) -> Result<(), ErrorCode>
+    fn withdraw_resource_amount_from_id<T>(
+        target: &RemoteObjectId<T>,
+        creep: &Creep,
+        resource: ResourceType,
+        amount: u32,
+    ) -> Result<(), ErrorCode>
     where
         T: Withdrawable + HasStore + HasId + wasm_bindgen::JsCast,
     {
@@ -205,7 +210,12 @@ impl TransferTarget {
         }
     }
 
-    fn creep_transfer_resource_amount_to_id<T>(target: &RemoteObjectId<T>, creep: &Creep, resource: ResourceType, amount: u32) -> Result<(), ErrorCode>
+    fn creep_transfer_resource_amount_to_id<T>(
+        target: &RemoteObjectId<T>,
+        creep: &Creep,
+        resource: ResourceType,
+        amount: u32,
+    ) -> Result<(), ErrorCode>
     where
         T: Transferable + HasStore + HasId + wasm_bindgen::JsCast,
     {
@@ -242,7 +252,11 @@ impl TransferTarget {
         }
     }
 
-    fn link_transfer_energy_amount_to_id(target: &RemoteObjectId<StructureLink>, link: &StructureLink, amount: u32) -> Result<(), ErrorCode> {
+    fn link_transfer_energy_amount_to_id(
+        target: &RemoteObjectId<StructureLink>,
+        link: &StructureLink,
+        amount: u32,
+    ) -> Result<(), ErrorCode> {
         if let Some(obj) = target.resolve() {
             let transfer_amount = obj.store().get_free_capacity(Some(ResourceType::Energy)).min(amount as i32);
 
@@ -285,7 +299,10 @@ pub mod target_filters {
     }
 
     pub fn storage(target: &TransferTarget) -> bool {
-        matches!(target, TransferTarget::Container(_) | TransferTarget::Storage(_) | TransferTarget::Terminal(_))
+        matches!(
+            target,
+            TransferTarget::Container(_) | TransferTarget::Storage(_) | TransferTarget::Terminal(_)
+        )
     }
 
     pub fn link(target: &TransferTarget) -> bool {
@@ -411,7 +428,9 @@ pub struct TransferWithdrawlKey {
 
 impl TransferWithdrawlKey {
     pub fn matches(&self, resource: ResourceType, allowed_priorities: TransferPriorityFlags, allowed_types: TransferTypeFlags) -> bool {
-        self.resource == resource && allowed_priorities.intersects(self.priority.into()) && allowed_types.intersects(self.allowed_type.into())
+        self.resource == resource
+            && allowed_priorities.intersects(self.priority.into())
+            && allowed_types.intersects(self.allowed_type.into())
     }
 }
 
@@ -429,7 +448,9 @@ impl TransferDepositKey {
         allowed_priorities: TransferPriorityFlags,
         allowed_types: TransferTypeFlags,
     ) -> bool {
-        self.resource == resource && allowed_priorities.intersects(self.priority.into()) && allowed_types.intersects(self.allowed_type.into())
+        self.resource == resource
+            && allowed_priorities.intersects(self.priority.into())
+            && allowed_types.intersects(self.allowed_type.into())
     }
 }
 
@@ -484,7 +505,9 @@ impl TransferNode {
         let mut available_resources: u32 = 0;
 
         for key in self.withdrawls.keys().filter(|key| {
-            allowed_priorities.intersects(key.priority.into()) && transfer_types.intersects(key.allowed_type.into()) && key.resource == resource
+            allowed_priorities.intersects(key.priority.into())
+                && transfer_types.intersects(key.allowed_type.into())
+                && key.resource == resource
         }) {
             available_resources += self.get_available_withdrawl(key);
         }
@@ -528,10 +551,7 @@ impl TransferNode {
         *current += amount;
     }
 
-    pub fn register_pickup(
-        &mut self,
-        withdrawls: &HashMap<ResourceType, Vec<TransferWithdrawlTicketResourceEntry>>,
-    ) {
+    pub fn register_pickup(&mut self, withdrawls: &HashMap<ResourceType, Vec<TransferWithdrawlTicketResourceEntry>>) {
         for (resource, resource_entries) in withdrawls {
             for resource_entry in resource_entries {
                 let key = TransferWithdrawlKey {
@@ -547,10 +567,7 @@ impl TransferNode {
         }
     }
 
-    pub fn register_delivery(
-        &mut self,
-        deposits: &HashMap<ResourceType, Vec<TransferDepositTicketResourceEntry>>,
-    ) {
+    pub fn register_delivery(&mut self, deposits: &HashMap<ResourceType, Vec<TransferDepositTicketResourceEntry>>) {
         for resource_entries in deposits.values() {
             for resource_entry in resource_entries {
                 let key = TransferDepositKey {
@@ -702,7 +719,9 @@ impl TransferNode {
         }
 
         let none_deposits = self.deposits.keys().filter(|key| {
-            key.resource.is_none() && delivery_types.intersects(key.allowed_type.into()) && allowed_priorities.intersects(key.priority.into())
+            key.resource.is_none()
+                && delivery_types.intersects(key.allowed_type.into())
+                && allowed_priorities.intersects(key.priority.into())
         });
 
         for key in none_deposits {
@@ -901,7 +920,10 @@ impl TransferWithdrawTicket {
                 .entry(*resource)
                 .and_modify(|existing| {
                     for entry in entries {
-                        if let Some(withdrawl_resource_entry) = existing.iter_mut().find(|oe| oe.priority == entry.priority && oe.transfer_type == entry.transfer_type) {
+                        if let Some(withdrawl_resource_entry) = existing
+                            .iter_mut()
+                            .find(|oe| oe.priority == entry.priority && oe.transfer_type == entry.transfer_type)
+                        {
                             withdrawl_resource_entry.amount += entry.amount;
                         } else {
                             existing.push(entry.clone());
@@ -1018,10 +1040,11 @@ impl TransferDepositTicket {
                 .entry(*resource)
                 .and_modify(|existing| {
                     for entry in entries {
-                        if let Some(deposit_resource_entry) = existing
-                            .iter_mut()
-                            .find(|oe| oe.target_resource == entry.target_resource && oe.priority == entry.priority && oe.transfer_type == entry.transfer_type)
-                        {
+                        if let Some(deposit_resource_entry) = existing.iter_mut().find(|oe| {
+                            oe.target_resource == entry.target_resource
+                                && oe.priority == entry.priority
+                                && oe.transfer_type == entry.transfer_type
+                        }) {
                             deposit_resource_entry.amount += entry.amount;
                         } else {
                             existing.push(entry.clone());
@@ -2238,9 +2261,9 @@ impl TransferQueue {
 
             for room_name in room_names.iter() {
                 let room = self.get_room(data, *room_name, TransferTypeFlags::all());
-                ui.with_room(*room_name, visualizer, |room_ui| {
+                ui.with_room(*room_name, visualizer, |room_vis| {
                     for (target, node) in &room.nodes {
-                        node.visualize(room_ui.visualizer(), target.pos());
+                        node.visualize(room_vis, target.pos());
                     }
                 });
             }
@@ -2254,8 +2277,6 @@ pub struct TransferQueueUpdateSystemData<'a> {
     updater: Read<'a, LazyUpdate>,
     entities: Entities<'a>,
     room_data: WriteStorage<'a, RoomData>,
-    visualizer: Option<Write<'a, Visualizer>>,
-    ui: Option<Write<'a, UISystem>>,
 }
 
 pub struct TransferQueueUpdateSystem;
@@ -2265,17 +2286,6 @@ impl<'a> System<'a> for TransferQueueUpdateSystem {
     type SystemData = TransferQueueUpdateSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        if let Some(visualizer) = &mut data.visualizer {
-            if let Some(ui) = &mut data.ui {
-                let transfer_queue_data = TransferQueueGeneratorData {
-                    cause: "Transfer System",
-                    room_data: &data.room_data,
-                };
-
-                data.transfer_queue.visualize(&transfer_queue_data, ui, visualizer);
-            }
-        }
-
         data.transfer_queue.clear();
     }
 }

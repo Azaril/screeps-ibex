@@ -3,6 +3,7 @@ use super::operationsystem::*;
 use crate::missions::colony::*;
 use crate::missions::data::*;
 use crate::serialize::*;
+use crate::visualization::SummaryContent;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -14,7 +15,7 @@ use specs::*;
 #[derive(Clone, ConvertSaveload)]
 pub struct ColonyOperation {
     owner: EntityOption<Entity>,
-    last_run: Option<u32>
+    last_run: Option<u32>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -29,7 +30,10 @@ impl ColonyOperation {
     }
 
     pub fn new(owner: Option<Entity>) -> ColonyOperation {
-        ColonyOperation { owner: owner.into(), last_run: None }
+        ColonyOperation {
+            owner: owner.into(),
+            last_run: None,
+        }
     }
 }
 
@@ -45,10 +49,8 @@ impl Operation for ColonyOperation {
         self.owner.take();
     }
 
-    fn describe(&mut self, _system_data: &mut OperationExecutionSystemData, describe_data: &mut OperationDescribeData) {
-        describe_data.ui.with_global(describe_data.visualizer, |global_ui| {
-            global_ui.operations().add_text("Colony".to_string(), None);
-        })
+    fn describe_operation(&self, _ctx: &OperationDescribeContext) -> SummaryContent {
+        SummaryContent::Text("Colony".to_string())
     }
 
     fn run_operation(

@@ -9,7 +9,7 @@ pub fn calc_transaction_cost_fractional(from: RoomName, to: RoomName) -> f64 {
 
 enum ActivePriorityGeneratorState {
     Pickup,
-    Delivery
+    Delivery,
 }
 
 struct ActivePriorityGenerator {
@@ -19,7 +19,7 @@ struct ActivePriorityGenerator {
     next_pickup_priority: Option<TransferPriority>,
     next_delivery_priority: Option<TransferPriority>,
 
-    state: ActivePriorityGeneratorState
+    state: ActivePriorityGeneratorState,
 }
 
 fn next_priority(priority: TransferPriority) -> Option<TransferPriority> {
@@ -34,14 +34,14 @@ fn next_priority(priority: TransferPriority) -> Option<TransferPriority> {
 impl Iterator for ActivePriorityGenerator {
     type Item = (TransferPriorityFlags, TransferPriorityFlags);
 
-    fn next(&mut self) -> Option<Self::Item> { 
+    fn next(&mut self) -> Option<Self::Item> {
         while self.next_pickup_priority.is_some() || self.next_delivery_priority.is_some() {
             match self.state {
                 ActivePriorityGeneratorState::Pickup => {
                     self.state = ActivePriorityGeneratorState::Delivery;
 
                     if let Some(pickup_priority) = self.next_pickup_priority {
-                        self.next_pickup_priority  = next_priority(pickup_priority);
+                        self.next_pickup_priority = next_priority(pickup_priority);
 
                         let priority_mask = pickup_priority.into();
 
@@ -60,7 +60,7 @@ impl Iterator for ActivePriorityGenerator {
                     self.state = ActivePriorityGeneratorState::Pickup;
 
                     if let Some(delivery_priority) = self.next_delivery_priority {
-                        self.next_delivery_priority  = next_priority(delivery_priority);
+                        self.next_delivery_priority = next_priority(delivery_priority);
 
                         let priority_mask = delivery_priority.into();
 
@@ -80,7 +80,6 @@ impl Iterator for ActivePriorityGenerator {
 
         None
     }
-    
 }
 
 pub fn generate_active_priorities(
@@ -94,6 +93,6 @@ pub fn generate_active_priorities(
         next_pickup_priority: Some(TransferPriority::High),
         next_delivery_priority: Some(TransferPriority::High),
 
-        state: ActivePriorityGeneratorState::Delivery
+        state: ActivePriorityGeneratorState::Delivery,
     }
 }

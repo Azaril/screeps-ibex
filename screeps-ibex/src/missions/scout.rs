@@ -1,3 +1,4 @@
+use super::constants::*;
 use super::data::*;
 use super::missionsystem::*;
 use super::utility::*;
@@ -6,7 +7,7 @@ use crate::jobs::scout::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
-use super::constants::*;
+use itertools::*;
 use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -14,7 +15,6 @@ use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
-use itertools::*;
 
 #[derive(ConvertSaveload)]
 pub struct ScoutMission {
@@ -120,8 +120,10 @@ impl Mission for ScoutMission {
             })
             .unwrap_or(0);
 
-        let home_room_names = self.home_room_datas.iter()
-            .filter_map(|e| system_data.room_data.get(*e))        
+        let home_room_names = self
+            .home_room_datas
+            .iter()
+            .filter_map(|e| system_data.room_data.get(*e))
             .map(|d| d.name.to_string())
             .join("/");
 
@@ -132,6 +134,14 @@ impl Mission for ScoutMission {
             next_spawn,
             home_room_names
         )
+    }
+
+    fn summarize(&self) -> crate::visualization::SummaryContent {
+        crate::visualization::SummaryContent::Text(format!(
+            "Scout - Scouts: {} - Priority: {:.0}",
+            self.scouts.len(),
+            self.priority
+        ))
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
@@ -147,12 +157,7 @@ impl Mission for ScoutMission {
         //
 
         self.home_room_datas
-            .retain(|entity| {
-                system_data.room_data
-                    .get(*entity)
-                    .map(is_valid_home_room)
-                    .unwrap_or(false)
-            });
+            .retain(|entity| system_data.room_data.get(*entity).map(is_valid_home_room).unwrap_or(false));
 
         if self.home_room_datas.is_empty() {
             return Err("No home rooms for scout mission".to_owned());
