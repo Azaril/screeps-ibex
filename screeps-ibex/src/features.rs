@@ -240,7 +240,6 @@ impl RoomVisualizeFeatures {
 /// feature cache is populated.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
-#[derive(Default)]
 pub struct Features {
     pub visualize: VisualizeFeatures,
     pub construction: ConstructionFeatures,
@@ -252,6 +251,23 @@ pub struct Features {
     pub raid: bool,
     pub claim: bool,
     pub dismantle: bool,
+}
+
+impl Default for Features {
+    fn default() -> Self {
+        Self {
+            visualize: VisualizeFeatures::default(),
+            construction: ConstructionFeatures::default(),
+            market: MarketFeatures::default(),
+            transfer: TransferFeatures::default(),
+            remote_mine: RemoteMineFeatures::default(),
+            pathing: PathingFeatures::default(),
+            room: RoomFeatures::default(),
+            raid: false,
+            claim: true,
+            dismantle: false,
+        }
+    }
 }
 
 // ─── Thread-local cache ────────────────────────────────────────────────────────
