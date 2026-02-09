@@ -15,7 +15,7 @@ use crate::spawnsystem::SpawnQueue;
 use crate::visualize::Visualizer;
 use screeps::game;
 use screeps::traits::SharedCreepProperties;
-use screeps::{LineDrawStyle, LineStyle, PolyStyle, RectStyle, RoomName, TextAlign, TextStyle};
+use screeps::{LineDrawStyle, LineStyle, PolyStyle, RectStyle, ResourceType, RoomName, TextAlign, TextStyle};
 use specs::prelude::*;
 use specs::*;
 use std::collections::HashMap;
@@ -328,7 +328,7 @@ pub struct SpawnQueueEntry {
     pub description: String,
 }
 
-/// Per-room visualization data (missions, jobs, spawn queue, room info, stats history).
+/// Per-room visualization data (missions, jobs, spawn queue, room info, stats history, transfer stats).
 #[derive(Debug, Default, Clone)]
 pub struct RoomVisualizationData {
     pub missions: Vec<MissionSummary>,
@@ -337,6 +337,8 @@ pub struct RoomVisualizationData {
     pub room_visibility: Option<RoomVisibilitySummary>,
     /// Recent tier of room stats history for sparkline rendering.
     pub stats_history: Option<Vec<crate::stats_history::RoomStatsSnapshot>>,
+    /// Current-tick transfer queue snapshot for this room.
+    pub transfer_stats: Option<crate::transfer::transfersystem::TransferRoomSnapshot>,
 }
 
 impl RoomVisualizationData {
@@ -383,6 +385,7 @@ pub struct AggregateSummarySystemData<'a> {
     vis_summary: ReadStorage<'a, RoomVisibilitySummaryComponent>,
     spawn_queue: Read<'a, SpawnQueue>,
     stats_history: Option<Read<'a, crate::stats_history::StatsHistoryData>>,
+    transfer_stats: Option<Read<'a, crate::transfer::transfersystem::TransferStatsSnapshot>>,
 }
 
 pub struct AggregateSummarySystem;
@@ -469,6 +472,14 @@ impl<'a> System<'a> for AggregateSummarySystem {
                 if !room_history.recent.is_empty() {
                     room_viz.stats_history = Some(room_history.recent.iter().cloned().collect());
                 }
+            }
+        }
+
+        // Transfer stats (per room) — from TransferStatsSnapshot resource
+        if let Some(ref transfer_stats) = data.transfer_stats {
+            for (room_name, room_snapshot) in &transfer_stats.rooms {
+                let room_viz = viz.get_or_create_room(*room_name);
+                room_viz.transfer_stats = Some(room_snapshot.clone());
             }
         }
     }
@@ -849,10 +860,7 @@ fn draw_stats_sparkline(
     let mut energy_fill = energy_points.clone();
     energy_fill.push((inner_right, inner_bottom));
     energy_fill.push((inner_left, inner_bottom));
-    vis.poly(
-        energy_fill,
-        Some(PolyStyle::default().fill(COLOR_ENERGY_FILL).opacity(0.35)),
-    );
+    vis.poly(energy_fill, Some(PolyStyle::default().fill(COLOR_ENERGY_FILL).opacity(0.35)));
     vis.poly(
         energy_points,
         Some(PolyStyle::default().stroke(COLOR_ENERGY_FILL).stroke_width(0.15).opacity(0.85)),
@@ -860,11 +868,7 @@ fn draw_stats_sparkline(
 
     // Minerals line (if any non-zero)
     if max_minerals > 0 {
-        let mineral_points: Vec<(f32, f32)> = snapshots
-            .iter()
-            .enumerate()
-            .map(|(i, s)| to_point(i, s.minerals_total))
-            .collect();
+        let mineral_points: Vec<(f32, f32)> = snapshots.iter().enumerate().map(|(i, s)| to_point(i, s.minerals_total)).collect();
         vis.poly(
             mineral_points,
             Some(PolyStyle::default().stroke(COLOR_MINERALS_LINE).stroke_width(0.15).opacity(0.85)),
@@ -880,6 +884,224 @@ fn draw_stats_sparkline(
         format!("E:{} M:{}", last.energy, last.minerals_total),
         Some(right_align),
     );
+}
+
+// ─── Transfer stats panel ────────────────────────────────────────────────────
+
+/// Row height sized for one text line (baseline y model: text drawn at baseline, extends upward by ~FONT_SIZE).
+const TRANSFER_ROW_H: f32 = FONT_SIZE + 0.15;
+/// Max chars for resource label — only used to truncate; actual label column is sized to fit the longest label in the row set.
+const TRANSFER_LABEL_MAX_CHARS: usize = 6;
+const TRANSFER_NUM_WIDTH: f32 = 4.0 * CHAR_WIDTH;
+const ROOM_BOTTOM: f32 = 50.0;
+/// Same width as left column panels for consistent layout.
+const TRANSFER_PANEL_WIDTH: f32 = LEFT_COLUMN_MAX_WIDTH;
+const TRANSFER_PANEL_LEFT: f32 = RIGHT_EDGE - RIGHT_MARGIN - TRANSFER_PANEL_WIDTH;
+const TRANSFER_BOTTOM_MARGIN: f32 = 1.2;
+const COLOR_SUPPLY: &str = "#3fb950";
+const COLOR_SUPPLY_IN_PROGRESS: &str = "#238636";
+const COLOR_DEMAND: &str = "#f85149";
+const COLOR_DEMAND_IN_PROGRESS: &str = "#da3633";
+
+/// Format a number compactly to save space: 0, 1k, 5.5k, 200k, 1.2M, etc.
+fn compact_number(n: u32) -> String {
+    if n >= 1_000_000 {
+        let m = n as f64 / 1_000_000.0;
+        if m >= 100.0 {
+            format!("{}M", m as u32)
+        } else if m >= 10.0 {
+            format!("{:.0}M", m)
+        } else {
+            format!("{:.1}M", m)
+        }
+    } else if n >= 1_000 {
+        let k = n as f64 / 1_000.0;
+        if k >= 100.0 {
+            format!("{}k", k as u32)
+        } else if k >= 10.0 {
+            format!("{:.0}k", k)
+        } else {
+            format!("{:.1}k", k)
+        }
+    } else {
+        format!("{}", n)
+    }
+}
+
+/// Use the game API's canonical short name for the resource (e.g. "energy", "H", "UO", "UH2O").
+fn resource_short_label(r: ResourceType) -> String {
+    r.to_string()
+}
+
+fn truncate_transfer_label(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= TRANSFER_LABEL_MAX_CHARS {
+        s.to_string()
+    } else {
+        chars.into_iter().take(TRANSFER_LABEL_MAX_CHARS).collect::<String>()
+    }
+}
+
+/// Draw transfer panel: supply/demand bars back-to-back (supply left, demand right from center), with in-progress vs unfulfilled segments.
+#[allow(clippy::too_many_arguments)]
+fn draw_transfer_panel(
+    vis: &mut crate::visualize::RoomVisualizer,
+    snapshot: &crate::transfer::transfersystem::TransferRoomSnapshot,
+    x: f32,
+    width: f32,
+    room_bottom: f32,
+    rect_style: &RectStyle,
+    header_style: &TextStyle,
+    text_style: &TextStyle,
+) -> f32 {
+    // Build rows with pending: (label, supply, supply_pending, demand, demand_pending).
+    let mut rows: Vec<(String, u32, u32, u32, u32)> = Vec::new();
+    for (resource, stats) in &snapshot.resources {
+        if stats.supply > 0 || stats.demand > 0 {
+            let label = truncate_transfer_label(&resource_short_label(*resource));
+            rows.push((label, stats.supply, stats.supply_pending, stats.demand, stats.demand_pending));
+        }
+    }
+    if snapshot.generic_demand > 0 {
+        rows.push((
+            "Any".to_string(),
+            0,
+            0,
+            snapshot.generic_demand,
+            snapshot.generic_demand_pending,
+        ));
+    }
+
+    // Stable sort by label so resource order does not jump each tick. "Any" last.
+    rows.sort_by(|a, b| {
+        let a_any = a.0 == "Any";
+        let b_any = b.0 == "Any";
+        match (a_any, b_any) {
+            (true, true) => std::cmp::Ordering::Equal,
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            (false, false) => a.0.cmp(&b.0),
+        }
+    });
+
+    if rows.is_empty() {
+        return 0.0;
+    }
+
+    let max_val = rows
+        .iter()
+        .map(|(_, s, _, d, _)| (*s).max(*d))
+        .max()
+        .unwrap_or(1)
+        .max(1) as f32;
+
+    // Dynamic label width: fit the longest label in the current set (no wasted space for short labels).
+    let max_label_chars = rows.iter().map(|(l, ..)| l.chars().count()).max().unwrap_or(1) as f32;
+    let label_width = max_label_chars * CHAR_WIDTH + PAD * 0.5;
+
+    let inner_width = (width - 2.0 * PAD).max(1.0);
+    // Layout: [label][supply num][bar region: supply←|center|demand→][demand num].
+    let bar_region_width = (inner_width - label_width - 2.0 * TRANSFER_NUM_WIDTH - PAD).max(0.5);
+    let half_bar = bar_region_width * 0.5;
+    let supply_num_x = x + PAD + label_width;
+    let bar_region_left = supply_num_x + TRANSFER_NUM_WIDTH + PAD * 0.25;
+    let center_x = bar_region_left + half_bar;
+    let demand_num_x = bar_region_left + bar_region_width;
+
+    let header_h = PAD + FONT_SIZE + PAD * 0.5;
+    let total_h = header_h + (rows.len() as f32) * TRANSFER_ROW_H;
+    let y = room_bottom - TRANSFER_BOTTOM_MARGIN - total_h;
+
+    vis.rect(x, y, width, total_h, Some(rect_style.clone()));
+
+    // Header baseline: positioned so text sits inside header area.
+    vis.text(x + PAD, y + PAD + FONT_SIZE * 0.8, "Transfer".to_string(), Some(header_style.clone()));
+
+    let mut row_y = y + header_h;
+    let label_x = x + PAD;
+    let supply_style = text_style.clone().color(COLOR_SUPPLY);
+    let demand_style = text_style.clone().color(COLOR_DEMAND);
+    let bar_h = (TRANSFER_ROW_H * 0.55).max(0.15);
+
+    for (label, supply, supply_pending, demand, demand_pending) in rows {
+        // Screeps text y = baseline. Text extends upward by ~FONT_SIZE. Place baseline near row bottom so text fills the row.
+        let text_y = row_y + TRANSFER_ROW_H - 0.05;
+        // Bar center = visual center of text ≈ baseline - FONT_SIZE * 0.35.
+        let bar_center_y = text_y - FONT_SIZE * 0.35;
+        vis.text(label_x, text_y, label.clone(), Some(text_style.clone()));
+
+        // Supply grows left from center. supply_available = supply - supply_pending (unfulfilled), supply_pending = in progress.
+        let supply_len = (supply as f32 / max_val).min(1.0) * half_bar;
+        let supply_pending_len = (supply_pending as f32 / max_val).min(1.0) * half_bar;
+        let supply_available_len = (supply_len - supply_pending_len).max(0.0);
+
+        if supply_len > 0.02 {
+            // Segment toward left: available (unfulfilled supply)
+            if supply_available_len > 0.02 {
+                vis.rect(
+                    center_x - supply_len,
+                    bar_center_y - bar_h * 0.5,
+                    supply_available_len,
+                    bar_h,
+                    Some(RectStyle::default().fill(COLOR_SUPPLY).opacity(0.9)),
+                );
+            }
+            // Segment next to center: in progress (pickups reserved)
+            if supply_pending_len > 0.02 {
+                vis.rect(
+                    center_x - supply_len + supply_available_len,
+                    bar_center_y - bar_h * 0.5,
+                    supply_pending_len,
+                    bar_h,
+                    Some(RectStyle::default().fill(COLOR_SUPPLY_IN_PROGRESS).opacity(0.9)),
+                );
+            }
+        }
+        vis.text(
+            supply_num_x + TRANSFER_NUM_WIDTH,
+            text_y,
+            compact_number(supply),
+            Some(supply_style.clone().align(TextAlign::Right)),
+        );
+
+        // Demand grows right from center. demand_pending = in progress, demand_available = demand - demand_pending (unfulfilled).
+        let demand_len = (demand as f32 / max_val).min(1.0) * half_bar;
+        let demand_pending_len = (demand_pending as f32 / max_val).min(1.0) * half_bar;
+        let demand_available_len = (demand_len - demand_pending_len).max(0.0);
+
+        if demand_len > 0.02 {
+            // Segment next to center: in progress (deliveries reserved)
+            if demand_pending_len > 0.02 {
+                vis.rect(
+                    center_x,
+                    bar_center_y - bar_h * 0.5,
+                    demand_pending_len,
+                    bar_h,
+                    Some(RectStyle::default().fill(COLOR_DEMAND_IN_PROGRESS).opacity(0.9)),
+                );
+            }
+            // Segment toward right: unfulfilled demand
+            if demand_available_len > 0.02 {
+                vis.rect(
+                    center_x + demand_pending_len,
+                    bar_center_y - bar_h * 0.5,
+                    demand_available_len,
+                    bar_h,
+                    Some(RectStyle::default().fill(COLOR_DEMAND).opacity(0.9)),
+                );
+            }
+        }
+        vis.text(
+            demand_num_x,
+            text_y,
+            compact_number(demand),
+            Some(demand_style.clone()),
+        );
+
+        row_y += TRANSFER_ROW_H;
+    }
+
+    total_h
 }
 
 // ─── Render system ───────────────────────────────────────────────────────────
@@ -909,18 +1131,14 @@ impl<'a> System<'a> for RenderSystem {
         let accent_style = accent_line_style();
 
         // Global: operations (no CPU line; CPU shown as histogram below)
-        let ops_lines: Vec<String> = viz
-            .operations
-            .iter()
-            .flat_map(|op| op.content.to_lines())
-            .collect();
+        let ops_lines: Vec<String> = viz.operations.iter().flat_map(|op| op.content.to_lines()).collect();
         // Tick and CPU limit come from CpuHistory (set by CpuTrackingSystem), not game API.
         let tick = data.cpu_history.as_deref().map_or(0, |h| h.tick);
         let cpu_limit_f32 = data.cpu_history.as_deref().map_or(0.0, |h| h.tick_limit);
         let ops_content = if ops_lines.is_empty() {
-            "Ops".to_string()
+            "Operations".to_string()
         } else {
-            format!("Ops\n{}", ops_lines.join("\n"))
+            format!("Operations\n{}", ops_lines.join("\n"))
         };
         let global_ops_panel = layout_global_right_panel(&ops_content);
         let right_column_left_x = right_column_left_x(&global_ops_panel);
@@ -1028,6 +1246,24 @@ impl<'a> System<'a> for RenderSystem {
                         &header_text_style,
                         &text_style,
                         &grid_style,
+                    );
+                }
+            }
+
+            // Transfer stats panel (bottom of room, thin horizontal layout)
+            if let Some(ref transfer_snapshot) = room_viz.transfer_stats {
+                let has_data =
+                    transfer_snapshot.resources.values().any(|s| s.supply > 0 || s.demand > 0) || transfer_snapshot.generic_demand > 0;
+                if has_data {
+                    let _h = draw_transfer_panel(
+                        room_vis,
+                        transfer_snapshot,
+                        TRANSFER_PANEL_LEFT,
+                        TRANSFER_PANEL_WIDTH,
+                        ROOM_BOTTOM,
+                        &rect_style,
+                        &header_text_style,
+                        &text_style,
                     );
                 }
             }

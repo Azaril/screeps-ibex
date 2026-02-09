@@ -18,10 +18,10 @@ use crate::room::updateroomsystem::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use crate::stats_history::StatsHistorySystem;
 use crate::statssystem::*;
 use crate::transfer::ordersystem::*;
 use crate::transfer::transfersystem::*;
-use crate::stats_history::StatsHistorySystem;
 use crate::visualization::{
     AggregateSummarySystem, CpuHistory, CpuTrackingSystem, RenderSystem, SummarizeJobSystem, SummarizeMissionSystem,
     SummarizeOperationSystem, SummarizeRoomVisibilitySystem, VisualizationData,
@@ -233,23 +233,20 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
 
     // Component segments: core ECS world state. Gate execution — the bot
     // cannot run until these are available for deserialization.
-    arbiter.register(
-        SegmentRequirement::new("components", COMPONENT_SEGMENTS.to_vec()).gates_execution(true),
-    );
+    arbiter.register(SegmentRequirement::new("components", COMPONENT_SEGMENTS.to_vec()).gates_execution(true));
 
     // Cost matrix cache (screeps-rover): needs segment active so the system
     // can read/write via raw_memory directly. Not gating.
-    arbiter.register(
-        SegmentRequirement::new("cost_matrix", vec![COST_MATRIX_SYSTEM_SEGMENT]),
-    );
+    arbiter.register(SegmentRequirement::new("cost_matrix", vec![COST_MATRIX_SYSTEM_SEGMENT]));
 
     // Stats history (visualization): persisted across VM restarts. Load
     // callback deserializes the data into a world resource on first use.
     arbiter.register(
-        SegmentRequirement::new("stats_history", vec![crate::stats_history::STATS_HISTORY_SEGMENT])
-            .on_load(Box::new(|world: &mut World| {
+        SegmentRequirement::new("stats_history", vec![crate::stats_history::STATS_HISTORY_SEGMENT]).on_load(Box::new(
+            |world: &mut World| {
                 crate::stats_history::load_stats_history(world);
-            })),
+            },
+        )),
     );
 
     world.insert(arbiter);
@@ -302,7 +299,8 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
         .with(SummarizeJobSystem, "summarize_jobs", &[])
         .with(SummarizeRoomVisibilitySystem, "summarize_room_visibility", &[])
         .with(SpawnQueueSystem, "spawn_queue", &[])
-        .with(TransferQueueUpdateSystem, "transfer_queue", &[])
+        .with(TransferStatsSnapshotSystem, "transfer_stats_snapshot", &[])
+        .with(TransferQueueUpdateSystem, "transfer_queue", &["transfer_stats_snapshot"])
         .with(OrderQueueSystem, "order_queue", &[])
         .with_barrier()
         .with(AggregateSummarySystem, "aggregate_summary", &[])
@@ -422,6 +420,7 @@ pub fn tick() {
             // Visualizer and VisualizationData are recreated each tick (ephemeral draw state).
             env.world.insert(Visualizer::new());
             env.world.insert(VisualizationData::new());
+            env.world.insert(TransferStatsSnapshot::default());
             // CpuHistory accumulates across ticks; only create if absent.
             if env.world.try_fetch::<CpuHistory>().is_none() {
                 env.world.insert(CpuHistory::new());
@@ -429,6 +428,7 @@ pub fn tick() {
         } else {
             env.world.remove::<Visualizer>();
             env.world.remove::<VisualizationData>();
+            env.world.remove::<TransferStatsSnapshot>();
             env.world.remove::<CpuHistory>();
             env.world.remove::<crate::stats_history::StatsHistoryData>();
         }

@@ -137,11 +137,7 @@ impl Mission for ScoutMission {
     }
 
     fn summarize(&self) -> crate::visualization::SummaryContent {
-        crate::visualization::SummaryContent::Text(format!(
-            "Scout - Scouts: {} - Priority: {:.0}",
-            self.scouts.len(),
-            self.priority
-        ))
+        crate::visualization::SummaryContent::Text(format!("Scout - Scouts: {} - Priority: {:.0}", self.scouts.len(), self.priority))
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {

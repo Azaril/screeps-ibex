@@ -224,11 +224,7 @@ impl<'a> System<'a> for StatsHistorySystem {
                 minerals_total,
             };
 
-            history
-                .rooms
-                .entry(room_data.name)
-                .or_default()
-                .push(snapshot);
+            history.rooms.entry(room_data.name).or_default().push(snapshot);
         }
 
         // Persist to segment (write every 6 ticks to reduce overhead).
