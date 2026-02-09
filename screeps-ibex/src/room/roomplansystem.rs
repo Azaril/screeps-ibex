@@ -1,7 +1,6 @@
 use super::data::*;
 use crate::entitymappingsystem::*;
 use crate::memorysystem::*;
-use crate::ui::*;
 use crate::visualize::*;
 use log::*;
 use screeps::*;
@@ -218,8 +217,6 @@ pub struct RoomPlanSystemData<'a> {
     room_data: WriteStorage<'a, RoomData>,
     room_plan_data: WriteStorage<'a, RoomPlanData>,
     room_plan_queue: Write<'a, RoomPlanQueue>,
-    visualizer: Option<Write<'a, Visualizer>>,
-    ui: Option<Write<'a, UISystem>>,
 }
 
 pub struct RoomPlanSystem;
@@ -400,36 +397,8 @@ impl<'a> System<'a> for RoomPlanSystem {
                         planner_state.running_state = None;
                     }
 
-                    if crate::features::features().construction.visualize.on {
-                        if let Some(running_state) = &planner_state.running_state {
-                            if let Some(visualizer) = &mut data.visualizer {
-                                let room_visualizer = visualizer.get_room(running_state.room_name);
-
-                                if crate::features::features().construction.visualize.planner() {
-                                    running_state.planner_state.visualize(room_visualizer);
-                                }
-
-                                if crate::features::features().construction.visualize.planner_best() {
-                                    running_state.planner_state.visualize_best(room_visualizer);
-                                }
-                            }
-                        }
-                    }
-
                     if let Ok(output_planner_data) = crate::serialize::encode_to_string(&planner_state) {
                         data.memory_arbiter.set(MEMORY_SEGMENT, &output_planner_data);
-                    }
-                }
-            }
-        }
-
-        if crate::features::features().construction.visualize.plan() {
-            if let Some(visualizer) = &mut data.visualizer {
-                for (_, room_data, room_plan_data) in (&data.entities, &data.room_data, &data.room_plan_data).join() {
-                    let room_visualizer = visualizer.get_room(room_data.name);
-
-                    if let Some(plan) = room_plan_data.plan() {
-                        plan.visualize(room_visualizer);
                     }
                 }
             }

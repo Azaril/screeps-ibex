@@ -6,13 +6,13 @@ use crate::remoteobjectid::*;
 use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use itertools::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 #[allow(deprecated)]
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
-use itertools::*;
 
 #[derive(ConvertSaveload)]
 pub struct ClaimMission {
@@ -44,10 +44,7 @@ impl ClaimMission {
         }
     }
 
-    fn create_handle_claimer_spawn(
-        mission_entity: Entity,
-        controller_id: RemoteObjectId<StructureController>,
-    ) -> SpawnQueueCallback {
+    fn create_handle_claimer_spawn(mission_entity: Entity, controller_id: RemoteObjectId<StructureController>) -> SpawnQueueCallback {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
@@ -85,12 +82,22 @@ impl Mission for ClaimMission {
     }
 
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
-        let home_room_names = self.home_room_datas.iter()
-            .filter_map(|e| system_data.room_data.get(*e))        
+        let home_room_names = self
+            .home_room_datas
+            .iter()
+            .filter_map(|e| system_data.room_data.get(*e))
             .map(|d| d.name.to_string())
             .join("/");
 
         format!("Claim - Claimers: {} - Home rooms: {}", self.claimers.len(), home_room_names)
+    }
+
+    fn summarize(&self) -> crate::visualization::SummaryContent {
+        crate::visualization::SummaryContent::Text(format!(
+            "Claim - Claimers: {} - Homes: {}",
+            self.claimers.len(),
+            self.home_room_datas.len()
+        ))
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {

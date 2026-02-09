@@ -11,7 +11,13 @@ where
     F: Fn(RemoteObjectId<ConstructionSite>) -> R,
 {
     if creep.store().get_used_capacity(Some(ResourceType::Energy)) > 0 {
-        let current_rcl = build_room.get_structures().iter().flat_map(|s| s.controllers()).map(|c| c.level()).max().unwrap_or(0);
+        let current_rcl = build_room
+            .get_structures()
+            .iter()
+            .flat_map(|s| s.controllers())
+            .map(|c| c.level())
+            .max()
+            .unwrap_or(0);
 
         //TODO: This requires visibility and could fail?
         if let Some(construction_site) = build_room

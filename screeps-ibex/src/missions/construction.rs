@@ -56,6 +56,10 @@ impl Mission for ConstructionMission {
         "Construction".to_string()
     }
 
+    fn summarize(&self) -> crate::visualization::SummaryContent {
+        crate::visualization::SummaryContent::Text("Construction".to_string())
+    }
+
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms().get(room_data.name).ok_or("Expected room")?;

@@ -58,6 +58,10 @@ impl Mission for TowerMission {
         "Tower".to_string()
     }
 
+    fn summarize(&self) -> crate::visualization::SummaryContent {
+        crate::visualization::SummaryContent::Text("Tower".to_string())
+    }
+
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
@@ -111,16 +115,19 @@ impl Mission for TowerMission {
         let creeps = room_data.get_creeps().ok_or("Expected creeps")?;
 
         let towers = structures.towers();
-       
-        //TODO: Include power creeps?        
-        let weakest_dangerous_hostile_creep = creeps.hostile()
+
+        //TODO: Include power creeps?
+        let weakest_dangerous_hostile_creep = creeps
+            .hostile()
             .iter()
-            .filter(|c| c.body().iter().any(|p| matches!(p.part(), Part::Attack | Part::RangedAttack | Part::Work)))
+            .filter(|c| {
+                c.body()
+                    .iter()
+                    .any(|p| matches!(p.part(), Part::Attack | Part::RangedAttack | Part::Work))
+            })
             .min_by_key(|creep| creep.hits());
 
-        let weakest_hostile_creep = creeps.hostile()
-            .iter()
-            .min_by_key(|creep| creep.hits());            
+        let weakest_hostile_creep = creeps.hostile().iter().min_by_key(|creep| creep.hits());
 
         let weakest_friendly_creep = creeps
             .friendly()

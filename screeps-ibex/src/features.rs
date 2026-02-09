@@ -66,7 +66,6 @@ pub struct ConstructionVisualizeFeatures {
     pub plan: bool,
 }
 
-
 impl ConstructionVisualizeFeatures {
     /// Returns `planner && on`.
     pub fn planner(&self) -> bool {
@@ -140,7 +139,6 @@ pub struct TransferVisualizeFeatures {
     pub orders: bool,
 }
 
-
 impl TransferVisualizeFeatures {
     pub fn haul(&self) -> bool {
         self.haul && self.on
@@ -162,7 +160,6 @@ pub struct TransferFeatures {
     pub visualize: TransferVisualizeFeatures,
 }
 
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RemoteMineFeatures {
@@ -181,45 +178,56 @@ impl Default for RemoteMineFeatures {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
+pub struct PathingVisualizeFeatures {
+    pub on: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PathingFeatures {
-    pub visualize_on: bool,
+    pub visualize: PathingVisualizeFeatures,
     pub custom: bool,
 }
 
 impl Default for PathingFeatures {
     fn default() -> Self {
         Self {
-            visualize_on: false,
+            visualize: PathingVisualizeFeatures::default(),
             custom: true,
         }
     }
 }
 
-impl PathingFeatures {
-    /// Returns `visualize_on && global visualize.on`.
-    pub fn visualize(&self, global_visualize: bool) -> bool {
-        self.visualize_on && global_visualize
+impl PathingVisualizeFeatures {
+    /// Returns `on && global visualize.on`.
+    pub fn enabled(&self, global_visualize: bool) -> bool {
+        self.on && global_visualize
     }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
-pub struct RoomFeatures {
-    pub visualize_on: bool,
+pub struct RoomVisualizeFeatures {
+    pub on: bool,
 }
 
-impl Default for RoomFeatures {
+impl Default for RoomVisualizeFeatures {
     fn default() -> Self {
-        Self {
-            visualize_on: true,
-        }
+        Self { on: true }
     }
 }
 
-impl RoomFeatures {
-    /// Returns `visualize_on && global visualize.on`.
-    pub fn visualize(&self, global_visualize: bool) -> bool {
-        self.visualize_on && global_visualize
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct RoomFeatures {
+    pub visualize: RoomVisualizeFeatures,
+}
+
+impl RoomVisualizeFeatures {
+    /// Returns `on && global visualize.on`.
+    pub fn enabled(&self, global_visualize: bool) -> bool {
+        self.on && global_visualize
     }
 }
 
@@ -245,7 +253,6 @@ pub struct Features {
     pub claim: bool,
     pub dismantle: bool,
 }
-
 
 // ─── Thread-local cache ────────────────────────────────────────────────────────
 

@@ -76,7 +76,8 @@ where
     F: Fn(Vec<TransferDepositTicket>) -> R,
 {
     let available_resources: HashMap<ResourceType, u32> = creep
-        .store().store_types()
+        .store()
+        .store_types()
         .into_iter()
         .map(|r| (r, creep.store().get_used_capacity(Some(r))))
         .collect();
@@ -169,7 +170,7 @@ where
                 &mut pickup,
                 &mut deliveries,
                 target_filter,
-                allowed_secondary_range
+                allowed_secondary_range,
             );
 
             return Some(state_map(pickup, deliveries));
@@ -238,7 +239,9 @@ pub fn get_additional_deliveries<TF>(
                         if target_filter(target) {
                             let target_pos = target.pos();
 
-                            deliveries.iter().any(|d| d.target().pos().get_range_to(&target_pos) <= additional_delivery_range)
+                            deliveries
+                                .iter()
+                                .any(|d| d.target().pos().get_range_to(&target_pos) <= additional_delivery_range)
                         } else {
                             false
                         }
@@ -428,7 +431,7 @@ where
             available_capacity,
             resource_type,
         ) {
-            tick_context.runtime_data.transfer_queue.register_pickup(&additional_withdrawl);            
+            tick_context.runtime_data.transfer_queue.register_pickup(&additional_withdrawl);
             ticket.combine_with(&additional_withdrawl);
         }
     }
@@ -436,17 +439,8 @@ where
     tick_pickup(tick_context, ticket, next_state)
 }
 
-pub fn visualize_pickup(describe_data: &mut JobDescribeData, ticket: &TransferWithdrawTicket) {
-    let pos = describe_data.owner.pos();
-    let to = ticket.target().pos();
-
-    if pos.room_name() == to.room_name() {
-        describe_data.visualizer.get_room(pos.room_name()).line(
-            (pos.x().u8() as f32, pos.y().u8() as f32),
-            (to.x() as f32, to.y() as f32),
-            Some(LineStyle::default().color("blue")),
-        );
-    }
+pub fn visualize_pickup(_describe_data: &mut JobDescribeData, _ticket: &TransferWithdrawTicket) {
+    // Visualization is handled by the central RenderSystem.
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -506,30 +500,12 @@ where
     }
 }
 
-pub fn visualize_delivery(describe_data: &mut JobDescribeData, tickets: &[TransferDepositTicket]) {
-    let pos = describe_data.owner.pos();
-
-    visualize_delivery_from(describe_data, tickets, pos.into());
+pub fn visualize_delivery(_describe_data: &mut JobDescribeData, _tickets: &[TransferDepositTicket]) {
+    // Visualization is handled by the central RenderSystem.
 }
 
-pub fn visualize_delivery_from(describe_data: &mut JobDescribeData, tickets: &[TransferDepositTicket], from: RoomPosition) {
-    let mut last_pos = from;
-
-    for ticket in tickets.iter() {
-        let delivery_pos = ticket.target().pos();
-
-        if delivery_pos.room_name() != last_pos.room_name() {
-            break;
-        }
-
-        describe_data.visualizer.get_room(delivery_pos.room_name()).line(
-            (last_pos.x() as f32, last_pos.y() as f32),
-            (delivery_pos.x() as f32, delivery_pos.y() as f32),
-            Some(LineStyle::default().color("green")),
-        );
-
-        last_pos = delivery_pos;
-    }
+pub fn visualize_delivery_from(_describe_data: &mut JobDescribeData, _tickets: &[TransferDepositTicket], _from: RoomPosition) {
+    // Visualization is handled by the central RenderSystem.
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]

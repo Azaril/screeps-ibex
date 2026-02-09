@@ -1,6 +1,6 @@
+use super::constants::*;
 use super::data::*;
 use super::missionsystem::*;
-use super::constants::*;
 use crate::creep::*;
 use crate::jobs::build::*;
 use crate::jobs::data::*;
@@ -162,6 +162,10 @@ impl Mission for LocalBuildMission {
 
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!("Local Build - Builders: {}", self.builders.len())
+    }
+
+    fn summarize(&self) -> crate::visualization::SummaryContent {
+        crate::visualization::SummaryContent::Text(format!("Local Build - Builders: {}", self.builders.len()))
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {

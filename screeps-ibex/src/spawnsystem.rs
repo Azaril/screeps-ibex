@@ -1,6 +1,4 @@
 use crate::room::data::*;
-use crate::ui::*;
-use crate::visualize::*;
 use log::*;
 use screeps::action_error_codes::SpawnCreepErrorCode;
 use screeps::*;
@@ -26,13 +24,7 @@ pub struct SpawnRequest {
 }
 
 impl SpawnRequest {
-    pub fn new(
-        description: String,
-        body: &[Part],
-        priority: f32,
-        token: Option<SpawnToken>,
-        callback: SpawnQueueCallback,
-    ) -> SpawnRequest {
+    pub fn new(description: String, body: &[Part], priority: f32, token: Option<SpawnToken>, callback: SpawnQueueCallback) -> SpawnRequest {
         SpawnRequest {
             description,
             body: body.to_vec(),
@@ -44,6 +36,14 @@ impl SpawnRequest {
 
     pub fn cost(&self) -> u32 {
         self.body.iter().map(|p| p.cost()).sum()
+    }
+
+    pub fn priority(&self) -> f32 {
+        self.priority
+    }
+
+    pub fn description(&self) -> &str {
+        &self.description
     }
 }
 
@@ -67,7 +67,12 @@ impl SpawnQueue {
         let requests = self.requests.entry(room).or_default();
 
         let pos = requests
-            .binary_search_by(|probe| spawn_request.priority.partial_cmp(&probe.priority).unwrap_or(std::cmp::Ordering::Equal))
+            .binary_search_by(|probe| {
+                spawn_request
+                    .priority
+                    .partial_cmp(&probe.priority)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .unwrap_or_else(|e| e);
 
         requests.insert(pos, spawn_request);
@@ -77,6 +82,11 @@ impl SpawnQueue {
         self.next_token = 0;
         self.requests.clear();
     }
+
+    /// Iterate over (room_entity, requests) for visualization/gather systems.
+    pub fn iter_requests(&self) -> std::collections::hash_map::Iter<'_, Entity, Vec<SpawnRequest>> {
+        self.requests.iter()
+    }
 }
 
 #[derive(SystemData)]
@@ -85,8 +95,6 @@ pub struct SpawnQueueSystemData<'a> {
     updater: Read<'a, LazyUpdate>,
     entities: Entities<'a>,
     room_data: WriteStorage<'a, RoomData>,
-    visualizer: Option<Write<'a, Visualizer>>,
-    ui: Option<Write<'a, UISystem>>,
 }
 
 pub struct SpawnQueueExecutionSystemData<'a, 'b> {
@@ -118,7 +126,12 @@ impl SpawnQueueSystem {
         }
     }
 
-    fn process_room_spawns(data: &SpawnQueueSystemData, room_entity: Entity, requests: &Vec<SpawnRequest>, spawned_tokens: &mut HashSet<SpawnToken>) -> Result<(), String> {
+    fn process_room_spawns(
+        data: &SpawnQueueSystemData,
+        room_entity: Entity,
+        requests: &Vec<SpawnRequest>,
+        spawned_tokens: &mut HashSet<SpawnToken>,
+    ) -> Result<(), String> {
         let room_data = data.room_data.get(room_entity).ok_or("Expected room data")?;
         let room = game::rooms().get(room_data.name).ok_or("Expected room")?;
         let structures = room_data.get_structures().ok_or("Expected structures")?;
@@ -134,7 +147,7 @@ impl SpawnQueueSystem {
             if request.token.map(|t| !spawned_tokens.contains(&t)).unwrap_or(true) {
                 if let Some(pos) = spawns.iter().position(|spawn| spawn.is_active() && spawn.spawning().is_none()) {
                     let spawn = &spawns[pos];
-                    
+
                     let body_cost: u32 = request.body.iter().map(|p| p.cost()).sum();
 
                     if body_cost > energy_capacity {
@@ -192,22 +205,6 @@ impl<'a> System<'a> for SpawnQueueSystem {
     type SystemData = SpawnQueueSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        if let Some(visualizer) = &mut data.visualizer {
-            if let Some(ui) = &mut data.ui {
-                for (room_entity, requests) in data.spawn_queue.requests.iter() {
-                    if let Some(room_data) = data.room_data.get(*room_entity) {
-                        ui.with_room(room_data.name, visualizer, |room_ui| {
-                            for request in requests.iter() {
-                                let text = format!("{} - {} - {}", request.priority, request.cost(), request.description);
-
-                                room_ui.spawn_queue().add_text(text, None);
-                            }
-                        });
-                    }
-                }
-            }
-        }
-
         let mut spawned_tokens = HashSet::new();
 
         for (room_entity, requests) in &data.spawn_queue.requests {

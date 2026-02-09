@@ -73,9 +73,7 @@ fn map_defense_priority(
         }
     } else if structure_type == StructureType::Rampart && hits <= RAMPART_DECAY_AMOUNT {
         Some(RepairPriority::Critical)
-    } else if (structure_type == StructureType::Rampart && hits <= RAMPART_DECAY_AMOUNT * 5)
-        || health_fraction < 0.0001
-    {
+    } else if (structure_type == StructureType::Rampart && hits <= RAMPART_DECAY_AMOUNT * 5) || health_fraction < 0.0001 {
         Some(RepairPriority::High)
     } else if health_fraction < 0.001 {
         Some(RepairPriority::Medium)
@@ -100,7 +98,9 @@ fn map_structure_repair_priority(
         StructureObject::StructureTower(_) => map_high_value_priority(hits, hits_max),
         StructureObject::StructureContainer(_) => map_high_value_priority(hits, hits_max),
         StructureObject::StructureWall(_) => map_defense_priority(StructureType::Wall, hits, hits_max, available_energy, under_attack),
-        StructureObject::StructureRampart(_) => map_defense_priority(StructureType::Rampart, hits, hits_max, available_energy, under_attack),
+        StructureObject::StructureRampart(_) => {
+            map_defense_priority(StructureType::Rampart, hits, hits_max, available_energy, under_attack)
+        }
         _ => map_normal_priority(hits, hits_max),
     }
 }
@@ -169,14 +169,16 @@ pub fn select_repair_structure_and_priority(
 
     get_prioritized_repair_targets(structures.all(), Some(available_energy), are_hostile_creeps, allow_walls)
         .filter(|(priority, _)| minimum_priority.map(|op| *priority >= op).unwrap_or(true))
-        .filter_map(|(priority, structure)| {
-            structure.as_attackable().map(|a| (priority, structure, a.hits()))
-        })
+        .filter_map(|(priority, structure)| structure.as_attackable().map(|a| (priority, structure, a.hits())))
         .max_by(|(priority_a, _, hits_a), (priority_b, _, hits_b)| priority_a.cmp(priority_b).then_with(|| hits_a.cmp(hits_b).reverse()))
         .map(|(priority, structure, _)| (priority, structure.clone()))
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn select_repair_structure(room_data: &RoomData, minimum_priority: Option<RepairPriority>, allow_walls: bool) -> Option<StructureObject> {
+pub fn select_repair_structure(
+    room_data: &RoomData,
+    minimum_priority: Option<RepairPriority>,
+    allow_walls: bool,
+) -> Option<StructureObject> {
     select_repair_structure_and_priority(room_data, minimum_priority, allow_walls).map(|(_, structure)| structure)
 }

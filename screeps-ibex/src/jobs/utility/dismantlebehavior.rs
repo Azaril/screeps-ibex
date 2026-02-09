@@ -44,7 +44,6 @@ where
                 .find_nearest_from(creep_pos, PathFinderHelpers::same_room_ignore_creeps_range_1);
         }
 
-
         if let Some(structure) = best_structure {
             return Some(state_map(RemoteStructureIdentifier::new(&structure)));
         }

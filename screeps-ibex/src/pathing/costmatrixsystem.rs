@@ -6,7 +6,9 @@ pub struct CostMatrixStorageInterface;
 
 impl CostMatrixStorage for CostMatrixStorageInterface {
     fn get_cache(&self, segment: u32) -> Result<CostMatrixCache, String> {
-        let raw_data = raw_memory::segments().get(segment as u8).ok_or("Cost matrix memory segment not active")?;
+        let raw_data = raw_memory::segments()
+            .get(segment as u8)
+            .ok_or("Cost matrix memory segment not active")?;
 
         let res = crate::serialize::decode_from_string(&raw_data)?;
 

@@ -1,3 +1,4 @@
+use super::constants::*;
 use super::data::*;
 use super::missionsystem::*;
 use crate::jobs::data::*;
@@ -5,7 +6,6 @@ use crate::jobs::upgrade::*;
 use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
-use super::constants::*;
 use lerp::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -92,6 +92,10 @@ impl Mission for UpgradeMission {
 
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!("Upgrade - Upgraders: {}", self.upgraders.len())
+    }
+
+    fn summarize(&self) -> crate::visualization::SummaryContent {
+        crate::visualization::SummaryContent::Text(format!("Upgrade - Upgraders: {}", self.upgraders.len()))
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
@@ -198,7 +202,9 @@ impl Mission for UpgradeMission {
 
             let downgrade_risk = controllers
                 .iter()
-                .filter_map(|controller| controller_downgrade(controller.level()).map(|ticks| controller.ticks_to_downgrade().is_some_and(|ttd| ttd < ticks / 2)))
+                .filter_map(|controller| {
+                    controller_downgrade(controller.level()).map(|ticks| controller.ticks_to_downgrade().is_some_and(|ttd| ttd < ticks / 2))
+                })
                 .any(|risk| risk);
 
             let maximum_energy = if self.upgraders.is_empty() && downgrade_risk {

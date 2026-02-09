@@ -1,7 +1,5 @@
 use crate::remoteobjectid::*;
 use crate::serialize::EntityVec;
-use crate::ui::*;
-use crate::visualize::*;
 use screeps::*;
 use screeps_cache::*;
 use screeps_foreman::constants::*;
@@ -99,8 +97,6 @@ impl RoomStaticVisibilityData {
     pub fn terrain_statistics(&self) -> &RoomTerrainStatistics {
         &self.terrain_statistics
     }
-
-    pub fn visualize(&self, _room_visualizer: &mut RoomVisualizer, _list_state: &mut ListVisualizerState) {}
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -229,17 +225,6 @@ impl RoomDynamicVisibilityData {
     pub fn hostile_structures(&self) -> bool {
         self.hostile_structures
     }
-
-    pub fn visualize(&self, room_visualizer: &mut RoomVisualizer, list_state: &mut ListVisualizerState) {
-        let mut list_visualizer = list_state.visualize(room_visualizer);
-
-        list_visualizer.add_text(format!("Visible: {} - Age: {}", self.visible(), self.age()), None);
-        list_visualizer.add_text(format!("Owner: {}", self.owner()), None);
-        list_visualizer.add_text(format!("Reservation: {}", self.reservation()), None);
-        list_visualizer.add_text(format!("Source Keeper: {}", self.source_keeper()), None);
-        list_visualizer.add_text(format!("Hostile creeps: {}", self.hostile_creeps()), None);
-        list_visualizer.add_text(format!("Hostile structures: {}", self.hostile_structures()), None);
-    }
 }
 
 #[derive(Component)]
@@ -317,19 +302,6 @@ impl RoomData {
             room_structure_data: RefCell::new(None),
             room_construction_sites_data: RefCell::new(None),
             room_creep_data: RefCell::new(None),
-        }
-    }
-
-    pub fn visualize(&self, room_visualizer: &mut RoomVisualizer) {
-        let missions_text_style = TextStyle::default().font(0.5).align(TextAlign::Left);
-        let mut list_state = ListVisualizerState::new(ROOM_DATA_POS, (0.0, 1.0), Some(missions_text_style));
-
-        if let Some(static_visibility_data) = self.get_static_visibility_data() {
-            static_visibility_data.visualize(room_visualizer, &mut list_state);
-        }
-
-        if let Some(dynamic_visibility_data) = self.get_dynamic_visibility_data() {
-            dynamic_visibility_data.visualize(room_visualizer, &mut list_state);
         }
     }
 
@@ -474,8 +446,7 @@ impl RoomData {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct RoomStructureData {
     #[serde(skip)]
     last_updated: u32,
@@ -525,7 +496,6 @@ pub struct RoomStructureData {
     #[serde(skip)]
     walls: Vec<StructureWall>,
 }
-
 
 impl RoomStructureData {
     fn new(room: &Room) -> RoomStructureData {
@@ -697,15 +667,13 @@ impl RoomStructureData {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 struct ConstructionSiteData {
     #[serde(skip)]
     last_updated: u32,
     #[serde(skip)]
     construction_sites: Vec<ConstructionSite>,
 }
-
 
 impl ConstructionSiteData {
     fn new(room: &Room) -> ConstructionSiteData {
@@ -718,8 +686,7 @@ impl ConstructionSiteData {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct CreepData {
     #[serde(skip)]
     last_updated: u32,
@@ -731,7 +698,6 @@ pub struct CreepData {
     #[serde(skip)]
     hostile: Vec<Creep>,
 }
-
 
 impl CreepData {
     fn new(room: &Room) -> CreepData {
