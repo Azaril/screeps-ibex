@@ -91,6 +91,7 @@ pub struct ConstructionFeatures {
     pub allow_replan: bool,
     pub execute: bool,
     pub cleanup: bool,
+    pub max_construction_sites: i32,
     pub visualize: ConstructionVisualizeFeatures,
 }
 
@@ -102,6 +103,7 @@ impl Default for ConstructionFeatures {
             allow_replan: false,
             execute: true,
             cleanup: true,
+            max_construction_sites: 10,
             visualize: ConstructionVisualizeFeatures::default(),
         }
     }

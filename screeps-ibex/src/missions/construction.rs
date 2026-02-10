@@ -3,7 +3,7 @@ use super::missionsystem::*;
 use crate::room::roomplansystem::*;
 use crate::serialize::*;
 use screeps::*;
-use screeps_foreman::plan::{BuildStep, ExecutionFilter};
+use screeps_foreman::plan::{BuildStep, CleanupFilter, ExistingStructure, ExecutionFilter};
 use screeps_foreman::terrain::NEIGHBORS_8;
 use serde::{Deserialize, Serialize};
 #[allow(deprecated)]
@@ -17,24 +17,35 @@ use specs::*;
 /// live game state:
 /// - Walls/ramparts are deferred until the room reaches a minimum RCL.
 /// - Roads are deferred until at least one adjacent non-road structure exists.
+/// - The total number of in-flight construction sites is capped at
+///   [`MAX_CONSTRUCTION_SITES`].
 struct ConstructionFilter<'a> {
     room: &'a Room,
     room_level: u8,
     min_rcl_for_walls: u8,
+    /// Number of construction sites remaining before hitting the cap.
+    remaining_sites: i32,
 }
 
 impl<'a> ConstructionFilter<'a> {
-    fn new(room: &'a Room, room_level: u8) -> Self {
+    fn new(room: &'a Room, room_level: u8, current_sites: usize) -> Self {
+        let max_sites = crate::features::features().construction.max_construction_sites;
+
         ConstructionFilter {
             room,
             room_level,
             min_rcl_for_walls: 4,
+            remaining_sites: max_sites - current_sites as i32,
         }
     }
 }
 
 impl<'a> ExecutionFilter for ConstructionFilter<'a> {
     fn should_place(&self, step: &BuildStep) -> bool {
+        if self.remaining_sites <= 0 {
+            return false;
+        }
+
         // Defer walls/ramparts until the room reaches min_rcl_for_walls.
         if (step.structure_type == StructureType::Wall
             || step.structure_type == StructureType::Rampart)
@@ -51,6 +62,10 @@ impl<'a> ExecutionFilter for ConstructionFilter<'a> {
         }
 
         true
+    }
+
+    fn added_placement(&mut self, _step: &BuildStep) {
+        self.remaining_sites -= 1;
     }
 }
 
@@ -82,6 +97,45 @@ fn has_adjacent_built_structure(
         }
     }
     false
+}
+
+/// Game-aware cleanup filter for plan removal.
+///
+/// Implements [`CleanupFilter`] with policy decisions that depend on
+/// live game state:
+/// - Spawns are only removed if at least one other spawn will remain
+///   in the room after the removal, ensuring the room is never left
+///   without a spawn.
+struct RemovalFilter {
+    /// Number of spawns remaining in the room. Starts at the current
+    /// total and is decremented each time a spawn removal is committed.
+    remaining_spawns: u32,
+}
+
+impl RemovalFilter {
+    fn new(room: &Room) -> Self {
+        let remaining_spawns = room
+            .find(find::MY_SPAWNS, None)
+            .len() as u32;
+
+        RemovalFilter { remaining_spawns }
+    }
+}
+
+impl CleanupFilter for RemovalFilter {
+    fn should_remove(&self, structure: &ExistingStructure) -> bool {
+        if structure.structure_type == StructureType::Spawn {
+            self.remaining_spawns > 1
+        } else {
+            true
+        }
+    }
+
+    fn added_removal(&mut self, structure: &ExistingStructure) {
+        if structure.structure_type == StructureType::Spawn {
+            self.remaining_spawns -= 1;
+        }
+    }
 }
 
 #[derive(ConvertSaveload)]
@@ -145,22 +199,16 @@ impl Mission for ConstructionMission {
                 if game::time().is_multiple_of(50) {
                     if crate::features::features().construction.execute {
                         let construction_sites = room_data.get_construction_sites().ok_or("Expected construction sites")?;
-
-                        const MAX_CONSTRUCTION_SITES: i32 = 10;
-
-                        let max_placement = MAX_CONSTRUCTION_SITES - (construction_sites.len() as i32);
-
-                        if max_placement > 0 {
-                            let filter = ConstructionFilter::new(&room, room_level);
-                            let ops = plan.get_build_operations(room_level, max_placement as u32, &filter);
-                            screeps_foreman::plan::execute_operations(&room, &ops);
-                        }
+                        let mut filter = ConstructionFilter::new(&room, room_level, construction_sites.len());
+                        let ops = plan.get_build_operations(room_level, &mut filter);
+                        screeps_foreman::plan::execute_operations(&room, &ops);
                     }
 
                     if crate::features::features().construction.cleanup {
                         let structures = room_data.get_structures().ok_or("Expected structures")?;
                         let snapshot = screeps_foreman::plan::snapshot_structures(structures.all());
-                        let ops = plan.get_cleanup_operations(&snapshot, room_level);
+                        let mut removal_filter = RemovalFilter::new(&room);
+                        let ops = plan.get_cleanup_operations(&snapshot, room_level, &mut removal_filter);
                         screeps_foreman::plan::execute_operations(&room, &ops);
                     }
                 }
