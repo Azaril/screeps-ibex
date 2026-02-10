@@ -37,6 +37,7 @@ screeps-machine = { git = "https://github.com/Azaril/screeps-machine" }
 screeps-cache = { git = "https://github.com/Azaril/screeps-cache" }
 screeps-rover = { git = "https://github.com/Azaril/screeps-rover" }
 screeps-foreman = { git = "https://github.com/Azaril/screeps-foreman" }
+screeps-visual = { git = "https://github.com/Azaril/screeps-visual" }
 talc = { version = "4", features = ["lock_api"] }
 screeps-timing = { git = "https://github.com/Azaril/screeps-timing", optional = true }
 screeps-timing-annotate = { git = "https://github.com/Azaril/screeps-timing-annotate", optional = true }

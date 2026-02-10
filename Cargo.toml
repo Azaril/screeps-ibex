@@ -7,6 +7,7 @@ members = [
     "screeps-timing",
     "screeps-timing-annotate",
     "screeps-foreman",
+    "screeps-visual",
 ]
 exclude = ["screeps-foreman-bench"]
 
@@ -32,6 +33,9 @@ screeps-timing-annotate = { path = "screeps-timing-annotate" }
 
 [patch.'https://github.com/Azaril/screeps-foreman']
 screeps-foreman = { path = "screeps-foreman" }
+
+[patch.'https://github.com/Azaril/screeps-visual']
+screeps-visual = { path = "screeps-visual" }
 
 [patch.crates-io]
 screeps-game-api = { path = "../screeps-game-api" }

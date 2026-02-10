@@ -1,7 +1,7 @@
 use super::data::*;
 use crate::entitymappingsystem::*;
 use crate::memorysystem::*;
-use crate::visualize::*;
+use crate::visualize::RoomVisualizer;
 use log::*;
 use screeps::*;
 use screeps_foreman::pipeline::{CpuBudget, PlanningState};
@@ -11,6 +11,10 @@ use screeps_foreman::room_data::*;
 use serde::{Deserialize, Serialize};
 use specs::prelude::{Entities, ResourceId, System, SystemData, World, Write, WriteStorage};
 use specs::*;
+
+// ---------------------------------------------------------------------------
+// Shared types (used by both planning and visualization)
+// ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy)]
 pub struct RoomPlanRequest {
@@ -75,6 +79,10 @@ impl RoomPlanData {
         self.state.plan()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Planner internals
+// ---------------------------------------------------------------------------
 
 struct RoomDataPlannerDataSource {
     room_name: RoomName,
@@ -219,10 +227,17 @@ enum PlanTickResult {
     Failed(String),
 }
 
+/// Persistent planner running state, serialized to segment 60.
 #[derive(Deserialize, Serialize, Default)]
 pub struct RoomPlannerData {
     running_state: Option<RoomPlannerRunningData>,
 }
+
+// ---------------------------------------------------------------------------
+// RoomPlanSystem — planning only, no visualization
+// ---------------------------------------------------------------------------
+
+pub const PLANNER_MEMORY_SEGMENT: u32 = 60;
 
 #[derive(SystemData)]
 pub struct RoomPlanSystemData<'a> {
@@ -276,14 +291,12 @@ impl<'a> System<'a> for RoomPlanSystem {
     type SystemData = RoomPlanSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        const MEMORY_SEGMENT: u32 = 60;
-
-        data.memory_arbiter.request(MEMORY_SEGMENT);
+        data.memory_arbiter.request(PLANNER_MEMORY_SEGMENT);
 
         if crate::features::features().construction.plan {
             if let Some(max_cpu) = Self::get_cpu_budget() {
-                if data.memory_arbiter.is_active(MEMORY_SEGMENT) {
-                    let Some(planner_data) = data.memory_arbiter.get(MEMORY_SEGMENT) else {
+                if data.memory_arbiter.is_active(PLANNER_MEMORY_SEGMENT) {
+                    let Some(planner_data) = data.memory_arbiter.get(PLANNER_MEMORY_SEGMENT) else {
                         return;
                     };
 
@@ -401,7 +414,7 @@ impl<'a> System<'a> for RoomPlanSystem {
                     }
 
                     if let Ok(output_planner_data) = crate::serialize::encode_to_string(&planner_state) {
-                        data.memory_arbiter.set(MEMORY_SEGMENT, &output_planner_data);
+                        data.memory_arbiter.set(PLANNER_MEMORY_SEGMENT, &output_planner_data);
                     }
                 }
             }
@@ -411,115 +424,18 @@ impl<'a> System<'a> for RoomPlanSystem {
     }
 }
 
+// ---------------------------------------------------------------------------
+// RoomVisualizer trait bridge (used by screeps-foreman's Plan::visualize)
+// ---------------------------------------------------------------------------
+
 impl screeps_foreman::RoomVisualizer for RoomVisualizer {
     fn render(&mut self, location: screeps_foreman::location::Location, structure: StructureType) {
-        match structure {
-            StructureType::Spawn => {
-                RoomVisualizer::circle(
-                    self,
-                    location.x() as f32,
-                    location.y() as f32,
-                    Some(CircleStyle::default().fill("green").opacity(1.0)),
-                );
-            }
-            StructureType::Extension => {
-                RoomVisualizer::circle(
-                    self,
-                    location.x() as f32,
-                    location.y() as f32,
-                    Some(CircleStyle::default().fill("purple").opacity(1.0)),
-                );
-            }
-            StructureType::Container => {
-                RoomVisualizer::circle(
-                    self,
-                    location.x() as f32,
-                    location.y() as f32,
-                    Some(CircleStyle::default().fill("blue").opacity(1.0)),
-                );
-            }
-            StructureType::Storage => {
-                RoomVisualizer::circle(
-                    self,
-                    location.x() as f32,
-                    location.y() as f32,
-                    Some(CircleStyle::default().fill("red").opacity(1.0)),
-                );
-            }
-            StructureType::Link => {
-                RoomVisualizer::circle(
-                    self,
-                    location.x() as f32,
-                    location.y() as f32,
-                    Some(CircleStyle::default().fill("orange").opacity(1.0)),
-                );
-            }
-            StructureType::Terminal => {
-                RoomVisualizer::circle(
-                    self,
-                    location.x() as f32,
-                    location.y() as f32,
-                    Some(CircleStyle::default().fill("pink").opacity(1.0)),
-                );
-            }
-            StructureType::Nuker => {
-                RoomVisualizer::circle(
-                    self,
-                    location.x() as f32,
-                    location.y() as f32,
-                    Some(CircleStyle::default().fill("black").opacity(1.0)),
-                );
-            }
-            StructureType::Lab => {
-                RoomVisualizer::circle(
-                    self,
-                    location.x() as f32,
-                    location.y() as f32,
-                    Some(CircleStyle::default().fill("aqua").opacity(1.0)),
-                );
-            }
-            StructureType::PowerSpawn => {
-                RoomVisualizer::circle(
-                    self,
-                    location.x() as f32,
-                    location.y() as f32,
-                    Some(CircleStyle::default().fill("Fuschia").opacity(1.0)),
-                );
-            }
-            StructureType::Observer => {
-                RoomVisualizer::circle(
-                    self,
-                    location.x() as f32,
-                    location.y() as f32,
-                    Some(CircleStyle::default().fill("Lime").opacity(1.0)),
-                );
-            }
-            StructureType::Factory => {
-                RoomVisualizer::circle(
-                    self,
-                    location.x() as f32,
-                    location.y() as f32,
-                    Some(CircleStyle::default().fill("Brown").opacity(1.0)),
-                );
-            }
-            StructureType::Rampart => {
-                RoomVisualizer::rect(
-                    self,
-                    location.x() as f32 - 0.5,
-                    location.y() as f32 - 0.5,
-                    1.0,
-                    1.0,
-                    Some(RectStyle::default().fill("Green").opacity(0.3)),
-                );
-            }
-            _ => {
-                RoomVisualizer::circle(
-                    self,
-                    location.x() as f32,
-                    location.y() as f32,
-                    Some(CircleStyle::default().fill("yellow").opacity(1.0)),
-                );
-            }
-        }
+        screeps_visual::render::render_structure(
+            self,
+            location.x() as f32,
+            location.y() as f32,
+            structure,
+            1.0,
+        );
     }
 }
