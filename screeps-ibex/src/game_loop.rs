@@ -214,9 +214,6 @@ thread_local! {
 /// Segment IDs used for ECS component serialization (world state).
 const COMPONENT_SEGMENTS: &[u32] = &[50, 51, 52];
 
-/// Segment ID used for cost matrix cache (screeps-rover).
-const COST_MATRIX_SYSTEM_SEGMENT: u32 = 55;
-
 fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
     info!("Initializing game environment");
 
@@ -238,7 +235,7 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
 
     // Cost matrix cache (screeps-rover): needs segment active so the system
     // can read/write via raw_memory directly. Not gating.
-    arbiter.register(SegmentRequirement::new("cost_matrix", vec![COST_MATRIX_SYSTEM_SEGMENT]));
+    arbiter.register(SegmentRequirement::new("cost_matrix", vec![COST_MATRIX_SEGMENT]));
 
     // Stats history (visualization): persisted across VM restarts. Load
     // callback deserializes the data into a world resource on first use.
@@ -255,10 +252,9 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
     world.insert(SerializeMarkerAllocator::new());
     world.register::<SerializeMarker>();
 
-    let cost_matrix_storage = Box::new(CostMatrixStorageInterface);
-    let cost_matrix_system = CostMatrixSystem::new(cost_matrix_storage, COST_MATRIX_SYSTEM_SEGMENT);
+    let cost_matrix_cache = crate::pathing::costmatrixsystem::load_cost_matrix_cache(COST_MATRIX_SEGMENT);
 
-    world.insert(cost_matrix_system);
+    world.insert(cost_matrix_cache);
 
     let movement_data = MovementData::<Entity>::new();
     world.insert(movement_data);
@@ -286,6 +282,8 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
     //
 
     let mut main_pass_dispatcher = DispatcherBuilder::new()
+        .with(CostMatrixClearSystem, "cost_matrix_clear", &[])
+        .with_barrier()
         .with(OperationManagerSystem, "operations_manager", &[])
         .with(PreRunOperationSystem, "pre_run_operations", &[])
         .with(PreRunMissionSystem, "pre_run_missions", &[])

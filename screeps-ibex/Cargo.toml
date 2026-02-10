@@ -35,8 +35,8 @@ lerp = "0.5"
 screeps-game-api = "0.23"
 screeps-machine = { git = "https://github.com/Azaril/screeps-machine" }
 screeps-cache = { git = "https://github.com/Azaril/screeps-cache" }
-screeps-rover = { git = "https://github.com/Azaril/screeps-rover" }
-screeps-foreman = { git = "https://github.com/Azaril/screeps-foreman" }
+screeps-rover = { git = "https://github.com/Azaril/screeps-rover", features = ["screeps"] }
+screeps-foreman = { git = "https://github.com/Azaril/screeps-foreman", features = ["screeps"] }
 screeps-visual = { git = "https://github.com/Azaril/screeps-visual" }
 talc = { version = "4", features = ["lock_api"] }
 screeps-timing = { git = "https://github.com/Azaril/screeps-timing", optional = true }
