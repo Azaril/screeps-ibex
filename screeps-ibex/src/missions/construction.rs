@@ -42,6 +42,13 @@ impl<'a> ConstructionFilter<'a> {
 
 impl<'a> ExecutionFilter for ConstructionFilter<'a> {
     fn should_place(&self, step: &BuildStep) -> bool {
+        // Skip if the structure already exists or already has a construction
+        // site at this location — placing would be a no-op but would consume
+        // a slot in the remaining_sites budget.
+        if structure_or_site_exists(step.location, step.structure_type, self.room) {
+            return false;
+        }
+
         if self.remaining_sites <= 0 {
             return false;
         }
@@ -96,6 +103,37 @@ fn has_adjacent_built_structure(
             }
         }
     }
+    false
+}
+
+/// Check if a structure of the given type already exists (built or as a
+/// construction site) at the given location.
+///
+/// Used to skip no-op placements so they don't consume the construction
+/// site budget.
+fn structure_or_site_exists(
+    loc: screeps_foreman::location::Location,
+    structure_type: StructureType,
+    room: &Room,
+) -> bool {
+    let pos = RoomPosition::new(loc.x(), loc.y(), room.name());
+
+    let structures = room.look_for_at(look::STRUCTURES, &pos);
+    if structures
+        .iter()
+        .any(|s| s.structure_type() == structure_type)
+    {
+        return true;
+    }
+
+    let sites = room.look_for_at(look::CONSTRUCTION_SITES, &pos);
+    if sites
+        .iter()
+        .any(|s| s.structure_type() == structure_type)
+    {
+        return true;
+    }
+
     false
 }
 
