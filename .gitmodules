@@ -22,3 +22,7 @@
 	path = screeps-foreman
 	url = https://github.com/Azaril/screeps-foreman.git
 	branch = master
+[submodule "screeps-visual"]
+	path = screeps-visual
+	url = https://github.com/Azaril/screeps-visual.git
+	branch = master

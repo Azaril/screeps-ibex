@@ -14,6 +14,7 @@ use crate::pathing::movementsystem::*;
 use crate::room::createroomsystem::*;
 use crate::room::data::*;
 use crate::room::roomplansystem::*;
+use crate::room::roomplanvisualizesystem::*;
 use crate::room::updateroomsystem::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
@@ -307,6 +308,7 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
         .with_barrier()
         .with(AggregateSummarySystem, "aggregate_summary", &[])
         .with(RoomPlanSystem, "room_plan", &[])
+        .with(RoomPlanVisualizeSystem, "room_plan_visualize", &["room_plan"])
         .with_barrier()
         .with(StatsSystem, "stats", &[])
         .with(StatsHistorySystem, "stats_history", &["stats"])
