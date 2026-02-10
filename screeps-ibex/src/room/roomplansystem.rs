@@ -4,8 +4,10 @@ use crate::memorysystem::*;
 use crate::visualize::*;
 use log::*;
 use screeps::*;
-use screeps_foreman::layout::*;
+use screeps_foreman::pipeline::{CpuBudget, PlanningState};
+use screeps_foreman::plan::Plan;
 use screeps_foreman::planner::*;
+use screeps_foreman::room_data::*;
 use serde::{Deserialize, Serialize};
 use specs::prelude::{Entities, ResourceId, System, SystemData, World, Write, WriteStorage};
 use specs::*;
@@ -74,137 +76,150 @@ impl RoomPlanData {
     }
 }
 
-struct RoomDataPlannerDataSource<'a> {
+struct RoomDataPlannerDataSource {
     room_name: RoomName,
-    static_visibility: &'a RoomStaticVisibilityData,
-    terrain: Option<FastRoomTerrain>,
-    controllers: Option<Vec<PlanLocation>>,
-    sources: Option<Vec<PlanLocation>>,
-    minerals: Option<Vec<PlanLocation>>,
+    terrain: FastRoomTerrain,
+    controllers: Vec<PlanLocation>,
+    sources: Vec<PlanLocation>,
+    minerals: Vec<PlanLocation>,
 }
 
-impl<'a> RoomDataPlannerDataSource<'a> {
-    pub fn new(room_name: RoomName, static_visibility: &RoomStaticVisibilityData) -> RoomDataPlannerDataSource<'_> {
+impl RoomDataPlannerDataSource {
+    pub fn new(room_name: RoomName, static_visibility: &RoomStaticVisibilityData) -> RoomDataPlannerDataSource {
+        let terrain = if let Some(room_terrain) = game::map::get_room_terrain(room_name) {
+            let terrain_data = room_terrain.get_raw_buffer().to_vec();
+            FastRoomTerrain::new(terrain_data)
+        } else {
+            const ROOM_SIZE: usize = 50 * 50;
+            FastRoomTerrain::new(vec![0u8; ROOM_SIZE])
+        };
+
+        let mut controllers: Vec<_> = static_visibility
+            .controller()
+            .iter()
+            .map(|id| {
+                let pos = id.pos();
+                PlanLocation::new(pos.x().u8() as i8, pos.y().u8() as i8)
+            })
+            .collect();
+        controllers.sort_by(|a, b| a.x().cmp(&b.x()).then_with(|| a.y().cmp(&b.y())));
+
+        let mut sources: Vec<_> = static_visibility
+            .sources()
+            .iter()
+            .map(|id| {
+                let pos = id.pos();
+                PlanLocation::new(pos.x().u8() as i8, pos.y().u8() as i8)
+            })
+            .collect();
+        sources.sort_by(|a, b| a.x().cmp(&b.x()).then_with(|| a.y().cmp(&b.y())));
+
+        let mut minerals: Vec<_> = static_visibility
+            .minerals()
+            .iter()
+            .map(|id| {
+                let pos = id.pos();
+                PlanLocation::new(pos.x().u8() as i8, pos.y().u8() as i8)
+            })
+            .collect();
+        minerals.sort_by(|a, b| a.x().cmp(&b.x()).then_with(|| a.y().cmp(&b.y())));
+
         RoomDataPlannerDataSource {
             room_name,
-            static_visibility,
-            terrain: None,
-            controllers: None,
-            sources: None,
-            minerals: None,
+            terrain,
+            controllers,
+            sources,
+            minerals,
         }
     }
 }
 
-impl<'a> PlannerRoomDataSource for RoomDataPlannerDataSource<'a> {
-    fn get_terrain(&mut self) -> &FastRoomTerrain {
-        if self.terrain.is_none() {
-            if let Some(room_terrain) = game::map::get_room_terrain(self.room_name) {
-                let terrain_data = room_terrain.get_raw_buffer().to_vec();
-                self.terrain = Some(FastRoomTerrain::new(terrain_data));
-            } else {
-                // Room not visible; use all-plain so planner can run without panicking (defer real planning until visible)
-                const ROOM_SIZE: usize = 50 * 50;
-                self.terrain = Some(FastRoomTerrain::new(vec![0u8; ROOM_SIZE]));
-            }
-        }
-
-        self.terrain.as_ref().unwrap()
+impl PlannerRoomDataSource for RoomDataPlannerDataSource {
+    fn get_terrain(&self) -> &FastRoomTerrain {
+        &self.terrain
     }
 
-    fn get_controllers(&mut self) -> &[PlanLocation] {
-        if self.controllers.is_none() {
-            let mut controllers: Vec<_> = self
-                .static_visibility
-                .controller()
-                .iter()
-                .map(|id| {
-                    let pos = id.pos();
-                    PlanLocation::new(pos.x().u8() as i8, pos.y().u8() as i8)
-                })
-                .collect();
-
-            controllers.sort_by(|a, b| a.x().cmp(&b.x()).then_with(|| a.y().cmp(&b.y())));
-
-            self.controllers = Some(controllers);
-        }
-
-        self.controllers.as_ref().unwrap()
+    fn get_controllers(&self) -> &[PlanLocation] {
+        &self.controllers
     }
 
-    fn get_sources(&mut self) -> &[PlanLocation] {
-        if self.sources.is_none() {
-            let mut sources: Vec<_> = self
-                .static_visibility
-                .sources()
-                .iter()
-                .map(|id| {
-                    let pos = id.pos();
-                    PlanLocation::new(pos.x().u8() as i8, pos.y().u8() as i8)
-                })
-                .collect();
-
-            sources.sort_by(|a, b| a.x().cmp(&b.x()).then_with(|| a.y().cmp(&b.y())));
-
-            self.sources = Some(sources);
-        }
-
-        self.sources.as_ref().unwrap()
+    fn get_sources(&self) -> &[PlanLocation] {
+        &self.sources
     }
 
-    fn get_minerals(&mut self) -> &[PlanLocation] {
-        if self.minerals.is_none() {
-            let mut minerals: Vec<_> = self
-                .static_visibility
-                .minerals()
-                .iter()
-                .map(|id| {
-                    let pos = id.pos();
-                    PlanLocation::new(pos.x().u8() as i8, pos.y().u8() as i8)
-                })
-                .collect();
-
-            minerals.sort_by(|a, b| a.x().cmp(&b.x()).then_with(|| a.y().cmp(&b.y())));
-
-            self.minerals = Some(minerals);
-        }
-
-        self.minerals.as_ref().unwrap()
+    fn get_minerals(&self) -> &[PlanLocation] {
+        &self.minerals
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct RoomPlannerRunningData {
     room_name: RoomName,
-    planner_state: PlanRunningStateData,
+    planner_state: PlanningState,
 }
 
 impl RoomPlannerRunningData {
-    fn seed(room_data: &RoomData) -> Result<PlanSeedResult, String> {
+    fn start(room_data: &RoomData) -> Result<Self, String> {
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility")?;
-        let mut data_source = RoomDataPlannerDataSource::new(room_data.name, static_visibility_data);
+        let _data_source = RoomDataPlannerDataSource::new(room_data.name, static_visibility_data);
 
-        let planner = Planner::new(screeps_foreman::scoring::score_state);
+        let state = PlannerBuilder::default().build();
 
-        planner.seed(ALL_ROOT_NODES, &mut data_source)
+        Ok(RoomPlannerRunningData {
+            room_name: room_data.name,
+            planner_state: state,
+        })
     }
 
-    fn process(&mut self, room_data: &RoomData, budget: f64) -> Result<PlanEvaluationResult, String> {
+    fn process(&mut self, room_data: &RoomData, budget_cpu: f64) -> Result<PlanTickResult, String> {
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility")?;
-
-        let mut data_source = RoomDataPlannerDataSource::new(room_data.name, static_visibility_data);
-
-        let planner = Planner::new(screeps_foreman::scoring::score_state);
+        let data_source = RoomDataPlannerDataSource::new(room_data.name, static_visibility_data);
 
         let start_cpu = game::cpu::get_used();
+        let budget = CpuBudget::new(move || (game::cpu::get_used() - start_cpu) < (budget_cpu * 0.9));
 
-        let should_continue = || (game::cpu::get_used() - start_cpu) < (budget * 0.9);
+        let old_state = std::mem::replace(
+            &mut self.planner_state,
+            PlanningState::Failed("replaced".to_string()),
+        );
 
-        planner.evaluate(ALL_ROOT_NODES, &mut data_source, &mut self.planner_state, should_continue)
+        // Re-inject layers via PlannerBuilder::resume() each tick.
+        // If fingerprint mismatches (layer config changed), restart planning.
+        let builder = PlannerBuilder::default();
+        let resumed_state = match builder.resume(old_state) {
+            Ok(state) => state,
+            Err(_) => {
+                info!("Layer fingerprint mismatch, restarting planning for {}", room_data.name);
+                PlannerBuilder::default().build()
+            }
+        };
+
+        let new_state = screeps_foreman::pipeline::tick_pipeline(resumed_state, &data_source, &budget);
+
+        match new_state {
+            PlanningState::Complete(plan) => {
+                self.planner_state = PlanningState::Complete(plan.clone());
+                Ok(PlanTickResult::Complete(Some(plan)))
+            }
+            PlanningState::Failed(msg) => {
+                self.planner_state = PlanningState::Failed(msg.clone());
+                Ok(PlanTickResult::Failed(msg))
+            }
+            other => {
+                self.planner_state = other;
+                Ok(PlanTickResult::Running)
+            }
+        }
     }
 }
 
-#[derive(Clone, Deserialize, Serialize, Default)]
+enum PlanTickResult {
+    Running,
+    Complete(Option<Plan>),
+    Failed(String),
+}
+
+#[derive(Deserialize, Serialize, Default)]
 pub struct RoomPlannerData {
     running_state: Option<RoomPlannerRunningData>,
 }
@@ -309,37 +324,13 @@ impl<'a> System<'a> for RoomPlanSystem {
 
                         if let Some(request) = request {
                             if let Some(room_data) = data.room_data.get(request.room) {
-                                match RoomPlannerRunningData::seed(room_data) {
-                                    Ok(PlanSeedResult::Running(state)) => {
-                                        info!("Seeding complete for room plan. Room: {}", room_data.name);
-
-                                        planner_state.running_state = Some(RoomPlannerRunningData {
-                                            room_name: room_data.name,
-                                            planner_state: state,
-                                        });
-                                    }
-                                    Ok(PlanSeedResult::Complete(Some(plan))) => {
-                                        info!("Seeding complete and viable plan found. Room: {}", room_data.name);
-
-                                        if let Err(err) =
-                                            Self::attach_plan_state(&mut data.room_plan_data, request.room, RoomPlanState::Valid(plan))
-                                        {
-                                            info!("Failed to attach plan to room! Room: {} - Err: {}", room_data.name, err);
-                                        }
-                                    }
-                                    Ok(PlanSeedResult::Complete(None)) => {
-                                        info!("Seeding complete but no viable plan found. Room: {}", room_data.name);
-
-                                        if let Err(err) = Self::attach_plan_state(
-                                            &mut data.room_plan_data,
-                                            request.room,
-                                            RoomPlanState::Failed { time: game::time() },
-                                        ) {
-                                            info!("Failed to attach plan to room! Room: {} - Err: {}", room_data.name, err);
-                                        }
+                                match RoomPlannerRunningData::start(room_data) {
+                                    Ok(running_data) => {
+                                        info!("Started planning for room: {}", room_data.name);
+                                        planner_state.running_state = Some(running_data);
                                     }
                                     Err(err) => {
-                                        info!("Seeding failure! Room: {} - Error: {}", room_data.name, err);
+                                        info!("Failed to start planning! Room: {} - Error: {}", room_data.name, err);
                                     }
                                 }
                             }
@@ -352,8 +343,8 @@ impl<'a> System<'a> for RoomPlanSystem {
                                 info!("Planning for room: {}", room_data.name);
 
                                 match running_state.process(room_data, max_cpu) {
-                                    Ok(PlanEvaluationResult::Running()) => false,
-                                    Ok(PlanEvaluationResult::Complete(Some(plan))) => {
+                                    Ok(PlanTickResult::Running) => false,
+                                    Ok(PlanTickResult::Complete(Some(plan))) => {
                                         info!("Planning complete and viable plan found. Room: {}", room_data.name);
 
                                         if let Err(err) =
@@ -364,7 +355,7 @@ impl<'a> System<'a> for RoomPlanSystem {
 
                                         true
                                     }
-                                    Ok(PlanEvaluationResult::Complete(None)) => {
+                                    Ok(PlanTickResult::Complete(None)) => {
                                         info!("Planning complete but no viable plan found. Room: {}", room_data.name);
 
                                         if let Err(err) = Self::attach_plan_state(
@@ -377,9 +368,21 @@ impl<'a> System<'a> for RoomPlanSystem {
 
                                         true
                                     }
-                                    Err(err) => {
-                                        info!("Planning failure! Room: {} - Error: {}", room_data.name, err);
+                                    Ok(PlanTickResult::Failed(msg)) => {
+                                        info!("Planning failed! Room: {} - Error: {}", room_data.name, msg);
 
+                                        if let Err(err) = Self::attach_plan_state(
+                                            &mut data.room_plan_data,
+                                            room_entity,
+                                            RoomPlanState::Failed { time: game::time() },
+                                        ) {
+                                            info!("Failed to attach plan to room! Room: {} - Error: {}", room_data.name, err);
+                                        }
+
+                                        true
+                                    }
+                                    Err(err) => {
+                                        info!("Planning error! Room: {} - Error: {}", room_data.name, err);
                                         true
                                     }
                                 }

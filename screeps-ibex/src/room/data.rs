@@ -3,7 +3,7 @@ use crate::serialize::EntityVec;
 use screeps::*;
 use screeps_cache::*;
 use screeps_foreman::constants::*;
-use screeps_foreman::planner::{FastRoomTerrain, TerrainFlags};
+use screeps_foreman::terrain::{FastRoomTerrain, TerrainFlags};
 use serde::{Deserialize, Serialize};
 #[allow(deprecated)]
 use specs::error::NoError;

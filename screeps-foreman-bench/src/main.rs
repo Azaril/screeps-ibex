@@ -1,18 +1,92 @@
-use screeps_foreman::planner::*;
-use screeps_foreman::visual::*;
+use clap::{Parser, Subcommand};
 use screeps_foreman::location::*;
-use screeps_foreman::*;
+use screeps_foreman::plan::*;
+use screeps_foreman::planner::*;
+use screeps_foreman::room_data::*;
+use screeps_foreman::visual::*;
 use log::*;
 use std::fs::File;
 use std::path::Path;
 use std::io::Read;
 use serde::*;
-use std::convert::*;
 use image::*;
 use std::time::*;
 use std::collections::HashMap;
 #[cfg(not(feature = "profile"))]
 use rayon::prelude::*;
+
+/// Offline room planner and visualization tool for screeps-foreman.
+///
+/// Loads map data from a JSON file, runs the room planning pipeline,
+/// and outputs PNG images, plan JSON, and score reports.
+#[derive(Parser)]
+#[command(name = "screeps-foreman-bench")]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Plan a single room and output results.
+    Plan {
+        /// Path to the map data JSON file (e.g. resources/map-mmo-shard3.json).
+        #[arg(short, long)]
+        map: String,
+
+        /// Room name to plan (e.g. W3S52).
+        #[arg(short, long)]
+        room: String,
+
+        /// Shard name, used in output metadata.
+        #[arg(short, long, default_value = "shard1")]
+        shard: String,
+
+        /// Output directory for generated files.
+        #[arg(short, long, default_value = "output")]
+        output: String,
+    },
+
+    /// Plan multiple rooms and rank them by score.
+    Compare {
+        /// Path to the map data JSON file.
+        #[arg(short, long)]
+        map: String,
+
+        /// Room names to compare (comma-separated, e.g. W3S52,E11N11).
+        /// If omitted, plans all rooms with 2 sources and a controller.
+        #[arg(short, long)]
+        rooms: Option<String>,
+
+        /// Shard name, used in output metadata.
+        #[arg(short, long, default_value = "shard1")]
+        shard: String,
+
+        /// Maximum number of rooms to plan (when --rooms is omitted).
+        #[arg(short = 'n', long, default_value = "20")]
+        limit: usize,
+
+        /// Output directory for generated files.
+        #[arg(short, long, default_value = "output")]
+        output: String,
+    },
+
+    /// List all rooms in a map data file.
+    ListRooms {
+        /// Path to the map data JSON file.
+        #[arg(short, long)]
+        map: String,
+
+        /// Only list rooms with this many sources.
+        #[arg(long)]
+        sources: Option<usize>,
+
+        /// Only list rooms that have a controller.
+        #[arg(long)]
+        has_controller: bool,
+    },
+}
 
 struct RoomDataPlannerDataSource {
     terrain: FastRoomTerrain,
@@ -22,19 +96,19 @@ struct RoomDataPlannerDataSource {
 }
 
 impl PlannerRoomDataSource for RoomDataPlannerDataSource {
-    fn get_terrain(&mut self) -> &FastRoomTerrain {
+    fn get_terrain(&self) -> &FastRoomTerrain {
         &self.terrain
     }
 
-    fn get_controllers(&mut self) -> &[PlanLocation] {
+    fn get_controllers(&self) -> &[PlanLocation] {
         &self.controllers
     }
 
-    fn get_sources(&mut self) -> &[PlanLocation] {
+    fn get_sources(&self) -> &[PlanLocation] {
         &self.sources
     }
 
-    fn get_minerals(&mut self) -> &[PlanLocation] {
+    fn get_minerals(&self) -> &[PlanLocation] {
         &self.minerals
     }
 }
@@ -42,74 +116,138 @@ impl PlannerRoomDataSource for RoomDataPlannerDataSource {
 fn main() -> Result<(), String> {
     env_logger::init();
 
-    std::fs::create_dir_all("output").map_err(|err| format!("Failed to create output folder: {}", err))?;
+    let cli = Cli::parse();
 
-    info!("Loading map data...");
-    let shard = "shard1";    
-    let map_data = load_map_data(format!("resources/map-mmo-{}.json", shard))?;
-    info!("Finished loading map data");
+    match cli.command {
+        Commands::Plan { map, room, shard, output } => {
+            cmd_plan(&map, &room, &shard, &output)
+        }
+        Commands::Compare { map, rooms, shard, limit, output } => {
+            cmd_compare(&map, rooms.as_deref(), &shard, limit, &output)
+        }
+        Commands::ListRooms { map, sources, has_controller } => {
+            cmd_list_rooms(&map, sources, has_controller)
+        }
+    }
+}
 
-    /*
-    let rooms = map_data
-        .get_rooms()
-        .iter()
-        .filter(|room_data| room_data.get_sources().len() == 2 && room_data.get_controllers().len() == 1)
-        .take(1000)
-        .collect::<Vec<_>>();
-    */
+fn cmd_plan(map_path: &str, room_name: &str, shard: &str, output_dir: &str) -> Result<(), String> {
+    std::fs::create_dir_all(output_dir)
+        .map_err(|err| format!("Failed to create output folder '{}': {}", output_dir, err))?;
 
-    let rooms = vec![
-        //map_data.get_room("E33S31")?,
-        //map_data.get_room("E34S31")?,
-        //map_data.get_room("E35S31")?,
-        
-        //map_data.get_room("E33S31")?,
-        //map_data.get_room("E11N11")?,
+    info!("Loading map data from {}...", map_path);
+    let map_data = load_map_data(map_path)?;
+    info!("Finished loading map data ({} rooms)", map_data.rooms.len());
 
-        //map_data.get_room("E11N1")?,
-        //map_data.get_room("E29S11")?,
+    let room = map_data.get_room(room_name)?;
+    run_room(shard, room, output_dir)?;
 
-        map_data.get_room("W3S52")?,
-    ];
+    println!("Done. Output written to {}/", output_dir);
+    Ok(())
+}
 
-    let maximum_seconds = Some(60.0);
-    //let maximum_seconds = Some(2.0);
+fn cmd_compare(
+    map_path: &str,
+    rooms_arg: Option<&str>,
+    shard: &str,
+    limit: usize,
+    output_dir: &str,
+) -> Result<(), String> {
+    std::fs::create_dir_all(output_dir)
+        .map_err(|err| format!("Failed to create output folder '{}': {}", output_dir, err))?;
 
-    //let maximum_batch_seconds = None;
-    let maximum_batch_seconds = Some(5.0);
+    info!("Loading map data from {}...", map_path);
+    let map_data = load_map_data(map_path)?;
+    info!("Finished loading map data ({} rooms)", map_data.rooms.len());
 
-    
+    let rooms: Vec<&BenchRoomData> = if let Some(names) = rooms_arg {
+        names
+            .split(',')
+            .map(|n| map_data.get_room(n.trim()))
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        map_data
+            .rooms
+            .iter()
+            .filter(|r| r.get_sources().len() == 2 && r.get_controllers().len() == 1)
+            .take(limit)
+            .collect()
+    };
+
+    println!("Planning {} rooms...", rooms.len());
+
     #[cfg(not(feature = "profile"))]
     let room_iter = rooms.par_iter();
 
     #[cfg(feature = "profile")]
     let room_iter = rooms.iter();
 
-    let room_results: Vec<_> = room_iter
-        .map(|room| {
-            let res = run_room(shard, &room, maximum_seconds, maximum_batch_seconds);
-
-            (room, res)
+    let mut results: Vec<_> = room_iter
+        .filter_map(|room| {
+            match run_room(shard, room, output_dir) {
+                Ok(plan) => Some((room.name().to_owned(), plan)),
+                Err(err) => {
+                    error!("Failed planning {}: {}", room.name(), err);
+                    None
+                }
+            }
         })
         .collect();
 
-    for (room, result) in room_results {
-        match result {
-            Ok(()) => {
-                info!("Succesfully ran room planning: {}", room.name());
-            },
-            Err(err) => {
-                error!("Failed running room planning: {} - Error: {}", room.name(), err);
-            }
-        }
+    // Sort by total score descending
+    results.sort_by(|a, b| {
+        b.1.score
+            .total
+            .partial_cmp(&a.1.score.total)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    println!();
+    println!("{:<10} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
+        "Room", "Total", "SrcDst", "CtrlD", "Hub", "Tower", "ExtEff", "Upkeep");
+    println!("{}", "-".repeat(73));
+    for (name, plan) in &results {
+        let s = &plan.score;
+        println!("{:<10} {:>7.4} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>7.3}",
+            name, s.total, s.source_distance, s.controller_distance,
+            s.hub_quality, s.tower_coverage, s.extension_efficiency, s.upkeep_cost);
     }
 
+    println!();
+    println!("Done. Output written to {}/", output_dir);
     Ok(())
 }
 
-fn run_room(shard: &str, room: &RoomData, maximum_seconds: Option<f32>, maximum_batch_seconds: Option<f32>) -> Result<(), String> {
+fn cmd_list_rooms(map_path: &str, sources_filter: Option<usize>, has_controller: bool) -> Result<(), String> {
+    let map_data = load_map_data(map_path)?;
+
+    let mut count = 0;
+    for room in &map_data.rooms {
+        let nsources = room.get_sources().len();
+        let ncontrollers = room.get_controllers().len();
+
+        if let Some(required) = sources_filter {
+            if nsources != required {
+                continue;
+            }
+        }
+        if has_controller && ncontrollers == 0 {
+            continue;
+        }
+
+        println!("{:<10} sources={} controllers={} minerals={}",
+            room.name(), nsources, ncontrollers, room.get_minerals().len());
+        count += 1;
+    }
+
+    println!();
+    println!("{} rooms listed.", count);
+    Ok(())
+}
+
+fn run_room(shard: &str, room: &BenchRoomData, output_dir: &str) -> Result<Plan, String> {
     let room_name = room.name();
-    
+
     info!("Planning: {}", room_name);
 
     let epoch = Instant::now();
@@ -120,16 +258,29 @@ fn run_room(shard: &str, room: &RoomData, maximum_seconds: Option<f32>, maximum_
 
         screeps_timing::start_trace(Box::new(move || {
             let elapsed = epoch.elapsed();
-
             elapsed.as_micros() as u64
         }))
     }
 
-    let plan_result = evaluate_plan(&room, maximum_seconds, maximum_batch_seconds);
-    
-    let duration = epoch.elapsed().as_secs_f32();
+    let data_source = RoomDataPlannerDataSource {
+        terrain: room.get_terrain()?,
+        controllers: room.get_controllers(),
+        sources: room.get_sources(),
+        minerals: room.get_minerals(),
+    };
 
-    info!("Planning complete - Duration: {}", duration);
+    let plan = plan_room(&data_source).map_err(|e| format!("Planning failed: {}", e))?;
+
+    let duration = epoch.elapsed().as_secs_f32();
+    info!("Planning complete - Duration: {:.3}s", duration);
+    info!(
+        "Plan score: {:.4} (source_dist={:.3}, ctrl_dist={:.3}, hub_quality={:.3}, tower_cov={:.3})",
+        plan.score.total,
+        plan.score.source_distance,
+        plan.score.controller_distance,
+        plan.score.hub_quality,
+        plan.score.tower_coverage,
+    );
 
     #[cfg(feature = "profile")]
     {
@@ -137,34 +288,37 @@ fn run_room(shard: &str, room: &RoomData, maximum_seconds: Option<f32>, maximum_
         let trace = screeps_timing::stop_trace();
         info!("Done gathering trace");
 
-        let trace_name = format!("output/{}_trace.json", room_name);
-        let trace_file = &File::create(trace_name).map_err(|err| format!("Failed to crate trace file: {}", err))?;
+        let trace_name = format!("{}/{}_trace.json", output_dir, room_name);
+        let trace_file =
+            &File::create(trace_name).map_err(|err| format!("Failed to create trace file: {}", err))?;
 
         info!("Serializing trace to disk...");
-        serde_json::to_writer(trace_file, &trace).map_err(|err| format!("Failed to serialize json: {}", err))?;
+        serde_json::to_writer(trace_file, &trace)
+            .map_err(|err| format!("Failed to serialize json: {}", err))?;
         info!("Done serializing");
     }
-
-    let plan = plan_result?.ok_or("Failed to create plan for room")?;
 
     let mut img: RgbImage = ImageBuffer::new(500, 500);
 
     let terrain = room.get_terrain()?;
     render_terrain(&mut img, &terrain, 10);
-
     render_plan(&mut img, &plan, 10);
 
-    let output_img_name = format!("output/{}.png", room_name);
+    let output_img_name = format!("{}/{}.png", output_dir, room_name);
     img.save(output_img_name).map_err(|err| format!("Failed to save image: {}", err))?;
 
-    let serialized_plan = serialize_plan(shard, &room, &plan)?;
+    let serialized_plan = serialize_plan(shard, room, &plan)?;
+    let output_plan_name = format!("{}/{}_plan.json", output_dir, room_name);
+    let output_plan_file =
+        &File::create(output_plan_name).map_err(|err| format!("Failed to create plan file: {}", err))?;
+    serde_json::to_writer(output_plan_file, &serialized_plan)
+        .map_err(|err| format!("Failed to write plan json: {}", err))?;
 
-    let output_plan_name = format!("output/{}_plan.json", room_name);
-    let output_plan_file = &File::create(output_plan_name).map_err(|err| format!("Failed to crate plan file: {}", err))?;
+    // Report serialized pipeline state size
+    let plan_json = serde_json::to_string(&plan).map_err(|e| format!("Failed to serialize plan: {}", e))?;
+    info!("Serialized plan size: {} bytes", plan_json.len());
 
-    serde_json::to_writer(output_plan_file, &serialized_plan).map_err(|err| format!("Failed to write plan json: {}", err))?;
-
-    Ok(())
+    Ok(plan)
 }
 
 #[derive(Serialize, Hash, Ord, PartialOrd, Eq, PartialEq)]
@@ -193,30 +347,30 @@ enum RoomPlannerStructure {
     InvaderCore = 20,
 }
 
-impl From<StructureType> for RoomPlannerStructure {
-    fn from(data: StructureType) -> Self {
+impl From<screeps_foreman::shim::StructureType> for RoomPlannerStructure {
+    fn from(data: screeps_foreman::shim::StructureType) -> Self {
         match data {
-            StructureType::Spawn => RoomPlannerStructure::Spawn,
-            StructureType::Extension => RoomPlannerStructure::Extension,
-            StructureType::Road => RoomPlannerStructure::Road,
-            StructureType::Wall => RoomPlannerStructure::Wall,
-            StructureType::Rampart => RoomPlannerStructure::Rampart,
-            StructureType::KeeperLair => RoomPlannerStructure::KeeperLair,
-            StructureType::Portal => RoomPlannerStructure::Portal,
-            StructureType::Controller => RoomPlannerStructure::Controller,
-            StructureType::Link => RoomPlannerStructure::Link,
-            StructureType::Storage => RoomPlannerStructure::Storage,
-            StructureType::Tower => RoomPlannerStructure::Tower,
-            StructureType::Observer => RoomPlannerStructure::Observer,
-            StructureType::PowerBank => RoomPlannerStructure::PowerBank,
-            StructureType::PowerSpawn => RoomPlannerStructure::PowerSpawn,
-            StructureType::Extractor => RoomPlannerStructure::Extractor,
-            StructureType::Lab => RoomPlannerStructure::Lab,
-            StructureType::Terminal => RoomPlannerStructure::Terminal,
-            StructureType::Container => RoomPlannerStructure::Container,
-            StructureType::Nuker => RoomPlannerStructure::Nuker,
-            StructureType::Factory => RoomPlannerStructure::Factory,
-            StructureType::InvaderCore => RoomPlannerStructure::InvaderCore,
+            screeps_foreman::shim::StructureType::Spawn => RoomPlannerStructure::Spawn,
+            screeps_foreman::shim::StructureType::Extension => RoomPlannerStructure::Extension,
+            screeps_foreman::shim::StructureType::Road => RoomPlannerStructure::Road,
+            screeps_foreman::shim::StructureType::Wall => RoomPlannerStructure::Wall,
+            screeps_foreman::shim::StructureType::Rampart => RoomPlannerStructure::Rampart,
+            screeps_foreman::shim::StructureType::KeeperLair => RoomPlannerStructure::KeeperLair,
+            screeps_foreman::shim::StructureType::Portal => RoomPlannerStructure::Portal,
+            screeps_foreman::shim::StructureType::Controller => RoomPlannerStructure::Controller,
+            screeps_foreman::shim::StructureType::Link => RoomPlannerStructure::Link,
+            screeps_foreman::shim::StructureType::Storage => RoomPlannerStructure::Storage,
+            screeps_foreman::shim::StructureType::Tower => RoomPlannerStructure::Tower,
+            screeps_foreman::shim::StructureType::Observer => RoomPlannerStructure::Observer,
+            screeps_foreman::shim::StructureType::PowerBank => RoomPlannerStructure::PowerBank,
+            screeps_foreman::shim::StructureType::PowerSpawn => RoomPlannerStructure::PowerSpawn,
+            screeps_foreman::shim::StructureType::Extractor => RoomPlannerStructure::Extractor,
+            screeps_foreman::shim::StructureType::Lab => RoomPlannerStructure::Lab,
+            screeps_foreman::shim::StructureType::Terminal => RoomPlannerStructure::Terminal,
+            screeps_foreman::shim::StructureType::Container => RoomPlannerStructure::Container,
+            screeps_foreman::shim::StructureType::Nuker => RoomPlannerStructure::Nuker,
+            screeps_foreman::shim::StructureType::Factory => RoomPlannerStructure::Factory,
+            screeps_foreman::shim::StructureType::InvaderCore => RoomPlannerStructure::InvaderCore,
         }
     }
 }
@@ -224,47 +378,51 @@ impl From<StructureType> for RoomPlannerStructure {
 #[derive(Serialize)]
 struct RoomPlannerPosition {
     x: u8,
-    y: u8
+    y: u8,
 }
 
 impl From<Location> for RoomPlannerPosition {
     fn from(data: Location) -> Self {
         Self {
             x: data.x(),
-            y: data.y()
+            y: data.y(),
         }
     }
 }
 
 #[derive(Serialize, Default)]
 struct RoomPlannerEntry {
-    pos: Vec<RoomPlannerPosition>
+    pos: Vec<RoomPlannerPosition>,
 }
 
 #[derive(Serialize)]
-struct RoomPlannerData {
+struct RoomPlannerOutputData {
     name: String,
     shard: String,
     rcl: u32,
-    buildings: HashMap<RoomPlannerStructure, RoomPlannerEntry>
+    buildings: HashMap<RoomPlannerStructure, RoomPlannerEntry>,
 }
 
-impl RoomVisualizer for RoomPlannerData {
-    fn render(&mut self, location: Location, structure_type: StructureType) { 
-        let entry = self.buildings
+impl RoomVisualizer for RoomPlannerOutputData {
+    fn render(&mut self, location: Location, structure_type: screeps_foreman::shim::StructureType) {
+        let entry = self
+            .buildings
             .entry(structure_type.into())
             .or_insert_with(RoomPlannerEntry::default);
-
         entry.pos.push(location.into());
     }
 }
 
-fn serialize_plan(shard: &str, room_data: &RoomData, plan: &Plan) -> Result<RoomPlannerData, String> {
-    let mut data = RoomPlannerData {
+fn serialize_plan(
+    shard: &str,
+    room_data: &BenchRoomData,
+    plan: &Plan,
+) -> Result<RoomPlannerOutputData, String> {
+    let mut data = RoomPlannerOutputData {
         name: room_data.name().to_owned(),
         shard: shard.to_owned(),
         rcl: 8,
-        buildings: HashMap::new()
+        buildings: HashMap::new(),
     };
 
     plan.visualize(&mut data);
@@ -284,7 +442,6 @@ fn render_terrain(img: &mut RgbImage, terrain: &FastRoomTerrain, pixel_size: u32
     for x in 0..50 {
         for y in 0..50 {
             let val = terrain.get_xy(x, y);
-
             let color = if val.contains(TerrainFlags::WALL) {
                 Rgb([0, 0, 0])
             } else if val.contains(TerrainFlags::SWAMP) {
@@ -292,38 +449,53 @@ fn render_terrain(img: &mut RgbImage, terrain: &FastRoomTerrain, pixel_size: u32
             } else {
                 Rgb([127, 127, 127])
             };
-
-            fill_region(img, (x as u32) * pixel_size, (y as u32) * pixel_size, pixel_size, pixel_size, color);
+            fill_region(
+                img,
+                (x as u32) * pixel_size,
+                (y as u32) * pixel_size,
+                pixel_size,
+                pixel_size,
+                color,
+            );
         }
     }
 }
 
 struct ImgVisualizer<'a> {
     img: &'a mut RgbImage,
-    pixel_size: u32
+    pixel_size: u32,
 }
 
 impl<'a> RoomVisualizer for ImgVisualizer<'a> {
-    fn render(&mut self, location: Location, structure: StructureType) {
+    fn render(&mut self, location: Location, structure: screeps_foreman::shim::StructureType) {
         let color = match structure {
-            StructureType::Road => Rgb([50, 0, 50]),
-            StructureType::Rampart => Rgb([0, 255, 0]),
-            StructureType::Spawn => Rgb([255, 255, 0]),
-            StructureType::Storage => Rgb([0, 255, 255]),
+            screeps_foreman::shim::StructureType::Road => Rgb([50, 0, 50]),
+            screeps_foreman::shim::StructureType::Rampart => Rgb([0, 255, 0]),
+            screeps_foreman::shim::StructureType::Spawn => Rgb([255, 255, 0]),
+            screeps_foreman::shim::StructureType::Storage => Rgb([0, 255, 255]),
+            screeps_foreman::shim::StructureType::Extension => Rgb([200, 100, 0]),
+            screeps_foreman::shim::StructureType::Tower => Rgb([255, 0, 0]),
+            screeps_foreman::shim::StructureType::Lab => Rgb([0, 200, 200]),
+            screeps_foreman::shim::StructureType::Link => Rgb([255, 165, 0]),
+            screeps_foreman::shim::StructureType::Terminal => Rgb([255, 192, 203]),
+            screeps_foreman::shim::StructureType::Container => Rgb([0, 0, 255]),
             _ => Rgb([255, 0, 0]),
         };
 
-        fill_region(&mut self.img, location.x() as u32 * self.pixel_size, location.y() as u32 * self.pixel_size, self.pixel_size, self.pixel_size, color);
+        fill_region(
+            &mut self.img,
+            location.x() as u32 * self.pixel_size,
+            location.y() as u32 * self.pixel_size,
+            self.pixel_size,
+            self.pixel_size,
+            color,
+        );
     }
 }
 
 fn render_plan(img: &mut RgbImage, plan: &Plan, pixel_size: u32) {
-    let mut visualizer = ImgVisualizer {
-        img,
-        pixel_size
-    };
-
-    plan.visualize(&mut visualizer)
+    let mut visualizer = ImgVisualizer { img, pixel_size };
+    plan.visualize(&mut visualizer);
 }
 
 fn terrain_string_to_vec<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
@@ -334,39 +506,39 @@ where
 
     impl<'de> de::Visitor<'de> for JsonStringVisitor {
         type Value = Vec<u8>;
-    
+
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
             formatter.write_str("a string containing terrain data")
         }
-    
+
         fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
         where
             E: de::Error,
         {
             let mut buffer = Vec::with_capacity(v.len());
-
             for mask in v.chars() {
-                let val = mask.to_digit(16).ok_or_else(|| E::custom("Expected hex digit character".to_owned()))? as u8;
-
+                let val = mask
+                    .to_digit(16)
+                    .ok_or_else(|| E::custom("Expected hex digit character".to_owned()))?
+                    as u8;
                 buffer.push(val);
             }
-
             Ok(buffer)
         }
     }
-    
+
     deserializer.deserialize_any(JsonStringVisitor)
 }
 
 #[derive(Deserialize)]
-struct RoomData {
+struct BenchRoomData {
     room: String,
     #[serde(deserialize_with = "terrain_string_to_vec")]
     terrain: Vec<u8>,
-    objects: Vec<serde_json::Value>
+    objects: Vec<serde_json::Value>,
 }
 
-impl RoomData {
+impl BenchRoomData {
     fn name(&self) -> &str {
         &self.room
     }
@@ -375,10 +547,7 @@ impl RoomData {
         if self.terrain.len() != 50 * 50 {
             return Err("Terrain was not expected 50 x 50 layout".to_owned());
         }
-
-        let terrain = FastRoomTerrain::new(self.terrain.clone());
-
-        Ok(terrain)
+        Ok(FastRoomTerrain::new(self.terrain.clone()))
     }
 
     fn get_object_type(&self, obj_type: &str) -> Vec<PlanLocation> {
@@ -389,7 +558,6 @@ impl RoomData {
             .filter_map(|o| {
                 let x = o.get("x")?.as_i64()?;
                 let y = o.get("y")?.as_i64()?;
-
                 Some(PlanLocation::new(x as i8, y as i8))
             })
             .collect()
@@ -410,105 +578,29 @@ impl RoomData {
 
 #[derive(Deserialize)]
 struct MapData {
-    rooms: Vec<RoomData>
+    rooms: Vec<BenchRoomData>,
 }
 
 impl MapData {
-    #[allow(dead_code)]
-    fn get_room(&self, room_name: &str) -> Result<&RoomData, String> {
-        self
-            .rooms
+    fn get_room(&self, room_name: &str) -> Result<&BenchRoomData, String> {
+        self.rooms
             .iter()
             .find(|room| room.name() == room_name)
-            .ok_or("Failed to find room".to_owned())
-    }
-
-    #[allow(dead_code)]
-    fn get_rooms(&self) -> &[RoomData] {
-        &self.rooms
+            .ok_or_else(|| format!("Room '{}' not found in map data", room_name))
     }
 }
 
-fn load_map_data<P>(path: P) -> Result<MapData, String> where P: AsRef<Path>  {
-    let mut file = File::open(path).map_err(|err| format!("Failed to open map file: {}", err))?;
+fn load_map_data<P>(path: P) -> Result<MapData, String>
+where
+    P: AsRef<Path>,
+{
+    let path = path.as_ref();
+    let mut file =
+        File::open(path).map_err(|err| format!("Failed to open map file '{}': {}", path.display(), err))?;
     let mut contents = String::new();
-    file.read_to_string(&mut contents).map_err(|err| format!("Failed to read string to buffer: {}", err))?;
-
-    let data: MapData = serde_json::from_str(&contents).map_err(|err| format!("Failed to load json: {}", err))?;
-
+    file.read_to_string(&mut contents)
+        .map_err(|err| format!("Failed to read map file: {}", err))?;
+    let data: MapData =
+        serde_json::from_str(&contents).map_err(|err| format!("Failed to parse map JSON: {}", err))?;
     Ok(data)
-}
-
-fn evaluate_plan(room: &RoomData, max_seconds: Option<f32>, max_batch_seconds: Option<f32>) -> Result<Option<Plan>, String> {
-    let mut data_source = RoomDataPlannerDataSource {
-        terrain: room.get_terrain()?,
-        controllers: room.get_controllers(),
-        sources: room.get_sources(),
-        minerals: room.get_minerals()
-    };
-
-    let planner = Planner::new(screeps_foreman::scoring::score_state);
-
-    let epoch = Instant::now();
-
-    let seed_result = planner.seed(screeps_foreman::layout::ALL_ROOT_NODES, &mut data_source)?;
-
-    let mut running_state = match seed_result {
-        PlanSeedResult::Complete(plan) => {
-            info!("Seeding complete - plan complete");
-
-            return Ok(plan);
-        }
-        PlanSeedResult::Running(run_state) => {
-            info!("Seeding complete - pending evaluation");
-
-            run_state
-        }
-    };
-
-    info!("Starting evaluating...");
-
-    let plan = loop {
-        let batch_epoch = Instant::now();
-
-        let evaluate_result = planner.evaluate(
-            screeps_foreman::layout::ALL_ROOT_NODES, 
-            &mut data_source, 
-            &mut running_state, 
-            || {
-                let elapsed = epoch.elapsed().as_secs_f32();
-
-                if max_seconds.map(|max| elapsed >= max).unwrap_or(false) {
-                    return false;
-                }
-
-                let batch_elapsed = batch_epoch.elapsed().as_secs_f32();
-
-                if max_batch_seconds.map(|max| batch_elapsed >= max).unwrap_or(false) {
-                    return false;
-                }
-
-                true
-            }
-        )?;
-    
-        match evaluate_result {
-            PlanEvaluationResult::Complete(plan) => {
-                if plan.is_some() {
-                    info!("Evaluate complete - planned room layout.");
-                } else {
-                    info!("Evaluate complete - failed to find room layout.");
-                }
-                
-                break Ok(plan)
-            },
-            PlanEvaluationResult::Running() => {
-                if max_seconds.map(|max| epoch.elapsed().as_secs_f32() >= max).unwrap_or(false) {
-                    break Err("Exceeded maximum duration for planning".to_owned());
-                }
-            }
-        };
-    }?;
-
-    Ok(plan)
 }
