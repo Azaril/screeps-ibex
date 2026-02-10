@@ -216,7 +216,7 @@ impl Mission for UpgradeMission {
             let body_definition = if controller_level <= 3 {
                 crate::creep::SpawnBodyDefinition {
                     maximum_energy,
-                    minimum_repeat: Some(1),
+                    minimum_repeat: Some(0),
                     maximum_repeat: work_parts_per_upgrader,
                     pre_body: &[Part::Work, Part::Carry, Part::Move, Part::Move],
                     repeat_body: &[Part::Work, Part::Move],
