@@ -1,5 +1,5 @@
 use screeps::*;
-use screeps_foreman::planner::*;
+use screeps_foreman::planner::get_build_priority;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn select_construction_site(creep: &Creep, construction_sites: &[ConstructionSite], current_rcl: u32) -> Option<ConstructionSite> {
