@@ -57,3 +57,7 @@
 [DONE] The anchor layer almost certainly needs to evaluate more than one placement as it will drive most of the rest of the scoring/placement. -- Already handled by search tree architecture. AnchorLayer now generates one candidate per valid position; hub stamp is placed by a separate StampLayer.
 
 [DONE] Separate out scoring in to its own layers for each type so they can be parameterized. -- FinalScoreLayer split into 6 individual scoring layers (HubQualityScoreLayer, UpgradeAreaScoreLayer, ExtensionScoreLayer, TowerCoverageScoreLayer, UpkeepScoreLayer, TrafficScoreLayer) placed at earliest viable positions in the stack.
+
+---
+
+Container miners need to anchor to their container location, or need to look for a container for their source to use if it gets built after they have started mining.
