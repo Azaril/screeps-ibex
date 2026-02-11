@@ -1,0 +1,853 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "datasource",
+          "uid": "grafana"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 285,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 165,
+      "panels": [],
+      "repeat": "shard",
+      "title": "CPU for $shard",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "graphite",
+        "uid": "afcvzx524n75sb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 1
+      },
+      "id": 1,
+      "options": {
+        "dataLinks": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "hide": false,
+          "refCount": 0,
+          "refId": "A",
+          "target": "alias(screeps.$user.shard.$shard.cpu.used, 'Used')",
+          "textEditor": true
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refCount": 0,
+          "refId": "D",
+          "target": "alias(movingAverage(screeps.$user.shard.$shard.cpu.used, '10min'), 'Average Used')",
+          "textEditor": false
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refCount": 0,
+          "refId": "B",
+          "target": "alias(screeps.$user.shard.$shard.cpu.bucket, 'Bucket')"
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "hide": false,
+          "refCount": 0,
+          "refId": "C",
+          "target": "alias(screeps.$user.shard.$shard.cpu.limit, 'Limit')"
+        }
+      ],
+      "title": "CPU",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "graphite",
+        "uid": "afcvzx524n75sb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      },
+      "id": 2,
+      "maxDataPoints": 100,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refId": "A",
+          "target": "screeps.$user.shard.$shard.cpu.bucket"
+        }
+      ],
+      "title": "Current Bucket",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "graphite",
+        "uid": "afcvzx524n75sb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
+      "id": 118,
+      "options": {
+        "dataLinks": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refId": "A",
+          "target": "alias(derivative(screeps.$user.shard.$shard.time), 'Ticks Per Update')"
+        }
+      ],
+      "title": "Ticks Per Stats Update",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "id": 166,
+      "panels": [],
+      "title": "GCL",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "graphite",
+        "uid": "afcvzx524n75sb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 0,
+        "y": 9
+      },
+      "id": 4,
+      "maxDataPoints": 100,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refId": "A",
+          "target": "screeps.$user.shard.$shard.gcl.level"
+        }
+      ],
+      "title": "GCL",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "graphite",
+        "uid": "afcvzx524n75sb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 6,
+        "x": 4,
+        "y": 9
+      },
+      "id": 5,
+      "options": {
+        "dataLinks": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refCount": 1,
+          "refId": "A",
+          "target": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.gcl.progress, 100)), #B), 'GCL per tick')",
+          "targetFull": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.gcl.progress, 100)), derivative(screeps.$user.shard.$shard.time)), 'GCL per tick')",
+          "textEditor": false
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "hide": true,
+          "refCount": 0,
+          "refId": "B",
+          "target": "derivative(screeps.$user.shard.$shard.time)"
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refCount": 0,
+          "refId": "C",
+          "target": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.gcl.progress, 100)), #B), '1hour'), '1hr Moving Average')",
+          "targetFull": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.gcl.progress, 100)), derivative(screeps.$user.shard.$shard.time)), '1hour'), '1hr Moving Average')"
+        }
+      ],
+      "title": "GCL Upgrade",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "graphite",
+        "uid": "afcvzx524n75sb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 5,
+        "x": 10,
+        "y": 9
+      },
+      "id": 164,
+      "options": {
+        "dataLinks": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "hide": false,
+          "refCount": -1,
+          "refId": "B",
+          "target": "groupByNode(screeps.$user.shard.$shard.room.*.storage.*.energy, 7, \"sumSeries\")",
+          "textEditor": true
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "hide": false,
+          "refCount": 0,
+          "refId": "A",
+          "target": "alias(sumSeries(#B), 'Total')",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.*.storage.*.energy, 7, \"sumSeries\")), 'Total')",
+          "textEditor": false
+        }
+      ],
+      "title": "Global Stored Energy",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "graphite",
+        "uid": "afcvzx524n75sb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 5,
+        "x": 15,
+        "y": 9
+      },
+      "id": 187,
+      "options": {
+        "dataLinks": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "hide": false,
+          "refCount": -1,
+          "refId": "B",
+          "target": "groupByNode(screeps.$user.shard.$shard.room.*.storage.*.*, 8, \"sumSeries\")",
+          "textEditor": true
+        }
+      ],
+      "title": "Global Resources",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "graphite",
+        "uid": "afcvzx524n75sb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 4,
+        "x": 20,
+        "y": 9
+      },
+      "id": 174,
+      "options": {
+        "dataLinks": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refCount": 1,
+          "refId": "A",
+          "target": "alias(divideSeries(derivative(keepLastValue(screeps.$user.shard.$shard.market.credits, 100)), #B), 'Credits per tick')",
+          "targetFull": "alias(divideSeries(derivative(keepLastValue(screeps.$user.shard.$shard.market.credits, 100)), derivative(screeps.$user.shard.$shard.time)), 'Credits per tick')",
+          "textEditor": false
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "hide": true,
+          "refCount": 1,
+          "refId": "B",
+          "target": "derivative(screeps.$user.shard.$shard.time)"
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refCount": 0,
+          "refId": "C",
+          "target": "alias(movingAverage(divideSeries(derivative(keepLastValue(screeps.$user.shard.$shard.market.credits, 100)), #B), '1hour'), '1 Hour Moving Average')",
+          "targetFull": "alias(movingAverage(divideSeries(derivative(keepLastValue(screeps.$user.shard.$shard.market.credits, 100)), derivative(screeps.$user.shard.$shard.time)), '1hour'), '1 Hour Moving Average')"
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refCount": 2,
+          "refId": "D",
+          "target": "alias(keepLastValue(screeps.$user.shard.$shard.market.credits, 100), 'Total')",
+          "textEditor": false
+        }
+      ],
+      "title": "Credits",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "graphite",
+        "uid": "afcvzx524n75sb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 0,
+        "y": 12
+      },
+      "id": 6,
+      "maxDataPoints": 100,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refId": "A",
+          "target": "divideSeries(screeps.$user.shard.$shard.gcl.progress, #B)"
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "hide": true,
+          "refId": "B",
+          "target": "screeps.$user.shard.$shard.gcl.progress_total"
+        }
+      ],
+      "title": "GCL Progress",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "graphite",
+        "uid": "afcvzx524n75sb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 0,
+        "y": 15
+      },
+      "id": 7,
+      "maxDataPoints": 100,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refCount": 0,
+          "refId": "A",
+          "target": "divideSeries(diffSeries(keepLastValue(screeps.$user.shard.$shard.gcl.progress_total, 100), #B), #C)",
+          "targetFull": "divideSeries(diffSeries(keepLastValue(screeps.$user.shard.$shard.gcl.progress_total, 100), keepLastValue(screeps.$user.shard.$shard.gcl.progress, 100)), scaleToSeconds(movingAverage(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.gcl.progress, 100)), '1hour'), 1))"
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "hide": true,
+          "refCount": -1,
+          "refId": "B",
+          "target": "keepLastValue(screeps.$user.shard.$shard.gcl.progress, 100)"
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "hide": true,
+          "refCount": 1,
+          "refId": "C",
+          "target": "scaleToSeconds(movingAverage(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.gcl.progress, 100)), '1hour'), 1)"
+        }
+      ],
+      "title": "Time to Next GCL",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "id": 167,
+      "panels": [],
+      "repeat": "room",
+      "title": "$room",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "graphite",
+        "uid": "afcvzx524n75sb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 0,
+        "y": 19
+      },
+      "id": 8,
+      "maxDataPoints": 100,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refId": "A",
+          "target": "screeps.$user.shard.$shard.room.$room.controller_level"
+        }
+      ],
+      "title": "RCL",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "graphite",
+        "uid": "afcvzx524n75sb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 6,
+        "x": 4,
+        "y": 19
+      },
+      "id": 53,
+      "options": {
+        "dataLinks": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refCount": 1,
+          "refId": "A",
+          "target": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), #C), 'RCL per tick')",
+          "targetFull": "alias(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), derivative(screeps.$user.shard.$shard.time)), 'RCL per tick')",
+          "textEditor": false
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "hide": true,
+          "refCount": 0,
+          "refId": "C",
+          "target": "derivative(screeps.$user.shard.$shard.time)"
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refCount": 0,
+          "refId": "B",
+          "target": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), #C), '1hour'), '1hr Moving Average')",
+          "targetFull": "alias(movingAverage(divideSeries(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), derivative(screeps.$user.shard.$shard.time)), '1hour'), '1hr Moving Average')"
+        }
+      ],
+      "title": "RCL Upgrade",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "graphite",
+        "uid": "afcvzx524n75sb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 5,
+        "x": 10,
+        "y": 19
+      },
+      "id": 82,
+      "options": {
+        "dataLinks": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refCount": -1,
+          "refId": "A",
+          "target": "groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.energy, 7, \"sumSeries\")",
+          "textEditor": true
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refCount": 0,
+          "refId": "D",
+          "target": "alias(sumSeries(#A), \"Total\")",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.energy, 7, \"sumSeries\")), \"Total\")",
+          "textEditor": true
+        }
+      ],
+      "title": "Room Stored Energy",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "graphite",
+        "uid": "afcvzx524n75sb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 5,
+        "x": 15,
+        "y": 19
+      },
+      "id": 188,
+      "options": {
+        "dataLinks": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refCount": -1,
+          "refId": "A",
+          "target": "groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.*, 8, \"sumSeries\")",
+          "textEditor": true
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refCount": 0,
+          "refId": "D",
+          "target": "alias(sumSeries(#A), \"Total\")",
+          "targetFull": "alias(sumSeries(groupByNode(screeps.$user.shard.$shard.room.$room.storage.*.*, 8, \"sumSeries\")), \"Total\")",
+          "textEditor": true
+        }
+      ],
+      "title": "Room Resources",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "graphite",
+        "uid": "afcvzx524n75sb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 22
+      },
+      "id": 16,
+      "maxDataPoints": 100,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refId": "A",
+          "target": "divideSeries(screeps.$user.shard.$shard.room.$room.controller_progress, #B)"
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "hide": true,
+          "refId": "B",
+          "target": "screeps.$user.shard.$shard.room.$room.controller_progress_total"
+        }
+      ],
+      "title": "RCL progress",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "graphite",
+        "uid": "afcvzx524n75sb"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 0,
+        "y": 26
+      },
+      "id": 31,
+      "maxDataPoints": 100,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "refCount": 0,
+          "refId": "A",
+          "target": "divideSeries(diffSeries(screeps.$user.shard.$shard.room.$room.controller_progress_total, #B), #C)",
+          "targetFull": "divideSeries(diffSeries(screeps.$user.shard.$shard.room.$room.controller_progress_total, keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), scaleToSeconds(movingAverage(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), '1hour'), 1))",
+          "textEditor": false
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "hide": true,
+          "refCount": -1,
+          "refId": "B",
+          "target": "keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)"
+        },
+        {
+          "datasource": {
+            "type": "graphite",
+            "uid": "afcvzx524n75sb"
+          },
+          "hide": true,
+          "refCount": 1,
+          "refId": "C",
+          "target": "scaleToSeconds(movingAverage(nonNegativeDerivative(keepLastValue(screeps.$user.shard.$shard.room.$room.controller_progress, 100)), '1hour'), 1)"
+        }
+      ],
+      "title": "Time to Next RCL",
+      "type": "stat"
+    }
+  ],
+  "preload": false,
+  "refresh": "30s",
+  "schemaVersion": 41,
+  "tags": [
+    "screeps"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": "graphite",
+        "definition": "screeps.*",
+        "includeAll": true,
+        "name": "user",
+        "options": [],
+        "query": "screeps.*",
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      },
+      {
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": "graphite",
+        "definition": "screeps.$user.shard.*",
+        "includeAll": true,
+        "name": "shard",
+        "options": [],
+        "query": "screeps.$user.shard.*",
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      },
+      {
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": "graphite",
+        "definition": "screeps.$user.shard.$shard.room.*",
+        "includeAll": true,
+        "name": "room",
+        "options": [],
+        "query": "screeps.$user.shard.$shard.room.*",
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Full Overview",
+  "uid": "y1clLT_Wk",
+  "version": 1
+}

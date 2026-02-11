@@ -193,6 +193,13 @@ pub struct GclStats {
 }
 
 #[derive(Serialize)]
+pub struct GplStats {
+    progress: f64,
+    progress_total: f64,
+    level: u32,
+}
+
+#[derive(Serialize)]
 pub struct MarketStats {
     credits: f64,
 }
@@ -201,6 +208,7 @@ pub struct MarketStats {
 pub struct ShardStats {
     time: u32,
     gcl: GclStats,
+    gpl: GplStats,
     cpu: CpuStats,
     room: HashMap<RoomName, RoomStats>,
     market: MarketStats,
@@ -220,6 +228,14 @@ impl StatsSystem {
             progress: game::gcl::progress(),
             progress_total: game::gcl::progress_total(),
             level: game::gcl::level(),
+        }
+    }
+
+    fn get_gpl_stats() -> GplStats {
+        GplStats {
+            progress: game::gpl::progress(),
+            progress_total: game::gpl::progress_total(),
+            level: game::gpl::level(),
         }
     }
 
@@ -293,6 +309,7 @@ impl StatsSystem {
         ShardStats {
             time: game::time(),
             gcl: Self::get_gcl_stats(),
+            gpl: Self::get_gpl_stats(),
             cpu: Self::get_cpu_stats(),
             room: Self::get_room_stats(data),
             market: Self::get_market_stats(),

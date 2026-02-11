@@ -615,6 +615,29 @@ fn grid_line_style() -> LineStyle {
         .line_style(LineDrawStyle::Dashed)
 }
 
+/// Bundled visual styles used by the global and room drawing functions.
+struct VisStyles {
+    rect: RectStyle,
+    header: TextStyle,
+    text: TextStyle,
+    accent: LineStyle,
+    sep: LineStyle,
+    grid: LineStyle,
+}
+
+impl VisStyles {
+    fn new() -> Self {
+        VisStyles {
+            rect: panel_rect_style(),
+            header: panel_header_text_style(),
+            text: panel_text_style(),
+            accent: accent_line_style(),
+            sep: separator_line_style(),
+            grid: grid_line_style(),
+        }
+    }
+}
+
 const GAP: f32 = 0.85;
 
 // Right side (global): fixed position, same in every room.
@@ -702,12 +725,7 @@ fn right_column_left_x(ops_panel: &Panel) -> f32 {
 fn draw_global_layer(
     vis: &mut crate::visualize::RoomVisualizer,
     ops_panel: &Panel,
-    rect_style: &RectStyle,
-    header_style: &TextStyle,
-    text_style: &TextStyle,
-    accent_style: &LineStyle,
-    sep_style: &LineStyle,
-    grid_style: &LineStyle,
+    styles: &VisStyles,
     cpu_samples: Option<&[f32]>,
     cpu_limit: f32,
     tick: u32,
@@ -715,20 +733,20 @@ fn draw_global_layer(
     // Right column: Ops (accent on right edge, header + separator)
     let ow = ops_panel.width();
     let oh = ops_panel.height();
-    vis.rect(ops_panel.x, ops_panel.y, ow, oh, Some(rect_style.clone()));
+    vis.rect(ops_panel.x, ops_panel.y, ow, oh, Some(styles.rect.clone()));
     vis.line(
         (ops_panel.x + ow, ops_panel.y),
         (ops_panel.x + ow, ops_panel.y + oh),
-        Some(accent_style.clone()),
+        Some(styles.accent.clone()),
     );
     let ops_header_y = ops_panel.y + PAD + LINE_HEIGHT;
     vis.line(
         (ops_panel.x + PAD, ops_header_y),
         (ops_panel.x + ow - PAD, ops_header_y),
-        Some(sep_style.clone()),
+        Some(styles.sep.clone()),
     );
     for (i, line) in ops_panel.lines.iter().enumerate() {
-        let style = if i == 0 { header_style.clone() } else { text_style.clone() };
+        let style = if i == 0 { styles.header.clone() } else { styles.text.clone() };
         vis.text(
             ops_panel.x + PAD,
             ops_panel.y + PAD + (i as f32) * LINE_HEIGHT,
@@ -747,8 +765,8 @@ fn draw_global_layer(
     let x_range = (GRAPH_W - 2.0 * PAD).max(0.1);
     let y_range = (GRAPH_H - 2.0 * PAD).max(0.1);
 
-    vis.rect(graph_left, graph_top, GRAPH_W, GRAPH_H, Some(rect_style.clone()));
-    let center_align = text_style.clone().align(TextAlign::Center);
+    vis.rect(graph_left, graph_top, GRAPH_W, GRAPH_H, Some(styles.rect.clone()));
+    let center_align = styles.text.clone().align(TextAlign::Center);
     vis.text(
         graph_left + GRAPH_W / 2.0,
         graph_top + PAD,
@@ -784,10 +802,10 @@ fn draw_global_layer(
             };
 
             // Axis: left edge of graph
-            vis.line((inner_left, inner_top), (inner_left, inner_bottom), Some(grid_style.clone()));
+            vis.line((inner_left, inner_top), (inner_left, inner_bottom), Some(styles.grid.clone()));
             // Grid: baseline (0) and top
-            vis.line((inner_left, inner_bottom), (inner_right, inner_bottom), Some(grid_style.clone()));
-            vis.line((inner_left, inner_top), (inner_right, inner_top), Some(grid_style.clone()));
+            vis.line((inner_left, inner_bottom), (inner_right, inner_bottom), Some(styles.grid.clone()));
+            vis.line((inner_left, inner_top), (inner_right, inner_top), Some(styles.grid.clone()));
 
             // Fill under the line (closed poly: points + bottom-right + bottom-left)
             let mut fill_points = points.clone();
@@ -800,10 +818,10 @@ fn draw_global_layer(
             );
 
             let used = samples.last().copied().unwrap_or(0.0);
-            let right_align = text_style.clone().align(TextAlign::Right);
+            let right_align = styles.text.clone().align(TextAlign::Right);
             vis.text(inner_right, graph_top + PAD, format!("{:.1} CPU", used), Some(right_align));
-            vis.text(graph_left, inner_top, format!("{:.0}", y_max), Some(text_style.clone()));
-            vis.text(graph_left, inner_bottom, "0".to_string(), Some(text_style.clone()));
+            vis.text(graph_left, inner_top, format!("{:.0}", y_max), Some(styles.text.clone()));
+            vis.text(graph_left, inner_bottom, "0".to_string(), Some(styles.text.clone()));
         }
     }
 }
@@ -814,23 +832,19 @@ const STATS_SPARKLINE_H: f32 = 3.5;
 const COLOR_ENERGY_FILL: &str = "#f0c040";
 const COLOR_MINERALS_LINE: &str = "#58a6ff";
 
-#[allow(clippy::too_many_arguments)]
 fn draw_stats_sparkline(
     vis: &mut crate::visualize::RoomVisualizer,
     snapshots: &[crate::stats_history::RoomStatsSnapshot],
     x: f32,
     y: f32,
     width: f32,
-    rect_style: &RectStyle,
-    header_style: &TextStyle,
-    text_style: &TextStyle,
-    grid_style: &LineStyle,
+    styles: &VisStyles,
 ) {
     let h = STATS_SPARKLINE_H;
-    vis.rect(x, y, width, h, Some(rect_style.clone()));
+    vis.rect(x, y, width, h, Some(styles.rect.clone()));
 
     // Header
-    vis.text(x + PAD, y + PAD, "Storage".to_string(), Some(header_style.clone()));
+    vis.text(x + PAD, y + PAD, "Storage".to_string(), Some(styles.header.clone()));
 
     let inner_left = x + PAD;
     let inner_right = x + width - PAD;
@@ -846,8 +860,8 @@ fn draw_stats_sparkline(
     let y_max = (max_energy.max(max_minerals)).max(1) as f32;
 
     // Grid lines
-    vis.line((inner_left, inner_bottom), (inner_right, inner_bottom), Some(grid_style.clone()));
-    vis.line((inner_left, inner_top), (inner_right, inner_top), Some(grid_style.clone()));
+    vis.line((inner_left, inner_bottom), (inner_right, inner_bottom), Some(styles.grid.clone()));
+    vis.line((inner_left, inner_top), (inner_right, inner_top), Some(styles.grid.clone()));
 
     let to_point = |i: usize, value: u32| -> (f32, f32) {
         let px = inner_left + (i as f32 / (n - 1) as f32) * x_range;
@@ -877,7 +891,7 @@ fn draw_stats_sparkline(
 
     // Labels
     let last = snapshots.last().unwrap();
-    let right_align = text_style.clone().align(TextAlign::Right);
+    let right_align = styles.text.clone().align(TextAlign::Right);
     vis.text(
         inner_right,
         y + PAD,
@@ -943,16 +957,13 @@ fn truncate_transfer_label(s: &str) -> String {
 }
 
 /// Draw transfer panel: supply/demand bars back-to-back (supply left, demand right from center), with in-progress vs unfulfilled segments.
-#[allow(clippy::too_many_arguments)]
 fn draw_transfer_panel(
     vis: &mut crate::visualize::RoomVisualizer,
     snapshot: &crate::transfer::transfersystem::TransferRoomSnapshot,
     x: f32,
     width: f32,
     room_bottom: f32,
-    rect_style: &RectStyle,
-    header_style: &TextStyle,
-    text_style: &TextStyle,
+    styles: &VisStyles,
 ) -> f32 {
     // Build rows with pending: (label, supply, supply_pending, demand, demand_pending).
     let mut rows: Vec<(String, u32, u32, u32, u32)> = Vec::new();
@@ -1012,15 +1023,15 @@ fn draw_transfer_panel(
     let total_h = header_h + (rows.len() as f32) * TRANSFER_ROW_H;
     let y = room_bottom - TRANSFER_BOTTOM_MARGIN - total_h;
 
-    vis.rect(x, y, width, total_h, Some(rect_style.clone()));
+    vis.rect(x, y, width, total_h, Some(styles.rect.clone()));
 
     // Header baseline: positioned so text sits inside header area.
-    vis.text(x + PAD, y + PAD + FONT_SIZE * 0.8, "Transfer".to_string(), Some(header_style.clone()));
+    vis.text(x + PAD, y + PAD + FONT_SIZE * 0.8, "Transfer".to_string(), Some(styles.header.clone()));
 
     let mut row_y = y + header_h;
     let label_x = x + PAD;
-    let supply_style = text_style.clone().color(COLOR_SUPPLY);
-    let demand_style = text_style.clone().color(COLOR_DEMAND);
+    let supply_style = styles.text.clone().color(COLOR_SUPPLY);
+    let demand_style = styles.text.clone().color(COLOR_DEMAND);
     let bar_h = (TRANSFER_ROW_H * 0.55).max(0.15);
 
     for (label, supply, supply_pending, demand, demand_pending) in rows {
@@ -1028,7 +1039,7 @@ fn draw_transfer_panel(
         let text_y = row_y + TRANSFER_ROW_H - 0.05;
         // Bar center = visual center of text ≈ baseline - FONT_SIZE * 0.35.
         let bar_center_y = text_y - FONT_SIZE * 0.35;
-        vis.text(label_x, text_y, label.clone(), Some(text_style.clone()));
+        vis.text(label_x, text_y, label.clone(), Some(styles.text.clone()));
 
         // Supply grows left from center. supply_available = supply - supply_pending (unfulfilled), supply_pending = in progress.
         let supply_len = (supply as f32 / max_val).min(1.0) * half_bar;
@@ -1124,11 +1135,7 @@ impl<'a> System<'a> for RenderSystem {
             return;
         };
 
-        let rect_style = panel_rect_style();
-        let header_text_style = panel_header_text_style();
-        let text_style = panel_text_style();
-        let sep_style = separator_line_style();
-        let accent_style = accent_line_style();
+        let styles = VisStyles::new();
 
         // Global: operations (no CPU line; CPU shown as histogram below)
         let ops_lines: Vec<String> = viz.operations.iter().flat_map(|op| op.content.to_lines()).collect();
@@ -1144,18 +1151,12 @@ impl<'a> System<'a> for RenderSystem {
         let right_column_left_x = right_column_left_x(&global_ops_panel);
         let cpu_samples = data.cpu_history.as_deref().map(|h| h.samples.as_slice());
 
-        let grid_style = grid_line_style();
         {
             let global = visualizer.global();
             draw_global_layer(
                 global,
                 &global_ops_panel,
-                &rect_style,
-                &header_text_style,
-                &text_style,
-                &accent_style,
-                &sep_style,
-                &grid_style,
+                &styles,
                 cpu_samples,
                 cpu_limit_f32,
                 tick,
@@ -1219,16 +1220,16 @@ impl<'a> System<'a> for RenderSystem {
 
             for panel in &panels {
                 let h = panel.height();
-                room_vis.rect(panel.x, panel.y, left_w, h, Some(rect_style.clone()));
-                room_vis.line((panel.x, panel.y), (panel.x, panel.y + h), Some(accent_style.clone()));
+                room_vis.rect(panel.x, panel.y, left_w, h, Some(styles.rect.clone()));
+                room_vis.line((panel.x, panel.y), (panel.x, panel.y + h), Some(styles.accent.clone()));
                 let header_y = panel.y + PAD + LINE_HEIGHT;
                 room_vis.line(
                     (panel.x + PAD, header_y),
                     (panel.x + left_w - PAD, header_y),
-                    Some(sep_style.clone()),
+                    Some(styles.sep.clone()),
                 );
                 for (i, line) in panel.lines.iter().enumerate() {
-                    let style = if i == 0 { header_text_style.clone() } else { text_style.clone() };
+                    let style = if i == 0 { styles.header.clone() } else { styles.text.clone() };
                     room_vis.text(panel.x + PAD, panel.y + PAD + (i as f32) * LINE_HEIGHT, line.clone(), Some(style));
                 }
             }
@@ -1242,10 +1243,7 @@ impl<'a> System<'a> for RenderSystem {
                         CPU_GRAPH_LEFT,
                         STATS_SPARKLINE_TOP_Y,
                         GRAPH_W,
-                        &rect_style,
-                        &header_text_style,
-                        &text_style,
-                        &grid_style,
+                        &styles,
                     );
                 }
             }
@@ -1261,9 +1259,7 @@ impl<'a> System<'a> for RenderSystem {
                         TRANSFER_PANEL_LEFT,
                         TRANSFER_PANEL_WIDTH,
                         ROOM_BOTTOM,
-                        &rect_style,
-                        &header_text_style,
-                        &text_style,
+                        &styles,
                     );
                 }
             }
@@ -1271,12 +1267,7 @@ impl<'a> System<'a> for RenderSystem {
             draw_global_layer(
                 room_vis,
                 &global_ops_panel,
-                &rect_style,
-                &header_text_style,
-                &text_style,
-                &accent_style,
-                &sep_style,
-                &grid_style,
+                &styles,
                 cpu_samples,
                 cpu_limit_f32,
                 tick,
