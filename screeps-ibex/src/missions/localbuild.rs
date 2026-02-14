@@ -186,10 +186,7 @@ impl Mission for LocalBuildMission {
 
         if let Some(room_data) = system_data.room_data.get(self.room_data) {
             if let Some(structures) = room_data.get_structures() {
-                let are_hostile_creeps = room_data
-                    .get_creeps()
-                    .map(|c| !c.hostile().is_empty())
-                    .unwrap_or(false);
+                let are_hostile_creeps = room_data.get_creeps().map(|c| !c.hostile().is_empty()).unwrap_or(false);
 
                 let available_energy = structures
                     .storages()
@@ -200,13 +197,9 @@ impl Mission for LocalBuildMission {
                 // Enqueue non-wall/rampart structures (roads, containers, spawns, etc.)
                 // Walls and ramparts are handled by the WallRepairMission.
                 for (structure, hits, hits_max) in get_repair_targets(structures.all(), false) {
-                    if let Some(priority) = map_structure_repair_priority(
-                        structure,
-                        hits,
-                        hits_max,
-                        Some(available_energy),
-                        are_hostile_creeps,
-                    ) {
+                    if let Some(priority) =
+                        map_structure_repair_priority(structure, hits, hits_max, Some(available_energy), are_hostile_creeps)
+                    {
                         system_data.repair_queue.request_repair(RepairRequest {
                             structure_id: RemoteStructureIdentifier::new(structure),
                             priority,

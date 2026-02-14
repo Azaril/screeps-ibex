@@ -3,8 +3,8 @@ use crate::entitymappingsystem::*;
 use crate::room::data::*;
 use crate::visualize::Visualizer;
 use screeps::*;
-use screeps_rover::*;
 use screeps_rover::screeps_impl::{ScreepsCostMatrixDataSource, ScreepsPathfinder};
+use screeps_rover::*;
 use serde::*;
 use shrinkwraprs::*;
 use specs::prelude::*;
@@ -38,14 +38,8 @@ impl<'a> MovementVisualizer for IbexMovementVisualizer<'a> {
     fn visualize_path(&mut self, creep_pos: Position, path: &[Position]) {
         let room = creep_pos.room_name();
         let room_vis = self.visualizer.get_room(room);
-        let points: Vec<(f32, f32)> = path
-            .iter()
-            .map(|p| (p.x().u8() as f32, p.y().u8() as f32))
-            .collect();
-        let style = PolyStyle::default()
-            .stroke("blue")
-            .stroke_width(0.2)
-            .opacity(0.5);
+        let points: Vec<(f32, f32)> = path.iter().map(|p| (p.x().u8() as f32, p.y().u8() as f32)).collect();
+        let style = PolyStyle::default().stroke("blue").stroke_width(0.2).opacity(0.5);
         room_vis.poly(points, Some(style));
     }
 
@@ -66,9 +60,7 @@ impl<'a> MovementVisualizer for IbexMovementVisualizer<'a> {
         let ax = anchor_pos.x().u8() as f32;
         let ay = anchor_pos.y().u8() as f32;
         if (ax - cx).abs() > 0.01 || (ay - cy).abs() > 0.01 {
-            let line_style = LineStyle::default()
-                .color("#ff8800")
-                .opacity(0.25);
+            let line_style = LineStyle::default().color("#ff8800").opacity(0.25);
             room_vis.line((cx, cy), (ax, ay), Some(line_style));
         }
     }
@@ -79,9 +71,7 @@ impl<'a> MovementVisualizer for IbexMovementVisualizer<'a> {
         let cx = creep_pos.x().u8() as f32;
         let cy = creep_pos.y().u8() as f32;
         let d = 0.15;
-        let style = LineStyle::default()
-            .color("#ff4444")
-            .opacity(0.6);
+        let style = LineStyle::default().color("#ff4444").opacity(0.6);
         room_vis.line((cx - d, cy - d), (cx + d, cy + d), Some(style.clone()));
         room_vis.line((cx - d, cy + d), (cx + d, cy - d), Some(style));
     }
@@ -100,11 +90,7 @@ impl<'a> MovementVisualizer for IbexMovementVisualizer<'a> {
             .stroke_width(0.03);
         room_vis.circle(cx, cy, Some(circle_style));
 
-        let text_style = TextStyle::default()
-            .color("#ffcc00")
-            .font(0.4)
-            .stroke("#000000")
-            .stroke_width(0.03);
+        let text_style = TextStyle::default().color("#ffcc00").font(0.4).stroke("#000000").stroke_width(0.03);
         room_vis.text(cx, cy + 0.55, format!("{}", ticks), Some(text_style));
     }
 
@@ -220,10 +206,7 @@ impl<'a> System<'a> for MovementUpdateSystem {
         let mut pathfinder = ScreepsPathfinder;
         let mut ibex_visualizer = data.visualizer.as_deref_mut().map(|v| IbexMovementVisualizer { visualizer: v });
 
-        let mut cost_matrix_system = CostMatrixSystem::new(
-            &mut data.cost_matrix_cache,
-            Box::new(ScreepsCostMatrixDataSource),
-        );
+        let mut cost_matrix_system = CostMatrixSystem::new(&mut data.cost_matrix_cache, Box::new(ScreepsCostMatrixDataSource));
 
         let mut system = MovementSystem::new(
             &mut cost_matrix_system,

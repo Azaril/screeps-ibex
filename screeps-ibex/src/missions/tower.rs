@@ -188,9 +188,7 @@ impl Mission for TowerMission {
 
         // Periodic cleanup of stale trackers (every 100 ticks).
         if current_tick - self.last_drain_cleanup > 100 {
-            self.drain_trackers.retain(|_, tracker| {
-                current_tick - tracker.last_seen_tick < 500
-            });
+            self.drain_trackers.retain(|_, tracker| current_tick - tracker.last_seen_tick < 500);
             self.last_drain_cleanup = current_tick;
         }
 
@@ -253,8 +251,7 @@ impl Mission for TowerMission {
             // OR confirmed drainer based on enter/exit tracking.
             let is_drain = best_target.is_none()
                 && hostile_infos.iter().any(|(c, heal, is_drainer)| {
-                    *is_drainer
-                        || crate::military::damage::is_likely_tower_drain(c.pos(), *heal, &tower_positions)
+                    *is_drainer || crate::military::damage::is_likely_tower_drain(c.pos(), *heal, &tower_positions)
                 });
 
             if is_drain {
@@ -270,9 +267,7 @@ impl Mission for TowerMission {
                 let close_drainer = hostile_infos
                     .iter()
                     .filter(|(_, _, is_drainer)| *is_drainer)
-                    .filter(|(c, _,  _)| {
-                        tower_positions.iter().any(|tp| tp.get_range_to(c.pos()) <= 5)
-                    })
+                    .filter(|(c, _, _)| tower_positions.iter().any(|tp| tp.get_range_to(c.pos()) <= 5))
                     .min_by_key(|(c, _, _)| c.hits())
                     .map(|(c, _, _)| *c);
 
@@ -319,8 +314,8 @@ impl Mission for TowerMission {
             Some(RepairPriority::Low)
         };
 
-        let repair_structure = select_repair_structure(room_data, system_data.repair_queue, minimum_repair_priority, false)
-            .and_then(|id| id.resolve());
+        let repair_structure =
+            select_repair_structure(room_data, system_data.repair_queue, minimum_repair_priority, false).and_then(|id| id.resolve());
 
         for tower in &my_towers {
             if let Some(creep) = weakest_friendly_creep {

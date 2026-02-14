@@ -82,17 +82,9 @@ impl Healing {
                 friendlies
                     .iter()
                     .find(|c| c.pos() == priority_pos && c.hits() < c.hits_max())
-                    .or_else(|| {
-                        friendlies
-                            .iter()
-                            .filter(|c| c.hits() < c.hits_max())
-                            .min_by_key(|c| c.hits())
-                    })
+                    .or_else(|| friendlies.iter().filter(|c| c.hits() < c.hits_max()).min_by_key(|c| c.hits()))
             } else {
-                friendlies
-                    .iter()
-                    .filter(|c| c.hits() < c.hits_max())
-                    .min_by_key(|c| c.hits())
+                friendlies.iter().filter(|c| c.hits() < c.hits_max()).min_by_key(|c| c.hits())
             };
 
             if let Some(target) = heal_target {
@@ -131,18 +123,14 @@ impl Healing {
                 }
             } else {
                 // No one to heal -- self-heal if damaged.
-                if creep.hits() < creep.hits_max()
-                    && tick_context.action_flags.consume(SimultaneousActionFlags::HEAL)
-                {
+                if creep.hits() < creep.hits_max() && tick_context.action_flags.consume(SimultaneousActionFlags::HEAL) {
                     let _ = creep.heal(creep);
                 }
                 mark_idle(tick_context);
             }
         } else {
             // Self-heal and idle.
-            if creep.hits() < creep.hits_max()
-                && tick_context.action_flags.consume(SimultaneousActionFlags::HEAL)
-            {
+            if creep.hits() < creep.hits_max() && tick_context.action_flags.consume(SimultaneousActionFlags::HEAL) {
                 let _ = creep.heal(creep);
             }
             mark_idle(tick_context);
@@ -158,7 +146,9 @@ impl Retreating {
 
         // Check squad state -- only re-engage if squad says so.
         let squad_state = get_squad_state(state_context.squad_entity, tick_context);
-        let squad_wants_engage = squad_state.map(|s| s == SquadState::Engaged || s == SquadState::Moving).unwrap_or(false);
+        let squad_wants_engage = squad_state
+            .map(|s| s == SquadState::Engaged || s == SquadState::Moving)
+            .unwrap_or(false);
 
         // Re-engage once HP recovers above 80%, or if squad signals engage.
         if creep.hits() > creep.hits_max() * 4 / 5 || (squad_wants_engage && creep.hits() > creep.hits_max() * 3 / 5) {
@@ -173,17 +163,9 @@ impl Retreating {
         // Flee from hostiles.
         if let Some(room) = game::rooms().get(creep.pos().room_name()) {
             let hostiles = room.find(find::HOSTILE_CREEPS, None);
-            let flee_targets: Vec<FleeTarget> = hostiles
-                .iter()
-                .map(|c| FleeTarget {
-                    pos: c.pos(),
-                    range: 8,
-                })
-                .collect();
+            let flee_targets: Vec<FleeTarget> = hostiles.iter().map(|c| FleeTarget { pos: c.pos(), range: 8 }).collect();
 
-            if !flee_targets.is_empty()
-                && tick_context.action_flags.consume(SimultaneousActionFlags::MOVE)
-            {
+            if !flee_targets.is_empty() && tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
                 tick_context
                     .runtime_data
                     .movement

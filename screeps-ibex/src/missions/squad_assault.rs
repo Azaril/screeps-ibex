@@ -334,12 +334,10 @@ impl Rallying {
                     // Check if the creep is in the rally room by looking at creep owners.
                     // We can't directly access creep positions from mission system data,
                     // so we check if the rally room is visible and if creeps are there.
-                    game::creeps()
-                        .values()
-                        .find(|c| {
-                            // Match by checking if any creep is in the rally room.
-                            c.pos().room_name() == rally_room
-                        })
+                    game::creeps().values().find(|c| {
+                        // Match by checking if any creep is in the rally room.
+                        c.pos().room_name() == rally_room
+                    })
                 })
                 .is_some()
         });
@@ -377,18 +375,13 @@ impl Rallying {
 }
 
 /// Select a rally room for the squad -- the home room closest to the target.
-fn select_rally_room(
-    system_data: &MissionExecutionSystemData,
-    state_context: &SquadAssaultMissionContext,
-) -> Option<RoomName> {
+fn select_rally_room(system_data: &MissionExecutionSystemData, state_context: &SquadAssaultMissionContext) -> Option<RoomName> {
     let target = state_context.target_room;
 
     state_context
         .home_room_datas
         .iter()
-        .filter_map(|entity| {
-            system_data.room_data.get(*entity).map(|rd| rd.name)
-        })
+        .filter_map(|entity| system_data.room_data.get(*entity).map(|rd| rd.name))
         .min_by_key(|room_name| {
             // Simple distance heuristic based on room name coordinates.
             let (tx, ty) = room_name_to_coords(target);

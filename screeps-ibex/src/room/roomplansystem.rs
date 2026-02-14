@@ -186,10 +186,7 @@ impl RoomPlannerRunningData {
         let start_cpu = game::cpu::get_used();
         let budget = CpuBudget::new(move || (game::cpu::get_used() - start_cpu) < (budget_cpu * 0.9));
 
-        let old_state = std::mem::replace(
-            &mut self.planner_state,
-            PlanningState::Failed("replaced".to_string()),
-        );
+        let old_state = std::mem::replace(&mut self.planner_state, PlanningState::Failed("replaced".to_string()));
 
         // Re-inject layers via PlannerBuilder::resume() each tick.
         // If fingerprint mismatches (layer config changed), restart planning.
@@ -429,13 +426,7 @@ impl<'a> System<'a> for RoomPlanSystem {
 // ---------------------------------------------------------------------------
 
 impl screeps_foreman::RoomVisualizer for RoomVisualizer {
-    fn render(&mut self, location: screeps_foreman::location::Location, structure: StructureType) {
-        screeps_visual::render::render_structure(
-            self,
-            location.x() as f32,
-            location.y() as f32,
-            structure,
-            1.0,
-        );
+    fn render(&mut self, location: screeps_common::Location, structure: StructureType) {
+        screeps_visual::render::render_structure(self, location.x() as f32, location.y() as f32, structure, 1.0);
     }
 }

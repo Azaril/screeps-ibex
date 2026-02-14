@@ -142,7 +142,9 @@ impl Retreating {
 
         // Check squad state -- only re-engage if squad says so.
         let squad_state = get_squad_state(state_context.squad_entity, tick_context);
-        let squad_wants_engage = squad_state.map(|s| s == SquadState::Engaged || s == SquadState::Moving).unwrap_or(false);
+        let squad_wants_engage = squad_state
+            .map(|s| s == SquadState::Engaged || s == SquadState::Moving)
+            .unwrap_or(false);
 
         // Re-engage once HP recovers above 80%, or if squad signals engage.
         if creep.hits() > creep.hits_max() * 4 / 5 || (squad_wants_engage && creep.hits() > creep.hits_max() * 3 / 5) {
@@ -152,17 +154,9 @@ impl Retreating {
         // Flee from all hostiles in the room.
         if let Some(room) = game::rooms().get(creep.pos().room_name()) {
             let hostiles = room.find(find::HOSTILE_CREEPS, None);
-            let flee_targets: Vec<FleeTarget> = hostiles
-                .iter()
-                .map(|c| FleeTarget {
-                    pos: c.pos(),
-                    range: 8,
-                })
-                .collect();
+            let flee_targets: Vec<FleeTarget> = hostiles.iter().map(|c| FleeTarget { pos: c.pos(), range: 8 }).collect();
 
-            if !flee_targets.is_empty()
-                && tick_context.action_flags.consume(SimultaneousActionFlags::MOVE)
-            {
+            if !flee_targets.is_empty() && tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
                 tick_context
                     .runtime_data
                     .movement

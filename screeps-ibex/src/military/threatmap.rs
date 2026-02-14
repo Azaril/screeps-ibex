@@ -73,9 +73,7 @@ pub struct ThreatMap {
 
 impl ThreatMap {
     pub fn new() -> Self {
-        ThreatMap {
-            rooms: HashMap::new(),
-        }
+        ThreatMap { rooms: HashMap::new() }
     }
 
     pub fn clear(&mut self) {
@@ -161,9 +159,7 @@ pub fn analyze_hostile_creep(creep: &Creep) -> HostileCreepInfo {
         }
     }
 
-    let owner = creep
-        .owner()
-        .username();
+    let owner = creep.owner().username();
 
     HostileCreepInfo {
         position: creep.pos(),
@@ -192,12 +188,12 @@ pub fn classify_threat(hostile_creeps: &[HostileCreepInfo], has_nukes: bool) -> 
     let total_dps: f32 = hostile_creeps.iter().map(|c| c.melee_dps + c.ranged_dps).sum();
     let total_heal: f32 = hostile_creeps.iter().map(|c| c.heal_per_tick).sum();
     let any_boosted = hostile_creeps.iter().any(|c| c.boosted);
-    let has_combat_parts = hostile_creeps.iter().any(|c| c.melee_dps > 0.0 || c.ranged_dps > 0.0 || c.work_parts > 0);
+    let has_combat_parts = hostile_creeps
+        .iter()
+        .any(|c| c.melee_dps > 0.0 || c.ranged_dps > 0.0 || c.work_parts > 0);
 
     // Check if all hostiles are NPC invaders (username "Invader" or "Source Keeper").
-    let all_npc = hostile_creeps
-        .iter()
-        .all(|c| c.owner == "Invader" || c.owner == "Source Keeper");
+    let all_npc = hostile_creeps.iter().all(|c| c.owner == "Invader" || c.owner == "Source Keeper");
 
     if all_npc {
         return ThreatLevel::Invader;
@@ -222,10 +218,7 @@ pub struct ThreatAssessmentSystem;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> specs::System<'a> for ThreatAssessmentSystem {
-    type SystemData = (
-        specs::ReadStorage<'a, crate::room::data::RoomData>,
-        specs::Write<'a, ThreatMap>,
-    );
+    type SystemData = (specs::ReadStorage<'a, crate::room::data::RoomData>, specs::Write<'a, ThreatMap>);
 
     fn run(&mut self, (room_data_storage, mut threat_map): Self::SystemData) {
         threat_map.clear();

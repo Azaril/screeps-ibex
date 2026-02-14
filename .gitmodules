@@ -30,3 +30,7 @@
 	path = screeps-foreman-bench
 	url = https://github.com/Azaril/screeps-foreman-bench.git
 	branch = master
+[submodule "screeps-common"]
+	path = screeps-common
+	url = https://github.com/Azaril/screeps-common.git
+	branch = master

@@ -58,34 +58,48 @@ impl Idle {
         let creep = tick_context.runtime_data.owner;
         let build_room_data = tick_context.system_data.room_data.get(state_context.build_room)?;
 
-        get_new_repair_state(creep, build_room_data, tick_context.system_data.repair_queue, Some(RepairPriority::High), BuildState::repair)
-            .or_else(|| get_new_build_state(creep, build_room_data, BuildState::build))
-            .or_else(|| get_new_repair_state(creep, build_room_data, tick_context.system_data.repair_queue, None, BuildState::repair))
-            .or_else(|| {
-                let transfer_queue_data = TransferQueueGeneratorData {
-                    cause: "Build Idle",
-                    room_data: tick_context.system_data.room_data,
-                };
+        get_new_repair_state(
+            creep,
+            build_room_data,
+            tick_context.system_data.repair_queue,
+            Some(RepairPriority::High),
+            BuildState::repair,
+        )
+        .or_else(|| get_new_build_state(creep, build_room_data, BuildState::build))
+        .or_else(|| {
+            get_new_repair_state(
+                creep,
+                build_room_data,
+                tick_context.system_data.repair_queue,
+                None,
+                BuildState::repair,
+            )
+        })
+        .or_else(|| {
+            let transfer_queue_data = TransferQueueGeneratorData {
+                cause: "Build Idle",
+                room_data: tick_context.system_data.room_data,
+            };
 
-                get_new_pickup_state_fill_resource(
-                    creep,
-                    &transfer_queue_data,
-                    &[build_room_data],
-                    TransferPriorityFlags::ALL,
-                    TransferTypeFlags::HAUL | TransferTypeFlags::USE,
-                    ResourceType::Energy,
-                    tick_context.runtime_data.transfer_queue,
-                    BuildState::pickup,
-                )
-            })
-            .or_else(|| {
-                if state_context.allow_harvest {
-                    get_new_harvest_state(creep, build_room_data, BuildState::harvest)
-                } else {
-                    None
-                }
-            })
-            .or_else(|| Some(BuildState::wait(5)))
+            get_new_pickup_state_fill_resource(
+                creep,
+                &transfer_queue_data,
+                &[build_room_data],
+                TransferPriorityFlags::ALL,
+                TransferTypeFlags::HAUL | TransferTypeFlags::USE,
+                ResourceType::Energy,
+                tick_context.runtime_data.transfer_queue,
+                BuildState::pickup,
+            )
+        })
+        .or_else(|| {
+            if state_context.allow_harvest {
+                get_new_harvest_state(creep, build_room_data, BuildState::harvest)
+            } else {
+                None
+            }
+        })
+        .or_else(|| Some(BuildState::wait(5)))
     }
 }
 

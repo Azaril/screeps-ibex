@@ -146,10 +146,7 @@ impl Operation for AttackOperation {
                                     .map(|s| s.towers().iter().filter(|t| !t.my()).count())
                                     .unwrap_or(0);
 
-                                let hostile_count = room_data
-                                    .get_creeps()
-                                    .map(|c| c.hostile().len())
-                                    .unwrap_or(0);
+                                let hostile_count = room_data.get_creeps().map(|c| c.hostile().len()).unwrap_or(0);
 
                                 // Determine squad size based on defense analysis.
                                 self.detected_towers = tower_count as u32;
@@ -192,13 +189,8 @@ impl Operation for AttackOperation {
                 let home_rooms: Vec<Entity> = (system_data.entities, &*system_data.room_data)
                     .join()
                     .filter(|(_, rd)| {
-                        rd.get_dynamic_visibility_data()
-                            .map(|d| d.owner().mine())
-                            .unwrap_or(false)
-                            && rd
-                                .get_structures()
-                                .map(|s| !s.spawns().is_empty())
-                                .unwrap_or(false)
+                        rd.get_dynamic_visibility_data().map(|d| d.owner().mine()).unwrap_or(false)
+                            && rd.get_structures().map(|s| !s.spawns().is_empty()).unwrap_or(false)
                     })
                     .map(|(e, _)| e)
                     .collect();
@@ -212,10 +204,7 @@ impl Operation for AttackOperation {
 
                 if !primary_alive {
                     if let Some(&anchor_room) = home_rooms.first() {
-                        info!(
-                            "Launching {:?} primary assault on {}",
-                            self.squad_size, self.target_room
-                        );
+                        info!("Launching {:?} primary assault on {}", self.squad_size, self.target_room);
 
                         let mission_entity = SquadAssaultMission::build(
                             system_data.updater.create_entity(system_data.entities),
@@ -249,10 +238,7 @@ impl Operation for AttackOperation {
                         // Only launch support after primary is deployed.
                         // Use a duo as the support squad to divide defender attention.
                         if let Some(&anchor_room) = home_rooms.last() {
-                            info!(
-                                "Launching Duo support squad on {} (multi-squad coordination)",
-                                self.target_room
-                            );
+                            info!("Launching Duo support squad on {} (multi-squad coordination)", self.target_room);
 
                             let support_entity = SquadAssaultMission::build(
                                 system_data.updater.create_entity(system_data.entities),

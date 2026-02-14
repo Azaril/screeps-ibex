@@ -38,16 +38,7 @@ impl RoomVisualizer {
 }
 
 impl screeps_visual::render::VisualBackend for RoomVisualizer {
-    fn circle(
-        &mut self,
-        x: f32,
-        y: f32,
-        radius: f32,
-        fill: Option<&str>,
-        stroke: Option<&str>,
-        stroke_width: f32,
-        opacity: f32,
-    ) {
+    fn circle(&mut self, x: f32, y: f32, radius: f32, fill: Option<&str>, stroke: Option<&str>, stroke_width: f32, opacity: f32) {
         let mut style = CircleStyle::default().radius(radius).opacity(opacity);
         if let Some(f) = fill {
             style = style.fill(f);
@@ -58,17 +49,7 @@ impl screeps_visual::render::VisualBackend for RoomVisualizer {
         self.visuals.push(Visual::circle(x, y, Some(style)));
     }
 
-    fn rect(
-        &mut self,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-        fill: Option<&str>,
-        stroke: Option<&str>,
-        stroke_width: f32,
-        opacity: f32,
-    ) {
+    fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, fill: Option<&str>, stroke: Option<&str>, stroke_width: f32, opacity: f32) {
         let mut style = RectStyle::default().opacity(opacity);
         if let Some(f) = fill {
             style = style.fill(f);
@@ -79,14 +60,7 @@ impl screeps_visual::render::VisualBackend for RoomVisualizer {
         self.visuals.push(Visual::rect(x, y, w, h, Some(style)));
     }
 
-    fn poly(
-        &mut self,
-        points: &[(f32, f32)],
-        fill: Option<&str>,
-        stroke: Option<&str>,
-        stroke_width: f32,
-        opacity: f32,
-    ) {
+    fn poly(&mut self, points: &[(f32, f32)], fill: Option<&str>, stroke: Option<&str>, stroke_width: f32, opacity: f32) {
         let mut style = PolyStyle::default().opacity(opacity);
         if let Some(f) = fill {
             style = style.fill(f);
@@ -94,18 +68,10 @@ impl screeps_visual::render::VisualBackend for RoomVisualizer {
         if let Some(s) = stroke {
             style = style.stroke(s).stroke_width(stroke_width);
         }
-        self.visuals
-            .push(Visual::poly(points.to_vec(), Some(style)));
+        self.visuals.push(Visual::poly(points.to_vec(), Some(style)));
     }
 
-    fn line(
-        &mut self,
-        from: (f32, f32),
-        to: (f32, f32),
-        color: Option<&str>,
-        width: f32,
-        opacity: f32,
-    ) {
+    fn line(&mut self, from: (f32, f32), to: (f32, f32), color: Option<&str>, width: f32, opacity: f32) {
         let mut style = LineStyle::default().width(width).opacity(opacity);
         if let Some(c) = color {
             style = style.color(c);

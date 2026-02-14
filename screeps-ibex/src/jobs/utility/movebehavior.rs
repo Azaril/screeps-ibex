@@ -20,9 +20,7 @@ pub fn check_movement_failure(tick_context: &JobTickContext) -> Option<MovementF
 
     match results.get(&entity) {
         Some(MovementResult::Failed(failure)) => Some(failure.clone()),
-        Some(MovementResult::Stuck { ticks }) if *ticks >= STUCK_REPORT_THRESHOLD => {
-            Some(MovementFailure::StuckTimeout { ticks: *ticks })
-        }
+        Some(MovementResult::Stuck { ticks }) if *ticks >= STUCK_REPORT_THRESHOLD => Some(MovementFailure::StuckTimeout { ticks: *ticks }),
         _ => None,
     }
 }
@@ -40,11 +38,7 @@ pub fn mark_idle(tick_context: &mut JobTickContext) {
         .movement
         .move_to(tick_context.runtime_data.creep_entity, creep_pos);
 
-    builder
-        .range(0)
-        .priority(MovementPriority::Low)
-        .allow_shove(true)
-        .allow_swap(true);
+    builder.range(0).priority(MovementPriority::Low).allow_shove(true).allow_swap(true);
 }
 
 /// Register the creep as immovable at its current position. Call this when a

@@ -974,13 +974,7 @@ fn draw_transfer_panel(
         }
     }
     if snapshot.generic_demand > 0 {
-        rows.push((
-            "Any".to_string(),
-            0,
-            0,
-            snapshot.generic_demand,
-            snapshot.generic_demand_pending,
-        ));
+        rows.push(("Any".to_string(), 0, 0, snapshot.generic_demand, snapshot.generic_demand_pending));
     }
 
     // Stable sort by label so resource order does not jump each tick. "Any" last.
@@ -999,12 +993,7 @@ fn draw_transfer_panel(
         return 0.0;
     }
 
-    let max_val = rows
-        .iter()
-        .map(|(_, s, _, d, _)| (*s).max(*d))
-        .max()
-        .unwrap_or(1)
-        .max(1) as f32;
+    let max_val = rows.iter().map(|(_, s, _, d, _)| (*s).max(*d)).max().unwrap_or(1).max(1) as f32;
 
     // Dynamic label width: fit the longest label in the current set (no wasted space for short labels).
     let max_label_chars = rows.iter().map(|(l, ..)| l.chars().count()).max().unwrap_or(1) as f32;
@@ -1026,7 +1015,12 @@ fn draw_transfer_panel(
     vis.rect(x, y, width, total_h, Some(styles.rect.clone()));
 
     // Header baseline: positioned so text sits inside header area.
-    vis.text(x + PAD, y + PAD + FONT_SIZE * 0.8, "Transfer".to_string(), Some(styles.header.clone()));
+    vis.text(
+        x + PAD,
+        y + PAD + FONT_SIZE * 0.8,
+        "Transfer".to_string(),
+        Some(styles.header.clone()),
+    );
 
     let mut row_y = y + header_h;
     let label_x = x + PAD;
@@ -1102,12 +1096,7 @@ fn draw_transfer_panel(
                 );
             }
         }
-        vis.text(
-            demand_num_x,
-            text_y,
-            compact_number(demand),
-            Some(demand_style.clone()),
-        );
+        vis.text(demand_num_x, text_y, compact_number(demand), Some(demand_style.clone()));
 
         row_y += TRANSFER_ROW_H;
     }
@@ -1153,14 +1142,7 @@ impl<'a> System<'a> for RenderSystem {
 
         {
             let global = visualizer.global();
-            draw_global_layer(
-                global,
-                &global_ops_panel,
-                &styles,
-                cpu_samples,
-                cpu_limit_f32,
-                tick,
-            );
+            draw_global_layer(global, &global_ops_panel, &styles, cpu_samples, cpu_limit_f32, tick);
         }
 
         // Per-room: draw room layer first (left stack), then global layer (right Ops + bottom CPU) so the histogram is on top and visible.
@@ -1237,14 +1219,7 @@ impl<'a> System<'a> for RenderSystem {
             // Stats history sparkline (center, below CPU histogram — fixed position per room)
             if let Some(ref snapshots) = room_viz.stats_history {
                 if snapshots.len() >= 2 {
-                    draw_stats_sparkline(
-                        room_vis,
-                        snapshots,
-                        CPU_GRAPH_LEFT,
-                        STATS_SPARKLINE_TOP_Y,
-                        GRAPH_W,
-                        &styles,
-                    );
+                    draw_stats_sparkline(room_vis, snapshots, CPU_GRAPH_LEFT, STATS_SPARKLINE_TOP_Y, GRAPH_W, &styles);
                 }
             }
 
@@ -1264,14 +1239,7 @@ impl<'a> System<'a> for RenderSystem {
                 }
             }
 
-            draw_global_layer(
-                room_vis,
-                &global_ops_panel,
-                &styles,
-                cpu_samples,
-                cpu_limit_f32,
-                tick,
-            );
+            draw_global_layer(room_vis, &global_ops_panel, &styles, cpu_samples, cpu_limit_f32, tick);
         }
     }
 }

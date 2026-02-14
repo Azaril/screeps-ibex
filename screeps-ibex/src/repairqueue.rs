@@ -38,11 +38,7 @@ pub struct RepairQueue {
 impl RepairQueue {
     /// Submit a repair request for a structure.
     pub fn request_repair(&mut self, request: RepairRequest) {
-        self.rooms
-            .entry(request.room)
-            .or_default()
-            .requests
-            .push(request);
+        self.rooms.entry(request.room).or_default().requests.push(request);
     }
 
     /// Submit multiple repair requests at once.
@@ -54,11 +50,7 @@ impl RepairQueue {
 
     /// Get the highest-priority repair target for a room.
     /// Optionally filter by minimum priority.
-    pub fn get_best_target(
-        &self,
-        room: RoomName,
-        minimum_priority: Option<RepairPriority>,
-    ) -> Option<&RepairRequest> {
+    pub fn get_best_target(&self, room: RoomName, minimum_priority: Option<RepairPriority>) -> Option<&RepairRequest> {
         let room_data = self.rooms.get(&room)?;
 
         room_data

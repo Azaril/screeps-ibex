@@ -114,11 +114,7 @@ impl MoveToContainer {
 /// Try to harvest the mine target. Returns `None` if the harvest action was
 /// issued (or the action flag was already consumed), or `Some` to transition
 /// when the resource is depleted or not visible.
-fn try_harvest_mine_target(
-    creep: &Creep,
-    mine_target: &StaticMineTarget,
-    tick_context: &mut JobTickContext,
-) -> Option<StaticMineState> {
+fn try_harvest_mine_target(creep: &Creep, mine_target: &StaticMineTarget, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
     match *mine_target {
         StaticMineTarget::Source(source_id) => {
             tick_opportunistic_repair(tick_context, Some(RepairPriority::Low));

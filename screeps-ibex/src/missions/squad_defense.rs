@@ -342,23 +342,20 @@ impl Defending {
                 .unwrap_or((0.0, 0.0, 0, false));
 
             // Determine what squad size the current threat warrants.
-            let warranted_size = if (any_boosted && estimated_dps > 200.0)
-                || (estimated_heal > 100.0 && estimated_dps > 150.0)
-                || hostile_count >= 4
-            {
-                // Enemy quad or heavy siege -- need our own quad.
-                DefenseSquadSize::Quad
-            } else if estimated_dps > 100.0 || estimated_heal > 20.0 || hostile_count >= 2 {
-                DefenseSquadSize::Duo
-            } else {
-                DefenseSquadSize::Solo
-            };
+            let warranted_size =
+                if (any_boosted && estimated_dps > 200.0) || (estimated_heal > 100.0 && estimated_dps > 150.0) || hostile_count >= 4 {
+                    // Enemy quad or heavy siege -- need our own quad.
+                    DefenseSquadSize::Quad
+                } else if estimated_dps > 100.0 || estimated_heal > 20.0 || hostile_count >= 2 {
+                    DefenseSquadSize::Duo
+                } else {
+                    DefenseSquadSize::Solo
+                };
 
             // Only escalate (never downgrade mid-fight).
             let should_escalate = matches!(
                 (state_context.squad_size, warranted_size),
-                (DefenseSquadSize::Solo, DefenseSquadSize::Duo | DefenseSquadSize::Quad)
-                    | (DefenseSquadSize::Duo, DefenseSquadSize::Quad)
+                (DefenseSquadSize::Solo, DefenseSquadSize::Duo | DefenseSquadSize::Quad) | (DefenseSquadSize::Duo, DefenseSquadSize::Quad)
             );
 
             if should_escalate {

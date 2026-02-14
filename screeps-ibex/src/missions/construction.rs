@@ -3,8 +3,8 @@ use super::missionsystem::*;
 use crate::room::roomplansystem::*;
 use crate::serialize::*;
 use screeps::*;
-use screeps_foreman::plan::{BuildStep, CleanupFilter, ExistingStructure, ExecutionFilter};
-use screeps_foreman::terrain::NEIGHBORS_8;
+use screeps_common::NEIGHBORS_8;
+use screeps_foreman::plan::{BuildStep, CleanupFilter, ExecutionFilter, ExistingStructure};
 use serde::{Deserialize, Serialize};
 #[allow(deprecated)]
 use specs::error::NoError;
@@ -54,17 +54,14 @@ impl<'a> ExecutionFilter for ConstructionFilter<'a> {
         }
 
         // Defer walls/ramparts until the room reaches min_rcl_for_walls.
-        if (step.structure_type == StructureType::Wall
-            || step.structure_type == StructureType::Rampart)
+        if (step.structure_type == StructureType::Wall || step.structure_type == StructureType::Rampart)
             && self.room_level < self.min_rcl_for_walls
         {
             return false;
         }
 
         // Defer roads that don't have any adjacent built structure yet.
-        if step.structure_type == StructureType::Road
-            && !has_adjacent_built_structure(step.location, self.room)
-        {
+        if step.structure_type == StructureType::Road && !has_adjacent_built_structure(step.location, self.room) {
             return false;
         }
 
@@ -83,10 +80,7 @@ impl<'a> ExecutionFilter for ConstructionFilter<'a> {
 /// roads). This allows road networks to grow outward from structures:
 /// the first road tile is adjacent to a building, subsequent tiles are
 /// adjacent to that road, and so on across ticks.
-fn has_adjacent_built_structure(
-    loc: screeps_foreman::location::Location,
-    room: &Room,
-) -> bool {
+fn has_adjacent_built_structure(loc: screeps_common::Location, room: &Room) -> bool {
     let room_name = room.name();
     for &(dx, dy) in &NEIGHBORS_8 {
         let nx = loc.x() as i16 + dx as i16;
@@ -111,26 +105,16 @@ fn has_adjacent_built_structure(
 ///
 /// Used to skip no-op placements so they don't consume the construction
 /// site budget.
-fn structure_or_site_exists(
-    loc: screeps_foreman::location::Location,
-    structure_type: StructureType,
-    room: &Room,
-) -> bool {
+fn structure_or_site_exists(loc: screeps_common::Location, structure_type: StructureType, room: &Room) -> bool {
     let pos = RoomPosition::new(loc.x(), loc.y(), room.name());
 
     let structures = room.look_for_at(look::STRUCTURES, &pos);
-    if structures
-        .iter()
-        .any(|s| s.structure_type() == structure_type)
-    {
+    if structures.iter().any(|s| s.structure_type() == structure_type) {
         return true;
     }
 
     let sites = room.look_for_at(look::CONSTRUCTION_SITES, &pos);
-    if sites
-        .iter()
-        .any(|s| s.structure_type() == structure_type)
-    {
+    if sites.iter().any(|s| s.structure_type() == structure_type) {
         return true;
     }
 
@@ -152,9 +136,7 @@ struct RemovalFilter {
 
 impl RemovalFilter {
     fn new(room: &Room) -> Self {
-        let remaining_spawns = room
-            .find(find::MY_SPAWNS, None)
-            .len() as u32;
+        let remaining_spawns = room.find(find::MY_SPAWNS, None).len() as u32;
 
         RemovalFilter { remaining_spawns }
     }
@@ -232,7 +214,7 @@ impl Mission for ConstructionMission {
         let room = game::rooms().get(room_data.name).ok_or("Expected room")?;
         let room_level = room.controller().map(|c| c.level()).unwrap_or(0);
 
-        let request_plan = if let Some(room_plan_data) = system_data.room_plan_data.get(self.room_data) {           
+        let request_plan = if let Some(room_plan_data) = system_data.room_plan_data.get(self.room_data) {
             if let Some(plan) = room_plan_data.plan() {
                 if game::time().is_multiple_of(50) {
                     if crate::features::features().construction.execute {

@@ -87,13 +87,8 @@ impl Operation for DefenseOperation {
         let home_rooms: Vec<Entity> = (system_data.entities, &*system_data.room_data)
             .join()
             .filter(|(_, rd)| {
-                rd.get_dynamic_visibility_data()
-                    .map(|d| d.owner().mine())
-                    .unwrap_or(false)
-                    && rd
-                        .get_structures()
-                        .map(|s| !s.spawns().is_empty())
-                        .unwrap_or(false)
+                rd.get_dynamic_visibility_data().map(|d| d.owner().mine()).unwrap_or(false)
+                    && rd.get_structures().map(|s| !s.spawns().is_empty()).unwrap_or(false)
             })
             .map(|(e, _)| e)
             .collect();
@@ -143,27 +138,15 @@ impl Operation for DefenseOperation {
 
                 // Check existing missions.
                 let missions = room_data.get_missions();
-                let has_nuke_defense_mission = missions.iter().any(|me| {
-                    system_data
-                        .mission_data
-                        .get(*me)
-                        .as_mission_type::<NukeDefenseMission>()
-                        .is_some()
-                });
-                let has_safe_mode_mission = missions.iter().any(|me| {
-                    system_data
-                        .mission_data
-                        .get(*me)
-                        .as_mission_type::<SafeModeMission>()
-                        .is_some()
-                });
-                let has_wall_repair_mission = missions.iter().any(|me| {
-                    system_data
-                        .mission_data
-                        .get(*me)
-                        .as_mission_type::<WallRepairMission>()
-                        .is_some()
-                });
+                let has_nuke_defense_mission = missions
+                    .iter()
+                    .any(|me| system_data.mission_data.get(*me).as_mission_type::<NukeDefenseMission>().is_some());
+                let has_safe_mode_mission = missions
+                    .iter()
+                    .any(|me| system_data.mission_data.get(*me).as_mission_type::<SafeModeMission>().is_some());
+                let has_wall_repair_mission = missions
+                    .iter()
+                    .any(|me| system_data.mission_data.get(*me).as_mission_type::<WallRepairMission>().is_some());
 
                 room_states.push(RoomDefenseState {
                     room_entity: entity,
@@ -255,11 +238,7 @@ impl Operation for DefenseOperation {
                 || need.hostile_count >= 4
             {
                 "Quad"
-            } else if need.estimated_dps > 60.0
-                || need.estimated_heal > 20.0
-                || need.hostile_count >= 2
-                || need.any_boosted
-            {
+            } else if need.estimated_dps > 60.0 || need.estimated_heal > 20.0 || need.hostile_count >= 2 || need.any_boosted {
                 "Duo"
             } else {
                 "Solo"
@@ -307,10 +286,7 @@ impl Operation for DefenseOperation {
 
             // NukeDefenseMission: create if nukes detected and no existing mission.
             if state.has_nukes && !state.has_nuke_defense_mission && features.military.nuke_defense {
-                info!(
-                    "Creating NukeDefenseMission for room: {}",
-                    room_data.name
-                );
+                info!("Creating NukeDefenseMission for room: {}", room_data.name);
                 let mission_entity = NukeDefenseMission::build(
                     system_data.updater.create_entity(system_data.entities),
                     Some(runtime_data.entity),
@@ -322,10 +298,7 @@ impl Operation for DefenseOperation {
 
             // SafeModeMission: create if hostiles present and no existing mission.
             if state.has_hostiles && !state.has_safe_mode_mission && features.military.safe_mode {
-                info!(
-                    "Creating SafeModeMission for room: {}",
-                    room_data.name
-                );
+                info!("Creating SafeModeMission for room: {}", room_data.name);
                 let mission_entity = SafeModeMission::build(
                     system_data.updater.create_entity(system_data.entities),
                     Some(runtime_data.entity),
@@ -337,10 +310,7 @@ impl Operation for DefenseOperation {
 
             // WallRepairMission: create if hostiles present and no existing mission.
             if state.has_hostiles && !state.has_wall_repair_mission {
-                info!(
-                    "Creating WallRepairMission for room: {}",
-                    room_data.name
-                );
+                info!("Creating WallRepairMission for room: {}", room_data.name);
                 let mission_entity = WallRepairMission::build(
                     system_data.updater.create_entity(system_data.entities),
                     Some(runtime_data.entity),

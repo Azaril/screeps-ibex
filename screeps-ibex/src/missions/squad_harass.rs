@@ -115,10 +115,7 @@ impl Spawning {
 
         // Try to spawn from each home room.
         for home_room_entity in state_context.home_rooms.iter() {
-            let _home_room_data = system_data
-                .room_data
-                .get(*home_room_entity)
-                .ok_or("Expected home room data")?;
+            let _home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
 
             let body_def = bodies::harasser_body();
 
@@ -190,11 +187,7 @@ impl Harassing {
         // We approximate this by checking if the target room has fewer enemy creeps
         // than expected for a remote mining operation. If the room is visible and
         // has no enemy creeps, count it as disruption success.
-        if let Some(target_room_entity) = system_data
-            .room_data
-            .join()
-            .find(|rd| rd.name == state_context.target_room)
-        {
+        if let Some(target_room_entity) = system_data.room_data.join().find(|rd| rd.name == state_context.target_room) {
             if let Some(dynamic_vis) = target_room_entity.get_dynamic_visibility_data() {
                 if !dynamic_vis.hostile_creeps() && dynamic_vis.visible() {
                     // Room is clear -- our harassment is working.
@@ -219,10 +212,7 @@ impl Harassing {
 
             info!(
                 "[SquadHarass] Harasser died targeting {} (deaths={}, kills={}, failures={}). Respawning.",
-                state_context.target_room,
-                state_context.total_deaths,
-                state_context.total_kills,
-                state_context.consecutive_failures,
+                state_context.target_room, state_context.total_deaths, state_context.total_kills, state_context.consecutive_failures,
             );
             return Ok(Some(SquadHarassState::spawning(std::marker::PhantomData)));
         }
@@ -340,11 +330,7 @@ impl Mission for SquadHarassMission {
         ))
     }
 
-    fn run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        mission_entity: Entity,
-    ) -> Result<MissionResult, String> {
+    fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
         if let Some(new_state) = self.state.tick(system_data, mission_entity, &mut self.context)? {
             self.state = new_state;
         }

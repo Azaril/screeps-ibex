@@ -14,11 +14,7 @@ const LINE_OFFSETS: [(i32, i32); 4] = [(0, 0), (0, 1), (0, 2), (0, 3)];
 /// and the leader's position.
 ///
 /// Returns `None` if the member index is out of range or position is invalid.
-pub fn formation_position(
-    leader_pos: Position,
-    formation: FormationType,
-    member_index: usize,
-) -> Option<Position> {
+pub fn formation_position(leader_pos: Position, formation: FormationType, member_index: usize) -> Option<Position> {
     let offsets = match formation {
         FormationType::None => return Some(leader_pos),
         FormationType::Line => &LINE_OFFSETS[..],
@@ -56,10 +52,7 @@ pub fn is_valid_quad_position(x: u8, y: u8) -> bool {
 /// as impassable (cost 255).
 ///
 /// This should be applied to the cost matrix before pathfinding for the quad leader.
-pub fn apply_quad_cost_overlay(
-    cost_matrix: &mut LocalCostMatrix,
-    room_name: RoomName,
-) {
+pub fn apply_quad_cost_overlay(cost_matrix: &mut LocalCostMatrix, room_name: RoomName) {
     let terrain = game::map::get_room_terrain(room_name);
 
     if let Some(terrain) = terrain {
@@ -96,11 +89,7 @@ pub fn apply_quad_cost_overlay(
 
 /// Apply hostile tower range costs to a cost matrix.
 /// Tiles within tower range get increased cost to encourage pathfinding around them.
-pub fn apply_tower_avoidance_costs(
-    cost_matrix: &mut LocalCostMatrix,
-    tower_positions: &[Position],
-    room_name: RoomName,
-) {
+pub fn apply_tower_avoidance_costs(cost_matrix: &mut LocalCostMatrix, tower_positions: &[Position], room_name: RoomName) {
     for tower_pos in tower_positions {
         if tower_pos.room_name() != room_name {
             continue;
@@ -154,11 +143,7 @@ pub fn apply_tower_avoidance_costs(
 ///   leader resolves first).  When the desired tile is blocked or out of
 ///   bounds the movement system falls back to the nearest tile within range,
 ///   so the quad can still squeeze through narrow corridors.
-pub fn issue_squad_movement(
-    squad: &SquadContext,
-    target_pos: Position,
-    movement: &mut MovementData<Entity>,
-) {
+pub fn issue_squad_movement(squad: &SquadContext, target_pos: Position, movement: &mut MovementData<Entity>) {
     let living_members: Vec<_> = squad.members.iter().filter(|m| m.alive).collect();
 
     if living_members.is_empty() {
@@ -239,16 +224,8 @@ pub fn issue_squad_movement(
 /// member fleeing independently, which would scatter the squad).
 /// For quads, followers use desired offsets to maintain the 2×2 shape
 /// during retreat.
-pub fn issue_squad_flee(
-    squad: &SquadContext,
-    hostile_positions: &[Position],
-    flee_range: u32,
-    movement: &mut MovementData<Entity>,
-) {
-    let targets: Vec<FleeTarget> = hostile_positions
-        .iter()
-        .map(|&pos| FleeTarget { pos, range: flee_range })
-        .collect();
+pub fn issue_squad_flee(squad: &SquadContext, hostile_positions: &[Position], flee_range: u32, movement: &mut MovementData<Entity>) {
+    let targets: Vec<FleeTarget> = hostile_positions.iter().map(|&pos| FleeTarget { pos, range: flee_range }).collect();
 
     let living_members: Vec<_> = squad.members.iter().filter(|m| m.alive).collect();
 
@@ -258,9 +235,7 @@ pub fn issue_squad_flee(
 
     // Leader flees from hostiles.
     if let Some(leader) = living_members.first() {
-        movement
-            .flee(leader.entity, targets)
-            .range(flee_range);
+        movement.flee(leader.entity, targets).range(flee_range);
 
         // Followers follow the leader rather than fleeing independently.
         // This keeps the squad together during retreat instead of scattering.

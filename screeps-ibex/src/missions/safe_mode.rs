@@ -90,11 +90,7 @@ impl Mission for SafeModeMission {
         }
     }
 
-    fn run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        _mission_entity: Entity,
-    ) -> Result<MissionResult, String> {
+    fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<MissionResult, String> {
         let features = crate::features::features();
 
         if !features.military.safe_mode {
@@ -112,10 +108,7 @@ impl Mission for SafeModeMission {
         }
         self.last_eval_tick = current_tick;
 
-        let room_data = system_data
-            .room_data
-            .get(self.room_data)
-            .ok_or("Expected room data")?;
+        let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
         let room = match game::rooms().get(room_data.name) {
             Some(r) => r,
@@ -187,10 +180,7 @@ impl Mission for SafeModeMission {
 
                 for spawn in structures.spawns() {
                     if hostile.pos().get_range_to(spawn.pos()) <= 1 {
-                        warn!(
-                            "[SafeMode] Dismantler adjacent to spawn '{}'!",
-                            spawn.name()
-                        );
+                        warn!("[SafeMode] Dismantler adjacent to spawn '{}'!", spawn.name());
                         critical_in_danger = true;
                     }
                 }

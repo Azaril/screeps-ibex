@@ -41,11 +41,7 @@ machine!(
 );
 
 impl MoveToRoom {
-    pub fn tick(
-        &mut self,
-        state_context: &mut RangedAttackJobContext,
-        tick_context: &mut JobTickContext,
-    ) -> Option<RangedAttackState> {
+    pub fn tick(&mut self, state_context: &mut RangedAttackJobContext, tick_context: &mut JobTickContext) -> Option<RangedAttackState> {
         let room_options = RoomOptions::new(HostileBehavior::Allow);
 
         tick_move_to_room(
@@ -58,11 +54,7 @@ impl MoveToRoom {
 }
 
 impl Engaged {
-    pub fn tick(
-        &mut self,
-        state_context: &mut RangedAttackJobContext,
-        tick_context: &mut JobTickContext,
-    ) -> Option<RangedAttackState> {
+    pub fn tick(&mut self, state_context: &mut RangedAttackJobContext, tick_context: &mut JobTickContext) -> Option<RangedAttackState> {
         let creep = tick_context.runtime_data.owner;
         let creep_pos = creep.pos();
 
@@ -127,17 +119,16 @@ impl Engaged {
             } else if let Some(target) = hostiles.iter().min_by_key(|c| creep_pos.get_range_to(c.pos())) {
                 let range = creep_pos.get_range_to(target.pos());
 
-                if range <= 3
-                    && tick_context.action_flags.consume(SimultaneousActionFlags::RANGED_ATTACK)
-                {
+                if range <= 3 && tick_context.action_flags.consume(SimultaneousActionFlags::RANGED_ATTACK) {
                     let _ = creep.ranged_attack(target);
                 }
             }
 
             // Kiting: maintain range 2-3 from melee-only hostiles.
-            let nearest_melee = hostiles.iter().filter(|c| {
-                c.body().iter().any(|p| p.part() == Part::Attack) && !c.body().iter().any(|p| p.part() == Part::RangedAttack)
-            }).min_by_key(|c| creep_pos.get_range_to(c.pos()));
+            let nearest_melee = hostiles
+                .iter()
+                .filter(|c| c.body().iter().any(|p| p.part() == Part::Attack) && !c.body().iter().any(|p| p.part() == Part::RangedAttack))
+                .min_by_key(|c| creep_pos.get_range_to(c.pos()));
 
             if let Some(melee_hostile) = nearest_melee {
                 let range = creep_pos.get_range_to(melee_hostile.pos());
@@ -181,16 +172,14 @@ impl Engaged {
 }
 
 impl Retreating {
-    pub fn tick(
-        &mut self,
-        state_context: &mut RangedAttackJobContext,
-        tick_context: &mut JobTickContext,
-    ) -> Option<RangedAttackState> {
+    pub fn tick(&mut self, state_context: &mut RangedAttackJobContext, tick_context: &mut JobTickContext) -> Option<RangedAttackState> {
         let creep = tick_context.runtime_data.owner;
 
         // Check squad state -- only re-engage if squad says so.
         let squad_state = get_squad_state(state_context.squad_entity, tick_context);
-        let squad_wants_engage = squad_state.map(|s| s == SquadState::Engaged || s == SquadState::Moving).unwrap_or(false);
+        let squad_wants_engage = squad_state
+            .map(|s| s == SquadState::Engaged || s == SquadState::Moving)
+            .unwrap_or(false);
 
         // Re-engage once HP recovers above 80%, or if squad signals engage.
         if creep.hits() > creep.hits_max() * 4 / 5 || (squad_wants_engage && creep.hits() > creep.hits_max() * 3 / 5) {
@@ -203,26 +192,16 @@ impl Retreating {
         }
 
         // Self-heal if we have heal parts.
-        if creep.hits() < creep.hits_max()
-            && tick_context.action_flags.consume(SimultaneousActionFlags::HEAL)
-        {
+        if creep.hits() < creep.hits_max() && tick_context.action_flags.consume(SimultaneousActionFlags::HEAL) {
             let _ = creep.heal(creep);
         }
 
         // Flee from hostiles.
         if let Some(room) = game::rooms().get(creep.pos().room_name()) {
             let hostiles = room.find(find::HOSTILE_CREEPS, None);
-            let flee_targets: Vec<FleeTarget> = hostiles
-                .iter()
-                .map(|c| FleeTarget {
-                    pos: c.pos(),
-                    range: 8,
-                })
-                .collect();
+            let flee_targets: Vec<FleeTarget> = hostiles.iter().map(|c| FleeTarget { pos: c.pos(), range: 8 }).collect();
 
-            if !flee_targets.is_empty()
-                && tick_context.action_flags.consume(SimultaneousActionFlags::MOVE)
-            {
+            if !flee_targets.is_empty() && tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
                 tick_context
                     .runtime_data
                     .movement

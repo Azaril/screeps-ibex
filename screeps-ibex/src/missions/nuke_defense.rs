@@ -79,11 +79,7 @@ impl Mission for NukeDefenseMission {
         crate::visualization::SummaryContent::Text("NukeDefense".to_string())
     }
 
-    fn run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        _mission_entity: Entity,
-    ) -> Result<MissionResult, String> {
+    fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<MissionResult, String> {
         let features = crate::features::features();
 
         if !features.military.nuke_defense {
@@ -97,10 +93,7 @@ impl Mission for NukeDefenseMission {
         }
         self.last_scan_tick = current_tick;
 
-        let room_data = system_data
-            .room_data
-            .get(self.room_data)
-            .ok_or("Expected room data")?;
+        let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
         let room = match game::rooms().get(room_data.name) {
             Some(r) => r,
@@ -114,11 +107,7 @@ impl Mission for NukeDefenseMission {
             return Ok(MissionResult::Running);
         }
 
-        info!(
-            "[NukeDefense] {} incoming nuke(s) detected in room {}",
-            nukes.len(),
-            room_data.name
-        );
+        info!("[NukeDefense] {} incoming nuke(s) detected in room {}", nukes.len(), room_data.name);
 
         let structures = match room_data.get_structures() {
             Some(s) => s,
@@ -204,7 +193,10 @@ impl Mission for NukeDefenseMission {
                 if range <= 1 {
                     let damage = if range == 0 { NUKE_DAMAGE_CENTER } else { NUKE_DAMAGE_ADJACENT };
                     // Check if there's a rampart covering this spawn.
-                    let has_rampart = structures.ramparts().iter().any(|r| r.my() && r.pos() == spos && r.hits() >= damage);
+                    let has_rampart = structures
+                        .ramparts()
+                        .iter()
+                        .any(|r| r.my() && r.pos() == spos && r.hits() >= damage);
                     if !has_rampart {
                         warn!(
                             "[NukeDefense] CRITICAL: Spawn at ({},{}) in blast zone with insufficient rampart protection!",
@@ -224,7 +216,10 @@ impl Mission for NukeDefenseMission {
                 let range = impact_pos.get_range_to(tpos);
                 if range <= 1 {
                     let damage = if range == 0 { NUKE_DAMAGE_CENTER } else { NUKE_DAMAGE_ADJACENT };
-                    let has_rampart = structures.ramparts().iter().any(|r| r.my() && r.pos() == tpos && r.hits() >= damage);
+                    let has_rampart = structures
+                        .ramparts()
+                        .iter()
+                        .any(|r| r.my() && r.pos() == tpos && r.hits() >= damage);
                     if !has_rampart {
                         warn!(
                             "[NukeDefense] CRITICAL: Tower at ({},{}) in blast zone with insufficient rampart protection!",
@@ -246,7 +241,10 @@ impl Mission for NukeDefenseMission {
                 let range = impact_pos.get_range_to(spos);
                 if range <= 1 {
                     let damage = if range == 0 { NUKE_DAMAGE_CENTER } else { NUKE_DAMAGE_ADJACENT };
-                    let has_rampart = structures.ramparts().iter().any(|r| r.my() && r.pos() == spos && r.hits() >= damage);
+                    let has_rampart = structures
+                        .ramparts()
+                        .iter()
+                        .any(|r| r.my() && r.pos() == spos && r.hits() >= damage);
                     if !has_rampart {
                         warn!(
                             "[NukeDefense] {:?} at ({},{}) in blast zone -- needs rampart with {} hits",

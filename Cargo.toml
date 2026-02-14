@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "screeps-ibex",
     "screeps-cache",
+    "screeps-common",
     "screeps-rover",
     "screeps-timing",
     "screeps-timing-annotate",
@@ -36,6 +37,9 @@ screeps-foreman = { path = "screeps-foreman" }
 
 [patch.'https://github.com/Azaril/screeps-visual']
 screeps-visual = { path = "screeps-visual" }
+
+[patch.'https://github.com/Azaril/screeps-common']
+screeps-common = { path = "screeps-common" }
 
 [patch.crates-io]
 screeps-game-api = { path = "../screeps-game-api" }

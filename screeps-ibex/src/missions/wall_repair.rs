@@ -76,15 +76,8 @@ impl Mission for WallRepairMission {
         crate::visualization::SummaryContent::Text("WallRepair".to_string())
     }
 
-    fn pre_run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        _mission_entity: Entity,
-    ) -> Result<(), String> {
-        let room_data = system_data
-            .room_data
-            .get(self.room_data)
-            .ok_or("Expected room data")?;
+    fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
+        let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
         let room_data_entity = self.room_data;
 
@@ -104,14 +97,8 @@ impl Mission for WallRepairMission {
                 }
 
                 // Check if any wall/rampart is under emergency threshold.
-                let has_emergency = structures
-                    .ramparts()
-                    .iter()
-                    .any(|r| r.my() && r.hits() < EMERGENCY_WALL_HITS)
-                    || structures
-                        .walls()
-                        .iter()
-                        .any(|w| w.hits() < EMERGENCY_WALL_HITS);
+                let has_emergency = structures.ramparts().iter().any(|r| r.my() && r.hits() < EMERGENCY_WALL_HITS)
+                    || structures.walls().iter().any(|w| w.hits() < EMERGENCY_WALL_HITS);
 
                 if !has_emergency {
                     return Ok(());
@@ -142,11 +129,7 @@ impl Mission for WallRepairMission {
         Ok(())
     }
 
-    fn run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        _mission_entity: Entity,
-    ) -> Result<MissionResult, String> {
+    fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<MissionResult, String> {
         let current_tick = game::time();
 
         // Scan every 20 ticks to save CPU.
@@ -155,10 +138,7 @@ impl Mission for WallRepairMission {
         }
         self.last_scan_tick = current_tick;
 
-        let room_data = system_data
-            .room_data
-            .get(self.room_data)
-            .ok_or("Expected room data")?;
+        let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
         let structures = match room_data.get_structures() {
             Some(s) => s,
@@ -244,17 +224,11 @@ impl Mission for WallRepairMission {
 
         // Log weakest points.
         if weakest_rampart_hits < u32::MAX {
-            info!(
-                "[WallRepair] Room {} weakest rampart: {} hits",
-                room_name, weakest_rampart_hits
-            );
+            info!("[WallRepair] Room {} weakest rampart: {} hits", room_name, weakest_rampart_hits);
         }
 
         if weakest_wall_hits < u32::MAX {
-            info!(
-                "[WallRepair] Room {} weakest wall: {} hits",
-                room_name, weakest_wall_hits
-            );
+            info!("[WallRepair] Room {} weakest wall: {} hits", room_name, weakest_wall_hits);
         }
 
         Ok(MissionResult::Running)
