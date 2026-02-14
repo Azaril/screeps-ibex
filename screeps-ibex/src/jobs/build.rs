@@ -58,9 +58,9 @@ impl Idle {
         let creep = tick_context.runtime_data.owner;
         let build_room_data = tick_context.system_data.room_data.get(state_context.build_room)?;
 
-        get_new_repair_state(creep, build_room_data, Some(RepairPriority::High), BuildState::repair)
+        get_new_repair_state(creep, build_room_data, tick_context.system_data.repair_queue, Some(RepairPriority::High), BuildState::repair)
             .or_else(|| get_new_build_state(creep, build_room_data, BuildState::build))
-            .or_else(|| get_new_repair_state(creep, build_room_data, None, BuildState::repair))
+            .or_else(|| get_new_repair_state(creep, build_room_data, tick_context.system_data.repair_queue, None, BuildState::repair))
             .or_else(|| {
                 let transfer_queue_data = TransferQueueGeneratorData {
                     cause: "Build Idle",

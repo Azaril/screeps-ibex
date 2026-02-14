@@ -1,7 +1,9 @@
 use super::data::*;
 use crate::creep::*;
 use crate::jobs::data::*;
+use crate::military::boostqueue::*;
 use crate::operations::data::*;
+use crate::repairqueue::*;
 use crate::room::data::*;
 use crate::room::roomplansystem::*;
 use crate::room::visibilitysystem::*;
@@ -27,6 +29,8 @@ pub struct MissionSystemData<'a> {
     transfer_queue: Write<'a, TransferQueue>,
     order_queue: Write<'a, OrderQueue>,
     visibility: Write<'a, VisibilityQueue>,
+    boost_queue: Write<'a, BoostQueue>,
+    repair_queue: Write<'a, RepairQueue>,
 }
 
 pub struct MissionExecutionSystemData<'a, 'b> {
@@ -44,6 +48,8 @@ pub struct MissionExecutionSystemData<'a, 'b> {
     pub transfer_queue: &'b mut TransferQueue,
     pub order_queue: &'b mut OrderQueue,
     pub visibility: &'b mut Write<'a, VisibilityQueue>,
+    pub boost_queue: &'b mut BoostQueue,
+    pub repair_queue: &'b mut RepairQueue,
 }
 
 pub struct MissionRequests {
@@ -185,6 +191,8 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 transfer_queue: &mut data.transfer_queue,
                 order_queue: &mut data.order_queue,
                 visibility: &mut data.visibility,
+                boost_queue: &mut data.boost_queue,
+                repair_queue: &mut data.repair_queue,
             };
 
             if let Some(mission_data) = data.missions.get(entity) {
@@ -236,6 +244,8 @@ impl<'a> System<'a> for RunMissionSystem {
                 transfer_queue: &mut data.transfer_queue,
                 order_queue: &mut data.order_queue,
                 visibility: &mut data.visibility,
+                boost_queue: &mut data.boost_queue,
+                repair_queue: &mut data.repair_queue,
             };
 
             if let Some(mission_data) = data.missions.get(entity) {

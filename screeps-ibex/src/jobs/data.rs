@@ -18,6 +18,10 @@ pub enum JobData {
     Reserve(super::reserve::ReserveJob),
     Claim(super::claim::ClaimJob),
     Dismantle(super::dismantle::DismantleJob),
+    Attack(super::attack::AttackJob),
+    Heal(super::heal::HealJob),
+    RangedAttack(super::ranged::RangedAttackJob),
+    Tank(super::tank::TankJob),
 }
 
 impl JobData {
@@ -34,6 +38,10 @@ impl JobData {
             JobData::Reserve(ref data) => data.summarize(),
             JobData::Claim(ref data) => data.summarize(),
             JobData::Dismantle(ref data) => data.summarize(),
+            JobData::Attack(ref data) => data.summarize(),
+            JobData::Heal(ref data) => data.summarize(),
+            JobData::RangedAttack(ref data) => data.summarize(),
+            JobData::Tank(ref data) => data.summarize(),
         }
     }
 
@@ -49,6 +57,10 @@ impl JobData {
             JobData::Reserve(ref mut data) => data,
             JobData::Claim(ref mut data) => data,
             JobData::Dismantle(ref mut data) => data,
+            JobData::Attack(ref mut data) => data,
+            JobData::Heal(ref mut data) => data,
+            JobData::RangedAttack(ref mut data) => data,
+            JobData::Tank(ref mut data) => data,
         }
     }
 }

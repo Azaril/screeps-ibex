@@ -21,6 +21,7 @@ pub fn load_reset() -> ResetFlags {
     ResetFlags {
         environment: js_bool(&reset, "environment"),
         memory: js_bool(&reset, "memory"),
+        room_plans: js_bool(&reset, "room_plans"),
     }
 }
 
@@ -28,12 +29,14 @@ pub fn load_reset() -> ResetFlags {
 pub fn clear_reset() {
     crate::memory_helper::path_set("_features.reset.environment", false);
     crate::memory_helper::path_set("_features.reset.memory", false);
+    crate::memory_helper::path_set("_features.reset.room_plans", false);
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ResetFlags {
     pub environment: bool,
     pub memory: bool,
+    pub room_plans: bool,
 }
 
 // ─── Feature flag structs ──────────────────────────────────────────────────────
@@ -235,6 +238,55 @@ impl RoomVisualizeFeatures {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
+#[derive(Default)]
+pub struct MilitaryVisualizeFeatures {
+    pub on: bool,
+    pub threat_map: bool,
+    pub squads: bool,
+}
+
+impl MilitaryVisualizeFeatures {
+    pub fn threat_map(&self, global_visualize: bool) -> bool {
+        self.on && self.threat_map && global_visualize
+    }
+
+    pub fn squads(&self, global_visualize: bool) -> bool {
+        self.on && self.squads && global_visualize
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MilitaryFeatures {
+    /// Enable the defense operation (threat response, squad defense).
+    pub defense: bool,
+    /// Enable attack operations (assault, harass).
+    pub attack: bool,
+    /// Request boosts for military creeps.
+    pub boost_military: bool,
+    /// Allow safe mode activation as last resort.
+    pub safe_mode: bool,
+    /// Enable nuke defense mission.
+    pub nuke_defense: bool,
+    /// Visualization settings.
+    pub visualize: MilitaryVisualizeFeatures,
+}
+
+impl Default for MilitaryFeatures {
+    fn default() -> Self {
+        Self {
+            defense: true,
+            attack: false,
+            boost_military: false,
+            safe_mode: true,
+            nuke_defense: true,
+            visualize: MilitaryVisualizeFeatures::default(),
+        }
+    }
+}
+
 // ─── Top-level features ────────────────────────────────────────────────────────
 
 /// All feature flags, loaded once per tick from `Memory._features`.
@@ -252,6 +304,7 @@ pub struct Features {
     pub remote_mine: RemoteMineFeatures,
     pub pathing: PathingFeatures,
     pub room: RoomFeatures,
+    pub military: MilitaryFeatures,
     pub raid: bool,
     pub claim: bool,
     pub dismantle: bool,
@@ -267,6 +320,7 @@ impl Default for Features {
             remote_mine: RemoteMineFeatures::default(),
             pathing: PathingFeatures::default(),
             room: RoomFeatures::default(),
+            military: MilitaryFeatures::default(),
             raid: false,
             claim: true,
             dismantle: false,
@@ -349,6 +403,7 @@ pub fn load() {
         let obj = js_sys::Object::new();
         let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("environment"), &JsValue::from_bool(false));
         let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("memory"), &JsValue::from_bool(false));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("room_plans"), &JsValue::from_bool(false));
         let _ = js_sys::Reflect::set(js_features.as_ref(), &JsValue::from_str("reset"), &obj);
     }
 

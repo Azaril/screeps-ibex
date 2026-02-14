@@ -232,7 +232,7 @@ impl Mission for ConstructionMission {
         let room = game::rooms().get(room_data.name).ok_or("Expected room")?;
         let room_level = room.controller().map(|c| c.level()).unwrap_or(0);
 
-        let request_plan = if let Some(room_plan_data) = system_data.room_plan_data.get(self.room_data) {
+        let request_plan = if let Some(room_plan_data) = system_data.room_plan_data.get(self.room_data) {           
             if let Some(plan) = room_plan_data.plan() {
                 if game::time().is_multiple_of(50) {
                     if crate::features::features().construction.execute {

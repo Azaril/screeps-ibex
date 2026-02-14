@@ -1,4 +1,6 @@
+use crate::repairqueue::*;
 use crate::room::data::*;
+use crate::structureidentifier::*;
 use screeps::*;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Ord, PartialOrd)]
@@ -86,7 +88,9 @@ fn map_defense_priority(
     }
 }
 
-fn map_structure_repair_priority(
+/// Compute the repair priority for a structure based on its type and health.
+/// Public so missions can use this when populating the repair queue.
+pub fn map_structure_repair_priority(
     structure: &StructureObject,
     hits: u32,
     hits_max: u32,
@@ -138,6 +142,8 @@ pub fn get_repair_targets(structures: &[StructureObject], allow_walls: bool) -> 
         .filter(|(_, hits, hits_max)| hits < hits_max)
 }
 
+/// Get prioritized repair targets from a room scan. This is the low-level
+/// fallback used when the repair queue has no entries for a room.
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_prioritized_repair_targets(
     structures: &[StructureObject],
@@ -150,12 +156,22 @@ pub fn get_prioritized_repair_targets(
     })
 }
 
+/// Select the best repair target for a room. Checks the repair queue first
+/// (mission-requested repairs), then falls back to a room scan.
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn select_repair_structure_and_priority(
     room_data: &RoomData,
+    repair_queue: &RepairQueue,
     minimum_priority: Option<RepairPriority>,
     allow_walls: bool,
-) -> Option<(RepairPriority, StructureObject)> {
+) -> Option<(RepairPriority, RemoteStructureIdentifier)> {
+    // Check the repair queue first -- these are mission-requested repairs
+    // (wall repair, nuke defense, etc.) that should take priority.
+    if let Some(request) = repair_queue.get_best_target(room_data.name, minimum_priority) {
+        return Some((request.priority, request.structure_id));
+    }
+
+    // Fall back to room-scan approach for structures not in the queue.
     let structures = room_data.get_structures()?;
     let creeps = room_data.get_creeps()?;
 
@@ -171,14 +187,46 @@ pub fn select_repair_structure_and_priority(
         .filter(|(priority, _)| minimum_priority.map(|op| *priority >= op).unwrap_or(true))
         .filter_map(|(priority, structure)| structure.as_attackable().map(|a| (priority, structure, a.hits())))
         .max_by(|(priority_a, _, hits_a), (priority_b, _, hits_b)| priority_a.cmp(priority_b).then_with(|| hits_a.cmp(hits_b).reverse()))
-        .map(|(priority, structure, _)| (priority, structure.clone()))
+        .map(|(priority, structure, _)| (priority, RemoteStructureIdentifier::new(structure)))
 }
 
+/// Select the best repair target for a room, returning just the structure identifier.
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn select_repair_structure(
     room_data: &RoomData,
+    repair_queue: &RepairQueue,
     minimum_priority: Option<RepairPriority>,
     allow_walls: bool,
-) -> Option<StructureObject> {
-    select_repair_structure_and_priority(room_data, minimum_priority, allow_walls).map(|(_, structure)| structure)
+) -> Option<RemoteStructureIdentifier> {
+    select_repair_structure_and_priority(room_data, repair_queue, minimum_priority, allow_walls).map(|(_, structure)| structure)
+}
+
+/// Select the best in-range repair target. Checks the repair queue for
+/// nearby mission-requested repairs first, then falls back to a room scan
+/// filtered by range. Used for opportunistic repair while moving.
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn select_repair_structure_in_range(
+    room_data: &RoomData,
+    repair_queue: &RepairQueue,
+    pos: Position,
+    range: u32,
+    minimum_priority: Option<RepairPriority>,
+    allow_walls: bool,
+) -> Option<(RepairPriority, RemoteStructureIdentifier)> {
+    // Check the repair queue for in-range targets first.
+    if let Some(request) = repair_queue.get_best_target_in_range(room_data.name, pos, range, minimum_priority) {
+        return Some((request.priority, request.structure_id));
+    }
+
+    // Fall back to room scan filtered by range.
+    let structures = room_data.get_structures()?;
+    let creeps = room_data.get_creeps()?;
+
+    let are_hostile_creeps = !creeps.hostile().is_empty();
+
+    get_prioritized_repair_targets(structures.all(), None, are_hostile_creeps, allow_walls)
+        .filter(|(priority, _)| minimum_priority.map(|p| *priority >= p).unwrap_or(true))
+        .filter(|(_, structure)| structure.pos().in_range_to(pos, range))
+        .max_by_key(|(priority, _)| *priority)
+        .map(|(priority, structure)| (priority, RemoteStructureIdentifier::new(structure)))
 }

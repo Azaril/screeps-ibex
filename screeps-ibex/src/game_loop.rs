@@ -4,6 +4,9 @@ use crate::globals::*;
 use crate::jobs::data::*;
 use crate::jobs::jobsystem::*;
 use crate::memorysystem::*;
+use crate::military::boostqueue::*;
+use crate::military::squad::*;
+use crate::military::threatmap::*;
 use crate::missions::data::*;
 use crate::missions::missionsystem::*;
 use crate::operations::data::*;
@@ -59,6 +62,7 @@ fn serialize_world(world: &World, segments: &[u32]) {
         job_data: ReadStorage<'a, JobData>,
         operation_data: ReadStorage<'a, OperationData>,
         mission_data: ReadStorage<'a, MissionData>,
+        squad_context: ReadStorage<'a, SquadContext>,
     }
 
     impl<'a, 'b> System<'a> for Serialize<'b> {
@@ -79,6 +83,7 @@ fn serialize_world(world: &World, segments: &[u32]) {
                     &data.job_data,
                     &data.operation_data,
                     &data.mission_data,
+                    &data.squad_context,
                 ),
                 &data.entities,
                 &data.markers,
@@ -148,6 +153,7 @@ fn deserialize_world(world: &World, segments: &[u32]) {
         job_data: WriteStorage<'a, JobData>,
         operation_data: WriteStorage<'a, OperationData>,
         mission_data: WriteStorage<'a, MissionData>,
+        squad_context: WriteStorage<'a, SquadContext>,
     }
 
     impl<'a, 'b> System<'a> for Deserialize<'b> {
@@ -181,6 +187,7 @@ fn deserialize_world(world: &World, segments: &[u32]) {
                         &mut data.job_data,
                         &mut data.operation_data,
                         &mut data.mission_data,
+                        &mut data.squad_context,
                     ),
                     &data.entities,
                     &mut data.markers,
@@ -262,6 +269,14 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
     let movement_results = MovementResults::<Entity>::new();
     world.insert(movement_results);
 
+    // Military systems (ephemeral -- rebuilt each tick).
+    world.insert(ThreatMap::new());
+    world.insert(BoostQueue::new());
+    world.register::<SquadContext>();
+
+    // Repair queue (ephemeral -- rebuilt each tick by missions).
+    world.insert(crate::repairqueue::RepairQueue::default());
+
     //
     // Pre-pass update
     //
@@ -273,6 +288,7 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
         .with(UpdateRoomDataSystem, "update_room_data", &["create_room_data"])
         .with_barrier()
         .with(EntityMappingSystem, "entity_mapping", &[])
+        .with(ThreatAssessmentSystem, "threat_assessment", &["entity_mapping"])
         .build();
 
     pre_pass_dispatcher.setup(&mut world);
@@ -358,9 +374,10 @@ pub fn tick() {
         ENVIRONMENT.with(|e| *e.borrow_mut() = None);
     }
 
-    // Memory reset is deferred until we have the MemoryArbiter (inside the
-    // ENVIRONMENT closure). We just remember the flag here.
+    // Memory and room-plan resets are deferred until we have the ECS world
+    // (inside the ENVIRONMENT closure). We just remember the flags here.
     let needs_memory_reset = reset.memory;
+    let needs_room_plan_reset = reset.room_plans;
 
     crate::features::clear_reset();
 
@@ -446,6 +463,25 @@ pub fn tick() {
         env.tick = Some(current_time);
 
         //
+        // Room plan reset — remove all plans so every room replans.
+        //
+
+        if needs_room_plan_reset {
+            info!("Resetting all room plans");
+
+            // Clear all RoomPlanData components so rooms have no plan.
+            let mut plan_storage = env.world.write_storage::<RoomPlanData>();
+            plan_storage.clear();
+
+            // Clear the planner running state (segment 60) so any in-progress
+            // planning is abandoned cleanly.
+            let mut arbiter = env.world.write_resource::<MemoryArbiter>();
+            if arbiter.is_active(PLANNER_MEMORY_SEGMENT) {
+                arbiter.set(PLANNER_MEMORY_SEGMENT, "");
+            }
+        }
+
+        //
         // Prepare globals
         //
 
@@ -471,6 +507,9 @@ pub fn tick() {
 
         env.pre_pass_dispatcher.dispatch(&env.world);
         env.world.maintain();
+
+        // Clear ephemeral per-tick queues before the main pass.
+        env.world.write_resource::<crate::repairqueue::RepairQueue>().clear();
 
         env.main_pass_dispatcher.dispatch(&env.world);
         env.world.maintain();

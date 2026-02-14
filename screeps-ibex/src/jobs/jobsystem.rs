@@ -1,6 +1,8 @@
 use super::data::JobData;
 use crate::creep::CreepOwner;
 use crate::entitymappingsystem::*;
+use crate::military::squad::SquadContext;
+use crate::repairqueue::RepairQueue;
 use crate::room::data::*;
 use crate::transfer::transfersystem::*;
 use crate::visualization::SummaryContent;
@@ -19,12 +21,16 @@ pub struct JobSystemData<'a> {
     movement: WriteExpect<'a, MovementData<Entity>>,
     movement_results: ReadExpect<'a, MovementResults<Entity>>,
     mapping: Read<'a, EntityMappingData>,
+    squad_contexts: WriteStorage<'a, SquadContext>,
+    repair_queue: Read<'a, RepairQueue>,
 }
 
 pub struct JobExecutionSystemData<'a> {
     pub updater: &'a Read<'a, LazyUpdate>,
     pub entities: &'a Entities<'a>,
     pub room_data: &'a ReadStorage<'a, RoomData>,
+    pub squad_contexts: &'a WriteStorage<'a, SquadContext>,
+    pub repair_queue: &'a RepairQueue,
 }
 
 pub struct JobExecutionRuntimeData<'a> {
@@ -66,6 +72,8 @@ impl<'a> System<'a> for PreRunJobSystem {
             updater: &data.updater,
             entities: &data.entities,
             room_data: &data.room_data,
+            squad_contexts: &data.squad_contexts,
+            repair_queue: &data.repair_queue,
         };
 
         for (creep_entity, creep, job_data) in (&data.entities, &data.creep_owners, &mut data.jobs).join() {
@@ -96,6 +104,8 @@ impl<'a> System<'a> for RunJobSystem {
             updater: &data.updater,
             entities: &data.entities,
             room_data: &data.room_data,
+            squad_contexts: &data.squad_contexts,
+            repair_queue: &data.repair_queue,
         };
 
         for (creep_entity, creep, job_data) in (&data.entities, &data.creep_owners, &mut data.jobs).join() {

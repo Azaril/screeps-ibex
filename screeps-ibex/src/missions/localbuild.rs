@@ -5,9 +5,11 @@ use crate::creep::*;
 use crate::jobs::build::*;
 use crate::jobs::data::*;
 use crate::jobs::utility::repair::*;
+use crate::repairqueue::*;
 use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
+use crate::structureidentifier::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 #[allow(deprecated)]
@@ -107,8 +109,8 @@ impl LocalBuildMission {
         }
     }
 
-    fn get_repairer_priority(&self, room_data: &RoomData) -> Option<(u32, f32)> {
-        let (priority, _) = select_repair_structure_and_priority(room_data, None, true)?;
+    fn get_repairer_priority(&self, room_data: &RoomData, repair_queue: &RepairQueue) -> Option<(u32, f32)> {
+        let (priority, _) = select_repair_structure_and_priority(room_data, repair_queue, None, true)?;
 
         if priority >= RepairPriority::High {
             Some((1, SPAWN_PRIORITY_HIGH))
@@ -176,6 +178,47 @@ impl Mission for LocalBuildMission {
         self.builders
             .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
 
+        //
+        // Populate the repair queue with non-wall structures that need repair.
+        // This makes the repair queue the single source of truth for repair
+        // targets, so jobs don't need to do their own room scans.
+        //
+
+        if let Some(room_data) = system_data.room_data.get(self.room_data) {
+            if let Some(structures) = room_data.get_structures() {
+                let are_hostile_creeps = room_data
+                    .get_creeps()
+                    .map(|c| !c.hostile().is_empty())
+                    .unwrap_or(false);
+
+                let available_energy = structures
+                    .storages()
+                    .iter()
+                    .map(|s| s.store().get_used_capacity(Some(ResourceType::Energy)))
+                    .sum::<u32>();
+
+                // Enqueue non-wall/rampart structures (roads, containers, spawns, etc.)
+                // Walls and ramparts are handled by the WallRepairMission.
+                for (structure, hits, hits_max) in get_repair_targets(structures.all(), false) {
+                    if let Some(priority) = map_structure_repair_priority(
+                        structure,
+                        hits,
+                        hits_max,
+                        Some(available_energy),
+                        are_hostile_creeps,
+                    ) {
+                        system_data.repair_queue.request_repair(RepairRequest {
+                            structure_id: RemoteStructureIdentifier::new(structure),
+                            priority,
+                            current_hits: hits,
+                            max_hits: hits_max,
+                            room: room_data.name,
+                        });
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -209,7 +252,7 @@ impl Mission for LocalBuildMission {
             spawn_priority = spawn_priority.max(build_priority);
         }
 
-        if let Some((desired_repairers, repair_priority)) = self.get_repairer_priority(room_data) {
+        if let Some((desired_repairers, repair_priority)) = self.get_repairer_priority(room_data, system_data.repair_queue) {
             spawn_count = spawn_count.max(desired_repairers);
             spawn_priority = spawn_priority.max(repair_priority);
         }

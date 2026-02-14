@@ -82,7 +82,7 @@ impl StructureIdentifier {
     }
 }
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum RemoteStructureIdentifier {
     Container(RemoteObjectId<StructureContainer>),
     Controller(RemoteObjectId<StructureController>),

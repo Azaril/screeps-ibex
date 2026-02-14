@@ -148,7 +148,7 @@ impl Idle {
             )
             .or_else(|| get_new_upgrade_state(creep, delivery_room_data, HarvestState::upgrade, Some(2)))
             .or_else(|| get_new_build_state(creep, delivery_room_data, HarvestState::build))
-            .or_else(|| get_new_repair_state(creep, delivery_room_data, Some(RepairPriority::Medium), HarvestState::repair))
+            .or_else(|| get_new_repair_state(creep, delivery_room_data, tick_context.system_data.repair_queue, Some(RepairPriority::Medium), HarvestState::repair))
             .or_else(|| {
                 [TransferPriority::Medium, TransferPriority::Low, TransferPriority::None]
                     .iter()
@@ -288,7 +288,7 @@ impl FinishedRepair {
 
         let creep = tick_context.runtime_data.owner;
 
-        get_new_repair_state(creep, delivery_room_data, Some(RepairPriority::Medium), HarvestState::repair).or(Some(HarvestState::idle()))
+        get_new_repair_state(creep, delivery_room_data, tick_context.system_data.repair_queue, Some(RepairPriority::Medium), HarvestState::repair).or(Some(HarvestState::idle()))
     }
 }
 
