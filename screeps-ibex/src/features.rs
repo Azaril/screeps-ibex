@@ -190,6 +190,7 @@ pub struct PathingVisualizeFeatures {
 pub struct PathingFeatures {
     pub visualize: PathingVisualizeFeatures,
     pub custom: bool,
+    pub reuse_path_length: u32,
 }
 
 impl Default for PathingFeatures {
@@ -197,6 +198,7 @@ impl Default for PathingFeatures {
         Self {
             visualize: PathingVisualizeFeatures::default(),
             custom: true,
+            reuse_path_length: 20,
         }
     }
 }
