@@ -61,6 +61,34 @@ pub fn mark_immovable(tick_context: &mut JobTickContext) {
         .allow_swap(false);
 }
 
+/// Register the creep as stationed at its current position. The creep uses
+/// High priority so it wins tile conflicts against most other creeps, causing
+/// them to repath around after their stuck timer fires. Shoving is still
+/// permitted as a last resort so creeps with no alternative path can push
+/// through.
+///
+/// Use this for creeps that have a specific assigned tile (e.g. link miners)
+/// but where blocking all traffic is undesirable. Compared to
+/// `mark_immovable`, stationed creeps can be displaced when truly necessary;
+/// compared to `mark_working`, they will not be casually shoved aside by
+/// normal-priority creeps.
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn mark_stationed(tick_context: &mut JobTickContext) {
+    let creep = tick_context.runtime_data.owner;
+    let creep_pos = creep.pos();
+
+    let mut builder = tick_context
+        .runtime_data
+        .movement
+        .move_to(tick_context.runtime_data.creep_entity, creep_pos);
+
+    builder
+        .range(0)
+        .priority(MovementPriority::High)
+        .allow_shove(true)
+        .allow_swap(false);
+}
+
 /// Register the creep as a stationary worker that prefers to stay put but may
 /// be shoved or swapped to an adjacent tile as long as it remains within
 /// `range` of `target_pos`. Use this for range-based workers (upgraders,

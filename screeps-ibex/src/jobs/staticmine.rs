@@ -170,10 +170,10 @@ impl Harvest {
                 return Some(StaticMineState::move_to_container());
             }
 
-            // Static miners sit on their container and should never be shoved.
-            // This must be the ONLY movement intent for this tick — do not call
-            // tick_harvest() which would override it with mark_working().
-            mark_immovable(tick_context);
+            // Static miners use High priority so other creeps repath around
+            // them, but allow shoving as a last resort. If shoved off the
+            // container, the is_equal_to check above will send us back.
+            mark_stationed(tick_context);
 
             // Check container capacity before harvesting.
             let container = state_context.container_target.resolve().unwrap();
@@ -225,7 +225,7 @@ impl Harvest {
 impl Wait {
     fn tick(&mut self, state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
         // Static miners remain on their container even while waiting.
-        mark_immovable(tick_context);
+        mark_stationed(tick_context);
 
         // If the container is gone, try to rediscover it.
         if state_context.container_target.resolve().is_none() && state_context.try_rediscover_container(tick_context) {

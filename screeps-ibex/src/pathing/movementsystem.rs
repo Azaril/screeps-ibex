@@ -214,7 +214,9 @@ impl<'a> System<'a> for MovementUpdateSystem {
             ibex_visualizer.as_mut().map(|v| v as &mut dyn MovementVisualizer),
         );
 
-        system.set_reuse_path_length(crate::features::features().pathing.reuse_path_length);
+        let pathing_features = crate::features::features().pathing;
+        system.set_reuse_path_length(pathing_features.reuse_path_length);
+        system.set_max_shove_depth(pathing_features.max_shove_depth);
 
         let results = system.process(&mut external, movement_data);
 

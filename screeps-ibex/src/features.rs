@@ -194,6 +194,7 @@ pub struct PathingFeatures {
     pub visualize: PathingVisualizeFeatures,
     pub custom: bool,
     pub reuse_path_length: u32,
+    pub max_shove_depth: u32,
 }
 
 impl Default for PathingFeatures {
@@ -202,6 +203,7 @@ impl Default for PathingFeatures {
             visualize: PathingVisualizeFeatures::default(),
             custom: true,
             reuse_path_length: 20,
+            max_shove_depth: 10,
         }
     }
 }

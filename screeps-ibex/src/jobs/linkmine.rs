@@ -53,8 +53,9 @@ impl MoveToPosition {
 
 impl Idle {
     pub fn tick(&mut self, state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
-        // Link miner is at its mining position — mark as immovable.
-        movebehavior::mark_immovable(tick_context);
+        // Link miner is at its mining position — use High priority so other
+        // creeps repath around, but allow shoving as a last resort.
+        movebehavior::mark_stationed(tick_context);
 
         let creep = tick_context.runtime_data.owner;
 
@@ -97,35 +98,64 @@ impl Idle {
 
 impl Harvest {
     pub fn tick(&mut self, state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
-        tick_harvest(tick_context, state_context.mine_target, true, true, LinkMineState::idle)
+        let creep = tick_context.runtime_data.owner;
+        let near_source = creep.pos().is_near_to(state_context.mine_target.pos());
+
+        let result = tick_harvest(tick_context, state_context.mine_target, true, true, LinkMineState::idle);
+
+        // Only override the movement request when the creep is actually at its
+        // mining position. When out of range, tick_harvest issues a move_to
+        // toward the source that must not be overwritten — otherwise the miner
+        // will never walk back after being shoved away.
+        if near_source {
+            movebehavior::mark_stationed(tick_context);
+        }
+
+        result
     }
 }
 
 impl DepositLink {
     pub fn tick(&mut self, state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
-        // Link miner deposits from its mining position — mark as immovable.
-        movebehavior::mark_immovable(tick_context);
+        let creep = tick_context.runtime_data.owner;
+        let near_link = creep.pos().is_near_to(state_context.link_target.pos());
 
-        tick_deposit_all_resources_state(tick_context, TransferTarget::Link(state_context.link_target), LinkMineState::idle)
+        let result = tick_deposit_all_resources_state(tick_context, TransferTarget::Link(state_context.link_target), LinkMineState::idle);
+
+        // Only mark stationed when in range; when out of range the deposit
+        // function issues a move_to that must not be overwritten.
+        if near_link {
+            movebehavior::mark_stationed(tick_context);
+        }
+
+        result
     }
 }
 
 impl DepositContainer {
     pub fn tick(&mut self, state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
-        // Link miner deposits from its mining position — mark as immovable.
-        movebehavior::mark_immovable(tick_context);
-
         let Some(container_id) = state_context.container_target else {
             return Some(LinkMineState::idle());
         };
-        tick_deposit_all_resources_state(tick_context, TransferTarget::Container(container_id), LinkMineState::idle)
+
+        let creep = tick_context.runtime_data.owner;
+        let near_container = creep.pos().is_near_to(container_id.pos());
+
+        let result = tick_deposit_all_resources_state(tick_context, TransferTarget::Container(container_id), LinkMineState::idle);
+
+        // Only mark stationed when in range; when out of range the deposit
+        // function issues a move_to that must not be overwritten.
+        if near_container {
+            movebehavior::mark_stationed(tick_context);
+        }
+
+        result
     }
 }
 
 impl Wait {
     pub fn tick(&mut self, _state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
-        // Link miner remains at its mining position while waiting.
-        movebehavior::mark_immovable(tick_context);
+        movebehavior::mark_stationed(tick_context);
 
         tick_wait(&mut self.ticks, LinkMineState::idle)
     }
