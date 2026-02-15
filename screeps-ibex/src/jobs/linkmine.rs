@@ -23,9 +23,7 @@ impl LinkMineJobContext {
     /// Returns `true` when a container target exists and the creep is not
     /// standing on it (i.e. it has been shoved off its ideal tile).
     fn is_displaced(&self, creep: &Creep) -> bool {
-        self.container_target
-            .map(|id| !creep.pos().is_equal_to(id.pos()))
-            .unwrap_or(false)
+        self.container_target.map(|id| !creep.pos().is_equal_to(id.pos())).unwrap_or(false)
     }
 
     /// Issue a movement request to walk back to the container tile. Call this

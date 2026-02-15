@@ -209,10 +209,7 @@ impl Mission for WallRepairMission {
         }
 
         if emergency_count > 0 {
-            let has_hostiles = room_data
-                .get_creeps()
-                .map(|c| !c.hostile().is_empty())
-                .unwrap_or(false);
+            let has_hostiles = room_data.get_creeps().map(|c| !c.hostile().is_empty()).unwrap_or(false);
 
             if has_hostiles {
                 warn!(

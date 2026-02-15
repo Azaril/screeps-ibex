@@ -62,6 +62,23 @@ impl StaticMineJobContext {
             false
         }
     }
+
+    /// Returns `true` when the container exists and the creep is not standing
+    /// on it (i.e. it has been shoved off its assigned tile).
+    fn is_displaced(&self, creep: &Creep) -> bool {
+        self.container_target.resolve().is_some() && !creep.pos().is_equal_to(self.container_target.pos())
+    }
+
+    /// Issue a movement request to walk back to the container tile. Call this
+    /// when the creep is displaced but still performing its action (harvest)
+    /// so it moves back without wasting a tick.
+    fn move_to_container(&self, tick_context: &mut JobTickContext) {
+        tick_context
+            .runtime_data
+            .movement
+            .move_to(tick_context.runtime_data.creep_entity, self.container_target.pos())
+            .range(0);
+    }
 }
 
 machine!(
@@ -163,32 +180,49 @@ impl Harvest {
         let container_exists = state_context.container_target.resolve().is_some();
 
         if container_exists {
-            let container_pos: Position = state_context.container_target.pos();
+            let displaced = state_context.is_displaced(creep);
 
-            // If the creep is not standing on the container tile, go back to it.
-            if !creep.pos().is_equal_to(container_pos) {
-                return Some(StaticMineState::move_to_container());
+            if displaced {
+                // Shoved off the container — issue a move back. The harvest
+                // action (HARVEST and MOVE are independent intents) can still
+                // fire this tick as long as we're in range of the mine target,
+                // so the creep is productive while walking back.
+                state_context.move_to_container(tick_context);
+            } else {
+                // On the container — stay put with high priority so other
+                // creeps repath around.
+                mark_stationed(tick_context);
             }
 
-            // Static miners use High priority so other creeps repath around
-            // them, but allow shoving as a last resort. If shoved off the
-            // container, the is_equal_to check above will send us back.
-            mark_stationed(tick_context);
+            // Check container capacity before harvesting (only when on the
+            // container — when displaced, resources drop on the ground and
+            // will be picked up, which is better than idling).
+            if !displaced {
+                let container = state_context.container_target.resolve().unwrap();
+                let work_parts = creep.body().iter().filter(|p| p.part() == Part::Work).count() as u32;
 
-            // Check container capacity before harvesting.
-            let container = state_context.container_target.resolve().unwrap();
-            let work_parts = creep.body().iter().filter(|p| p.part() == Part::Work).count() as u32;
+                let mining_power = match state_context.mine_target {
+                    StaticMineTarget::Source(_) => HARVEST_POWER,
+                    StaticMineTarget::Mineral(_, _) => HARVEST_MINERAL_POWER,
+                };
 
-            let mining_power = match state_context.mine_target {
-                StaticMineTarget::Source(_) => HARVEST_POWER,
-                StaticMineTarget::Mineral(_, _) => HARVEST_MINERAL_POWER,
-            };
+                let resources_harvested = work_parts * mining_power;
 
-            let resources_harvested = work_parts * mining_power;
-
-            if resources_harvested as i32 > container.store().get_free_capacity(None) {
-                return Some(StaticMineState::wait(1));
+                if resources_harvested as i32 > container.store().get_free_capacity(None) {
+                    return Some(StaticMineState::wait(1));
+                }
             }
+
+            // Harvest if in range — works whether on the container or
+            // displaced (as long as within range 1 of the mine target).
+            if creep.pos().is_near_to(state_context.mine_target.pos()) {
+                return try_harvest_mine_target(creep, &state_context.mine_target, tick_context);
+            }
+
+            // Displaced and out of harvest range — the move_to_container
+            // request above will move us back. Return None to commit the
+            // movement intent this tick.
+            None
         } else {
             // Container is gone — try to find a replacement.
             if state_context.try_rediscover_container(tick_context) {
@@ -214,23 +248,31 @@ impl Harvest {
             // Near the source without a container — allow shoving within
             // range 1 so we don't block other creeps.
             mark_working(tick_context, mine_pos, 1);
-        }
 
-        // Perform the harvest action inline (not via tick_harvest, which would
-        // override our immovable movement intent when on a container).
-        try_harvest_mine_target(creep, &state_context.mine_target, tick_context)
+            // Perform the harvest action.
+            try_harvest_mine_target(creep, &state_context.mine_target, tick_context)
+        }
     }
 }
 
 impl Wait {
     fn tick(&mut self, state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
-        // Static miners remain on their container even while waiting.
-        mark_stationed(tick_context);
+        let creep = tick_context.runtime_data.owner;
 
         // If the container is gone, try to rediscover it.
         if state_context.container_target.resolve().is_none() && state_context.try_rediscover_container(tick_context) {
             return Some(StaticMineState::move_to_container());
         }
+
+        if state_context.is_displaced(creep) {
+            // Shoved off the container while waiting — skip the wait and go
+            // straight to Harvest so we start walking back while still being
+            // productive (Harvest will issue the move and attempt to mine).
+            return Some(StaticMineState::harvest());
+        }
+
+        // On the container — stay put.
+        mark_stationed(tick_context);
 
         tick_wait(&mut self.ticks, StaticMineState::harvest)
     }

@@ -35,6 +35,9 @@ pub enum MissionData {
     NukeDefense(EntityRefCell<super::nuke_defense::NukeDefenseMission>),
     SafeMode(EntityRefCell<super::safe_mode::SafeModeMission>),
     WallRepair(EntityRefCell<super::wall_repair::WallRepairMission>),
+    SourceMining(EntityRefCell<super::localsupply::source_mining::SourceMiningMission>),
+    MineralMining(EntityRefCell<super::localsupply::mineral_mining::MineralMiningMission>),
+    RoomTransfer(EntityRefCell<super::localsupply::room_transfer::RoomTransferMission>),
 }
 
 impl MissionData {
@@ -64,6 +67,9 @@ impl MissionData {
             MissionData::NukeDefense(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::SafeMode(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::WallRepair(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
+            MissionData::SourceMining(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
+            MissionData::MineralMining(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
+            MissionData::RoomTransfer(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
         }
     }
 
@@ -98,6 +104,9 @@ impl MissionData {
             MissionData::NukeDefense(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::SafeMode(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::WallRepair(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
+            MissionData::SourceMining(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
+            MissionData::MineralMining(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
+            MissionData::RoomTransfer(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
         }
     }
 }
@@ -250,3 +259,6 @@ mission_type!(super::squad_harass::SquadHarassMission, MissionData::SquadHarass)
 mission_type!(super::nuke_defense::NukeDefenseMission, MissionData::NukeDefense);
 mission_type!(super::safe_mode::SafeModeMission, MissionData::SafeMode);
 mission_type!(super::wall_repair::WallRepairMission, MissionData::WallRepair);
+mission_type!(super::localsupply::source_mining::SourceMiningMission, MissionData::SourceMining);
+mission_type!(super::localsupply::mineral_mining::MineralMiningMission, MissionData::MineralMining);
+mission_type!(super::localsupply::room_transfer::RoomTransferMission, MissionData::RoomTransfer);

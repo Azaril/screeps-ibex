@@ -1,4 +1,5 @@
 use super::data::*;
+use super::localsupply::structure_data::SupplyStructureCache;
 use crate::creep::*;
 use crate::jobs::data::*;
 use crate::military::boostqueue::*;
@@ -31,6 +32,7 @@ pub struct MissionSystemData<'a> {
     visibility: Write<'a, VisibilityQueue>,
     boost_queue: Write<'a, BoostQueue>,
     repair_queue: Write<'a, RepairQueue>,
+    supply_structure_cache: Write<'a, SupplyStructureCache>,
 }
 
 pub struct MissionExecutionSystemData<'a, 'b> {
@@ -50,6 +52,7 @@ pub struct MissionExecutionSystemData<'a, 'b> {
     pub visibility: &'b mut Write<'a, VisibilityQueue>,
     pub boost_queue: &'b mut BoostQueue,
     pub repair_queue: &'b mut RepairQueue,
+    pub supply_structure_cache: &'b mut SupplyStructureCache,
 }
 
 pub struct MissionRequests {
@@ -77,6 +80,30 @@ impl MissionRequests {
                 mission.complete(system_data, mission_entity);
 
                 Self::queue_cleanup_mission(system_data.updater, mission_entity, owner, children, room);
+            } else {
+                // Entity exists but has no MissionData component yet (likely created
+                // via LazyUpdate this tick). Queue deferred cleanup so it is deleted
+                // once its components are applied during world.maintain().
+                warn!(
+                    "Mission abort requested for entity {:?} but it has no MissionData \
+                     (component not yet applied). Queuing deferred cleanup.",
+                    mission_entity
+                );
+                let entity = mission_entity;
+                system_data.updater.exec_mut(move |world| {
+                    if world.entities().is_alive(entity) {
+                        // Remove from any room that lists it.
+                        for room_data in (&mut world.write_storage::<RoomData>()).join() {
+                            room_data.remove_mission(entity);
+                        }
+
+                        if let Err(err) = world.delete_entity(entity) {
+                            warn!("Deferred cleanup of orphan mission entity {:?} failed: {}", entity, err);
+                        } else {
+                            info!("Deferred cleanup: deleted orphan mission entity {:?}", entity);
+                        }
+                    }
+                });
             }
         }
     }
@@ -193,6 +220,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 visibility: &mut data.visibility,
                 boost_queue: &mut data.boost_queue,
                 repair_queue: &mut data.repair_queue,
+                supply_structure_cache: &mut data.supply_structure_cache,
             };
 
             if let Some(mission_data) = data.missions.get(entity) {
@@ -246,6 +274,7 @@ impl<'a> System<'a> for RunMissionSystem {
                 visibility: &mut data.visibility,
                 boost_queue: &mut data.boost_queue,
                 repair_queue: &mut data.repair_queue,
+                supply_structure_cache: &mut data.supply_structure_cache,
             };
 
             if let Some(mission_data) = data.missions.get(entity) {

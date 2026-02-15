@@ -42,6 +42,53 @@ use specs::{
 use std::cell::RefCell;
 use std::collections::HashSet;
 
+/// Pre-serialization integrity check.
+///
+/// Scans every serializable component that contains `Entity` references and
+/// verifies that the referenced entities are alive and carry a
+/// `SerializeMarker`. Any dangling reference is logged so we can identify the
+/// root cause before specs panics inside `ConvertSaveload`.
+fn check_entity_integrity(world: &World) {
+    let entities = world.entities();
+    let markers = world.read_storage::<SerializeMarker>();
+    let missions = world.read_storage::<MissionData>();
+    let room_data_storage = world.read_storage::<RoomData>();
+
+    let is_valid = |e: Entity, context: &str, holder: Entity| -> bool {
+        if !entities.is_alive(e) {
+            error!("INTEGRITY: Entity {:?} referenced by {:?} ({}) is NOT alive", e, holder, context);
+            return false;
+        }
+        if markers.get(e).is_none() {
+            error!(
+                "INTEGRITY: Entity {:?} referenced by {:?} ({}) is alive but has NO SerializeMarker",
+                e, holder, context
+            );
+            return false;
+        }
+        true
+    };
+
+    // Check RoomData.missions
+    for (entity, rd) in (&entities, &room_data_storage).join() {
+        for &mission_entity in rd.get_missions().iter() {
+            is_valid(mission_entity, "RoomData.missions", entity);
+        }
+    }
+
+    // Check MissionData entity references (owner, room, children)
+    for (entity, md) in (&entities, &missions).join() {
+        let mission = md.as_mission();
+        if let Some(owner) = *mission.get_owner() {
+            is_valid(owner, "MissionData.owner", entity);
+        }
+        is_valid(mission.get_room(), "MissionData.room", entity);
+        for child in mission.get_children() {
+            is_valid(child, "MissionData.child", entity);
+        }
+    }
+}
+
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 fn serialize_world(world: &World, segments: &[u32]) {
     struct Serialize<'a> {
@@ -277,6 +324,9 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
     // Repair queue (ephemeral -- rebuilt each tick by missions).
     world.insert(crate::repairqueue::RepairQueue::default());
 
+    // Per-room supply structure cache (ephemeral -- lazily populated each tick).
+    world.insert(crate::missions::localsupply::structure_data::SupplyStructureCache::new());
+
     //
     // Pre-pass update
     //
@@ -320,12 +370,16 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
         // AggregateSummarySystem reads all summary components and the spawn
         // queue, so it must run after every Summarize* system writes its data
         // and before SpawnQueueSystem processes and clears the queue.
-        .with(AggregateSummarySystem, "aggregate_summary", &[
-            "summarize_operations",
-            "summarize_missions",
-            "summarize_jobs",
-            "summarize_room_visibility",
-        ])
+        .with(
+            AggregateSummarySystem,
+            "aggregate_summary",
+            &[
+                "summarize_operations",
+                "summarize_missions",
+                "summarize_jobs",
+                "summarize_room_visibility",
+            ],
+        )
         .with_barrier()
         .with(SpawnQueueSystem, "spawn_queue", &[])
         .with(TransferQueueUpdateSystem, "transfer_queue", &["transfer_stats_snapshot"])
@@ -531,6 +585,13 @@ pub fn tick() {
         if let Err(e) = cleanup_memory() {
             warn!("cleanup_memory: {}", e);
         }
+
+        //
+        // Pre-serialization integrity check: detect dangling entity references
+        // that would panic inside specs ConvertSaveload.
+        //
+
+        check_entity_integrity(&env.world);
 
         //
         // Serialize world state.

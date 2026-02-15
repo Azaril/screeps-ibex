@@ -169,9 +169,15 @@ impl Scout {
 impl Cleanup {
     fn status_description(&self) -> String {
         let mut parts = Vec::new();
-        if self.raid_mission.is_some() { parts.push("raid"); }
-        if self.dismantle_mission.is_some() { parts.push("dismantle"); }
-        if self.defend_mission.is_some() { parts.push("defend"); }
+        if self.raid_mission.is_some() {
+            parts.push("raid");
+        }
+        if self.dismantle_mission.is_some() {
+            parts.push("dismantle");
+        }
+        if self.defend_mission.is_some() {
+            parts.push("defend");
+        }
         if parts.is_empty() {
             "Cleanup".to_string()
         } else {
@@ -451,10 +457,18 @@ impl Cleanup {
 impl Mine {
     fn status_description(&self) -> String {
         let mut parts = Vec::new();
-        if self.supply_mission.is_some() { parts.push("supply"); }
-        if self.haul_mission.is_some() { parts.push("haul"); }
-        if self.reserve_mission.is_some() { parts.push("reserve"); }
-        if self.defend_mission.is_some() { parts.push("defend"); }
+        if self.supply_mission.is_some() {
+            parts.push("supply");
+        }
+        if self.haul_mission.is_some() {
+            parts.push("haul");
+        }
+        if self.reserve_mission.is_some() {
+            parts.push("reserve");
+        }
+        if self.defend_mission.is_some() {
+            parts.push("defend");
+        }
         if parts.is_empty() {
             "Mine".to_string()
         } else {
