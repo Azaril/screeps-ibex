@@ -298,6 +298,49 @@ impl Default for MilitaryFeatures {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClaimFeatures {
+    /// Enable the claim operation.
+    pub on: bool,
+    /// Enable claim debug visualization (panel + map).
+    pub visualize: bool,
+    /// Maximum number of concurrent room claim missions. 0 = no limit (capped by
+    /// GCL/CPU). Set to 1 for the old conservative behaviour.
+    pub max_concurrent_missions: u32,
+    /// Ticks between full BFS re-discovery cycles. Room topology is static and
+    /// ownership changes slowly, so this can be long. Default: 500.
+    pub discover_interval: u32,
+    /// Ticks to wait after discovery for scouts/observers to provide visibility
+    /// before selecting claim targets. Must be long enough for scout spawning
+    /// (3 ticks) + travel to distance-4 rooms (~200 ticks on swamp). Default: 200.
+    pub scouting_window: u32,
+    /// Ticks between spawn_remote_build checks. Independent of the claim
+    /// pipeline. Default: 50.
+    pub remote_build_interval: u32,
+}
+
+impl Default for ClaimFeatures {
+    fn default() -> Self {
+        Self {
+            on: true,
+            visualize: false,
+            max_concurrent_missions: 0,
+            discover_interval: 500,
+            scouting_window: 200,
+            remote_build_interval: 50,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
+#[derive(Default)]
+pub struct VisibilityFeatures {
+    /// Enable visibility queue debug visualization (panel).
+    pub visualize: bool,
+}
+
 // ─── Top-level features ────────────────────────────────────────────────────────
 
 /// All feature flags, loaded once per tick from `Memory._features`.
@@ -305,7 +348,7 @@ impl Default for MilitaryFeatures {
 /// Reset flags are intentionally excluded — they live in a separate path
 /// ([`load_reset`] / [`clear_reset`]) because they are consumed before the
 /// feature cache is populated.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Features {
     pub visualize: VisualizeFeatures,
@@ -317,26 +360,12 @@ pub struct Features {
     pub room: RoomFeatures,
     pub military: MilitaryFeatures,
     pub raid: bool,
-    pub claim: bool,
+    pub claim: ClaimFeatures,
+    pub visibility: VisibilityFeatures,
     pub dismantle: bool,
-}
-
-impl Default for Features {
-    fn default() -> Self {
-        Self {
-            visualize: VisualizeFeatures::default(),
-            construction: ConstructionFeatures::default(),
-            market: MarketFeatures::default(),
-            transfer: TransferFeatures::default(),
-            remote_mine: RemoteMineFeatures::default(),
-            pathing: PathingFeatures::default(),
-            room: RoomFeatures::default(),
-            military: MilitaryFeatures::default(),
-            raid: false,
-            claim: true,
-            dismantle: false,
-        }
-    }
+    /// Log per-system CPU timing for each ECS system in the game loop.
+    /// When enabled, each system's CPU cost is measured and logged at info level.
+    pub system_timing: bool,
 }
 
 // ─── Thread-local cache ────────────────────────────────────────────────────────

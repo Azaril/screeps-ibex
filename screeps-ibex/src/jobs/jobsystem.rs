@@ -4,6 +4,7 @@ use crate::entitymappingsystem::*;
 use crate::military::squad::SquadContext;
 use crate::repairqueue::RepairQueue;
 use crate::room::data::*;
+use crate::room::visibilitysystem::VisibilityQueue;
 use crate::transfer::transfersystem::*;
 use crate::visualization::SummaryContent;
 use screeps::*;
@@ -23,6 +24,7 @@ pub struct JobSystemData<'a> {
     mapping: Read<'a, EntityMappingData>,
     squad_contexts: WriteStorage<'a, SquadContext>,
     repair_queue: Read<'a, RepairQueue>,
+    visibility_queue: Write<'a, VisibilityQueue>,
 }
 
 pub struct JobExecutionSystemData<'a> {
@@ -40,6 +42,7 @@ pub struct JobExecutionRuntimeData<'a> {
     pub transfer_queue: &'a mut TransferQueue,
     pub movement: &'a mut MovementData<Entity>,
     pub movement_results: &'a MovementResults<Entity>,
+    pub visibility_queue: &'a mut VisibilityQueue,
 }
 
 pub struct JobDescribeData<'a> {
@@ -85,6 +88,7 @@ impl<'a> System<'a> for PreRunJobSystem {
                     transfer_queue: &mut data.transfer_queue,
                     movement: &mut data.movement,
                     movement_results: &data.movement_results,
+                    visibility_queue: &mut data.visibility_queue,
                 };
 
                 job_data.as_job().pre_run_job(&system_data, &mut runtime_data);
@@ -117,6 +121,7 @@ impl<'a> System<'a> for RunJobSystem {
                     transfer_queue: &mut data.transfer_queue,
                     movement: &mut data.movement,
                     movement_results: &data.movement_results,
+                    visibility_queue: &mut data.visibility_queue,
                 };
 
                 job_data.as_job().run_job(&system_data, &mut runtime_data);

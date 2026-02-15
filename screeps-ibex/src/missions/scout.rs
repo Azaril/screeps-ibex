@@ -66,12 +66,18 @@ impl ScoutMission {
         self.priority = priority
     }
 
-    fn create_handle_scout_spawn(mission_entity: Entity, scout_room: RoomName) -> crate::spawnsystem::SpawnQueueCallback {
+    pub fn home_room_datas(&self) -> &EntityVec<Entity> {
+        &self.home_room_datas
+    }
+
+    /// Spawn callback: creates a ScoutJob with no pre-assigned target.
+    /// The scout will pick its own target from the visibility queue.
+    fn create_handle_scout_spawn(mission_entity: Entity) -> crate::spawnsystem::SpawnQueueCallback {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Scout(ScoutJob::new(scout_room));
+                let creep_job = JobData::Scout(ScoutJob::new(None));
 
                 let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
@@ -222,7 +228,7 @@ impl Mission for ScoutMission {
                         &body,
                         priority,
                         Some(token),
-                        Self::create_handle_scout_spawn(mission_entity, room_data.name),
+                        Self::create_handle_scout_spawn(mission_entity),
                     );
 
                     system_data.spawn_queue.request(*home_room_entity, spawn_request);

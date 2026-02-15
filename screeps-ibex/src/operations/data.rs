@@ -13,6 +13,7 @@ pub enum OperationData {
     Colony(super::colony::ColonyOperation),
     Defense(super::defense::DefenseOperation),
     Attack(super::attack::AttackOperation),
+    Scout(super::scout::ScoutOperation),
 }
 
 impl OperationData {
@@ -23,6 +24,7 @@ impl OperationData {
             OperationData::Colony(ref mut data) => data,
             OperationData::Defense(ref mut data) => data,
             OperationData::Attack(ref mut data) => data,
+            OperationData::Scout(ref mut data) => data,
         }
     }
 
@@ -34,6 +36,7 @@ impl OperationData {
             OperationData::Colony(ref data) => data.describe_operation(ctx),
             OperationData::Defense(ref data) => data.describe_operation(ctx),
             OperationData::Attack(ref data) => data.describe_operation(ctx),
+            OperationData::Scout(ref data) => data.describe_operation(ctx),
         }
     }
 }

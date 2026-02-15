@@ -3,6 +3,7 @@ use super::colony::*;
 use super::data::*;
 use super::defense::*;
 use super::miningoutpost::*;
+use super::scout::*;
 use log::*;
 use specs::*;
 
@@ -18,6 +19,7 @@ impl<'a> System<'a> for OperationManagerSystem {
         let mut has_claim = false;
         let mut has_colony = false;
         let mut has_defense = false;
+        let mut has_scout = false;
 
         for (_, operation) in (&entities, &operations).join() {
             match operation {
@@ -26,6 +28,7 @@ impl<'a> System<'a> for OperationManagerSystem {
                 OperationData::Colony(_) => has_colony = true,
                 OperationData::Defense(_) => has_defense = true,
                 OperationData::Attack(_) => {}
+                OperationData::Scout(_) => has_scout = true,
             }
         }
 
@@ -51,6 +54,12 @@ impl<'a> System<'a> for OperationManagerSystem {
             info!("Defense operation does not exist, creating.");
 
             DefenseOperation::build(updater.create_entity(&entities), None).build();
+        }
+
+        if !has_scout {
+            info!("Scout operation does not exist, creating.");
+
+            ScoutOperation::build(updater.create_entity(&entities), None).build();
         }
     }
 }

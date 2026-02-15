@@ -6,3 +6,4 @@ pub mod defense;
 pub mod managersystem;
 pub mod miningoutpost;
 pub mod operationsystem;
+pub mod scout;

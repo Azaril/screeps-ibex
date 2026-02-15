@@ -4,7 +4,7 @@ use crate::missions::data::*;
 use crate::room::data::*;
 use crate::room::roomplansystem::*;
 use crate::room::visibilitysystem::*;
-use crate::visualization::SummaryContent;
+use crate::visualization::{MapVisualizationData, SummaryContent, VisualizationData};
 use log::*;
 use specs::prelude::*;
 
@@ -19,6 +19,7 @@ pub struct OperationSystemData<'a> {
     mission_data: ReadStorage<'a, MissionData>,
     mapping: Read<'a, EntityMappingData>,
     visibility: Write<'a, VisibilityQueue>,
+    visualization_data: Option<Write<'a, VisualizationData>>,
 }
 
 pub struct OperationExecutionSystemData<'a, 'b> {
@@ -30,6 +31,7 @@ pub struct OperationExecutionSystemData<'a, 'b> {
     pub mission_data: &'b ReadStorage<'a, MissionData>,
     pub mapping: &'b Read<'a, EntityMappingData>,
     pub visibility: &'b mut VisibilityQueue,
+    pub map_viz_data: Option<&'b mut MapVisualizationData>,
 }
 
 pub struct OperationExecutionRuntimeData {
@@ -76,6 +78,8 @@ impl<'a> System<'a> for PreRunOperationSystem {
     type SystemData = OperationSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
+        let map_viz = data.visualization_data.as_deref_mut().map(|v| &mut v.map);
+
         let mut system_data = OperationExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
@@ -85,6 +89,7 @@ impl<'a> System<'a> for PreRunOperationSystem {
             mission_data: &data.mission_data,
             mapping: &data.mapping,
             visibility: &mut data.visibility,
+            map_viz_data: map_viz,
         };
 
         for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
@@ -122,6 +127,8 @@ impl<'a> System<'a> for RunOperationSystem {
     type SystemData = OperationSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
+        let map_viz = data.visualization_data.as_deref_mut().map(|v| &mut v.map);
+
         let mut system_data = OperationExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
@@ -131,6 +138,7 @@ impl<'a> System<'a> for RunOperationSystem {
             mission_data: &data.mission_data,
             mapping: &data.mapping,
             visibility: &mut data.visibility,
+            map_viz_data: map_viz,
         };
 
         for (entity, operation_data) in (&data.entities, &mut data.operations).join() {

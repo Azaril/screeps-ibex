@@ -12,6 +12,10 @@ impl RoomVisualizer {
         RoomVisualizer { visuals: vec![] }
     }
 
+    pub fn clear(&mut self) {
+        self.visuals.clear();
+    }
+
     pub fn circle(&mut self, x: f32, y: f32, style: Option<CircleStyle>) {
         self.visuals.push(Visual::circle(x, y, style));
     }
@@ -125,6 +129,8 @@ impl<'a> System<'a> for ApplyVisualsSystem {
     fn run(&mut self, mut data: Self::SystemData) {
         if let Some(visualizer) = &mut data.visualizer {
             visualizer.global.apply(None);
+
+            visualizer.global.clear();
 
             for (room, room_visualizer) in &visualizer.rooms {
                 room_visualizer.apply(Some(*room));

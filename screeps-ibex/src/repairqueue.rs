@@ -1,6 +1,7 @@
 use crate::jobs::utility::repair::RepairPriority;
 use crate::structureidentifier::RemoteStructureIdentifier;
 use screeps::*;
+use specs::prelude::*;
 use std::collections::HashMap;
 
 /// A single repair request submitted by a mission.
@@ -135,5 +136,18 @@ impl RepairQueue {
     /// Clear all requests (called at the start of each tick).
     pub fn clear(&mut self) {
         self.rooms.clear();
+    }
+}
+
+/// System that clears the repair queue at the start of each tick.
+#[derive(Default)]
+pub struct RepairQueueClearSystem;
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+impl<'a> System<'a> for RepairQueueClearSystem {
+    type SystemData = Write<'a, RepairQueue>;
+
+    fn run(&mut self, mut queue: Self::SystemData) {
+        queue.clear();
     }
 }

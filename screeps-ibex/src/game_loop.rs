@@ -14,6 +14,7 @@ use crate::operations::managersystem::*;
 use crate::operations::operationsystem::*;
 use crate::pathing::costmatrixsystem::*;
 use crate::pathing::movementsystem::*;
+use crate::repairqueue::RepairQueueClearSystem;
 use crate::room::createroomsystem::*;
 use crate::room::data::*;
 use crate::room::roomplansystem::*;
@@ -27,8 +28,8 @@ use crate::statssystem::*;
 use crate::transfer::ordersystem::*;
 use crate::transfer::transfersystem::*;
 use crate::visualization::{
-    AggregateSummarySystem, CpuHistory, CpuTrackingSystem, RenderSystem, SummarizeJobSystem, SummarizeMissionSystem,
-    SummarizeOperationSystem, SummarizeRoomVisibilitySystem, VisualizationData,
+    AggregateSummarySystem, ClearVisualizationSystem, CpuHistory, CpuTrackingSystem, RenderSystem, SummarizeJobSystem,
+    SummarizeMissionSystem, SummarizeOperationSystem, SummarizeRoomVisibilitySystem, VisualizationData,
 };
 use crate::visualize::*;
 use bincode::{DefaultOptions, Deserializer, Serializer};
@@ -42,50 +43,247 @@ use specs::{
 use std::cell::RefCell;
 use std::collections::HashSet;
 
-/// Pre-serialization integrity check.
+/// Apply an operation to every system in the tick system list.
+///
+/// The system list is defined once here; both `setup_systems` and
+/// `run_systems` expand from this single definition so they cannot
+/// drift out of sync.
+///
+/// `$op` is a macro name that will be invoked as `$op!(SystemInstance, "label")`
+/// where `SystemInstance` is a value expression (unit struct literal).
+macro_rules! for_each_system {
+    ($op:ident) => {
+        // === Pre-pass ===
+        $op!(WaitForSpawnSystem, "wait_for_spawn");
+        $op!(CleanupCreepsSystem, "cleanup_creeps");
+        $op!(CreateRoomDataSystem, "create_room_data");
+        $op!(UpdateRoomDataSystem, "update_room_data");
+        $op!(EntityMappingSystem, "entity_mapping");
+        $op!(ThreatAssessmentSystem, "threat_assessment");
+        // === Main-pass: Cleanup ===
+        $op!(RepairQueueClearSystem, "repair_queue_clear");
+        $op!(ClearVisualizationSystem, "clear_visualization");
+        $op!(VisibilityQueueCleanupSystem, "visibility_cleanup");
+        $op!(CostMatrixClearSystem, "cost_matrix_clear");
+        // === Main-pass: Pre-run ===
+        $op!(OperationManagerSystem, "operations_manager");
+        $op!(PreRunOperationSystem, "pre_run_operations");
+        $op!(PreRunMissionSystem, "pre_run_missions");
+        $op!(PreRunJobSystem, "pre_run_jobs");
+        // === Main-pass: Execution ===
+        $op!(RunOperationSystem, "run_operations");
+        $op!(RunMissionSystem, "run_missions");
+        $op!(RunJobSystem, "run_jobs");
+        $op!(MovementUpdateSystem, "movement");
+        // === Main-pass: Observer ===
+        $op!(ObserverSystem, "observer");
+        // === Main-pass: Summarization ===
+        $op!(SummarizeOperationSystem, "summarize_operations");
+        $op!(SummarizeMissionSystem, "summarize_missions");
+        $op!(SummarizeJobSystem, "summarize_jobs");
+        $op!(SummarizeRoomVisibilitySystem, "summarize_room_visibility");
+        $op!(VisibilityVisualizationSystem, "visibility_viz");
+        $op!(TransferStatsSnapshotSystem, "transfer_stats_snapshot");
+        $op!(AggregateSummarySystem, "aggregate_summary");
+        // === Main-pass: Queues ===
+        $op!(SpawnQueueSystem, "spawn_queue");
+        $op!(TransferQueueUpdateSystem, "transfer_queue");
+        $op!(OrderQueueSystem, "order_queue");
+        // === Main-pass: Room Planning ===
+        $op!(RoomPlanSystem, "room_plan");
+        $op!(RoomPlanVisualizeSystem, "room_plan_visualize");
+        // === Main-pass: Stats and Visualization ===
+        $op!(StatsSystem, "stats");
+        $op!(StatsHistorySystem, "stats_history");
+        $op!(CpuTrackingSystem, "cpu_tracking");
+        $op!(RenderSystem, "render");
+        $op!(ApplyVisualsSystem, "apply_visuals");
+        // === Main-pass: Persistence ===
+        $op!(VisibilityQueueSyncSystem, "visibility_sync");
+        $op!(CostMatrixStoreSystem, "cost_matrix_store");
+        $op!(MemoryArbiterSystem, "memory");
+    };
+}
+
+/// Call `RunNow::setup` for every system in the tick list.
+fn setup_systems(world: &mut World) {
+    macro_rules! do_setup {
+        ($sys:expr, $label:expr) => {
+            RunNow::setup(&mut $sys, world);
+        };
+    }
+    for_each_system!(do_setup);
+}
+
+/// Run every system in the tick list sequentially.
+/// Each system call is followed by `world.maintain()`.
+/// When `timing` is true, per-system CPU cost is measured and logged.
+fn run_systems(world: &mut World, timing: bool) {
+    macro_rules! do_run {
+        ($sys:expr, $label:expr) => {
+            if timing {
+                let before = game::cpu::get_used();
+                $sys.run_now(world);
+                world.maintain();
+                let after = game::cpu::get_used();
+                info!("[timing] {}: {:.2} cpu", $label, after - before);
+            } else {
+                $sys.run_now(world);
+                world.maintain();
+            }
+        };
+    }
+    for_each_system!(do_run);
+}
+
+/// Pre-serialization integrity check and repair.
 ///
 /// Scans every serializable component that contains `Entity` references and
 /// verifies that the referenced entities are alive and carry a
-/// `SerializeMarker`. Any dangling reference is logged so we can identify the
-/// root cause before specs panics inside `ConvertSaveload`.
-fn check_entity_integrity(world: &World) {
-    let entities = world.entities();
-    let markers = world.read_storage::<SerializeMarker>();
-    let missions = world.read_storage::<MissionData>();
-    let room_data_storage = world.read_storage::<RoomData>();
+/// `SerializeMarker`. Dangling references are logged and repaired:
+///
+/// - `RoomData.missions`: dead entries are removed from the list.
+/// - `MissionData.owner`: dead owner is cleared; the mission is deleted
+///   (orphaned missions would never be cleaned up otherwise).
+/// - `MissionData.room`: dead room reference causes the mission to be deleted.
+/// - `MissionData` children: dead children are cleared via `child_complete`.
+///
+/// This acts as a safety net so that `ConvertSaveload` never panics on a
+/// dangling entity during serialization, regardless of the specific cleanup
+/// ordering that caused the inconsistency.
+fn repair_entity_integrity(world: &mut World) {
+    // Collect missions that need deletion and missions with dead children.
+    let mut missions_to_delete: Vec<Entity> = Vec::new();
+    let mut dead_children: Vec<(Entity, Vec<Entity>)> = Vec::new();
 
-    let is_valid = |e: Entity, context: &str, holder: Entity| -> bool {
-        if !entities.is_alive(e) {
-            error!("INTEGRITY: Entity {:?} referenced by {:?} ({}) is NOT alive", e, holder, context);
-            return false;
-        }
-        if markers.get(e).is_none() {
-            error!(
-                "INTEGRITY: Entity {:?} referenced by {:?} ({}) is alive but has NO SerializeMarker",
-                e, holder, context
-            );
-            return false;
-        }
-        true
-    };
+    {
+        let entities = world.entities();
+        let markers = world.read_storage::<SerializeMarker>();
+        let missions = world.read_storage::<MissionData>();
+        let mut room_data_storage = world.write_storage::<RoomData>();
 
-    // Check RoomData.missions
-    for (entity, rd) in (&entities, &room_data_storage).join() {
-        for &mission_entity in rd.get_missions().iter() {
-            is_valid(mission_entity, "RoomData.missions", entity);
+        let is_valid = |e: Entity| -> bool { entities.is_alive(e) && markers.get(e).is_some() };
+
+        // ── RoomData.missions: remove dead entries ──────────────────────
+        for (entity, rd) in (&entities, &mut room_data_storage).join() {
+            let before = rd.get_missions().len();
+            rd.retain_missions(|e| {
+                let ok = is_valid(e);
+                if !ok {
+                    error!("INTEGRITY: dead mission entity {:?} removed from RoomData {:?}", e, entity);
+                }
+                ok
+            });
+            let after = rd.get_missions().len();
+            if after < before {
+                warn!("INTEGRITY: removed {} dead mission(s) from RoomData {:?}", before - after, entity);
+            }
+        }
+
+        // ── MissionData: scan for dangling references ───────────────────
+        for (entity, md) in (&entities, &missions).join() {
+            let mission = md.as_mission();
+
+            // Owner
+            if let Some(owner) = *mission.get_owner() {
+                if !is_valid(owner) {
+                    error!("INTEGRITY: dead owner {:?} on mission {:?}, scheduling deletion", owner, entity);
+                    missions_to_delete.push(entity);
+                    continue; // skip further checks; entity will be deleted
+                }
+            }
+
+            // Room
+            let room = mission.get_room();
+            if !is_valid(room) {
+                error!("INTEGRITY: dead room {:?} on mission {:?}, scheduling deletion", room, entity);
+                missions_to_delete.push(entity);
+                continue;
+            }
+
+            // Children
+            let bad_children: Vec<Entity> = mission
+                .get_children()
+                .into_iter()
+                .filter(|child| {
+                    let ok = is_valid(*child);
+                    if !ok {
+                        error!("INTEGRITY: dead child {:?} on mission {:?}", child, entity);
+                    }
+                    !ok
+                })
+                .collect();
+
+            if !bad_children.is_empty() {
+                dead_children.push((entity, bad_children));
+            }
         }
     }
 
-    // Check MissionData entity references (owner, room, children)
-    for (entity, md) in (&entities, &missions).join() {
-        let mission = md.as_mission();
-        if let Some(owner) = *mission.get_owner() {
-            is_valid(owner, "MissionData.owner", entity);
+    // ── Repair dead children (clear via child_complete) ─────────────────
+    if !dead_children.is_empty() {
+        let missions = world.read_storage::<MissionData>();
+        for (entity, children) in &dead_children {
+            if let Some(md) = missions.get(*entity) {
+                let mut mission = md.as_mission_mut();
+                for child in children {
+                    warn!("INTEGRITY: clearing dead child {:?} from mission {:?}", child, entity);
+                    mission.child_complete(*child);
+                }
+            }
         }
-        is_valid(mission.get_room(), "MissionData.room", entity);
-        for child in mission.get_children() {
-            is_valid(child, "MissionData.child", entity);
+    }
+
+    // ── Delete orphaned missions ────────────────────────────────────────
+    //
+    // These missions had dead owners or dead room references and cannot
+    // function. Clear the owner, remove from rooms, notify the owner (if
+    // still alive), and delete the entity.
+    for mission_entity in &missions_to_delete {
+        // Read the owner before we clear it.
+        let owner = world
+            .read_storage::<MissionData>()
+            .get(*mission_entity)
+            .map(|md| *md.as_mission().get_owner())
+            .unwrap_or(None);
+
+        // Clear the dead owner reference so serialization of any
+        // intermediate state cannot panic.
+        if let Some(dead_owner) = owner {
+            if let Some(md) = world.read_storage::<MissionData>().get(*mission_entity) {
+                md.as_mission_mut().owner_complete(dead_owner);
+            }
         }
+
+        // Remove from rooms.
+        {
+            let mut room_data_storage = world.write_storage::<RoomData>();
+            for rd in (&mut room_data_storage).join() {
+                rd.remove_mission(*mission_entity);
+            }
+        }
+
+        // Notify the (alive) owner that this child is gone.
+        if let Some(owner) = owner {
+            if world.entities().is_alive(owner) {
+                if let Some(od) = world.write_storage::<OperationData>().get_mut(owner) {
+                    od.as_operation().child_complete(*mission_entity);
+                }
+                if let Some(md) = world.write_storage::<MissionData>().get_mut(owner) {
+                    md.as_mission_mut().child_complete(*mission_entity);
+                }
+            }
+        }
+
+        if let Err(err) = world.delete_entity(*mission_entity) {
+            warn!("INTEGRITY: failed to delete orphaned mission {:?}: {}", mission_entity, err);
+        } else {
+            warn!("INTEGRITY: deleted orphaned mission {:?}", mission_entity);
+        }
+    }
+
+    if !missions_to_delete.is_empty() {
+        world.maintain();
     }
 }
 
@@ -110,6 +308,7 @@ fn serialize_world(world: &World, segments: &[u32]) {
         operation_data: ReadStorage<'a, OperationData>,
         mission_data: ReadStorage<'a, MissionData>,
         squad_context: ReadStorage<'a, SquadContext>,
+        visibility_queue_data: ReadStorage<'a, VisibilityQueueData>,
     }
 
     impl<'a, 'b> System<'a> for Serialize<'b> {
@@ -131,6 +330,7 @@ fn serialize_world(world: &World, segments: &[u32]) {
                     &data.operation_data,
                     &data.mission_data,
                     &data.squad_context,
+                    &data.visibility_queue_data,
                 ),
                 &data.entities,
                 &data.markers,
@@ -201,6 +401,7 @@ fn deserialize_world(world: &World, segments: &[u32]) {
         operation_data: WriteStorage<'a, OperationData>,
         mission_data: WriteStorage<'a, MissionData>,
         squad_context: WriteStorage<'a, SquadContext>,
+        visibility_queue_data: WriteStorage<'a, VisibilityQueueData>,
     }
 
     impl<'a, 'b> System<'a> for Deserialize<'b> {
@@ -235,6 +436,7 @@ fn deserialize_world(world: &World, segments: &[u32]) {
                         &mut data.operation_data,
                         &mut data.mission_data,
                         &mut data.squad_context,
+                        &mut data.visibility_queue_data,
                     ),
                     &data.entities,
                     &mut data.markers,
@@ -253,22 +455,20 @@ fn deserialize_world(world: &World, segments: &[u32]) {
     sys.run_now(world);
 }
 
-struct GameEnvironment<'a, 'b, 'c, 'd> {
+struct GameEnvironment {
     world: World,
-    pre_pass_dispatcher: Dispatcher<'a, 'b>,
-    main_pass_dispatcher: Dispatcher<'c, 'd>,
     loaded: bool,
     tick: Option<u32>,
 }
 
 thread_local! {
-    static ENVIRONMENT: RefCell<Option<GameEnvironment<'static, 'static, 'static, 'static>>> = const { RefCell::new(None) };
+    static ENVIRONMENT: RefCell<Option<GameEnvironment>> = const { RefCell::new(None) };
 }
 
 /// Segment IDs used for ECS component serialization (world state).
 const COMPONENT_SEGMENTS: &[u32] = &[50, 51, 52];
 
-fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
+fn create_environment() -> GameEnvironment {
     info!("Initializing game environment");
 
     crate::features::prepare();
@@ -327,84 +527,11 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
     // Per-room supply structure cache (ephemeral -- lazily populated each tick).
     world.insert(crate::missions::localsupply::structure_data::SupplyStructureCache::new());
 
-    //
-    // Pre-pass update
-    //
-
-    let mut pre_pass_dispatcher = DispatcherBuilder::new()
-        .with(WaitForSpawnSystem, "wait_for_spawn", &[])
-        .with(CleanupCreepsSystem, "cleanup_creeps", &[])
-        .with(CreateRoomDataSystem, "create_room_data", &[])
-        .with(UpdateRoomDataSystem, "update_room_data", &["create_room_data"])
-        .with_barrier()
-        .with(EntityMappingSystem, "entity_mapping", &[])
-        .with(ThreatAssessmentSystem, "threat_assessment", &["entity_mapping"])
-        .build();
-
-    pre_pass_dispatcher.setup(&mut world);
-
-    //
-    // Main update
-    //
-
-    let mut main_pass_dispatcher = DispatcherBuilder::new()
-        .with(CostMatrixClearSystem, "cost_matrix_clear", &[])
-        .with_barrier()
-        .with(OperationManagerSystem, "operations_manager", &[])
-        .with(PreRunOperationSystem, "pre_run_operations", &["operations_manager"])
-        .with(PreRunMissionSystem, "pre_run_missions", &["pre_run_operations"])
-        .with(PreRunJobSystem, "pre_run_jobs", &["pre_run_missions"])
-        .with_barrier()
-        .with(RunOperationSystem, "run_operations", &[])
-        .with(RunMissionSystem, "run_missions", &["run_operations"])
-        .with(RunJobSystem, "run_jobs", &["run_missions"])
-        .with(MovementUpdateSystem, "movement", &["run_jobs"])
-        .with_barrier()
-        .with(VisibilityQueueSystem, "visibility_queue", &[])
-        .with_barrier()
-        .with(SummarizeOperationSystem, "summarize_operations", &[])
-        .with(SummarizeMissionSystem, "summarize_missions", &[])
-        .with(SummarizeJobSystem, "summarize_jobs", &[])
-        .with(SummarizeRoomVisibilitySystem, "summarize_room_visibility", &[])
-        .with(TransferStatsSnapshotSystem, "transfer_stats_snapshot", &[])
-        // AggregateSummarySystem reads all summary components and the spawn
-        // queue, so it must run after every Summarize* system writes its data
-        // and before SpawnQueueSystem processes and clears the queue.
-        .with(
-            AggregateSummarySystem,
-            "aggregate_summary",
-            &[
-                "summarize_operations",
-                "summarize_missions",
-                "summarize_jobs",
-                "summarize_room_visibility",
-            ],
-        )
-        .with_barrier()
-        .with(SpawnQueueSystem, "spawn_queue", &[])
-        .with(TransferQueueUpdateSystem, "transfer_queue", &["transfer_stats_snapshot"])
-        .with(OrderQueueSystem, "order_queue", &[])
-        .with_barrier()
-        .with(RoomPlanSystem, "room_plan", &[])
-        .with(RoomPlanVisualizeSystem, "room_plan_visualize", &["room_plan"])
-        .with_barrier()
-        .with(StatsSystem, "stats", &[])
-        .with(StatsHistorySystem, "stats_history", &["stats"])
-        .with(CpuTrackingSystem, "cpu_tracking", &[])
-        .with(RenderSystem, "render", &["cpu_tracking", "stats_history"])
-        .with(ApplyVisualsSystem, "apply_visuals", &["render"])
-        .with_barrier()
-        .with(CostMatrixStoreSystem, "cost_matrix_store", &[])
-        .with_barrier()
-        .with(MemoryArbiterSystem, "memory", &[])
-        .build();
-
-    main_pass_dispatcher.setup(&mut world);
+    // Register components and resources for every system in the tick list.
+    setup_systems(&mut world);
 
     GameEnvironment {
         world,
-        pre_pass_dispatcher,
-        main_pass_dispatcher,
         loaded: false,
         tick: None,
     }
@@ -566,17 +693,10 @@ pub fn tick() {
         }
 
         //
-        // Execution
+        // Execution — systems run sequentially with maintain() after each.
         //
 
-        env.pre_pass_dispatcher.dispatch(&env.world);
-        env.world.maintain();
-
-        // Clear ephemeral per-tick queues before the main pass.
-        env.world.write_resource::<crate::repairqueue::RepairQueue>().clear();
-
-        env.main_pass_dispatcher.dispatch(&env.world);
-        env.world.maintain();
+        run_systems(&mut env.world, features.system_timing);
 
         //
         // Cleanup memory.
@@ -591,7 +711,7 @@ pub fn tick() {
         // that would panic inside specs ConvertSaveload.
         //
 
-        check_entity_integrity(&env.world);
+        repair_entity_integrity(&mut env.world);
 
         //
         // Serialize world state.

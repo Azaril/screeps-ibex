@@ -44,6 +44,10 @@ impl ClaimMission {
         }
     }
 
+    pub fn home_room_datas(&self) -> &EntityVec<Entity> {
+        &self.home_room_datas
+    }
+
     fn create_handle_claimer_spawn(mission_entity: Entity, controller_id: RemoteObjectId<StructureController>) -> SpawnQueueCallback {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();

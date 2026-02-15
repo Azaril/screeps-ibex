@@ -16,6 +16,7 @@ use crate::visualize::Visualizer;
 use screeps::game;
 use screeps::traits::SharedCreepProperties;
 use screeps::{LineDrawStyle, LineStyle, PolyStyle, RectStyle, ResourceType, RoomName, TextAlign, TextStyle};
+use serde::{Deserialize, Serialize};
 use specs::prelude::*;
 use specs::*;
 use std::collections::HashMap;
@@ -347,11 +348,69 @@ impl RoomVisualizationData {
     }
 }
 
+/// One visibility queue entry for the global visibility panel.
+#[derive(Debug, Clone)]
+pub struct VisibilityQueueSummaryEntry {
+    pub room_name: RoomName,
+    pub priority: f32,
+    pub types_label: String,
+}
+
+/// Raw (unweighted) sub-scores for a claim candidate room.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct CandidateSubScores {
+    /// Source count score (0–1).
+    pub source: f32,
+    /// Walkability / plains ratio score (0–1).
+    pub walkability: f32,
+    /// Distance score (0–1).
+    pub distance: f32,
+}
+
+/// Claim visualization data for map visuals and enriched description.
+/// Populated by ClaimOperation::run_operation when the feature flag is on.
+#[derive(Debug, Default, Clone)]
+pub struct ClaimVisualizationData {
+    /// Candidate rooms with their suitability score and raw sub-scores.
+    pub candidate_rooms: Vec<(RoomName, f32, CandidateSubScores)>,
+    /// Rooms that need visibility before claiming can proceed.
+    pub unknown_rooms: Vec<RoomName>,
+    /// Active claim missions: (home room names, target room name).
+    pub active_claims: Vec<(Vec<RoomName>, RoomName)>,
+    /// Current home rooms.
+    pub home_rooms: Vec<RoomName>,
+    /// Number of currently owned rooms.
+    pub owned_rooms: u32,
+    /// Maximum rooms allowed (min of GCL and CPU limit).
+    pub maximum_rooms: u32,
+    /// Whether claim is blocked waiting for visibility.
+    pub blocked_by_visibility: bool,
+}
+
+/// Map-level visualization data drawn via the global `MapVisual` API.
+/// Stored as a sub-structure of [`VisualizationData`].
+#[derive(Debug, Default)]
+pub struct MapVisualizationData {
+    /// Claim system debug visuals.
+    pub claim: ClaimVisualizationData,
+}
+
+/// Global (non-room-specific) visualization data for the overlay panels.
+/// Stored as a sub-structure of [`VisualizationData`].
+#[derive(Debug, Default)]
+pub struct GlobalVisualizationData {
+    pub operations: Vec<OperationSummary>,
+    pub visibility_queue: Vec<VisibilityQueueSummaryEntry>,
+}
+
 /// All visualization summary data for one tick.
 /// Filled by gather systems, read by RenderSystem. Not serialized.
+/// Only present in the world when `features.visualize.on` is true;
+/// systems use `Option<>` to detect presence.
 #[derive(Debug, Default)]
 pub struct VisualizationData {
-    pub operations: Vec<OperationSummary>,
+    pub map: MapVisualizationData,
+    pub global: GlobalVisualizationData,
     pub rooms: HashMap<RoomName, RoomVisualizationData>,
 }
 
@@ -360,14 +419,26 @@ impl VisualizationData {
         Self::default()
     }
 
-    /// Clear and reuse for next tick (when visualization is on).
-    pub fn clear(&mut self) {
-        self.operations.clear();
-        self.rooms.clear();
-    }
-
     pub fn get_or_create_room(&mut self, room: RoomName) -> &mut RoomVisualizationData {
         self.rooms.entry(room).or_default()
+    }
+}
+
+// ─── Clear visualization system ──────────────────────────────────────────────
+
+/// Resets all visualization data at the start of the tick so that systems
+/// can populate it fresh. Runs early in the main pass, before operations
+/// and summarize systems.
+pub struct ClearVisualizationSystem;
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+impl<'a> System<'a> for ClearVisualizationSystem {
+    type SystemData = Option<Write<'a, VisualizationData>>;
+
+    fn run(&mut self, mut data: Self::SystemData) {
+        if let Some(ref mut viz) = data {
+            **viz = VisualizationData::default();
+        }
     }
 }
 
@@ -386,6 +457,7 @@ pub struct AggregateSummarySystemData<'a> {
     spawn_queue: Read<'a, SpawnQueue>,
     stats_history: Option<Read<'a, crate::stats_history::StatsHistoryData>>,
     transfer_stats: Option<Read<'a, crate::transfer::transfersystem::TransferStatsSnapshot>>,
+    visibility_snapshot: Read<'a, crate::room::visibilitysystem::VisibilityQueueSnapshot>,
 }
 
 pub struct AggregateSummarySystem;
@@ -398,7 +470,6 @@ impl<'a> System<'a> for AggregateSummarySystem {
         let Some(ref mut viz) = data.visualization_data else {
             return;
         };
-        viz.clear();
 
         // Ensure every known room has an entry (so we draw room-specific UI when that room is viewed).
         for (_entity, room_data) in (&data.entities, &data.room_data).join() {
@@ -407,7 +478,7 @@ impl<'a> System<'a> for AggregateSummarySystem {
 
         // Operations (global list) — from OperationSummaryComponent
         for (_entity, op_sum) in (&data.entities, &data.op_summary).join() {
-            viz.operations.push(OperationSummary {
+            viz.global.operations.push(OperationSummary {
                 content: op_sum.content.clone(),
             });
         }
@@ -480,6 +551,20 @@ impl<'a> System<'a> for AggregateSummarySystem {
             for (room_name, room_snapshot) in &transfer_stats.rooms {
                 let room_viz = viz.get_or_create_room(*room_name);
                 room_viz.transfer_stats = Some(room_snapshot.clone());
+            }
+        }
+
+        // Visibility queue (global) — from VisibilityQueueSnapshot resource.
+        // VisualizationData presence already implies features.visualize.on;
+        // only the sub-feature flag needs checking.
+        if crate::features::features().visibility.visualize {
+            const MAX_VISIBILITY_ENTRIES: usize = 15;
+            for entry in data.visibility_snapshot.entries.iter().take(MAX_VISIBILITY_ENTRIES) {
+                viz.global.visibility_queue.push(VisibilityQueueSummaryEntry {
+                    room_name: entry.room_name,
+                    priority: entry.priority,
+                    types_label: format!("{}", entry.allowed_types),
+                });
             }
         }
     }
@@ -719,10 +804,12 @@ fn right_column_left_x(ops_panel: &Panel) -> f32 {
     RIGHT_EDGE - RIGHT_MARGIN - ops_panel.width()
 }
 
-/// Draw global layer: right column (Ops) + top-center CPU histogram. Same in every room; draw to global() and to each room_vis.
+/// Draw global layer: right column (Ops + optional Visibility Queue) + top-center CPU histogram.
+/// Same in every room; draw to global() and to each room_vis.
 fn draw_global_layer(
     vis: &mut crate::visualize::RoomVisualizer,
     ops_panel: &Panel,
+    visibility_panel: Option<&Panel>,
     styles: &VisStyles,
     cpu_samples: Option<&[f32]>,
     cpu_limit: f32,
@@ -751,6 +838,33 @@ fn draw_global_layer(
             line.clone(),
             Some(style),
         );
+    }
+
+    // Visibility Queue panel (below Ops, same right column) — only when feature is on.
+    if let Some(visibility_panel) = visibility_panel {
+        let vw = visibility_panel.width();
+        let vh = visibility_panel.height();
+        vis.rect(visibility_panel.x, visibility_panel.y, vw, vh, Some(styles.rect.clone()));
+        vis.line(
+            (visibility_panel.x + vw, visibility_panel.y),
+            (visibility_panel.x + vw, visibility_panel.y + vh),
+            Some(styles.accent.clone()),
+        );
+        let vp_header_y = visibility_panel.y + PAD + LINE_HEIGHT;
+        vis.line(
+            (visibility_panel.x + PAD, vp_header_y),
+            (visibility_panel.x + vw - PAD, vp_header_y),
+            Some(styles.sep.clone()),
+        );
+        for (i, line) in visibility_panel.lines.iter().enumerate() {
+            let style = if i == 0 { styles.header.clone() } else { styles.text.clone() };
+            vis.text(
+                visibility_panel.x + PAD,
+                visibility_panel.y + PAD + (i as f32) * LINE_HEIGHT,
+                line.clone(),
+                Some(style),
+            );
+        }
     }
 
     // Top center: CPU histogram. Rect, tick, then axis/grid/fill/line/labels when we have samples.
@@ -1117,15 +1231,21 @@ pub struct RenderSystem;
 impl<'a> System<'a> for RenderSystem {
     type SystemData = RenderSystemData<'a>;
 
+    #[warn(unreachable_code)]
     fn run(&mut self, mut data: Self::SystemData) {
         let (Some(viz), Some(visualizer)) = (data.visualization_data.as_deref(), data.visualizer.as_deref_mut()) else {
             return;
         };
 
+        // Map visuals use the global MapVisual API (string-based to avoid
+        // serde_wasm_bindgen corruption). Data is only populated when the
+        // relevant sub-feature flags are on.
+        draw_claim_map_visuals(&viz.map.claim);
+
         let styles = VisStyles::new();
 
         // Global: operations (no CPU line; CPU shown as histogram below)
-        let ops_lines: Vec<String> = viz.operations.iter().flat_map(|op| op.content.to_lines()).collect();
+        let ops_lines: Vec<String> = viz.global.operations.iter().flat_map(|op| op.content.to_lines()).collect();
         // Tick and CPU limit come from CpuHistory (set by CpuTrackingSystem), not game API.
         let tick = data.cpu_history.as_deref().map_or(0, |h| h.tick);
         let cpu_limit_f32 = data.cpu_history.as_deref().map_or(0.0, |h| h.tick_limit);
@@ -1135,12 +1255,42 @@ impl<'a> System<'a> for RenderSystem {
             format!("Operations\n{}", ops_lines.join("\n"))
         };
         let global_ops_panel = layout_global_right_panel(&ops_content);
-        let right_column_left_x = right_column_left_x(&global_ops_panel);
         let cpu_samples = data.cpu_history.as_deref().map(|h| h.samples.as_slice());
+
+        // Build visibility queue panel (below ops panel, same right column) only
+        // when the visibility feature flag is on. When on but the queue is empty,
+        // still show the panel with 0 entries.
+        let show_visibility_panel = crate::features::features().visibility.visualize;
+        let visibility_panel = if show_visibility_panel {
+            let vis_lines: Vec<String> = viz
+                .global
+                .visibility_queue
+                .iter()
+                .map(|e| format!("{} {:.0} [{}]", e.room_name, e.priority, e.types_label))
+                .collect();
+            let vis_content = format!("Visibility Queue ({})\n{}", viz.global.visibility_queue.len(), vis_lines.join("\n"));
+            let ops_max_chars = (OPS_PANEL_MAX_WIDTH / CHAR_WIDTH - 2.0 * PAD / CHAR_WIDTH).floor().max(4.0) as usize;
+            let mut p = Panel::from_content(&vis_content, ops_max_chars.min(MAX_LINE_CHARS));
+            p.x = RIGHT_EDGE - RIGHT_MARGIN - p.width();
+            p.y = global_ops_panel.y + global_ops_panel.height() + GAP;
+            Some(p)
+        } else {
+            None
+        };
+
+        let right_column_left_x = right_column_left_x(&global_ops_panel);
 
         {
             let global = visualizer.global();
-            draw_global_layer(global, &global_ops_panel, &styles, cpu_samples, cpu_limit_f32, tick);
+            draw_global_layer(
+                global,
+                &global_ops_panel,
+                visibility_panel.as_ref(),
+                &styles,
+                cpu_samples,
+                cpu_limit_f32,
+                tick,
+            );
         }
 
         // Per-room: draw room layer first (left stack), then global layer (right Ops + bottom CPU) so the histogram is on top and visible.
@@ -1237,7 +1387,87 @@ impl<'a> System<'a> for RenderSystem {
                 }
             }
 
-            draw_global_layer(room_vis, &global_ops_panel, &styles, cpu_samples, cpu_limit_f32, tick);
+            draw_global_layer(
+                room_vis,
+                &global_ops_panel,
+                visibility_panel.as_ref(),
+                &styles,
+                cpu_samples,
+                cpu_limit_f32,
+                tick,
+            );
+        }
+    }
+}
+
+// ─── Claim map visuals ───────────────────────────────────────────────────────
+
+/// Draw claim system debug visuals on the game map.
+/// Uses MapVisual API to color rooms by suitability and draw arrows for active claims.
+fn draw_claim_map_visuals(claim_data: &ClaimVisualizationData) {
+    use screeps::local::Position;
+    use screeps::local::RoomCoordinate;
+    use screeps::{CircleStyle, MapTextStyle, MapVisual};
+
+    let center = unsafe { RoomCoordinate::unchecked_new(25) };
+
+    // Home rooms: blue circle
+    for room_name in &claim_data.home_rooms {
+        let pos = Position::new(center, center, *room_name);
+        let style = CircleStyle::default().fill("#1f6feb").radius(8.0).opacity(0.35);
+        MapVisual::circle(pos, style);
+    }
+
+    // Unknown/blocking rooms: purple circle + "?" text
+    for room_name in &claim_data.unknown_rooms {
+        let pos = Position::new(center, center, *room_name);
+        let style = CircleStyle::default().fill("#8b5cf6").radius(8.0).opacity(0.4);
+        MapVisual::circle(pos, style);
+        let text_style = MapTextStyle::default().color("#c4b5fd").font_size(10.0).opacity(0.8);
+        MapVisual::text(pos, "?".to_string(), text_style);
+    }
+
+    // Candidate rooms: colored by score, with raw sub-scores displayed
+    for (room_name, score, sub) in &claim_data.candidate_rooms {
+        let pos = Position::new(center, center, *room_name);
+        let (color, fill_opacity) = if *score > 0.8 {
+            ("#3fb950", 0.35) // green - high score
+        } else if *score > 0.5 {
+            ("#d29922", 0.35) // yellow - medium score
+        } else {
+            ("#f85149", 0.30) // red - low score
+        };
+        let style = CircleStyle::default().fill(color).radius(8.0).opacity(fill_opacity);
+        MapVisual::circle(pos, style);
+
+        // Total score (top line)
+        let text_style = MapTextStyle::default().color("#c9d1d9").font_size(6.0).opacity(0.85);
+        MapVisual::text(pos, format!("{:.2}", score), text_style);
+
+        // Raw sub-scores: S=source W=walkability D=distance (below center)
+        let sub_pos = Position::new(center, unsafe { RoomCoordinate::unchecked_new(35) }, *room_name);
+        let sub_style = MapTextStyle::default().color("#8b949e").font_size(4.0).opacity(0.75);
+        MapVisual::text(
+            sub_pos,
+            format!("S{:.1} W{:.1} D{:.1}", sub.source, sub.walkability, sub.distance),
+            sub_style,
+        );
+    }
+
+    // Active claims: bright green circle + "CLAIMING" text + arrows from home rooms
+    for (home_rooms, target_room) in &claim_data.active_claims {
+        let target_pos = Position::new(center, center, *target_room);
+        let style = CircleStyle::default().fill("#3fb950").radius(10.0).opacity(0.5);
+        MapVisual::circle(target_pos, style);
+
+        let text_style = MapTextStyle::default().color("#3fb950").font_size(8.0).opacity(0.9);
+        MapVisual::text(target_pos, "CLAIM".to_string(), text_style);
+
+        // Draw arrows from each home room to the claim target
+        for home_room in home_rooms {
+            let home_pos = Position::new(center, center, *home_room);
+            let line_style = LineStyle::default().color("#58a6ff").width(1.5).opacity(0.7);
+            MapVisual::line(home_pos, target_pos, line_style);
         }
     }
 }

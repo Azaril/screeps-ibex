@@ -317,6 +317,15 @@ impl RoomData {
         self.missions.retain(|other| *other != mission);
     }
 
+    pub fn retain_missions<F>(&mut self, f: F)
+    where
+        F: FnMut(Entity) -> bool,
+    {
+        // EntityVec<Entity> derefs to Vec<Entity>; adapt the closure to take &Entity.
+        let mut f = f;
+        self.missions.retain(|e| f(*e));
+    }
+
     pub fn update(&mut self, room: &Room) {
         if self.static_visibility_data.is_none() {
             self.static_visibility_data = Some(Self::create_static_visibility_data(room));
