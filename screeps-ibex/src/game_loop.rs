@@ -1,3 +1,4 @@
+use crate::cleanup::*;
 use crate::creep::*;
 use crate::entitymappingsystem::*;
 use crate::globals::*;
@@ -56,6 +57,11 @@ macro_rules! for_each_system {
         // === Pre-pass ===
         $op!(WaitForSpawnSystem, "wait_for_spawn");
         $op!(CleanupCreepsSystem, "cleanup_creeps");
+        // Flush creep deaths immediately so missions see accurate counts.
+        // The system is a no-op when the queue is empty, so the second
+        // invocation after RunJobSystem costs nothing when there are no
+        // mid-tick mission/operation deletions.
+        $op!(EntityCleanupSystem, "entity_cleanup_prepass");
         $op!(CreateRoomDataSystem, "create_room_data");
         $op!(UpdateRoomDataSystem, "update_room_data");
         $op!(EntityMappingSystem, "entity_mapping");
@@ -74,6 +80,8 @@ macro_rules! for_each_system {
         $op!(RunOperationSystem, "run_operations");
         $op!(RunMissionSystem, "run_missions");
         $op!(RunJobSystem, "run_jobs");
+        // === Entity cleanup: process all pending deletions ===
+        $op!(EntityCleanupSystem, "entity_cleanup");
         $op!(MovementUpdateSystem, "movement");
         // === Main-pass: Observer ===
         $op!(ObserverSystem, "observer");
@@ -523,6 +531,9 @@ fn create_environment() -> GameEnvironment {
 
     // Repair queue (ephemeral -- rebuilt each tick by missions).
     world.insert(crate::repairqueue::RepairQueue::default());
+
+    // Entity cleanup queue (ephemeral -- drained each tick by EntityCleanupSystem).
+    world.insert(EntityCleanupQueue::default());
 
     // Per-room supply structure cache (ephemeral -- lazily populated each tick).
     world.insert(crate::missions::localsupply::structure_data::SupplyStructureCache::new());

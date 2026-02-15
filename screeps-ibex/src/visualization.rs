@@ -365,6 +365,8 @@ pub struct CandidateSubScores {
     pub walkability: f32,
     /// Distance score (0–1).
     pub distance: f32,
+    /// Room plan quality score (0–1). `None` if no plan exists yet.
+    pub plan: Option<f32>,
 }
 
 /// Claim visualization data for map visuals and enriched description.
@@ -1444,12 +1446,13 @@ fn draw_claim_map_visuals(claim_data: &ClaimVisualizationData) {
         let text_style = MapTextStyle::default().color("#c9d1d9").font_size(6.0).opacity(0.85);
         MapVisual::text(pos, format!("{:.2}", score), text_style);
 
-        // Raw sub-scores: S=source W=walkability D=distance (below center)
+        // Raw sub-scores: S=source W=walkability D=distance P=plan (below center)
         let sub_pos = Position::new(center, unsafe { RoomCoordinate::unchecked_new(35) }, *room_name);
         let sub_style = MapTextStyle::default().color("#8b949e").font_size(4.0).opacity(0.75);
+        let plan_label = sub.plan.map(|p| format!(" P{:.1}", p)).unwrap_or_default();
         MapVisual::text(
             sub_pos,
-            format!("S{:.1} W{:.1} D{:.1}", sub.source, sub.walkability, sub.distance),
+            format!("S{:.1} W{:.1} D{:.1}{}", sub.source, sub.walkability, sub.distance, plan_label),
             sub_style,
         );
     }

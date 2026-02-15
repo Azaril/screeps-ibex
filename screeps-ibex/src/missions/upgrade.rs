@@ -149,23 +149,16 @@ impl Mission for UpgradeMission {
         self.room_data
     }
 
+    fn remove_creep(&mut self, entity: Entity) {
+        self.upgraders.retain(|e| *e != entity);
+    }
+
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!("Upgrade - Upgraders: {}", self.upgraders.len())
     }
 
     fn summarize(&self) -> crate::visualization::SummaryContent {
         crate::visualization::SummaryContent::Text(format!("Upgrade - Upgraders: {}", self.upgraders.len()))
-    }
-
-    fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
-        //
-        // Cleanup creeps that no longer exist.
-        //
-
-        self.upgraders
-            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
-
-        Ok(())
     }
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {

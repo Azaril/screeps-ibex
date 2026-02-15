@@ -1,4 +1,5 @@
 use super::data::*;
+use crate::cleanup::*;
 use crate::entitymappingsystem::EntityMappingData;
 use crate::missions::data::*;
 use crate::room::data::*;
@@ -20,6 +21,7 @@ pub struct OperationSystemData<'a> {
     mapping: Read<'a, EntityMappingData>,
     visibility: Write<'a, VisibilityQueue>,
     visualization_data: Option<Write<'a, VisualizationData>>,
+    cleanup_queue: Write<'a, EntityCleanupQueue>,
 }
 
 pub struct OperationExecutionSystemData<'a, 'b> {
@@ -102,24 +104,6 @@ impl<'a> System<'a> for PreRunOperationSystem {
     }
 }
 
-fn queue_cleanup_operation(updater: &LazyUpdate, operation_entity: Entity, owner: Option<Entity>) {
-    updater.exec_mut(move |world| {
-        if let Some(owner) = owner {
-            if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(owner) {
-                operation_data.as_operation().child_complete(operation_entity);
-            }
-
-            if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(owner) {
-                mission_data.as_mission_mut().child_complete(operation_entity);
-            }
-        }
-
-        if let Err(err) = world.delete_entity(operation_entity) {
-            warn!("Trying to clean up operation entity that no longer exists. Error: {}", err);
-        }
-    });
-}
-
 pub struct RunOperationSystem;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -160,10 +144,11 @@ impl<'a> System<'a> for RunOperationSystem {
                 }
             };
 
-            //TODO: Copy over cleanup semantics from mission code.
-
             if cleanup_operation {
-                queue_cleanup_operation(&data.updater, entity, *operation.get_owner());
+                data.cleanup_queue.delete_operation(OperationCleanup {
+                    entity,
+                    owner: *operation.get_owner(),
+                });
             }
         }
     }

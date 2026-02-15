@@ -162,6 +162,10 @@ impl Mission for LocalBuildMission {
         self.room_data
     }
 
+    fn remove_creep(&mut self, entity: Entity) {
+        self.builders.retain(|e| *e != entity);
+    }
+
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!("Local Build - Builders: {}", self.builders.len())
     }
@@ -171,13 +175,6 @@ impl Mission for LocalBuildMission {
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
-        //
-        // Cleanup creeps that no longer exist.
-        //
-
-        self.builders
-            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
-
         //
         // Populate the repair queue with non-wall structures that need repair.
         // This makes the repair queue the single source of truth for repair

@@ -306,8 +306,18 @@ pub struct ClaimFeatures {
     /// Enable claim debug visualization (panel + map).
     pub visualize: bool,
     /// Maximum number of concurrent room claim missions. 0 = no limit (capped by
-    /// GCL/CPU). Set to 1 for the old conservative behaviour.
+    /// GCL/CPU). Default: 2 — allows the pipeline to pursue a second-best
+    /// candidate when the top pick is blocked.
     pub max_concurrent_missions: u32,
+    /// Maximum score difference (0.0–1.0) between the best candidate and any
+    /// additional candidates that may be claimed in the same select cycle.
+    /// Prevents picking vastly inferior rooms just to fill the mission cap.
+    /// Default: 0.15.
+    pub max_score_delta: f32,
+    /// Weight applied to the room plan score (from screeps-foreman) when
+    /// scoring claim candidates. A good room with a poor layout should be
+    /// penalised. Default: 2.0.
+    pub plan_score_weight: f32,
     /// Ticks between full BFS re-discovery cycles. Room topology is static and
     /// ownership changes slowly, so this can be long. Default: 500.
     pub discover_interval: u32,
@@ -325,7 +335,9 @@ impl Default for ClaimFeatures {
         Self {
             on: true,
             visualize: false,
-            max_concurrent_missions: 0,
+            max_concurrent_missions: 2,
+            max_score_delta: 0.15,
+            plan_score_weight: 2.0,
             discover_interval: 500,
             scouting_window: 200,
             remote_build_interval: 50,

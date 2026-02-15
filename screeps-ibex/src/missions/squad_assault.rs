@@ -83,13 +83,6 @@ machine!(
 );
 
 impl SquadAssaultMissionContext {
-    fn cleanup_dead(&mut self, system_data: &MissionExecutionSystemData) {
-        let alive = |entity: &&Entity| system_data.entities.is_alive(**entity) && system_data.job_data.get(**entity).is_some();
-        self.attackers.retain(|e| alive(&e));
-        self.healers.retain(|e| alive(&e));
-        self.tanks.retain(|e| alive(&e));
-    }
-
     fn total_alive(&self) -> usize {
         self.attackers.len() + self.healers.len() + self.tanks.len()
     }
@@ -118,8 +111,6 @@ impl Spawning {
         mission_entity: Entity,
         state_context: &mut SquadAssaultMissionContext,
     ) -> Result<Option<SquadAssaultState>, String> {
-        state_context.cleanup_dead(system_data);
-
         if state_context.is_full() {
             return Ok(Some(SquadAssaultState::rallying(std::marker::PhantomData)));
         }
@@ -304,8 +295,6 @@ impl Rallying {
         _mission_entity: Entity,
         state_context: &mut SquadAssaultMissionContext,
     ) -> Result<Option<SquadAssaultState>, String> {
-        state_context.cleanup_dead(system_data);
-
         // If we lost too many creeps during rally, go back to spawning.
         if state_context.total_alive() == 0 {
             return Ok(Some(SquadAssaultState::spawning(std::marker::PhantomData)));
@@ -464,12 +453,10 @@ impl Attacking {
 
     fn tick(
         &mut self,
-        system_data: &mut MissionExecutionSystemData,
+        _system_data: &mut MissionExecutionSystemData,
         _mission_entity: Entity,
         state_context: &mut SquadAssaultMissionContext,
     ) -> Result<Option<SquadAssaultState>, String> {
-        state_context.cleanup_dead(system_data);
-
         // If all creeps are dead, go back to spawning or complete.
         if state_context.total_alive() == 0 {
             return Ok(Some(SquadAssaultState::spawning(std::marker::PhantomData)));
@@ -560,6 +547,12 @@ impl Mission for SquadAssaultMission {
 
     fn get_room(&self) -> Entity {
         self.context.room_data_entity
+    }
+
+    fn remove_creep(&mut self, entity: Entity) {
+        self.context.attackers.retain(|e| *e != entity);
+        self.context.healers.retain(|e| *e != entity);
+        self.context.tanks.retain(|e| *e != entity);
     }
 
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> String {

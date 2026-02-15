@@ -111,6 +111,10 @@ impl Mission for DismantleMission {
         self.room_data
     }
 
+    fn remove_creep(&mut self, entity: Entity) {
+        self.dismantlers.retain(|e| *e != entity);
+    }
+
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!("Dismantle - Dismantlers: {}", self.dismantlers.len())
     }
@@ -120,13 +124,6 @@ impl Mission for DismantleMission {
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
-        //
-        // Cleanup dismantlers that no longer exist.
-        //
-
-        self.dismantlers
-            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
-
         //
         // Cleanup home rooms that no longer exist.
         //

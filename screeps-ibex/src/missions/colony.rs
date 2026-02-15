@@ -73,12 +73,6 @@ machine!(
         * => fn gather_data(&self, _system_data: &MissionExecutionSystemData, _mission_entity: Entity) {}
 
         _ => fn tick(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity, state_context: &mut ColonyMissionContext) -> Result<Option<ColonyState>, String>;
-
-        * => fn complete(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) {
-            for mission_child in self.get_children_internal_mut().iter_mut() {
-                if let Some(e) = mission_child.take() { system_data.mission_requests.abort(e) }
-            }
-        }
     }
 );
 
@@ -391,9 +385,5 @@ impl Mission for ColonyMission {
         self.state.visualize(system_data, mission_entity, &self.context);
 
         Ok(MissionResult::Running)
-    }
-
-    fn complete(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) {
-        self.state.complete(system_data, mission_entity);
     }
 }

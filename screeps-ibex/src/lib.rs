@@ -6,6 +6,7 @@
 #[global_allocator]
 static ALLOC: talc::TalckWasm = unsafe { talc::TalckWasm::new_global() };
 
+mod cleanup;
 mod constants;
 mod creep;
 mod entitymappingsystem;

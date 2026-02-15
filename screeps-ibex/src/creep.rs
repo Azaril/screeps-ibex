@@ -1,3 +1,4 @@
+use crate::cleanup::EntityCleanupQueue;
 use crate::serialize::*;
 use log::*;
 use screeps::*;
@@ -71,9 +72,9 @@ pub struct CleanupCreepsSystem;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for CleanupCreepsSystem {
-    type SystemData = (Entities<'a>, ReadStorage<'a, CreepOwner>, Read<'a, LazyUpdate>);
+    type SystemData = (Entities<'a>, ReadStorage<'a, CreepOwner>, Write<'a, EntityCleanupQueue>);
 
-    fn run(&mut self, (entities, creeps, _updater): Self::SystemData) {
+    fn run(&mut self, (entities, creeps, mut cleanup_queue): Self::SystemData) {
         for (entity, creep) in (&entities, &creeps).join() {
             let delete = if let Some(creep) = creep.owner.resolve() {
                 creep.hits() == 0
@@ -82,12 +83,7 @@ impl<'a> System<'a> for CleanupCreepsSystem {
             };
 
             if delete {
-                if let Err(error) = entities.delete(entity) {
-                    warn!(
-                        "Failed to delete creep entity that had been deleted by the simulation. Error: {}",
-                        error
-                    );
-                }
+                cleanup_queue.delete_creep(entity);
             }
         }
     }

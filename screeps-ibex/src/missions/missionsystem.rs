@@ -1,9 +1,9 @@
 use super::data::*;
 use super::localsupply::structure_data::SupplyStructureCache;
+use crate::cleanup::*;
 use crate::creep::*;
 use crate::jobs::data::*;
 use crate::military::boostqueue::*;
-use crate::operations::data::*;
 use crate::repairqueue::*;
 use crate::room::data::*;
 use crate::room::roomplansystem::*;
@@ -33,6 +33,7 @@ pub struct MissionSystemData<'a> {
     boost_queue: Write<'a, BoostQueue>,
     repair_queue: Write<'a, RepairQueue>,
     supply_structure_cache: Write<'a, SupplyStructureCache>,
+    cleanup_queue: Write<'a, EntityCleanupQueue>,
 }
 
 pub struct MissionExecutionSystemData<'a, 'b> {
@@ -44,7 +45,7 @@ pub struct MissionExecutionSystemData<'a, 'b> {
     pub creep_spawning: &'b ReadStorage<'a, CreepSpawning>,
     pub job_data: &'b WriteStorage<'a, JobData>,
     pub missions: &'b WriteStorage<'a, MissionData>,
-    pub mission_requests: &'b mut MissionRequests,
+    pub cleanup_queue: &'b mut EntityCleanupQueue,
     pub spawn_queue: &'b mut SpawnQueue,
     pub room_plan_queue: &'b mut RoomPlanQueue,
     pub transfer_queue: &'b mut TransferQueue,
@@ -55,100 +56,47 @@ pub struct MissionExecutionSystemData<'a, 'b> {
     pub supply_structure_cache: &'b mut SupplyStructureCache,
 }
 
-pub struct MissionRequests {
-    abort: Vec<Entity>,
-}
+/// Queue a mission for cleanup via the `EntityCleanupQueue`.
+///
+/// Extracts context from the live mission component and pushes a
+/// `MissionCleanup` entry. If the entity has no `MissionData` yet
+/// (created via `LazyUpdate` this tick), queues a deferred cleanup
+/// via `LazyUpdate::exec_mut` as a fallback.
+fn queue_mission_abort(system_data: &mut MissionExecutionSystemData, mission_entity: Entity) {
+    if let Some(mission_data) = system_data.missions.get(mission_entity) {
+        let mission = mission_data.as_mission();
+        let owner = *mission.get_owner();
+        let children = mission.get_children();
+        let room = mission.get_room();
+        drop(mission);
 
-impl MissionRequests {
-    fn new() -> MissionRequests {
-        MissionRequests { abort: Vec::new() }
-    }
-
-    pub fn abort(&mut self, mission: Entity) {
-        self.abort.push(mission);
-    }
-
-    fn process(system_data: &mut MissionExecutionSystemData) {
-        while let Some(mission_entity) = system_data.mission_requests.abort.pop() {
-            if let Some(mission_data) = system_data.missions.get(mission_entity) {
-                let mut mission = mission_data.as_mission_mut();
-
-                let owner = *mission.get_owner();
-                let children = mission.get_children();
-                let room = mission.get_room();
-
-                mission.complete(system_data, mission_entity);
-
-                Self::queue_cleanup_mission(system_data.updater, mission_entity, owner, children, room);
-            } else {
-                // Entity exists but has no MissionData component yet (likely created
-                // via LazyUpdate this tick). Queue deferred cleanup so it is deleted
-                // once its components are applied during world.maintain().
-                warn!(
-                    "Mission abort requested for entity {:?} but it has no MissionData \
-                     (component not yet applied). Queuing deferred cleanup.",
-                    mission_entity
-                );
-                let entity = mission_entity;
-                system_data.updater.exec_mut(move |world| {
-                    if world.entities().is_alive(entity) {
-                        // Remove from any room that lists it.
-                        for room_data in (&mut world.write_storage::<RoomData>()).join() {
-                            room_data.remove_mission(entity);
-                        }
-
-                        if let Err(err) = world.delete_entity(entity) {
-                            warn!("Deferred cleanup of orphan mission entity {:?} failed: {}", entity, err);
-                        } else {
-                            info!("Deferred cleanup: deleted orphan mission entity {:?}", entity);
-                        }
-                    }
-                });
-            }
-        }
-    }
-
-    fn queue_cleanup_mission(updater: &LazyUpdate, mission_entity: Entity, owner: Option<Entity>, children: Vec<Entity>, room: Entity) {
-        updater.exec_mut(move |world| {
-            if world.entities().is_alive(mission_entity) {
-                //
-                // Remove mission from room.
-                //
-
-                if let Some(room_data) = world.write_storage::<RoomData>().get_mut(room) {
-                    room_data.remove_mission(mission_entity);
+        system_data.cleanup_queue.delete_mission(MissionCleanup {
+            entity: mission_entity,
+            owner,
+            children,
+            room,
+        });
+    } else {
+        // Entity exists but has no MissionData component yet (likely created
+        // via LazyUpdate this tick). Queue deferred cleanup so it is deleted
+        // once its components are applied during world.maintain().
+        warn!(
+            "Mission abort requested for entity {:?} but it has no MissionData \
+             (component not yet applied). Queuing deferred cleanup.",
+            mission_entity
+        );
+        let entity = mission_entity;
+        system_data.updater.exec_mut(move |world| {
+            if world.entities().is_alive(entity) {
+                // Remove from any room that lists it.
+                for room_data in (&mut world.write_storage::<RoomData>()).join() {
+                    room_data.remove_mission(entity);
                 }
 
-                //
-                // Notify children of termination.
-                //
-
-                for child_entity in children {
-                    if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(child_entity) {
-                        operation_data.as_operation().owner_complete(mission_entity);
-                    }
-
-                    if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(child_entity) {
-                        mission_data.as_mission_mut().owner_complete(mission_entity);
-                    }
-                }
-
-                //
-                // Notify owner of termination.
-                //
-
-                if let Some(owner) = owner {
-                    if let Some(operation_data) = world.write_storage::<OperationData>().get_mut(owner) {
-                        operation_data.as_operation().child_complete(mission_entity);
-                    }
-
-                    if let Some(mission_data) = world.write_storage::<MissionData>().get_mut(owner) {
-                        mission_data.as_mission_mut().child_complete(mission_entity);
-                    }
-                }
-
-                if let Err(err) = world.delete_entity(mission_entity) {
-                    warn!("Trying to clean up mission entity that no longer exists. Error: {}", err);
+                if let Err(err) = world.delete_entity(entity) {
+                    warn!("Deferred cleanup of orphan mission entity {:?} failed: {}", entity, err);
+                } else {
+                    info!("Deferred cleanup: deleted orphan mission entity {:?}", entity);
                 }
             }
         });
@@ -174,6 +122,11 @@ pub trait Mission {
 
     fn child_complete(&mut self, _child: Entity) {}
 
+    /// Called by `EntityCleanupSystem` when a creep entity dies.
+    /// Missions that track creeps should override this to remove the
+    /// entity from their tracking lists.
+    fn remove_creep(&mut self, _entity: Entity) {}
+
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> String;
 
     /// Produce a structured summary for the visualization overlay.
@@ -187,8 +140,6 @@ pub trait Mission {
     }
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String>;
-
-    fn complete(&mut self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) {}
 }
 
 pub struct PreRunMissionSystem;
@@ -198,8 +149,6 @@ impl<'a> System<'a> for PreRunMissionSystem {
     type SystemData = MissionSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        let mut mission_requests = MissionRequests::new();
-
         let mission_entities: Vec<Entity> = (&data.entities, &data.missions).join().map(|(e, _)| e).collect();
 
         for entity in mission_entities {
@@ -212,7 +161,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 creep_spawning: &data.creep_spawning,
                 job_data: &data.job_data,
                 missions: &data.missions,
-                mission_requests: &mut mission_requests,
+                cleanup_queue: &mut data.cleanup_queue,
                 spawn_queue: &mut data.spawn_queue,
                 room_plan_queue: &mut data.room_plan_queue,
                 transfer_queue: &mut data.transfer_queue,
@@ -236,11 +185,10 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 };
 
                 if cleanup_mission {
-                    system_data.mission_requests.abort(entity);
+                    drop(mission);
+                    queue_mission_abort(&mut system_data, entity);
                 }
             }
-
-            MissionRequests::process(&mut system_data);
         }
     }
 }
@@ -252,8 +200,6 @@ impl<'a> System<'a> for RunMissionSystem {
     type SystemData = MissionSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        let mut mission_requests = MissionRequests::new();
-
         let mission_entities: Vec<Entity> = (&data.entities, &data.missions).join().map(|(e, _)| e).collect();
 
         for entity in mission_entities {
@@ -266,7 +212,7 @@ impl<'a> System<'a> for RunMissionSystem {
                 creep_spawning: &data.creep_spawning,
                 job_data: &data.job_data,
                 missions: &data.missions,
-                mission_requests: &mut mission_requests,
+                cleanup_queue: &mut data.cleanup_queue,
                 spawn_queue: &mut data.spawn_queue,
                 room_plan_queue: &mut data.room_plan_queue,
                 transfer_queue: &mut data.transfer_queue,
@@ -293,11 +239,10 @@ impl<'a> System<'a> for RunMissionSystem {
                 };
 
                 if cleanup_mission {
-                    system_data.mission_requests.abort(entity);
+                    drop(mission);
+                    queue_mission_abort(&mut system_data, entity);
                 }
             }
-
-            MissionRequests::process(&mut system_data);
         }
     }
 }

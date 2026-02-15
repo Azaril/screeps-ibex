@@ -118,6 +118,10 @@ impl Mission for RemoteBuildMission {
         self.room_data
     }
 
+    fn remove_creep(&mut self, entity: Entity) {
+        self.builders.retain(|e| *e != entity);
+    }
+
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         let home_room_names = self
             .home_room_datas
@@ -134,13 +138,6 @@ impl Mission for RemoteBuildMission {
     }
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
-        //
-        // Cleanup creeps that no longer exist.
-        //
-
-        self.builders
-            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
-
         //
         // Cleanup home rooms that no longer exist.
         //

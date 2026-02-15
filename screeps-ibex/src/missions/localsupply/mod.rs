@@ -322,18 +322,7 @@ impl Mission for LocalSupplyMission {
         }
     }
 
-    fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
-        // Cleanup child missions that no longer exist.
-        self.source_mining_missions
-            .retain(|&entity| system_data.entities.is_alive(entity) && system_data.missions.get(entity).is_some());
-        self.mineral_mining_missions
-            .retain(|&entity| system_data.entities.is_alive(entity) && system_data.missions.get(entity).is_some());
-        if let Some(entity) = *self.transfer_mission {
-            if !system_data.entities.is_alive(entity) || system_data.missions.get(entity).is_none() {
-                self.transfer_mission.take();
-            }
-        }
-
+    fn pre_run_mission(&mut self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         Ok(())
     }
 
@@ -342,17 +331,5 @@ impl Mission for LocalSupplyMission {
         self.update_children(system_data);
 
         Ok(MissionResult::Running)
-    }
-
-    fn complete(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) {
-        for &child in self.source_mining_missions.iter() {
-            system_data.mission_requests.abort(child);
-        }
-        for &child in self.mineral_mining_missions.iter() {
-            system_data.mission_requests.abort(child);
-        }
-        if let Some(child) = self.transfer_mission.take() {
-            system_data.mission_requests.abort(child);
-        }
     }
 }

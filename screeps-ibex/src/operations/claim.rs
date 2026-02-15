@@ -177,6 +177,15 @@ impl ClaimOperation {
         Some((score, 0.5))
     }
 
+    /// Return a plan quality score (0–1) for a room that has a valid plan.
+    /// Returns `None` if the room has no plan data or the plan failed.
+    fn plan_score(system_data: &mut OperationExecutionSystemData, room_entity: Entity) -> Option<f32> {
+        let plan_data = system_data.room_plan_data.get(room_entity)?;
+        let plan = plan_data.plan()?;
+        // PlanScore.total is already a 0–1 weighted average from screeps-foreman.
+        Some(plan.score.total)
+    }
+
     /// Score a candidate room, returning the weighted total and raw sub-scores.
     /// Returns `None` if the room lacks visibility data or fails any scoring
     /// criterion.
@@ -184,17 +193,26 @@ impl ClaimOperation {
         system_data: &mut OperationExecutionSystemData,
         room_entity: Entity,
         distance: u32,
+        plan_score_weight: f32,
     ) -> Option<(f32, CandidateSubScores)> {
         let (source_raw, source_w) = Self::source_score(system_data, room_entity)?;
         let (walk_raw, walk_w) = Self::walkability_score(system_data, room_entity)?;
         let (dist_raw, dist_w) = Self::distance_score(distance)?;
 
-        let total_weight = source_w + walk_w + dist_w;
+        // Plan score is optional — rooms without a plan yet are scored without
+        // this component (weight excluded from total).
+        let plan_raw = Self::plan_score(system_data, room_entity);
+        let (plan_contribution, plan_w) = match plan_raw {
+            Some(raw) => (raw * plan_score_weight, plan_score_weight),
+            None => (0.0, 0.0),
+        };
+
+        let total_weight = source_w + walk_w + dist_w + plan_w;
         if total_weight <= 0.0 {
             return None;
         }
 
-        let total = (source_raw * source_w + walk_raw * walk_w + dist_raw * dist_w) / total_weight;
+        let total = (source_raw * source_w + walk_raw * walk_w + dist_raw * dist_w + plan_contribution) / total_weight;
 
         Some((
             total,
@@ -202,6 +220,7 @@ impl ClaimOperation {
                 source: source_raw,
                 walkability: walk_raw,
                 distance: dist_raw,
+                plan: plan_raw,
             },
         ))
     }
@@ -310,7 +329,7 @@ impl ClaimOperation {
 
     /// Attempt to score any candidates that now have fresh visibility data.
     /// Pure ECS lookups, no JS API calls.
-    fn try_score_candidates(&mut self, system_data: &mut OperationExecutionSystemData) {
+    fn try_score_candidates(&mut self, system_data: &mut OperationExecutionSystemData, plan_score_weight: f32) {
         for candidate in self.candidates.iter_mut() {
             if candidate.score.is_some() {
                 continue;
@@ -332,6 +351,7 @@ impl ClaimOperation {
                                 source: 0.0,
                                 walkability: 0.0,
                                 distance: 0.0,
+                                plan: None,
                             },
                         ));
                         continue;
@@ -340,7 +360,7 @@ impl ClaimOperation {
             }
 
             // Attempt scoring.
-            if let Some(result) = Self::score_candidate(system_data, room_entity, candidate.distance) {
+            if let Some(result) = Self::score_candidate(system_data, room_entity, candidate.distance, plan_score_weight) {
                 candidate.score = Some(result);
             }
         }
@@ -348,11 +368,13 @@ impl ClaimOperation {
 
     // ── Phase: Select ───────────────────────────────────────────────────────
 
-    /// Score and sort candidates, create a mission for the best one, and
+    /// Score and sort candidates, create missions for the best candidates, and
     /// transition back to Idle.
     ///
-    /// Only the single highest-scoring candidate is claimed per select cycle
-    /// to avoid over-committing resources.
+    /// Up to `max_concurrent_missions` claim missions may be active at once
+    /// (0 = unlimited, capped by GCL/CPU). Additional candidates beyond the
+    /// first are only selected if their score is within `max_score_delta` of
+    /// the best candidate, preventing vastly inferior rooms from being claimed.
     fn run_select(
         &mut self,
         system_data: &mut OperationExecutionSystemData,
@@ -362,7 +384,7 @@ impl ClaimOperation {
         features: &crate::features::ClaimFeatures,
     ) {
         // Final scoring pass for any candidates still unscored.
-        self.try_score_candidates(system_data);
+        self.try_score_candidates(system_data, features.plan_score_weight);
 
         let total_before_prune = self.candidates.len();
         let unscored = self.candidates.iter().filter(|c| c.score.is_none()).count();
@@ -394,14 +416,16 @@ impl ClaimOperation {
         // Log the ranked candidates.
         for (i, candidate) in self.candidates.iter().enumerate() {
             if let Some((score, sub)) = candidate.score {
+                let plan_label = sub.plan.map(|p| format!(" plan={:.2}", p)).unwrap_or_default();
                 info!(
-                    "ClaimOp [Select]:   #{} {} score={:.3} (source={:.2} walk={:.2} dist={:.2}) dist={} homes=[{}]",
+                    "ClaimOp [Select]:   #{} {} score={:.3} (source={:.2} walk={:.2} dist={:.2}{}) dist={} homes=[{}]",
                     i + 1,
                     candidate.room_name,
                     score,
                     sub.source,
                     sub.walkability,
                     sub.distance,
+                    plan_label,
                     candidate.distance,
                     candidate.home_rooms.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(","),
                 );
@@ -412,24 +436,31 @@ impl ClaimOperation {
         let available_rooms = maximum_rooms.saturating_sub(active_rooms);
         let at_capacity = active_rooms >= maximum_rooms || !features.on;
 
+        // Determine how many missions we can still create this cycle.
+        // max_concurrent_missions caps total active missions (0 = unlimited).
+        let mission_headroom = if features.max_concurrent_missions == 0 {
+            usize::MAX
+        } else {
+            (features.max_concurrent_missions as usize).saturating_sub(self.claim_missions.len())
+        };
+
         info!(
-            "ClaimOp [Select]: owned={} active_missions={} max_rooms={} available={} at_capacity={} features.on={}",
+            "ClaimOp [Select]: owned={} active_missions={} max_rooms={} available={} mission_cap={} at_capacity={} features.on={}",
             currently_owned_rooms,
             self.claim_missions.len(),
             maximum_rooms,
             available_rooms,
+            features.max_concurrent_missions,
             at_capacity,
             features.on,
         );
 
-        // Only claim the single best candidate per cycle to avoid
-        // over-committing resources.
         let max_new_missions = if at_capacity {
             info!("ClaimOp [Select]: at capacity, no new missions");
             0
         } else {
-            // Cap to 1 per select cycle regardless of room/mission headroom.
-            1usize
+            // Cap by both room headroom and mission concurrency limit.
+            (available_rooms as usize).min(mission_headroom)
         };
 
         if max_new_missions > 0 {
@@ -468,9 +499,21 @@ impl ClaimOperation {
             }
 
             let mut missions_created = 0;
+            let best_score = self.candidates.first().and_then(|c| c.score.map(|(s, _)| s)).unwrap_or(0.0);
 
-            for candidate in self.candidates.iter().take(1) {
+            for candidate in self.candidates.iter() {
                 if missions_created >= max_new_missions {
+                    break;
+                }
+
+                // Enforce score delta: additional candidates beyond the first
+                // must be within max_score_delta of the best.
+                let candidate_score = candidate.score.map(|(s, _)| s).unwrap_or(0.0);
+                if missions_created > 0 && (best_score - candidate_score) > features.max_score_delta {
+                    info!(
+                        "ClaimOp [Select]: candidate {} score={:.3} exceeds delta {:.3} from best {:.3}, stopping",
+                        candidate.room_name, candidate_score, features.max_score_delta, best_score,
+                    );
                     break;
                 }
 
@@ -847,7 +890,7 @@ impl Operation for ClaimOperation {
                 }
             }
             ClaimPhase::Scouting => {
-                self.try_score_candidates(system_data);
+                self.try_score_candidates(system_data, features.claim.plan_score_weight);
                 self.refresh_visibility_requests(system_data);
 
                 let elapsed = self.phase_tick.map(|t| game::time().saturating_sub(t)).unwrap_or(0);

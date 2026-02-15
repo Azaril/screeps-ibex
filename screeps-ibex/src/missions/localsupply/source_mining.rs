@@ -520,6 +520,12 @@ impl Mission for SourceMiningMission {
         self.room_data
     }
 
+    fn remove_creep(&mut self, entity: Entity) {
+        self.harvesters.retain(|e| *e != entity);
+        self.container_miners.retain(|e| *e != entity);
+        self.link_miners.retain(|e| *e != entity);
+    }
+
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!(
             "Source Mining - Link: {} Container: {} Harvest: {}",
@@ -536,17 +542,6 @@ impl Mission for SourceMiningMission {
             self.container_miners.len(),
             self.harvesters.len()
         ))
-    }
-
-    fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
-        self.harvesters
-            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
-        self.container_miners
-            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
-        self.link_miners
-            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
-
-        Ok(())
     }
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {

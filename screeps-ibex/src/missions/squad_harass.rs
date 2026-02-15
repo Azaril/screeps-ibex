@@ -90,11 +90,6 @@ impl Spawning {
             state_context.mission_start_tick = Some(game::time());
         }
 
-        // Clean up dead attackers.
-        state_context
-            .attackers
-            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
-
         // Check if harassment is cost-effective before spawning another.
         if should_abandon_harassment(state_context) {
             info!(
@@ -175,14 +170,18 @@ impl Harassing {
         _mission_entity: Entity,
         state_context: &mut SquadHarassMissionContext,
     ) -> Result<Option<SquadHarassState>, String> {
-        let prev_count = state_context.attackers.len();
-
-        // Clean up dead attackers.
-        state_context
+        // Count dead attackers (game object gone but entity still alive until cleanup).
+        let deaths_this_tick = state_context
             .attackers
-            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
-
-        let deaths_this_tick = prev_count - state_context.attackers.len();
+            .iter()
+            .filter(|e| {
+                system_data
+                    .creep_owner
+                    .get(**e)
+                    .map(|co| co.owner.resolve().is_none())
+                    .unwrap_or(true)
+            })
+            .count();
 
         // Track deaths.
         if deaths_this_tick > 0 {
@@ -323,6 +322,10 @@ impl Mission for SquadHarassMission {
 
     fn get_room(&self) -> Entity {
         self.room_data
+    }
+
+    fn remove_creep(&mut self, entity: Entity) {
+        self.context.attackers.retain(|e| *e != entity);
     }
 
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> String {

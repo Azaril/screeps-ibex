@@ -86,14 +86,6 @@ impl Spawning {
         mission_entity: Entity,
         state_context: &mut SquadDefenseMissionContext,
     ) -> Result<Option<SquadDefenseState>, String> {
-        // Clean up dead defenders and healers.
-        state_context
-            .defenders
-            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
-        state_context
-            .healers
-            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
-
         // Check if we have enough creeps to start defending.
         let ready = match state_context.squad_size {
             DefenseSquadSize::Solo => !state_context.defenders.is_empty(),
@@ -231,14 +223,6 @@ impl Rallying {
         _mission_entity: Entity,
         state_context: &mut SquadDefenseMissionContext,
     ) -> Result<Option<SquadDefenseState>, String> {
-        // Clean up dead members.
-        state_context
-            .defenders
-            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
-        state_context
-            .healers
-            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
-
         // If all members died during rally, go back to spawning.
         if state_context.defenders.is_empty() && state_context.healers.is_empty() {
             return Ok(Some(SquadDefenseState::spawning(std::marker::PhantomData)));
@@ -291,14 +275,6 @@ impl Defending {
         _mission_entity: Entity,
         state_context: &mut SquadDefenseMissionContext,
     ) -> Result<Option<SquadDefenseState>, String> {
-        // Clean up dead defenders and healers.
-        state_context
-            .defenders
-            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
-        state_context
-            .healers
-            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
-
         // Check if the room is still under threat.
         let defend_room_data = system_data
             .room_data
@@ -478,6 +454,11 @@ impl Mission for SquadDefenseMission {
 
     fn get_room(&self) -> Entity {
         self.context.defend_room_data
+    }
+
+    fn remove_creep(&mut self, entity: Entity) {
+        self.context.defenders.retain(|e| *e != entity);
+        self.context.healers.retain(|e| *e != entity);
     }
 
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> String {
