@@ -217,6 +217,7 @@ impl<'a> System<'a> for MovementUpdateSystem {
         let pathing_features = crate::features::features().pathing;
         system.set_reuse_path_length(pathing_features.reuse_path_length);
         system.set_max_shove_depth(pathing_features.max_shove_depth);
+        system.set_friendly_creep_distance(pathing_features.friendly_creep_distance);
 
         let results = system.process(&mut external, movement_data);
 

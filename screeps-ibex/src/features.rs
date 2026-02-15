@@ -195,6 +195,14 @@ pub struct PathingFeatures {
     pub custom: bool,
     pub reuse_path_length: u32,
     pub max_shove_depth: u32,
+    /// Maximum tile distance (Chebyshev) from the creep for proximity-limited
+    /// friendly creep avoidance (tier 1 stuck escalation). Only friendly
+    /// creeps within this many tiles of the pathing creep are avoided; creeps
+    /// further away are ignored since they will likely have moved by the time
+    /// the pathing creep arrives. Works both across rooms and within the same
+    /// room. Set to 0 to disable proximity limiting (all creeps avoided, old
+    /// behaviour).
+    pub friendly_creep_distance: u32,
 }
 
 impl Default for PathingFeatures {
@@ -204,6 +212,7 @@ impl Default for PathingFeatures {
             custom: true,
             reuse_path_length: 20,
             max_shove_depth: 10,
+            friendly_creep_distance: 15,
         }
     }
 }
