@@ -209,14 +209,26 @@ impl Mission for WallRepairMission {
         }
 
         if emergency_count > 0 {
-            warn!(
-                "[WallRepair] Room {} has {} structures below emergency threshold ({} hits)",
-                room_name, emergency_count, EMERGENCY_WALL_HITS
-            );
+            let has_hostiles = room_data
+                .get_creeps()
+                .map(|c| !c.hostile().is_empty())
+                .unwrap_or(false);
+
+            if has_hostiles {
+                warn!(
+                    "[WallRepair] Room {} has {} structures below emergency threshold ({} hits)",
+                    room_name, emergency_count, EMERGENCY_WALL_HITS
+                );
+            } else {
+                debug!(
+                    "[WallRepair] Room {} has {} structures below emergency threshold ({} hits) - no hostiles, likely building up",
+                    room_name, emergency_count, EMERGENCY_WALL_HITS
+                );
+            }
         }
 
         if moderate_count > 0 {
-            info!(
+            debug!(
                 "[WallRepair] Room {} has {} structures below moderate threshold ({} hits)",
                 room_name, moderate_count, MODERATE_WALL_HITS
             );
@@ -224,11 +236,11 @@ impl Mission for WallRepairMission {
 
         // Log weakest points.
         if weakest_rampart_hits < u32::MAX {
-            info!("[WallRepair] Room {} weakest rampart: {} hits", room_name, weakest_rampart_hits);
+            debug!("[WallRepair] Room {} weakest rampart: {} hits", room_name, weakest_rampart_hits);
         }
 
         if weakest_wall_hits < u32::MAX {
-            info!("[WallRepair] Room {} weakest wall: {} hits", room_name, weakest_wall_hits);
+            debug!("[WallRepair] Room {} weakest wall: {} hits", room_name, weakest_wall_hits);
         }
 
         Ok(MissionResult::Running)

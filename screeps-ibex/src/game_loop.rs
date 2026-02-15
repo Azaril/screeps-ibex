@@ -301,26 +301,36 @@ fn create_environment<'a, 'b, 'c, 'd>() -> GameEnvironment<'a, 'b, 'c, 'd> {
         .with(CostMatrixClearSystem, "cost_matrix_clear", &[])
         .with_barrier()
         .with(OperationManagerSystem, "operations_manager", &[])
-        .with(PreRunOperationSystem, "pre_run_operations", &[])
-        .with(PreRunMissionSystem, "pre_run_missions", &[])
-        .with(PreRunJobSystem, "pre_run_jobs", &[])
+        .with(PreRunOperationSystem, "pre_run_operations", &["operations_manager"])
+        .with(PreRunMissionSystem, "pre_run_missions", &["pre_run_operations"])
+        .with(PreRunJobSystem, "pre_run_jobs", &["pre_run_missions"])
         .with_barrier()
         .with(RunOperationSystem, "run_operations", &[])
-        .with(RunMissionSystem, "run_missions", &[])
-        .with(RunJobSystem, "run_jobs", &[])
+        .with(RunMissionSystem, "run_missions", &["run_operations"])
+        .with(RunJobSystem, "run_jobs", &["run_missions"])
         .with(MovementUpdateSystem, "movement", &["run_jobs"])
         .with_barrier()
         .with(VisibilityQueueSystem, "visibility_queue", &[])
+        .with_barrier()
         .with(SummarizeOperationSystem, "summarize_operations", &[])
         .with(SummarizeMissionSystem, "summarize_missions", &[])
         .with(SummarizeJobSystem, "summarize_jobs", &[])
         .with(SummarizeRoomVisibilitySystem, "summarize_room_visibility", &[])
-        .with(SpawnQueueSystem, "spawn_queue", &[])
         .with(TransferStatsSnapshotSystem, "transfer_stats_snapshot", &[])
+        // AggregateSummarySystem reads all summary components and the spawn
+        // queue, so it must run after every Summarize* system writes its data
+        // and before SpawnQueueSystem processes and clears the queue.
+        .with(AggregateSummarySystem, "aggregate_summary", &[
+            "summarize_operations",
+            "summarize_missions",
+            "summarize_jobs",
+            "summarize_room_visibility",
+        ])
+        .with_barrier()
+        .with(SpawnQueueSystem, "spawn_queue", &[])
         .with(TransferQueueUpdateSystem, "transfer_queue", &["transfer_stats_snapshot"])
         .with(OrderQueueSystem, "order_queue", &[])
         .with_barrier()
-        .with(AggregateSummarySystem, "aggregate_summary", &[])
         .with(RoomPlanSystem, "room_plan", &[])
         .with(RoomPlanVisualizeSystem, "room_plan_visualize", &["room_plan"])
         .with_barrier()

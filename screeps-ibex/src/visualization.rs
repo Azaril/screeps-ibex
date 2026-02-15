@@ -495,20 +495,18 @@ impl<'a> System<'a> for AggregateSummarySystem {
 // - Bottom strip (fixed size): CPU histogram (global), then room resources / transfer / trade (per-room, placeholders for now).
 
 /// Approximate character width in room units (no text measurement API).
-const CHAR_WIDTH: f32 = 0.48;
+const CHAR_WIDTH: f32 = 0.30;
 const LINE_HEIGHT: f32 = 1.05;
 const PAD: f32 = 0.45;
 const FONT_SIZE: f32 = 0.55;
 
-/// Max characters per line and max lines per panel to keep layout bounded and prevent overlap.
-const MAX_LINE_CHARS: usize = 22;
-const MAX_PANEL_LINES: usize = 12;
+/// Max characters per line to keep layout bounded.
+const MAX_LINE_CHARS: usize = 34;
 
-/// Truncate content to max lines and max chars per line (Screeps doesn't reliably wrap or honour \n in one text call).
-fn truncate_content(s: &str, max_lines: usize, max_chars: usize) -> String {
+/// Truncate content per line to max chars (Screeps doesn't reliably wrap or honour \n in one text call).
+fn truncate_content(s: &str, max_chars: usize) -> String {
     let lines: Vec<String> = s
         .lines()
-        .take(max_lines)
         .map(|l| {
             let len = l.chars().count();
             if len <= max_chars {
@@ -550,8 +548,8 @@ impl Panel {
         (self.line_count() as f32) * LINE_HEIGHT + 2.0 * PAD
     }
 
-    fn from_content(content: &str, max_lines: usize, max_chars: usize) -> Self {
-        let truncated = truncate_content(content, max_lines, max_chars);
+    fn from_content(content: &str, max_chars: usize) -> Self {
+        let truncated = truncate_content(content, max_chars);
         let lines: Vec<String> = truncated.lines().map(String::from).collect();
         Panel {
             lines: if lines.is_empty() { vec!["—".to_string()] } else { lines },
@@ -665,7 +663,7 @@ const STATS_SPARKLINE_TOP_Y: f32 = CPU_GRAPH_TOP_Y + GRAPH_H + GAP;
 /// Global right column: one panel (misc + operations). Right-aligned, max width capped to hug the edge.
 fn layout_global_right_panel(ops_content: &str) -> Panel {
     let ops_max_chars = (OPS_PANEL_MAX_WIDTH / CHAR_WIDTH - 2.0 * PAD / CHAR_WIDTH).floor().max(4.0) as usize;
-    let mut p = Panel::from_content(ops_content, MAX_PANEL_LINES, ops_max_chars.min(MAX_LINE_CHARS));
+    let mut p = Panel::from_content(ops_content, ops_max_chars.min(MAX_LINE_CHARS));
     p.x = RIGHT_EDGE - RIGHT_MARGIN - p.width();
     p.y = TOP_Y;
     p
@@ -689,26 +687,26 @@ fn layout_room_left_panels(right_column_left_x: f32, room_content: Option<&str>,
     let mut y = TOP_Y;
 
     if let Some(rc) = room_content {
-        let mut room = Panel::from_content(rc, MAX_PANEL_LINES, max_chars);
+        let mut room = Panel::from_content(rc, max_chars);
         room.x = LEFT_X;
         room.y = y;
         y += room.height() + GAP;
         panels.push(room);
     }
 
-    let mut missions_panel = Panel::from_content(missions, MAX_PANEL_LINES, max_chars);
+    let mut missions_panel = Panel::from_content(missions, max_chars);
     missions_panel.x = LEFT_X;
     missions_panel.y = y;
     y += missions_panel.height() + GAP;
     panels.push(missions_panel);
 
-    let mut jobs_panel = Panel::from_content(jobs, MAX_PANEL_LINES, max_chars);
+    let mut jobs_panel = Panel::from_content(jobs, max_chars);
     jobs_panel.x = LEFT_X;
     jobs_panel.y = y;
     y += jobs_panel.height() + GAP;
     panels.push(jobs_panel);
 
-    let mut spawn_panel = Panel::from_content(spawn, MAX_PANEL_LINES, max_chars);
+    let mut spawn_panel = Panel::from_content(spawn, max_chars);
     spawn_panel.x = LEFT_X;
     spawn_panel.y = y;
     panels.push(spawn_panel);

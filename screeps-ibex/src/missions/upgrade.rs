@@ -72,6 +72,65 @@ impl UpgradeMission {
             });
         })
     }
+
+    /// Compute the minimum number of WORK parts needed for an upgrader to
+    /// restore the controller's downgrade timer from `current_ttd` back to
+    /// the safe threshold (`max_ticks / 2`) within one creep lifetime.
+    ///
+    /// Assumes the creep has a container of energy adjacent to the controller
+    /// so pickup costs only 1 tick per refill. The body format at RCL > 3 is
+    /// `[WORK, CARRY, MOVE, MOVE] + (W-1)*[WORK]`, giving 1 CARRY (50 cap),
+    /// 2 MOVE, and W total WORK parts.
+    ///
+    /// Model per refill cycle (W work parts, 1 carry = 50 energy):
+    ///   - upgrade_ticks = floor(50 / W)
+    ///   - pickup_ticks  = 1 (withdraw from adjacent container)
+    ///   - cycle_ticks   = upgrade_ticks + pickup_ticks
+    ///   - Each upgrade tick restores CONTROLLER_DOWNGRADE_RESTORE (100) ticks
+    ///     but the timer also decays by 1, so net = 99 per upgrade tick.
+    ///   - The pickup tick contributes 0 restore but still decays by 1.
+    ///   - net_per_cycle = upgrade_ticks * 99 - 1
+    ///
+    /// Available lifetime ticks = CREEP_LIFE_TIME - spawn_ticks, where
+    /// spawn_ticks = body_part_count * CREEP_SPAWN_TIME.
+    fn work_parts_for_upkeep(current_ttd: u32, max_ticks: u32) -> usize {
+        let safe_threshold = max_ticks / 2;
+        if current_ttd >= safe_threshold {
+            return 1;
+        }
+        let deficit = (safe_threshold - current_ttd) as f64;
+        let net_restore_per_upgrade_tick = (CONTROLLER_DOWNGRADE_RESTORE as f64) - 1.0;
+
+        // Try increasing WORK parts until the creep can cover the deficit.
+        // The body is [WORK, CARRY, MOVE, MOVE] + (w-1)*[WORK], so total
+        // parts = w + 3. Max body size is 50 parts, so w <= 47.
+        for w in 1..=CONTROLLER_MAX_UPGRADE_PER_TICK {
+            let body_parts = w + 3;
+            let spawn_ticks = body_parts * CREEP_SPAWN_TIME;
+            let lifetime = CREEP_LIFE_TIME.saturating_sub(spawn_ticks) as f64;
+
+            let carry_cap = CARRY_CAPACITY as f64; // 50
+            let upgrade_ticks_per_cycle = (carry_cap / w as f64).floor();
+            if upgrade_ticks_per_cycle < 1.0 {
+                continue;
+            }
+            let cycle_ticks = upgrade_ticks_per_cycle + 1.0; // +1 for pickup
+            let net_per_cycle = upgrade_ticks_per_cycle * net_restore_per_upgrade_tick - 1.0;
+            if net_per_cycle <= 0.0 {
+                continue;
+            }
+
+            let cycles = (lifetime / cycle_ticks).floor();
+            let total_restore = cycles * net_per_cycle;
+
+            if total_restore >= deficit {
+                return w as usize;
+            }
+        }
+
+        // Fallback: cap at the max-level upgrade limit.
+        CONTROLLER_MAX_UPGRADE_PER_TICK as usize
+    }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -110,7 +169,7 @@ impl Mission for UpgradeMission {
     }
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
-        //TODO: Limit upgraders to 15 total work parts upgrading across all creeps at RCL 8.
+        //TODO: Limit upgraders to CONTROLLER_MAX_UPGRADE_PER_TICK total work parts at max level.
 
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let room = game::rooms().get(room_data.name).ok_or("Expected room")?;
@@ -148,9 +207,31 @@ impl Mission for UpgradeMission {
 
         let are_hostile_creeps = !creeps.hostile().is_empty();
 
+        // Detect downgrade risk at any RCL. When the downgrade timer falls
+        // below half of max we spawn an upkeep upgrader at critical priority,
+        // sized so that it can restore the timer back to the safe threshold
+        // within a single creep lifetime (assuming a container of energy is
+        // adjacent to the controller).
+        let downgrade_upkeep_parts: Option<usize> = controllers
+            .iter()
+            .filter_map(|controller| {
+                let max_ticks = controller_downgrade(controller.level())?;
+                let ttd = controller.ticks_to_downgrade()?;
+                if ttd < max_ticks / 2 {
+                    Some(Self::work_parts_for_upkeep(ttd, max_ticks))
+                } else {
+                    None
+                }
+            })
+            .max();
+
+        let downgrade_risk = downgrade_upkeep_parts.is_some();
+
+        let at_max_level = controller_levels(controller_level as u32).is_none();
+
         //TODO: Need better calculation for maximum number of upgraders.
         let max_upgraders = if can_execute_cpu(CpuBar::MediumPriority) {
-            if are_hostile_creeps || controller_level >= 8 {
+            if are_hostile_creeps || at_max_level {
                 1
             } else if has_excess_energy {
                 if controller_level <= 3 {
@@ -181,7 +262,21 @@ impl Mission for UpgradeMission {
             .count();
 
         if alive_upgraders < max_upgraders {
-            let work_parts_per_upgrader = if controller_level == 8 {
+            let work_parts_per_upgrader = if let Some(upkeep_parts) = downgrade_upkeep_parts {
+                if self.upgraders.is_empty() {
+                    // Downgrade risk with no upgrader at all: size the body
+                    // to restore the timer in one lifetime.
+                    Some(upkeep_parts)
+                } else {
+                    // Have an upgrader (possibly dying) — use the normal
+                    // max-level cap for the replacement.
+                    let work_parts_per_tick = (CONTROLLER_MAX_UPGRADE_PER_TICK as f32) / (UPGRADE_CONTROLLER_POWER as f32);
+                    let work_parts = (work_parts_per_tick / (max_upgraders as f32)).ceil();
+                    Some(work_parts as usize)
+                }
+            } else if at_max_level {
+                // At max controller level the game caps upgrade throughput to
+                // CONTROLLER_MAX_UPGRADE_PER_TICK energy per tick.
                 let work_parts_per_tick = (CONTROLLER_MAX_UPGRADE_PER_TICK as f32) / (UPGRADE_CONTROLLER_POWER as f32);
 
                 let work_parts = (work_parts_per_tick / (max_upgraders as f32)).ceil();
@@ -199,13 +294,6 @@ impl Mission for UpgradeMission {
 
                 Some(parts_per_upgrader)
             };
-
-            let downgrade_risk = controllers
-                .iter()
-                .filter_map(|controller| {
-                    controller_downgrade(controller.level()).map(|ticks| controller.ticks_to_downgrade().is_some_and(|ttd| ttd < ticks / 2))
-                })
-                .any(|risk| risk);
 
             let maximum_energy = if self.upgraders.is_empty() && downgrade_risk {
                 room.energy_available().max(SPAWN_ENERGY_CAPACITY)
@@ -234,7 +322,11 @@ impl Mission for UpgradeMission {
             };
 
             if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                let priority = if self.upgraders.is_empty() {
+                let priority = if downgrade_risk && self.upgraders.is_empty() {
+                    // Downgrade risk with no upgrader at all — override
+                    // everything else and get a creep out immediately.
+                    SPAWN_PRIORITY_CRITICAL
+                } else if self.upgraders.is_empty() {
                     SPAWN_PRIORITY_HIGH
                 } else if has_excess_energy && !storages.is_empty() && max_upgraders > 1 {
                     let interp = (alive_upgraders as f32) / ((max_upgraders - 1) as f32);

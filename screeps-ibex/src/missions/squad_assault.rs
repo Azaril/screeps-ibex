@@ -72,9 +72,7 @@ machine!(
             format!("SquadAssault - {}", self.status_description())
         }
 
-        * => fn status_description(&self) -> String {
-            std::any::type_name::<Self>().to_string()
-        }
+        _ => fn status_description(&self) -> String;
 
         * => fn visualize(&self, _system_data: &MissionExecutionSystemData, _mission_entity: Entity, _state_context: &SquadAssaultMissionContext) {}
 
@@ -110,6 +108,10 @@ impl SquadAssaultMissionContext {
 }
 
 impl Spawning {
+    fn status_description(&self) -> String {
+        "Spawning".to_string()
+    }
+
     fn tick(
         &mut self,
         system_data: &mut MissionExecutionSystemData,
@@ -292,6 +294,10 @@ impl Spawning {
 }
 
 impl Rallying {
+    fn status_description(&self) -> String {
+        "Rallying".to_string()
+    }
+
     fn tick(
         &mut self,
         system_data: &mut MissionExecutionSystemData,
@@ -452,6 +458,10 @@ fn room_name_to_coords(name: RoomName) -> (i32, i32) {
 }
 
 impl Attacking {
+    fn status_description(&self) -> String {
+        "Attacking".to_string()
+    }
+
     fn tick(
         &mut self,
         system_data: &mut MissionExecutionSystemData,
@@ -471,6 +481,10 @@ impl Attacking {
 }
 
 impl Complete {
+    fn status_description(&self) -> String {
+        "Complete".to_string()
+    }
+
     fn tick(
         &mut self,
         _system_data: &mut MissionExecutionSystemData,

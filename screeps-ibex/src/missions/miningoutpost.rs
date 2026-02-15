@@ -47,9 +47,7 @@ machine!(
             format!("Mining Outpost - {}", self.status_description())
         }
 
-        * => fn status_description(&self) -> String {
-            std::any::type_name::<Self>().to_string()
-        }
+        _ => fn status_description(&self) -> String;
 
         * => fn visualize(&self, _system_data: &MissionExecutionSystemData, _mission_entity: Entity) {}
 
@@ -105,6 +103,10 @@ fn can_run_mission(
 }
 
 impl Scout {
+    fn status_description(&self) -> String {
+        "Scout".to_string()
+    }
+
     fn get_children_internal(&self) -> [&Option<Entity>; 0] {
         []
     }
@@ -165,6 +167,18 @@ impl Scout {
 }
 
 impl Cleanup {
+    fn status_description(&self) -> String {
+        let mut parts = Vec::new();
+        if self.raid_mission.is_some() { parts.push("raid"); }
+        if self.dismantle_mission.is_some() { parts.push("dismantle"); }
+        if self.defend_mission.is_some() { parts.push("defend"); }
+        if parts.is_empty() {
+            "Cleanup".to_string()
+        } else {
+            format!("Cleanup - {}", parts.join(", "))
+        }
+    }
+
     fn get_children_internal(&self) -> [&Option<Entity>; 3] {
         [&self.raid_mission, &self.dismantle_mission, &self.defend_mission]
     }
@@ -435,6 +449,19 @@ impl Cleanup {
 }
 
 impl Mine {
+    fn status_description(&self) -> String {
+        let mut parts = Vec::new();
+        if self.supply_mission.is_some() { parts.push("supply"); }
+        if self.haul_mission.is_some() { parts.push("haul"); }
+        if self.reserve_mission.is_some() { parts.push("reserve"); }
+        if self.defend_mission.is_some() { parts.push("defend"); }
+        if parts.is_empty() {
+            "Mine".to_string()
+        } else {
+            format!("Mine - {}", parts.join(", "))
+        }
+    }
+
     fn get_children_internal(&self) -> [&Option<Entity>; 4] {
         [
             &self.supply_mission,

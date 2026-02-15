@@ -25,6 +25,58 @@ use std::cell::*;
 use std::collections::HashMap;
 use std::rc::*;
 
+/// Minimum TTL threshold used when we cannot compute a more accurate lead
+/// time (e.g. no spawn positions visible). This is deliberately conservative
+/// — a small overlap is cheaper than losing mining ticks.
+const MIN_REPLACEMENT_LEAD_TICKS: u32 = 30;
+
+/// Estimate how many ticks it takes for a creep with the given body to
+/// traverse `distance` tiles, assuming roads are present. Returns the
+/// travel time in ticks.
+///
+/// Screeps movement on roads:
+///   fatigue_per_tile = MOVE_COST_ROAD (1) * non_move_parts
+///   fatigue_removed_per_tick = MOVE_POWER (2) * move_parts
+///   ticks_per_tile = ceil(fatigue_per_tile / fatigue_removed_per_tick)
+///
+/// If the creep has no MOVE parts it cannot move; returns u32::MAX.
+fn estimate_travel_ticks(body: &[Part], distance: u32) -> u32 {
+    let move_parts = body.iter().filter(|p| **p == Part::Move).count() as u32;
+    if move_parts == 0 {
+        return u32::MAX;
+    }
+
+    let non_move_parts = body.len() as u32 - move_parts;
+    let fatigue_per_tile = MOVE_COST_ROAD * non_move_parts;
+    let fatigue_removed_per_tick = MOVE_POWER * move_parts;
+
+    // Ceiling division: ticks needed to clear fatigue from one road tile.
+    let ticks_per_tile = fatigue_per_tile.div_ceil(fatigue_removed_per_tick);
+    // At minimum 1 tick per tile (even with excess MOVE parts).
+    let ticks_per_tile = ticks_per_tile.max(1);
+
+    distance * ticks_per_tile
+}
+
+/// Compute the total lead time (in ticks) needed to spawn a replacement
+/// creep and have it walk to `target_pos`. Uses the Chebyshev distance from
+/// the nearest spawn in `structure_data` to the target as the path estimate.
+fn replacement_lead_ticks(body: &[Part], target_pos: screeps::Position, structure_data: &StructureData) -> u32 {
+    let spawn_ticks = body.len() as u32 * CREEP_SPAWN_TIME;
+
+    let nearest_spawn_distance = structure_data
+        .spawns
+        .iter()
+        .filter_map(|spawn_id| spawn_id.resolve())
+        .map(|spawn| spawn.pos().get_range_to(target_pos))
+        .min()
+        .unwrap_or(0);
+
+    let travel_ticks = estimate_travel_ticks(body, nearest_spawn_distance);
+
+    spawn_ticks + travel_ticks
+}
+
 //TODO: This mission is overloaded and should be split in to separate mission components.
 
 pub struct LocalSupplyMission {
@@ -692,7 +744,55 @@ impl LocalSupplyMission {
                 }
             }
 
-            //TODO: Correctly compute time needed to spawn + get to source.
+            // Estimate the lead time needed to spawn a replacement miner and
+            // have it walk to the source. We compute the body that would be
+            // spawned (using the best home room's energy capacity) and derive
+            // spawn_ticks + travel_ticks so the replacement arrives just as the
+            // current miner expires.
+            let miner_replacement_lead = {
+                let energy_capacity = if likely_owned_room {
+                    SOURCE_ENERGY_CAPACITY
+                } else {
+                    SOURCE_ENERGY_NEUTRAL_CAPACITY
+                };
+                let energy_per_tick = (energy_capacity as f32) / (ENERGY_REGEN_TIME as f32);
+                let work_parts_per_tick = (energy_per_tick / (HARVEST_POWER as f32)).ceil() as usize;
+
+                // Try each home room and pick the smallest lead time (the
+                // fastest replacement determines when we need to start).
+                self.home_room_datas
+                    .iter()
+                    .filter_map(|home_room_entity| {
+                        let home_room_data = system_data.room_data.get(*home_room_entity)?;
+                        let home_room = game::rooms().get(home_room_data.name)?;
+
+                        let body_definition = if source_id.pos().room_name() == home_room_data.name {
+                            SpawnBodyDefinition {
+                                maximum_energy: home_room.energy_capacity_available(),
+                                minimum_repeat: Some(1),
+                                maximum_repeat: Some(work_parts_per_tick),
+                                pre_body: &[Part::Move, Part::Carry],
+                                repeat_body: &[Part::Work],
+                                post_body: &[],
+                            }
+                        } else {
+                            SpawnBodyDefinition {
+                                maximum_energy: home_room.energy_capacity_available(),
+                                minimum_repeat: Some(1),
+                                maximum_repeat: Some(work_parts_per_tick),
+                                pre_body: &[Part::Carry],
+                                repeat_body: &[Part::Move, Part::Work],
+                                post_body: &[],
+                            }
+                        };
+
+                        let body = crate::creep::spawning::create_body(&body_definition).ok()?;
+                        Some(replacement_lead_ticks(&body, source_id.pos(), structure_data))
+                    })
+                    .min()
+                    .unwrap_or(MIN_REPLACEMENT_LEAD_TICKS)
+                    .max(MIN_REPLACEMENT_LEAD_TICKS)
+            };
 
             let alive_source_miners = source_container_miners
                 .iter()
@@ -704,7 +804,7 @@ impl LocalSupplyMission {
                             .get(***entity)
                             .and_then(|creep_owner| creep_owner.owner.resolve())
                             .and_then(|creep| creep.ticks_to_live())
-                            .map(|count| count > 50)
+                            .map(|count| count > miner_replacement_lead)
                             .unwrap_or(false)
                 })
                 .map(|entity| **entity)
@@ -861,6 +961,41 @@ impl LocalSupplyMission {
                 .flat_map(|m| m.iter())
                 .collect_vec();
 
+            let mineral_replacement_lead = {
+                self.home_room_datas
+                    .iter()
+                    .filter_map(|home_room_entity| {
+                        let home_room_data = system_data.room_data.get(*home_room_entity)?;
+                        let home_room = game::rooms().get(home_room_data.name)?;
+
+                        let body_definition = if mineral_id.pos().room_name() == home_room_data.name {
+                            SpawnBodyDefinition {
+                                maximum_energy: home_room.energy_capacity_available(),
+                                minimum_repeat: Some(1),
+                                maximum_repeat: None,
+                                pre_body: &[],
+                                repeat_body: &[Part::Work, Part::Work, Part::Move],
+                                post_body: &[],
+                            }
+                        } else {
+                            SpawnBodyDefinition {
+                                maximum_energy: home_room.energy_capacity_available(),
+                                minimum_repeat: Some(1),
+                                maximum_repeat: None,
+                                pre_body: &[],
+                                repeat_body: &[Part::Move, Part::Work],
+                                post_body: &[],
+                            }
+                        };
+
+                        let body = crate::creep::spawning::create_body(&body_definition).ok()?;
+                        Some(replacement_lead_ticks(&body, mineral_id.pos(), structure_data))
+                    })
+                    .min()
+                    .unwrap_or(MIN_REPLACEMENT_LEAD_TICKS)
+                    .max(MIN_REPLACEMENT_LEAD_TICKS)
+            };
+
             let alive_mineral_miners = mineral_miners
                 .iter()
                 .filter(|entity| {
@@ -870,7 +1005,7 @@ impl LocalSupplyMission {
                             .get(***entity)
                             .and_then(|creep_owner| creep_owner.owner.resolve())
                             .and_then(|creep| creep.ticks_to_live())
-                            .map(|count| count > 50)
+                            .map(|count| count > mineral_replacement_lead)
                             .unwrap_or(false)
                 })
                 .map(|entity| **entity)
@@ -1325,7 +1460,9 @@ impl LocalSupplyMission {
                 |d| game::time() - d.last_updated >= 10 && has_visibility,
                 || Self::create_structure_data(room_data),
             );
-            let structure_data = structure_data.get().ok_or("Expected structure data")?;
+            let Some(structure_data) = structure_data.get() else {
+                return Ok(());
+            };
 
             Self::request_transfer_for_spawns(transfer, &structure_data.spawns);
             Self::request_transfer_for_extension(transfer, &structure_data.extensions);
@@ -1351,7 +1488,9 @@ impl LocalSupplyMission {
                 |d| game::time() - d.last_updated >= 10 && has_visibility,
                 || Self::create_structure_data(room_data),
             );
-            let structure_data = structure_data.get().ok_or("Expected structure data")?;
+            let Some(structure_data) = structure_data.get() else {
+                return Ok(());
+            };
 
             Self::request_transfer_for_source_links(transfer, structure_data);
             Self::request_transfer_for_storage_links(transfer, structure_data);

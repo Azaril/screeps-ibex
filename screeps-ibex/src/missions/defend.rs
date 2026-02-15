@@ -34,9 +34,7 @@ machine!(
             format!("Defend - {}", self.status_description())
         }
 
-        * => fn status_description(&self) -> String {
-            std::any::type_name::<Self>().to_string()
-        }
+        _ => fn status_description(&self) -> String;
 
         * => fn visualize(&self, _system_data: &MissionExecutionSystemData, _mission_entity: Entity, _state_context: &DefendMissionContext) {}
 
@@ -49,6 +47,10 @@ machine!(
 );
 
 impl Idle {
+    fn status_description(&self) -> String {
+        "Idle".to_string()
+    }
+
     fn tick(
         &mut self,
         system_data: &mut MissionExecutionSystemData,
@@ -93,6 +95,14 @@ impl Idle {
 }
 
 impl Active {
+    fn status_description(&self) -> String {
+        format!(
+            "Active - squads: {}, last_hostiles: {}",
+            self.squads.len(),
+            self.last_hostiles.map(|t| t.to_string()).unwrap_or_else(|| "none".to_string())
+        )
+    }
+
     fn tick(
         &mut self,
         system_data: &mut MissionExecutionSystemData,

@@ -19,6 +19,29 @@ pub struct LinkMineJobContext {
     container_target: Option<RemoteObjectId<StructureContainer>>,
 }
 
+impl LinkMineJobContext {
+    /// Returns `true` when a container target exists and the creep is not
+    /// standing on it (i.e. it has been shoved off its ideal tile).
+    fn is_displaced(&self, creep: &Creep) -> bool {
+        self.container_target
+            .map(|id| !creep.pos().is_equal_to(id.pos()))
+            .unwrap_or(false)
+    }
+
+    /// Issue a movement request to walk back to the container tile. Call this
+    /// when the creep is displaced but still performing its action (harvest /
+    /// deposit) so it moves back without wasting a tick.
+    fn move_to_container(&self, tick_context: &mut JobTickContext) {
+        if let Some(container_id) = self.container_target {
+            tick_context
+                .runtime_data
+                .movement
+                .move_to(tick_context.runtime_data.creep_entity, container_id.pos())
+                .range(0);
+        }
+    }
+}
+
 machine!(
     #[derive(Clone, Serialize, Deserialize)]
     enum LinkMineState {
@@ -53,11 +76,19 @@ impl MoveToPosition {
 
 impl Idle {
     pub fn tick(&mut self, state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
-        // Link miner is at its mining position — use High priority so other
-        // creeps repath around, but allow shoving as a last resort.
-        movebehavior::mark_stationed(tick_context);
-
         let creep = tick_context.runtime_data.owner;
+        let displaced = state_context.is_displaced(creep);
+
+        if displaced {
+            // Shoved off the container — issue a move back. The movement
+            // request is set first and may be overridden below if a harvest or
+            // deposit state takes over and issues its own move_to.
+            state_context.move_to_container(tick_context);
+        } else {
+            // Link miner is at its mining position — use High priority so other
+            // creeps repath around, but allow shoving as a last resort.
+            movebehavior::mark_stationed(tick_context);
+        }
 
         if let Some(state) = get_new_harvest_target_state(
             creep,
@@ -92,6 +123,13 @@ impl Idle {
             }
         }
 
+        if displaced {
+            // No harvest or deposit action to take — the move_to_container
+            // request issued above will move us back. Return None to commit
+            // the movement intent this tick.
+            return None;
+        }
+
         Some(LinkMineState::wait(5))
     }
 }
@@ -103,12 +141,17 @@ impl Harvest {
 
         let result = tick_harvest(tick_context, state_context.mine_target, true, true, LinkMineState::idle);
 
-        // Only override the movement request when the creep is actually at its
-        // mining position. When out of range, tick_harvest issues a move_to
-        // toward the source that must not be overwritten — otherwise the miner
-        // will never walk back after being shoved away.
         if near_source {
-            movebehavior::mark_stationed(tick_context);
+            if state_context.is_displaced(creep) {
+                // Shoved off the container but still in harvest range — the
+                // harvest action already fired this tick (HARVEST and MOVE are
+                // independent). Override the movement intent from tick_harvest
+                // to walk back to the container so future drops land in it.
+                state_context.move_to_container(tick_context);
+            } else {
+                // On the container — stay put.
+                movebehavior::mark_stationed(tick_context);
+            }
         }
 
         result
@@ -122,10 +165,14 @@ impl DepositLink {
 
         let result = tick_deposit_all_resources_state(tick_context, TransferTarget::Link(state_context.link_target), LinkMineState::idle);
 
-        // Only mark stationed when in range; when out of range the deposit
+        // Only override movement when in range; when out of range the deposit
         // function issues a move_to that must not be overwritten.
         if near_link {
-            movebehavior::mark_stationed(tick_context);
+            if state_context.is_displaced(creep) {
+                state_context.move_to_container(tick_context);
+            } else {
+                movebehavior::mark_stationed(tick_context);
+            }
         }
 
         result
@@ -143,10 +190,14 @@ impl DepositContainer {
 
         let result = tick_deposit_all_resources_state(tick_context, TransferTarget::Container(container_id), LinkMineState::idle);
 
-        // Only mark stationed when in range; when out of range the deposit
+        // Only override movement when in range; when out of range the deposit
         // function issues a move_to that must not be overwritten.
         if near_container {
-            movebehavior::mark_stationed(tick_context);
+            if state_context.is_displaced(creep) {
+                state_context.move_to_container(tick_context);
+            } else {
+                movebehavior::mark_stationed(tick_context);
+            }
         }
 
         result
@@ -154,7 +205,16 @@ impl DepositContainer {
 }
 
 impl Wait {
-    pub fn tick(&mut self, _state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
+    pub fn tick(&mut self, state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
+        let creep = tick_context.runtime_data.owner;
+
+        if state_context.is_displaced(creep) {
+            // Shoved off the container while waiting — skip the wait and go
+            // straight to Idle so we start walking back while still being
+            // productive (Idle will issue the move and look for work).
+            return Some(LinkMineState::idle());
+        }
+
         movebehavior::mark_stationed(tick_context);
 
         tick_wait(&mut self.ticks, LinkMineState::idle)

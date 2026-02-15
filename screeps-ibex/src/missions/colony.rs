@@ -14,6 +14,7 @@ use super::tower::*;
 use super::upgrade::*;
 use crate::room::data::*;
 use crate::serialize::*;
+use log::*;
 use screeps::*;
 use screeps_machine::*;
 use serde::{Deserialize, Serialize};
@@ -49,9 +50,7 @@ machine!(
             format!("Colony - {}", self.status_description())
         }
 
-        * => fn status_description(&self) -> String {
-            std::any::type_name::<Self>().to_string()
-        }
+        _ => fn status_description(&self) -> String;
 
         * => fn visualize(&self, _system_data: &MissionExecutionSystemData, _mission_entity: Entity, _state_context: &ColonyMissionContext) {}
 
@@ -84,6 +83,11 @@ machine!(
 );
 
 impl Incubate {
+    fn status_description(&self) -> String {
+        let active_count = self.get_children_internal().iter().filter(|e| e.is_some()).count();
+        format!("Incubate - {} active missions", active_count)
+    }
+
     fn get_children_internal(&self) -> [&Option<Entity>; 10] {
         [
             &self.construction_mission,
@@ -114,12 +118,35 @@ impl Incubate {
         ]
     }
 
+    /// Clear any child mission references that point to entities which are
+    /// alive but no longer carry `MissionData`.  This can happen after a
+    /// partial deserialization (e.g. the colony was deserialized and created
+    /// placeholder entities for its children, but the children's component
+    /// data was not reached before deserialization stopped).
+    fn clear_stale_children(&mut self, system_data: &MissionExecutionSystemData) {
+        for child in self.get_children_internal_mut().iter_mut() {
+            if let Some(entity) = **child {
+                let alive = system_data.entities.is_alive(entity);
+                let has_mission_data = system_data.missions.get(entity).is_some();
+                if !alive || !has_mission_data {
+                    info!(
+                        "Colony: clearing stale child mission {:?} (alive={}, has_mission_data={})",
+                        entity, alive, has_mission_data
+                    );
+                    child.take();
+                }
+            }
+        }
+    }
+
     fn tick(
         &mut self,
         system_data: &mut MissionExecutionSystemData,
         mission_entity: Entity,
         state_context: &mut ColonyMissionContext,
     ) -> Result<Option<ColonyState>, String> {
+        self.clear_stale_children(system_data);
+
         let room_data = system_data
             .room_data
             .get_mut(state_context.room_data)
