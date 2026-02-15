@@ -116,6 +116,10 @@ impl Mission for ScoutMission {
         self.room_data
     }
 
+    fn remove_creep(&mut self, entity: Entity) {
+        self.scouts.retain(|e| *e != entity);
+    }
+
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         let next_spawn = self
             .next_spawn
@@ -148,13 +152,6 @@ impl Mission for ScoutMission {
 
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         //
-        // Cleanup scouts that no longer exist.
-        //
-
-        self.scouts
-            .retain(|entity| system_data.entities.is_alive(*entity) && system_data.job_data.get(*entity).is_some());
-
-        //
         // Cleanup home rooms that no longer exist.
         //
 
@@ -177,10 +174,11 @@ impl Mission for ScoutMission {
             .map(|v| v.updated_within(10))
             .unwrap_or(false);
 
-        if data_is_fresh && self.scouts.is_empty() {
+        if data_is_fresh {
             info!(
-                "Completing scout mission - room is visible and no active scouts. Room: {}",
-                room_data.name
+                "Completing scout mission - room has fresh data. Room: {} (scouts still alive: {})",
+                room_data.name,
+                self.scouts.len()
             );
 
             return Ok(MissionResult::Success);

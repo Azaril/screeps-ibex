@@ -71,6 +71,9 @@ pub struct VisibilityEntry {
     pub allowed_types: VisibilityRequestFlags,
     /// Game tick at which this entry expires.
     pub expires_at: u32,
+    /// When true, this entry should only be serviced by scouts that are already
+    /// alive. The `ScoutOperation` will not spawn new missions for it.
+    pub opportunistic: bool,
 }
 
 impl Default for VisibilityEntry {
@@ -80,6 +83,7 @@ impl Default for VisibilityEntry {
             priority: 0.0,
             allowed_types: VisibilityRequestFlags::UNSET,
             expires_at: 0,
+            opportunistic: false,
         }
     }
 }
@@ -142,22 +146,32 @@ impl VisibilityQueue {
     /// Upsert a visibility request. If an entry for the room already exists,
     /// merge priority upward and extend expiration. Also ensures a runtime
     /// entry exists.
+    ///
+    /// The `opportunistic` flag is merged conservatively: a non-opportunistic
+    /// request upgrades an opportunistic entry (clears the flag), but an
+    /// opportunistic request never downgrades a non-opportunistic entry.
     pub fn request(&mut self, request: VisibilityRequest) {
         let room_name = request.room_name;
         let priority = request.priority;
         let allowed_types = request.allowed_types;
+        let opportunistic = request.opportunistic;
         let expires_at = game::time() + DEFAULT_VISIBILITY_TTL;
 
         if let Some(existing) = self.entries.iter_mut().find(|e| e.room_name == room_name) {
             existing.priority = existing.priority.max(priority);
             existing.allowed_types |= allowed_types;
             existing.expires_at = existing.expires_at.max(expires_at);
+            // A non-opportunistic request upgrades an opportunistic entry.
+            if !opportunistic {
+                existing.opportunistic = false;
+            }
         } else {
             self.entries.push(VisibilityEntry {
                 room_name,
                 priority,
                 allowed_types,
                 expires_at,
+                opportunistic,
             });
         }
 
@@ -239,10 +253,13 @@ impl VisibilityQueue {
             .map(|e| e.room_name)
     }
 
-    /// Check if there are any unclaimed, scout-eligible entries.
+    /// Check if there are any unclaimed, non-opportunistic, scout-eligible entries.
+    ///
+    /// Opportunistic entries (created by idle scouts for proactive exploration)
+    /// are excluded — they should not trigger new scout mission spawns.
     pub fn has_unclaimed_scout_eligible(&self) -> bool {
         self.entries.iter().any(|e| {
-            e.allowed_types.contains(VisibilityRequestFlags::SCOUT) && {
+            e.allowed_types.contains(VisibilityRequestFlags::SCOUT) && !e.opportunistic && {
                 let rt = self.runtime.get(&e.room_name);
                 let claimed = rt.map(|r| r.claimed_by.is_some()).unwrap_or(false);
                 !claimed
@@ -277,6 +294,7 @@ pub struct VisibilityRequest {
     room_name: RoomName,
     priority: f32,
     allowed_types: VisibilityRequestFlags,
+    opportunistic: bool,
 }
 
 impl VisibilityRequest {
@@ -285,6 +303,19 @@ impl VisibilityRequest {
             room_name,
             priority,
             allowed_types,
+            opportunistic: false,
+        }
+    }
+
+    /// Create an opportunistic visibility request. These are only serviced by
+    /// scouts that are already alive — the `ScoutOperation` will not spawn new
+    /// missions for them.
+    pub fn new_opportunistic(room_name: RoomName, priority: f32, allowed_types: VisibilityRequestFlags) -> VisibilityRequest {
+        VisibilityRequest {
+            room_name,
+            priority,
+            allowed_types,
+            opportunistic: true,
         }
     }
 

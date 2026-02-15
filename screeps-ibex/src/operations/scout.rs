@@ -91,11 +91,7 @@ impl Operation for ScoutOperation {
         SummaryContent::Text(format!("Scout - Missions: {}", self.scout_missions.len()))
     }
 
-    fn pre_run_operation(&mut self, system_data: &mut OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {
-        // Clean up dead/completed mission entities.
-        self.scout_missions
-            .retain(|e| system_data.entities.is_alive(*e) && system_data.mission_data.get(*e).is_some());
-    }
+    fn pre_run_operation(&mut self, _system_data: &mut OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {}
 
     fn run_operation(
         &mut self,
@@ -133,11 +129,13 @@ impl Operation for ScoutOperation {
         let slots = MAX_SCOUT_MISSIONS.saturating_sub(self.scout_missions.len());
 
         // Gather eligible entries sorted by priority descending.
+        // Opportunistic entries (created by idle scouts for proactive
+        // exploration) are excluded — they should not trigger new missions.
         let mut eligible_entries: Vec<_> = system_data
             .visibility
             .entries
             .iter()
-            .filter(|e| e.allowed_types.contains(VisibilityRequestFlags::SCOUT))
+            .filter(|e| e.allowed_types.contains(VisibilityRequestFlags::SCOUT) && !e.opportunistic)
             .filter(|e| {
                 let rt = system_data.visibility.runtime.get(&e.room_name);
                 let claimed = rt.map(|r| r.claimed_by.is_some()).unwrap_or(false);
