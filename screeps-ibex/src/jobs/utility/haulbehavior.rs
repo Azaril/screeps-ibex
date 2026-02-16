@@ -61,6 +61,72 @@ where
 
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn get_new_nearby_pickup_state_fill_resource<F, R>(
+    creep: &Creep,
+    data: &dyn TransferRequestSystemData,
+    pickup_rooms: &[&RoomData],
+    allowed_priorities: TransferPriorityFlags,
+    transfer_types: TransferTypeFlags,
+    desired_resource: ResourceType,
+    transfer_queue: &mut TransferQueue,
+    max_range: Option<u32>,
+    state_map: F,
+) -> Option<R>
+where
+    F: Fn(TransferWithdrawTicket) -> R,
+{
+    let capacity = creep.store().get_capacity(None);
+    let store_types = creep.store().store_types();
+    let used_capacity = store_types.iter().map(|r| creep.store().get_used_capacity(Some(*r))).sum::<u32>();
+    //TODO: Fix this when double resource counting bug is fixed.
+    //let used_capacity = creep.store().get_used_capacity(None);
+    let free_capacity = capacity - used_capacity;
+
+    if free_capacity > 0 {
+        let mut desired_resources = HashMap::new();
+
+        desired_resources.insert(Some(desired_resource), free_capacity);
+
+        let pickup_room_names = pickup_rooms.iter().map(|r| r.name).collect_vec();
+
+        let pickups = transfer_queue.select_pickups(
+            data,
+            &pickup_room_names,
+            allowed_priorities,
+            transfer_types,
+            &desired_resources,
+            TransferCapacity::Infinite,
+        );
+
+        let creep_pos = creep.pos();
+
+        let filtered: Vec<_> = if let Some(range) = max_range {
+            pickups
+                .into_iter()
+                .filter(|ticket| {
+                    let target_pos: screeps::Position = ticket.target().pos().into();
+                    creep_pos.get_range_to(target_pos) <= range
+                })
+                .collect()
+        } else {
+            pickups
+        };
+
+        if let Some(pickup) = filtered
+            .into_iter()
+            .find_nearest_linear_by(creep_pos, |ticket| ticket.target().pos().into())
+        {
+            transfer_queue.register_pickup(&pickup);
+
+            return Some(state_map(pickup));
+        }
+    }
+
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_delivery_current_resources_state<TF, F, R>(
     creep: &Creep,
     data: &dyn TransferRequestSystemData,

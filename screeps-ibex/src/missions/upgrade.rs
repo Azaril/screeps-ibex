@@ -52,13 +52,12 @@ impl UpgradeMission {
     fn create_handle_upgrader_spawn(
         mission_entity: Entity,
         home_room: Entity,
-        allow_harvest: bool,
     ) -> crate::spawnsystem::SpawnQueueCallback {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Upgrade(UpgradeJob::new(home_room, allow_harvest));
+                let creep_job = JobData::Upgrade(UpgradeJob::new(home_room));
 
                 let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
@@ -333,14 +332,12 @@ impl Mission for UpgradeMission {
                     SPAWN_PRIORITY_MEDIUM
                 };
 
-                let allow_harvest = controller_level <= 3;
-
                 let spawn_request = SpawnRequest::new(
                     "Upgrader".to_string(),
                     &body,
                     priority,
                     None,
-                    Self::create_handle_upgrader_spawn(mission_entity, self.room_data, allow_harvest),
+                    Self::create_handle_upgrader_spawn(mission_entity, self.room_data),
                 );
 
                 system_data.spawn_queue.request(self.room_data, spawn_request);

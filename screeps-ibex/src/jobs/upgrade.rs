@@ -8,6 +8,7 @@ use super::utility::movebehavior::*;
 use super::utility::waitbehavior::*;
 use crate::constants::*;
 use crate::remoteobjectid::*;
+use crate::room::data::*;
 use crate::transfer::transfersystem::*;
 use screeps::*;
 use screeps_machine::*;
@@ -20,7 +21,33 @@ use specs::*;
 #[derive(Clone, ConvertSaveload)]
 pub struct UpgradeJobContext {
     home_room: Entity,
-    allow_harvest: bool,
+}
+
+/// A creep is considered slow when it has fewer than 1 MOVE part per 4 total
+/// parts. The RCL > 3 upgrader body (`[W, C, M, M] + N*[W]`) hits this
+/// threshold at 5+ parts. Slow creeps should stay near the controller and
+/// rely on haulers for energy delivery.
+fn is_slow_creep(creep: &Creep) -> bool {
+    let body = creep.body();
+    let total_parts = body.len();
+    let move_parts = body.iter().filter(|p| p.part() == Part::Move).count();
+    total_parts > 4 && move_parts * 4 < total_parts
+}
+
+/// Decide at runtime whether this upgrader should be allowed to harvest from
+/// sources. Fast creeps (RCL <= 3 style bodies) always harvest. Slow creeps
+/// only harvest when the room lacks delivery infrastructure (no storage and
+/// no containers), which covers downgrade emergencies and room recovery
+/// scenarios where haulers cannot deliver energy.
+fn should_allow_harvest(creep: &Creep, room_data: &RoomData) -> bool {
+    if !is_slow_creep(creep) {
+        return true;
+    }
+    let structures = match room_data.get_structures() {
+        Some(s) => s,
+        None => return true,
+    };
+    structures.storages().is_empty() && structures.containers().is_empty()
 }
 
 machine!(
@@ -53,31 +80,36 @@ machine!(
 impl Idle {
     pub fn tick(&mut self, state_context: &UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState> {
         let home_room_data = tick_context.system_data.room_data.get(state_context.home_room)?;
+        let creep = tick_context.runtime_data.owner;
 
         let transfer_queue_data = TransferQueueGeneratorData {
             cause: "Upgrade Idle",
             room_data: tick_context.system_data.room_data,
         };
 
-        get_new_pickup_state_fill_resource(
-            tick_context.runtime_data.owner,
+        let slow = is_slow_creep(creep);
+        let max_range = if slow { Some(5) } else { None };
+
+        get_new_nearby_pickup_state_fill_resource(
+            creep,
             &transfer_queue_data,
             &[home_room_data],
             TransferPriorityFlags::ALL,
             TransferTypeFlags::HAUL | TransferTypeFlags::USE,
             ResourceType::Energy,
             tick_context.runtime_data.transfer_queue,
+            max_range,
             UpgradeState::pickup,
         )
         .or_else(|| {
-            if state_context.allow_harvest {
-                get_new_harvest_state(tick_context.runtime_data.owner, home_room_data, UpgradeState::harvest)
+            if should_allow_harvest(creep, home_room_data) {
+                get_new_harvest_state(creep, home_room_data, UpgradeState::harvest)
             } else {
                 None
             }
         })
         .or_else(|| get_new_sign_state(home_room_data, UpgradeState::sign))
-        .or_else(|| get_new_upgrade_state(tick_context.runtime_data.owner, home_room_data, UpgradeState::upgrade, None))
+        .or_else(|| get_new_upgrade_state(creep, home_room_data, UpgradeState::upgrade, None))
         .or_else(|| Some(UpgradeState::wait(5)))
     }
 }
@@ -110,20 +142,25 @@ impl Pickup {
 impl FinishedPickup {
     pub fn tick(&self, state_context: &UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState> {
         let home_room_data = tick_context.system_data.room_data.get(state_context.home_room)?;
+        let creep = tick_context.runtime_data.owner;
 
         let transfer_queue_data = TransferQueueGeneratorData {
             cause: "Upgrade Finished Pickup",
             room_data: tick_context.system_data.room_data,
         };
 
-        get_new_pickup_state_fill_resource(
-            tick_context.runtime_data.owner,
+        let slow = is_slow_creep(creep);
+        let max_range = if slow { Some(5) } else { None };
+
+        get_new_nearby_pickup_state_fill_resource(
+            creep,
             &transfer_queue_data,
             &[home_room_data],
             TransferPriorityFlags::ALL,
             TransferTypeFlags::HAUL | TransferTypeFlags::USE,
             ResourceType::Energy,
             tick_context.runtime_data.transfer_queue,
+            max_range,
             UpgradeState::pickup,
         )
         .or_else(|| Some(UpgradeState::idle()))
@@ -157,9 +194,9 @@ pub struct UpgradeJob {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl UpgradeJob {
-    pub fn new(home_room: Entity, allow_harvest: bool) -> UpgradeJob {
+    pub fn new(home_room: Entity) -> UpgradeJob {
         UpgradeJob {
-            context: UpgradeJobContext { home_room, allow_harvest },
+            context: UpgradeJobContext { home_room },
             state: UpgradeState::idle(),
         }
     }
