@@ -114,6 +114,14 @@ where
     mark_working(tick_context, target_position, 1);
 
     if let Some(controller) = controller_id.resolve() {
+        // If the controller has a hostile reservation, attack it to burn down
+        // the reservation ticks before attempting to claim. claimController()
+        // fails on reserved controllers.
+        if controller.reservation().is_some() {
+            let _ = creep.attack_controller(&controller);
+            return None;
+        }
+
         match creep.claim_controller(&controller) {
             Ok(()) => None,
             Err(_) => Some(next_state()),

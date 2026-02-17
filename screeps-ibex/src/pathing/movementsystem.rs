@@ -219,6 +219,15 @@ impl<'a> System<'a> for MovementUpdateSystem {
         system.set_max_shove_depth(pathing_features.max_shove_depth);
         system.set_friendly_creep_distance(pathing_features.friendly_creep_distance);
 
+        let tick_limit = screeps::game::cpu::tick_limit();
+        let max_budget = tick_limit * pathing_features.movement_cpu_budget_pct;
+        let remaining = (tick_limit - screeps::game::cpu::get_used()).max(0.0);
+        let cpu_budget = remaining.min(max_budget);
+        system.set_cpu_budget(screeps::game::cpu::get_used, cpu_budget);
+
+        let repath_budget = pathing_features.repath_cpu_budget;
+        system.set_repath_budget(screeps::game::cpu::get_used, repath_budget);
+
         let results = system.process(&mut external, movement_data);
 
         *data.movement_results = results;

@@ -1,3 +1,5 @@
+use crate::jobs::data::JobData;
+use crate::military::squad::SquadContext;
 use crate::missions::data::*;
 use crate::operations::data::*;
 use crate::room::data::*;
@@ -98,18 +100,22 @@ impl<'a> System<'a> for EntityCleanupSystem {
         WriteStorage<'a, MissionData>,
         WriteStorage<'a, OperationData>,
         WriteStorage<'a, RoomData>,
+        ReadStorage<'a, JobData>,
+        WriteStorage<'a, SquadContext>,
         Write<'a, EntityCleanupQueue>,
     );
 
-    fn run(&mut self, (entities, missions, mut operations, mut room_data, mut queue): Self::SystemData) {
+    fn run(&mut self, (entities, missions, mut operations, mut room_data, jobs, mut squad_contexts, mut queue): Self::SystemData) {
         if queue.is_empty() {
             return;
         }
 
         // ── Phase 1: Process creep deaths ────────────────────────────
         //
-        // For each CreepCleanup entry, notify every live mission via
-        // remove_creep(), then delete the creep entity.
+        // For each CreepCleanup entry:
+        //   - Notify every live mission via remove_creep().
+        //   - Notify the owning SquadContext (if any) by removing the member.
+        //   - Delete the creep entity.
 
         let all_entries = queue.drain();
         let mut creep_entries = Vec::new();
@@ -132,6 +138,20 @@ impl<'a> System<'a> for EntityCleanupSystem {
                 }
             }
 
+            // Notify owning SquadContext for each dead creep (if the creep's
+            // job references a squad entity). This is read from the creep's
+            // JobData component before the entity is deleted.
+            for creep in &creep_entries {
+                if let Some(squad_id) = jobs.get(creep.entity).and_then(|j| j.squad_entity_id()) {
+                    let squad_entity = entities.entity(squad_id);
+                    if entities.is_alive(squad_entity) {
+                        if let Some(sc) = squad_contexts.get_mut(squad_entity) {
+                            sc.members.retain(|m| m.entity != creep.entity);
+                        }
+                    }
+                }
+            }
+
             // Delete creep entities.
             for creep in &creep_entries {
                 if let Err(err) = entities.delete(creep.entity) {
@@ -147,21 +167,27 @@ impl<'a> System<'a> for EntityCleanupSystem {
         // entries into the queue. Loop until stable.
 
         let mut iteration = 0;
-        const MAX_CASCADE_ITERATIONS: usize = 20;
+        const MAX_CASCADE_ITERATIONS: usize = 200;
+
+        // Track all entities already scheduled so we don't re-add duplicates
+        // during cascade expansion.
+        let mut seen: HashSet<Entity> = mission_entries.iter().map(|mc| mc.entity).collect();
+
+        // Only expand children from the most recently added batch, not the
+        // entire accumulated list.
+        let mut frontier_start = 0;
 
         loop {
             let mut new_entries: Vec<MissionCleanup> = Vec::new();
 
-            for mc in &mission_entries {
-                // Children are already captured in mc.children from the
-                // pre-extracted context. We cascade by extracting cleanup
-                // data for each child below.
-
-                // For each child in the captured list, extract cleanup data
-                // and add to new_entries (if not already scheduled).
+            for mc in &mission_entries[frontier_start..] {
                 for &child in &mc.children {
+                    if seen.contains(&child) {
+                        continue;
+                    }
                     if entities.is_alive(child) {
                         if let Some(child_cleanup) = extract_mission_cleanup(child, &missions) {
+                            seen.insert(child);
                             new_entries.push(child_cleanup);
                         }
                     }
@@ -179,11 +205,11 @@ impl<'a> System<'a> for EntityCleanupSystem {
                     MAX_CASCADE_ITERATIONS,
                     new_entries.len()
                 );
-                // Process what we have and break to avoid infinite loops.
                 mission_entries.extend(new_entries);
                 break;
             }
 
+            frontier_start = mission_entries.len();
             mission_entries.extend(new_entries);
         }
 
@@ -236,13 +262,25 @@ impl<'a> System<'a> for EntityCleanupSystem {
             }
 
             // Notify children via owner_complete (if alive).
+            // Also delete auxiliary children (e.g. SquadContext entities) that
+            // are not missions or operations and would otherwise be orphaned.
             for &child in &mc.children {
                 if entities.is_alive(child) {
-                    if let Some(od) = operations.get_mut(child) {
-                        od.as_operation().owner_complete(mc.entity);
+                    let is_mission = missions.get(child).is_some();
+                    let is_operation = operations.get(child).is_some();
+
+                    if is_operation {
+                        operations.get_mut(child).unwrap().as_operation().owner_complete(mc.entity);
                     }
-                    if let Some(md) = missions.get(child) {
-                        md.as_mission_mut().owner_complete(mc.entity);
+                    if is_mission {
+                        missions.get(child).unwrap().as_mission_mut().owner_complete(mc.entity);
+                    }
+
+                    // Delete auxiliary entities that aren't missions or operations.
+                    if !is_mission && !is_operation {
+                        if let Err(err) = entities.delete(child) {
+                            warn!("EntityCleanupSystem: failed to delete auxiliary child {:?}: {}", child, err);
+                        }
                     }
                 }
             }

@@ -1,45 +1,15 @@
+use super::composition::*;
 use super::squad::*;
 use screeps::*;
 use screeps_rover::*;
 use specs::Entity;
 
-/// Offset positions for a 2x2 box formation relative to the leader at (0,0).
-/// Leader is top-left; other members fill right, below, and diagonal.
+/// Offset positions for a 2x2 box formation relative to the anchor at (0,0).
+/// Anchor is top-left; other members fill right, below, and diagonal.
 const QUAD_OFFSETS: [(i32, i32); 4] = [(0, 0), (1, 0), (0, 1), (1, 1)];
 
-/// Offset positions for a line formation (leader in front, others behind).
+/// Offset positions for a line formation (front member first, others behind).
 const LINE_OFFSETS: [(i32, i32); 4] = [(0, 0), (0, 1), (0, 2), (0, 3)];
-
-/// Calculate the target position for a squad member based on formation type
-/// and the leader's position.
-///
-/// Returns `None` if the member index is out of range or position is invalid.
-pub fn formation_position(leader_pos: Position, formation: FormationType, member_index: usize) -> Option<Position> {
-    let offsets = match formation {
-        FormationType::None => return Some(leader_pos),
-        FormationType::Line => &LINE_OFFSETS[..],
-        FormationType::Box2x2 => &QUAD_OFFSETS[..],
-    };
-
-    if member_index >= offsets.len() {
-        return None;
-    }
-
-    let (dx, dy) = offsets[member_index];
-    let new_x = leader_pos.x().u8() as i32 + dx;
-    let new_y = leader_pos.y().u8() as i32 + dy;
-
-    // Ensure position is within room bounds (1..48 for walkable tiles).
-    if !(1..=48).contains(&new_x) || !(1..=48).contains(&new_y) {
-        return None;
-    }
-
-    Some(Position::new(
-        RoomCoordinate::new(new_x as u8).ok()?,
-        RoomCoordinate::new(new_y as u8).ok()?,
-        leader_pos.room_name(),
-    ))
-}
 
 /// Check if a 2x2 footprint at (x, y) is valid (all four tiles are within room bounds).
 pub fn is_valid_quad_position(x: u8, y: u8) -> bool {
@@ -51,18 +21,58 @@ pub fn is_valid_quad_position(x: u8, y: u8) -> bool {
 /// Marks tiles where the 2x2 footprint would overlap walls or unwalkable terrain
 /// as impassable (cost 255).
 ///
-/// This should be applied to the cost matrix before pathfinding for the quad leader.
+/// This should be applied to the cost matrix before pathfinding for the quad anchor.
 pub fn apply_quad_cost_overlay(cost_matrix: &mut LocalCostMatrix, room_name: RoomName) {
     let terrain = game::map::get_room_terrain(room_name);
 
     if let Some(terrain) = terrain {
-        // For each potential leader position, check if the 2x2 footprint is valid.
+        // For each potential anchor position, check if the 2x2 footprint is valid.
         for x in 0u8..50 {
             for y in 0u8..50 {
                 // Check if any of the 4 tiles in the 2x2 footprint is a wall.
                 let mut blocked = false;
 
                 for &(dx, dy) in &QUAD_OFFSETS {
+                    let fx = x as i32 + dx;
+                    let fy = y as i32 + dy;
+
+                    if !(0..50).contains(&fx) || !(0..50).contains(&fy) {
+                        blocked = true;
+                        break;
+                    }
+
+                    if terrain.get(fx as u8, fy as u8) == Terrain::Wall {
+                        blocked = true;
+                        break;
+                    }
+                }
+
+                if blocked {
+                    if let Ok(xy) = RoomXY::checked_new(x, y) {
+                        cost_matrix.set(xy, 255);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Apply a formation-aware cost matrix overlay for any formation shape.
+/// Marks tiles where the formation footprint would overlap walls as impassable.
+/// Works for any formation shape, not just 2x2.
+pub fn apply_formation_cost_overlay(cost_matrix: &mut LocalCostMatrix, room_name: RoomName, layout: &FormationLayout) {
+    if layout.offsets.len() <= 1 {
+        return; // No overlay needed for single-member formations.
+    }
+
+    let terrain = game::map::get_room_terrain(room_name);
+
+    if let Some(terrain) = terrain {
+        for x in 0u8..50 {
+            for y in 0u8..50 {
+                let mut blocked = false;
+
+                for &(dx, dy) in &layout.offsets {
                     let fx = x as i32 + dx;
                     let fy = y as i32 + dy;
 
@@ -128,139 +138,236 @@ pub fn apply_tower_avoidance_costs(cost_matrix: &mut LocalCostMatrix, tower_posi
     }
 }
 
-/// Issue movement requests for all squad members based on formation and squad state.
-///
-/// Movement strategy by squad type:
-///
-/// - **Solo**: simple `MoveTo` toward target.
-/// - **Duo**: leader `MoveTo`, follower `Follow` with desired range 1.
-///   The follower independently pathfinds to stay close to the leader.
-///   Pull is only used when the follower is fatigued (heavy TOUGH bodies).
-/// - **Quad**: leader `MoveTo` (with 2×2-aware cost matrix applied externally),
-///   followers use `Follow` with a `desired_offset` so each member targets a
-///   unique tile in the 2×2 footprint.  The offset is computed relative to
-///   the leader's *resolved* next position (topological sort guarantees the
-///   leader resolves first).  When the desired tile is blocked or out of
-///   bounds the movement system falls back to the nearest tile within range,
-///   so the quad can still squeeze through narrow corridors.
-pub fn issue_squad_movement(squad: &SquadContext, target_pos: Position, movement: &mut MovementData<Entity>) {
-    let living_members: Vec<_> = squad.members.iter().filter(|m| m.alive).collect();
+// ─── Virtual anchor movement (new) ─────────────────────────────────────────
 
-    if living_members.is_empty() {
-        return;
+/// Compute the target tile for a squad member given the virtual position
+/// and the formation layout.
+pub fn virtual_anchor_target(virtual_pos: Position, layout: &FormationLayout, formation_slot: usize) -> Option<Position> {
+    let (dx, dy) = layout.get_offset(formation_slot);
+    let new_x = virtual_pos.x().u8() as i32 + dx;
+    let new_y = virtual_pos.y().u8() as i32 + dy;
+
+    if !(0..50).contains(&new_x) || !(0..50).contains(&new_y) {
+        return None;
     }
 
-    match squad.squad_type {
-        SquadType::Solo => {
-            if let Some(member) = living_members.first() {
-                movement
-                    .move_to(member.entity, target_pos)
-                    .range(1)
-                    .priority(MovementPriority::High);
-            }
-        }
-        SquadType::Duo => {
-            if let Some(leader) = living_members.first() {
-                // Leader pathfinds to the target.
-                movement
-                    .move_to(leader.entity, target_pos)
-                    .range(1)
-                    .priority(MovementPriority::High);
+    Some(Position::new(
+        RoomCoordinate::new(new_x as u8).ok()?,
+        RoomCoordinate::new(new_y as u8).ok()?,
+        virtual_pos.room_name(),
+    ))
+}
 
-                // Follower uses Follow to stay within range 1 of the leader.
-                // The movement system decides the best adjacent tile; no rigid
-                // offset is imposed so the pair can navigate narrow corridors.
-                for follower in living_members.iter().skip(1) {
-                    movement
-                        .follow(follower.entity, leader.entity)
-                        .range(1)
-                        .priority(MovementPriority::High);
-                }
-            }
-        }
-        SquadType::Quad => {
-            if let Some(leader) = living_members.first() {
-                // Leader pathfinds to the target. The caller should apply a
-                // 2×2-aware cost matrix so the leader only picks paths where
-                // the full quad footprint fits.
-                movement
-                    .move_to(leader.entity, target_pos)
-                    .range(1)
-                    .priority(MovementPriority::High);
+/// Issue movement requests for all squad members using the virtual anchor approach.
+/// Every creep independently issues MoveTo toward their formation offset relative
+/// to the virtual position. No Follow intents are used.
+///
+/// This is a convenience function that combines `advance_squad_virtual_position`
+/// (strategic advancement) with per-member movement commands. When the mission
+/// and job layers are split (mission advances, job moves), use
+/// `advance_squad_virtual_position` and `virtual_anchor_target` separately.
+pub fn issue_virtual_anchor_movement(
+    squad: &mut SquadContext,
+    destination: Position,
+    movement: &mut MovementData<Entity>,
+) {
+    // Advance the virtual position (cohesion checks, mode transitions).
+    advance_squad_virtual_position(squad, destination);
 
-                // Followers use Follow with a desired_offset so each one
-                // targets a unique tile in the 2×2 formation:
-                //   leader (0,0)  |  follower 1 (1,0)
-                //   follower 2 (0,1) | follower 3 (1,1)
-                //
-                // The offset is applied to the leader's resolved destination,
-                // so the formation shape is maintained as the group moves.
-                // When the offset tile is blocked the movement system falls
-                // back to any tile within range 1, allowing the quad to
-                // deform temporarily in tight spaces.
-                for (i, follower) in living_members.iter().skip(1).enumerate() {
-                    // QUAD_OFFSETS[0] is the leader; followers use indices 1..3.
-                    let (dx, dy) = if i + 1 < QUAD_OFFSETS.len() {
-                        QUAD_OFFSETS[i + 1]
-                    } else {
-                        // More members than formation slots -- just follow.
-                        (0, 0)
-                    };
+    // Read the resulting virtual position.
+    let virtual_pos = squad
+        .squad_path
+        .as_ref()
+        .map(|p| p.virtual_pos)
+        .unwrap_or(destination);
 
-                    movement
-                        .follow(follower.entity, leader.entity)
-                        .range(1)
-                        .desired_offset(dx, dy)
-                        .priority(MovementPriority::High);
-                }
-            }
-        }
+    let layout = squad.layout.clone();
+
+    // Issue MoveTo for each living member toward their formation offset.
+    for member in squad.members.iter() {
+        let target_tile = if let Some(ref layout) = layout {
+            virtual_anchor_target(virtual_pos, layout, member.formation_slot)
+                .unwrap_or(virtual_pos)
+        } else {
+            destination
+        };
+
+        movement
+            .move_to(member.entity, target_tile)
+            .range(0)
+            .priority(MovementPriority::High);
     }
 }
 
-/// Issue flee movement for all squad members away from hostile positions.
+/// Advance the squad's virtual position toward the destination, handling
+/// formation cohesion checks and mode transitions. Call this once per squad
+/// per tick from the mission layer. Individual creeps then read the resulting
+/// `virtual_pos` from `SquadContext` and issue their own `move_to` toward
+/// their formation offset.
 ///
-/// The leader flees and all followers follow the leader (rather than each
-/// member fleeing independently, which would scatter the squad).
-/// For quads, followers use desired offsets to maintain the 2×2 shape
-/// during retreat.
-pub fn issue_squad_flee(squad: &SquadContext, hostile_positions: &[Position], flee_range: u32, movement: &mut MovementData<Entity>) {
-    let targets: Vec<FleeTarget> = hostile_positions.iter().map(|&pos| FleeTarget { pos, range: flee_range }).collect();
-
-    let living_members: Vec<_> = squad.members.iter().filter(|m| m.alive).collect();
+/// `destination` is the strategic target the squad is moving toward (e.g.
+/// the focus target position or room center).
+pub fn advance_squad_virtual_position(squad: &mut SquadContext, destination: Position) {
+    let living_members: Vec<(usize, Option<Position>)> = squad
+        .members
+        .iter()
+        .map(|m| (m.formation_slot, m.position))
+        .collect();
 
     if living_members.is_empty() {
         return;
     }
 
-    // Leader flees from hostiles.
-    if let Some(leader) = living_members.first() {
-        movement.flee(leader.entity, targets).range(flee_range);
+    let layout = match &squad.layout {
+        Some(l) => l.clone(),
+        None => {
+            // No layout -- just advance directly.
+            init_squad_path_if_needed(squad, &living_members, destination);
+            advance_virtual_pos(squad, destination);
+            return;
+        }
+    };
 
-        // Followers follow the leader rather than fleeing independently.
-        // This keeps the squad together during retreat instead of scattering.
-        let is_quad = matches!(squad.squad_type, SquadType::Quad);
+    // Initialize squad path if needed.
+    init_squad_path_if_needed(squad, &living_members, destination);
 
-        for (i, follower) in living_members.iter().skip(1).enumerate() {
-            if is_quad {
-                if let Some(&(dx, dy)) = QUAD_OFFSETS.get(i + 1) {
-                    movement
-                        .follow(follower.entity, leader.entity)
-                        .range(1)
-                        .desired_offset(dx, dy)
-                        .priority(MovementPriority::High);
-                } else {
-                    movement
-                        .follow(follower.entity, leader.entity)
-                        .range(1)
-                        .priority(MovementPriority::High);
-                }
+    // Update destination if changed.
+    if let Some(path) = squad.squad_path.as_mut() {
+        path.destination = destination;
+    }
+
+    let virtual_pos = squad
+        .squad_path
+        .as_ref()
+        .map(|p| p.virtual_pos)
+        .unwrap_or(destination);
+
+    // Check formation cohesion and decide whether to advance the virtual position.
+    let living_count = living_members.len();
+    let in_formation_count = living_members
+        .iter()
+        .filter(|(slot, pos)| {
+            if let Some(target) = virtual_anchor_target(virtual_pos, &layout, *slot) {
+                pos.map(|p| p.get_range_to(target) <= 1).unwrap_or(false)
             } else {
-                movement
-                    .follow(follower.entity, leader.entity)
-                    .range(1)
-                    .priority(MovementPriority::High);
+                false
+            }
+        })
+        .count();
+
+    let all_in_formation = in_formation_count == living_count;
+
+    let should_advance = match squad.formation_mode {
+        FormationMode::Strict => {
+            if all_in_formation {
+                squad.strict_hold_ticks = 0;
+                true
+            } else {
+                squad.strict_hold_ticks += 1;
+
+                if squad.strict_hold_ticks >= STRICT_HOLD_MAX_TICKS {
+                    squad.formation_mode = FormationMode::Loose;
+                    squad.strict_hold_ticks = 0;
+                    true
+                } else {
+                    squad.strict_hold_ticks >= STRICT_QUORUM_TICKS
+                        && in_formation_count as f32 >= living_count as f32 * STRICT_QUORUM_RATIO
+                }
             }
         }
+        FormationMode::Loose => {
+            if squad.desired_formation_mode == FormationMode::Strict && all_in_formation {
+                squad.formation_mode = FormationMode::Strict;
+            }
+            true
+        }
+    };
+
+    if should_advance {
+        advance_virtual_pos(squad, destination);
+    }
+}
+
+/// Initialize the squad path if it doesn't exist yet.
+fn init_squad_path_if_needed(
+    squad: &mut SquadContext,
+    living_members: &[(usize, Option<Position>)],
+    destination: Position,
+) {
+    if squad.squad_path.is_none() {
+        let start_pos = living_members
+            .iter()
+            .find_map(|(_, pos)| *pos)
+            .unwrap_or(destination);
+
+        squad.squad_path = Some(SquadPath {
+            destination,
+            room_route: Vec::new(),
+            virtual_pos: start_pos,
+            stuck_ticks: 0,
+        });
+    }
+}
+
+/// Advance the virtual position one step toward the destination.
+fn advance_virtual_pos(squad: &mut SquadContext, destination: Position) {
+    let path = match squad.squad_path.as_mut() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let current = path.virtual_pos;
+
+    // If already at destination, nothing to do.
+    if current == destination {
+        path.stuck_ticks = 0;
+        return;
+    }
+
+    // Simple one-step advance toward destination.
+    let dx = (destination.x().u8() as i32 - current.x().u8() as i32).signum();
+    let dy = (destination.y().u8() as i32 - current.y().u8() as i32).signum();
+
+    let new_x = (current.x().u8() as i32 + dx).clamp(0, 49) as u8;
+    let new_y = (current.y().u8() as i32 + dy).clamp(0, 49) as u8;
+
+    if let (Ok(rx), Ok(ry)) = (RoomCoordinate::new(new_x), RoomCoordinate::new(new_y)) {
+        let new_pos = Position::new(rx, ry, current.room_name());
+
+        if new_pos == current {
+            path.stuck_ticks += 1;
+        } else {
+            path.virtual_pos = new_pos;
+            path.stuck_ticks = 0;
+        }
+    } else {
+        path.stuck_ticks += 1;
+    }
+}
+
+/// Issue flee movement for all squad members using virtual anchor approach.
+/// Each member independently flees from hostile positions.
+pub fn issue_virtual_anchor_flee(
+    squad: &SquadContext,
+    hostile_positions: &[Position],
+    flee_range: u32,
+    movement: &mut MovementData<Entity>,
+) {
+    let targets: Vec<FleeTarget> = hostile_positions
+        .iter()
+        .map(|&pos| FleeTarget {
+            pos,
+            range: flee_range,
+        })
+        .collect();
+
+    if targets.is_empty() {
+        return;
+    }
+
+    for member in squad.members.iter() {
+        movement
+            .flee(member.entity, targets.clone())
+            .range(flee_range);
     }
 }

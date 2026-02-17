@@ -97,8 +97,8 @@ impl Job for ClaimJob {
             action_flags: SimultaneousActionFlags::UNSET,
         };
 
-        while let Some(tick_result) = self.state.tick(&mut self.context, &mut tick_context) {
-            self.state = tick_result
-        }
+        crate::machine_tick::run_state_machine(&mut self.state, "ClaimJob", |state| {
+            state.tick(&mut self.context, &mut tick_context)
+        });
     }
 }

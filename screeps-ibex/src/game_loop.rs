@@ -6,6 +6,7 @@ use crate::jobs::data::*;
 use crate::jobs::jobsystem::*;
 use crate::memorysystem::*;
 use crate::military::boostqueue::*;
+use crate::military::economy::*;
 use crate::military::squad::*;
 use crate::military::threatmap::*;
 use crate::missions::data::*;
@@ -66,6 +67,7 @@ macro_rules! for_each_system {
         $op!(UpdateRoomDataSystem, "update_room_data");
         $op!(EntityMappingSystem, "entity_mapping");
         $op!(ThreatAssessmentSystem, "threat_assessment");
+        $op!(EconomyAssessmentSystem, "economy_assessment");
         // === Main-pass: Cleanup ===
         $op!(RepairQueueClearSystem, "repair_queue_clear");
         $op!(ClearVisualizationSystem, "clear_visualization");
@@ -75,10 +77,12 @@ macro_rules! for_each_system {
         $op!(OperationManagerSystem, "operations_manager");
         $op!(PreRunOperationSystem, "pre_run_operations");
         $op!(PreRunMissionSystem, "pre_run_missions");
+        $op!(PreRunSquadUpdateSystem, "pre_run_squad_update");
         $op!(PreRunJobSystem, "pre_run_jobs");
         // === Main-pass: Execution ===
         $op!(RunOperationSystem, "run_operations");
         $op!(RunMissionSystem, "run_missions");
+        $op!(RunSquadUpdateSystem, "run_squad_update");
         $op!(RunJobSystem, "run_jobs");
         // === Entity cleanup: process all pending deletions ===
         $op!(EntityCleanupSystem, "entity_cleanup");
@@ -228,6 +232,63 @@ fn repair_entity_integrity(world: &mut World) {
         }
     }
 
+    // ── OperationData: clean dangling entity references ─────────────────
+    {
+        let entities = world.entities();
+        let markers = world.read_storage::<SerializeMarker>();
+        let mut operations = world.write_storage::<OperationData>();
+
+        let is_valid = |e: Entity| -> bool { entities.is_alive(e) && markers.get(e).is_some() };
+
+        for (_entity, od) in (&entities, &mut operations).join() {
+            od.as_operation().repair_entity_refs(&is_valid);
+        }
+    }
+
+    // ── MissionData: clean dangling internal entity references ────────
+    {
+        let entities = world.entities();
+        let markers = world.read_storage::<SerializeMarker>();
+        let missions = world.read_storage::<MissionData>();
+
+        let is_valid = |e: Entity| -> bool { entities.is_alive(e) && markers.get(e).is_some() };
+
+        for (_entity, md) in (&entities, &missions).join() {
+            md.as_mission_mut().repair_entity_refs(&is_valid);
+        }
+    }
+
+    // ── SquadContext: clean dangling member and heal_priority refs ────
+    {
+        let entities = world.entities();
+        let markers = world.read_storage::<SerializeMarker>();
+        let mut squads = world.write_storage::<SquadContext>();
+
+        let is_valid = |e: Entity| -> bool { entities.is_alive(e) && markers.get(e).is_some() };
+
+        for (entity, sc) in (&entities, &mut squads).join() {
+            let before = sc.members.len();
+            sc.members.retain(|m| {
+                let ok = is_valid(m.entity);
+                if !ok {
+                    error!("INTEGRITY: dead member entity {:?} removed from SquadContext {:?}", m.entity, entity);
+                }
+                ok
+            });
+            let after = sc.members.len();
+            if after < before {
+                warn!("INTEGRITY: removed {} dead member(s) from SquadContext {:?}", before - after, entity);
+            }
+
+            if let Some(heal_entity) = *sc.heal_priority {
+                if !is_valid(heal_entity) {
+                    error!("INTEGRITY: dead heal_priority entity {:?} cleared from SquadContext {:?}", heal_entity, entity);
+                    *sc.heal_priority = None;
+                }
+            }
+        }
+    }
+
     // ── Repair dead children (clear via child_complete) ─────────────────
     if !dead_children.is_empty() {
         let missions = world.read_storage::<MissionData>();
@@ -317,6 +378,7 @@ fn serialize_world(world: &World, segments: &[u32]) {
         mission_data: ReadStorage<'a, MissionData>,
         squad_context: ReadStorage<'a, SquadContext>,
         visibility_queue_data: ReadStorage<'a, VisibilityQueueData>,
+        room_threat_data: ReadStorage<'a, RoomThreatData>,
     }
 
     impl<'a, 'b> System<'a> for Serialize<'b> {
@@ -339,6 +401,7 @@ fn serialize_world(world: &World, segments: &[u32]) {
                     &data.mission_data,
                     &data.squad_context,
                     &data.visibility_queue_data,
+                    &data.room_threat_data,
                 ),
                 &data.entities,
                 &data.markers,
@@ -410,6 +473,7 @@ fn deserialize_world(world: &World, segments: &[u32]) {
         mission_data: WriteStorage<'a, MissionData>,
         squad_context: WriteStorage<'a, SquadContext>,
         visibility_queue_data: WriteStorage<'a, VisibilityQueueData>,
+        room_threat_data: WriteStorage<'a, RoomThreatData>,
     }
 
     impl<'a, 'b> System<'a> for Deserialize<'b> {
@@ -445,6 +509,7 @@ fn deserialize_world(world: &World, segments: &[u32]) {
                         &mut data.mission_data,
                         &mut data.squad_context,
                         &mut data.visibility_queue_data,
+                        &mut data.room_threat_data,
                     ),
                     &data.entities,
                     &mut data.markers,
@@ -474,7 +539,7 @@ thread_local! {
 }
 
 /// Segment IDs used for ECS component serialization (world state).
-const COMPONENT_SEGMENTS: &[u32] = &[50, 51, 52];
+const COMPONENT_SEGMENTS: &[u32] = &[50, 51, 52, 53];
 
 fn create_environment() -> GameEnvironment {
     info!("Initializing game environment");
@@ -524,9 +589,12 @@ fn create_environment() -> GameEnvironment {
     let movement_results = MovementResults::<Entity>::new();
     world.insert(movement_results);
 
-    // Military systems (ephemeral -- rebuilt each tick).
-    world.insert(ThreatMap::new());
+    // Military systems.
+    world.register::<RoomThreatData>();
     world.insert(BoostQueue::new());
+    world.insert(EconomySnapshot::default());
+    world.insert(SpawnQueueSnapshot::default());
+    world.insert(RoomRouteCache::new());
     world.register::<SquadContext>();
 
     // Repair queue (ephemeral -- rebuilt each tick by missions).

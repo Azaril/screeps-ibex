@@ -79,6 +79,10 @@ pub struct RoomStaticVisibilityData {
     minerals: Vec<RemoteObjectId<Mineral>>,
     #[serde(rename = "r")]
     terrain_statistics: RoomTerrainStatistics,
+    /// Cached exits from this room. Populated lazily from describe_exits().
+    /// Static data -- never changes for a given room.
+    #[serde(default, rename = "e")]
+    exits: Option<Vec<(Direction, RoomName)>>,
 }
 
 impl RoomStaticVisibilityData {
@@ -96,6 +100,14 @@ impl RoomStaticVisibilityData {
 
     pub fn terrain_statistics(&self) -> &RoomTerrainStatistics {
         &self.terrain_statistics
+    }
+
+    pub fn exits(&self) -> Option<&Vec<(Direction, RoomName)>> {
+        self.exits.as_ref()
+    }
+
+    pub fn set_exits(&mut self, exits: Vec<(Direction, RoomName)>) {
+        self.exits = Some(exits);
     }
 }
 
@@ -236,6 +248,8 @@ pub struct RoomData {
     room_structure_data: RefCell<Option<RoomStructureData>>,
     room_construction_sites_data: RefCell<Option<ConstructionSiteData>>,
     room_creep_data: RefCell<Option<CreepData>>,
+    room_dropped_resource_data: RefCell<Option<DroppedResourceData>>,
+    room_nuke_data: RefCell<Option<NukeData>>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -288,6 +302,8 @@ where
             room_structure_data: RefCell::new(None),
             room_construction_sites_data: RefCell::new(None),
             room_creep_data: RefCell::new(None),
+            room_dropped_resource_data: RefCell::new(None),
+            room_nuke_data: RefCell::new(None),
         })
     }
 }
@@ -302,6 +318,8 @@ impl RoomData {
             room_structure_data: RefCell::new(None),
             room_construction_sites_data: RefCell::new(None),
             room_creep_data: RefCell::new(None),
+            room_dropped_resource_data: RefCell::new(None),
+            room_nuke_data: RefCell::new(None),
         }
     }
 
@@ -343,11 +361,16 @@ impl RoomData {
         let terrain = FastRoomTerrain::new(terrain.get_raw_buffer().to_vec());
         let terrain_statistics = RoomTerrainStatistics::from_terrain(&terrain);
 
+        // Cache room exits (static, never changes).
+        let exits = game::map::describe_exits(room.name());
+        let exit_list: Vec<(Direction, RoomName)> = exits.entries().collect();
+
         RoomStaticVisibilityData {
             controller: controller_id,
             sources: source_ids,
             minerals: mineral_ids,
             terrain_statistics,
+            exits: Some(exit_list),
         }
     }
 
@@ -450,6 +473,28 @@ impl RoomData {
             .maybe_access(
                 |s| game::time() != s.last_updated,
                 move || game::rooms().get(name).as_ref().map(CreepData::new),
+            )
+            .take()
+    }
+
+    pub fn get_dropped_resources(&self) -> Option<Ref<'_, DroppedResourceData>> {
+        let name = self.name;
+
+        self.room_dropped_resource_data
+            .maybe_access(
+                |s| game::time() != s.last_updated,
+                move || game::rooms().get(name).as_ref().map(DroppedResourceData::new),
+            )
+            .take()
+    }
+
+    pub fn get_nukes(&self) -> Option<Ref<'_, NukeData>> {
+        let name = self.name;
+
+        self.room_nuke_data
+            .maybe_access(
+                |s| game::time() != s.last_updated,
+                move || game::rooms().get(name).as_ref().map(NukeData::new),
             )
             .take()
     }
@@ -732,5 +777,112 @@ impl CreepData {
 
     pub fn hostile(&self) -> &[Creep] {
         &self.hostile
+    }
+}
+
+// ─── Dropped resources, tombstones, ruins ───────────────────────────────────
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct DroppedResourceData {
+    #[serde(skip)]
+    last_updated: u32,
+    #[serde(skip)]
+    resources: Vec<Resource>,
+    #[serde(skip)]
+    tombstones: Vec<Tombstone>,
+    #[serde(skip)]
+    ruins: Vec<Ruin>,
+}
+
+impl DroppedResourceData {
+    fn new(room: &Room) -> DroppedResourceData {
+        DroppedResourceData {
+            last_updated: game::time(),
+            resources: room.find(find::DROPPED_RESOURCES, None),
+            tombstones: room.find(find::TOMBSTONES, None),
+            ruins: room.find(find::RUINS, None),
+        }
+    }
+
+    pub fn resources(&self) -> &[Resource] {
+        &self.resources
+    }
+
+    pub fn tombstones(&self) -> &[Tombstone] {
+        &self.tombstones
+    }
+
+    pub fn ruins(&self) -> &[Ruin] {
+        &self.ruins
+    }
+
+    /// Total energy available from all dropped resources, tombstones, and ruins.
+    pub fn total_energy(&self) -> u32 {
+        let resource_energy: u32 = self
+            .resources
+            .iter()
+            .filter(|r| r.resource_type() == ResourceType::Energy)
+            .map(|r| r.amount())
+            .sum();
+
+        let tombstone_energy: u32 = self
+            .tombstones
+            .iter()
+            .map(|t| t.store().get_used_capacity(Some(ResourceType::Energy)))
+            .sum();
+
+        let ruin_energy: u32 = self
+            .ruins
+            .iter()
+            .map(|r| r.store().get_used_capacity(Some(ResourceType::Energy)))
+            .sum();
+
+        resource_energy + tombstone_energy + ruin_energy
+    }
+
+    /// Total value of all lootable resources (all types).
+    pub fn total_loot_value(&self) -> u32 {
+        let resource_total: u32 = self.resources.iter().map(|r| r.amount()).sum();
+
+        let tombstone_total: u32 = self
+            .tombstones
+            .iter()
+            .map(|t| t.store().get_used_capacity(None))
+            .sum();
+
+        let ruin_total: u32 = self
+            .ruins
+            .iter()
+            .map(|r| r.store().get_used_capacity(None))
+            .sum();
+
+        resource_total + tombstone_total + ruin_total
+    }
+}
+
+// ─── Incoming nukes ─────────────────────────────────────────────────────────
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct NukeData {
+    #[serde(skip)]
+    last_updated: u32,
+    #[serde(skip)]
+    nukes: Vec<Nuke>,
+}
+
+impl NukeData {
+    fn new(room: &Room) -> NukeData {
+        NukeData {
+            last_updated: game::time(),
+            nukes: room.find(find::NUKES, None),
+        }
+    }
+
+    pub fn nukes(&self) -> &[Nuke] {
+        &self.nukes
+    }
+
+    pub fn has_incoming(&self) -> bool {
+        !self.nukes.is_empty()
     }
 }

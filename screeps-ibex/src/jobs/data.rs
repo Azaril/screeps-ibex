@@ -22,6 +22,7 @@ pub enum JobData {
     Heal(super::heal::HealJob),
     RangedAttack(super::ranged::RangedAttackJob),
     Tank(super::tank::TankJob),
+    SquadCombat(super::squad_combat::SquadCombatJob),
 }
 
 impl JobData {
@@ -42,6 +43,20 @@ impl JobData {
             JobData::Heal(ref data) => data.summarize(),
             JobData::RangedAttack(ref data) => data.summarize(),
             JobData::Tank(ref data) => data.summarize(),
+            JobData::SquadCombat(ref data) => data.summarize(),
+        }
+    }
+
+    /// Extract the squad entity id if this job is associated with a squad.
+    /// Returns `None` for non-squad jobs.
+    pub fn squad_entity_id(&self) -> Option<u32> {
+        match self {
+            JobData::Attack(ref data) => data.context.squad_entity,
+            JobData::Heal(ref data) => data.context.squad_entity,
+            JobData::RangedAttack(ref data) => data.context.squad_entity,
+            JobData::Tank(ref data) => data.context.squad_entity,
+            JobData::SquadCombat(ref data) => data.context.squad_entity,
+            _ => None,
         }
     }
 
@@ -61,6 +76,7 @@ impl JobData {
             JobData::Heal(ref mut data) => data,
             JobData::RangedAttack(ref mut data) => data,
             JobData::Tank(ref mut data) => data,
+            JobData::SquadCombat(ref mut data) => data,
         }
     }
 }

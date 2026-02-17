@@ -1,9 +1,9 @@
 use super::claim::*;
 use super::colony::*;
 use super::data::*;
-use super::defense::*;
 use super::miningoutpost::*;
 use super::scout::*;
+use super::war::*;
 use log::*;
 use specs::*;
 
@@ -14,21 +14,20 @@ impl<'a> System<'a> for OperationManagerSystem {
     type SystemData = (Entities<'a>, ReadStorage<'a, OperationData>, Read<'a, LazyUpdate>);
 
     fn run(&mut self, (entities, operations, updater): Self::SystemData) {
-        //TODO: Come up with a better way of doing this for always-running operations.
         let mut has_mining_outpost = false;
         let mut has_claim = false;
         let mut has_colony = false;
-        let mut has_defense = false;
         let mut has_scout = false;
+        let mut has_war = false;
 
         for (_, operation) in (&entities, &operations).join() {
             match operation {
                 OperationData::MiningOutpost(_) => has_mining_outpost = true,
                 OperationData::Claim(_) => has_claim = true,
                 OperationData::Colony(_) => has_colony = true,
-                OperationData::Defense(_) => has_defense = true,
                 OperationData::Attack(_) => {}
                 OperationData::Scout(_) => has_scout = true,
+                OperationData::War(_) => has_war = true,
             }
         }
 
@@ -50,10 +49,10 @@ impl<'a> System<'a> for OperationManagerSystem {
             ColonyOperation::build(updater.create_entity(&entities), None).build();
         }
 
-        if !has_defense {
-            info!("Defense operation does not exist, creating.");
+        if !has_war {
+            info!("War operation does not exist, creating.");
 
-            DefenseOperation::build(updater.create_entity(&entities), None).build();
+            WarOperation::build(updater.create_entity(&entities), None).build();
         }
 
         if !has_scout {

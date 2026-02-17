@@ -239,6 +239,116 @@ pub fn boosted_tank_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
     }
 }
 
+// ─── Source Keeper body definitions ──────────────────────────────────────────
+
+/// SK ranged attacker body -- heavy RANGED_ATTACK + MOVE for kiting at range 3.
+/// No TOUGH needed since the strategy is to never be in melee range.
+/// At 12,900 energy: 4 pre + 20 repeat (10 RA + 10 M) + 2 post = 26 parts.
+/// DPS: 10 RANGED_ATTACK * 10 = 100 DPS at range 3.
+pub fn sk_ranged_attacker_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
+    SpawnBodyDefinition {
+        maximum_energy: max_energy,
+        minimum_repeat: Some(3),
+        maximum_repeat: Some(15),
+        pre_body: &[Part::Tough, Part::Tough],
+        repeat_body: &[Part::RangedAttack, Part::Move],
+        post_body: &[Part::Move, Part::Heal, Part::Move],
+    }
+}
+
+/// SK healer body -- focused HEAL + MOVE for keeping the SK attacker alive.
+/// Needs to outheal incidental damage (SK does 168 melee DPS if it catches up).
+/// At 12,900 energy: 2 pre + 20 repeat (10 H + 10 M) + 2 post = 24 parts.
+/// Heal: 10 HEAL * 12 = 120 HP/tick adjacent.
+pub fn sk_healer_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
+    SpawnBodyDefinition {
+        maximum_energy: max_energy,
+        minimum_repeat: Some(3),
+        maximum_repeat: Some(15),
+        pre_body: &[Part::Tough, Part::Tough],
+        repeat_body: &[Part::Heal, Part::Move],
+        post_body: &[Part::Move, Part::Move],
+    }
+}
+
+// ─── Specialized body definitions (Phase 6) ────────────────────────────────
+
+/// Power bank attacker body -- heavy ATTACK + MOVE.
+/// Needs ~25 ATTACK parts (750 DPS) to destroy a 2M HP bank in ~2667 ticks.
+/// Must be paired with a healer to survive 50% damage reflection (375 damage/tick).
+pub fn power_bank_attacker_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
+    SpawnBodyDefinition {
+        maximum_energy: max_energy,
+        minimum_repeat: Some(5),
+        maximum_repeat: Some(25),
+        pre_body: &[],
+        repeat_body: &[Part::Attack, Part::Move],
+        post_body: &[],
+    }
+}
+
+/// Power bank healer body -- heavy HEAL + MOVE.
+/// Needs ~32 HEAL parts (384 heal/tick) to outheal 375 damage/tick reflection.
+pub fn power_bank_healer_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
+    SpawnBodyDefinition {
+        maximum_energy: max_energy,
+        minimum_repeat: Some(5),
+        maximum_repeat: Some(25),
+        pre_body: &[],
+        repeat_body: &[Part::Heal, Part::Move],
+        post_body: &[],
+    }
+}
+
+/// Siege dismantler body -- TOUGH front, WORK + MOVE for dismantling under fire.
+/// Heavier than the standard dismantler with more TOUGH for survivability.
+pub fn siege_dismantler_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
+    SpawnBodyDefinition {
+        maximum_energy: max_energy,
+        minimum_repeat: Some(2),
+        maximum_repeat: None,
+        pre_body: &[
+            Part::Tough,
+            Part::Tough,
+            Part::Tough,
+            Part::Tough,
+            Part::Tough,
+            Part::Tough,
+            Part::Tough,
+            Part::Tough,
+        ],
+        repeat_body: &[Part::Work, Part::Move],
+        post_body: &[Part::Move, Part::Move, Part::Move, Part::Move],
+    }
+}
+
+/// Core attacker body -- cheap ATTACK + MOVE for destroying level 0 invader cores.
+/// Minimal investment since cores have low HP and no defenders when deploying.
+pub fn core_attacker_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
+    SpawnBodyDefinition {
+        maximum_energy: max_energy.min(1300),
+        minimum_repeat: Some(2),
+        maximum_repeat: Some(5),
+        pre_body: &[],
+        repeat_body: &[Part::Attack, Part::Move],
+        post_body: &[],
+    }
+}
+
+/// Hauler body -- CARRY + MOVE for collecting dropped resources.
+/// Sized to carry resources efficiently. For power banks,
+/// ceil(power_amount / 50) CARRY parts needed.
+pub fn hauler_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
+    SpawnBodyDefinition {
+        maximum_energy: max_energy,
+        minimum_repeat: Some(2),
+        maximum_repeat: Some(25),
+        pre_body: &[],
+        repeat_body: &[Part::Carry, Part::Move],
+        post_body: &[],
+    }
+}
+
 /// Standard military boost compounds (T3).
 pub mod boosts {
     use screeps::ResourceType;

@@ -203,6 +203,16 @@ pub struct PathingFeatures {
     /// room. Set to 0 to disable proximity limiting (all creeps avoided, old
     /// behaviour).
     pub friendly_creep_distance: u32,
+    /// Maximum fraction of the tick CPU limit that the movement system may
+    /// spend on pathfinding for stuck creeps. The actual budget is
+    /// `min(tick_limit * pct, remaining_cpu)`. Creeps with no path at all
+    /// still pathfind unconditionally regardless of budget.
+    pub movement_cpu_budget_pct: f64,
+    /// CPU budget for non-stuck path expiry repathing per tick. Paths older
+    /// than `reuse_path_length` are eligible for re-evaluation but only if
+    /// this budget has not been exhausted. Set to 0 to disable expiry
+    /// repathing entirely.
+    pub repath_cpu_budget: f64,
 }
 
 impl Default for PathingFeatures {
@@ -213,6 +223,8 @@ impl Default for PathingFeatures {
             reuse_path_length: 20,
             max_shove_depth: 10,
             friendly_creep_distance: 15,
+            movement_cpu_budget_pct: 0.3,
+            repath_cpu_budget: 5.0,
         }
     }
 }
@@ -271,16 +283,27 @@ impl MilitaryVisualizeFeatures {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MilitaryFeatures {
-    /// Enable the defense operation (threat response, squad defense).
+    /// Enable defensive operations (squad defense, wall repair, remote defense).
     pub defense: bool,
-    /// Enable attack operations (assault, harass).
-    pub attack: bool,
+    /// Master switch for all offensive operations. When false, no attacks are
+    /// launched or executed regardless of sub-flags.
+    pub offense: bool,
+    /// Allow attacking player-owned rooms (resource denial, expansion contests).
+    /// Requires `offense` to be enabled.
+    pub attack_players: bool,
+    /// Allow attacking invader cores, strongholds, and invader bases.
+    /// Requires `offense` to be enabled.
+    pub attack_invaders: bool,
     /// Request boosts for military creeps.
     pub boost_military: bool,
     /// Allow safe mode activation as last resort.
     pub safe_mode: bool,
     /// Enable nuke defense mission.
     pub nuke_defense: bool,
+    /// Enable verbose debug logging for war system (target selection, threat
+    /// intel, defense decisions). Useful for diagnosing why attacks are or
+    /// aren't being launched.
+    pub debug_log: bool,
     /// Visualization settings.
     pub visualize: MilitaryVisualizeFeatures,
 }
@@ -289,10 +312,13 @@ impl Default for MilitaryFeatures {
     fn default() -> Self {
         Self {
             defense: true,
-            attack: false,
+            offense: false,
+            attack_players: false,
+            attack_invaders: true,
             boost_military: false,
             safe_mode: true,
             nuke_defense: true,
+            debug_log: false,
             visualize: MilitaryVisualizeFeatures::default(),
         }
     }

@@ -1,3 +1,4 @@
+pub mod attack_mission;
 pub mod claim;
 pub mod colony;
 pub mod constants;

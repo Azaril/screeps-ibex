@@ -1,6 +1,8 @@
 use super::data::*;
 use crate::cleanup::*;
 use crate::entitymappingsystem::EntityMappingData;
+use crate::military::economy::*;
+use crate::military::threatmap::RoomThreatData;
 use crate::missions::data::*;
 use crate::room::data::*;
 use crate::room::roomplansystem::*;
@@ -22,6 +24,9 @@ pub struct OperationSystemData<'a> {
     visibility: Write<'a, VisibilityQueue>,
     visualization_data: Option<Write<'a, VisualizationData>>,
     cleanup_queue: Write<'a, EntityCleanupQueue>,
+    economy: Write<'a, EconomySnapshot>,
+    route_cache: Write<'a, RoomRouteCache>,
+    threat_data: ReadStorage<'a, RoomThreatData>,
 }
 
 pub struct OperationExecutionSystemData<'a, 'b> {
@@ -34,6 +39,9 @@ pub struct OperationExecutionSystemData<'a, 'b> {
     pub mapping: &'b Read<'a, EntityMappingData>,
     pub visibility: &'b mut VisibilityQueue,
     pub map_viz_data: Option<&'b mut MapVisualizationData>,
+    pub economy: &'b mut EconomySnapshot,
+    pub route_cache: &'b mut RoomRouteCache,
+    pub threat_data: &'b ReadStorage<'a, RoomThreatData>,
 }
 
 pub struct OperationExecutionRuntimeData {
@@ -58,6 +66,15 @@ pub trait Operation {
     fn owner_complete(&mut self, owner: Entity);
 
     fn child_complete(&mut self, _child: Entity) {}
+
+    /// Remove any internal entity references that fail the validity check.
+    ///
+    /// Called by `repair_entity_integrity` before serialization to prevent
+    /// `ConvertSaveload` panics on dangling entities. The provided closure
+    /// returns `true` if the entity is alive and has a `SerializeMarker`.
+    /// Default implementation is a no-op (safe for operations without
+    /// entity-valued fields beyond `owner`).
+    fn repair_entity_refs(&mut self, _is_valid: &dyn Fn(Entity) -> bool) {}
 
     /// Produce a structured summary for the visualization overlay.
     fn describe_operation(&self, _ctx: &OperationDescribeContext) -> SummaryContent {
@@ -92,6 +109,9 @@ impl<'a> System<'a> for PreRunOperationSystem {
             mapping: &data.mapping,
             visibility: &mut data.visibility,
             map_viz_data: map_viz,
+            economy: &mut data.economy,
+            route_cache: &mut data.route_cache,
+            threat_data: &data.threat_data,
         };
 
         for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
@@ -123,6 +143,9 @@ impl<'a> System<'a> for RunOperationSystem {
             mapping: &data.mapping,
             visibility: &mut data.visibility,
             map_viz_data: map_viz,
+            economy: &mut data.economy,
+            route_cache: &mut data.route_cache,
+            threat_data: &data.threat_data,
         };
 
         for (entity, operation_data) in (&data.entities, &mut data.operations).join() {

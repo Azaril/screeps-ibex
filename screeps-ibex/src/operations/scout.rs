@@ -87,6 +87,16 @@ impl Operation for ScoutOperation {
         self.scout_missions.retain(|e| *e != child);
     }
 
+    fn repair_entity_refs(&mut self, is_valid: &dyn Fn(Entity) -> bool) {
+        self.scout_missions.retain(|e| {
+            let ok = is_valid(*e);
+            if !ok {
+                error!("INTEGRITY: dead scout mission entity {:?} removed from ScoutOperation", e);
+            }
+            ok
+        });
+    }
+
     fn describe_operation(&self, _ctx: &OperationDescribeContext) -> SummaryContent {
         SummaryContent::Text(format!("Scout - Missions: {}", self.scout_missions.len()))
     }
@@ -169,7 +179,7 @@ impl Operation for ScoutOperation {
                 continue;
             }
 
-            info!("ScoutOperation: spawning scout mission for room {}", target_entry.room_name);
+            debug!("ScoutOperation: spawning scout mission for room {}", target_entry.room_name);
 
             let mission_entity = ScoutMission::build(
                 system_data.updater.create_entity(system_data.entities),
@@ -191,7 +201,7 @@ impl Operation for ScoutOperation {
         }
 
         if created > 0 {
-            info!("ScoutOperation: created {} scout missions this tick", created);
+            debug!("ScoutOperation: created {} scout missions this tick", created);
         }
 
         Ok(OperationResult::Running)

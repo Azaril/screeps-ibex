@@ -1,3 +1,4 @@
+use crate::military::economy::SpawnQueueSnapshot;
 use crate::room::data::*;
 use log::*;
 use screeps::action_error_codes::SpawnCreepErrorCode;
@@ -92,6 +93,7 @@ impl SpawnQueue {
 #[derive(SystemData)]
 pub struct SpawnQueueSystemData<'a> {
     spawn_queue: Write<'a, SpawnQueue>,
+    spawn_queue_snapshot: Write<'a, SpawnQueueSnapshot>,
     updater: Read<'a, LazyUpdate>,
     entities: Entities<'a>,
     room_data: WriteStorage<'a, RoomData>,
@@ -213,6 +215,16 @@ impl<'a> System<'a> for SpawnQueueSystem {
                 Err(err) => warn!("Failed spawning for room: {}", err),
             }
         }
+
+        // Snapshot the queue depth before clearing, so EconomyAssessmentSystem
+        // can read it next tick.
+        let mut snapshot = SpawnQueueSnapshot::default();
+        for (room_entity, requests) in data.spawn_queue.iter_requests() {
+            let depth = requests.len() as u32;
+            snapshot.queue_depth_per_room.insert(*room_entity, depth);
+            snapshot.total_queue_depth += depth;
+        }
+        *data.spawn_queue_snapshot = snapshot;
 
         data.spawn_queue.clear();
     }

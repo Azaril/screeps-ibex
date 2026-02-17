@@ -2,8 +2,11 @@ use super::data::*;
 use super::localsupply::structure_data::SupplyStructureCache;
 use crate::cleanup::*;
 use crate::creep::*;
+use crate::entitymappingsystem::EntityMappingData;
 use crate::jobs::data::*;
 use crate::military::boostqueue::*;
+use crate::military::economy::*;
+use crate::military::squad::SquadContext;
 use crate::repairqueue::*;
 use crate::room::data::*;
 use crate::room::roomplansystem::*;
@@ -34,6 +37,10 @@ pub struct MissionSystemData<'a> {
     repair_queue: Write<'a, RepairQueue>,
     supply_structure_cache: Write<'a, SupplyStructureCache>,
     cleanup_queue: Write<'a, EntityCleanupQueue>,
+    economy: Write<'a, EconomySnapshot>,
+    route_cache: Write<'a, RoomRouteCache>,
+    squad_contexts: WriteStorage<'a, SquadContext>,
+    mapping: Read<'a, EntityMappingData>,
 }
 
 pub struct MissionExecutionSystemData<'a, 'b> {
@@ -54,6 +61,10 @@ pub struct MissionExecutionSystemData<'a, 'b> {
     pub boost_queue: &'b mut BoostQueue,
     pub repair_queue: &'b mut RepairQueue,
     pub supply_structure_cache: &'b mut SupplyStructureCache,
+    pub economy: &'b mut EconomySnapshot,
+    pub route_cache: &'b mut RoomRouteCache,
+    pub squad_contexts: &'b mut WriteStorage<'a, SquadContext>,
+    pub mapping: &'b Read<'a, EntityMappingData>,
 }
 
 /// Queue a mission for cleanup via the `EntityCleanupQueue`.
@@ -122,6 +133,12 @@ pub trait Mission {
 
     fn child_complete(&mut self, _child: Entity) {}
 
+    /// Remove any internal entity references that fail the validity check.
+    ///
+    /// Called by `repair_entity_integrity` before serialization to prevent
+    /// `ConvertSaveload` panics on dangling entities. Default is a no-op.
+    fn repair_entity_refs(&mut self, _is_valid: &dyn Fn(Entity) -> bool) {}
+
     /// Called by `EntityCleanupSystem` when a creep entity dies.
     /// Missions that track creeps should override this to remove the
     /// entity from their tracking lists.
@@ -170,6 +187,10 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 boost_queue: &mut data.boost_queue,
                 repair_queue: &mut data.repair_queue,
                 supply_structure_cache: &mut data.supply_structure_cache,
+                economy: &mut data.economy,
+                route_cache: &mut data.route_cache,
+                squad_contexts: &mut data.squad_contexts,
+                mapping: &data.mapping,
             };
 
             if let Some(mission_data) = data.missions.get(entity) {
@@ -221,6 +242,10 @@ impl<'a> System<'a> for RunMissionSystem {
                 boost_queue: &mut data.boost_queue,
                 repair_queue: &mut data.repair_queue,
                 supply_structure_cache: &mut data.supply_structure_cache,
+                economy: &mut data.economy,
+                route_cache: &mut data.route_cache,
+                squad_contexts: &mut data.squad_contexts,
+                mapping: &data.mapping,
             };
 
             if let Some(mission_data) = data.missions.get(entity) {
@@ -228,10 +253,7 @@ impl<'a> System<'a> for RunMissionSystem {
 
                 let cleanup_mission = match mission.run_mission(&mut system_data, entity) {
                     Ok(MissionResult::Running) => false,
-                    Ok(MissionResult::Success) => {
-                        info!("Mission complete, cleaning up.");
-                        true
-                    }
+                    Ok(MissionResult::Success) => true,
                     Err(error) => {
                         info!("Mission run failed, cleaning up. Error: {}", error);
                         true

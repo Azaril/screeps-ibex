@@ -1,35 +1,59 @@
 use bitflags::*;
 
-//TODO: This needs a better API. It also needs to correctly represent pipelines.
+// Screeps simultaneous action pipelines (from docs.screeps.com/simultaneous-actions.html):
+//
+// Pipeline A (melee/work): harvest, attack, build, repair, dismantle, attackController, generateSafeMode
+// Pipeline B (ranged):      rangedAttack, rangedMassAttack, rangedHeal
+// Pipeline C (heal):        heal
+// Pipeline D (transfer):    withdraw, transfer, drop, pickup
+// Pipeline E:               upgradeController
+// Pipeline F:               claimController, reserveController, signController
+//
+// Actions within the same pipeline are mutually exclusive (share the same bit).
+// Actions in different pipelines can coexist (different bits).
+//
+// Key combat combinations now correctly allowed:
+//   rangedAttack + heal       (Pipeline B + C)
+//   attack + heal             (Pipeline A + C)
+//   rangedAttack + attack     (Pipeline A + B)
 
 bitflags! {
     #[derive(Copy, Clone)]
-    pub struct SimultaneousActionFlags: u8 {
+    pub struct SimultaneousActionFlags: u16 {
         const UNSET = 0;
 
-        const MOVE = 1u8;
+        const MOVE = 1;
 
-        const HARVEST = 1u8 << 1;
-        const ATTACK = 1u8 << 1;
-        const BUILD = 1u8 << 1;
-        const REPAIR = 1u8 << 1;
-        const DISMANTLE = 1u8 << 1;
-        const ATTACK_CONTROLLER = 1u8 << 1;
-        const RANGED_HEAL = 1u8 << 1;
-        const HEAL = 1u8 << 1;
+        // Pipeline A: melee/work actions (mutually exclusive within pipeline)
+        const HARVEST            = 1 << 1;
+        const ATTACK             = 1 << 1;
+        const BUILD              = 1 << 1;
+        const REPAIR             = 1 << 1;
+        const DISMANTLE          = 1 << 1;
+        const ATTACK_CONTROLLER  = 1 << 1;
+        const GENERATE_SAFE_MODE = 1 << 1;
 
-        const RANGED_ATTACK = 1u8 << 1;
-        const RANGED_MASS_ATTACK = 1u8 << 1;
+        // Pipeline B: ranged actions (mutually exclusive within pipeline)
+        const RANGED_ATTACK      = 1 << 2;
+        const RANGED_MASS_ATTACK = 1 << 2;
+        const RANGED_HEAL        = 1 << 2;
 
-        const WITHDRAW = 1u8 << 2;
-        const TRANSFER = 1u8 << 2;
-        const DROP = 1u8 << 2;
+        // Pipeline C: heal (own pipeline, independent of A and B)
+        const HEAL = 1 << 3;
 
-        const SIGN = 1u8 << 3;
+        // Pipeline D: transfer/logistics actions (mutually exclusive within pipeline)
+        const WITHDRAW = 1 << 4;
+        const TRANSFER = 1 << 4;
+        const DROP     = 1 << 4;
+        const PICKUP   = 1 << 4;
 
-        const UPGRADE_CONTROLLER = 1u8 << 4;
+        // Pipeline E: upgrade (own pipeline)
+        const UPGRADE_CONTROLLER = 1 << 5;
 
-        //TODO: Handle overlapping priorities.
+        // Pipeline F: claim/reserve/sign (mutually exclusive within pipeline)
+        const CLAIM_CONTROLLER   = 1 << 6;
+        const RESERVE_CONTROLLER = 1 << 6;
+        const SIGN               = 1 << 6;
     }
 }
 

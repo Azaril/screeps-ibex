@@ -202,9 +202,9 @@ impl Job for ScoutJob {
             action_flags: SimultaneousActionFlags::UNSET,
         };
 
-        while let Some(tick_result) = self.state.tick(&mut self.context, &mut tick_context) {
-            self.state = tick_result
-        }
+        crate::machine_tick::run_state_machine(&mut self.state, "ScoutJob", |state| {
+            state.tick(&mut self.context, &mut tick_context)
+        });
     }
 }
 
@@ -212,14 +212,22 @@ impl Job for ScoutJob {
 /// consider for proactive exploration.
 const EXPLORE_SEARCH_RADIUS: u32 = 5;
 
+/// Visibility age threshold: when every known room within range has been seen
+/// more recently than this, the scout prefers discovering unknown rooms over
+/// re-visiting known ones.
+const FRESH_VISIBILITY_THRESHOLD: u32 = 1000;
+
 /// Pick the best nearby room for an idle scout to explore proactively.
 ///
-/// Searches in two passes:
+/// Searches in three passes:
 /// 1. **Known rooms** — iterates all `RoomData` entities within
 ///    [`EXPLORE_SEARCH_RADIUS`] of the scout and scores them by visibility age
 ///    (oldest first), with a tiebreaker preferring closer rooms.
-/// 2. **Unknown adjacent rooms** — checks immediate exits for rooms that have
-///    no `RoomData` entity at all (never seen). These are highest priority.
+/// 2. **Unknown rooms via BFS** — if all known rooms within range have fresh
+///    data (age <= [`FRESH_VISIBILITY_THRESHOLD`]), walks the cached exit graph
+///    of known rooms to find the nearest room with no `RoomData` entity.
+/// 3. **Unknown adjacent rooms** — as a fast fallback, checks immediate exits
+///    for rooms that have no `RoomData` entity at all (never seen).
 ///
 /// Rooms that already have a pending visibility queue entry are skipped.
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -231,6 +239,7 @@ fn pick_adjacent_explore_target(
     let current_room = creep_pos.room_name();
 
     // ── Pass 1: score all known rooms within range ───────────────────────
+    let mut all_fresh = true;
     let best_known: Option<(RoomName, u32, u32)> = (system_data.entities, system_data.room_data)
         .join()
         .filter_map(|(_, rd)| {
@@ -254,6 +263,10 @@ fn pick_adjacent_explore_target(
                 .map(|dvd: &RoomDynamicVisibilityData| dvd.age())
                 .unwrap_or(u32::MAX);
 
+            if age > FRESH_VISIBILITY_THRESHOLD {
+                all_fresh = false;
+            }
+
             Some((name, age, dist))
         })
         // Prefer oldest data first, then closest on ties.
@@ -262,7 +275,16 @@ fn pick_adjacent_explore_target(
                 .then_with(|| b.2.cmp(&a.2)) // smaller dist is better
         });
 
-    // ── Pass 2: check immediate exits for truly unknown rooms ────────────
+    // ── Pass 2: BFS for nearest unknown room via cached exits ────────────
+    // When all known rooms are fresh, expand the frontier to discover new
+    // rooms rather than re-visiting stale ones.
+    if all_fresh {
+        if let Some(unknown) = bfs_nearest_unknown(current_room, system_data, runtime_data) {
+            return Some(unknown);
+        }
+    }
+
+    // ── Pass 3: check immediate exits for truly unknown rooms ────────────
     let exits = game::map::describe_exits(current_room);
     let unknown_neighbor = exits.values().find(|neighbor| {
         !runtime_data.visibility_queue.has_entry(*neighbor)
@@ -281,4 +303,57 @@ fn pick_adjacent_explore_target(
         (None, Some((known_name, _, _))) => Some(known_name),
         (None, None) => None,
     }
+}
+
+/// BFS through known rooms' cached exits to find the nearest room that has no
+/// `RoomData` entity (never been seen). Returns `None` if no unknown room is
+/// reachable within [`EXPLORE_SEARCH_RADIUS`].
+fn bfs_nearest_unknown(
+    start: RoomName,
+    system_data: &JobExecutionSystemData,
+    runtime_data: &JobExecutionRuntimeData,
+) -> Option<RoomName> {
+    use std::collections::{HashSet, VecDeque};
+
+    let mut visited: HashSet<RoomName> = HashSet::new();
+    let mut queue: VecDeque<(RoomName, u32)> = VecDeque::new();
+
+    visited.insert(start);
+    queue.push_back((start, 0));
+
+    while let Some((room, depth)) = queue.pop_front() {
+        if depth >= EXPLORE_SEARCH_RADIUS {
+            continue;
+        }
+
+        // Get exits for this room from cached static visibility data.
+        let exits: Vec<RoomName> = runtime_data
+            .mapping
+            .get_room(&room)
+            .and_then(|entity| system_data.room_data.get(entity))
+            .and_then(|rd| rd.get_static_visibility_data())
+            .and_then(|svd| svd.exits())
+            .map(|exits| exits.iter().map(|(_, name)| *name).collect())
+            .unwrap_or_default();
+
+        for neighbor in exits {
+            if !visited.insert(neighbor) {
+                continue;
+            }
+
+            // Skip rooms already in the visibility queue.
+            if runtime_data.visibility_queue.has_entry(neighbor) {
+                continue;
+            }
+
+            // If this neighbor has no RoomData entity, it's unknown — return it.
+            if runtime_data.mapping.get_room(&neighbor).is_none() {
+                return Some(neighbor);
+            }
+
+            queue.push_back((neighbor, depth + 1));
+        }
+    }
+
+    None
 }

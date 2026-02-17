@@ -288,8 +288,11 @@ fn room_distance(a: RoomName, b: RoomName) -> u32 {
     delta.0.unsigned_abs().max(delta.1.unsigned_abs())
 }
 
-// ─── Legacy VisibilityRequest (kept for caller convenience) ──────────────────
+// ─── VisibilityRequest (input struct for VisibilityQueue::request) ───────────
 
+/// Builder struct for pushing a visibility request into the
+/// [`VisibilityQueue`]. Callers construct one via [`new`] or
+/// [`new_opportunistic`] and pass it to [`VisibilityQueue::request`].
 pub struct VisibilityRequest {
     room_name: RoomName,
     priority: f32,
@@ -298,8 +301,8 @@ pub struct VisibilityRequest {
 }
 
 impl VisibilityRequest {
-    pub fn new(room_name: RoomName, priority: f32, allowed_types: VisibilityRequestFlags) -> VisibilityRequest {
-        VisibilityRequest {
+    pub fn new(room_name: RoomName, priority: f32, allowed_types: VisibilityRequestFlags) -> Self {
+        Self {
             room_name,
             priority,
             allowed_types,
@@ -310,25 +313,13 @@ impl VisibilityRequest {
     /// Create an opportunistic visibility request. These are only serviced by
     /// scouts that are already alive — the `ScoutOperation` will not spawn new
     /// missions for them.
-    pub fn new_opportunistic(room_name: RoomName, priority: f32, allowed_types: VisibilityRequestFlags) -> VisibilityRequest {
-        VisibilityRequest {
+    pub fn new_opportunistic(room_name: RoomName, priority: f32, allowed_types: VisibilityRequestFlags) -> Self {
+        Self {
             room_name,
             priority,
             allowed_types,
             opportunistic: true,
         }
-    }
-
-    pub fn room_name(&self) -> RoomName {
-        self.room_name
-    }
-
-    pub fn priority(&self) -> f32 {
-        self.priority
-    }
-
-    pub fn allowed_types(&self) -> VisibilityRequestFlags {
-        self.allowed_types
     }
 }
 

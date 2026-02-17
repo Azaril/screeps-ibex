@@ -13,6 +13,7 @@ pub mod linkmine;
 pub mod ranged;
 pub mod reserve;
 pub mod scout;
+pub mod squad_combat;
 pub mod staticmine;
 pub mod tank;
 pub mod upgrade;

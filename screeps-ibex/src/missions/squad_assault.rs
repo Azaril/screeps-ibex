@@ -33,7 +33,6 @@ pub enum AssaultSquadSize {
 pub struct SquadAssaultMissionContext {
     target_room: RoomName,
     home_room_datas: EntityVec<Entity>,
-    room_data_entity: Entity,
     /// Attacker/ranged creep entities.
     attackers: EntityVec<Entity>,
     /// Healer creep entities.
@@ -46,8 +45,6 @@ pub struct SquadAssaultMissionContext {
     /// Chosen as a safe position near the target room (typically in an
     /// adjacent room or just outside the target room border).
     rally_room: Option<RoomName>,
-    /// Tick when rallying started, used to timeout if members take too long.
-    rally_start_tick: Option<u32>,
 }
 
 machine!(
@@ -300,11 +297,6 @@ impl Rallying {
             return Ok(Some(SquadAssaultState::spawning(std::marker::PhantomData)));
         }
 
-        // Initialize rally start tick.
-        if state_context.rally_start_tick.is_none() {
-            state_context.rally_start_tick = Some(game::time());
-        }
-
         // Select rally room if not set. Pick the closest home room to the target.
         if state_context.rally_room.is_none() {
             state_context.rally_room = select_rally_room(system_data, state_context);
@@ -337,32 +329,12 @@ impl Rallying {
                 .is_some()
         });
 
-        // Timeout: if we've been rallying for more than 100 ticks, go anyway.
-        let rally_timeout = state_context
-            .rally_start_tick
-            .map(|start| game::time() - start > 100)
-            .unwrap_or(false);
-
-        if state_context.is_full() && (all_in_rally_room || rally_timeout) {
+        if state_context.is_full() && all_in_rally_room {
             info!(
-                "[SquadAssault] Squad rallied at {} (timeout={}), moving to attack {}",
-                rally_room, rally_timeout, state_context.target_room
+                "[SquadAssault] Squad rallied at {}, moving to attack {}",
+                rally_room, state_context.target_room
             );
-            state_context.rally_start_tick = None;
             return Ok(Some(SquadAssaultState::attacking(std::marker::PhantomData)));
-        }
-
-        // If not full but we've been waiting a very long time (200 ticks), go with what we have.
-        if rally_timeout && state_context.total_alive() > 0 {
-            let start = state_context.rally_start_tick.unwrap_or(0);
-            if game::time() - start > 200 {
-                info!(
-                    "[SquadAssault] Rally timeout exceeded, attacking with {} members",
-                    state_context.total_alive()
-                );
-                state_context.rally_start_tick = None;
-                return Ok(Some(SquadAssaultState::attacking(std::marker::PhantomData)));
-            }
         }
 
         Ok(None)
@@ -494,7 +466,6 @@ impl SquadAssaultMission {
     pub fn build<B>(
         builder: B,
         owner: Option<Entity>,
-        room_data_entity: Entity,
         target_room: RoomName,
         home_room_datas: &[Entity],
         squad_size: AssaultSquadSize,
@@ -502,7 +473,7 @@ impl SquadAssaultMission {
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = SquadAssaultMission::new(owner, room_data_entity, target_room, home_room_datas, squad_size);
+        let mission = SquadAssaultMission::new(owner, target_room, home_room_datas, squad_size);
 
         builder
             .with(MissionData::SquadAssault(EntityRefCell::new(mission)))
@@ -511,7 +482,6 @@ impl SquadAssaultMission {
 
     pub fn new(
         owner: Option<Entity>,
-        room_data_entity: Entity,
         target_room: RoomName,
         home_room_datas: &[Entity],
         squad_size: AssaultSquadSize,
@@ -521,13 +491,11 @@ impl SquadAssaultMission {
             context: SquadAssaultMissionContext {
                 target_room,
                 home_room_datas: home_room_datas.to_owned().into(),
-                room_data_entity,
                 attackers: EntityVec::new(),
                 healers: EntityVec::new(),
                 tanks: EntityVec::new(),
                 squad_size,
                 rally_room: None,
-                rally_start_tick: None,
             },
             state: SquadAssaultState::spawning(std::marker::PhantomData),
         }
@@ -546,13 +514,45 @@ impl Mission for SquadAssaultMission {
     }
 
     fn get_room(&self) -> Entity {
-        self.context.room_data_entity
+        *self.context.home_room_datas.first()
+            .expect("SquadAssaultMission must have at least one home room")
     }
 
     fn remove_creep(&mut self, entity: Entity) {
         self.context.attackers.retain(|e| *e != entity);
         self.context.healers.retain(|e| *e != entity);
         self.context.tanks.retain(|e| *e != entity);
+    }
+
+    fn repair_entity_refs(&mut self, is_valid: &dyn Fn(Entity) -> bool) {
+        self.context.home_room_datas.retain(|e| {
+            let ok = is_valid(*e);
+            if !ok {
+                error!("INTEGRITY: dead home room entity {:?} removed from SquadAssaultMission", e);
+            }
+            ok
+        });
+        self.context.attackers.retain(|e| {
+            let ok = is_valid(*e);
+            if !ok {
+                error!("INTEGRITY: dead attacker entity {:?} removed from SquadAssaultMission", e);
+            }
+            ok
+        });
+        self.context.healers.retain(|e| {
+            let ok = is_valid(*e);
+            if !ok {
+                error!("INTEGRITY: dead healer entity {:?} removed from SquadAssaultMission", e);
+            }
+            ok
+        });
+        self.context.tanks.retain(|e| {
+            let ok = is_valid(*e);
+            if !ok {
+                error!("INTEGRITY: dead tank entity {:?} removed from SquadAssaultMission", e);
+            }
+            ok
+        });
     }
 
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> String {
@@ -582,9 +582,9 @@ impl Mission for SquadAssaultMission {
     }
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
-        while let Some(tick_result) = self.state.tick(system_data, mission_entity, &mut self.context)? {
-            self.state = tick_result
-        }
+        crate::machine_tick::run_state_machine_result(&mut self.state, "SquadAssaultMission", |state| {
+            state.tick(system_data, mission_entity, &mut self.context)
+        })?;
 
         self.state.visualize(system_data, mission_entity, &self.context);
 

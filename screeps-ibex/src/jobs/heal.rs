@@ -14,7 +14,7 @@ pub struct HealJobContext {
     target_room: RoomName,
     /// Optional squad entity for coordinated behavior.
     #[serde(default)]
-    squad_entity: Option<u32>,
+    pub(crate) squad_entity: Option<u32>,
 }
 
 machine!(
@@ -42,7 +42,7 @@ machine!(
 
 impl MoveToRoom {
     pub fn tick(&mut self, state_context: &mut HealJobContext, tick_context: &mut JobTickContext) -> Option<HealState> {
-        let room_options = RoomOptions::new(HostileBehavior::Allow);
+        let room_options = RoomOptions::new(HostileBehavior::HighCost);
 
         tick_move_to_room(tick_context, state_context.target_room, Some(room_options), HealState::healing)
     }
@@ -243,8 +243,8 @@ impl Job for HealJob {
             action_flags: SimultaneousActionFlags::UNSET,
         };
 
-        while let Some(tick_result) = self.state.tick(&mut self.context, &mut tick_context) {
-            self.state = tick_result
-        }
+        crate::machine_tick::run_state_machine(&mut self.state, "HealJob", |state| {
+            state.tick(&mut self.context, &mut tick_context)
+        });
     }
 }

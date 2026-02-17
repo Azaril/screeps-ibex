@@ -7,6 +7,7 @@ use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use itertools::*;
+use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 #[allow(deprecated)]
@@ -123,10 +124,13 @@ impl Mission for ClaimMission {
                 RoomDisposition::Neutral => {}
             }
 
+            // A reservation does not prevent claimController() from
+            // succeeding — claiming overrides any active reservation.
+            // Log but do not abort.
             match dynamic_visibility_data.reservation() {
                 RoomDisposition::Mine | RoomDisposition::Neutral => {}
-                RoomDisposition::Friendly(_) | RoomDisposition::Hostile(_) => {
-                    return Err("Room already owned".to_string());
+                RoomDisposition::Friendly(ref name) | RoomDisposition::Hostile(ref name) => {
+                    info!("Claim target has reservation by {}, proceeding anyway", name);
                 }
             }
         }

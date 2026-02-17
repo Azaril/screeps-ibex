@@ -175,7 +175,7 @@ impl Mission for ScoutMission {
             .unwrap_or(false);
 
         if data_is_fresh {
-            info!(
+            debug!(
                 "Completing scout mission - room has fresh data. Room: {} (scouts still alive: {})",
                 room_data.name,
                 self.scouts.len()

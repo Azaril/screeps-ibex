@@ -1,8 +1,10 @@
 use screeps::*;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use specs::prelude::*;
+use specs::Component;
 
 /// Analyzed information about a single hostile creep.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HostileCreepInfo {
     pub position: Position,
     pub owner: String,
@@ -23,7 +25,7 @@ pub struct HostileCreepInfo {
 }
 
 /// Information about an incoming nuke.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NukeInfo {
     /// Game tick when the nuke will land.
     pub landing_tick: u32,
@@ -32,12 +34,14 @@ pub struct NukeInfo {
 }
 
 /// Threat classification for a room, driving defense escalation.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ThreatLevel {
     /// No threats detected.
     #[default]
     None,
-    /// NPC invaders only.
+    /// Source Keepers only -- permanent room residents, not a threat to respond to.
+    SourceKeeper,
+    /// NPC invaders only (not Source Keepers).
     Invader,
     /// Player scout (unarmed creep, no attack parts).
     PlayerScout,
@@ -49,61 +53,40 @@ pub enum ThreatLevel {
     NukeIncoming,
 }
 
-/// Per-room threat intelligence, rebuilt each tick from visibility data.
-#[derive(Clone, Debug, Default)]
+/// Per-room threat intelligence, attached as a component to room entities.
+///
+/// Persisted across VM reloads via the standard component serialization
+/// pipeline (segments 50-52). Updated each tick by `ThreatAssessmentSystem`
+/// for visible rooms; stale data is retained for rooms that lose visibility
+/// (e.g. scout dies) and expired after `THREAT_DATA_MAX_AGE` ticks.
+///
+/// The component is removed from a room entity when the room is confirmed
+/// safe (visible with no threats) or when the data expires.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, Component)]
+#[storage(DenseVecStorage)]
 pub struct RoomThreatData {
     pub threat_level: ThreatLevel,
+    #[serde(default)]
     pub hostile_creeps: Vec<HostileCreepInfo>,
+    #[serde(default)]
     pub hostile_tower_positions: Vec<Position>,
+    #[serde(default)]
     pub incoming_nukes: Vec<NukeInfo>,
     /// Game tick when this data was last updated.
+    #[serde(default)]
     pub last_seen: u32,
     /// Total hostile damage per tick across all hostiles.
+    #[serde(default)]
     pub estimated_dps: f32,
     /// Total hostile healing per tick across all hostiles.
+    #[serde(default)]
     pub estimated_heal: f32,
-}
-
-/// Global threat intelligence resource, keyed by room name.
-/// Rebuilt each tick (ephemeral -- not serialized).
-#[derive(Default)]
-pub struct ThreatMap {
-    rooms: HashMap<RoomName, RoomThreatData>,
-}
-
-impl ThreatMap {
-    pub fn new() -> Self {
-        ThreatMap { rooms: HashMap::new() }
-    }
-
-    pub fn clear(&mut self) {
-        self.rooms.clear();
-    }
-
-    pub fn get(&self, room: &RoomName) -> Option<&RoomThreatData> {
-        self.rooms.get(room)
-    }
-
-    pub fn get_threat_level(&self, room: &RoomName) -> ThreatLevel {
-        self.rooms.get(room).map(|d| d.threat_level).unwrap_or(ThreatLevel::None)
-    }
-
-    pub fn insert(&mut self, room: RoomName, data: RoomThreatData) {
-        self.rooms.insert(room, data);
-    }
-
-    pub fn rooms(&self) -> impl Iterator<Item = (&RoomName, &RoomThreatData)> {
-        self.rooms.iter()
-    }
-
-    /// Return all rooms at or above the given threat level.
-    pub fn rooms_at_threat(&self, min_level: ThreatLevel) -> Vec<(RoomName, &RoomThreatData)> {
-        self.rooms
-            .iter()
-            .filter(|(_, d)| d.threat_level >= min_level)
-            .map(|(name, d)| (*name, d))
-            .collect()
-    }
+    /// Whether safe mode is currently active on the room's controller.
+    #[serde(default)]
+    pub safe_mode_active: bool,
+    /// Whether safe mode charges are available on the room's controller.
+    #[serde(default)]
+    pub safe_mode_available: bool,
 }
 
 /// Analyze a hostile creep's body to produce a `HostileCreepInfo`.
@@ -192,12 +175,23 @@ pub fn classify_threat(hostile_creeps: &[HostileCreepInfo], has_nukes: bool) -> 
         .iter()
         .any(|c| c.melee_dps > 0.0 || c.ranged_dps > 0.0 || c.work_parts > 0);
 
-    // Check if all hostiles are NPC invaders (username "Invader" or "Source Keeper").
-    let all_npc = hostile_creeps.iter().all(|c| c.owner == "Invader" || c.owner == "Source Keeper");
+    // Check if all hostiles are NPCs and distinguish Source Keepers from Invaders.
+    let all_npc = hostile_creeps.iter().all(|c| super::is_npc_owner(&c.owner));
+    let all_source_keepers = hostile_creeps.iter().all(|c| super::is_source_keeper_owner(&c.owner));
+    let has_invaders = hostile_creeps.iter().any(|c| super::is_invader_owner(&c.owner));
 
     if all_npc {
+        if all_source_keepers {
+            // Only Source Keepers -- permanent residents, not a threat.
+            return ThreatLevel::SourceKeeper;
+        }
+        // Has actual Invader NPCs (possibly mixed with Source Keepers in an SK room).
         return ThreatLevel::Invader;
     }
+
+    // Mixed NPC + player, or pure player -- ignore the NPC classification
+    // and fall through to player threat assessment.
+    let _ = has_invaders;
 
     if !has_combat_parts {
         return ThreatLevel::PlayerScout;
@@ -211,27 +205,52 @@ pub fn classify_threat(hostile_creeps: &[HostileCreepInfo], has_nukes: bool) -> 
     ThreatLevel::PlayerRaid
 }
 
-/// System that populates the ThreatMap each tick from visible room data.
+/// Maximum age (in ticks) before a RoomThreatData component is removed.
+/// Prevents stale data from driving decisions long after the threat may
+/// have moved.
+const THREAT_DATA_MAX_AGE: u32 = 500;
+
+/// System that populates `RoomThreatData` components on room entities each
+/// tick from visible room data.
 ///
-/// This runs in the pre-pass dispatcher after room data is updated.
+/// Runs in the pre-pass dispatcher after room data is updated.
+///
+/// - For visible rooms with threats: upserts the `RoomThreatData` component.
+/// - For visible rooms with no threats: removes the component.
+/// - For non-visible rooms: the component is retained from previous ticks.
+/// - Stale components (older than `THREAT_DATA_MAX_AGE`) are removed.
 pub struct ThreatAssessmentSystem;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-impl<'a> specs::System<'a> for ThreatAssessmentSystem {
-    type SystemData = (specs::ReadStorage<'a, crate::room::data::RoomData>, specs::Write<'a, ThreatMap>);
+impl<'a> System<'a> for ThreatAssessmentSystem {
+    type SystemData = (
+        Entities<'a>,
+        ReadStorage<'a, crate::room::data::RoomData>,
+        WriteStorage<'a, RoomThreatData>,
+    );
 
-    fn run(&mut self, (room_data_storage, mut threat_map): Self::SystemData) {
-        threat_map.clear();
+    fn run(&mut self, (entities, room_data_storage, mut threat_data_storage): Self::SystemData) {
+        let current_tick = game::time();
 
-        use specs::Join;
+        // Expire stale threat data from rooms that haven't been refreshed.
+        let stale_entities: Vec<Entity> = (&entities, &threat_data_storage)
+            .join()
+            .filter(|(_, td)| current_tick.saturating_sub(td.last_seen) > THREAT_DATA_MAX_AGE)
+            .map(|(e, _)| e)
+            .collect();
 
-        for room_data in room_data_storage.join() {
+        for entity in stale_entities {
+            threat_data_storage.remove(entity);
+        }
+
+        // Update threat data for visible rooms.
+        for (entity, room_data) in (&entities, &room_data_storage).join() {
             let dynamic_vis = match room_data.get_dynamic_visibility_data() {
                 Some(d) => d,
                 None => continue,
             };
 
-            // Only process rooms we can currently see.
+            // Only update rooms we can currently see.
             if !dynamic_vis.visible() {
                 continue;
             }
@@ -265,29 +284,53 @@ impl<'a> specs::System<'a> for ThreatAssessmentSystem {
                 let nukes = room.find(find::NUKES, None);
                 for nuke in &nukes {
                     incoming_nukes.push(NukeInfo {
-                        landing_tick: nuke.time_to_land() + game::time(),
+                        landing_tick: nuke.time_to_land() + current_tick,
                         impact_position: nuke.pos(),
                     });
                 }
             }
 
+            // Detect safe mode status from cached structure data.
+            let (safe_mode_active, safe_mode_available) = room_data
+                .get_structures()
+                .and_then(|s| s.controllers().first().map(|c| {
+                    (
+                        c.safe_mode().unwrap_or(0) > 0,
+                        c.safe_mode_available() > 0,
+                    )
+                }))
+                .unwrap_or((false, false));
+
             let has_nukes = !incoming_nukes.is_empty();
             let threat_level = classify_threat(&hostile_creep_infos, has_nukes);
 
-            // Only store data if there is something interesting.
-            if threat_level != ThreatLevel::None || !incoming_nukes.is_empty() {
-                threat_map.insert(
-                    room_data.name,
+            // Persist when there are threats, nukes, or an enemy room has safe mode
+            // (relevant for attack planning even if no hostiles are currently present).
+            let enemy_safe_mode_relevant = (safe_mode_active || safe_mode_available)
+                && room_data
+                    .get_structures()
+                    .and_then(|s| s.controllers().first().map(|c| !c.my()))
+                    .unwrap_or(false);
+
+            if threat_level != ThreatLevel::None || !incoming_nukes.is_empty() || enemy_safe_mode_relevant {
+                // Upsert: insert or overwrite the component with fresh data.
+                let _ = threat_data_storage.insert(
+                    entity,
                     RoomThreatData {
                         threat_level,
                         hostile_creeps: hostile_creep_infos,
                         hostile_tower_positions,
                         incoming_nukes,
-                        last_seen: game::time(),
+                        last_seen: current_tick,
                         estimated_dps,
                         estimated_heal,
+                        safe_mode_active,
+                        safe_mode_available,
                     },
                 );
+            } else {
+                // Room is visible and has no threats -- remove stale component.
+                threat_data_storage.remove(entity);
             }
         }
     }

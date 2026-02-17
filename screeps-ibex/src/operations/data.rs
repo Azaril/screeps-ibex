@@ -11,9 +11,9 @@ pub enum OperationData {
     MiningOutpost(super::miningoutpost::MiningOutpostOperation),
     Claim(super::claim::ClaimOperation),
     Colony(super::colony::ColonyOperation),
-    Defense(super::defense::DefenseOperation),
     Attack(super::attack::AttackOperation),
     Scout(super::scout::ScoutOperation),
+    War(super::war::WarOperation),
 }
 
 impl OperationData {
@@ -22,9 +22,9 @@ impl OperationData {
             OperationData::MiningOutpost(ref mut data) => data,
             OperationData::Claim(ref mut data) => data,
             OperationData::Colony(ref mut data) => data,
-            OperationData::Defense(ref mut data) => data,
             OperationData::Attack(ref mut data) => data,
             OperationData::Scout(ref mut data) => data,
+            OperationData::War(ref mut data) => data,
         }
     }
 
@@ -34,9 +34,9 @@ impl OperationData {
             OperationData::MiningOutpost(ref data) => data.describe_operation(ctx),
             OperationData::Claim(ref data) => data.describe_operation(ctx),
             OperationData::Colony(ref data) => data.describe_operation(ctx),
-            OperationData::Defense(ref data) => data.describe_operation(ctx),
             OperationData::Attack(ref data) => data.describe_operation(ctx),
             OperationData::Scout(ref data) => data.describe_operation(ctx),
+            OperationData::War(ref data) => data.describe_operation(ctx),
         }
     }
 }

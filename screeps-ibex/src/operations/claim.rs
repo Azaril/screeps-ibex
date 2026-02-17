@@ -782,10 +782,20 @@ impl Operation for ClaimOperation {
         self.claim_missions.retain(|e| *e != child);
     }
 
-    fn describe_operation(&self, ctx: &OperationDescribeContext) -> SummaryContent {
-        let mut items = Vec::new();
+    fn repair_entity_refs(&mut self, is_valid: &dyn Fn(Entity) -> bool) {
+        self.claim_missions.retain(|e| {
+            let ok = is_valid(*e);
+            if !ok {
+                error!("INTEGRITY: dead claim mission entity {:?} removed from ClaimOperation", e);
+            }
+            ok
+        });
+    }
 
-        // Active claim missions with home rooms
+    fn describe_operation(&self, ctx: &OperationDescribeContext) -> SummaryContent {
+        let mut children = Vec::new();
+
+        // Active claim missions with home rooms.
         for mission_entity in self.claim_missions.iter() {
             if let Some(mission) = ctx.mission_data.get(*mission_entity) {
                 let room_entity = mission.as_mission().get_room();
@@ -801,26 +811,31 @@ impl Operation for ClaimOperation {
                         })
                         .unwrap_or_default();
                     if home_names.is_empty() {
-                        items.push(format!("-> {}", room.name));
+                        children.push(SummaryContent::Text(format!("-> {}", room.name)));
                     } else {
-                        items.push(format!("-> {} (from {})", room.name, home_names.join(",")));
+                        children.push(SummaryContent::Text(format!(
+                            "-> {} (from {})",
+                            room.name,
+                            home_names.join(", ")
+                        )));
                     }
                 }
             }
         }
 
-        if items.is_empty() {
+        // When idle/scouting/selecting with no active missions, show phase in header.
+        if children.is_empty() {
             let phase_label = match self.phase {
-                ClaimPhase::Idle => "idle",
-                ClaimPhase::Scouting => "scouting",
-                ClaimPhase::Select => "selecting",
+                ClaimPhase::Idle => "Idle",
+                ClaimPhase::Scouting => "Scouting",
+                ClaimPhase::Select => "Selecting",
             };
-            items.push(format!("({})", phase_label));
+            return SummaryContent::Text(format!("Claim ({})", phase_label));
         }
 
-        SummaryContent::Lines {
-            header: "Claim".to_string(),
-            items,
+        SummaryContent::Tree {
+            label: "Claim".to_string(),
+            children,
         }
     }
 

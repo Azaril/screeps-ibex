@@ -775,9 +775,9 @@ impl Mission for LabsMission {
     }
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
-        while let Some(tick_result) = self.state.tick(system_data, mission_entity, &mut self.context)? {
-            self.state = tick_result
-        }
+        crate::machine_tick::run_state_machine_result(&mut self.state, "LabsMission", |state| {
+            state.tick(system_data, mission_entity, &mut self.context)
+        })?;
 
         self.state.visualize(system_data, mission_entity);
 
