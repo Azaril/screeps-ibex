@@ -1,4 +1,4 @@
-use crate::creep::CreepOwner;
+use crate::creep::{CreepOwner, CreepSpawning};
 use crate::military::composition::*;
 use crate::serialize::*;
 use screeps::*;
@@ -916,9 +916,10 @@ impl<'a> System<'a> for PreRunSquadUpdateSystem {
         Entities<'a>,
         WriteStorage<'a, SquadContext>,
         ReadStorage<'a, CreepOwner>,
+        ReadStorage<'a, CreepSpawning>,
     );
 
-    fn run(&mut self, (entities, mut squad_contexts, creep_owners): Self::SystemData) {
+    fn run(&mut self, (entities, mut squad_contexts, creep_owners, creep_spawning): Self::SystemData) {
         for (_, squad_ctx) in (&entities, &mut squad_contexts).join() {
             // Clear previous tick's orders so missions start from a clean slate.
             for member in squad_ctx.members.iter_mut() {
@@ -926,9 +927,16 @@ impl<'a> System<'a> for PreRunSquadUpdateSystem {
             }
 
             // Remove dead members (entity deleted or creep gone).
+            // Keep members that are still physically spawning (have
+            // CreepSpawning but no CreepOwner yet) -- removing them
+            // would cause the mission to re-queue the slot and produce
+            // duplicate creeps.
             squad_ctx.members.retain(|m| {
                 if !entities.is_alive(m.entity) {
                     return false;
+                }
+                if creep_spawning.get(m.entity).is_some() {
+                    return true;
                 }
                 if let Some(creep_owner) = creep_owners.get(m.entity) {
                     creep_owner.owner.resolve().is_some()

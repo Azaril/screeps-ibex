@@ -266,10 +266,11 @@ impl Spawning {
 
             let planned = &state_context.force_plan[plan_index];
 
-            // Queue ALL unfilled slots to ALL capable home rooms.
-            // Each slot gets one shared token so only one room spawns it.
+            // Queue all unfilled slots to all capable home rooms.
+            // Each slot gets one shared token so only one room spawns it
+            // per tick. The spawn callback fires on the same tick via
+            // LazyUpdate, so is_slot_filled() is accurate by next tick.
             for (slot_index, slot) in planned.composition.slots.iter().enumerate() {
-                // Check if this slot is already filled via SquadContext.
                 let already_filled = system_data
                     .squad_contexts
                     .get(squad_entity)
@@ -281,7 +282,6 @@ impl Spawning {
                 }
 
                 let token = system_data.spawn_queue.token();
-                let mut any_queued = false;
 
                 for home_entity in state_context.home_room_datas.iter() {
                     let home_room_data = match system_data.room_data.get(*home_entity) {
@@ -313,7 +313,6 @@ impl Spawning {
                                 ),
                             );
                             system_data.spawn_queue.request(*home_entity, spawn_request);
-                            any_queued = true;
                         }
                         Err(()) => {
                             // This room can't produce the body; try the next.
@@ -509,7 +508,8 @@ impl Rallying {
 }
 
 /// Check if every squad that ever had members spawned now has zero living
-/// members. Returns false if no squad ever had members (nothing to wipe).
+/// members. Returns false if no squad ever had members (nothing to wipe),
+/// or if any squad hasn't finished spawning yet.
 fn all_squads_wiped(
     system_data: &MissionExecutionSystemData,
     state_context: &AttackMissionContext,
@@ -542,6 +542,10 @@ fn all_squads_wiped(
             let ever_had = squad_ctx
                 .map(|ctx| ctx.ever_had_members())
                 .unwrap_or(false);
+            // A squad is wiped if it has no living members AND spawning is
+            // done (spawn_complete) or it at least had members at some point
+            // (ever_had). Squads still mid-spawn (!spawn_complete && !ever_had)
+            // are not considered wiped.
             living == 0 && (s.spawn_complete || ever_had)
         })
 }
