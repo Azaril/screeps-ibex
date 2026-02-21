@@ -88,16 +88,9 @@ pub enum DefenseEscalation {
 impl DefenseEscalation {
     /// Determine escalation level from threat analysis.
     fn from_threat(estimated_dps: f32, estimated_heal: f32, hostile_count: usize, any_boosted: bool) -> Self {
-        if (any_boosted && estimated_dps > 200.0)
-            || (estimated_heal > 100.0 && estimated_dps > 150.0)
-            || hostile_count >= 4
-        {
+        if (any_boosted && estimated_dps > 200.0) || (estimated_heal > 100.0 && estimated_dps > 150.0) || hostile_count >= 4 {
             DefenseEscalation::Quad
-        } else if estimated_dps > 60.0
-            || estimated_heal > 20.0
-            || hostile_count >= 2
-            || any_boosted
-        {
+        } else if estimated_dps > 60.0 || estimated_heal > 20.0 || hostile_count >= 2 || any_boosted {
             DefenseEscalation::Duo
         } else {
             DefenseEscalation::Solo
@@ -143,9 +136,9 @@ pub struct WarOperation {
 }
 
 // Cadence constants (ticks).
-const DEFENSE_CADENCE: u32 = 2;
-const OFFENSE_CADENCE: u32 = 15;
-const RECOMPUTE_CADENCE: u32 = 50;
+const DEFENSE_CADENCE: u32 = 1;
+const OFFENSE_CADENCE: u32 = 1;
+const RECOMPUTE_CADENCE: u32 = 1;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl WarOperation {
@@ -174,11 +167,7 @@ impl WarOperation {
 
     // ── Defense scan (every 1-2 ticks) ─────────────────────────────────────
 
-    fn run_defense_scan(
-        &mut self,
-        system_data: &mut OperationExecutionSystemData,
-        runtime_data: &mut OperationExecutionRuntimeData,
-    ) {
+    fn run_defense_scan(&mut self, system_data: &mut OperationExecutionSystemData, runtime_data: &mut OperationExecutionRuntimeData) {
         let features = crate::features::features();
 
         if !features.military.defense {
@@ -189,9 +178,7 @@ impl WarOperation {
         let home_rooms: Vec<Entity> = (system_data.entities, &*system_data.room_data)
             .join()
             .filter(|(_, rd)| {
-                rd.get_dynamic_visibility_data()
-                    .map(|d| d.owner().mine())
-                    .unwrap_or(false)
+                rd.get_dynamic_visibility_data().map(|d| d.owner().mine()).unwrap_or(false)
                     && rd.get_structures().map(|s| !s.spawns().is_empty()).unwrap_or(false)
             })
             .map(|(e, _)| e)
@@ -233,10 +220,7 @@ impl WarOperation {
 
                 let has_hostiles = dynamic_vis.hostile_creeps();
 
-                let has_nukes = room_data
-                    .get_nukes()
-                    .map(|n| n.has_incoming())
-                    .unwrap_or(false);
+                let has_nukes = room_data.get_nukes().map(|n| n.has_incoming()).unwrap_or(false);
 
                 let missions = room_data.get_missions();
                 let has_nuke_defense_mission = missions
@@ -266,9 +250,7 @@ impl WarOperation {
                 let hostiles: Vec<_> = creeps
                     .hostile()
                     .iter()
-                    .filter(|c| {
-                        !crate::military::is_npc_owner(&c.owner().username())
-                    })
+                    .filter(|c| !crate::military::is_npc_owner(&c.owner().username()))
                     .collect();
 
                 if hostiles.is_empty() {
@@ -326,12 +308,7 @@ impl WarOperation {
                 None => continue,
             };
 
-            let escalation = DefenseEscalation::from_threat(
-                need.estimated_dps,
-                need.estimated_heal,
-                need.hostile_count,
-                need.any_boosted,
-            );
+            let escalation = DefenseEscalation::from_threat(need.estimated_dps, need.estimated_heal, need.hostile_count, need.any_boosted);
 
             info!(
                 "[War] Starting {:?} squad defense for room: {} (dps={:.0}, heal={:.0}, count={})",
@@ -365,9 +342,17 @@ impl WarOperation {
             room_data.add_mission(mission_entity);
         }
 
-        // ── Nuke defense, safe mode, wall repair ───────────────────────────
+        // ── Nuke defense, safe mode, wall repair (home rooms only) ──────────
+        // Only create these missions for rooms we control (have spawns). This
+        // avoids running wall repair / safe mode / nuke defense in owned rooms
+        // we don't want to manage (e.g. no spawns, or abandoned).
+        let home_set: std::collections::HashSet<Entity> = home_rooms.iter().copied().collect();
 
         for state in room_states {
+            if !home_set.contains(&state.room_entity) {
+                continue;
+            }
+
             let room_data = match system_data.room_data.get_mut(state.room_entity) {
                 Some(rd) => rd,
                 None => continue,
@@ -460,66 +445,62 @@ impl WarOperation {
         // Invader creeps in rooms we've reserved disrupt remote mining.
         // Spawn a solo or duo defense depending on invader strength.
 
-        let remote_rooms_with_invaders: Vec<(Entity, f32, f32, usize)> =
-            (system_data.entities, &*system_data.room_data)
-                .join()
-                .filter_map(|(entity, room_data)| {
-                    let dynamic_vis = room_data.get_dynamic_visibility_data()?;
+        let remote_rooms_with_invaders: Vec<(Entity, f32, f32, usize)> = (system_data.entities, &*system_data.room_data)
+            .join()
+            .filter_map(|(entity, room_data)| {
+                let dynamic_vis = room_data.get_dynamic_visibility_data()?;
 
-                    // Only defend rooms we've reserved (our remote mining rooms).
-                    if !dynamic_vis.reservation().mine() || !dynamic_vis.visible() {
-                        return None;
-                    }
+                // Only defend rooms we've reserved (our remote mining rooms).
+                if !dynamic_vis.reservation().mine() || !dynamic_vis.visible() {
+                    return None;
+                }
 
-                    if !dynamic_vis.hostile_creeps() {
-                        return None;
-                    }
+                if !dynamic_vis.hostile_creeps() {
+                    return None;
+                }
 
-                    // Already has defense?
-                    let has_defense = room_data.get_missions().iter().any(|me| {
-                        system_data
-                            .mission_data
-                            .get(*me)
-                            .as_mission_type::<SquadDefenseMission>()
-                            .is_some()
-                    });
-                    if has_defense {
-                        return None;
-                    }
+                // Already has defense?
+                let has_defense = room_data
+                    .get_missions()
+                    .iter()
+                    .any(|me| system_data.mission_data.get(*me).as_mission_type::<SquadDefenseMission>().is_some());
+                if has_defense {
+                    return None;
+                }
 
-                    let creeps = room_data.get_creeps()?;
-                    // Only count actual Invader NPCs, not Source Keepers.
-                    // Source Keepers are permanent residents and should not
-                    // trigger defensive responses.
-                    let invaders: Vec<_> = creeps
-                        .hostile()
-                        .iter()
-                        .filter(|c| crate::military::is_invader_owner(&c.owner().username()))
-                        .collect();
+                let creeps = room_data.get_creeps()?;
+                // Only count actual Invader NPCs, not Source Keepers.
+                // Source Keepers are permanent residents and should not
+                // trigger defensive responses.
+                let invaders: Vec<_> = creeps
+                    .hostile()
+                    .iter()
+                    .filter(|c| crate::military::is_invader_owner(&c.owner().username()))
+                    .collect();
 
-                    if invaders.is_empty() {
-                        return None;
-                    }
+                if invaders.is_empty() {
+                    return None;
+                }
 
-                    let mut dps: f32 = 0.0;
-                    let mut heal: f32 = 0.0;
-                    for inv in &invaders {
-                        for part_info in inv.body().iter() {
-                            if part_info.hits() == 0 {
-                                continue;
-                            }
-                            match part_info.part() {
-                                Part::Attack => dps += 30.0,
-                                Part::RangedAttack => dps += 10.0,
-                                Part::Heal => heal += 12.0,
-                                _ => {}
-                            }
+                let mut dps: f32 = 0.0;
+                let mut heal: f32 = 0.0;
+                for inv in &invaders {
+                    for part_info in inv.body().iter() {
+                        if part_info.hits() == 0 {
+                            continue;
+                        }
+                        match part_info.part() {
+                            Part::Attack => dps += 30.0,
+                            Part::RangedAttack => dps += 10.0,
+                            Part::Heal => heal += 12.0,
+                            _ => {}
                         }
                     }
+                }
 
-                    Some((entity, dps, heal, invaders.len()))
-                })
-                .collect();
+                Some((entity, dps, heal, invaders.len()))
+            })
+            .collect();
 
         for (room_entity, dps, heal, count) in remote_rooms_with_invaders {
             let room_data = match system_data.room_data.get_mut(room_entity) {
@@ -562,11 +543,7 @@ impl WarOperation {
 
     // ── Offense evaluation (every 10-20 ticks) ────────────────────────────
 
-    fn run_offense_evaluation(
-        &mut self,
-        system_data: &mut OperationExecutionSystemData,
-        runtime_data: &mut OperationExecutionRuntimeData,
-    ) {
+    fn run_offense_evaluation(&mut self, system_data: &mut OperationExecutionSystemData, runtime_data: &mut OperationExecutionRuntimeData) {
         let features = crate::features::features();
 
         if !features.military.offense {
@@ -584,7 +561,8 @@ impl WarOperation {
             if features.military.debug_log {
                 info!(
                     "[War] Offense at capacity ({}/{})",
-                    self.active_attack_entities.len(), self.max_concurrent_attacks
+                    self.active_attack_entities.len(),
+                    self.max_concurrent_attacks
                 );
             }
             return;
@@ -602,9 +580,7 @@ impl WarOperation {
         let home_room_entries: Vec<(Entity, RoomName)> = (system_data.entities, &*system_data.room_data)
             .join()
             .filter(|(_, rd)| {
-                rd.get_dynamic_visibility_data()
-                    .map(|d| d.owner().mine())
-                    .unwrap_or(false)
+                rd.get_dynamic_visibility_data().map(|d| d.owner().mine()).unwrap_or(false)
                     && rd.get_structures().map(|s| !s.spawns().is_empty()).unwrap_or(false)
             })
             .map(|(e, rd)| (e, rd.name))
@@ -647,10 +623,11 @@ impl WarOperation {
 
         // Collect rooms with threat data for iteration (avoids borrow conflicts
         // with system_data.room_data which is &mut).
-        let threat_rooms: Vec<(Entity, RoomName, RoomThreatData)> = (system_data.entities, &*system_data.room_data, system_data.threat_data)
-            .join()
-            .map(|(e, rd, td)| (e, rd.name, td.clone()))
-            .collect();
+        let threat_rooms: Vec<(Entity, RoomName, RoomThreatData)> =
+            (system_data.entities, &*system_data.room_data, system_data.threat_data)
+                .join()
+                .map(|(e, rd, td)| (e, rd.name, td.clone()))
+                .collect();
 
         if war_debug {
             info!(
@@ -693,12 +670,7 @@ impl WarOperation {
             }
 
             // Compute minimum distance from any home room.
-            let min_distance = self.min_distance_to_homes(
-                room_name,
-                &home_rooms,
-                system_data.route_cache,
-                current_tick,
-            );
+            let min_distance = self.min_distance_to_homes(room_name, &home_rooms, system_data.route_cache, current_tick);
 
             // Skip rooms that are too far away (> 10 hops).
             if min_distance > 10 {
@@ -712,25 +684,14 @@ impl WarOperation {
             let invader_core_level = room_entity
                 .and_then(|e| system_data.room_data.get(e))
                 .and_then(|rd| rd.get_structures())
-                .map(|structures| {
-                    structures
-                        .invader_cores()
-                        .iter()
-                        .map(|core| core.level())
-                        .max()
-                        .unwrap_or(0)
-                })
+                .map(|structures| structures.invader_cores().iter().map(|core| core.level()).max().unwrap_or(0))
                 .unwrap_or(0);
 
             // Check for power banks.
             let power_bank_info = room_entity
                 .and_then(|e| system_data.room_data.get(e))
                 .and_then(|rd| rd.get_structures())
-                .and_then(|structures| {
-                    structures.power_banks().first().map(|pb| {
-                        (pb.power(), pb.ticks_to_decay())
-                    })
-                });
+                .and_then(|structures| structures.power_banks().first().map(|pb| (pb.power(), pb.ticks_to_decay())));
 
             // Check room ownership for player targeting.
             let room_owner_hostile = room_entity
@@ -785,9 +746,7 @@ impl WarOperation {
                     if score > 0.0 {
                         candidates.push(AttackCandidate {
                             room: room_name,
-                            source: TargetSource::InvaderCore {
-                                level: invader_core_level,
-                            },
+                            source: TargetSource::InvaderCore { level: invader_core_level },
                             score,
                             tower_count,
                             estimated_enemy_dps: threat_data.estimated_dps,
@@ -824,10 +783,7 @@ impl WarOperation {
                     if score > 0.0 {
                         candidates.push(AttackCandidate {
                             room: room_name,
-                            source: TargetSource::PowerBank {
-                                power,
-                                ticks_to_decay,
-                            },
+                            source: TargetSource::PowerBank { power, ticks_to_decay },
                             score,
                             tower_count: 0,
                             estimated_enemy_dps: 0.0,
@@ -847,10 +803,7 @@ impl WarOperation {
                 .hostile_creeps
                 .iter()
                 .any(|c| crate::military::is_invader_owner(&c.owner));
-            let all_npc = threat_data
-                .hostile_creeps
-                .iter()
-                .all(|c| crate::military::is_npc_owner(&c.owner));
+            let all_npc = threat_data.hostile_creeps.iter().all(|c| crate::military::is_npc_owner(&c.owner));
             let is_our_remote = room_entity
                 .and_then(|e| system_data.room_data.get(e))
                 .and_then(|rd| rd.get_dynamic_visibility_data())
@@ -882,16 +835,10 @@ impl WarOperation {
             }
 
             // ── Hostile player rooms (resource denial / expansion) ───────
-            if room_owner_hostile
-                && features.military.attack_players
-                && !all_npc
-                && threat_data.threat_level >= ThreatLevel::PlayerScout
-            {
+            if room_owner_hostile && features.military.attack_players && !all_npc && threat_data.threat_level >= ThreatLevel::PlayerScout {
                 // Only target hostile player rooms if we have strong economy
                 // and the room is close enough to be worth contesting.
-                if system_data.economy.total_stored_energy > 150_000
-                    && min_distance <= 6
-                {
+                if system_data.economy.total_stored_energy > 150_000 && min_distance <= 6 {
                     let distance_penalty = min_distance as f32 * 4.0;
                     let tower_penalty = tower_count as f32 * 5.0;
                     let safe_mode_penalty = if has_safe_mode { 20.0 } else { 0.0 };
@@ -933,9 +880,15 @@ impl WarOperation {
                 for (i, c) in candidates.iter().enumerate() {
                     info!(
                         "[War]   #{}: {} score={:.1} source={:?} towers={} dps={:.0} heal={:.0} safe_mode={} roi={:?}",
-                        i + 1, c.room, c.score, c.source, c.tower_count,
-                        c.estimated_enemy_dps, c.estimated_enemy_heal,
-                        c.has_safe_mode, c.estimated_roi
+                        i + 1,
+                        c.room,
+                        c.score,
+                        c.source,
+                        c.tower_count,
+                        c.estimated_enemy_dps,
+                        c.estimated_enemy_heal,
+                        c.has_safe_mode,
+                        c.estimated_roi
                     );
                 }
             }
@@ -950,8 +903,12 @@ impl WarOperation {
 
             info!(
                 "[War] Launching AttackOperation for {} (source={:?}, score={:.1}, towers={}, dps={:.0}, heal={:.0})",
-                candidate.room, candidate.source, candidate.score,
-                candidate.tower_count, candidate.estimated_enemy_dps, candidate.estimated_enemy_heal
+                candidate.room,
+                candidate.source,
+                candidate.score,
+                candidate.tower_count,
+                candidate.estimated_enemy_dps,
+                candidate.estimated_enemy_heal
             );
 
             let reason: super::attack::AttackReason = candidate.source.into();
@@ -974,11 +931,7 @@ impl WarOperation {
 
     // ── Heavy recompute (every 50+ ticks) ─────────────────────────────────
 
-    fn run_heavy_recompute(
-        &mut self,
-        system_data: &mut OperationExecutionSystemData,
-        _runtime_data: &mut OperationExecutionRuntimeData,
-    ) {
+    fn run_heavy_recompute(&mut self, system_data: &mut OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {
         let current_tick = game::time();
 
         // ── 1. Update concurrent attack limits based on economy ──────────
@@ -1021,16 +974,21 @@ impl WarOperation {
                     .filter(|c| !crate::military::is_npc_owner(&c.owner))
                     .collect();
                 let hostile_count = player_hostiles.len() as u32;
-                let enemy_dps: f32 = player_hostiles.iter().map(|c| c.melee_dps + c.ranged_dps).sum::<f32>()
-                    + tower_count as f32 * 600.0;
+                let enemy_dps: f32 = player_hostiles.iter().map(|c| c.melee_dps + c.ranged_dps).sum::<f32>() + tower_count as f32 * 600.0;
                 let enemy_heal: f32 = player_hostiles.iter().map(|c| c.heal_per_tick).sum();
                 let any_boosted = player_hostiles.iter().any(|c| c.boosted);
 
                 if war_debug && (hostile_count > 0 || tower_count > 0) {
                     info!(
                         "[War] Threat update for {}: towers={}, dps={:.0}, heal={:.0}, hostiles={}, boosted={}, safe_mode={}/{}",
-                        room_name, tower_count, enemy_dps, enemy_heal, hostile_count, any_boosted,
-                        threat_data.safe_mode_active, threat_data.safe_mode_available
+                        room_name,
+                        tower_count,
+                        enemy_dps,
+                        enemy_heal,
+                        hostile_count,
+                        any_boosted,
+                        threat_data.safe_mode_active,
+                        threat_data.safe_mode_available
                     );
                 }
 
@@ -1039,17 +997,8 @@ impl WarOperation {
                 let safe_active = threat_data.safe_mode_active;
                 let safe_available = threat_data.safe_mode_available;
                 system_data.updater.exec_mut(move |world| {
-                    if let Some(OperationData::Attack(ref mut attack_op)) =
-                        world.write_storage::<OperationData>().get_mut(entity)
-                    {
-                        attack_op.update_threat_intel(
-                            tower_count,
-                            enemy_dps,
-                            enemy_heal,
-                            hostile_count,
-                            safe_active,
-                            safe_available,
-                        );
+                    if let Some(OperationData::Attack(ref mut attack_op)) = world.write_storage::<OperationData>().get_mut(entity) {
+                        attack_op.update_threat_intel(tower_count, enemy_dps, enemy_heal, hostile_count, safe_active, safe_available);
                     }
                 });
             }
@@ -1061,11 +1010,7 @@ impl WarOperation {
 
         let home_rooms: Vec<RoomName> = (system_data.entities, &*system_data.room_data)
             .join()
-            .filter(|(_, rd)| {
-                rd.get_dynamic_visibility_data()
-                    .map(|d| d.owner().mine())
-                    .unwrap_or(false)
-            })
+            .filter(|(_, rd)| rd.get_dynamic_visibility_data().map(|d| d.owner().mine()).unwrap_or(false))
             .map(|(_, rd)| rd.name)
             .collect();
 
@@ -1109,11 +1054,9 @@ impl WarOperation {
                 .unwrap_or(false);
 
             if !has_fresh_data {
-                system_data.visibility.request(VisibilityRequest::new(
-                    *room_name,
-                    1.0,
-                    VisibilityRequestFlags::ALL,
-                ));
+                system_data
+                    .visibility
+                    .request(VisibilityRequest::new(*room_name, 1.0, VisibilityRequestFlags::ALL));
             }
         }
 
@@ -1133,9 +1076,7 @@ impl WarOperation {
 
             // Check if this room is adjacent to one of our rooms.
             let near_home = home_rooms.iter().any(|&home| {
-                let route = system_data
-                    .route_cache
-                    .get_route_distance(home, room_name, current_tick);
+                let route = system_data.route_cache.get_route_distance(home, room_name, current_tick);
                 route.reachable && route.hops <= 2
             });
 
@@ -1153,10 +1094,7 @@ impl WarOperation {
 
     // ── Home room rebalancing ────────────────────────────────────────────────
 
-    fn reassign_home_rooms(
-        &self,
-        system_data: &mut OperationExecutionSystemData,
-    ) {
+    fn reassign_home_rooms(&self, system_data: &mut OperationExecutionSystemData) {
         let current_tick = game::time();
         let war_debug = crate::features::features().military.debug_log;
 
@@ -1164,9 +1102,7 @@ impl WarOperation {
         let home_rooms: Vec<(Entity, RoomName)> = (system_data.entities, &*system_data.room_data)
             .join()
             .filter(|(_, rd)| {
-                rd.get_dynamic_visibility_data()
-                    .map(|d| d.owner().mine())
-                    .unwrap_or(false)
+                rd.get_dynamic_visibility_data().map(|d| d.owner().mine()).unwrap_or(false)
                     && rd.get_structures().map(|s| !s.spawns().is_empty()).unwrap_or(false)
             })
             .map(|(e, rd)| (e, rd.name))
@@ -1199,10 +1135,12 @@ impl WarOperation {
                 home_rooms
                     .iter()
                     .map(|(_, home_name)| {
-                        let route = system_data
-                            .route_cache
-                            .get_route_distance(*home_name, *target, current_tick);
-                        if route.reachable { route.hops } else { u32::MAX }
+                        let route = system_data.route_cache.get_route_distance(*home_name, *target, current_tick);
+                        if route.reachable {
+                            route.hops
+                        } else {
+                            u32::MAX
+                        }
                     })
                     .collect()
             })
@@ -1215,12 +1153,7 @@ impl WarOperation {
 
         // Sort attacks by fewest reachable home rooms (most constrained first).
         let mut attack_order: Vec<usize> = (0..attacks.len()).collect();
-        attack_order.sort_by_key(|&ai| {
-            distances[ai]
-                .iter()
-                .filter(|&&d| d < u32::MAX)
-                .count()
-        });
+        attack_order.sort_by_key(|&ai| distances[ai].iter().filter(|&&d| d < u32::MAX).count());
 
         for &ai in &attack_order {
             // Find closest untaken home room.
@@ -1266,15 +1199,8 @@ impl WarOperation {
             }
 
             if war_debug {
-                let room_names: Vec<String> = home_indices
-                    .iter()
-                    .map(|&hi| home_rooms[hi].1.to_string())
-                    .collect();
-                info!(
-                    "[War] Assign {} -> spawn: [{}]",
-                    attacks[ai].1,
-                    room_names.join(", ")
-                );
+                let room_names: Vec<String> = home_indices.iter().map(|&hi| home_rooms[hi].1.to_string()).collect();
+                info!("[War] Assign {} -> spawn: [{}]", attacks[ai].1, room_names.join(", "));
             }
 
             // Don't overwrite existing home rooms with an empty assignment.
@@ -1282,10 +1208,7 @@ impl WarOperation {
             // home rooms were consumed by higher-priority attacks.
             if rooms.is_empty() {
                 if war_debug {
-                    info!(
-                        "[War] Skipping empty home room assignment for {} (keeping existing)",
-                        attacks[ai].1
-                    );
+                    info!("[War] Skipping empty home room assignment for {} (keeping existing)", attacks[ai].1);
                 }
                 continue;
             }
@@ -1302,9 +1225,7 @@ impl WarOperation {
                 };
 
                 // Update the operation's home rooms.
-                if let Some(OperationData::Attack(ref mut attack_op)) =
-                    world.write_storage::<OperationData>().get_mut(attack_entity)
-                {
+                if let Some(OperationData::Attack(ref mut attack_op)) = world.write_storage::<OperationData>().get_mut(attack_entity) {
                     attack_op.set_home_rooms(rooms.clone());
                 }
 
@@ -1338,7 +1259,11 @@ impl WarOperation {
             .iter()
             .map(|&home| {
                 let route = route_cache.get_route_distance(home, target, current_tick);
-                if route.reachable { route.hops } else { u32::MAX }
+                if route.reachable {
+                    route.hops
+                } else {
+                    u32::MAX
+                }
             })
             .min()
             .unwrap_or(u32::MAX)
@@ -1389,7 +1314,6 @@ impl WarOperation {
     fn should_run_tier(&self, last_tick: Option<u32>, cadence: u32) -> bool {
         last_tick.map(|t| game::time() - t >= cadence).unwrap_or(true)
     }
-
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -1449,11 +1373,7 @@ impl Operation for WarOperation {
                 if offense_items.is_empty() {
                     format!("Offense: ON (cap {})", self.max_concurrent_attacks)
                 } else {
-                    format!(
-                        "Offense: {}/{} active",
-                        offense_items.len(),
-                        self.max_concurrent_attacks
-                    )
+                    format!("Offense: {}/{} active", offense_items.len(), self.max_concurrent_attacks)
                 }
             } else {
                 "Offense: OFF".to_string()

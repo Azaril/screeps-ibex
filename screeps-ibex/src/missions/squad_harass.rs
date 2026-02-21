@@ -2,7 +2,7 @@ use super::data::*;
 use super::missionsystem::*;
 use crate::creep::*;
 use crate::jobs::data::*;
-use crate::jobs::ranged::*;
+use crate::jobs::squad_combat::*;
 use crate::military::bodies;
 use crate::serialize::*;
 use crate::spawnsystem::*;
@@ -146,7 +146,7 @@ impl Spawning {
             let name = name.to_string();
 
             system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::RangedAttack(RangedAttackJob::new(target_room));
+                let creep_job = JobData::SquadCombat(SquadCombatJob::new(target_room));
                 let creep_entity = spawning::build(world.create_entity(), &name).with(creep_job).build();
 
                 if let Some(mission_data) = world.write_storage::<MissionData>().get(mission_entity) {

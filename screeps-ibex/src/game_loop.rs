@@ -271,18 +271,28 @@ fn repair_entity_integrity(world: &mut World) {
             sc.members.retain(|m| {
                 let ok = is_valid(m.entity);
                 if !ok {
-                    error!("INTEGRITY: dead member entity {:?} removed from SquadContext {:?}", m.entity, entity);
+                    error!(
+                        "INTEGRITY: dead member entity {:?} removed from SquadContext {:?}",
+                        m.entity, entity
+                    );
                 }
                 ok
             });
             let after = sc.members.len();
             if after < before {
-                warn!("INTEGRITY: removed {} dead member(s) from SquadContext {:?}", before - after, entity);
+                warn!(
+                    "INTEGRITY: removed {} dead member(s) from SquadContext {:?}",
+                    before - after,
+                    entity
+                );
             }
 
             if let Some(heal_entity) = *sc.heal_priority {
                 if !is_valid(heal_entity) {
-                    error!("INTEGRITY: dead heal_priority entity {:?} cleared from SquadContext {:?}", heal_entity, entity);
+                    error!(
+                        "INTEGRITY: dead heal_priority entity {:?} cleared from SquadContext {:?}",
+                        heal_entity, entity
+                    );
                     *sc.heal_priority = None;
                 }
             }
@@ -539,7 +549,7 @@ thread_local! {
 }
 
 /// Segment IDs used for ECS component serialization (world state).
-const COMPONENT_SEGMENTS: &[u32] = &[50, 51, 52, 53];
+const COMPONENT_SEGMENTS: &[u32] = &[50, 51, 52, 53, 54, 55];
 
 fn create_environment() -> GameEnvironment {
     info!("Initializing game environment");

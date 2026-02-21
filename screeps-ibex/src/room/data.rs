@@ -844,17 +844,9 @@ impl DroppedResourceData {
     pub fn total_loot_value(&self) -> u32 {
         let resource_total: u32 = self.resources.iter().map(|r| r.amount()).sum();
 
-        let tombstone_total: u32 = self
-            .tombstones
-            .iter()
-            .map(|t| t.store().get_used_capacity(None))
-            .sum();
+        let tombstone_total: u32 = self.tombstones.iter().map(|t| t.store().get_used_capacity(None)).sum();
 
-        let ruin_total: u32 = self
-            .ruins
-            .iter()
-            .map(|r| r.store().get_used_capacity(None))
-            .sum();
+        let ruin_total: u32 = self.ruins.iter().map(|r| r.store().get_used_capacity(None)).sum();
 
         resource_total + tombstone_total + ruin_total
     }

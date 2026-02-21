@@ -93,7 +93,10 @@ impl RaidMission {
         //Structure::Tombstone(s) => Ok(s.into()),
         //Structure::Resource(s) => Ok(s.into()),
 
-        let structures = room_data.get_structures().ok_or("Expected structures")?;
+        let structures = match room_data.get_structures() {
+            Some(s) => s,
+            None => return Ok(()),
+        };
 
         for structure in structures.all().iter() {
             if let Some(store) = structure.as_has_store() {

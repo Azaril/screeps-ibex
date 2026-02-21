@@ -70,7 +70,11 @@ enum ReactionType {
 fn unload_labs_transfer_generator(room_entity: Entity) -> TransferQueueGenerator {
     Box::new(move |system, transfer, _room_name| {
         let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
-        let structures = room_data.get_structures().ok_or("Expected structures")?;
+        let structures = room_data.get_structures().ok_or_else(|| {
+            let msg = format!("Expected structures - Room: {}", room_data.name);
+            log::warn!("{} at {}:{}", msg, file!(), line!());
+            msg
+        })?;
         let labs = structures.labs();
 
         for lab in labs.iter() {
@@ -113,7 +117,11 @@ impl Idle {
     fn get_labs(system_data: &mut MissionExecutionSystemData, state_context: &mut LabsMissionContext, input_labs: usize) -> LabPairResult {
         let room_data = system_data.room_data.get(state_context.room_data).ok_or("Expected room data")?;
 
-        let structures = room_data.get_structures().ok_or("Expected structures")?;
+        let structures = room_data.get_structures().ok_or_else(|| {
+            let msg = format!("Expected structures - Room: {}", room_data.name);
+            log::warn!("{} at {}:{}", msg, file!(), line!());
+            msg
+        })?;
 
         let labs = structures.labs();
 

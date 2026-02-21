@@ -279,8 +279,6 @@ impl Job for HaulJob {
             action_flags: SimultaneousActionFlags::UNSET,
         };
 
-        crate::machine_tick::run_state_machine(&mut self.state, "HaulJob", |state| {
-            state.tick(&mut self.context, &mut tick_context)
-        });
+        crate::machine_tick::run_state_machine(&mut self.state, "HaulJob", |state| state.tick(&mut self.context, &mut tick_context));
     }
 }

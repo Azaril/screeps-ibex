@@ -271,8 +271,7 @@ fn pick_adjacent_explore_target(
         })
         // Prefer oldest data first, then closest on ties.
         .max_by(|a, b| {
-            a.1.cmp(&b.1)
-                .then_with(|| b.2.cmp(&a.2)) // smaller dist is better
+            a.1.cmp(&b.1).then_with(|| b.2.cmp(&a.2)) // smaller dist is better
         });
 
     // ── Pass 2: BFS for nearest unknown room via cached exits ────────────
@@ -286,10 +285,9 @@ fn pick_adjacent_explore_target(
 
     // ── Pass 3: check immediate exits for truly unknown rooms ────────────
     let exits = game::map::describe_exits(current_room);
-    let unknown_neighbor = exits.values().find(|neighbor| {
-        !runtime_data.visibility_queue.has_entry(*neighbor)
-            && runtime_data.mapping.get_room(neighbor).is_none()
-    });
+    let unknown_neighbor = exits
+        .values()
+        .find(|neighbor| !runtime_data.visibility_queue.has_entry(*neighbor) && runtime_data.mapping.get_room(neighbor).is_none());
 
     // Unknown neighbors are highest priority (age = u32::MAX, dist = 1).
     // Compare against the best known room.
@@ -308,11 +306,7 @@ fn pick_adjacent_explore_target(
 /// BFS through known rooms' cached exits to find the nearest room that has no
 /// `RoomData` entity (never been seen). Returns `None` if no unknown room is
 /// reachable within [`EXPLORE_SEARCH_RADIUS`].
-fn bfs_nearest_unknown(
-    start: RoomName,
-    system_data: &JobExecutionSystemData,
-    runtime_data: &JobExecutionRuntimeData,
-) -> Option<RoomName> {
+fn bfs_nearest_unknown(start: RoomName, system_data: &JobExecutionSystemData, runtime_data: &JobExecutionRuntimeData) -> Option<RoomName> {
     use std::collections::{HashSet, VecDeque};
 
     let mut visited: HashSet<RoomName> = HashSet::new();

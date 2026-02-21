@@ -159,12 +159,18 @@ pub fn analyze_hostile_creep(creep: &Creep) -> HostileCreepInfo {
 }
 
 /// Classify the threat level of a set of hostile creeps.
-pub fn classify_threat(hostile_creeps: &[HostileCreepInfo], has_nukes: bool) -> ThreatLevel {
+pub fn classify_threat(hostile_creeps: &[HostileCreepInfo], has_nukes: bool, has_invader_core: bool) -> ThreatLevel {
     if has_nukes {
         return ThreatLevel::NukeIncoming;
     }
 
     if hostile_creeps.is_empty() {
+        // An invader core without accompanying creeps should still
+        // register as at least ThreatLevel::Invader so the offense
+        // evaluation loop can see the room and plan an attack.
+        if has_invader_core {
+            return ThreatLevel::Invader;
+        }
         return ThreatLevel::None;
     }
 
@@ -181,11 +187,11 @@ pub fn classify_threat(hostile_creeps: &[HostileCreepInfo], has_nukes: bool) -> 
     let has_invaders = hostile_creeps.iter().any(|c| super::is_invader_owner(&c.owner));
 
     if all_npc {
-        if all_source_keepers {
+        if all_source_keepers && !has_invader_core {
             // Only Source Keepers -- permanent residents, not a threat.
             return ThreatLevel::SourceKeeper;
         }
-        // Has actual Invader NPCs (possibly mixed with Source Keepers in an SK room).
+        // Has actual Invader NPCs, an invader core, or a mix with Source Keepers.
         return ThreatLevel::Invader;
     }
 
@@ -293,26 +299,31 @@ impl<'a> System<'a> for ThreatAssessmentSystem {
             // Detect safe mode status from cached structure data.
             let (safe_mode_active, safe_mode_available) = room_data
                 .get_structures()
-                .and_then(|s| s.controllers().first().map(|c| {
-                    (
-                        c.safe_mode().unwrap_or(0) > 0,
-                        c.safe_mode_available() > 0,
-                    )
-                }))
+                .and_then(|s| {
+                    s.controllers()
+                        .first()
+                        .map(|c| (c.safe_mode().unwrap_or(0) > 0, c.safe_mode_available() > 0))
+                })
                 .unwrap_or((false, false));
 
             let has_nukes = !incoming_nukes.is_empty();
-            let threat_level = classify_threat(&hostile_creep_infos, has_nukes);
+            let has_invader_core = room_data
+                .get_structures()
+                .map(|s| !s.invader_cores().is_empty())
+                .unwrap_or(false);
 
-            // Persist when there are threats, nukes, or an enemy room has safe mode
-            // (relevant for attack planning even if no hostiles are currently present).
+            let threat_level = classify_threat(&hostile_creep_infos, has_nukes, has_invader_core);
+
+            // Persist when there are threats, nukes, invader cores, or an
+            // enemy room has safe mode (relevant for attack planning even if
+            // no hostiles are currently present).
             let enemy_safe_mode_relevant = (safe_mode_active || safe_mode_available)
                 && room_data
                     .get_structures()
                     .and_then(|s| s.controllers().first().map(|c| !c.my()))
                     .unwrap_or(false);
 
-            if threat_level != ThreatLevel::None || !incoming_nukes.is_empty() || enemy_safe_mode_relevant {
+            if threat_level != ThreatLevel::None || !incoming_nukes.is_empty() || enemy_safe_mode_relevant || has_invader_core {
                 // Upsert: insert or overwrite the component with fresh data.
                 let _ = threat_data_storage.insert(
                     entity,

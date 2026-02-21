@@ -104,7 +104,7 @@ impl Mission for NukeDefenseMission {
         let nukes = room.find(find::NUKES, None);
 
         if nukes.is_empty() {
-            return Ok(MissionResult::Running);
+            return Ok(MissionResult::Success);
         }
 
         info!("[NukeDefense] {} incoming nuke(s) detected in room {}", nukes.len(), room_data.name);

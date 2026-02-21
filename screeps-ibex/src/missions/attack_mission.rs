@@ -2,10 +2,7 @@ use super::data::*;
 use super::missionsystem::*;
 use crate::creep::*;
 use crate::jobs::data::*;
-use crate::jobs::heal::*;
-use crate::jobs::ranged::*;
 use crate::jobs::squad_combat::*;
-use crate::jobs::tank::*;
 use crate::military::composition::*;
 use crate::military::formation::advance_squad_virtual_position;
 use crate::military::squad::*;
@@ -20,6 +17,11 @@ use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
+
+/// TTL below which a squad member should seek renewal (mission-side threshold).
+const RENEW_TTL_THRESHOLD: u32 = 1200;
+/// Minimum stored energy (per room) to allow renewal.
+const RENEW_MIN_ROOM_ENERGY: u32 = 10_000;
 
 /// When to deploy a squad within a force plan.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -208,6 +210,112 @@ impl Planning {
     }
 }
 
+/// Nearest home room (with sufficient energy) to the engagement target; used for rally.
+/// Uses RoomRouteCache to avoid repeated find_route calls.
+fn nearest_home_room_to_target(
+    home_room_datas: &[Entity],
+    room_data: &specs::WriteStorage<'_, crate::room::data::RoomData>,
+    economy: &crate::military::economy::EconomySnapshot,
+    route_cache: &mut crate::military::economy::RoomRouteCache,
+    target_room: RoomName,
+    current_tick: u32,
+) -> Option<Entity> {
+    let mut best: Option<(Entity, u32)> = None;
+    for &room_entity in home_room_datas {
+        let rd = room_data.get(room_entity)?;
+        let stored = economy.rooms.get(&room_entity).map(|r| r.stored_energy).unwrap_or(0);
+        if stored < RENEW_MIN_ROOM_ENERGY {
+            continue;
+        }
+        let cached = route_cache.get_route_distance(rd.name, target_room, current_tick);
+        let dist = if cached.reachable { cached.hops } else { u32::MAX };
+        if best.map(|(_, d)| dist < d).unwrap_or(true) {
+            best = Some((room_entity, dist));
+        }
+    }
+    best.map(|(e, _)| e)
+}
+
+fn has_claim_parts(creep: &Creep) -> bool {
+    creep.body().iter().any(|p| p.part() == Part::Claim)
+}
+
+fn gather_creeps_needing_renew(
+    squad_ctx: &SquadContext,
+    creep_owner: &specs::ReadStorage<'_, CreepOwner>,
+) -> Vec<(Entity, u32)> {
+    let mut out = Vec::new();
+    for member in squad_ctx.members.iter() {
+        let creep = match creep_owner.get(member.entity).and_then(|co| co.owner.resolve()) {
+            Some(c) => c,
+            None => continue,
+        };
+        let ttl = match creep.ticks_to_live() {
+            Some(t) => t,
+            None => continue,
+        };
+        if ttl >= RENEW_TTL_THRESHOLD || has_claim_parts(&creep) {
+            continue;
+        }
+        out.push((member.entity, ttl));
+    }
+    out
+}
+
+fn room_has_idle_spawn(
+    room_entity: Entity,
+    room_data: &specs::WriteStorage<'_, crate::room::data::RoomData>,
+) -> bool {
+    let rd = match room_data.get(room_entity) {
+        Some(r) => r,
+        None => return false,
+    };
+    let structures = match rd.get_structures() {
+        Some(s) => s,
+        None => return false,
+    };
+    structures.spawns().iter().any(|s| s.my() && s.spawning().is_none())
+}
+
+fn rally_position_in_room(
+    room_entity_opt: Option<Entity>,
+    room_data: &specs::WriteStorage<'_, crate::room::data::RoomData>,
+) -> Option<Position> {
+    let room_entity = room_entity_opt?;
+    let rd = room_data.get(room_entity)?;
+    Some(Position::new(
+        RoomCoordinate::new(25).unwrap(),
+        RoomCoordinate::new(25).unwrap(),
+        rd.name,
+    ))
+}
+
+fn formation_dest_adjacent_to_spawn(
+    room_entity: Entity,
+    room_data: &specs::WriteStorage<'_, crate::room::data::RoomData>,
+) -> Option<Position> {
+    let rd = room_data.get(room_entity)?;
+    let structures = rd.get_structures()?;
+    let spawn = structures.spawns().iter().find(|s| s.my() && s.spawning().is_none())?;
+    let pos = spawn.pos();
+    let x = pos.x().u8();
+    let y = pos.y().u8();
+    let room_name = rd.name;
+    for (dx, dy) in [(0i32, 1), (1, 0), (0, -1), (-1, 0)] {
+        let nx = (x as i32).saturating_add(dx);
+        let ny = (y as i32).saturating_add(dy);
+        if (1..=48).contains(&nx) && (1..=48).contains(&ny) {
+            if let (Some(rx), Some(ry)) = (
+                RoomCoordinate::new(nx as u8).ok(),
+                RoomCoordinate::new(ny as u8).ok(),
+            ) {
+                return Some(Position::new(rx, ry, room_name));
+            }
+        }
+    }
+    None
+}
+
 impl Spawning {
     fn status_description(&self) -> String {
         "Spawning".to_string()
@@ -305,12 +413,7 @@ impl Spawning {
                                 &body,
                                 SPAWN_PRIORITY_MEDIUM,
                                 Some(token),
-                                Self::create_spawn_callback(
-                                    slot.role,
-                                    slot_index,
-                                    target_room,
-                                    squad_entity,
-                                ),
+                                Self::create_spawn_callback(slot.role, slot_index, target_room, squad_entity),
                             );
                             system_data.spawn_queue.request(*home_entity, spawn_request);
                         }
@@ -320,7 +423,73 @@ impl Spawning {
                     }
                 }
             }
+        }
 
+        let target_room_center = Position::new(
+            RoomCoordinate::new(25).unwrap(),
+            RoomCoordinate::new(25).unwrap(),
+            state_context.target_room,
+        );
+
+        let rally_room = nearest_home_room_to_target(
+            &state_context.home_room_datas,
+            system_data.room_data,
+            system_data.economy,
+            system_data.route_cache,
+            state_context.target_room,
+            game::time(),
+        );
+
+        for squad_idx in 0..state_context.squads.len() {
+            let squad_entity = match state_context.squad_entities.get(squad_idx).copied() {
+                Some(e) if system_data.entities.is_alive(e) => e,
+                _ => continue,
+            };
+            let squad_ctx = match system_data.squad_contexts.get_mut(squad_entity) {
+                Some(ctx) => ctx,
+                None => continue,
+            };
+
+            if squad_ctx.filled_slot_count() == 0 {
+                continue;
+            }
+
+            let creeps_needing_renew = gather_creeps_needing_renew(squad_ctx, system_data.creep_owner);
+            let renew_room = if creeps_needing_renew.is_empty() {
+                None
+            } else {
+                rally_room.filter(|&room_entity| {
+                    system_data
+                        .economy
+                        .rooms
+                        .get(&room_entity)
+                        .map(|r| r.stored_energy >= RENEW_MIN_ROOM_ENERGY)
+                        .unwrap_or(false)
+                        && room_has_idle_spawn(room_entity, system_data.room_data)
+                })
+            };
+
+            let formation_dest = if let Some(room_entity) = renew_room {
+                formation_dest_adjacent_to_spawn(room_entity, system_data.room_data)
+                    .unwrap_or_else(|| rally_position_in_room(rally_room, system_data.room_data).unwrap_or(target_room_center))
+            } else {
+                rally_position_in_room(rally_room, system_data.room_data).unwrap_or(target_room_center)
+            };
+
+            for (entity, ttl) in &creeps_needing_renew {
+                if let Some(room_entity) = renew_room.or(rally_room) {
+                    system_data.spawn_queue.request_renew(room_entity, *entity, *ttl);
+                }
+            }
+
+            for member in squad_ctx.members.iter_mut() {
+                member.tick_orders = Some(TickOrders {
+                    movement: TickMovement::Formation,
+                    ..Default::default()
+                });
+            }
+
+            advance_squad_virtual_position(squad_ctx, formation_dest);
         }
 
         // Check if all immediate squads are spawned or spawning.
@@ -336,16 +505,13 @@ impl Spawning {
             })
             .all(|(_, s)| s.spawn_complete);
 
-        let any_has_members = state_context
-            .squad_entities
-            .iter()
-            .any(|&e| {
-                system_data
-                    .squad_contexts
-                    .get(e)
-                    .map(|ctx| ctx.filled_slot_count() > 0)
-                    .unwrap_or(false)
-            });
+        let any_has_members = state_context.squad_entities.iter().any(|&e| {
+            system_data
+                .squad_contexts
+                .get(e)
+                .map(|ctx| ctx.filled_slot_count() > 0)
+                .unwrap_or(false)
+        });
 
         if all_immediate_ready && any_has_members {
             return Ok(Some(AttackMissionState::rallying(std::marker::PhantomData)));
@@ -362,17 +528,8 @@ impl Spawning {
 
         match &planned.deploy_condition {
             DeployCondition::Immediate => true,
-            DeployCondition::AfterSquad { index, state } => {
-                ctx.squads
-                    .get(*index)
-                    .map(|s| s.state >= *state)
-                    .unwrap_or(false)
-            }
-            DeployCondition::AfterDelay { ticks } => {
-                ctx.start_tick
-                    .map(|start| game::time() - start >= *ticks)
-                    .unwrap_or(false)
-            }
+            DeployCondition::AfterSquad { index, state } => ctx.squads.get(*index).map(|s| s.state >= *state).unwrap_or(false),
+            DeployCondition::AfterDelay { ticks } => ctx.start_tick.map(|start| game::time() - start >= *ticks).unwrap_or(false),
             DeployCondition::AfterTargetHPPercent { .. } => {
                 // HP-based deployment is checked during Engaging phase.
                 false
@@ -380,30 +537,17 @@ impl Spawning {
         }
     }
 
-    fn create_spawn_callback(
-        role: SquadRole,
-        slot_index: usize,
-        target_room: RoomName,
-        squad_entity: Entity,
-    ) -> SpawnQueueCallback {
+    fn create_spawn_callback(role: SquadRole, slot_index: usize, target_room: RoomName, squad_entity: Entity) -> SpawnQueueCallback {
         let squad_entity_id = squad_entity.id();
         Box::new(move |system_data, name| {
             let name = name.to_string();
             system_data.updater.exec_mut(move |world| {
                 let sq_entity = world.entities().entity(squad_entity_id);
 
-                // Create the appropriate job based on role, linked to the squad.
-                let creep_job = match role {
-                    SquadRole::RangedDPS => JobData::RangedAttack(RangedAttackJob::new_with_squad(target_room, sq_entity)),
-                    SquadRole::Healer => JobData::Heal(HealJob::new_with_squad(target_room, sq_entity)),
-                    SquadRole::Tank | SquadRole::MeleeDPS => JobData::Tank(TankJob::new_with_squad(target_room, sq_entity)),
-                    SquadRole::Dismantler => JobData::RangedAttack(RangedAttackJob::new_with_squad(target_room, sq_entity)),
-                    SquadRole::Hauler => JobData::SquadCombat(SquadCombatJob::new_with_squad(target_room, sq_entity)),
-                };
+                // All roles use SquadCombatJob -- it detects body parts at runtime.
+                let creep_job = JobData::SquadCombat(SquadCombatJob::new_with_squad(target_room, sq_entity));
 
-                let creep_entity = spawning::build(world.create_entity(), &name)
-                    .with(creep_job)
-                    .build();
+                let creep_entity = spawning::build(world.create_entity(), &name).with(creep_job).build();
 
                 // Register creep on the SquadContext component with its slot index.
                 if let Some(squad_ctx) = world.write_storage::<SquadContext>().get_mut(sq_entity) {
@@ -412,7 +556,9 @@ impl Spawning {
                     log::warn!(
                         "[AttackMission] Spawn callback: SquadContext missing for entity {:?}, \
                          creep {} (slot {}) not registered on squad",
-                        sq_entity, name, slot_index
+                        sq_entity,
+                        name,
+                        slot_index
                     );
                 }
             });
@@ -436,6 +582,72 @@ impl Rallying {
         // that will never happen (the creeps died during rally).
         if all_squads_wiped(system_data, state_context) {
             return handle_wave_wipe(system_data, state_context);
+        }
+
+        let target_room_center = Position::new(
+            RoomCoordinate::new(25).unwrap(),
+            RoomCoordinate::new(25).unwrap(),
+            state_context.target_room,
+        );
+
+        let rally_room = nearest_home_room_to_target(
+            &state_context.home_room_datas,
+            system_data.room_data,
+            system_data.economy,
+            system_data.route_cache,
+            state_context.target_room,
+            game::time(),
+        );
+
+        for (squad_idx, squad) in state_context.squads.iter().enumerate() {
+            if squad.state != SquadState::Rallying {
+                continue;
+            }
+            let squad_entity = match state_context.squad_entities.get(squad_idx).copied() {
+                Some(e) if system_data.entities.is_alive(e) => e,
+                _ => continue,
+            };
+            let squad_ctx = match system_data.squad_contexts.get_mut(squad_entity) {
+                Some(ctx) => ctx,
+                None => continue,
+            };
+
+            let creeps_needing_renew = gather_creeps_needing_renew(squad_ctx, system_data.creep_owner);
+            let renew_room = if creeps_needing_renew.is_empty() {
+                None
+            } else {
+                rally_room.filter(|&room_entity| {
+                    system_data
+                        .economy
+                        .rooms
+                        .get(&room_entity)
+                        .map(|r| r.stored_energy >= RENEW_MIN_ROOM_ENERGY)
+                        .unwrap_or(false)
+                        && room_has_idle_spawn(room_entity, system_data.room_data)
+                })
+            };
+
+            let formation_dest = if let Some(room_entity) = renew_room {
+                formation_dest_adjacent_to_spawn(room_entity, system_data.room_data)
+                    .unwrap_or(target_room_center)
+            } else {
+                target_room_center
+            };
+
+            for (entity, ttl) in &creeps_needing_renew {
+                if let Some(room_entity) = renew_room.or(rally_room) {
+                    system_data.spawn_queue.request_renew(room_entity, *entity, *ttl);
+                }
+            }
+
+            for member in squad_ctx.members.iter_mut() {
+                member.tick_orders = Some(TickOrders {
+                    movement: TickMovement::Formation,
+                    ..Default::default()
+                });
+            }
+
+            advance_squad_virtual_position(squad_ctx, formation_dest);
         }
 
         // Check if all rallying squads are ready (filled and cohesive).
@@ -478,76 +690,97 @@ impl Rallying {
                 }
             }
 
-            info!(
-                "[AttackMission] Squads rallied for {}, engaging",
-                state_context.target_room
-            );
+            info!("[AttackMission] Squads rallied for {}, engaging", state_context.target_room);
             return Ok(Some(AttackMissionState::engaging(std::marker::PhantomData)));
         }
 
         Ok(None)
     }
 
-    /// Check if all living members of a squad are within 5 tiles of each other.
+    /// Check if all living members of a squad are cohesive enough to engage.
+    ///
+    /// For multi-member squads, requires members to be:
+    /// 1. All in the same room.
+    /// 2. Within 1 tile of each other (combat range).
+    /// 3. Each member within 1 tile of their formation target (if a
+    ///    formation layout and virtual position exist).
+    ///
+    /// If the squad has been held for `STRICT_HOLD_MAX_TICKS` ticks
+    /// (pathfinding blocked), the formation offset check (3) is relaxed
+    /// to avoid permanently blocking the squad.
     fn squad_is_cohesive(squad_ctx: &SquadContext) -> bool {
-        let positions: Vec<Position> = squad_ctx
-            .members
-            .iter()
-            .filter_map(|m| m.position)
-            .collect();
+        let positions: Vec<Position> = squad_ctx.members.iter().filter_map(|m| m.position).collect();
 
         if positions.len() < 2 {
             return !positions.is_empty();
         }
 
         let anchor = positions[0];
-        positions.iter().all(|p| {
-            p.room_name() == anchor.room_name() && anchor.get_range_to(*p) <= 5
-        })
+
+        // Requirement 1 & 2: same room, within 1 tile of each other.
+        let spatially_tight = positions
+            .iter()
+            .all(|p| p.room_name() == anchor.room_name() && anchor.get_range_to(*p) <= 1);
+
+        if !spatially_tight {
+            return false;
+        }
+
+        // Requirement 3: each member near their formation offset.
+        // Relaxed if the squad has been held long enough (pathfinding blocked).
+        let pathfinding_blocked = squad_ctx.strict_hold_ticks >= STRICT_HOLD_MAX_TICKS;
+        if pathfinding_blocked {
+            // Members are spatially tight (≤1 tile) -- good enough.
+            return true;
+        }
+
+        if let (Some(layout), Some(squad_path)) = (&squad_ctx.layout, &squad_ctx.squad_path) {
+            let virtual_pos = squad_path.virtual_pos;
+            let formation_tight = squad_ctx.members.iter().all(|m| {
+                if let (Some(pos), Some(target)) = (
+                    m.position,
+                    crate::military::formation::virtual_anchor_target(virtual_pos, layout, m.formation_slot),
+                ) {
+                    pos.get_range_to(target) <= 1
+                } else {
+                    // No position or target -- assume ok to avoid blocking.
+                    true
+                }
+            });
+            formation_tight
+        } else {
+            // No formation layout -- spatial check is sufficient.
+            true
+        }
     }
 }
 
 /// Check if every squad that ever had members spawned now has zero living
 /// members. Returns false if no squad ever had members (nothing to wipe),
 /// or if any squad hasn't finished spawning yet.
-fn all_squads_wiped(
-    system_data: &MissionExecutionSystemData,
-    state_context: &AttackMissionContext,
-) -> bool {
+fn all_squads_wiped(system_data: &MissionExecutionSystemData, state_context: &AttackMissionContext) -> bool {
     let any_ever_had = state_context
         .squad_entities
         .iter()
-        .any(|&e| {
-            system_data
-                .squad_contexts
-                .get(e)
-                .map(|ctx| ctx.ever_had_members())
-                .unwrap_or(false)
-        });
+        .any(|&e| system_data.squad_contexts.get(e).map(|ctx| ctx.ever_had_members()).unwrap_or(false));
 
     if !any_ever_had {
         return false;
     }
 
-    state_context
-        .squads
-        .iter()
-        .enumerate()
-        .all(|(idx, s)| {
-            let squad_ctx = state_context
-                .squad_entities
-                .get(idx)
-                .and_then(|&e| system_data.squad_contexts.get(e));
-            let living = squad_ctx.map(|ctx| ctx.members.len()).unwrap_or(0);
-            let ever_had = squad_ctx
-                .map(|ctx| ctx.ever_had_members())
-                .unwrap_or(false);
-            // A squad is wiped if it has no living members AND spawning is
-            // done (spawn_complete) or it at least had members at some point
-            // (ever_had). Squads still mid-spawn (!spawn_complete && !ever_had)
-            // are not considered wiped.
-            living == 0 && (s.spawn_complete || ever_had)
-        })
+    state_context.squads.iter().enumerate().all(|(idx, s)| {
+        let squad_ctx = state_context
+            .squad_entities
+            .get(idx)
+            .and_then(|&e| system_data.squad_contexts.get(e));
+        let living = squad_ctx.map(|ctx| ctx.members.len()).unwrap_or(0);
+        let ever_had = squad_ctx.map(|ctx| ctx.ever_had_members()).unwrap_or(false);
+        // A squad is wiped if it has no living members AND spawning is
+        // done (spawn_complete) or it at least had members at some point
+        // (ever_had). Squads still mid-spawn (!spawn_complete && !ever_had)
+        // are not considered wiped.
+        living == 0 && (s.spawn_complete || ever_had)
+    })
 }
 
 /// Shared wave-wipe handler: increment the wave counter and either complete
@@ -614,7 +847,7 @@ impl Engaging {
         // ── Squad coordination: pre-compute tick orders before jobs run ──
 
         // Phase 1: Compute focus targets for each squad (requires room_data, not squad_contexts).
-        let mut focus_targets: Vec<Option<Position>> = Vec::new();
+        let mut focus_targets: Vec<Option<(Position, Option<RawObjectId>)>> = Vec::new();
         for squad_idx in 0..state_context.squads.len() {
             let squad_entity = match state_context.squad_entities.get(squad_idx).copied() {
                 Some(e) if system_data.entities.is_alive(e) => e,
@@ -625,15 +858,12 @@ impl Engaging {
             };
 
             // Read squad centroid from cached member positions (updated by SquadUpdateSystem).
-            let squad_center = if let Some(squad_ctx) = system_data.squad_contexts.get(squad_entity) {
-                squad_ctx
-                    .members
-                    .iter()
-                    .filter_map(|m| m.position)
-                    .next()
-            } else {
-                None
-            };
+            let squad_center =
+                if let Some(squad_ctx) = system_data.squad_contexts.get(squad_entity) {
+                    squad_ctx.members.iter().filter_map(|m| m.position).next()
+                } else {
+                    None
+                };
 
             let target_room = state_context.squads[squad_idx].target_room;
             let focus = Self::compute_focus_target(target_room, squad_center, system_data);
@@ -652,39 +882,50 @@ impl Engaging {
                 None => continue,
             };
 
-            // 1. Apply pre-computed focus target.
-            squad_ctx.focus_target = focus_targets.get(squad_idx).copied().flatten();
+            // 1. Convert focus target to AttackTarget enum.
+            let focus_data = focus_targets.get(squad_idx).copied().flatten();
+            let attack_target: Option<AttackTarget> = focus_data.map(|(pos, id)| {
+                if let Some(raw_id) = id {
+                    AttackTarget::Creep(raw_id)
+                } else {
+                    AttackTarget::Structure(pos)
+                }
+            });
+            // Store position on SquadContext for squad-level movement direction.
+            squad_ctx.focus_target = focus_data.map(|(pos, _)| pos);
 
             // 2. Check retreat.
             if squad_ctx.should_retreat() {
                 squad_ctx.state = SquadState::Retreating;
-                squad_ctx.issue_retreat_orders(None);
+                squad_ctx.issue_retreat_orders(None, Some(system_data.creep_owner));
             } else {
                 // 3. Write tick orders for each living member.
-                let focus = squad_ctx.focus_target;
                 for member in squad_ctx.members.iter_mut() {
                     member.tick_orders = Some(TickOrders {
-                        attack_target: focus,
+                        attack_target,
                         movement: TickMovement::Formation,
                         ..Default::default()
                     });
                 }
 
                 // 4. Compute and apply heal assignments on top of attack orders.
-                let heal_assignments = squad_ctx.compute_heal_assignments();
+                let heal_assignments =
+                    squad_ctx.compute_heal_assignments(Some(system_data.creep_owner));
                 squad_ctx.apply_heal_assignments(&heal_assignments);
 
                 // 5. Advance the squad's virtual position toward the focus target
                 //    (or room center if no focus). Individual creeps read this in
                 //    their job tick to compute formation offset movement.
                 let target_room = state_context.squads[squad_idx].target_room;
-                let destination = focus.unwrap_or_else(|| {
-                    Position::new(
-                        RoomCoordinate::new(25).unwrap(),
-                        RoomCoordinate::new(25).unwrap(),
-                        target_room,
-                    )
-                });
+                let destination = attack_target
+                    .and_then(|t| t.pos())
+                    .unwrap_or_else(|| {
+                        Position::new(
+                            RoomCoordinate::new(25).unwrap(),
+                            RoomCoordinate::new(25).unwrap(),
+                            target_room,
+                        )
+                    });
                 advance_squad_virtual_position(squad_ctx, destination);
             }
         }
@@ -698,17 +939,13 @@ impl Engaging {
                 .get(squad_idx)
                 .and_then(|&e| system_data.squad_contexts.get(e));
 
-            let living = squad_ctx
-                .map(|ctx| ctx.members.len())
-                .unwrap_or(0);
+            let living = squad_ctx.map(|ctx| ctx.members.len()).unwrap_or(0);
 
             // A squad that ever had members registered means spawning happened.
             // If all members are now dead, the squad is complete regardless of
             // the spawn_complete flag (which may not have been set if the
             // Spawning state transitioned before the SquadContext was updated).
-            let ever_had_members = squad_ctx
-                .map(|ctx| ctx.ever_had_members())
-                .unwrap_or(false);
+            let ever_had_members = squad_ctx.map(|ctx| ctx.ever_had_members()).unwrap_or(false);
 
             if living == 0 && (squad.spawn_complete || ever_had_members) {
                 squad.state = SquadState::Complete;
@@ -726,18 +963,9 @@ impl Engaging {
             let plan_idx = state_context.squads[squad_idx].plan_index;
             if let Some(planned) = state_context.force_plan.get(plan_idx) {
                 if let DeployCondition::AfterTargetHPPercent { percent } = &planned.deploy_condition {
-                    let should_deploy = Self::check_target_hp_threshold(
-                        state_context.target_room,
-                        *percent,
-                        system_data,
-                    );
+                    let should_deploy = Self::check_target_hp_threshold(state_context.target_room, *percent, system_data);
                     if should_deploy {
-                        Spawning::spawn_deferred_squad(
-                            system_data,
-                            mission_entity,
-                            state_context,
-                            squad_idx,
-                        );
+                        Spawning::spawn_deferred_squad(system_data, mission_entity, state_context, squad_idx);
                     }
                 }
             }
@@ -751,10 +979,7 @@ impl Engaging {
             // hostiles remain in the target room. If hostiles are still
             // present (e.g. our creeps expired from TTL while enemies
             // survived), treat it as a failed wave instead.
-            let hostiles_remain = Self::room_has_hostile_threats(
-                state_context.target_room,
-                system_data,
-            );
+            let hostiles_remain = Self::room_has_hostile_threats(state_context.target_room, system_data);
 
             if hostiles_remain {
                 info!(
@@ -775,8 +1000,12 @@ impl Engaging {
         Ok(None)
     }
 
-    /// Compute a single focus target for the squad to concentrate fire on.
-    /// Returns `None` if no valid target is found.
+    /// Compute the squad's focus target: position + optional object ID.
+    ///
+    /// Returns `(position, raw_object_id)`. The ID is available for creep
+    /// targets (allows the job to resolve the exact hostile without scanning
+    /// the room). Structure targets only return a position since
+    /// `StructureObject` doesn't expose a uniform `RawObjectId`.
     ///
     /// Priority:
     /// 1. Hostile creeps with HEAL parts (kill healers first to prevent regen).
@@ -786,7 +1015,7 @@ impl Engaging {
         target_room: RoomName,
         squad_center: Option<Position>,
         system_data: &MissionExecutionSystemData,
-    ) -> Option<Position> {
+    ) -> Option<(Position, Option<RawObjectId>)> {
         let squad_center = squad_center?;
 
         // Only target things in the room we can see.
@@ -804,46 +1033,49 @@ impl Engaging {
 
                     if !hostiles.is_empty() {
                         // Priority 1: hostiles with HEAL parts.
-                        let healer = hostiles.iter().filter(|c| {
-                            c.body().iter().any(|p| p.part() == Part::Heal && p.hits() > 0)
-                        }).min_by_key(|c| c.hits());
+                        let healer = hostiles
+                            .iter()
+                            .filter(|c| {
+                                c.body()
+                                    .iter()
+                                    .any(|p| p.part() == Part::Heal && p.hits() > 0)
+                            })
+                            .min_by_key(|c| c.hits());
 
                         if let Some(target) = healer {
-                            return Some(target.pos());
+                            return Some((target.pos(), target.try_raw_id()));
                         }
 
                         // Priority 2: lowest HP hostile (focus fire).
                         if let Some(target) = hostiles.iter().min_by_key(|c| c.hits()) {
-                            return Some(target.pos());
+                            return Some((target.pos(), target.try_raw_id()));
                         }
                     }
                 }
 
-                // Priority 3: hostile structures.
+                // Priority 3: hostile structures (no object ID -- structures
+                // don't move so position is sufficient for targeting).
                 if let Some(structures) = room_data.get_structures() {
                     let hostile_structures: Vec<_> = structures
                         .all()
                         .iter()
-                        .filter(|s| {
-                            s.as_owned()
-                                .map(|o| !o.my())
-                                .unwrap_or(false)
-                        })
+                        .filter(|s| s.as_owned().map(|o| !o.my()).unwrap_or(false))
                         .collect();
 
                     if !hostile_structures.is_empty() {
                         // Prioritize: invader cores > spawns > towers > other.
-                        let best = hostile_structures.iter().min_by_key(|s| {
-                            match s.structure_type() {
-                                StructureType::InvaderCore => 0u32,
-                                StructureType::Spawn => 1,
-                                StructureType::Tower => 2,
-                                _ => 10,
-                            }
-                        });
+                        let best =
+                            hostile_structures
+                                .iter()
+                                .min_by_key(|s| match s.structure_type() {
+                                    StructureType::InvaderCore => 0u32,
+                                    StructureType::Spawn => 1,
+                                    StructureType::Tower => 2,
+                                    _ => 10,
+                                });
 
                         if let Some(target) = best {
-                            return Some(target.pos());
+                            return Some((target.pos(), None));
                         }
                     }
                 }
@@ -856,11 +1088,7 @@ impl Engaging {
     /// Check if the primary attackable structure in the target room has dropped
     /// below the given HP fraction. Used for `AfterTargetHPPercent` deployment
     /// (e.g. spawning haulers when a power bank is nearly destroyed).
-    fn check_target_hp_threshold(
-        target_room: RoomName,
-        percent: f32,
-        system_data: &MissionExecutionSystemData,
-    ) -> bool {
+    fn check_target_hp_threshold(target_room: RoomName, percent: f32, system_data: &MissionExecutionSystemData) -> bool {
         // Find room data for the target room.
         let room_entity = match system_data.mapping.get_room(&target_room) {
             Some(e) => e,
@@ -907,10 +1135,7 @@ impl Engaging {
     /// combat squads. Returns `false` when only the controller remains
     /// (controllers can't be destroyed, only unclaimed over time) or when
     /// we have no visibility.
-    fn room_has_hostile_threats(
-        target_room: RoomName,
-        system_data: &MissionExecutionSystemData,
-    ) -> bool {
+    fn room_has_hostile_threats(target_room: RoomName, system_data: &MissionExecutionSystemData) -> bool {
         let room_entity = match system_data.mapping.get_room(&target_room) {
             Some(e) => e,
             None => return false, // No visibility -- assume clear.
@@ -929,10 +1154,8 @@ impl Engaging {
                 .iter()
                 .filter(|c| {
                     let body = c.body();
-                    body.iter().any(|p| {
-                        matches!(p.part(), Part::Attack | Part::RangedAttack | Part::Heal)
-                            && p.hits() > 0
-                    })
+                    body.iter()
+                        .any(|p| matches!(p.part(), Part::Attack | Part::RangedAttack | Part::Heal) && p.hits() > 0)
                 })
                 .count();
 
@@ -948,17 +1171,11 @@ impl Engaging {
             let threatening_structures = structures
                 .all()
                 .iter()
-                .filter(|s| {
-                    s.as_owned()
-                        .map(|o| !o.my())
-                        .unwrap_or(false)
-                })
+                .filter(|s| s.as_owned().map(|o| !o.my()).unwrap_or(false))
                 .filter(|s| {
                     matches!(
                         s.structure_type(),
-                        StructureType::Tower
-                            | StructureType::Spawn
-                            | StructureType::InvaderCore
+                        StructureType::Tower | StructureType::Spawn | StructureType::InvaderCore
                     )
                 })
                 .count();
@@ -1040,12 +1257,7 @@ impl Spawning {
                         &body,
                         SPAWN_PRIORITY_MEDIUM,
                         Some(token),
-                        Self::create_spawn_callback(
-                            slot.role,
-                            slot_index,
-                            target_room,
-                            squad_entity,
-                        ),
+                        Self::create_spawn_callback(slot.role, slot_index, target_room, squad_entity),
                     );
                     system_data.spawn_queue.request(*home_entity, spawn_request);
                 }
@@ -1077,17 +1289,11 @@ impl Exploiting {
             state_context.exploit_start_tick = Some(tick);
         }
 
-        let exploit_age = state_context
-            .exploit_start_tick
-            .map(|s| tick - s)
-            .unwrap_or(0);
+        let exploit_age = state_context.exploit_start_tick.map(|s| tick - s).unwrap_or(0);
 
         // Timeout: don't exploit forever.
         if exploit_age > EXPLOIT_TIMEOUT_TICKS {
-            info!(
-                "[AttackMission] Exploit timeout for {}, completing",
-                state_context.target_room
-            );
+            info!("[AttackMission] Exploit timeout for {}, completing", state_context.target_room);
             return Ok(Some(AttackMissionState::mission_complete(std::marker::PhantomData)));
         }
 
@@ -1117,19 +1323,15 @@ impl Exploiting {
 
         if hostile_count > 0 {
             // Hostiles returned -- check if we have combat squads still alive.
-            let combat_alive = state_context
-                .squads
-                .iter()
-                .enumerate()
-                .any(|(idx, s)| {
-                    let living = state_context
-                        .squad_entities
-                        .get(idx)
-                        .and_then(|&e| system_data.squad_contexts.get(e))
-                        .map(|ctx| ctx.members.len())
-                        .unwrap_or(0);
-                    living > 0 && s.state != SquadState::Complete
-                });
+            let combat_alive = state_context.squads.iter().enumerate().any(|(idx, s)| {
+                let living = state_context
+                    .squad_entities
+                    .get(idx)
+                    .and_then(|&e| system_data.squad_contexts.get(e))
+                    .map(|ctx| ctx.members.len())
+                    .unwrap_or(0);
+                living > 0 && s.state != SquadState::Complete
+            });
 
             if !combat_alive {
                 info!(
@@ -1223,10 +1425,7 @@ impl Exploiting {
                 });
                 state_context.squad_entities.push(guard_squad_entity);
 
-                info!(
-                    "[AttackMission] Spawning guard for exploit in {}",
-                    state_context.target_room
-                );
+                info!("[AttackMission] Spawning guard for exploit in {}", state_context.target_room);
             }
         }
 
@@ -1240,61 +1439,41 @@ impl Exploiting {
             let is_exploit_squad = state_context
                 .force_plan
                 .get(plan_idx)
-                .map(|p| {
-                    matches!(
-                        p.target,
-                        SquadTarget::CollectResources { .. } | SquadTarget::DefendRoom { .. }
-                    )
-                })
+                .map(|p| matches!(p.target, SquadTarget::CollectResources { .. } | SquadTarget::DefendRoom { .. }))
                 .unwrap_or(false);
 
             if !is_exploit_squad {
                 continue;
             }
 
-            Spawning::spawn_deferred_squad(
-                system_data,
-                mission_entity,
-                state_context,
-                squad_idx,
-            );
+            Spawning::spawn_deferred_squad(system_data, mission_entity, state_context, squad_idx);
         }
 
         // Check if all exploit-phase squads are done (spawned and dead, or timed out).
         // This includes both hauler (CollectResources) and guard (DefendRoom) squads.
-        let exploit_squads_active = state_context
-            .squads
-            .iter()
-            .enumerate()
-            .any(|(idx, s)| {
-                let is_exploit = state_context
-                    .force_plan
-                    .get(s.plan_index)
-                    .map(|p| {
-                        matches!(
-                            p.target,
-                            SquadTarget::CollectResources { .. }
-                                | SquadTarget::DefendRoom { .. }
-                        )
-                    })
-                    .unwrap_or(false);
+        let exploit_squads_active = state_context.squads.iter().enumerate().any(|(idx, s)| {
+            let is_exploit = state_context
+                .force_plan
+                .get(s.plan_index)
+                .map(|p| matches!(p.target, SquadTarget::CollectResources { .. } | SquadTarget::DefendRoom { .. }))
+                .unwrap_or(false);
 
-                if !is_exploit {
-                    return false;
-                }
+            if !is_exploit {
+                return false;
+            }
 
-                if !s.spawn_complete {
-                    return true;
-                }
+            if !s.spawn_complete {
+                return true;
+            }
 
-                let living = state_context
-                    .squad_entities
-                    .get(idx)
-                    .and_then(|&e| system_data.squad_contexts.get(e))
-                    .map(|ctx| ctx.members.len())
-                    .unwrap_or(0);
-                living > 0
-            });
+            let living = state_context
+                .squad_entities
+                .get(idx)
+                .and_then(|&e| system_data.squad_contexts.get(e))
+                .map(|ctx| ctx.members.len())
+                .unwrap_or(0);
+            living > 0
+        });
 
         // Complete if: no loot left, or all exploit squads done, or global timeout.
         if state_context.exploit_haulers_spawned && !exploit_squads_active {
@@ -1332,27 +1511,18 @@ impl Exploiting {
         if let Some(structures) = room_data.get_structures() {
             for storage in structures.storages() {
                 if !storage.my() {
-                    total += storage
-                        .store()
-                        .get_used_capacity(Some(ResourceType::Energy))
-                        .min(100_000);
+                    total += storage.store().get_used_capacity(Some(ResourceType::Energy)).min(100_000);
                 }
             }
 
             for terminal in structures.terminals() {
                 if !terminal.my() {
-                    total += terminal
-                        .store()
-                        .get_used_capacity(Some(ResourceType::Energy))
-                        .min(100_000);
+                    total += terminal.store().get_used_capacity(Some(ResourceType::Energy)).min(100_000);
                 }
             }
 
             for container in structures.containers() {
-                total += container
-                    .store()
-                    .get_used_capacity(Some(ResourceType::Energy))
-                    .min(10_000);
+                total += container.store().get_used_capacity(Some(ResourceType::Energy)).min(10_000);
             }
 
             for power_bank in structures.power_banks() {
@@ -1386,23 +1556,14 @@ impl Retreating {
         let all_dead = state_context
             .squad_entities
             .iter()
-            .all(|&e| {
-                system_data
-                    .squad_contexts
-                    .get(e)
-                    .map(|ctx| ctx.members.is_empty())
-                    .unwrap_or(true)
-            });
+            .all(|&e| system_data.squad_contexts.get(e).map(|ctx| ctx.members.is_empty()).unwrap_or(true));
 
         if all_dead {
             return Ok(Some(AttackMissionState::mission_complete(std::marker::PhantomData)));
         }
 
         // Retreat timeout: after 200 ticks of retreating, abort.
-        let retreat_age = state_context
-            .start_tick
-            .map(|s| game::time() - s)
-            .unwrap_or(0);
+        let retreat_age = state_context.start_tick.map(|s| game::time() - s).unwrap_or(0);
 
         if retreat_age > 200 {
             return Ok(Some(AttackMissionState::mission_complete(std::marker::PhantomData)));
@@ -1438,34 +1599,18 @@ pub struct AttackMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl AttackMission {
-    pub fn build<B>(
-        builder: B,
-        owner: Option<Entity>,
-        target_room: RoomName,
-        force_plan: Vec<PlannedSquad>,
-        max_waves: u32,
-    ) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, target_room: RoomName, force_plan: Vec<PlannedSquad>, max_waves: u32) -> B
     where
         B: Builder + MarkedBuilder,
     {
-        let mission = AttackMission::new(
-            owner,
-            target_room,
-            force_plan,
-            max_waves,
-        );
+        let mission = AttackMission::new(owner, target_room, force_plan, max_waves);
 
         builder
             .with(MissionData::AttackMission(EntityRefCell::new(mission)))
             .marked::<SerializeMarker>()
     }
 
-    pub fn new(
-        owner: Option<Entity>,
-        target_room: RoomName,
-        force_plan: Vec<PlannedSquad>,
-        max_waves: u32,
-    ) -> AttackMission {
+    pub fn new(owner: Option<Entity>, target_room: RoomName, force_plan: Vec<PlannedSquad>, max_waves: u32) -> AttackMission {
         AttackMission {
             owner: owner.into(),
             context: AttackMissionContext {
@@ -1516,7 +1661,6 @@ impl AttackMission {
     pub fn is_exploiting(&self) -> bool {
         matches!(self.state, AttackMissionState::Exploiting(_))
     }
-
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -1543,13 +1687,22 @@ impl Mission for AttackMission {
         if let Some(entity) = self.context.home_room_datas.first() {
             *entity
         } else if let Some(owner) = *self.owner {
-            error!("[AttackMission] get_room: no home rooms for {}, using owner", self.context.target_room);
+            error!(
+                "[AttackMission] get_room: no home rooms for {}, using owner",
+                self.context.target_room
+            );
             owner
         } else {
-            error!("[AttackMission] get_room: no home rooms and no owner for {}", self.context.target_room);
+            error!(
+                "[AttackMission] get_room: no home rooms and no owner for {}",
+                self.context.target_room
+            );
             // Return the first squad entity as a last resort. The cleanup
             // system will fail to find a room for it, which is acceptable.
-            self.context.squad_entities.first().copied()
+            self.context
+                .squad_entities
+                .first()
+                .copied()
                 .expect("AttackMission must have at least one entity reference")
         }
     }
@@ -1584,8 +1737,7 @@ impl Mission for AttackMission {
     }
 
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> String {
-        self.state
-            .describe_state(system_data, mission_entity, &self.context)
+        self.state.describe_state(system_data, mission_entity, &self.context)
     }
 
     fn summarize(&self) -> SummaryContent {
@@ -1617,18 +1769,18 @@ impl Mission for AttackMission {
         for (i, squad) in ctx.squads.iter().enumerate() {
             let has_entity = ctx.squad_entities.get(i).is_some();
             let plan = ctx.force_plan.get(squad.plan_index);
-            let comp_label = plan
-                .map(|p| p.composition.label.as_str())
-                .unwrap_or("?");
-            let target_label = plan.map(|p| match &p.target {
-                SquadTarget::DefendRoom { room } => format!("defend {}", room),
-                SquadTarget::AttackRoom { room } => format!("attack {}", room),
-                SquadTarget::HarassRoom { room } => format!("harass {}", room),
-                SquadTarget::CollectResources { room } => format!("loot {}", room),
-                SquadTarget::MoveToPosition { position } => format!("move {}", position),
-                SquadTarget::AttackStructure { position } => format!("struct {}", position),
-                SquadTarget::EscortPosition { position } => format!("escort {}", position),
-            }).unwrap_or_else(|| "?".into());
+            let comp_label = plan.map(|p| p.composition.label.as_str()).unwrap_or("?");
+            let target_label = plan
+                .map(|p| match &p.target {
+                    SquadTarget::DefendRoom { room } => format!("defend {}", room),
+                    SquadTarget::AttackRoom { room } => format!("attack {}", room),
+                    SquadTarget::HarassRoom { room } => format!("harass {}", room),
+                    SquadTarget::CollectResources { room } => format!("loot {}", room),
+                    SquadTarget::MoveToPosition { position } => format!("move {}", position),
+                    SquadTarget::AttackStructure { position } => format!("struct {}", position),
+                    SquadTarget::EscortPosition { position } => format!("escort {}", position),
+                })
+                .unwrap_or_else(|| "?".into());
 
             let mut sq_children = Vec::new();
             sq_children.push(SummaryContent::Text(format!(
@@ -1649,35 +1801,22 @@ impl Mission for AttackMission {
         }
 
         SummaryContent::Tree {
-            label: format!(
-                "AttackMission -> {} ({})",
-                ctx.target_room,
-                self.state.status_description(),
-            ),
+            label: format!("AttackMission -> {} ({})", ctx.target_room, self.state.status_description(),),
             children,
         }
     }
 
-    fn pre_run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        mission_entity: Entity,
-    ) -> Result<(), String> {
+    fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<(), String> {
         self.state.gather_data(system_data, mission_entity);
         Ok(())
     }
 
-    fn run_mission(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        mission_entity: Entity,
-    ) -> Result<MissionResult, String> {
+    fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
         crate::machine_tick::run_state_machine_result(&mut self.state, "AttackMission", |state| {
             state.tick(system_data, mission_entity, &mut self.context)
         })?;
 
-        self.state
-            .visualize(system_data, mission_entity, &self.context);
+        self.state.visualize(system_data, mission_entity, &self.context);
 
         if matches!(self.state, AttackMissionState::MissionComplete(_)) {
             // Squad entities are cleaned up by the EntityCleanupSystem via

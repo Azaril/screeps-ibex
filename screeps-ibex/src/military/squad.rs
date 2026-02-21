@@ -208,29 +208,64 @@ pub enum TickMovement {
     Hold,
 }
 
+/// What the squad should focus fire on.
+///
+/// Creep targets carry a `RawObjectId` so the job can resolve the exact game
+/// object without scanning the room. Structure targets use a position because
+/// `StructureObject` doesn't expose a uniform ID and structures don't move.
+#[derive(Clone, Copy, Debug)]
+pub enum AttackTarget {
+    /// A hostile creep identified by its object ID.
+    Creep(RawObjectId),
+    /// A hostile structure at a fixed position (structures don't move).
+    Structure(Position),
+}
+
+impl AttackTarget {
+    /// Resolve to a position. For creeps this calls `getObjectById`; for
+    /// structures the position is returned directly.
+    pub fn pos(&self) -> Option<Position> {
+        match self {
+            AttackTarget::Creep(id) => ObjectId::<Creep>::from(*id).resolve().map(|c| c.pos()),
+            AttackTarget::Structure(pos) => Some(*pos),
+        }
+    }
+
+    /// Try to resolve as a `Creep` game object. Returns `None` for structure
+    /// targets or if the creep is no longer alive.
+    pub fn resolve_creep(&self) -> Option<Creep> {
+        match self {
+            AttackTarget::Creep(id) => ObjectId::<Creep>::from(*id).resolve(),
+            AttackTarget::Structure(_) => None,
+        }
+    }
+}
+
 /// Per-creep orders from the mission to the job for a single tick.
+///
+/// Ephemeral: cleared every tick by `PreRunSquadUpdateSystem` and repopulated
+/// by the mission before jobs run. Always `None` at serialization time, so
+/// non-serializable fields are fine (skipped via `serde(skip)`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TickOrders {
-    /// Target to attack this tick (if any).
-    pub attack_target: Option<Position>,
-    /// Target to heal this tick (if any -- entity ID as u32 for serialization).
-    pub heal_target_pos: Option<Position>,
-    /// Whether to use ranged heal for the heal target.
-    pub heal_ranged: bool,
+    /// Focus fire target for this tick. Resolved by the job to get the exact
+    /// game object (creep) or position (structure).
+    #[serde(skip)]
+    pub attack_target: Option<AttackTarget>,
+    /// Friendly creep to heal this tick. Resolved by the job via
+    /// `ObjectId::resolve()` for direct API calls.
+    #[serde(skip)]
+    pub heal_target: Option<ObjectId<Creep>>,
     /// Movement intent for this tick.
     pub movement: TickMovement,
-    /// Whether this creep should be renewing at a spawn.
-    pub renewing: bool,
 }
 
 impl Default for TickOrders {
     fn default() -> Self {
         TickOrders {
             attack_target: None,
-            heal_target_pos: None,
-            heal_ranged: false,
+            heal_target: None,
             movement: TickMovement::Formation,
-            renewing: false,
         }
     }
 }
@@ -244,10 +279,8 @@ pub struct HealAssignment {
     pub healer: Entity,
     /// Entity of the target to heal.
     pub target: Entity,
-    /// Position of the target (for range checks in the job).
-    pub target_pos: Position,
-    /// Whether to use ranged heal (range 2-3) vs adjacent heal (range 0-1).
-    pub ranged: bool,
+    /// Screeps object ID of the target creep for direct game API resolution.
+    pub target_id: Option<ObjectId<Creep>>,
     /// Expected heal amount (12 per HEAL part adjacent, 4 per HEAL part ranged).
     pub expected_heal: u32,
 }
@@ -291,7 +324,7 @@ pub const STRICT_QUORUM_TICKS: u16 = 3;
 /// Anti-deadlock: fraction of living members needed for quorum advance.
 pub const STRICT_QUORUM_RATIO: f32 = 0.75;
 /// Anti-deadlock: max ticks before forcing loose mode.
-pub const STRICT_HOLD_MAX_TICKS: u16 = 8;
+pub const STRICT_HOLD_MAX_TICKS: u16 = 15;
 
 /// Shared state for a squad, attached as an ECS component to a squad entity.
 /// All member jobs read/write this each tick for coordination.
@@ -338,10 +371,7 @@ pub struct SquadContext {
 impl SquadContext {
     /// Create a new SquadContext from a SquadComposition.
     pub fn from_composition(composition: &SquadComposition) -> Self {
-        let layout = FormationLayout::from_shape(
-            composition.formation_shape,
-            composition.member_count(),
-        );
+        let layout = FormationLayout::from_shape(composition.formation_shape, composition.member_count());
 
         SquadContext {
             layout: Some(layout),
@@ -403,11 +433,7 @@ impl SquadContext {
 
     /// Check if all expected members are present and alive.
     pub fn is_full(&self) -> bool {
-        let expected = self
-            .layout
-            .as_ref()
-            .map(|l| l.offsets.len())
-            .unwrap_or(1);
+        let expected = self.layout.as_ref().map(|l| l.offsets.len()).unwrap_or(1);
         self.members.len() >= expected
     }
 
@@ -486,7 +512,10 @@ impl SquadContext {
     /// 3. Greedily assign healers to the most urgent targets, preferring
     ///    adjacent heal (12 HP/part) over ranged heal (4 HP/part).
     /// 4. Avoid over-healing: once a target's deficit is covered, move on.
-    pub fn compute_heal_assignments(&self) -> Vec<HealAssignment> {
+    pub fn compute_heal_assignments(
+        &self,
+        creep_owners: Option<&ReadStorage<'_, CreepOwner>>,
+    ) -> Vec<HealAssignment> {
         let mut assignments = Vec::new();
 
         // Collect healers.
@@ -503,6 +532,7 @@ impl SquadContext {
         // Collect targets needing healing, with their urgency score.
         struct HealTarget {
             entity: Entity,
+            creep_id: Option<ObjectId<Creep>>,
             pos: Position,
             deficit: u32,
             predicted_damage: u32,
@@ -517,8 +547,10 @@ impl SquadContext {
             .map(|m| {
                 let deficit = m.max_hits - m.current_hits;
                 let predicted = m.damage_taken_last_tick;
+                let creep_id = creep_owners.and_then(|co| co.get(m.entity)).map(|co| co.owner);
                 HealTarget {
                     entity: m.entity,
+                    creep_id,
                     pos: m.position.unwrap(),
                     deficit,
                     predicted_damage: predicted,
@@ -580,8 +612,7 @@ impl SquadContext {
                 assignments.push(HealAssignment {
                     healer: healers[idx].entity,
                     target: target.entity,
-                    target_pos: target.pos,
-                    ranged: best_ranged,
+                    target_id: target.creep_id,
                     expected_heal: effective_heal,
                 });
             }
@@ -609,14 +640,14 @@ impl SquadContext {
                 if target.damage_taken_last_tick > 0 || target.current_hits < target.max_hits {
                     let healer_pos = healer.position.unwrap();
                     let range = healer_pos.get_range_to(target.position.unwrap());
-                    let ranged = range > 1;
+                    let creep_id =
+                        creep_owners.and_then(|co| co.get(target.entity)).map(|co| co.owner);
 
                     assignments.push(HealAssignment {
                         healer: healer.entity,
                         target: target.entity,
-                        target_pos: target.position.unwrap(),
-                        ranged,
-                        expected_heal: if ranged {
+                        target_id: creep_id,
+                        expected_heal: if range > 1 {
                             healer.heal_power * 4
                         } else {
                             healer.heal_power * 12
@@ -649,14 +680,16 @@ impl SquadContext {
     /// initialized for all members.
     pub fn apply_heal_assignments(&mut self, assignments: &[HealAssignment]) {
         for assignment in assignments {
-            if let Some(member) = self.members.iter_mut().find(|m| m.entity == assignment.healer) {
+            if let Some(member) = self
+                .members
+                .iter_mut()
+                .find(|m| m.entity == assignment.healer)
+            {
                 if let Some(ref mut orders) = member.tick_orders {
-                    orders.heal_target_pos = Some(assignment.target_pos);
-                    orders.heal_ranged = assignment.ranged;
+                    orders.heal_target = assignment.target_id;
                 } else {
                     member.tick_orders = Some(TickOrders {
-                        heal_target_pos: Some(assignment.target_pos),
-                        heal_ranged: assignment.ranged,
+                        heal_target: assignment.target_id,
                         ..Default::default()
                     });
                 }
@@ -692,11 +725,7 @@ impl SquadContext {
     /// Returns the centroid of all living members, biased away from hostiles.
     /// This keeps the squad together instead of scattering.
     pub fn compute_retreat_centroid(&self) -> Option<Position> {
-        let living: Vec<_> = self
-            .members
-            .iter()
-            .filter(|m| m.position.is_some())
-            .collect();
+        let living: Vec<_> = self.members.iter().filter(|m| m.position.is_some()).collect();
 
         if living.is_empty() {
             return None;
@@ -720,13 +749,17 @@ impl SquadContext {
     /// Issue retreat tick orders for all members.
     /// Members move toward the retreat rally point (or centroid) to stay together,
     /// with heal assignments applied so healers prioritize damaged squad members.
-    pub fn issue_retreat_orders(&mut self, rally_point: Option<Position>) {
+    pub fn issue_retreat_orders(
+        &mut self,
+        rally_point: Option<Position>,
+        creep_owners: Option<&ReadStorage<'_, CreepOwner>>,
+    ) {
         let retreat_pos = rally_point
             .or(self.rally_point)
             .or_else(|| self.compute_retreat_centroid());
 
         // Compute heal assignments for the retreat.
-        let heal_assignments = self.compute_heal_assignments();
+        let heal_assignments = self.compute_heal_assignments(creep_owners);
 
         // Set movement orders: all members move toward the retreat position.
         for member in self.members.iter_mut() {
@@ -753,11 +786,7 @@ impl SquadContext {
     pub fn update_formation_for_living_count(&mut self) {
         let living_count = self.members.len();
 
-        let base_shape = self
-            .layout
-            .as_ref()
-            .map(|l| l.shape)
-            .unwrap_or(FormationShape::None);
+        let base_shape = self.layout.as_ref().map(|l| l.shape).unwrap_or(FormationShape::None);
 
         let new_layout = match (base_shape, living_count) {
             (_, 0) => FormationLayout::none(),
@@ -833,11 +862,7 @@ impl SquadContext {
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Assign highest-scored members to threat-facing slots.
-        let all_slots: Vec<usize> = threat_slots
-            .iter()
-            .chain(safe_slots.iter())
-            .copied()
-            .collect();
+        let all_slots: Vec<usize> = threat_slots.iter().chain(safe_slots.iter()).copied().collect();
 
         for (i, &(member_idx, _)) in scored.iter().enumerate() {
             if let Some(&slot) = all_slots.get(i) {
@@ -947,9 +972,7 @@ impl<'a> System<'a> for PreRunSquadUpdateSystem {
 
             // Update live member state from the game world.
             for member in squad_ctx.members.iter_mut() {
-                let creep = creep_owners
-                    .get(member.entity)
-                    .and_then(|co| co.owner.resolve());
+                let creep = creep_owners.get(member.entity).and_then(|co| co.owner.resolve());
 
                 if let Some(creep) = creep {
                     member.position = Some(creep.pos());
@@ -964,11 +987,7 @@ impl<'a> System<'a> for PreRunSquadUpdateSystem {
                     }
 
                     if member.heal_power == 0 {
-                        member.heal_power = creep
-                            .body()
-                            .iter()
-                            .filter(|p| p.part() == Part::Heal && p.hits() > 0)
-                            .count() as u32;
+                        member.heal_power = creep.body().iter().filter(|p| p.part() == Part::Heal && p.hits() > 0).count() as u32;
                     }
                 }
             }
@@ -986,19 +1005,12 @@ pub struct RunSquadUpdateSystem;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for RunSquadUpdateSystem {
-    type SystemData = (
-        Entities<'a>,
-        WriteStorage<'a, SquadContext>,
-    );
+    type SystemData = (Entities<'a>, WriteStorage<'a, SquadContext>);
 
     fn run(&mut self, (entities, mut squad_contexts): Self::SystemData) {
         for (_, squad_ctx) in (&entities, &mut squad_contexts).join() {
             let living_count = squad_ctx.members.len();
-            let slot_count = squad_ctx
-                .layout
-                .as_ref()
-                .map(|l| l.slot_count())
-                .unwrap_or(1);
+            let slot_count = squad_ctx.layout.as_ref().map(|l| l.slot_count()).unwrap_or(1);
 
             // Only update if the formation no longer fits the living count.
             if living_count < slot_count {

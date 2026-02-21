@@ -21,18 +21,27 @@ const EMERGENCY_WALL_HITS: u32 = 100_000;
 /// Moderate wall/rampart hits threshold. Structures below this get medium priority.
 const MODERATE_WALL_HITS: u32 = 1_000_000;
 
+/// Ticks with no hostiles before the mission completes (avoids restart flip-flop).
+const IDLE_TICKS_BEFORE_COMPLETE: u32 = 100;
+
 /// Mission to prioritize wall and rampart repair during siege.
 ///
 /// When hostiles are present and attacking walls/ramparts, this mission
 /// ensures towers focus on repair and that the transfer system prioritizes
 /// energy delivery to towers. It also tracks the weakest wall/rampart
 /// sections and logs warnings.
+///
+/// Uses an idle/active state: when hostiles leave, the mission stays running
+/// (idle) for IDLE_TICKS_BEFORE_COMPLETE before completing, so we don't
+/// restart the mission every other tick if hostiles flicker.
 #[derive(ConvertSaveload)]
 pub struct WallRepairMission {
     owner: EntityOption<Entity>,
     room_data: Entity,
     /// Tick when we last ran the wall scan.
     last_scan_tick: u32,
+    /// Ticks since we last saw hostiles. When >= IDLE_TICKS_BEFORE_COMPLETE we complete.
+    ticks_since_hostiles: u32,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -45,6 +54,7 @@ impl WallRepairMission {
             owner: owner.into(),
             room_data,
             last_scan_tick: 0,
+            ticks_since_hostiles: 0,
         };
 
         builder
@@ -87,8 +97,16 @@ impl Mission for WallRepairMission {
             TransferTypeFlags::HAUL,
             Box::new(move |system, transfer, _room_name| {
                 let room_data = system.get_room_data(room_data_entity).ok_or("Expected room data")?;
-                let structures = room_data.get_structures().ok_or("Expected structures")?;
-                let creeps = room_data.get_creeps().ok_or("Expected creeps")?;
+                let structures = room_data.get_structures().ok_or_else(|| {
+                    let msg = format!("Expected structures - Room: {}", room_data.name);
+                    log::warn!("{} at {}:{}", msg, file!(), line!());
+                    msg
+                })?;
+                let creeps = room_data.get_creeps().ok_or_else(|| {
+                    let msg = format!("Expected creeps - Room: {}", room_data.name);
+                    log::warn!("{} at {}:{}", msg, file!(), line!());
+                    msg
+                })?;
 
                 // Only boost tower energy priority if hostiles are present.
                 let hostiles = creeps.hostile();
@@ -136,6 +154,7 @@ impl Mission for WallRepairMission {
         if current_tick.saturating_sub(self.last_scan_tick) < 20 {
             return Ok(MissionResult::Running);
         }
+        let elapsed = current_tick.saturating_sub(self.last_scan_tick);
         self.last_scan_tick = current_tick;
 
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
@@ -144,6 +163,20 @@ impl Mission for WallRepairMission {
             Some(s) => s,
             None => return Ok(MissionResult::Running),
         };
+
+        let has_hostiles = room_data
+            .get_creeps()
+            .map(|c| !c.hostile().is_empty())
+            .unwrap_or(false);
+
+        if has_hostiles {
+            self.ticks_since_hostiles = 0;
+        } else {
+            self.ticks_since_hostiles = self.ticks_since_hostiles.saturating_add(elapsed);
+            if self.ticks_since_hostiles >= IDLE_TICKS_BEFORE_COMPLETE {
+                return Ok(MissionResult::Success);
+            }
+        }
 
         let room_name = room_data.name;
 

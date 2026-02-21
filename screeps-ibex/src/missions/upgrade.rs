@@ -49,10 +49,7 @@ impl UpgradeMission {
             .unwrap_or(false)
     }
 
-    fn create_handle_upgrader_spawn(
-        mission_entity: Entity,
-        home_room: Entity,
-    ) -> crate::spawnsystem::SpawnQueueCallback {
+    fn create_handle_upgrader_spawn(mission_entity: Entity, home_room: Entity) -> crate::spawnsystem::SpawnQueueCallback {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 

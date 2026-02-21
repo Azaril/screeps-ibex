@@ -477,10 +477,7 @@ impl SquadComposition {
     /// Estimate the total energy cost to spawn this composition
     /// at a given energy capacity.
     pub fn estimated_cost(&self, energy_capacity: u32) -> u32 {
-        self.slots
-            .iter()
-            .map(|slot| slot.body_type.estimated_cost(energy_capacity))
-            .sum()
+        self.slots.iter().map(|slot| slot.body_type.estimated_cost(energy_capacity)).sum()
     }
 
     /// Estimate total spawn time for this composition (ticks to spawn all members).
@@ -514,11 +511,7 @@ impl SquadComposition {
     /// Estimate travel time from a home room to a target room (ticks).
     /// Uses RoomRouteCache for accurate room-hop distance via find_route().
     /// Returns None if the rooms are unreachable.
-    pub fn estimated_travel_time(
-        route_cache: &mut RoomRouteCache,
-        home: RoomName,
-        target: RoomName,
-    ) -> Option<u32> {
+    pub fn estimated_travel_time(route_cache: &mut RoomRouteCache, home: RoomName, target: RoomName) -> Option<u32> {
         route_cache.travel_ticks(home, target, screeps::game::time())
     }
 

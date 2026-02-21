@@ -11,10 +11,15 @@ use log::*;
 use screeps::{game, RoomName};
 use serde::{Deserialize, Serialize};
 use specs::prelude::*;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Dedicated segment for stats history persistence.
 pub const STATS_HISTORY_SEGMENT: u32 = 56;
+
+/// Maximum encoded size (in bytes) that we allow for the stats segment.
+/// Segments hold up to 100 KB of string, but MemoryArbiter warns at 50 KiB.
+/// Keep a comfortable margin below the warning threshold.
+const MAX_ENCODED_SIZE: usize = 45 * 1024;
 
 // ─── Tier configuration ──────────────────────────────────────────────────────
 
@@ -130,6 +135,60 @@ pub struct StatsHistoryData {
     pub rooms: HashMap<RoomName, RoomStatsHistory>,
 }
 
+impl StatsHistoryData {
+    /// Remove rooms that are not in the `active` set.
+    pub fn prune_stale_rooms(&mut self, active: &std::collections::HashSet<RoomName>) {
+        self.rooms.retain(|name, _| active.contains(name));
+    }
+
+    /// Progressively trim the oldest/largest tiers across all rooms until the
+    /// encoded representation fits within `MAX_ENCODED_SIZE`. Returns the
+    /// encoded string on success.
+    pub fn encode_bounded(&self) -> Result<String, String> {
+        let encoded = serialize::encode_to_string(self).map_err(|e| format!("encode: {}", e))?;
+        if encoded.len() <= MAX_ENCODED_SIZE {
+            return Ok(encoded);
+        }
+
+        // Work on a clone so we can trim without mutating the live data.
+        let mut trimmed = self.clone();
+
+        // Trim tiers from coarsest (day) to finest (recent), halving each tier
+        // across all rooms until the data fits.
+        let tier_accessors: Vec<fn(&mut RoomStatsHistory) -> &mut VecDeque<RoomStatsSnapshot>> = vec![
+            |h| &mut h.day,
+            |h| &mut h.hour,
+            |h| &mut h.ten_min,
+            |h| &mut h.minute,
+            |h| &mut h.recent,
+        ];
+
+        for accessor in &tier_accessors {
+            for history in trimmed.rooms.values_mut() {
+                let tier = accessor(history);
+                let new_len = tier.len() / 2;
+                tier.truncate(new_len);
+            }
+            match serialize::encode_to_string(&trimmed) {
+                Ok(enc) if enc.len() <= MAX_ENCODED_SIZE => {
+                    warn!(
+                        "Stats history trimmed to fit segment (encoded {} bytes)",
+                        enc.len()
+                    );
+                    return Ok(enc);
+                }
+                Ok(_) => continue,
+                Err(e) => return Err(format!("encode after trim: {}", e)),
+            }
+        }
+
+        // Last resort: clear everything and encode empty.
+        trimmed.rooms.clear();
+        warn!("Stats history too large even after trimming — cleared all data");
+        serialize::encode_to_string(&trimmed).map_err(|e| format!("encode cleared: {}", e))
+    }
+}
+
 // ─── Segment load callback ───────────────────────────────────────────────────
 
 /// Load `StatsHistoryData` from its segment and insert it into the world.
@@ -185,6 +244,9 @@ impl<'a> System<'a> for StatsHistorySystem {
 
         let tick = game::time();
 
+        // Track which rooms are currently active so we can prune stale entries.
+        let mut active_rooms = HashSet::new();
+
         // Collect snapshots for each owned, visible room.
         for (_entity, room_data) in (&data.entities, &data.room_data).join() {
             let dyn_vis = match room_data.get_dynamic_visibility_data() {
@@ -224,12 +286,16 @@ impl<'a> System<'a> for StatsHistorySystem {
                 minerals_total,
             };
 
+            active_rooms.insert(room_data.name);
             history.rooms.entry(room_data.name).or_default().push(snapshot);
         }
 
+        // Remove history for rooms we no longer own.
+        history.prune_stale_rooms(&active_rooms);
+
         // Persist to segment (write every 6 ticks to reduce overhead).
         if tick.is_multiple_of(6) {
-            match serialize::encode_to_string(&**history) {
+            match history.encode_bounded() {
                 Ok(encoded) => {
                     data.memory_arbiter.set(STATS_HISTORY_SEGMENT, &encoded);
                 }

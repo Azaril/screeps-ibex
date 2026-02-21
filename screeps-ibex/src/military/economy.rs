@@ -80,11 +80,7 @@ impl EconomySnapshot {
     /// 5k–30k) so low-RCL rooms with little storage don't inflate
     /// the threshold, and mature rooms keep a reasonable buffer.
     pub fn can_afford_military(&self, amount: u32) -> bool {
-        let reserve: u32 = self
-            .rooms
-            .values()
-            .map(|r| (r.stored_energy / 5).clamp(5_000, 30_000))
-            .sum();
+        let reserve: u32 = self.rooms.values().map(|r| (r.stored_energy / 5).clamp(5_000, 30_000)).sum();
         self.total_stored_energy > reserve + amount
     }
 
@@ -302,10 +298,7 @@ impl<'a> System<'a> for EconomyAssessmentSystem {
 
         for (entity, room) in (&entities, &room_data).join() {
             // Only process owned rooms.
-            let is_mine = room
-                .get_dynamic_visibility_data()
-                .map(|d| d.owner().mine())
-                .unwrap_or(false);
+            let is_mine = room.get_dynamic_visibility_data().map(|d| d.owner().mine()).unwrap_or(false);
             if !is_mine {
                 continue;
             }
@@ -344,11 +337,7 @@ impl<'a> System<'a> for EconomyAssessmentSystem {
                 .map(|d| d.sources().len() as f32 * (3000.0 / 300.0))
                 .unwrap_or(0.0);
 
-            let prev_tick_queue_depth = spawn_snapshot
-                .queue_depth_per_room
-                .get(&entity)
-                .copied()
-                .unwrap_or(0);
+            let prev_tick_queue_depth = spawn_snapshot.queue_depth_per_room.get(&entity).copied().unwrap_or(0);
 
             let room_econ = RoomEconomyData {
                 stored_energy,

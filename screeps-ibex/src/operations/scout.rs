@@ -70,6 +70,21 @@ impl ScoutOperation {
         }
         result
     }
+
+    /// Inject visibility requests for rooms that have a "scout" flag placed in them.
+    /// This forces scouting regardless of whether the room would normally be queued.
+    fn inject_flag_scout_requests(visibility: &mut VisibilityQueue) {
+        for flag in game::flags().values() {
+            if flag.name().to_lowercase().starts_with("scout") {
+                let room_name = flag.pos().room_name();
+                visibility.request(VisibilityRequest::new(
+                    room_name,
+                    VISIBILITY_PRIORITY_HIGH,
+                    VisibilityRequestFlags::ALL,
+                ));
+            }
+        }
+    }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -108,6 +123,11 @@ impl Operation for ScoutOperation {
         system_data: &mut OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
+        // Inject visibility requests from "scout" flags so flagged rooms are
+        // always queued for scouting.
+        Self::inject_flag_scout_requests(system_data.visibility);
+
+
         // Check if there are scout-eligible entries that need servicing.
         if !system_data.visibility.has_unclaimed_scout_eligible() {
             return Ok(OperationResult::Running);

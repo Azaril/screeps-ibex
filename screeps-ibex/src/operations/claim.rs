@@ -813,11 +813,7 @@ impl Operation for ClaimOperation {
                     if home_names.is_empty() {
                         children.push(SummaryContent::Text(format!("-> {}", room.name)));
                     } else {
-                        children.push(SummaryContent::Text(format!(
-                            "-> {} (from {})",
-                            room.name,
-                            home_names.join(", ")
-                        )));
+                        children.push(SummaryContent::Text(format!("-> {} (from {})", room.name, home_names.join(", "))));
                     }
                 }
             }

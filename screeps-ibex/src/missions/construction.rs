@@ -251,7 +251,11 @@ impl Mission for ConstructionMission {
                     }
 
                     if crate::features::features().construction.cleanup {
-                        let structures = room_data.get_structures().ok_or("Expected structures")?;
+                        let structures = room_data.get_structures().ok_or_else(|| {
+                            let msg = format!("Expected structures - Room: {}", room_data.name);
+                            log::warn!("{} at {}:{}", msg, file!(), line!());
+                            msg
+                        })?;
                         let snapshot = screeps_foreman::plan::snapshot_structures(structures.all());
                         let mut removal_filter = RemovalFilter::new(&room);
                         let ops = plan.get_cleanup_operations(&snapshot, room_level, &mut removal_filter);

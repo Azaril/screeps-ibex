@@ -1,4 +1,3 @@
-use super::actions::*;
 use super::context::*;
 use super::jobsystem::*;
 use super::utility::movebehavior::*;
@@ -55,22 +54,26 @@ machine!(
     }
 );
 
+// ─── Body part detection helpers ────────────────────────────────────────────
+
+fn has_active_part(creep: &Creep, part: Part) -> bool {
+    creep.body().iter().any(|p| p.part() == part && p.hits() > 0)
+}
+
 // ─── MoveToRoom ─────────────────────────────────────────────────────────────
 
 impl MoveToRoom {
     pub fn tick(&mut self, state_context: &mut SquadCombatJobContext, tick_context: &mut JobTickContext) -> Option<SquadCombatState> {
         let creep = tick_context.runtime_data.owner;
         let creep_pos = creep.pos();
+        let creep_entity = tick_context.runtime_data.creep_entity;
 
         // Check for hostiles in the current room -- respond to ambush.
         if creep_pos.room_name() != state_context.target_room {
             let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
-            let nearby_threats = hostiles
-                .iter()
-                .any(|c| creep_pos.get_range_to(c.pos()) <= 5);
+            let nearby_threats = hostiles.iter().any(|c| creep_pos.get_range_to(c.pos()) <= 5);
 
             if nearby_threats {
-                // Under attack while traveling -- enter combat response.
                 state_context.combat_response_start = Some(game::time());
                 return Some(SquadCombatState::combat_response());
             }
@@ -83,6 +86,37 @@ impl MoveToRoom {
             }
         }
 
+        // Check for squad formation movement orders (keeps squad grouped during travel).
+        let tick_orders = get_tick_orders(state_context.squad_entity, creep_entity, tick_context);
+
+        if let Some(ref orders) = tick_orders {
+            if matches!(orders.movement, TickMovement::Formation) {
+                if let Some(target_tile) = get_formation_target(state_context.squad_entity, creep_entity, tick_context) {
+                    tick_context
+                        .runtime_data
+                        .movement
+                        .move_to(creep_entity, target_tile)
+                        .range(0)
+                        .priority(MovementPriority::High);
+
+                    // Only transition to Engaged when the squad itself has
+                    // progressed past Rallying. This prevents individual
+                    // creeps from engaging while the rest of the squad is
+                    // still gathering at a room boundary.
+                    if creep_pos.room_name() == state_context.target_room {
+                        let squad_ready = get_squad_state(state_context.squad_entity, tick_context)
+                            .map(|s| s >= SquadState::Moving)
+                            .unwrap_or(true);
+                        if squad_ready {
+                            return Some(SquadCombatState::engaged());
+                        }
+                    }
+                    return None;
+                }
+            }
+        }
+
+        // No squad formation orders -- use standard room navigation.
         let room_options = RoomOptions::new(HostileBehavior::HighCost);
 
         tick_move_to_room(
@@ -121,9 +155,7 @@ impl CombatResponse {
 
         // Check if threats have cleared or timeout reached.
         let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
-        let threats_nearby = hostiles
-            .iter()
-            .any(|c| creep_pos.get_range_to(c.pos()) <= 6);
+        let threats_nearby = hostiles.iter().any(|c| creep_pos.get_range_to(c.pos()) <= 6);
 
         let timed_out = state_context
             .combat_response_start
@@ -131,115 +163,132 @@ impl CombatResponse {
             .unwrap_or(false);
 
         if !threats_nearby || timed_out {
-            // Threats cleared or timeout -- resume travel.
             state_context.combat_response_start = None;
             return Some(SquadCombatState::move_to_room());
         }
 
-        // Fight back: ranged attack + heal while kiting.
+        // Fight back with all applicable body parts.
         let tick_orders = get_tick_orders(state_context.squad_entity, creep_entity, tick_context);
+        let focus_creep: Option<Creep> = tick_orders
+            .as_ref()
+            .and_then(|o| o.attack_target.as_ref())
+            .and_then(|t| t.resolve_creep());
 
-        // Ranged attack nearest hostile (Pipeline B).
-        {
-            // Mass attack if multiple hostiles nearby.
-            let in_range_3: usize = hostiles.iter().filter(|c| creep_pos.get_range_to(c.pos()) <= 3).count();
-            let in_range_1: usize = hostiles.iter().filter(|c| creep_pos.get_range_to(c.pos()) <= 1).count();
+        // Pipeline A: Melee attack adjacent hostile (prefer focus target).
+        if has_active_part(creep, Part::Attack) {
+            let target = if let Some(ref focus) = focus_creep {
+                if creep_pos.get_range_to(focus.pos()) <= 1 {
+                    Some(focus)
+                } else {
+                    hostiles
+                        .iter()
+                        .filter(|c| creep_pos.get_range_to(c.pos()) <= 1)
+                        .min_by_key(|c| c.hits())
+                }
+            } else {
+                hostiles
+                    .iter()
+                    .filter(|c| creep_pos.get_range_to(c.pos()) <= 1)
+                    .min_by_key(|c| c.hits())
+            };
+            if let Some(target) = target {
+                let _ = creep.attack(target);
+            }
+        }
 
-            if (in_range_3 >= 2 || in_range_1 >= 1)
-                && tick_context.action_flags.consume(SimultaneousActionFlags::RANGED_MASS_ATTACK)
-            {
+        // Pipeline B: Ranged attack (prefer focus target).
+        if has_active_part(creep, Part::RangedAttack) {
+            let in_range_3_count = hostiles
+                .iter()
+                .filter(|c| creep_pos.get_range_to(c.pos()) <= 3)
+                .count();
+            let in_range_1_count = hostiles
+                .iter()
+                .filter(|c| creep_pos.get_range_to(c.pos()) <= 1)
+                .count();
+
+            if in_range_1_count >= 3 || (in_range_3_count >= 3 && in_range_1_count >= 1) {
                 let _ = creep.ranged_mass_attack();
-            } else if let Some(target) = hostiles.iter().min_by_key(|c| creep_pos.get_range_to(c.pos())) {
-                if creep_pos.get_range_to(target.pos()) <= 3
-                    && tick_context.action_flags.consume(SimultaneousActionFlags::RANGED_ATTACK)
-                {
+            } else {
+                let target = if let Some(ref focus) = focus_creep {
+                    if creep_pos.get_range_to(focus.pos()) <= 3 {
+                        Some(focus)
+                    } else {
+                        hostiles
+                            .iter()
+                            .filter(|c| creep_pos.get_range_to(c.pos()) <= 3)
+                            .min_by_key(|c| c.hits())
+                    }
+                } else {
+                    hostiles
+                        .iter()
+                        .filter(|c| creep_pos.get_range_to(c.pos()) <= 3)
+                        .min_by_key(|c| c.hits())
+                };
+                if let Some(target) = target {
                     let _ = creep.ranged_attack(target);
                 }
             }
+        }
 
-            // Melee attack if adjacent (Pipeline A -- independent of ranged).
-            if let Some(target) = hostiles.iter().find(|c| creep_pos.get_range_to(c.pos()) <= 1) {
-                if tick_context.action_flags.consume(SimultaneousActionFlags::ATTACK) {
-                    let _ = creep.attack(target);
+        // Pipeline C: Heal -- resolve assigned target by ID, else best nearby.
+        if has_active_part(creep, Part::Heal) {
+            let heal_target = tick_orders
+                .as_ref()
+                .and_then(|o| o.heal_target)
+                .and_then(|id| id.resolve());
+            if let Some(target) = heal_target {
+                let range = creep_pos.get_range_to(target.pos());
+                if range <= 1 {
+                    let _ = creep.heal(&target);
+                } else if range <= 3 {
+                    let _ = creep.ranged_heal(&target);
+                } else {
+                    heal_best_nearby(creep, tick_context);
                 }
+            } else {
+                heal_best_nearby(creep, tick_context);
             }
         }
 
-        // Self-heal (Pipeline C -- independent of attack).
-        if creep.hits() < creep.hits_max() && tick_context.action_flags.consume(SimultaneousActionFlags::HEAL) {
-            let _ = creep.heal(creep);
-        }
-
-        // Movement: kite if tick orders say Formation, otherwise follow orders.
+        // Movement: follow tick orders or kite toward objective.
         if let Some(ref orders) = tick_orders {
             match &orders.movement {
                 TickMovement::Flee => {
-                    Self::flee_from_hostiles(tick_context);
+                    flee_from_hostiles(tick_context);
                 }
                 TickMovement::Formation | TickMovement::Hold => {
-                    // During combat response, default to kiting toward objective.
                     Self::kite_toward_objective(tick_context, state_context);
                 }
                 TickMovement::MoveTo(pos) => {
-                    if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
-                        tick_context
-                            .runtime_data
-                            .movement
-                            .move_to(creep_entity, *pos)
-                            .range(1)
-                            .priority(MovementPriority::High);
-                    }
+                    tick_context
+                        .runtime_data
+                        .movement
+                        .move_to(creep_entity, *pos)
+                        .range(1)
+                        .priority(MovementPriority::High);
                 }
             }
         } else {
-            // No tick orders -- kite toward objective by default.
             Self::kite_toward_objective(tick_context, state_context);
         }
 
         None
     }
 
-    /// Kite toward the objective room while maintaining range from hostiles.
     fn kite_toward_objective(tick_context: &mut JobTickContext, state_context: &SquadCombatJobContext) {
         let creep_entity = tick_context.runtime_data.creep_entity;
-
-        // Move toward the target room center.
-        if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
-            let target_pos = Position::new(
-                RoomCoordinate::new(25).unwrap(),
-                RoomCoordinate::new(25).unwrap(),
-                state_context.target_room,
-            );
-            tick_context
-                .runtime_data
-                .movement
-                .move_to(creep_entity, target_pos)
-                .range(20)
-                .priority(MovementPriority::High);
-        }
-    }
-
-    /// Flee from nearby hostiles.
-    fn flee_from_hostiles(tick_context: &mut JobTickContext) {
-        let creep = tick_context.runtime_data.owner;
-        let creep_entity = tick_context.runtime_data.creep_entity;
-
-        let hostiles = get_hostile_creeps(creep.pos().room_name(), tick_context);
-        let flee_targets: Vec<FleeTarget> = hostiles
-            .iter()
-            .map(|c| FleeTarget {
-                pos: c.pos(),
-                range: 8,
-            })
-            .collect();
-
-        if !flee_targets.is_empty() && tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
-            tick_context
-                .runtime_data
-                .movement
-                .flee(creep_entity, flee_targets)
-                .range(8);
-        }
+        let target_pos = Position::new(
+            RoomCoordinate::new(25).unwrap(),
+            RoomCoordinate::new(25).unwrap(),
+            state_context.target_room,
+        );
+        tick_context
+            .runtime_data
+            .movement
+            .move_to(creep_entity, target_pos)
+            .range(20)
+            .priority(MovementPriority::High);
     }
 }
 
@@ -261,7 +310,7 @@ impl Engaged {
             }
         }
 
-        // Retreat if HP drops below 50% (unless squad overrides).
+        // Retreat if HP drops below 50%.
         if creep.hits() < creep.hits_max() / 2 {
             return Some(SquadCombatState::retreating());
         }
@@ -271,230 +320,324 @@ impl Engaged {
             return Some(SquadCombatState::move_to_room());
         }
 
-        // Check if renewing.
+        // ── Execute actions (all pipelines fire independently) ──
+
         if let Some(ref orders) = tick_orders {
-            if orders.renewing {
-                return None;
-            }
-        }
-
-        // Execute attack orders (Pipeline A or B).
-        if let Some(ref orders) = tick_orders {
-            if let Some(attack_pos) = orders.attack_target {
-                let range = creep_pos.get_range_to(attack_pos);
-                let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
-
-                // Try ranged attack (Pipeline B).
-                if range <= 3 && tick_context.action_flags.consume(SimultaneousActionFlags::RANGED_ATTACK) {
-                    if let Some(target) = hostiles.iter().min_by_key(|c| creep_pos.get_range_to(c.pos())) {
-                        if creep_pos.get_range_to(target.pos()) <= 3 {
-                            let _ = creep.ranged_attack(target);
-                        }
-                    }
-                }
-
-                // Try melee attack (Pipeline A) -- independent of ranged.
-                if range <= 1 && tick_context.action_flags.consume(SimultaneousActionFlags::ATTACK) {
-                    if let Some(target) = hostiles.iter().find(|c| creep_pos.get_range_to(c.pos()) <= 1) {
-                        let _ = creep.attack(target);
-                    }
-                }
-            }
+            // With tick orders: use ordered targets.
+            Self::execute_attack_with_orders(creep, creep_pos, orders, tick_context);
+            Self::execute_heal_with_orders(creep, creep_pos, orders, tick_context);
         } else {
-            // No tick orders -- fallback: attack nearest hostile.
-            Self::fallback_attack(tick_context);
+            // No tick orders: body-part-aware fallback.
+            Self::fallback_attack(creep, creep_pos, tick_context);
+            Self::fallback_heal(creep, tick_context);
         }
 
-        // Execute heal orders (Pipeline C -- independent of attack pipelines).
-        if let Some(ref orders) = tick_orders {
-            if let Some(heal_pos) = orders.heal_target_pos {
-                let range = creep_pos.get_range_to(heal_pos);
-                let my_creeps = get_friendly_creeps(creep_pos.room_name(), tick_context);
+        // ── Movement ──
 
-                // Find the actual creep at the heal target position.
-                let heal_target = my_creeps
-                    .iter()
-                    .filter(|c| c.pos() == heal_pos || creep_pos.get_range_to(c.pos()) <= 3)
-                    .min_by_key(|c| c.pos().get_range_to(heal_pos));
-
-                if let Some(target) = heal_target {
-                    let actual_range = creep_pos.get_range_to(target.pos());
-                    if actual_range <= 1 && tick_context.action_flags.consume(SimultaneousActionFlags::HEAL) {
-                        // Adjacent heal is always preferred (12 HP/part vs 4 HP/part).
-                        let _ = creep.heal(target);
-                    } else if actual_range <= 3 && tick_context.action_flags.consume(SimultaneousActionFlags::RANGED_HEAL) {
-                        let _ = creep.ranged_heal(target);
-                    }
-                } else if range <= 1 && tick_context.action_flags.consume(SimultaneousActionFlags::HEAL) {
-                    // Target not found at position -- self-heal as fallback.
-                    let _ = creep.heal(creep);
-                }
-            } else {
-                // No heal target assigned but we have orders -- self-heal if damaged.
-                if creep.hits() < creep.hits_max() && tick_context.action_flags.consume(SimultaneousActionFlags::HEAL) {
-                    let _ = creep.heal(creep);
-                }
-            }
-        } else {
-            // No tick orders -- fallback: self-heal if damaged.
-            if creep.hits() < creep.hits_max() && tick_context.action_flags.consume(SimultaneousActionFlags::HEAL) {
-                let _ = creep.heal(creep);
-            }
-        }
-
-        // Issue movement based on tick orders.
         if let Some(ref orders) = tick_orders {
             match &orders.movement {
                 TickMovement::Formation => {
-                    // Read the squad's virtual position and this member's formation
-                    // slot, then move toward the computed formation offset tile.
-                    if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
-                        let moved = (|| {
-                            let id = state_context.squad_entity?;
-                            let entity = tick_context.system_data.entities.entity(id);
-                            let squad_ctx = tick_context.system_data.squad_contexts.get(entity)?;
-                            let member = squad_ctx.get_member(creep_entity)?;
-                            let virtual_pos = squad_ctx.squad_path.as_ref().map(|p| p.virtual_pos)?;
-                            let layout = squad_ctx.layout.as_ref()?;
-                            let target_tile = virtual_anchor_target(virtual_pos, layout, member.formation_slot)?;
-                            tick_context
-                                .runtime_data
-                                .movement
-                                .move_to(creep_entity, target_tile)
-                                .range(0)
-                                .priority(MovementPriority::High);
-                            Some(())
-                        })();
-
-                        if moved.is_none() {
-                            // Fallback: no squad path or layout -- move toward focus target.
-                            if let Some(ref orders) = tick_orders {
-                                if let Some(target) = orders.attack_target {
-                                    tick_context
-                                        .runtime_data
-                                        .movement
-                                        .move_to(creep_entity, target)
-                                        .range(1)
-                                        .priority(MovementPriority::High);
-                                }
-                            }
-                        }
-                    }
+                    execute_formation_movement(state_context, creep_entity, orders, tick_context);
                 }
                 TickMovement::MoveTo(pos) => {
-                    if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
-                        tick_context
-                            .runtime_data
-                            .movement
-                            .move_to(creep_entity, *pos)
-                            .range(1)
-                            .priority(MovementPriority::High);
-                    }
+                    tick_context
+                        .runtime_data
+                        .movement
+                        .move_to(creep_entity, *pos)
+                        .range(1)
+                        .priority(MovementPriority::High);
                 }
                 TickMovement::Flee => {
-                    CombatResponse::flee_from_hostiles(tick_context);
+                    flee_from_hostiles(tick_context);
                 }
-                TickMovement::Hold => {
-                    // Stay put.
-                }
+                TickMovement::Hold => {}
             }
         } else {
-            // No tick orders -- fallback: move toward nearest hostile.
-            Self::fallback_movement(tick_context, state_context);
+            Self::fallback_movement(creep, creep_pos, creep_entity, tick_context, state_context);
         }
 
         None
     }
 
-    /// Fallback attack behavior when no tick orders are available.
-    /// Focus fire: prefer lowest HP hostile to get kills faster.
-    fn fallback_attack(tick_context: &mut JobTickContext) {
-        let creep = tick_context.runtime_data.owner;
-        let creep_pos = creep.pos();
+    // ── Ordered attack ──
 
+    fn execute_attack_with_orders(
+        creep: &Creep,
+        creep_pos: Position,
+        orders: &TickOrders,
+        tick_context: &mut JobTickContext,
+    ) {
+        let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
+
+        // Resolve the focus target from the AttackTarget enum.
+        let focus_creep: Option<Creep> = orders
+            .attack_target
+            .as_ref()
+            .and_then(|t| t.resolve_creep());
+
+        // Pipeline A: Melee attack adjacent hostile -- prefer focus target.
+        if has_active_part(creep, Part::Attack) {
+            let target = if let Some(ref focus) = focus_creep {
+                if creep_pos.get_range_to(focus.pos()) <= 1 {
+                    Some(focus)
+                } else {
+                    hostiles
+                        .iter()
+                        .filter(|c| creep_pos.get_range_to(c.pos()) <= 1)
+                        .min_by_key(|c| c.hits())
+                }
+            } else {
+                hostiles
+                    .iter()
+                    .filter(|c| creep_pos.get_range_to(c.pos()) <= 1)
+                    .min_by_key(|c| c.hits())
+            };
+            if let Some(target) = target {
+                let _ = creep.attack(target);
+            }
+        }
+
+        // Pipeline B: Ranged attack -- focus fire the squad's designated target.
+        if has_active_part(creep, Part::RangedAttack) {
+            let in_range_3_count = hostiles
+                .iter()
+                .filter(|c| creep_pos.get_range_to(c.pos()) <= 3)
+                .count();
+            let in_range_1_count = hostiles
+                .iter()
+                .filter(|c| creep_pos.get_range_to(c.pos()) <= 1)
+                .count();
+
+            if in_range_3_count > 0 {
+                // Mass attack when multiple hostiles are stacked on us.
+                if in_range_1_count >= 3 || (in_range_3_count >= 3 && in_range_1_count >= 1) {
+                    let _ = creep.ranged_mass_attack();
+                } else {
+                    // Focus fire: prefer the exact focus target by ID.
+                    let target = if let Some(ref focus) = focus_creep {
+                        if creep_pos.get_range_to(focus.pos()) <= 3 {
+                            Some(focus)
+                        } else {
+                            hostiles
+                                .iter()
+                                .filter(|c| creep_pos.get_range_to(c.pos()) <= 3)
+                                .min_by_key(|c| c.hits())
+                        }
+                    } else {
+                        hostiles
+                            .iter()
+                            .filter(|c| creep_pos.get_range_to(c.pos()) <= 3)
+                            .min_by_key(|c| c.hits())
+                    };
+                    if let Some(target) = target {
+                        let _ = creep.ranged_attack(target);
+                    }
+                }
+            } else {
+                // No hostiles in range -- try structures.
+                let structures = get_hostile_structures(creep_pos.room_name(), tick_context);
+                let target = structures
+                    .iter()
+                    .filter(|s| creep_pos.get_range_to(s.pos()) <= 3)
+                    .min_by_key(|s| match s.structure_type() {
+                        StructureType::InvaderCore => 0u32,
+                        StructureType::Spawn => 1,
+                        StructureType::Tower => 2,
+                        _ => 10,
+                    });
+                if let Some(target) = target {
+                    if let Some(attackable) = target.as_attackable() {
+                        let _ = creep.ranged_attack(attackable);
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Ordered heal ──
+
+    fn execute_heal_with_orders(
+        creep: &Creep,
+        creep_pos: Position,
+        orders: &TickOrders,
+        tick_context: &mut JobTickContext,
+    ) {
+        if !has_active_part(creep, Part::Heal) {
+            return;
+        }
+
+        // Resolve the heal target directly by ObjectId.
+        if let Some(target) = orders.heal_target.and_then(|id| id.resolve()) {
+            let range = creep_pos.get_range_to(target.pos());
+            if range <= 1 {
+                let _ = creep.heal(&target);
+            } else if range <= 3 {
+                let _ = creep.ranged_heal(&target);
+            } else {
+                // Assigned target out of range -- heal best nearby instead.
+                heal_best_nearby(creep, tick_context);
+            }
+        } else {
+            // No target or target died -- heal best nearby.
+            heal_best_nearby(creep, tick_context);
+        }
+    }
+
+    // ── Fallback attack (no tick orders, body-part-aware) ──
+
+    fn fallback_attack(creep: &Creep, creep_pos: Position, tick_context: &mut JobTickContext) {
         let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
 
         if hostiles.is_empty() {
             // Attack structures: prioritize invader cores > spawns > towers.
-            let structures = get_hostile_structures(creep_pos.room_name(), tick_context);
-            let target = structures.iter()
-                .filter(|s| creep_pos.get_range_to(s.pos()) <= 3)
-                .min_by_key(|s| match s.structure_type() {
-                    StructureType::InvaderCore => 0u32,
-                    StructureType::Spawn => 1,
-                    StructureType::Tower => 2,
-                    _ => 10,
-                });
-            if let Some(target) = target {
-                if tick_context.action_flags.consume(SimultaneousActionFlags::RANGED_ATTACK) {
+            if has_active_part(creep, Part::RangedAttack) {
+                let structures = get_hostile_structures(creep_pos.room_name(), tick_context);
+                let target = structures
+                    .iter()
+                    .filter(|s| creep_pos.get_range_to(s.pos()) <= 3)
+                    .min_by_key(|s| match s.structure_type() {
+                        StructureType::InvaderCore => 0u32,
+                        StructureType::Spawn => 1,
+                        StructureType::Tower => 2,
+                        _ => 10,
+                    });
+                if let Some(target) = target {
                     if let Some(attackable) = target.as_attackable() {
                         let _ = creep.ranged_attack(attackable);
+                    }
+                }
+            }
+            if has_active_part(creep, Part::Attack) {
+                let structures = get_hostile_structures(creep_pos.room_name(), tick_context);
+                let target = structures
+                    .iter()
+                    .filter(|s| creep_pos.get_range_to(s.pos()) <= 1)
+                    .min_by_key(|s| match s.structure_type() {
+                        StructureType::InvaderCore => 0u32,
+                        StructureType::Spawn => 1,
+                        StructureType::Tower => 2,
+                        _ => 10,
+                    });
+                if let Some(target) = target {
+                    if let Some(attackable) = target.as_attackable() {
+                        let _ = creep.attack(attackable);
                     }
                 }
             }
             return;
         }
 
-        // Use mass attack only when 3+ hostiles are at range 1 (it does less
-        // single-target damage than ranged_attack at range 3).
-        let in_range_1: usize = hostiles.iter().filter(|c| creep_pos.get_range_to(c.pos()) <= 1).count();
-
-        if in_range_1 >= 3
-            && tick_context.action_flags.consume(SimultaneousActionFlags::RANGED_MASS_ATTACK)
-        {
-            let _ = creep.ranged_mass_attack();
-        } else {
-            // Focus fire: attack the hostile with lowest HP in range 3.
-            let target = hostiles
+        // Pipeline A: Melee attack adjacent hostile.
+        if has_active_part(creep, Part::Attack) {
+            if let Some(target) = hostiles
                 .iter()
-                .filter(|c| creep_pos.get_range_to(c.pos()) <= 3)
-                .min_by_key(|c| c.hits());
+                .filter(|c| creep_pos.get_range_to(c.pos()) <= 1)
+                .min_by_key(|c| c.hits())
+            {
+                let _ = creep.attack(target);
+            }
+        }
 
-            if let Some(target) = target {
-                if tick_context.action_flags.consume(SimultaneousActionFlags::RANGED_ATTACK) {
+        // Pipeline B: Ranged attack.
+        if has_active_part(creep, Part::RangedAttack) {
+            let in_range_1: usize = hostiles.iter().filter(|c| creep_pos.get_range_to(c.pos()) <= 1).count();
+
+            if in_range_1 >= 3 {
+                let _ = creep.ranged_mass_attack();
+            } else {
+                let target = hostiles
+                    .iter()
+                    .filter(|c| creep_pos.get_range_to(c.pos()) <= 3)
+                    .min_by_key(|c| c.hits());
+
+                if let Some(target) = target {
                     let _ = creep.ranged_attack(target);
                 }
             }
         }
-
-        // Self-heal (Pipeline C -- independent of ranged attack).
-        if creep.hits() < creep.hits_max() && tick_context.action_flags.consume(SimultaneousActionFlags::HEAL) {
-            let _ = creep.heal(creep);
-        }
     }
 
-    /// Fallback movement when no tick orders are available.
-    /// Kite melee hostiles at range 3; flee if they close to range 1-2.
-    fn fallback_movement(tick_context: &mut JobTickContext, state_context: &SquadCombatJobContext) {
-        let creep = tick_context.runtime_data.owner;
-        let creep_pos = creep.pos();
-        let creep_entity = tick_context.runtime_data.creep_entity;
+    // ── Fallback heal (no tick orders) ──
+
+    fn fallback_heal(creep: &Creep, tick_context: &mut JobTickContext) {
+        if !has_active_part(creep, Part::Heal) {
+            return;
+        }
+        heal_best_nearby(creep, tick_context);
+    }
+
+    // ── Fallback movement (no tick orders, body-part-aware) ──
+
+    fn fallback_movement(
+        creep: &Creep,
+        creep_pos: Position,
+        creep_entity: Entity,
+        tick_context: &mut JobTickContext,
+        state_context: &SquadCombatJobContext,
+    ) {
+        let has_attack = has_active_part(creep, Part::Attack);
+        let has_ranged = has_active_part(creep, Part::RangedAttack);
+        let has_heal = has_active_part(creep, Part::Heal);
 
         let hostiles = get_hostile_creeps(state_context.target_room, tick_context);
-        if let Some(target) = hostiles.iter().min_by_key(|c| creep_pos.get_range_to(c.pos())) {
-            let range = creep_pos.get_range_to(target.pos());
 
-            // Check if the nearest hostile is melee-only (has ATTACK but no RANGED_ATTACK).
-            let is_melee = target.body().iter().any(|p| p.part() == Part::Attack && p.hits() > 0)
-                && !target.body().iter().any(|p| p.part() == Part::RangedAttack && p.hits() > 0);
-
-            if is_melee && range <= 2 {
-                // Melee hostile too close -- flee to maintain kiting distance.
-                if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
-                    CombatResponse::flee_from_hostiles(tick_context);
+        if has_attack && !has_ranged {
+            // Pure melee: close to range 1 aggressively.
+            if let Some(target) = hostiles.iter().min_by_key(|c| creep_pos.get_range_to(c.pos())) {
+                let range = creep_pos.get_range_to(target.pos());
+                if range > 1 {
+                    tick_context
+                        .runtime_data
+                        .movement
+                        .move_to(creep_entity, target.pos())
+                        .range(1)
+                        .priority(MovementPriority::High);
+                } else {
+                    mark_working(tick_context, target.pos(), 1);
                 }
-            } else if range > 3 && tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
-                // Too far -- close to range 3.
-                tick_context
-                    .runtime_data
-                    .movement
-                    .move_to(creep_entity, target.pos())
-                    .range(3)
-                    .priority(MovementPriority::High);
-            } else {
-                mark_working(tick_context, target.pos(), 3);
+            }
+        } else if has_ranged {
+            // Ranged (with or without melee): kite at range 3.
+            if let Some(target) = hostiles.iter().min_by_key(|c| creep_pos.get_range_to(c.pos())) {
+                let range = creep_pos.get_range_to(target.pos());
+
+                let is_melee_only = target.body().iter().any(|p| p.part() == Part::Attack && p.hits() > 0)
+                    && !target.body().iter().any(|p| p.part() == Part::RangedAttack && p.hits() > 0);
+
+                if is_melee_only && range <= 2 {
+                    flee_from_hostiles(tick_context);
+                } else if range > 3 {
+                    tick_context
+                        .runtime_data
+                        .movement
+                        .move_to(creep_entity, target.pos())
+                        .range(3)
+                        .priority(MovementPriority::High);
+                } else {
+                    mark_working(tick_context, target.pos(), 3);
+                }
+            }
+        } else if has_heal && !hostiles.is_empty() {
+            // Pure healer: follow nearest damaged friendly.
+            let my_creeps = get_friendly_creeps(creep_pos.room_name(), tick_context);
+            let damaged = my_creeps
+                .iter()
+                .filter(|c| c.hits() < c.hits_max() && c.pos() != creep_pos)
+                .min_by_key(|c| creep_pos.get_range_to(c.pos()));
+
+            if let Some(target) = damaged {
+                let range = creep_pos.get_range_to(target.pos());
+                if range > 1 {
+                    tick_context
+                        .runtime_data
+                        .movement
+                        .move_to(creep_entity, target.pos())
+                        .range(1)
+                        .priority(MovementPriority::High);
+                }
             }
         }
+        // Hauler / no combat parts: idle.
     }
 }
 
@@ -513,80 +656,204 @@ impl Retreating {
             .unwrap_or(false);
 
         // Re-engage once HP recovers above 80%, or if squad signals engage.
-        if creep.hits() > creep.hits_max() * 4 / 5
-            || (squad_wants_engage && creep.hits() > creep.hits_max() * 3 / 5)
-        {
+        if creep.hits() > creep.hits_max() * 4 / 5 || (squad_wants_engage && creep.hits() > creep.hits_max() * 3 / 5) {
             return Some(SquadCombatState::engaged());
         }
 
         // Read tick orders for coordinated retreat.
         let tick_orders = get_tick_orders(state_context.squad_entity, creep_entity, tick_context);
 
-        // Ranged mass attack while retreating (Pipeline B).
-        if tick_context.action_flags.consume(SimultaneousActionFlags::RANGED_MASS_ATTACK) {
+        // Pipeline B: Ranged mass attack while retreating.
+        if has_active_part(creep, Part::RangedAttack) {
             let _ = creep.ranged_mass_attack();
         }
 
-        // Heal: prefer healing squad members over self-heal during retreat.
-        if let Some(ref orders) = tick_orders {
-            if let Some(heal_pos) = orders.heal_target_pos {
-                let my_creeps = get_friendly_creeps(creep_pos.room_name(), tick_context);
-                let heal_target = my_creeps
-                    .iter()
-                    .filter(|c| c.pos() == heal_pos || creep_pos.get_range_to(c.pos()) <= 3)
-                    .min_by_key(|c| c.pos().get_range_to(heal_pos));
-
-                if let Some(target) = heal_target {
-                    let range = creep_pos.get_range_to(target.pos());
-                    if range <= 1 && tick_context.action_flags.consume(SimultaneousActionFlags::HEAL) {
-                        let _ = creep.heal(target);
-                    } else if range <= 3 && tick_context.action_flags.consume(SimultaneousActionFlags::RANGED_HEAL) {
-                        let _ = creep.ranged_heal(target);
-                    }
-                } else if creep.hits() < creep.hits_max()
-                    && tick_context.action_flags.consume(SimultaneousActionFlags::HEAL)
-                {
-                    let _ = creep.heal(creep);
-                }
-            } else if creep.hits() < creep.hits_max()
-                && tick_context.action_flags.consume(SimultaneousActionFlags::HEAL)
-            {
-                let _ = creep.heal(creep);
+        // Pipeline A: Melee attack if adjacent.
+        if has_active_part(creep, Part::Attack) {
+            let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
+            if let Some(target) = hostiles.iter().find(|c| creep_pos.get_range_to(c.pos()) <= 1) {
+                let _ = creep.attack(target);
             }
-        } else if creep.hits() < creep.hits_max()
-            && tick_context.action_flags.consume(SimultaneousActionFlags::HEAL)
-        {
-            let _ = creep.heal(creep);
+        }
+
+        // Pipeline C: Heal -- resolve assigned target by ID, else best nearby.
+        if has_active_part(creep, Part::Heal) {
+            let heal_target = tick_orders
+                .as_ref()
+                .and_then(|o| o.heal_target)
+                .and_then(|id| id.resolve());
+            if let Some(target) = heal_target {
+                let range = creep_pos.get_range_to(target.pos());
+                if range <= 1 {
+                    let _ = creep.heal(&target);
+                } else if range <= 3 {
+                    let _ = creep.ranged_heal(&target);
+                } else {
+                    heal_best_nearby(creep, tick_context);
+                }
+            } else {
+                heal_best_nearby(creep, tick_context);
+            }
         }
 
         // Movement: use tick orders for coordinated retreat, fall back to flee.
         if let Some(ref orders) = tick_orders {
             match &orders.movement {
                 TickMovement::MoveTo(pos) => {
-                    // Squad-coordinated retreat toward rally point.
-                    if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
-                        tick_context
-                            .runtime_data
-                            .movement
-                            .move_to(creep_entity, *pos)
-                            .range(1)
-                            .priority(MovementPriority::High);
-                    }
+                    tick_context
+                        .runtime_data
+                        .movement
+                        .move_to(creep_entity, *pos)
+                        .range(1)
+                        .priority(MovementPriority::High);
                 }
                 TickMovement::Flee => {
-                    CombatResponse::flee_from_hostiles(tick_context);
+                    flee_from_hostiles(tick_context);
                 }
                 _ => {
-                    // Default: flee from hostiles.
-                    CombatResponse::flee_from_hostiles(tick_context);
+                    flee_from_hostiles(tick_context);
                 }
             }
         } else {
-            CombatResponse::flee_from_hostiles(tick_context);
+            flee_from_hostiles(tick_context);
         }
 
         None
     }
+}
+
+// ─── Shared helpers ─────────────────────────────────────────────────────────
+
+/// Heal the best nearby target: prefer adjacent damaged squad member, then
+/// adjacent damaged friendly, then self-heal, then ranged heal.
+fn heal_best_nearby(creep: &Creep, tick_context: &mut JobTickContext) {
+    let creep_pos = creep.pos();
+    let my_creeps = get_friendly_creeps(creep_pos.room_name(), tick_context);
+
+    // Prefer adjacent damaged friendlies (12 HP/part).
+    let adjacent_damaged = my_creeps
+        .iter()
+        .filter(|c| creep_pos.get_range_to(c.pos()) <= 1 && c.hits() < c.hits_max())
+        .min_by_key(|c| c.hits());
+
+    if let Some(target) = adjacent_damaged {
+        let _ = creep.heal(target);
+        return;
+    }
+
+    // Self-heal if damaged.
+    if creep.hits() < creep.hits_max() {
+        let _ = creep.heal(creep);
+        return;
+    }
+
+    // Ranged heal damaged friendlies (4 HP/part).
+    let ranged_damaged = my_creeps
+        .iter()
+        .filter(|c| {
+            let range = creep_pos.get_range_to(c.pos());
+            range > 1 && range <= 3 && c.hits() < c.hits_max()
+        })
+        .min_by_key(|c| c.hits());
+
+    if let Some(target) = ranged_damaged {
+        let _ = creep.ranged_heal(target);
+    }
+}
+
+/// Flee from nearby hostiles.
+fn flee_from_hostiles(tick_context: &mut JobTickContext) {
+    let creep = tick_context.runtime_data.owner;
+    let creep_entity = tick_context.runtime_data.creep_entity;
+
+    let hostiles = get_hostile_creeps(creep.pos().room_name(), tick_context);
+    let flee_targets: Vec<FleeTarget> = hostiles.iter().map(|c| FleeTarget { pos: c.pos(), range: 8 }).collect();
+
+    if !flee_targets.is_empty() {
+        tick_context.runtime_data.movement.flee(creep_entity, flee_targets).range(8);
+    }
+}
+
+/// Execute formation movement: move toward the virtual anchor offset tile.
+fn execute_formation_movement(
+    state_context: &SquadCombatJobContext,
+    creep_entity: Entity,
+    orders: &TickOrders,
+    tick_context: &mut JobTickContext,
+) {
+    let moved = (|| {
+        let target_tile = get_formation_target(state_context.squad_entity, creep_entity, tick_context)?;
+        tick_context
+            .runtime_data
+            .movement
+            .move_to(creep_entity, target_tile)
+            .range(0)
+            .priority(MovementPriority::High);
+        Some(())
+    })();
+
+    if moved.is_none() {
+        // Fallback: no squad path or layout -- move toward focus target.
+        if let Some(target_pos) = orders.attack_target.as_ref().and_then(|t| t.pos()) {
+            tick_context
+                .runtime_data
+                .movement
+                .move_to(creep_entity, target_pos)
+                .range(1)
+                .priority(MovementPriority::High);
+        }
+    }
+}
+
+/// Get the formation target tile for a specific creep from the squad context.
+///
+/// If the virtual position is in a different room from the creep, returns
+/// a position on the nearest room edge toward the virtual position so the
+/// creep moves to rejoin the formation rather than wandering independently.
+fn get_formation_target(squad_entity_id: Option<u32>, creep_entity: Entity, tick_context: &JobTickContext) -> Option<Position> {
+    let id = squad_entity_id?;
+    let entity = tick_context.system_data.entities.entity(id);
+    let squad_ctx = tick_context.system_data.squad_contexts.get(entity)?;
+    let member = squad_ctx.get_member(creep_entity)?;
+    let virtual_pos = squad_ctx.squad_path.as_ref().map(|p| p.virtual_pos)?;
+    let layout = squad_ctx.layout.as_ref()?;
+    let target = virtual_anchor_target(virtual_pos, layout, member.formation_slot)?;
+
+    // If the creep is in the same room as the target, use the target directly.
+    let creep_pos = member.position?;
+    if creep_pos.room_name() == target.room_name() {
+        return Some(target);
+    }
+
+    // The target is in a different room. Guide the creep toward the room
+    // exit that leads to the target's room. Using world coordinates gives
+    // the correct direction even across room boundaries.
+    let (cur_wx, cur_wy) = creep_pos.world_coords();
+    let (tgt_wx, tgt_wy) = target.world_coords();
+    let dx = (tgt_wx - cur_wx).signum();
+    let dy = (tgt_wy - cur_wy).signum();
+
+    // Compute a position on the current room's edge in the right direction.
+    let edge_x = if dx > 0 {
+        49
+    } else if dx < 0 {
+        0
+    } else {
+        creep_pos.x().u8()
+    };
+    let edge_y = if dy > 0 {
+        49
+    } else if dy < 0 {
+        0
+    } else {
+        creep_pos.y().u8()
+    };
+
+    Some(Position::new(
+        RoomCoordinate::new(edge_x).ok()?,
+        RoomCoordinate::new(edge_y).ok()?,
+        creep_pos.room_name(),
+    ))
 }
 
 // ─── SquadCombatJob ─────────────────────────────────────────────────────────
@@ -640,7 +907,6 @@ fn get_hostile_creeps(room_name: RoomName, tick_context: &JobTickContext) -> Vec
             }
         }
     }
-    // Fallback: direct game API (room may not be in ECS yet).
     game::rooms()
         .get(room_name)
         .map(|room| room.find(find::HOSTILE_CREEPS, None))
@@ -670,11 +936,7 @@ fn get_hostile_structures(room_name: RoomName, tick_context: &JobTickContext) ->
                 return structures
                     .all()
                     .iter()
-                    .filter(|s| {
-                        s.as_owned()
-                            .map(|o| !o.my())
-                            .unwrap_or(false)
-                    })
+                    .filter(|s| s.as_owned().map(|o| !o.my()).unwrap_or(false))
                     .cloned()
                     .collect();
             }
@@ -687,11 +949,7 @@ fn get_hostile_structures(room_name: RoomName, tick_context: &JobTickContext) ->
 }
 
 /// Look up tick orders for a specific creep from the squad context.
-fn get_tick_orders(
-    squad_entity_id: Option<u32>,
-    creep_entity: Entity,
-    tick_context: &JobTickContext,
-) -> Option<TickOrders> {
+fn get_tick_orders(squad_entity_id: Option<u32>, creep_entity: Entity, tick_context: &JobTickContext) -> Option<TickOrders> {
     let id = squad_entity_id?;
     let entity = tick_context.system_data.entities.entity(id);
     let squad_ctx = tick_context.system_data.squad_contexts.get(entity)?;
@@ -713,7 +971,7 @@ impl Job for SquadCombatJob {
         let mut tick_context = JobTickContext {
             system_data,
             runtime_data,
-            action_flags: SimultaneousActionFlags::UNSET,
+            action_flags: super::actions::SimultaneousActionFlags::UNSET,
         };
 
         crate::machine_tick::run_state_machine(&mut self.state, "SquadCombatJob", |state| {

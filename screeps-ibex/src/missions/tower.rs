@@ -103,8 +103,16 @@ impl Mission for TowerMission {
             TransferTypeFlags::HAUL,
             Box::new(move |system, transfer, _room_name| {
                 let room_data = system.get_room_data(room_data_entity).ok_or("Expected room data")?;
-                let structures = room_data.get_structures().ok_or("Expected structures")?;
-                let creeps = room_data.get_creeps().ok_or("Expected creeps")?;
+                let structures = room_data.get_structures().ok_or_else(|| {
+                    let msg = format!("Expected structures - Room: {}", room_data.name);
+                    log::warn!("{} at {}:{}", msg, file!(), line!());
+                    msg
+                })?;
+                let creeps = room_data.get_creeps().ok_or_else(|| {
+                    let msg = format!("Expected creeps - Room: {}", room_data.name);
+                    log::warn!("{} at {}:{}", msg, file!(), line!());
+                    msg
+                })?;
 
                 let towers = structures.towers();
 
@@ -141,9 +149,17 @@ impl Mission for TowerMission {
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
-        let structures = room_data.get_structures().ok_or("Expected structures")?;
+        let structures = room_data.get_structures().ok_or_else(|| {
+            let msg = format!("Expected structures - Room: {}", room_data.name);
+            log::warn!("{} at {}:{}", msg, file!(), line!());
+            msg
+        })?;
         let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility data")?;
-        let creeps = room_data.get_creeps().ok_or("Expected creeps")?;
+        let creeps = room_data.get_creeps().ok_or_else(|| {
+            let msg = format!("Expected creeps - Room: {}", room_data.name);
+            log::warn!("{} at {}:{}", msg, file!(), line!());
+            msg
+        })?;
 
         let towers = structures.towers();
         let my_towers: Vec<_> = towers.iter().filter(|t| t.my()).collect();

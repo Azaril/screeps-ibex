@@ -72,7 +72,11 @@ impl Mission for PowerSpawnMission {
     fn pre_run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<(), String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
-        let structures = room_data.get_structures().ok_or("Expected structures")?;
+        let structures = room_data.get_structures().ok_or_else(|| {
+            let msg = format!("Expected structures - Room: {}", room_data.name);
+            log::warn!("{} at {}:{}", msg, file!(), line!());
+            msg
+        })?;
 
         if structures.power_spawns().is_empty() {
             return Err("No power spawns in room".to_owned());
@@ -85,7 +89,11 @@ impl Mission for PowerSpawnMission {
             TransferTypeFlags::HAUL,
             Box::new(move |system, transfer, _room_name| {
                 let room_data = system.get_room_data(room_data_entity).ok_or("Expected room data")?;
-                let structures = room_data.get_structures().ok_or("Expected structures")?;
+                let structures = room_data.get_structures().ok_or_else(|| {
+                    let msg = format!("Expected structures - Room: {}", room_data.name);
+                    log::warn!("{} at {}:{}", msg, file!(), line!());
+                    msg
+                })?;
                 let power_spawns = structures.power_spawns();
 
                 for power_spawn in power_spawns.iter() {
@@ -144,7 +152,11 @@ impl Mission for PowerSpawnMission {
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<MissionResult, String> {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
 
-        let structures = room_data.get_structures().ok_or("Expected structures")?;
+        let structures = room_data.get_structures().ok_or_else(|| {
+            let msg = format!("Expected structures - Room: {}", room_data.name);
+            log::warn!("{} at {}:{}", msg, file!(), line!());
+            msg
+        })?;
         let power_spawns = structures.power_spawns();
 
         if power_spawns.is_empty() {

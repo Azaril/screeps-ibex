@@ -2,8 +2,7 @@ use super::data::*;
 use super::missionsystem::*;
 use crate::creep::*;
 use crate::jobs::data::*;
-use crate::jobs::heal::*;
-use crate::jobs::ranged::*;
+use crate::jobs::squad_combat::*;
 use crate::military::bodies;
 use crate::serialize::*;
 use crate::spawnsystem::*;
@@ -172,6 +171,29 @@ impl Spawning {
             }
         }
 
+        // Submit renew requests for defenders/healers with low TTL; SpawnQueueSystem fulfills when adjacent to idle spawn.
+        const RENEW_TTL_THRESHOLD: u32 = 1200;
+        const RENEW_MIN_ROOM_ENERGY: u32 = 10_000;
+        let renew_room = state_context.home_room_datas.iter().find(|&&e| {
+            system_data
+                .economy
+                .rooms
+                .get(&e)
+                .map(|r| r.stored_energy >= RENEW_MIN_ROOM_ENERGY)
+                .unwrap_or(false)
+        });
+        if let Some(&room_entity) = renew_room {
+            for &entity in state_context.defenders.iter().chain(state_context.healers.iter()) {
+                if let Some(creep) = system_data.creep_owner.get(entity).and_then(|co| co.owner.resolve()) {
+                    if let Some(ttl) = creep.ticks_to_live() {
+                        if ttl < RENEW_TTL_THRESHOLD && !creep.body().iter().any(|p| p.part() == screeps::Part::Claim) {
+                            system_data.spawn_queue.request_renew(room_entity, entity, ttl);
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(None)
     }
 }
@@ -182,7 +204,7 @@ impl Spawning {
             let name = name.to_string();
 
             system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::RangedAttack(RangedAttackJob::new(defend_room));
+                let creep_job = JobData::SquadCombat(SquadCombatJob::new(defend_room));
                 let creep_entity = spawning::build(world.create_entity(), &name).with(creep_job).build();
 
                 if let Some(mission_data) = world.write_storage::<MissionData>().get(mission_entity) {
@@ -199,7 +221,7 @@ impl Spawning {
             let name = name.to_string();
 
             system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Heal(HealJob::new(defend_room));
+                let creep_job = JobData::SquadCombat(SquadCombatJob::new(defend_room));
                 let creep_entity = spawning::build(world.create_entity(), &name).with(creep_job).build();
 
                 if let Some(mission_data) = world.write_storage::<MissionData>().get(mission_entity) {

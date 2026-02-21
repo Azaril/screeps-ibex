@@ -56,7 +56,6 @@ pub enum AttackReason {
     ProactiveDefense,
 }
 
-
 /// Attack operation -- coordinates offensive campaigns against a target room.
 /// Created by WarOperation for each target. Supports multi-squad coordination.
 #[derive(Clone, ConvertSaveload)]
@@ -110,12 +109,7 @@ impl AttackOperation {
         builder.with(OperationData::Attack(operation)).marked::<SerializeMarker>()
     }
 
-    pub fn build_with_context<B>(
-        builder: B,
-        owner: Option<Entity>,
-        target_room: RoomName,
-        reason: AttackReason,
-    ) -> B
+    pub fn build_with_context<B>(builder: B, owner: Option<Entity>, target_room: RoomName, reason: AttackReason) -> B
     where
         B: Builder + MarkedBuilder,
     {
@@ -150,11 +144,7 @@ impl AttackOperation {
 
     /// Create with a specific attack reason. Home rooms are assigned lazily
     /// by `WarOperation::reassign_home_rooms` for global balance.
-    pub fn new_with_context(
-        owner: Option<Entity>,
-        target_room: RoomName,
-        reason: AttackReason,
-    ) -> AttackOperation {
+    pub fn new_with_context(owner: Option<Entity>, target_room: RoomName, reason: AttackReason) -> AttackOperation {
         let mut op = AttackOperation::new(owner, target_room);
         op.attack_reason = reason;
         op
@@ -180,9 +170,7 @@ impl AttackOperation {
                 // Remote mining invader cleanup.
                 vec![PlannedSquad {
                     composition: SquadComposition::solo_ranged(),
-                    target: SquadTarget::DefendRoom {
-                        room: self.target_room,
-                    },
+                    target: SquadTarget::DefendRoom { room: self.target_room },
                     deploy_condition: DeployCondition::Immediate,
                 }]
             }
@@ -190,9 +178,7 @@ impl AttackOperation {
                 // Source Keeper farming: ranged kiter + healer duo.
                 vec![PlannedSquad {
                     composition: SquadComposition::duo_sk_farmer(),
-                    target: SquadTarget::AttackRoom {
-                        room: self.target_room,
-                    },
+                    target: SquadTarget::AttackRoom { room: self.target_room },
                     deploy_condition: DeployCondition::Immediate,
                 }]
             }
@@ -200,9 +186,7 @@ impl AttackOperation {
                 // Power bank farming: melee attacker + healer duo.
                 vec![PlannedSquad {
                     composition: SquadComposition::duo_melee_heal(),
-                    target: SquadTarget::AttackRoom {
-                        room: self.target_room,
-                    },
+                    target: SquadTarget::AttackRoom { room: self.target_room },
                     deploy_condition: DeployCondition::Immediate,
                 }]
             }
@@ -210,9 +194,7 @@ impl AttackOperation {
                 // Harassment: cheap solo harasser.
                 vec![PlannedSquad {
                     composition: SquadComposition::solo_harasser(),
-                    target: SquadTarget::HarassRoom {
-                        room: self.target_room,
-                    },
+                    target: SquadTarget::HarassRoom { room: self.target_room },
                     deploy_condition: DeployCondition::Immediate,
                 }]
             }
@@ -237,16 +219,12 @@ impl AttackOperation {
             vec![
                 PlannedSquad {
                     composition: SquadComposition::duo_drain(),
-                    target: SquadTarget::AttackRoom {
-                        room: self.target_room,
-                    },
+                    target: SquadTarget::AttackRoom { room: self.target_room },
                     deploy_condition: DeployCondition::Immediate,
                 },
                 PlannedSquad {
                     composition: SquadComposition::quad_ranged(),
-                    target: SquadTarget::AttackRoom {
-                        room: self.target_room,
-                    },
+                    target: SquadTarget::AttackRoom { room: self.target_room },
                     deploy_condition: DeployCondition::AfterSquad {
                         index: 0,
                         state: SquadState::Engaged,
@@ -257,27 +235,21 @@ impl AttackOperation {
             // Significant defense: quad assault.
             vec![PlannedSquad {
                 composition: SquadComposition::quad_ranged(),
-                target: SquadTarget::AttackRoom {
-                    room: self.target_room,
-                },
+                target: SquadTarget::AttackRoom { room: self.target_room },
                 deploy_condition: DeployCondition::Immediate,
             }]
         } else if towers >= 1 || total_dps > 0.0 {
             // Light defense: duo.
             vec![PlannedSquad {
                 composition: SquadComposition::duo_attack_heal(),
-                target: SquadTarget::AttackRoom {
-                    room: self.target_room,
-                },
+                target: SquadTarget::AttackRoom { room: self.target_room },
                 deploy_condition: DeployCondition::Immediate,
             }]
         } else {
             // No defense detected: solo.
             vec![PlannedSquad {
                 composition: SquadComposition::solo_ranged(),
-                target: SquadTarget::AttackRoom {
-                    room: self.target_room,
-                },
+                target: SquadTarget::AttackRoom { room: self.target_room },
                 deploy_condition: DeployCondition::Immediate,
             }]
         }
@@ -290,10 +262,7 @@ impl AttackOperation {
             .map(|s| s.towers().iter().filter(|t| !t.my()).count())
             .unwrap_or(0);
 
-        let hostile_count = room_data
-            .get_creeps()
-            .map(|c| c.hostile().len())
-            .unwrap_or(0);
+        let hostile_count = room_data.get_creeps().map(|c| c.hostile().len()).unwrap_or(0);
 
         // Analyze hostile DPS and healing.
         let mut estimated_dps: f32 = 0.0;
@@ -399,7 +368,11 @@ impl AttackOperation {
             AttackReason::InvaderCreeps => 100,
             // Invader cores have a timer but it's long. Moderate patience.
             AttackReason::InvaderCore { level } => {
-                if *level == 0 { 200 } else { 500 }
+                if *level == 0 {
+                    200
+                } else {
+                    500
+                }
             }
             // Resource denial / harassment -- not urgent, but don't wait forever.
             AttackReason::ResourceDenial => 300,
@@ -465,7 +438,10 @@ impl Operation for AttackOperation {
         self.missions.retain(|e| {
             let ok = is_valid(*e);
             if !ok {
-                error!("INTEGRITY: dead mission entity {:?} removed from AttackOperation {}", e, self.target_room);
+                error!(
+                    "INTEGRITY: dead mission entity {:?} removed from AttackOperation {}",
+                    e, self.target_room
+                );
             }
             ok
         });
@@ -481,7 +457,10 @@ impl Operation for AttackOperation {
         self.assigned_home_rooms.retain(|e| {
             let ok = is_valid(*e);
             if !ok {
-                error!("INTEGRITY: dead home room entity {:?} removed from AttackOperation {}", e, self.target_room);
+                error!(
+                    "INTEGRITY: dead home room entity {:?} removed from AttackOperation {}",
+                    e, self.target_room
+                );
             }
             ok
         });
@@ -533,10 +512,7 @@ impl Operation for AttackOperation {
         children.push(SummaryContent::Text(format!("reason: {}", reason_label)));
 
         // Wave progress.
-        children.push(SummaryContent::Text(format!(
-            "waves: {}/{}",
-            self.total_waves, self.max_waves
-        )));
+        children.push(SummaryContent::Text(format!("waves: {}/{}", self.total_waves, self.max_waves)));
 
         // Assigned home rooms for spawning.
         if !self.assigned_home_rooms.is_empty() {
@@ -547,23 +523,15 @@ impl Operation for AttackOperation {
                 .map(|rd| rd.name.to_string())
                 .collect();
             if !home_names.is_empty() {
-                children.push(SummaryContent::Text(format!(
-                    "spawn: {}",
-                    home_names.join(", ")
-                )));
+                children.push(SummaryContent::Text(format!("spawn: {}", home_names.join(", "))));
             }
         }
 
         // Threat intel (only if non-zero).
-        if self.detected_towers > 0
-            || self.detected_enemy_dps > 0.0
-            || self.detected_hostile_count > 0
-        {
+        if self.detected_towers > 0 || self.detected_enemy_dps > 0.0 || self.detected_hostile_count > 0 {
             children.push(SummaryContent::Text(format!(
                 "threat: {}T {:.0}dps {:.0}heal",
-                self.detected_towers,
-                self.detected_enemy_dps,
-                self.detected_enemy_heal
+                self.detected_towers, self.detected_enemy_dps, self.detected_enemy_heal
             )));
         }
 
@@ -579,10 +547,7 @@ impl Operation for AttackOperation {
         if let Some(wait_since) = self.economy_wait_since {
             let elapsed = game::time().saturating_sub(wait_since);
             let patience = self.economy_patience();
-            children.push(SummaryContent::Text(format!(
-                "econ wait: {}/{} ticks",
-                elapsed, patience
-            )));
+            children.push(SummaryContent::Text(format!("econ wait: {}/{} ticks", elapsed, patience)));
         }
 
         // Missions count.
@@ -657,9 +622,7 @@ impl Operation for AttackOperation {
                         // recent (< 200 ticks old). This covers the case where the
                         // scout that provided initial visibility has died.
                         let threat_data = room_entity.and_then(|e| system_data.threat_data.get(e));
-                        let recent_threat = threat_data.filter(|td| {
-                            game::time().saturating_sub(td.last_seen) < 200
-                        });
+                        let recent_threat = threat_data.filter(|td| game::time().saturating_sub(td.last_seen) < 200);
 
                         if let Some(td) = recent_threat {
                             self.analyze_target_from_threat_data(td);
@@ -676,10 +639,7 @@ impl Operation for AttackOperation {
                             // For automated targets, abort if we can't get intel.
                             match &self.attack_reason {
                                 AttackReason::Flag => {
-                                    info!(
-                                        "[Attack] Recon timeout for {} (flag target), continuing to wait",
-                                        self.target_room
-                                    );
+                                    info!("[Attack] Recon timeout for {} (flag target), continuing to wait", self.target_room);
                                     // Reset timer to avoid spamming.
                                     self.recon_requested = Some(game::time());
                                 }
@@ -709,10 +669,7 @@ impl Operation for AttackOperation {
                     // creeps would be killed instantly. Wait for it to expire.
                     if let Some(td) = room_entity.and_then(|e| system_data.threat_data.get(e)) {
                         if td.safe_mode_active {
-                            info!(
-                                "[Attack] Safe mode active on {} -- delaying attack",
-                                self.target_room
-                            );
+                            info!("[Attack] Safe mode active on {} -- delaying attack", self.target_room);
                             break;
                         }
                     }
@@ -726,10 +683,7 @@ impl Operation for AttackOperation {
                         .map(|r| r.spawn_energy_capacity)
                         .max()
                         .unwrap_or(0);
-                    let estimated_cost: u32 = force_plan
-                        .iter()
-                        .map(|p| p.composition.estimated_cost(spawn_capacity))
-                        .sum();
+                    let estimated_cost: u32 = force_plan.iter().map(|p| p.composition.estimated_cost(spawn_capacity)).sum();
                     self.estimated_total_cost = estimated_cost;
 
                     // Economy gate: check whether assigned home rooms can
@@ -763,8 +717,12 @@ impl Operation for AttackOperation {
                             info!(
                                 "[Attack] Economy gate: cannot afford {} for {} \
                                  (waiting {}/{} ticks, surplus {} from {} rooms)",
-                                estimated_cost, self.target_room, elapsed, patience,
-                                surplus, home_rooms.len()
+                                estimated_cost,
+                                self.target_room,
+                                elapsed,
+                                patience,
+                                surplus,
+                                home_rooms.len()
                             );
                         }
                         break;
@@ -791,10 +749,7 @@ impl Operation for AttackOperation {
 
                     // Only use explicitly assigned home rooms for spawning.
                     if self.assigned_home_rooms.is_empty() {
-                        info!(
-                            "[Attack] No home rooms assigned for {} -- waiting for rebalance",
-                            self.target_room
-                        );
+                        info!("[Attack] No home rooms assigned for {} -- waiting for rebalance", self.target_room);
                         break;
                     }
                     let home_rooms: Vec<Entity> = self.assigned_home_rooms.iter().copied().collect();
@@ -828,9 +783,7 @@ impl Operation for AttackOperation {
                         // they are set from the same source as reassign_home_rooms.
                         let rooms_for_mission = self.assigned_home_rooms.clone();
                         system_data.updater.exec_mut(move |world| {
-                            if let Some(MissionData::AttackMission(ref cell)) =
-                                world.read_storage::<MissionData>().get(mission_entity)
-                            {
+                            if let Some(MissionData::AttackMission(ref cell)) = world.read_storage::<MissionData>().get(mission_entity) {
                                 cell.borrow_mut().set_home_rooms(rooms_for_mission);
                             }
                         });

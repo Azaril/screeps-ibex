@@ -47,10 +47,7 @@ impl ColonyOperation {
     /// - The controller exists but is neutral (unclaimed).
     /// - The room has no significant hostile threat (at most invader-level).
     /// - No `ClaimMission` already targets this room.
-    fn run_reclaim(
-        system_data: &mut OperationExecutionSystemData,
-        runtime_data: &mut OperationExecutionRuntimeData,
-    ) {
+    fn run_reclaim(system_data: &mut OperationExecutionSystemData, runtime_data: &mut OperationExecutionRuntimeData) {
         // Collect rooms that need reclaiming. We gather into a vec first to
         // avoid borrowing conflicts with room_data.
         let mut needs_reclaim: Vec<(Entity, RoomName)> = Vec::new();
@@ -77,10 +74,7 @@ impl ColonyOperation {
             }
 
             // Must have at least one spawn in the room.
-            let has_spawns = room_data
-                .get_structures()
-                .map(|s| !s.spawns().is_empty())
-                .unwrap_or(false);
+            let has_spawns = room_data.get_structures().map(|s| !s.spawns().is_empty()).unwrap_or(false);
             if !has_spawns {
                 continue;
             }
@@ -92,21 +86,16 @@ impl ColonyOperation {
                 .map(|td| td.threat_level <= ThreatLevel::Invader)
                 .unwrap_or(true);
             if !threat_ok {
-                info!(
-                    "Colony reclaim: skipping {} due to hostile threat",
-                    room_data.name
-                );
+                info!("Colony reclaim: skipping {} due to hostile threat", room_data.name);
                 continue;
             }
 
             // Skip if a ClaimMission already targets this room.
             let mission_data = system_data.mission_data;
-            let has_claim_mission = room_data.get_missions().iter().any(|mission_entity| {
-                mission_data
-                    .get(*mission_entity)
-                    .as_mission_type::<ClaimMission>()
-                    .is_some()
-            });
+            let has_claim_mission = room_data
+                .get_missions()
+                .iter()
+                .any(|mission_entity| mission_data.get(*mission_entity).as_mission_type::<ClaimMission>().is_some());
             if has_claim_mission {
                 continue;
             }
@@ -156,17 +145,11 @@ impl ColonyOperation {
                 .collect();
 
             if home_room_entities.is_empty() {
-                info!(
-                    "Colony reclaim: no eligible home rooms for {}",
-                    target_name
-                );
+                info!("Colony reclaim: no eligible home rooms for {}", target_name);
                 continue;
             }
 
-            info!(
-                "Colony reclaim: creating claim mission to reclaim room {}",
-                target_name
-            );
+            info!("Colony reclaim: creating claim mission to reclaim room {}", target_name);
 
             let room_data = match system_data.room_data.get_mut(target_entity) {
                 Some(rd) => rd,

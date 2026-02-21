@@ -2,9 +2,7 @@ use super::data::*;
 use super::missionsystem::*;
 use crate::creep::*;
 use crate::jobs::data::*;
-use crate::jobs::heal::*;
-use crate::jobs::ranged::*;
-use crate::jobs::tank::*;
+use crate::jobs::squad_combat::*;
 use crate::military::bodies;
 use crate::serialize::*;
 use crate::spawnsystem::*;
@@ -239,7 +237,7 @@ impl Spawning {
         Box::new(move |system_data, name| {
             let name = name.to_string();
             system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::RangedAttack(RangedAttackJob::new(target_room));
+                let creep_job = JobData::SquadCombat(SquadCombatJob::new(target_room));
                 let creep_entity = spawning::build(world.create_entity(), &name).with(creep_job).build();
                 if let Some(mission_data) = world.write_storage::<MissionData>().get(mission_entity) {
                     if let Ok(mut mission) = <std::cell::RefMut<'_, SquadAssaultMission>>::try_from(mission_data) {
@@ -254,7 +252,7 @@ impl Spawning {
         Box::new(move |system_data, name| {
             let name = name.to_string();
             system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Tank(TankJob::new(target_room));
+                let creep_job = JobData::SquadCombat(SquadCombatJob::new(target_room));
                 let creep_entity = spawning::build(world.create_entity(), &name).with(creep_job).build();
                 if let Some(mission_data) = world.write_storage::<MissionData>().get(mission_entity) {
                     if let Ok(mut mission) = <std::cell::RefMut<'_, SquadAssaultMission>>::try_from(mission_data) {
@@ -269,7 +267,7 @@ impl Spawning {
         Box::new(move |system_data, name| {
             let name = name.to_string();
             system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Heal(HealJob::new(target_room));
+                let creep_job = JobData::SquadCombat(SquadCombatJob::new(target_room));
                 let creep_entity = spawning::build(world.create_entity(), &name).with(creep_job).build();
                 if let Some(mission_data) = world.write_storage::<MissionData>().get(mission_entity) {
                     if let Ok(mut mission) = <std::cell::RefMut<'_, SquadAssaultMission>>::try_from(mission_data) {
@@ -463,13 +461,7 @@ pub struct SquadAssaultMission {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl SquadAssaultMission {
-    pub fn build<B>(
-        builder: B,
-        owner: Option<Entity>,
-        target_room: RoomName,
-        home_room_datas: &[Entity],
-        squad_size: AssaultSquadSize,
-    ) -> B
+    pub fn build<B>(builder: B, owner: Option<Entity>, target_room: RoomName, home_room_datas: &[Entity], squad_size: AssaultSquadSize) -> B
     where
         B: Builder + MarkedBuilder,
     {
@@ -514,7 +506,10 @@ impl Mission for SquadAssaultMission {
     }
 
     fn get_room(&self) -> Entity {
-        *self.context.home_room_datas.first()
+        *self
+            .context
+            .home_room_datas
+            .first()
             .expect("SquadAssaultMission must have at least one home room")
     }
 

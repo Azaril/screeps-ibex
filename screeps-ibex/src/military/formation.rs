@@ -166,28 +166,19 @@ pub fn virtual_anchor_target(virtual_pos: Position, layout: &FormationLayout, fo
 /// (strategic advancement) with per-member movement commands. When the mission
 /// and job layers are split (mission advances, job moves), use
 /// `advance_squad_virtual_position` and `virtual_anchor_target` separately.
-pub fn issue_virtual_anchor_movement(
-    squad: &mut SquadContext,
-    destination: Position,
-    movement: &mut MovementData<Entity>,
-) {
+pub fn issue_virtual_anchor_movement(squad: &mut SquadContext, destination: Position, movement: &mut MovementData<Entity>) {
     // Advance the virtual position (cohesion checks, mode transitions).
     advance_squad_virtual_position(squad, destination);
 
     // Read the resulting virtual position.
-    let virtual_pos = squad
-        .squad_path
-        .as_ref()
-        .map(|p| p.virtual_pos)
-        .unwrap_or(destination);
+    let virtual_pos = squad.squad_path.as_ref().map(|p| p.virtual_pos).unwrap_or(destination);
 
     let layout = squad.layout.clone();
 
     // Issue MoveTo for each living member toward their formation offset.
     for member in squad.members.iter() {
         let target_tile = if let Some(ref layout) = layout {
-            virtual_anchor_target(virtual_pos, layout, member.formation_slot)
-                .unwrap_or(virtual_pos)
+            virtual_anchor_target(virtual_pos, layout, member.formation_slot).unwrap_or(virtual_pos)
         } else {
             destination
         };
@@ -208,11 +199,7 @@ pub fn issue_virtual_anchor_movement(
 /// `destination` is the strategic target the squad is moving toward (e.g.
 /// the focus target position or room center).
 pub fn advance_squad_virtual_position(squad: &mut SquadContext, destination: Position) {
-    let living_members: Vec<(usize, Option<Position>)> = squad
-        .members
-        .iter()
-        .map(|m| (m.formation_slot, m.position))
-        .collect();
+    let living_members: Vec<(usize, Option<Position>)> = squad.members.iter().map(|m| (m.formation_slot, m.position)).collect();
 
     if living_members.is_empty() {
         return;
@@ -236,11 +223,7 @@ pub fn advance_squad_virtual_position(squad: &mut SquadContext, destination: Pos
         path.destination = destination;
     }
 
-    let virtual_pos = squad
-        .squad_path
-        .as_ref()
-        .map(|p| p.virtual_pos)
-        .unwrap_or(destination);
+    let virtual_pos = squad.squad_path.as_ref().map(|p| p.virtual_pos).unwrap_or(destination);
 
     // Check formation cohesion and decide whether to advance the virtual position.
     let living_count = living_members.len();
@@ -248,7 +231,10 @@ pub fn advance_squad_virtual_position(squad: &mut SquadContext, destination: Pos
         .iter()
         .filter(|(slot, pos)| {
             if let Some(target) = virtual_anchor_target(virtual_pos, &layout, *slot) {
-                pos.map(|p| p.get_range_to(target) <= 1).unwrap_or(false)
+                match squad.formation_mode {
+                    FormationMode::Strict => pos.map(|p| p.get_range_to(target) == 0).unwrap_or(false),
+                    FormationMode::Loose => pos.map(|p| p.get_range_to(target) <= 1).unwrap_or(false),
+                }
             } else {
                 false
             }
@@ -257,29 +243,113 @@ pub fn advance_squad_virtual_position(squad: &mut SquadContext, destination: Pos
 
     let all_in_formation = in_formation_count == living_count;
 
-    let should_advance = match squad.formation_mode {
-        FormationMode::Strict => {
-            if all_in_formation {
-                squad.strict_hold_ticks = 0;
-                true
-            } else {
-                squad.strict_hold_ticks += 1;
+    // ── Room boundary cohesion: hold at room edges until squad is gathered ──
+    //
+    // When the virtual position is about to cross a room boundary (destination
+    // is in a different room), require most members to be in the same room as
+    // the virtual position before advancing across. This prevents faster
+    // creeps from trickling into the next room while slower ones lag behind.
+    let at_room_boundary = virtual_pos.room_name() != destination.room_name();
+    let boundary_hold = if at_room_boundary && living_count > 1 {
+        let vp_room = virtual_pos.room_name();
+        let members_in_vp_room = living_members
+            .iter()
+            .filter(|(_, pos)| pos.map(|p| p.room_name() == vp_room).unwrap_or(false))
+            .count();
+        let members_already_crossed = living_members
+            .iter()
+            .filter(|(_, pos)| pos.map(|p| p.room_name() == destination.room_name()).unwrap_or(false))
+            .count();
 
-                if squad.strict_hold_ticks >= STRICT_HOLD_MAX_TICKS {
-                    squad.formation_mode = FormationMode::Loose;
+        // Allow crossing when:
+        // - All members are in the virtual_pos room (full cohesion), OR
+        // - At least 75% are in either the vp room or destination room AND
+        //   the majority are near the boundary (within 8 tiles of the edge), OR
+        // - The hold has lasted too long (STRICT_HOLD_MAX_TICKS) to avoid deadlock.
+        let gathered_count = members_in_vp_room + members_already_crossed;
+        let quorum_met = gathered_count as f32 >= living_count as f32 * STRICT_QUORUM_RATIO;
+
+        // Count members near the relevant room edge.
+        let members_near_edge = living_members
+            .iter()
+            .filter(|(_, pos)| {
+                pos.map(|p| {
+                    if p.room_name() != vp_room {
+                        // Already in destination room -- they've crossed.
+                        return true;
+                    }
+                    is_near_room_edge_toward(p, destination)
+                }).unwrap_or(false)
+            })
+            .count();
+        let near_edge_quorum = members_near_edge as f32 >= living_count as f32 * STRICT_QUORUM_RATIO;
+
+        !(quorum_met && near_edge_quorum)
+    } else {
+        false
+    };
+
+    let should_advance = if boundary_hold {
+        // Hold at the room boundary -- don't advance the virtual pos.
+        // Still allow strict_hold_ticks to increment so we eventually
+        // force through via the deadlock timeout.
+        squad.strict_hold_ticks += 1;
+        if squad.strict_hold_ticks >= STRICT_HOLD_MAX_TICKS * 2 {
+            // Extended timeout: force advance to avoid permanent deadlock.
+            squad.strict_hold_ticks = 0;
+            true
+        } else {
+            false
+        }
+    } else {
+        match squad.formation_mode {
+            FormationMode::Strict => {
+                if all_in_formation {
                     squad.strict_hold_ticks = 0;
                     true
                 } else {
-                    squad.strict_hold_ticks >= STRICT_QUORUM_TICKS
-                        && in_formation_count as f32 >= living_count as f32 * STRICT_QUORUM_RATIO
+                    squad.strict_hold_ticks += 1;
+
+                    if squad.strict_hold_ticks >= STRICT_HOLD_MAX_TICKS {
+                        squad.formation_mode = FormationMode::Loose;
+                        squad.strict_hold_ticks = 0;
+                        true
+                    } else {
+                        squad.strict_hold_ticks >= STRICT_QUORUM_TICKS && in_formation_count as f32 >= living_count as f32 * STRICT_QUORUM_RATIO
+                    }
                 }
             }
-        }
-        FormationMode::Loose => {
-            if squad.desired_formation_mode == FormationMode::Strict && all_in_formation {
-                squad.formation_mode = FormationMode::Strict;
+            FormationMode::Loose => {
+                if squad.desired_formation_mode == FormationMode::Strict && all_in_formation {
+                    squad.formation_mode = FormationMode::Strict;
+                }
+
+                // Enforce formation in loose mode too: wait for members to
+                // be within range ≤ 1 of their formation slot (combat range).
+                // Use a shorter hold timeout since this is already the
+                // relaxed fallback mode.
+                let loose_in_formation = living_members
+                    .iter()
+                    .filter(|(slot, pos)| {
+                        if let Some(target) = virtual_anchor_target(virtual_pos, &layout, *slot) {
+                            pos.map(|p| p.get_range_to(target) <= 1).unwrap_or(false)
+                        } else {
+                            false
+                        }
+                    })
+                    .count();
+
+                if loose_in_formation == living_count {
+                    squad.strict_hold_ticks = 0;
+                    true
+                } else {
+                    squad.strict_hold_ticks += 1;
+                    // Force advance after a shorter timeout to avoid permanent blocks
+                    // when pathfinding can't reach the exact formation tile.
+                    squad.strict_hold_ticks >= STRICT_QUORUM_TICKS
+                        && loose_in_formation as f32 >= living_count as f32 * STRICT_QUORUM_RATIO
+                }
             }
-            true
         }
     };
 
@@ -289,16 +359,9 @@ pub fn advance_squad_virtual_position(squad: &mut SquadContext, destination: Pos
 }
 
 /// Initialize the squad path if it doesn't exist yet.
-fn init_squad_path_if_needed(
-    squad: &mut SquadContext,
-    living_members: &[(usize, Option<Position>)],
-    destination: Position,
-) {
+fn init_squad_path_if_needed(squad: &mut SquadContext, living_members: &[(usize, Option<Position>)], destination: Position) {
     if squad.squad_path.is_none() {
-        let start_pos = living_members
-            .iter()
-            .find_map(|(_, pos)| *pos)
-            .unwrap_or(destination);
+        let start_pos = living_members.iter().find_map(|(_, pos)| *pos).unwrap_or(destination);
 
         squad.squad_path = Some(SquadPath {
             destination,
@@ -310,6 +373,9 @@ fn init_squad_path_if_needed(
 }
 
 /// Advance the virtual position one step toward the destination.
+///
+/// Uses world coordinates so the virtual position correctly crosses room
+/// boundaries instead of getting stuck at room edges.
 fn advance_virtual_pos(squad: &mut SquadContext, destination: Position) {
     let path = match squad.squad_path.as_mut() {
         Some(p) => p,
@@ -324,25 +390,65 @@ fn advance_virtual_pos(squad: &mut SquadContext, destination: Position) {
         return;
     }
 
-    // Simple one-step advance toward destination.
-    let dx = (destination.x().u8() as i32 - current.x().u8() as i32).signum();
-    let dy = (destination.y().u8() as i32 - current.y().u8() as i32).signum();
+    // Use world coordinates for correct cross-room movement.
+    let (cur_wx, cur_wy) = current.world_coords();
+    let (dst_wx, dst_wy) = destination.world_coords();
 
-    let new_x = (current.x().u8() as i32 + dx).clamp(0, 49) as u8;
-    let new_y = (current.y().u8() as i32 + dy).clamp(0, 49) as u8;
+    let dx = (dst_wx - cur_wx).signum();
+    let dy = (dst_wy - cur_wy).signum();
 
-    if let (Ok(rx), Ok(ry)) = (RoomCoordinate::new(new_x), RoomCoordinate::new(new_y)) {
-        let new_pos = Position::new(rx, ry, current.room_name());
-
-        if new_pos == current {
-            path.stuck_ticks += 1;
-        } else {
-            path.virtual_pos = new_pos;
-            path.stuck_ticks = 0;
+    match Position::checked_from_world_coords(cur_wx + dx, cur_wy + dy) {
+        Ok(new_pos) => {
+            if new_pos == current {
+                path.stuck_ticks += 1;
+            } else {
+                path.virtual_pos = new_pos;
+                path.stuck_ticks = 0;
+            }
         }
-    } else {
-        path.stuck_ticks += 1;
+        Err(_) => {
+            path.stuck_ticks += 1;
+        }
     }
+}
+
+/// Check if a position is near the room edge leading toward a destination in
+/// another room. "Near" means within 8 tiles of the relevant border.
+fn is_near_room_edge_toward(pos: Position, destination: Position) -> bool {
+    let (cur_wx, cur_wy) = pos.world_coords();
+    let (dst_wx, dst_wy) = destination.world_coords();
+    let pos_room = pos.room_name();
+    let dst_room = destination.room_name();
+
+    if pos_room == dst_room {
+        return true; // Already in the destination room.
+    }
+
+    let x = pos.x().u8();
+    let y = pos.y().u8();
+    let near_threshold = 8;
+
+    // Check which direction we need to go based on world coordinates.
+    let room_dx = (dst_wx - cur_wx).signum();
+    let room_dy = (dst_wy - cur_wy).signum();
+
+    let near_x_edge = if room_dx > 0 {
+        x >= 49 - near_threshold
+    } else if room_dx < 0 {
+        x <= near_threshold
+    } else {
+        true // Same x-axis; no x-boundary to cross.
+    };
+
+    let near_y_edge = if room_dy > 0 {
+        y >= 49 - near_threshold
+    } else if room_dy < 0 {
+        y <= near_threshold
+    } else {
+        true // Same y-axis; no y-boundary to cross.
+    };
+
+    near_x_edge && near_y_edge
 }
 
 /// Issue flee movement for all squad members using virtual anchor approach.
@@ -353,21 +459,13 @@ pub fn issue_virtual_anchor_flee(
     flee_range: u32,
     movement: &mut MovementData<Entity>,
 ) {
-    let targets: Vec<FleeTarget> = hostile_positions
-        .iter()
-        .map(|&pos| FleeTarget {
-            pos,
-            range: flee_range,
-        })
-        .collect();
+    let targets: Vec<FleeTarget> = hostile_positions.iter().map(|&pos| FleeTarget { pos, range: flee_range }).collect();
 
     if targets.is_empty() {
         return;
     }
 
     for member in squad.members.iter() {
-        movement
-            .flee(member.entity, targets.clone())
-            .range(flee_range);
+        movement.flee(member.entity, targets.clone()).range(flee_range);
     }
 }
