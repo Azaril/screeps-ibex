@@ -1,4 +1,5 @@
 use crate::creep::SpawnBodyDefinition;
+use crate::military::damage;
 use screeps::Part;
 
 /// Solo defender body (unboosted, emergency response).
@@ -16,6 +17,7 @@ pub fn solo_defender_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
 
 /// Duo attacker body (ranged variant).
 /// TOUGH front for damage absorption, RANGED_ATTACK + MOVE repeat.
+/// Enough MOVE so creep keeps full speed in formation.
 pub fn duo_ranged_attacker_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
     SpawnBodyDefinition {
         maximum_energy: max_energy,
@@ -23,12 +25,13 @@ pub fn duo_ranged_attacker_body(max_energy: u32) -> SpawnBodyDefinition<'static>
         maximum_repeat: None,
         pre_body: &[Part::Tough, Part::Tough, Part::Tough, Part::Tough],
         repeat_body: &[Part::RangedAttack, Part::Move],
-        post_body: &[Part::Move, Part::Move],
+        post_body: &[Part::Move, Part::Move, Part::Move, Part::Move],
     }
 }
 
 /// Duo attacker body (melee variant).
 /// TOUGH front, ATTACK + MOVE repeat.
+/// Enough MOVE so creep keeps full speed in formation.
 pub fn duo_melee_attacker_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
     SpawnBodyDefinition {
         maximum_energy: max_energy,
@@ -36,12 +39,13 @@ pub fn duo_melee_attacker_body(max_energy: u32) -> SpawnBodyDefinition<'static> 
         maximum_repeat: None,
         pre_body: &[Part::Tough, Part::Tough, Part::Tough, Part::Tough],
         repeat_body: &[Part::Attack, Part::Move],
-        post_body: &[Part::Move, Part::Move],
+        post_body: &[Part::Move, Part::Move, Part::Move, Part::Move],
     }
 }
 
 /// Duo healer body.
 /// TOUGH front for damage absorption, HEAL + MOVE repeat.
+/// Enough MOVE so creep keeps full speed (MOVE >= non-MOVE parts for formation).
 pub fn duo_healer_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
     SpawnBodyDefinition {
         maximum_energy: max_energy,
@@ -49,13 +53,28 @@ pub fn duo_healer_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
         maximum_repeat: None,
         pre_body: &[Part::Tough, Part::Tough, Part::Tough, Part::Tough, Part::Tough, Part::Tough],
         repeat_body: &[Part::Heal, Part::Move],
-        post_body: &[Part::Move, Part::Move],
+        post_body: &[Part::Move, Part::Move, Part::Move, Part::Move, Part::Move, Part::Move],
     }
 }
 
+/// Minimum energy for full quad member (pre + 1 repeat + post).
+const QUAD_MEMBER_FULL_MIN: u32 = 40 + 500 + 1200; // 1740
+
 /// Quad member body (boosted, RCL 8).
 /// TOUGH front, mixed RANGED_ATTACK + HEAL + MOVE.
+/// For low RCL (e.g. RCL 5), returns a minimal ranged body so the room still gets spawn queue entries.
 pub fn quad_member_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
+    if max_energy < QUAD_MEMBER_FULL_MIN {
+        // Light variant: RANGED_ATTACK + MOVE only, fits RCL 5 (550+).
+        return SpawnBodyDefinition {
+            maximum_energy: max_energy,
+            minimum_repeat: Some(1),
+            maximum_repeat: None,
+            pre_body: &[],
+            repeat_body: &[Part::RangedAttack, Part::Move],
+            post_body: &[],
+        };
+    }
     SpawnBodyDefinition {
         maximum_energy: max_energy,
         minimum_repeat: Some(1),
@@ -71,12 +90,17 @@ pub fn quad_member_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
             Part::Move,
             Part::Move,
             Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
         ],
     }
 }
 
 /// Tank body for front-line damage absorption.
-/// Heavy TOUGH front, ATTACK for counter-damage, MOVE for mobility.
+/// Heavy TOUGH front, ATTACK for counter-damage.
+/// Enough MOVE (1:1 with non-MOVE) so creep keeps full speed in formation.
 pub fn tank_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
     SpawnBodyDefinition {
         maximum_energy: max_energy,
@@ -93,11 +117,23 @@ pub fn tank_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
             Part::Tough,
         ],
         repeat_body: &[Part::Attack, Part::Move],
-        post_body: &[Part::Move, Part::Move, Part::Move, Part::Move],
+        post_body: &[
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+        ],
     }
 }
 
 /// Drain creep body -- heavy TOUGH + HEAL for soaking tower energy.
+/// Baseline HEAL in post_body so the creep can sustain tower damage (e.g. one tower at
+/// range 20+ = 150 damage/tick; 13 HEAL = 156 heal/tick adjacent). MOVE in post matches
+/// fixed TOUGH + fixed HEAL; repeat adds Heal + one MOVE per Heal.
 pub fn drain_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
     SpawnBodyDefinition {
         maximum_energy: max_energy,
@@ -116,7 +152,123 @@ pub fn drain_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
             Part::Tough,
         ],
         repeat_body: &[Part::Heal, Part::Move],
-        post_body: &[],
+        post_body: &[
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+        ],
+    }
+}
+
+/// Drain body with more HEAL for rooms with higher tower DPS (e.g. 2 towers at edge).
+/// 18 HEAL in post + 2 repeat = 20 HEAL (240 heal/tick).
+fn drain_body_heavy(max_energy: u32) -> SpawnBodyDefinition<'static> {
+    SpawnBodyDefinition {
+        maximum_energy: max_energy,
+        minimum_repeat: Some(2),
+        maximum_repeat: None,
+        pre_body: &[
+            Part::Tough,
+            Part::Tough,
+            Part::Tough,
+            Part::Tough,
+            Part::Tough,
+            Part::Tough,
+            Part::Tough,
+            Part::Tough,
+            Part::Tough,
+            Part::Tough,
+        ],
+        repeat_body: &[Part::Heal, Part::Move],
+        post_body: &[
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Heal,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+        ],
+    }
+}
+
+/// Drain body sized for the given tower DPS (e.g. from target room).
+/// Uses standard body (13 HEAL) when required heal parts ≤ 13, heavy body (20 HEAL) otherwise.
+pub fn drain_body_for_tower_dps(max_energy: u32, tower_damage_per_tick: f32) -> SpawnBodyDefinition<'static> {
+    let min_heal = damage::drain_heal_parts_for_dps(tower_damage_per_tick);
+    if min_heal > 13 {
+        drain_body_heavy(max_energy)
+    } else {
+        drain_body(max_energy)
     }
 }
 
@@ -134,7 +286,7 @@ pub fn harasser_body() -> SpawnBodyDefinition<'static> {
 }
 
 /// Dismantler body for structure destruction.
-/// TOUGH front, WORK + MOVE repeat for dismantle damage.
+/// TOUGH front, WORK + MOVE repeat. MOVE to match TOUGH in post_body.
 pub fn dismantler_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
     SpawnBodyDefinition {
         maximum_energy: max_energy,
@@ -142,7 +294,7 @@ pub fn dismantler_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
         maximum_repeat: None,
         pre_body: &[Part::Tough, Part::Tough, Part::Tough, Part::Tough],
         repeat_body: &[Part::Work, Part::Move],
-        post_body: &[Part::Move, Part::Move],
+        post_body: &[Part::Move, Part::Move, Part::Move, Part::Move],
     }
 }
 
@@ -301,7 +453,7 @@ pub fn power_bank_healer_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
 }
 
 /// Siege dismantler body -- TOUGH front, WORK + MOVE for dismantling under fire.
-/// Heavier than the standard dismantler with more TOUGH for survivability.
+/// MOVE to match TOUGH in post_body; repeat is only Work + one MOVE per Work.
 pub fn siege_dismantler_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
     SpawnBodyDefinition {
         maximum_energy: max_energy,
@@ -318,7 +470,16 @@ pub fn siege_dismantler_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
             Part::Tough,
         ],
         repeat_body: &[Part::Work, Part::Move],
-        post_body: &[Part::Move, Part::Move, Part::Move, Part::Move],
+        post_body: &[
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+            Part::Move,
+        ],
     }
 }
 

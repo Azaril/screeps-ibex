@@ -195,6 +195,9 @@ pub struct RoomDynamicVisibilityData {
     hostile_creeps: bool,
     #[serde(rename = "h")]
     hostile_structures: bool,
+    /// Tower DPS at room edge (hostile towers only). Set when we have visibility; used to size drain bodies.
+    #[serde(default, rename = "td")]
+    tower_dps_at_edge: Option<f32>,
 }
 
 impl RoomDynamicVisibilityData {
@@ -212,6 +215,11 @@ impl RoomDynamicVisibilityData {
 
     pub fn updated_within(&self, ticks: u32) -> bool {
         self.age() <= ticks
+    }
+
+    /// Tower DPS at room edge from last time we had visibility (hostile towers only). Used for drain body sizing.
+    pub fn tower_dps_at_edge(&self) -> Option<f32> {
+        self.tower_dps_at_edge
     }
 
     pub fn owner(&self) -> &RoomDisposition {
@@ -424,6 +432,16 @@ impl RoomData {
             .filter_map(|s| s.as_owned())
             .any(|s| s.owner().is_some() && !s.my());
 
+        let tower_dps_at_edge = structures.as_ref().map(|s| {
+            let positions: Vec<Position> = s
+                .towers()
+                .iter()
+                .filter(|t| !t.my())
+                .map(|t| t.pos())
+                .collect();
+            crate::military::damage::tower_dps_at_room_edge(self.name, &positions)
+        });
+
         RoomDynamicVisibilityData {
             update_tick: game::time(),
             owner: controller_owner_disposition,
@@ -432,6 +450,7 @@ impl RoomData {
             sign,
             hostile_creeps,
             hostile_structures,
+            tower_dps_at_edge,
         }
     }
 

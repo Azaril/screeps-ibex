@@ -91,7 +91,12 @@ impl MoveToRoom {
 
         if let Some(ref orders) = tick_orders {
             if matches!(orders.movement, TickMovement::Formation) {
-                if let Some(target_tile) = get_formation_target(state_context.squad_entity, creep_entity, tick_context) {
+                if let Some(target_tile) = get_formation_target(
+                    state_context.squad_entity,
+                    creep_entity,
+                    tick_context,
+                    creep_pos,
+                ) {
                     tick_context
                         .runtime_data
                         .movement
@@ -781,8 +786,14 @@ fn execute_formation_movement(
     orders: &TickOrders,
     tick_context: &mut JobTickContext,
 ) {
+    let creep_pos = tick_context.runtime_data.owner.pos();
     let moved = (|| {
-        let target_tile = get_formation_target(state_context.squad_entity, creep_entity, tick_context)?;
+        let target_tile = get_formation_target(
+            state_context.squad_entity,
+            creep_entity,
+            tick_context,
+            creep_pos,
+        )?;
         tick_context
             .runtime_data
             .movement
@@ -810,7 +821,16 @@ fn execute_formation_movement(
 /// If the virtual position is in a different room from the creep, returns
 /// a position on the nearest room edge toward the virtual position so the
 /// creep moves to rejoin the formation rather than wandering independently.
-fn get_formation_target(squad_entity_id: Option<u32>, creep_entity: Entity, tick_context: &JobTickContext) -> Option<Position> {
+///
+/// Uses `creep_pos_fallback` when `member.position` is None (e.g. first tick
+/// after spawn or before PreRunSquadUpdate has synced this member's position)
+/// so that all squad members get a valid formation target and move together.
+fn get_formation_target(
+    squad_entity_id: Option<u32>,
+    creep_entity: Entity,
+    tick_context: &JobTickContext,
+    creep_pos_fallback: Position,
+) -> Option<Position> {
     let id = squad_entity_id?;
     let entity = tick_context.system_data.entities.entity(id);
     let squad_ctx = tick_context.system_data.squad_contexts.get(entity)?;
@@ -819,8 +839,8 @@ fn get_formation_target(squad_entity_id: Option<u32>, creep_entity: Entity, tick
     let layout = squad_ctx.layout.as_ref()?;
     let target = virtual_anchor_target(virtual_pos, layout, member.formation_slot)?;
 
-    // If the creep is in the same room as the target, use the target directly.
-    let creep_pos = member.position?;
+    // Prefer cached position; use live creep position when not yet synced (e.g. second of duo).
+    let creep_pos = member.position.unwrap_or(creep_pos_fallback);
     if creep_pos.room_name() == target.room_name() {
         return Some(target);
     }

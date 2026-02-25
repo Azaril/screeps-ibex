@@ -49,6 +49,29 @@ pub fn tower_repair_at_range(range: u32) -> f32 {
     }
 }
 
+/// HEAL part output per tick when adjacent (used for sizing drain bodies).
+pub const HEAL_PER_PART_ADJACENT: f32 = 12.0;
+
+/// Minimum HEAL parts needed to sustain a given tower DPS (adjacent self-heal).
+/// Used to pick drain body size from room tower damage.
+pub fn drain_heal_parts_for_dps(dps: f32) -> u32 {
+    if dps <= 0.0 {
+        return 1;
+    }
+    (dps / HEAL_PER_PART_ADJACENT).ceil().max(1.0) as u32
+}
+
+/// Tower DPS at a typical drain position (room edge, north side).
+/// Drains sit at the edge to maximize range from towers; this approximates that.
+pub fn tower_dps_at_room_edge(room_name: RoomName, tower_positions: &[Position]) -> f32 {
+    let edge_pos = Position::new(
+        RoomCoordinate::new(25).unwrap(),
+        RoomCoordinate::new(0).unwrap(),
+        room_name,
+    );
+    total_tower_damage(tower_positions, edge_pos)
+}
+
 /// Calculate total tower damage from multiple towers against a target at a given position.
 pub fn total_tower_damage(tower_positions: &[Position], target_pos: Position) -> f32 {
     tower_positions

@@ -315,7 +315,7 @@ impl SquadComposition {
         }
     }
 
-    /// 2 drain creeps, loose formation.
+    /// 2 drain creeps, strict formation so they stay adjacent and can heal each other while tanking.
     pub fn duo_drain() -> Self {
         SquadComposition {
             label: "Duo Drain".into(),
@@ -330,7 +330,7 @@ impl SquadComposition {
                 },
             ],
             formation_shape: FormationShape::Line,
-            formation_mode: FormationMode::Loose,
+            formation_mode: FormationMode::Strict,
             retreat_threshold: default_retreat_threshold(),
         }
     }

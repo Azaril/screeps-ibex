@@ -403,7 +403,12 @@ impl Spawning {
                     };
 
                     let energy_capacity = room.energy_capacity_available();
-                    let body_def = slot.body_type.body_definition(energy_capacity);
+                    let body_def = if matches!(slot.body_type, BodyType::Drain) {
+                        let dps = tower_dps_at_target_room(system_data, state_context.target_room).unwrap_or(150.0);
+                        crate::military::bodies::drain_body_for_tower_dps(energy_capacity, dps)
+                    } else {
+                        slot.body_type.body_definition(energy_capacity)
+                    };
 
                     match spawning::create_body(&body_def) {
                         Ok(body) => {
@@ -627,11 +632,13 @@ impl Rallying {
                 })
             };
 
+            // Rally in a safe room (nearest home to target), not in the target room.
+            // This ensures squads group up before moving into engagement.
             let formation_dest = if let Some(room_entity) = renew_room {
                 formation_dest_adjacent_to_spawn(room_entity, system_data.room_data)
-                    .unwrap_or(target_room_center)
+                    .unwrap_or_else(|| rally_position_in_room(rally_room, system_data.room_data).unwrap_or(target_room_center))
             } else {
-                target_room_center
+                rally_position_in_room(rally_room, system_data.room_data).unwrap_or(target_room_center)
             };
 
             for (entity, ttl) in &creeps_needing_renew {
@@ -650,7 +657,8 @@ impl Rallying {
             advance_squad_virtual_position(squad_ctx, formation_dest);
         }
 
-        // Check if all rallying squads are ready (filled and cohesive).
+        // Check if all rallying squads are ready (filled and cohesive). Do not transition
+        // just because no squads are in Rallying state — require actual cohesion.
         let all_rallied = state_context
             .squads
             .iter()
@@ -671,18 +679,31 @@ impl Rallying {
                     return false;
                 }
 
-                // For multi-member squads, check that members are in the same room.
+                // For multi-member squads, check that members are in the same room and tight.
                 if s.expected_count <= 1 {
                     return true;
                 }
 
-                Self::squad_is_cohesive(squad_ctx)
+                if !Self::squad_is_cohesive(squad_ctx) {
+                    return false;
+                }
+
+                // Require squad to be grouped outside the target room (rally point, not already in engagement).
+                let in_target = squad_ctx
+                    .members
+                    .iter()
+                    .filter_map(|m| m.position)
+                    .next()
+                    .map(|p| p.room_name() == state_context.target_room)
+                    .unwrap_or(false);
+                !in_target
             });
 
-        // If no squads are rallying, also proceed.
+        // Only transition when at least one squad was rallying and all such squads are cohesive.
+        // Do not transition when no squads are rallying (e.g. all still Forming) — wait for group-up.
         let any_rallying = state_context.squads.iter().any(|s| s.state == SquadState::Rallying);
 
-        if all_rallied || !any_rallying {
+        if any_rallying && all_rallied {
             // Transition rallying squads to Moving.
             for squad in state_context.squads.iter_mut() {
                 if squad.state == SquadState::Rallying {
@@ -759,10 +780,18 @@ impl Rallying {
 /// members. Returns false if no squad ever had members (nothing to wipe),
 /// or if any squad hasn't finished spawning yet.
 fn all_squads_wiped(system_data: &MissionExecutionSystemData, state_context: &AttackMissionContext) -> bool {
-    let any_ever_had = state_context
-        .squad_entities
-        .iter()
-        .any(|&e| system_data.squad_contexts.get(e).map(|ctx| ctx.ever_had_members()).unwrap_or(false));
+    // At least one squad must have "ever had members" (or we treat spawn_complete as proxy
+    // when SquadContext is missing, e.g. entity deleted). Otherwise we'd never trigger wipe
+    // when all squad entities are gone or creeps were never registered.
+    let any_ever_had = state_context.squads.iter().enumerate().any(|(idx, s)| {
+        let squad_ctx = state_context
+            .squad_entities
+            .get(idx)
+            .and_then(|&e| system_data.squad_contexts.get(e));
+        squad_ctx
+            .map(|ctx| ctx.ever_had_members())
+            .unwrap_or(s.spawn_complete)
+    });
 
     if !any_ever_had {
         return false;
@@ -775,12 +804,31 @@ fn all_squads_wiped(system_data: &MissionExecutionSystemData, state_context: &At
             .and_then(|&e| system_data.squad_contexts.get(e));
         let living = squad_ctx.map(|ctx| ctx.members.len()).unwrap_or(0);
         let ever_had = squad_ctx.map(|ctx| ctx.ever_had_members()).unwrap_or(false);
-        // A squad is wiped if it has no living members AND spawning is
-        // done (spawn_complete) or it at least had members at some point
-        // (ever_had). Squads still mid-spawn (!spawn_complete && !ever_had)
-        // are not considered wiped.
-        living == 0 && (s.spawn_complete || ever_had)
+        // A squad is wiped if it has no living members AND: spawning is done
+        // (spawn_complete), it had members at some point (ever_had), or it's
+        // still in Forming (never filled this wave — don't block progression).
+        living == 0 && (s.spawn_complete || ever_had || s.state == SquadState::Forming)
     })
+}
+
+/// Tower DPS at room edge for the target room (hostile towers only).
+/// Used to size drain bodies. Prefers cached value from dynamic room data (any past visibility), then live structures if visible this tick.
+fn tower_dps_at_target_room(system_data: &MissionExecutionSystemData, target_room: RoomName) -> Option<f32> {
+    let room_entity = system_data.mapping.get_room(&target_room)?;
+    let rd = system_data.room_data.get(room_entity)?;
+    if let Some(dvd) = rd.get_dynamic_visibility_data() {
+        if let Some(dps) = dvd.tower_dps_at_edge() {
+            return Some(dps);
+        }
+    }
+    let structures = rd.get_structures()?;
+    let positions: Vec<Position> = structures
+        .towers()
+        .iter()
+        .filter(|t| !t.my())
+        .map(|t| t.pos())
+        .collect();
+    Some(crate::military::damage::tower_dps_at_room_edge(target_room, &positions))
 }
 
 /// Shared wave-wipe handler: increment the wave counter and either complete
@@ -1219,6 +1267,7 @@ impl Spawning {
 
         if filled_count >= planned.composition.slots.len() {
             state_context.squads[squad_idx].spawn_complete = true;
+            state_context.squads[squad_idx].state = SquadState::Rallying;
             return;
         }
 
@@ -1248,7 +1297,12 @@ impl Spawning {
                 };
 
                 let energy_capacity = room.energy_capacity_available();
-                let body_def = slot.body_type.body_definition(energy_capacity);
+                let body_def = if matches!(slot.body_type, BodyType::Drain) {
+                    let dps = tower_dps_at_target_room(system_data, state_context.target_room).unwrap_or(150.0);
+                    crate::military::bodies::drain_body_for_tower_dps(energy_capacity, dps)
+                } else {
+                    slot.body_type.body_definition(energy_capacity)
+                };
 
                 if let Ok(body) = spawning::create_body(&body_def) {
                     let target_room = state_context.target_room;
@@ -1660,6 +1714,163 @@ impl AttackMission {
     /// Whether the mission is currently in the Exploiting state.
     pub fn is_exploiting(&self) -> bool {
         matches!(self.state, AttackMissionState::Exploiting(_))
+    }
+
+    /// Rich tree summary with per-squad state, orders, and each member's room/status/orders.
+    /// Used by SummarizeMissionSystem when SquadContext and CreepOwner storages are available.
+    pub fn summarize_with(
+        &self,
+        squad_contexts: &specs::ReadStorage<SquadContext>,
+        creep_owner: &specs::ReadStorage<CreepOwner>,
+    ) -> SummaryContent {
+        let ctx = &self.context;
+        let mut children = Vec::new();
+
+        // Mission-level: vertical tree items to save horizontal space.
+        let age = ctx.start_tick.map(|s| game::time().saturating_sub(s));
+        let exploit_age = ctx.exploit_start_tick.map(|s| game::time().saturating_sub(s));
+
+        children.push(SummaryContent::Tree {
+            label: "mission".to_string(),
+            children: vec![
+                SummaryContent::Text(format!("wave {}/{}", ctx.current_wave, ctx.max_waves)),
+                SummaryContent::Text(format!("succeeded: {}", ctx.mission_succeeded)),
+                SummaryContent::Text(format!(
+                    "age: {}",
+                    age.map(|a| a.to_string()).unwrap_or_else(|| "-".into())
+                )),
+                SummaryContent::Text(format!(
+                    "exploit_age: {}",
+                    exploit_age.map(|a| a.to_string()).unwrap_or_else(|| "-".into())
+                )),
+                SummaryContent::Text(format!("haulers_spawned: {}", ctx.exploit_haulers_spawned)),
+                SummaryContent::Text(format!("homes: {} squads: {} plans: {}", ctx.home_room_datas.len(), ctx.squad_entities.len(), ctx.force_plan.len())),
+            ],
+        });
+
+        // Per-squad: state tree, orders tree, then one tree per member (name + room, status, orders).
+        for (i, squad) in ctx.squads.iter().enumerate() {
+            let squad_entity = match ctx.squad_entities.get(i).copied() {
+                Some(e) => e,
+                None => {
+                    let plan = ctx.force_plan.get(squad.plan_index);
+                    let comp_label = plan.map(|p| p.composition.label.as_str()).unwrap_or("?");
+                    children.push(SummaryContent::Tree {
+                        label: format!("sq[{}] {} (no entity)", i, comp_label),
+                        children: vec![
+                            SummaryContent::Text(format!("state: {:?}", squad.state)),
+                            SummaryContent::Text(format!("spawn_done: {}", squad.spawn_complete)),
+                        ],
+                    });
+                    continue;
+                }
+            };
+
+            let squad_ctx = match squad_contexts.get(squad_entity) {
+                Some(c) => c,
+                None => {
+                    let plan = ctx.force_plan.get(squad.plan_index);
+                    let comp_label = plan.map(|p| p.composition.label.as_str()).unwrap_or("?");
+                    children.push(SummaryContent::Tree {
+                        label: format!("sq[{}] {} (no context)", i, comp_label),
+                        children: vec![
+                            SummaryContent::Text(format!("state: {:?}", squad.state)),
+                            SummaryContent::Text(format!("spawn_done: {}", squad.spawn_complete)),
+                        ],
+                    });
+                    continue;
+                }
+            };
+
+            let plan = ctx.force_plan.get(squad.plan_index);
+            let comp_label = plan.map(|p| p.composition.label.as_str()).unwrap_or("?");
+            let target_label = plan
+                .map(|p| match &p.target {
+                    SquadTarget::DefendRoom { room } => format!("defend {}", room),
+                    SquadTarget::AttackRoom { room } => format!("attack {}", room),
+                    SquadTarget::HarassRoom { room } => format!("harass {}", room),
+                    SquadTarget::CollectResources { room } => format!("loot {}", room),
+                    SquadTarget::MoveToPosition { position } => format!("move {}", position),
+                    SquadTarget::AttackStructure { position } => format!("struct {}", position),
+                    SquadTarget::EscortPosition { position } => format!("escort {}", position),
+                })
+                .unwrap_or_else(|| "?".into());
+
+            let mut sq_children = Vec::new();
+
+            // Squad state subtree (vertical items).
+            sq_children.push(SummaryContent::Tree {
+                label: "state".to_string(),
+                children: vec![
+                    SummaryContent::Text(format!("{:?}", squad.state)),
+                    SummaryContent::Text(format!("spawn_done: {}", squad.spawn_complete)),
+                    SummaryContent::Text(format!("expected: {}", squad.expected_count)),
+                    SummaryContent::Text(format!("target: {}", target_label)),
+                ],
+            });
+
+            // Squad orders subtree (focus, formation, retreat).
+            let orders_children = {
+                let mut lines = vec![
+                    SummaryContent::Text(format!("formation: {:?}", squad_ctx.formation_mode)),
+                    SummaryContent::Text(format!("retreat_threshold: {}", squad_ctx.retreat_threshold)),
+                ];
+                if let Some(focus) = squad_ctx.focus_target {
+                    lines.insert(0, SummaryContent::Text(format!("focus: {}", focus)));
+                }
+                if squad_ctx.strict_hold_ticks > 0 {
+                    lines.push(SummaryContent::Text(format!("strict_hold_ticks: {}", squad_ctx.strict_hold_ticks)));
+                }
+                lines
+            };
+            sq_children.push(SummaryContent::Tree {
+                label: "orders".to_string(),
+                children: orders_children,
+            });
+
+            // Per-member tree: label "name (RoomName)" so users can find creeps in the world.
+            for member in squad_ctx.members.iter() {
+                let name = creep_owner
+                    .get(member.entity)
+                    .and_then(|co| co.owner.resolve())
+                    .map(|c| c.name())
+                    .unwrap_or_else(|| format!("entity_{:?}", member.entity.id()));
+                let room_str = member
+                    .position
+                    .map(|p| format!("{}", p.room_name()))
+                    .unwrap_or_else(|| "?".to_string());
+                let member_label = format!("{} ({})", name, room_str);
+
+                let mut member_children = vec![
+                    SummaryContent::Text(format!("role: {:?}", member.role)),
+                    SummaryContent::Text(format!("HP: {}/{}", member.current_hits, member.max_hits)),
+                    SummaryContent::Text(format!("room: {}", room_str)),
+                ];
+                if let Some(ref orders) = member.tick_orders {
+                    member_children.push(SummaryContent::Text(format!("movement: {:?}", orders.movement)));
+                    if orders.attack_target.is_some() {
+                        member_children.push(SummaryContent::Text("attack: focus".to_string()));
+                    }
+                    if orders.heal_target.is_some() {
+                        member_children.push(SummaryContent::Text("heal: assigned".to_string()));
+                    }
+                }
+                sq_children.push(SummaryContent::Tree {
+                    label: member_label,
+                    children: member_children,
+                });
+            }
+
+            children.push(SummaryContent::Tree {
+                label: format!("sq[{}] {}", i, comp_label),
+                children: sq_children,
+            });
+        }
+
+        SummaryContent::Tree {
+            label: format!("AttackMission -> {} ({})", ctx.target_room, self.state.status_description()),
+            children,
+        }
     }
 }
 
