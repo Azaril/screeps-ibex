@@ -6,6 +6,7 @@ use crate::military::threatmap::RoomThreatData;
 use crate::missions::data::*;
 use crate::room::data::*;
 use crate::room::roomplansystem::*;
+use crate::room::room_status_cache::RoomStatusCache;
 use crate::room::visibilitysystem::*;
 use crate::visualization::{MapVisualizationData, SummaryContent, VisualizationData};
 use log::*;
@@ -26,6 +27,7 @@ pub struct OperationSystemData<'a> {
     cleanup_queue: Write<'a, EntityCleanupQueue>,
     economy: Write<'a, EconomySnapshot>,
     route_cache: Write<'a, RoomRouteCache>,
+    room_status_cache: Write<'a, RoomStatusCache>,
     threat_data: ReadStorage<'a, RoomThreatData>,
 }
 
@@ -41,6 +43,7 @@ pub struct OperationExecutionSystemData<'a, 'b> {
     pub map_viz_data: Option<&'b mut MapVisualizationData>,
     pub economy: &'b mut EconomySnapshot,
     pub route_cache: &'b mut RoomRouteCache,
+    pub room_status_cache: &'b RoomStatusCache,
     pub threat_data: &'b ReadStorage<'a, RoomThreatData>,
 }
 
@@ -111,6 +114,7 @@ impl<'a> System<'a> for PreRunOperationSystem {
             map_viz_data: map_viz,
             economy: &mut data.economy,
             route_cache: &mut data.route_cache,
+            room_status_cache: &data.room_status_cache,
             threat_data: &data.threat_data,
         };
 
@@ -145,6 +149,7 @@ impl<'a> System<'a> for RunOperationSystem {
             map_viz_data: map_viz,
             economy: &mut data.economy,
             route_cache: &mut data.route_cache,
+            room_status_cache: &data.room_status_cache,
             threat_data: &data.threat_data,
         };
 

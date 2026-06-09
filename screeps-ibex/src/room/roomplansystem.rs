@@ -179,12 +179,16 @@ impl RoomPlannerRunningData {
         })
     }
 
-    fn process(&mut self, room_data: &RoomData, budget_cpu: f64) -> Result<PlanTickResult, String> {
+    fn process(&mut self, room_data: &RoomData, budget_cpu: f64, tick_limit: f64) -> Result<PlanTickResult, String> {
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility")?;
         let data_source = RoomDataPlannerDataSource::new(room_data.name, static_visibility_data);
 
         let start_cpu = game::cpu::get_used();
-        let budget = CpuBudget::new(move || (game::cpu::get_used() - start_cpu) < (budget_cpu * 0.9));
+        // Use 0.75 of allocated budget so we stop early and avoid overshooting the tick.
+        let budget = CpuBudget::new(move || {
+            let used = game::cpu::get_used();
+            (used - start_cpu) < (budget_cpu * 0.75) && used < tick_limit - 0.5
+        });
 
         let old_state = std::mem::replace(&mut self.planner_state, PlanningState::Failed("replaced".to_string()));
 
@@ -249,21 +253,45 @@ pub struct RoomPlanSystemData<'a> {
 pub struct RoomPlanSystem;
 
 impl RoomPlanSystem {
-    fn get_cpu_budget() -> Option<f64> {
+    /// Returns (budget_cpu, tick_limit) when room planning may run. Budget is derived from
+    /// remaining CPU and a reserve (like movement), never exceeds the tick limit, and
+    /// ensures at least some work when there are pending requests to avoid deadlock.
+    /// Planning runs only when bucket is at or above bucket_threshold (0 = always allow).
+    fn get_cpu_budget(has_pending_request: bool) -> Option<(f64, f64)> {
+        let construction = crate::features::features().construction;
         let bucket = game::cpu::bucket();
-        let tick_limit = game::cpu::tick_limit();
-
-        if bucket as f64 >= tick_limit * 2.0 {
-            let current_cpu = game::cpu::get_used();
-            let remaining_cpu = tick_limit - current_cpu;
-            let max_cpu = (remaining_cpu * 0.25).min(tick_limit / 2.0);
-
-            if max_cpu >= 20.0 {
-                return Some(max_cpu);
-            }
+        if construction.bucket_threshold > 0 && bucket < construction.bucket_threshold {
+            return None;
         }
 
-        None
+        let tick_limit = game::cpu::tick_limit();
+        let cpu_limit = game::cpu::limit() as f64;
+        let used = game::cpu::get_used();
+        let remaining = (tick_limit - used).max(0.0);
+
+        // Under normal conditions use GCL limit; when bucket is at/above threshold allow burst.
+        let budget_ceiling = if construction.bucket_threshold == 0 || bucket >= construction.bucket_threshold {
+            tick_limit
+        } else {
+            cpu_limit
+        };
+
+        const RESERVE_FRACTION: f64 = 0.2;
+        const RESERVE_FLOOR: f64 = 2.0;
+        let reserve = (budget_ceiling * RESERVE_FRACTION).max(RESERVE_FLOOR);
+        let planning_cpu_available = (remaining - reserve).max(0.0);
+
+        let configured = construction.room_plan_cpu_budget;
+        let mut budget_cpu = configured.min(planning_cpu_available);
+
+        if budget_cpu <= 0.0 && has_pending_request && remaining > 5.0 {
+            budget_cpu = 5.0;
+        }
+        if budget_cpu < 1.0 {
+            return None;
+        }
+
+        Some((budget_cpu, tick_limit))
     }
 
     fn attach_plan_state(
@@ -291,7 +319,9 @@ impl<'a> System<'a> for RoomPlanSystem {
         data.memory_arbiter.request(PLANNER_MEMORY_SEGMENT);
 
         if crate::features::features().construction.plan {
-            if let Some(max_cpu) = Self::get_cpu_budget() {
+            let has_pending = !data.room_plan_queue.requests.is_empty()
+                || data.memory_arbiter.get(PLANNER_MEMORY_SEGMENT).map(|d| !d.is_empty()).unwrap_or(false);
+            if let Some((max_cpu, tick_limit)) = Self::get_cpu_budget(has_pending) {
                 if data.memory_arbiter.is_active(PLANNER_MEMORY_SEGMENT) {
                     let Some(planner_data) = data.memory_arbiter.get(PLANNER_MEMORY_SEGMENT) else {
                         return;
@@ -352,7 +382,7 @@ impl<'a> System<'a> for RoomPlanSystem {
                             if let Some(room_data) = data.room_data.get(room_entity) {
                                 info!("Planning for room: {}", room_data.name);
 
-                                match running_state.process(room_data, max_cpu) {
+                                match running_state.process(room_data, max_cpu, tick_limit) {
                                     Ok(PlanTickResult::Running) => false,
                                     Ok(PlanTickResult::Complete(Some(plan))) => {
                                         info!("Planning complete and viable plan found. Room: {}", room_data.name);

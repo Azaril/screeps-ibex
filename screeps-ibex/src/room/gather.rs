@@ -1,6 +1,7 @@
 use crate::entitymappingsystem::*;
 use crate::missions::utility::*;
 use crate::room::data::*;
+use crate::room::room_status_cache::RoomStatusCache;
 use crate::room::roomplansystem::*;
 use screeps::*;
 use screeps_rover::*;
@@ -92,6 +93,7 @@ pub struct GatherSystemData<'a, 'b> {
     pub mapping: &'b Read<'a, EntityMappingData>,
     pub room_data: &'b mut WriteStorage<'a, RoomData>,
     pub room_plan_data: &'b ReadStorage<'a, RoomPlanData>,
+    pub room_status_cache: &'b RoomStatusCache,
 }
 
 pub fn gather_home_rooms(system_data: &GatherSystemData, min_rcl: u32) -> Vec<Entity> {
@@ -140,10 +142,10 @@ where
             if visited_room.can_expand {
                 let room_exits = game::map::describe_exits(room_data.name);
 
-                let source_room_status = game::map::get_room_status(room_data.name).map(|r| r.status());
+                let source_room_status = system_data.room_status_cache.get_or_insert(room_data.name);
 
                 for expansion_room in room_exits.values() {
-                    let expansion_room_status = game::map::get_room_status(expansion_room).map(|r| r.status());
+                    let expansion_room_status = system_data.room_status_cache.get_or_insert(expansion_room);
 
                     if can_traverse_between_room_status(source_room_status, expansion_room_status) {
                         let rooms = expansion_rooms.entry(expansion_room).or_default();
@@ -178,10 +180,10 @@ where
                     if visited_room.can_expand {
                         let room_exits = game::map::describe_exits(source_room_name);
 
-                        let source_room_status = game::map::get_room_status(source_room_name).map(|r| r.status());
+                        let source_room_status = system_data.room_status_cache.get_or_insert(source_room_name);
 
                         for expansion_room in room_exits.values() {
-                            let expansion_room_status = game::map::get_room_status(expansion_room).map(|r| r.status());
+                            let expansion_room_status = system_data.room_status_cache.get_or_insert(expansion_room);
 
                             if can_traverse_between_room_status(source_room_status, expansion_room_status) {
                                 let rooms = expansion_rooms.entry(expansion_room).or_default();

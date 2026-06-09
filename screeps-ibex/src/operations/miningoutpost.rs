@@ -92,6 +92,7 @@ impl Operation for MiningOutpostOperation {
             mapping: system_data.mapping,
             room_data: system_data.room_data,
             room_plan_data: system_data.room_plan_data,
+            room_status_cache: system_data.room_status_cache,
         };
 
         let home_rooms = gather_home_rooms(&gather_system_data, 2);

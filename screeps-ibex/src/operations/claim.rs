@@ -235,6 +235,7 @@ impl ClaimOperation {
             mapping: system_data.mapping,
             room_data: system_data.room_data,
             room_plan_data: system_data.room_plan_data,
+            room_status_cache: system_data.room_status_cache,
         };
 
         // Use min_rcl=2 so the BFS only seeds from rooms that can spawn scouts.

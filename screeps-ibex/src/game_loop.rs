@@ -19,6 +19,7 @@ use crate::pathing::movementsystem::*;
 use crate::repairqueue::RepairQueueClearSystem;
 use crate::room::createroomsystem::*;
 use crate::room::data::*;
+use crate::room::room_status_cache::{RoomStatusCache, RoomStatusCacheClearSystem};
 use crate::room::roomplansystem::*;
 use crate::room::roomplanvisualizesystem::*;
 use crate::room::updateroomsystem::*;
@@ -73,6 +74,7 @@ macro_rules! for_each_system {
         $op!(ClearVisualizationSystem, "clear_visualization");
         $op!(VisibilityQueueCleanupSystem, "visibility_cleanup");
         $op!(CostMatrixClearSystem, "cost_matrix_clear");
+        $op!(RoomStatusCacheClearSystem, "room_status_cache_clear");
         // === Main-pass: Pre-run ===
         $op!(OperationManagerSystem, "operations_manager");
         $op!(PreRunOperationSystem, "pre_run_operations");
@@ -605,6 +607,7 @@ fn create_environment() -> GameEnvironment {
     world.insert(EconomySnapshot::default());
     world.insert(SpawnQueueSnapshot::default());
     world.insert(RoomRouteCache::new());
+    world.insert(RoomStatusCache::new());
     world.register::<SquadContext>();
 
     // Repair queue (ephemeral -- rebuilt each tick by missions).

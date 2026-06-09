@@ -1,6 +1,7 @@
 use crate::creep::*;
 use crate::entitymappingsystem::*;
 use crate::room::data::*;
+use crate::room::room_status_cache::RoomStatusCache;
 use crate::visualize::Visualizer;
 use screeps::*;
 use screeps_rover::screeps_impl::{ScreepsCostMatrixDataSource, ScreepsPathfinder};
@@ -25,6 +26,7 @@ pub struct MovementUpdateSystemData<'a> {
     room_data: ReadStorage<'a, RoomData>,
     mapping: Read<'a, EntityMappingData>,
     cost_matrix_cache: WriteExpect<'a, CostMatrixCache>,
+    room_status_cache: ReadExpect<'a, RoomStatusCache>,
     visualizer: Option<Write<'a, Visualizer>>,
 }
 
@@ -116,6 +118,7 @@ struct MovementSystemExternalProvider<'a, 'b> {
     creep_movement_data: &'b mut WriteStorage<'a, CreepRoverData>,
     room_data: &'b ReadStorage<'a, RoomData>,
     mapping: &'b Read<'a, EntityMappingData>,
+    room_status_cache: &'b RoomStatusCache,
 }
 
 impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'a, 'b> {
@@ -140,7 +143,9 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
     }
 
     fn get_room_cost(&self, from_room_name: RoomName, to_room_name: RoomName, room_options: &RoomOptions) -> Option<f64> {
-        if !can_traverse_between_rooms(from_room_name, to_room_name) {
+        let from_status = self.room_status_cache.get_or_insert(from_room_name);
+        let to_status = self.room_status_cache.get_or_insert(to_room_name);
+        if !can_traverse_between_room_status(from_status, to_status) {
             return None;
         }
 
@@ -201,6 +206,7 @@ impl<'a> System<'a> for MovementUpdateSystem {
             creep_movement_data: &mut data.creep_movement_data,
             room_data: &data.room_data,
             mapping: &data.mapping,
+            room_status_cache: &data.room_status_cache,
         };
 
         let mut pathfinder = ScreepsPathfinder;
@@ -220,15 +226,91 @@ impl<'a> System<'a> for MovementUpdateSystem {
         system.set_friendly_creep_distance(pathing_features.friendly_creep_distance);
 
         let tick_limit = screeps::game::cpu::tick_limit();
-        let max_budget = tick_limit * pathing_features.movement_cpu_budget_pct;
-        let remaining = (tick_limit - screeps::game::cpu::get_used()).max(0.0);
+        let get_cpu = screeps::game::cpu::get_used;
+        let cpu_limit = screeps::game::cpu::limit() as f64;
+        let bucket = screeps::game::cpu::bucket();
+        // Under normal conditions use GCL limit; when bucket is at/above threshold allow burst up to tick_limit.
+        let budget_ceiling = if pathing_features.bucket_burst_threshold == 0
+            || bucket >= pathing_features.bucket_burst_threshold
+        {
+            tick_limit
+        } else {
+            cpu_limit
+        };
+
+        let max_budget = budget_ceiling * pathing_features.movement_cpu_budget_pct;
+        let remaining = (tick_limit - get_cpu()).max(0.0);
         let cpu_budget = remaining.min(max_budget);
-        system.set_cpu_budget(screeps::game::cpu::get_used, cpu_budget);
+        system.set_cpu_budget(get_cpu, cpu_budget);
 
         let repath_budget = pathing_features.repath_cpu_budget;
-        system.set_repath_budget(screeps::game::cpu::get_used, repath_budget);
+        system.set_repath_budget(get_cpu, repath_budget);
 
+        // Pathfinding ops: never use more than remaining CPU (1 op ≈ 0.001 CPU). Reserve
+        // a fraction of the budget ceiling for cost matrices, resolver, and rest of tick.
+        const MOVEMENT_RESERVE_FRACTION: f64 = 0.2;
+        const MOVEMENT_RESERVE_FLOOR: f64 = 2.0;
+        let reserve = (budget_ceiling * MOVEMENT_RESERVE_FRACTION).max(MOVEMENT_RESERVE_FLOOR);
+        // Each move/pull action has a 0.2 CPU artificial cost; reserve so we don't exhaust the tick.
+        const MOVE_ACTION_CPU: f64 = 0.2;
+        let move_action_reserve = movement_data.request_count() as f64 * MOVE_ACTION_CPU;
+        let pathfinding_cpu_available = (remaining - reserve - move_action_reserve).max(0.0);
+        let pathfinding_cpu_cap = pathing_features.pathfinding_cpu_budget.min(pathfinding_cpu_available);
+        let mut pathfinding_ops = (pathfinding_cpu_cap * 1000.0) as u32;
+        // Ensure at least one pathfinding can run to avoid deadlock (no progress across ticks).
+        const MIN_PATHFIND_OPS: u32 = 2000;
+        if movement_data.request_count() > 0 && pathfinding_ops == 0 && remaining > (MIN_PATHFIND_OPS as f64 / 1000.0) + MOVE_ACTION_CPU {
+            pathfinding_ops = MIN_PATHFIND_OPS;
+        }
+        // Absolute ceiling so we never grant more than ~50 CPU worth of pathfinding ops per tick.
+        const PATHFIND_OPS_CEILING: u32 = 50_000;
+        pathfinding_ops = pathfinding_ops.min(PATHFIND_OPS_CEILING);
+        system.set_pathfinding_ops_budget(pathfinding_ops);
+
+        system.set_tick_limit(get_cpu, tick_limit);
+
+        // Hard cap on movement CPU per tick; stay within budget_ceiling so we don't consume bucket unnecessarily.
+        // In normal (non-burst) mode, apply an absolute ceiling so we don't give movement more than 80 CPU.
+        // In burst mode use a higher cap so one pathfinding can run (headroom then limits blow-through).
+        let movement_start_cpu = get_cpu();
+        const MIN_MOVEMENT_CPU: f64 = 5.0;
+        const NORMAL_MODE_MOVEMENT_CEILING: f64 = 80.0;
+        /// In burst mode allow one pathfinding; headroom 80 means we only start when used <= cap - 80.
+        const BURST_MODE_MOVEMENT_CAP: f64 = 150.0;
+        let normal_mode = (budget_ceiling - cpu_limit).abs() < 0.01;
+        let movement_cap_max = if normal_mode {
+            pathing_features.movement_max_cpu.min(NORMAL_MODE_MOVEMENT_CEILING)
+        } else {
+            BURST_MODE_MOVEMENT_CAP
+        };
+        let ceiling_remaining = (budget_ceiling - get_cpu()).max(0.0);
+        let movement_cap = (remaining - reserve)
+            .max(0.0)
+            .min(ceiling_remaining)
+            .min(movement_cap_max)
+            .max(MIN_MOVEMENT_CPU);
+        system.set_movement_cpu_cap(get_cpu, movement_start_cpu, movement_cap);
+        // Pathfinding headroom: do not start find_route unless (used + headroom) <= cap (find_route is unbounded).
+        // Normal mode: headroom = cap so we never start pathfinding (saves CPU).
+        // Burst mode: headroom 80 so we only start when we have 80 CPU headroom, allowing one pathfind and capping blow-through.
+        let pathfinding_headroom = if normal_mode {
+            Some(movement_cap)
+        } else {
+            Some(80.0)
+        };
+        system.set_pathfinding_headroom(pathfinding_headroom);
+
+        let request_count = movement_data.request_count();
         let results = system.process(&mut external, movement_data);
+
+        let movement_cpu_used = get_cpu() - movement_start_cpu;
+        if movement_cpu_used > 80.0 {
+            log::info!(
+                "movement: {:.1} CPU, {} requests",
+                movement_cpu_used,
+                request_count
+            );
+        }
 
         *data.movement_results = results;
     }

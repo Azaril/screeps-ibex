@@ -1081,7 +1081,7 @@ impl WarOperation {
             });
 
             if near_home {
-                info!(
+                debug!(
                     "[War] Proactive: player threat ({:?}) detected near territory in {} (dps={:.0}, heal={:.0})",
                     threat_data.threat_level, room_name, threat_data.estimated_dps, threat_data.estimated_heal
                 );

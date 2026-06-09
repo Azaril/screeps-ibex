@@ -96,6 +96,22 @@ pub struct ConstructionFeatures {
     pub cleanup: bool,
     pub max_construction_sites: i32,
     pub visualize: ConstructionVisualizeFeatures,
+    /// Per-tick CPU budget for room planning (screeps-foreman pipeline). Uses remaining CPU
+    /// and never exceeds tick limit. Scales with GCL. Default: 20.0.
+    #[serde(default = "default_room_plan_cpu_budget")]
+    pub room_plan_cpu_budget: f64,
+    /// Minimum bucket level for room planning to run. Planning is a burst activity; set to 0 to
+    /// always allow (old behavior). Default: 9000.
+    #[serde(default = "default_bucket_threshold")]
+    pub bucket_threshold: i32,
+}
+
+fn default_room_plan_cpu_budget() -> f64 {
+    20.0
+}
+
+fn default_bucket_threshold() -> i32 {
+    9000
 }
 
 impl Default for ConstructionFeatures {
@@ -108,6 +124,8 @@ impl Default for ConstructionFeatures {
             cleanup: true,
             max_construction_sites: 10,
             visualize: ConstructionVisualizeFeatures::default(),
+            room_plan_cpu_budget: 20.0,
+            bucket_threshold: 9000,
         }
     }
 }
@@ -213,6 +231,31 @@ pub struct PathingFeatures {
     /// this budget has not been exhausted. Set to 0 to disable expiry
     /// repathing entirely.
     pub repath_cpu_budget: f64,
+    /// Per-tick pathfinding ops budget in CPU (1 op ≈ 0.001 CPU). All pathfinding
+    /// (including first-time paths) deducts from this; once exhausted, further
+    /// pathfinding returns PathNotFound. Caps total movement CPU to avoid timeouts.
+    #[serde(default = "default_pathfinding_cpu_budget")]
+    pub pathfinding_cpu_budget: f64,
+    /// Hard cap on CPU the movement system may use per tick. Movement stops once
+    /// (get_cpu() - start_cpu) >= this value, even if tick limit allows more. Default: 80.0.
+    #[serde(default = "default_movement_max_cpu")]
+    pub movement_max_cpu: f64,
+    /// Bucket level at or above which movement budgets expand from limit() to tick_limit().
+    /// Set to 0 to always allow burst (old behavior). Default: 9500.
+    #[serde(default = "default_bucket_burst_threshold")]
+    pub bucket_burst_threshold: i32,
+}
+
+fn default_pathfinding_cpu_budget() -> f64 {
+    20.0
+}
+
+fn default_movement_max_cpu() -> f64 {
+    80.0
+}
+
+fn default_bucket_burst_threshold() -> i32 {
+    9500
 }
 
 impl Default for PathingFeatures {
@@ -225,6 +268,9 @@ impl Default for PathingFeatures {
             friendly_creep_distance: 15,
             movement_cpu_budget_pct: 0.3,
             repath_cpu_budget: 5.0,
+            pathfinding_cpu_budget: 20.0,
+            movement_max_cpu: 80.0,
+            bucket_burst_threshold: 9500,
         }
     }
 }
