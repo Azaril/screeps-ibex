@@ -21,7 +21,7 @@ Each increment: replaces one thing, behind a **stable seam**, validated before t
 
 | # | Increment | Replaces / adds | Stable seam | Validation (test / replay / parallel-run) | Breaking? | Status |
 |---|---|---|---|---|---|---|
-| 0 | **Test & telemetry substrate** | unit-test harness, world-model abstraction, metrics segment, console event log | game-API boundary | pure-logic unit tests + replay smoke-run green | No | ☐ |
+| 0 | **Test, telemetry & eval substrate** | unit-test harness, world-model abstraction, metrics segment, console event log, **local-server eval harness (ADR 0006)** | game-API boundary | pure-logic unit tests green + **local-server smoke-run** (deploy → run K ticks → metrics captured) | No | ☐ |
 | 1 | **CPU governor + load-shedding** | global budget, bucket-aware scheduler, pathfinding cap | scheduler hook | sim under CPU pressure: progress continues, no restart-loop | No | ☐ |
 | 2 | <e.g. entity model> | | | | | ☐ |
 | 3 | <e.g. serialization> | | | | | ☐ |
