@@ -10,7 +10,7 @@ description = "Private-server execution, deployment, and evaluation harness for 
 # assumptions beyond the documented .screeps.yaml discovery rule.
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "process", "io-util", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "process", "io-util", "io-std", "signal"] }
 bollard = "0.19"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 clap = { version = "4", features = ["derive"] }

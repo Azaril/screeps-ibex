@@ -6,7 +6,9 @@
 
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
-use screeps_eval::config::{EvalConfig, DEFAULT_SERVER_NAME, TICK_MS_FLOOR};
+use screeps_eval::config::{EvalConfig, DEFAULT_SERVER_NAME, TICK_MS_FLOOR, TICK_MS_SMOKE};
+use screeps_eval::server::{mask_cli_command, CliClient, GameApi};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -138,15 +140,44 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Command::Tick { action } => {
-            if let TickAction::Set { ms } = &action {
-                if *ms < TICK_MS_FLOOR {
-                    bail!(
-                        "tick {ms} ms is below the {TICK_MS_FLOOR} ms floor \
-                         (server/UI cannot keep up — plan D-2)"
-                    );
+            let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
+            let client = CliClient::new(cfg.eval.cli_port)?;
+            let api = GameApi::new(&cfg.server)?;
+            match action {
+                TickAction::Set { ms } => {
+                    if ms < TICK_MS_FLOOR {
+                        bail!(
+                            "tick {ms} ms is below the {TICK_MS_FLOOR} ms floor \
+                             (server/UI cannot keep up — plan D-2)"
+                        );
+                    }
+                    if ms < TICK_MS_SMOKE {
+                        eprintln!(
+                            "warning: {ms} ms is below the {TICK_MS_SMOKE} ms smoke default — \
+                             the server may not keep up (plan D-2)"
+                        );
+                    }
+                    let applied = screeps_eval::server::set_tick_ms(&client, ms).await?;
+                    println!("tick duration: {applied} ms (read back from the server)");
+                }
+                TickAction::Pause => {
+                    screeps_eval::server::pause(&client).await?;
+                    let time = api.game_time().await.ok();
+                    match time {
+                        Some(t) => println!("simulation paused at tick {t}"),
+                        None => println!("simulation paused"),
+                    }
+                }
+                TickAction::Resume => {
+                    screeps_eval::server::resume(&client).await?;
+                    let time = api.game_time().await.ok();
+                    match time {
+                        Some(t) => println!("simulation resumed (tick {t})"),
+                        None => println!("simulation resumed"),
+                    }
                 }
             }
-            bail!("tick control lands with P0.A3/P0.A8 (server-CLI client)")
+            Ok(())
         }
         Command::Server { action } => {
             match action {
@@ -179,10 +210,71 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
-        Command::Bootstrap { .. } => bail!("bootstrap lands with P0.A3"),
+        Command::Bootstrap { reset } => {
+            let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
+            let outcome = screeps_eval::server::bootstrap(&cfg, reset).await?;
+            println!("{outcome}");
+            println!("web client: {}/", cfg.server.http_base());
+            Ok(())
+        }
+        Command::Cli { command } => {
+            let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
+            let client = CliClient::new(cfg.eval.cli_port)?;
+            match command {
+                // One-shot: print the (masked) response and exit.
+                Some(cmd) => {
+                    let body = client.send_raw(&cmd).await?;
+                    println!("{}", mask_cli_command(&body));
+                    Ok(())
+                }
+                None => repl(&client).await,
+            }
+        }
         Command::Deploy { .. } => bail!("deploy lands with P0.A4"),
         Command::Run { .. } => bail!("run/capture lands with P0.A5"),
         Command::Smoke => bail!("smoke lands with P0.A6 (after A2-A5)"),
-        Command::Cli { .. } => bail!("CLI passthrough lands with P0.A3/P0.A8"),
     }
+}
+
+/// Interactive REPL against the server CLI (P0.A8). Every line that we
+/// echo and every response body passes through [`mask_cli_command`] —
+/// the vm echoes command source in error stacks, so even responses can
+/// carry a typed password (P0.A7(c)).
+async fn repl(client: &CliClient) -> Result<()> {
+    use std::io::Write;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    println!("{}", client.greeting().await?);
+    println!("(screeps-eval REPL — quit/exit or Ctrl-C to leave; setPassword arguments are masked in echoed output)");
+
+    // When stdin is piped (operator scripting), echo each command so the
+    // transcript is readable — masked.
+    let echo_input = !std::io::stdin().is_terminal();
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    loop {
+        print!("screeps> ");
+        std::io::stdout().flush()?;
+        let line: Option<String> = tokio::select! {
+            _ = tokio::signal::ctrl_c() => break,
+            line = lines.next_line() => line?,
+        };
+        let Some(line) = line else { break }; // EOF
+                                              // PowerShell pipes prepend a UTF-8 BOM to the first line.
+        let cmd = line.trim_start_matches('\u{feff}').trim();
+        if cmd.is_empty() {
+            continue;
+        }
+        if matches!(cmd, "quit" | "exit" | ".exit") {
+            break;
+        }
+        if echo_input {
+            println!("{}", mask_cli_command(cmd));
+        }
+        match client.send_raw(cmd).await {
+            Ok(body) => println!("{}", mask_cli_command(&body)),
+            Err(e) => eprintln!("{e:#}"),
+        }
+    }
+    println!();
+    Ok(())
 }

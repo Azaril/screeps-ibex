@@ -10,16 +10,16 @@
 //! - [`config`]        — `.screeps.yaml` + env loading, secrets policy (A1/A7)
 //! - [`server_config`] — launcher-config merge -> `target/runtime/`    (A2)
 //! - [`docker`]        — bollard lifecycle of launcher/mongo/redis     (A2)
-//! - `server`          — server-CLI client: bootstrap, tick control    (A3/A8)
+//! - [`server`]        — server-CLI client: bootstrap, tick control    (A3/A8)
 //! - `api`             — HTTP/websocket client: deploy, console, segments (A4/A5)
 //! - `capture`         — runs/ artifact writing, summaries             (A5/A6)
 
 pub mod config;
 pub mod docker;
+pub mod server;
 pub mod server_config;
 
 // Stubs land with their tasks (kept out until then so the crate carries
 // no dead code from day one):
-// pub mod server;   // P0.A3 / P0.A8
 // pub mod api;      // P0.A4 / P0.A5
 // pub mod capture;  // P0.A5 / P0.A6

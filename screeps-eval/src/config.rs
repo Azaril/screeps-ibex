@@ -71,6 +71,19 @@ pub struct EvalSettings {
     /// (screepsmod-admin-utils). Default 100; clamped to the 50 ms
     /// floor (plan D-2).
     pub tick_ms: u64,
+    /// Spawn-placement preference for `bootstrap` (P0.A3). All fields
+    /// optional: room alone = auto-pick a tile in that room; room+x+y =
+    /// exact placement (no fallback); nothing = auto-pick room and tile.
+    pub spawn: SpawnPreference,
+}
+
+/// The optional `eval.spawn:` section — where `bootstrap` places the
+/// first spawn. `x`/`y` are only honored together with `room`.
+#[derive(Debug, Default, Clone)]
+pub struct SpawnPreference {
+    pub room: Option<String>,
+    pub x: Option<u32>,
+    pub y: Option<u32>,
 }
 
 impl Default for EvalSettings {
@@ -81,6 +94,7 @@ impl Default for EvalSettings {
             game_port: DEFAULT_GAME_PORT,
             cli_port: DEFAULT_CLI_PORT,
             tick_ms: TICK_MS_SMOKE,
+            spawn: SpawnPreference::default(),
         }
     }
 }
@@ -124,6 +138,8 @@ struct RawEval {
     #[serde(default)]
     ports: RawEvalPorts,
     tick_ms: Option<u64>,
+    #[serde(default)]
+    spawn: RawEvalSpawn,
 }
 
 #[derive(Deserialize, Default)]
@@ -131,6 +147,14 @@ struct RawEval {
 struct RawEvalPorts {
     game: Option<u16>,
     cli: Option<u16>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct RawEvalSpawn {
+    room: Option<String>,
+    x: Option<u32>,
+    y: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -161,6 +185,11 @@ impl From<RawEval> for EvalSettings {
             // than erroring: the config is shared/long-lived, and a
             // too-low value is a tuning mistake, not a corruption.
             tick_ms: tick_ms.max(TICK_MS_FLOOR),
+            spawn: SpawnPreference {
+                room: raw.spawn.room,
+                x: raw.spawn.x,
+                y: raw.spawn.y,
+            },
         }
     }
 }
@@ -338,6 +367,44 @@ eval:
         assert_eq!(cfg.eval.game_port, DEFAULT_GAME_PORT);
         assert_eq!(cfg.eval.cli_port, DEFAULT_CLI_PORT);
         assert_eq!(cfg.eval.tick_ms, TICK_MS_SMOKE);
+        assert!(cfg.eval.spawn.room.is_none());
+        assert!(cfg.eval.spawn.x.is_none());
+        assert!(cfg.eval.spawn.y.is_none());
+    }
+
+    /// P0.A3: the `eval.spawn:` section (room-only and room+x+y forms).
+    #[test]
+    fn spawn_preference_parses() {
+        let yaml = r#"
+servers:
+  private-server:
+    host: 127.0.0.1
+    username: ibex
+    password: super-secret-test-pw-7391
+eval:
+  spawn:
+    room: W5N3
+    x: 18
+    y: 14
+"#;
+        let cfg = EvalConfig::from_yaml_str(yaml, "private-server").unwrap();
+        assert_eq!(cfg.eval.spawn.room.as_deref(), Some("W5N3"));
+        assert_eq!(cfg.eval.spawn.x, Some(18));
+        assert_eq!(cfg.eval.spawn.y, Some(14));
+
+        let yaml_room_only = r#"
+servers:
+  private-server:
+    host: 127.0.0.1
+    username: ibex
+    password: super-secret-test-pw-7391
+eval:
+  spawn:
+    room: W8N3
+"#;
+        let cfg = EvalConfig::from_yaml_str(yaml_room_only, "private-server").unwrap();
+        assert_eq!(cfg.eval.spawn.room.as_deref(), Some("W8N3"));
+        assert_eq!(cfg.eval.spawn.x, None);
     }
 
     #[test]
