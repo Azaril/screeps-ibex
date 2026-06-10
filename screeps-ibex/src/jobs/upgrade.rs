@@ -34,6 +34,28 @@ fn is_slow_creep(creep: &Creep) -> bool {
     total_parts > 4 && move_parts * 4 < total_parts
 }
 
+/// How far from the controller a slow upgrader is willing to fetch energy.
+/// Covers the planner's upgrade-area container (range <= 3 from the
+/// controller) plus a small margin, while still excluding cross-room treks
+/// to storage.
+const SLOW_UPGRADER_PICKUP_RANGE: u32 = 5;
+
+/// Pickup range filter for this upgrader: slow creeps only take pickups near
+/// the CONTROLLER (their work site). The anchor is deliberately not the
+/// creep's own position -- a creep-anchored radius deadlocks a slow upgrader
+/// that idles just outside the radius of the only valid pickup (observed
+/// live: a fresh upgrader at range 6 from a full upgrade container could
+/// neither pick up nor upgrade, so it never moved again).
+fn pickup_range_anchor(creep: &Creep, room_data: &RoomData) -> Option<(Position, u32)> {
+    if !is_slow_creep(creep) {
+        return None;
+    }
+
+    let controller = room_data.get_static_visibility_data()?.controller()?;
+
+    Some((controller.pos(), SLOW_UPGRADER_PICKUP_RANGE))
+}
+
 /// Decide at runtime whether this upgrader should be allowed to harvest from
 /// sources. Fast creeps (RCL <= 3 style bodies) always harvest. Slow creeps
 /// only harvest when the room lacks delivery infrastructure (no storage and
@@ -87,9 +109,6 @@ impl Idle {
             room_data: tick_context.system_data.room_data,
         };
 
-        let slow = is_slow_creep(creep);
-        let max_range = if slow { Some(5) } else { None };
-
         get_new_nearby_pickup_state_fill_resource(
             creep,
             &transfer_queue_data,
@@ -98,7 +117,7 @@ impl Idle {
             TransferTypeFlags::HAUL | TransferTypeFlags::USE,
             ResourceType::Energy,
             tick_context.runtime_data.transfer_queue,
-            max_range,
+            pickup_range_anchor(creep, home_room_data),
             UpgradeState::pickup,
         )
         .or_else(|| {
@@ -149,9 +168,6 @@ impl FinishedPickup {
             room_data: tick_context.system_data.room_data,
         };
 
-        let slow = is_slow_creep(creep);
-        let max_range = if slow { Some(5) } else { None };
-
         get_new_nearby_pickup_state_fill_resource(
             creep,
             &transfer_queue_data,
@@ -160,7 +176,7 @@ impl FinishedPickup {
             TransferTypeFlags::HAUL | TransferTypeFlags::USE,
             ResourceType::Energy,
             tick_context.runtime_data.transfer_queue,
-            max_range,
+            pickup_range_anchor(creep, home_room_data),
             UpgradeState::pickup,
         )
         .or_else(|| Some(UpgradeState::idle()))

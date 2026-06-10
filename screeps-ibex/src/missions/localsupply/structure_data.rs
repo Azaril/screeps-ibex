@@ -9,6 +9,23 @@ use std::rc::*;
 
 pub type MineralExtractorPair = (RemoteObjectId<Mineral>, RemoteObjectId<StructureExtractor>);
 
+/// Range around the controller within which a container is classified as a
+/// controller (upgrade) container. The room planner places this container on
+/// an upgrade-area tile, which can be up to range 3 from the controller
+/// (screeps-foreman `ControllerInfraLayer`, matching the game's upgrade
+/// range). Classifying with a smaller radius mis-buckets a planner-placed
+/// container as a generic storage container: its deposit requests are then
+/// registered at `TransferPriority::None`, which never pairs with the
+/// storage's `TransferPriority::None` withdraw, so no energy is hauled to
+/// the controller and upgraders idle.
+pub const CONTROLLER_CONTAINER_RANGE: u32 = 3;
+
+/// Whether a container at `container_pos` serves the controller at
+/// `controller_pos` (see [`CONTROLLER_CONTAINER_RANGE`]).
+fn is_controller_container(container_pos: screeps::Position, controller_pos: screeps::Position) -> bool {
+    container_pos.in_range_to(controller_pos, CONTROLLER_CONTAINER_RANGE)
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct StructureData {
     pub last_updated: u32,
@@ -138,7 +155,7 @@ pub fn create_structure_data(room_data: &RoomData) -> Option<StructureData> {
                         .values()
                         .any(|other_containers| other_containers.iter().any(|other_container| other_container == container))
                 })
-                .find(|container| container.pos().in_range_to(controller.pos(), 2));
+                .find(|container| is_controller_container(container.pos(), controller.pos()));
 
             nearby_container_id.map(|container_id| (**controller, container_id))
         })
@@ -203,4 +220,46 @@ fn compute_nearest_spawn_distances(
     }
 
     distances
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use screeps::RoomCoordinate;
+
+    // Pin: the controller-container classification radius must cover the room
+    // planner's whole upgrade area (range 3 from the controller -- foreman's
+    // ControllerInfraLayer / the game's upgrade range). At the old radius of 2
+    // a planner-placed container at range 3 fell into the generic storage-
+    // container bucket, whose TransferPriority::None deposit never pairs with
+    // the storage's TransferPriority::None withdraw -- observed live as a
+    // controller container stuck at 0 energy beside a 250k+ storage while
+    // upgraders idled (W7N4: container (36,9), controller (39,12)).
+
+    fn pos(x: u8, y: u8) -> screeps::Position {
+        screeps::Position::new(
+            RoomCoordinate::new(x).expect("valid coordinate"),
+            RoomCoordinate::new(y).expect("valid coordinate"),
+            "W7N4".parse().expect("valid room name"),
+        )
+    }
+
+    #[test]
+    fn classifies_planner_placed_container_at_upgrade_area_edge() {
+        // The live repro geometry: range 3 (Chebyshev) from the controller.
+        assert!(is_controller_container(pos(36, 9), pos(39, 12)));
+    }
+
+    #[test]
+    fn classifies_adjacent_and_near_containers() {
+        assert!(is_controller_container(pos(38, 12), pos(39, 12)));
+        assert!(is_controller_container(pos(37, 11), pos(39, 12)));
+    }
+
+    #[test]
+    fn rejects_containers_outside_the_upgrade_area() {
+        // Range 4: not reachable by an upgrader working the controller.
+        assert!(!is_controller_container(pos(35, 12), pos(39, 12)));
+        assert!(!is_controller_container(pos(35, 8), pos(39, 12)));
+    }
 }

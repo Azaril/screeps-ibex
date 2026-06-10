@@ -55,6 +55,16 @@ where
     None
 }
 
+/// Whether a pickup target is within `range` of an anchor position. The
+/// anchor must be the creep's work site (e.g. the controller for slow
+/// upgraders), NOT the creep's current position: anchoring on the creep can
+/// permanently deadlock it -- a slow creep idling just outside the radius of
+/// the only valid pickup can neither pick up (too far) nor work (no energy),
+/// so it never moves again.
+fn within_anchor_range(target_pos: screeps::Position, anchor: screeps::Position, range: u32) -> bool {
+    anchor.get_range_to(target_pos) <= range
+}
+
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_nearby_pickup_state_fill_resource<F, R>(
@@ -65,7 +75,7 @@ pub fn get_new_nearby_pickup_state_fill_resource<F, R>(
     transfer_types: TransferTypeFlags,
     desired_resource: ResourceType,
     transfer_queue: &mut TransferQueue,
-    max_range: Option<u32>,
+    range_anchor: Option<(screeps::Position, u32)>,
     state_map: F,
 ) -> Option<R>
 where
@@ -92,13 +102,10 @@ where
 
         let creep_pos = creep.pos();
 
-        let filtered: Vec<_> = if let Some(range) = max_range {
+        let filtered: Vec<_> = if let Some((anchor, range)) = range_anchor {
             pickups
                 .into_iter()
-                .filter(|ticket| {
-                    let target_pos: screeps::Position = ticket.target().pos().into();
-                    creep_pos.get_range_to(target_pos) <= range
-                })
+                .filter(|ticket| within_anchor_range(ticket.target().pos().into(), anchor, range))
                 .collect()
         } else {
             pickups
@@ -553,6 +560,42 @@ where
 
 pub fn visualize_delivery(_describe_data: &mut JobDescribeData, _tickets: &[TransferDepositTicket]) {
     // Visualization is handled by the central RenderSystem.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use screeps::RoomCoordinate;
+
+    // Pin: the nearby-pickup range filter is anchored on the WORK SITE
+    // passed by the caller, never on the creep. Geometry from the live
+    // deadlock (W7N4): with the controller (39,12) as anchor and range 5,
+    // the upgrade container (36,9) must stay eligible no matter where the
+    // creep idles, while the room's storage (31,32) stays excluded.
+
+    fn pos(x: u8, y: u8) -> screeps::Position {
+        screeps::Position::new(
+            RoomCoordinate::new(x).expect("valid coordinate"),
+            RoomCoordinate::new(y).expect("valid coordinate"),
+            "W7N4".parse().expect("valid room name"),
+        )
+    }
+
+    #[test]
+    fn anchor_range_keeps_upgrade_container_eligible() {
+        assert!(within_anchor_range(pos(36, 9), pos(39, 12), 5));
+    }
+
+    #[test]
+    fn anchor_range_excludes_distant_storage() {
+        assert!(!within_anchor_range(pos(31, 32), pos(39, 12), 5));
+    }
+
+    #[test]
+    fn anchor_range_boundary_is_inclusive() {
+        assert!(within_anchor_range(pos(34, 12), pos(39, 12), 5));
+        assert!(!within_anchor_range(pos(33, 12), pos(39, 12), 5));
+    }
 }
 
 pub fn visualize_delivery_from(_describe_data: &mut JobDescribeData, _tickets: &[TransferDepositTicket], _from: RoomPosition) {
