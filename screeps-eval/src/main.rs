@@ -6,8 +6,9 @@
 
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
+use screeps_eval::api::GameApi;
 use screeps_eval::config::{EvalConfig, DEFAULT_SERVER_NAME, TICK_MS_FLOOR, TICK_MS_SMOKE};
-use screeps_eval::server::{mask_cli_command, CliClient, GameApi};
+use screeps_eval::server::{mask_cli_command, CliClient};
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
@@ -43,9 +44,10 @@ enum Command {
         #[arg(long)]
         reset: bool,
     },
-    /// Build and upload the bot to the private server
+    /// Build and upload the bot to the private server (wraps
+    /// js_tools/deploy.js; the full wasm build runs — first builds are slow)
     Deploy {
-        /// Deploy a debug build (richer logs)
+        /// Deploy a debug build (deploy.js --mode debug -> wasm-pack --dev)
         #[arg(long)]
         debug: bool,
     },
@@ -53,9 +55,17 @@ enum Command {
     Run {
         #[arg(long, default_value_t = 200)]
         ticks: u64,
+        /// Scenario label for the runs/<scenario>-<git-sha>-<stamp>/ dir
+        #[arg(long, default_value = "adhoc")]
+        scenario: String,
     },
-    /// One-shot: server up -> bootstrap --reset -> deploy -> run -> summary
-    Smoke,
+    /// One-shot: server up -> bootstrap --reset -> deploy -> run -> summary.
+    /// Exits nonzero on the hard-zero gates (deploy failure, zero ticks,
+    /// panic lines, deserialization-failure lines); metrics never gate.
+    Smoke {
+        #[arg(long, default_value_t = screeps_eval::smoke::SMOKE_TICKS_DEFAULT)]
+        ticks: u64,
+    },
     /// Interactive passthrough to the server CLI (operator mode)
     Cli {
         /// Single command to send (omit for an interactive REPL)
@@ -230,9 +240,35 @@ async fn main() -> Result<()> {
                 None => repl(&client).await,
             }
         }
-        Command::Deploy { .. } => bail!("deploy lands with P0.A4"),
-        Command::Run { .. } => bail!("run/capture lands with P0.A5"),
-        Command::Smoke => bail!("smoke lands with P0.A6 (after A2-A5)"),
+        Command::Deploy { debug } => {
+            let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
+            let report = screeps_eval::deploy::deploy(&cfg, &cli.server_name, debug).await?;
+            println!("{report}");
+            Ok(())
+        }
+        Command::Run { ticks, scenario } => {
+            let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
+            let artifacts = screeps_eval::capture::run(&cfg, ticks, &scenario).await?;
+            println!("artifacts: {}", artifacts.dir.display());
+            println!("{}", artifacts.summary);
+            Ok(())
+        }
+        Command::Smoke { ticks } => {
+            let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
+            let report = screeps_eval::smoke::smoke(&cfg, &cli.server_name, ticks).await?;
+            println!("deploy:   {}", report.deploy);
+            println!("artifacts: {}", report.artifacts.dir.display());
+            println!("{}", report.artifacts.summary);
+            if report.gate_failures.is_empty() {
+                println!("smoke: PASS (all hard-zero gates green)");
+                Ok(())
+            } else {
+                for failure in &report.gate_failures {
+                    eprintln!("smoke gate FAILED: {failure}");
+                }
+                bail!("smoke failed {} gate(s)", report.gate_failures.len());
+            }
+        }
     }
 }
 

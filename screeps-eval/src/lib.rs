@@ -11,15 +11,16 @@
 //! - [`server_config`] — launcher-config merge -> `target/runtime/`    (A2)
 //! - [`docker`]        — bollard lifecycle of launcher/mongo/redis     (A2)
 //! - [`server`]        — server-CLI client: bootstrap, tick control    (A3/A8)
-//! - `api`             — HTTP/websocket client: deploy, console, segments (A4/A5)
-//! - `capture`         — runs/ artifact writing, summaries             (A5/A6)
+//! - [`api`]           — game-API HTTP client (auth, time, segments)   (A3/A5)
+//! - [`deploy`]        — js_tools/deploy.js wrapper                    (A4)
+//! - [`capture`]       — console websocket + metrics -> runs/          (A5)
+//! - [`smoke`]         — up -> bootstrap -> deploy -> run -> gates     (A6)
 
+pub mod api;
+pub mod capture;
 pub mod config;
+pub mod deploy;
 pub mod docker;
 pub mod server;
 pub mod server_config;
-
-// Stubs land with their tasks (kept out until then so the crate carries
-// no dead code from day one):
-// pub mod api;      // P0.A4 / P0.A5
-// pub mod capture;  // P0.A5 / P0.A6
+pub mod smoke;

@@ -46,7 +46,8 @@
 //!   objects, user not blocked and has cpu. Success claims the
 //!   controller (level 1 + safe mode) and returns `{ok:1, newbie:true}`.
 
-use crate::config::{EvalConfig, ServerEndpoint, SpawnPreference};
+use crate::api::GameApi;
+use crate::config::{EvalConfig, SpawnPreference};
 use anyhow::{anyhow, bail, Context, Result};
 use secrecy::ExposeSecret;
 use serde::Deserialize;
@@ -175,6 +176,15 @@ pub fn cmd_set_password(username: &str, password: &str) -> String {
 
 pub fn cmd_respawn_user(username: &str) -> String {
     format!("utils.respawnUser({})", js_str(username))
+}
+
+/// Count the user's live creeps (capture metrics, P0.A5). The CLI
+/// returns the bare count (`util.inspect` of a number, e.g. `5`).
+pub fn cmd_count_creeps(user_id: &str) -> String {
+    format!(
+        "storage.db['rooms.objects'].count({{type: 'creep', user: {}}})",
+        js_str(user_id)
+    )
 }
 
 /// Rooms a first spawn can go in: status `normal`, exactly one
@@ -486,172 +496,11 @@ pub async fn resume(cli: &CliClient) -> Result<()> {
 }
 
 // ===================================================================
-// game-API client (bootstrap-scoped; the full client is P0.A4/A5)
-// ===================================================================
-
-#[derive(Debug, Deserialize)]
-struct ApiOkResponse {
-    ok: Option<i64>,
-    error: Option<String>,
-    token: Option<String>,
-    status: Option<String>,
-    time: Option<u64>,
-}
-
-pub struct GameApi {
-    base: String,
-    http: reqwest::Client,
-    /// Rolling auth state: screepsmod-auth refreshes the token in every
-    /// response's `X-Token` header; the old one is consumed.
-    token: Option<String>,
-}
-
-impl GameApi {
-    pub fn new(server: &ServerEndpoint) -> Result<Self> {
-        Ok(GameApi {
-            base: server.http_base(),
-            http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .context("building HTTP client")?,
-            token: None,
-        })
-    }
-
-    pub async fn game_time(&self) -> Result<u64> {
-        let resp: ApiOkResponse = self
-            .http
-            .get(format!("{}/api/game/time", self.base))
-            .send()
-            .await
-            .with_context(|| format!("GET {}/api/game/time", self.base))?
-            .json()
-            .await?;
-        resp.time.context("no `time` in /api/game/time response")
-    }
-
-    pub async fn username_available(&self, username: &str) -> Result<bool> {
-        let resp: ApiOkResponse = self
-            .http
-            .get(format!("{}/api/register/check-username", self.base))
-            .query(&[("username", username)])
-            .send()
-            .await?
-            .json()
-            .await
-            .context("parsing check-username response")?;
-        Ok(resp.ok == Some(1))
-    }
-
-    /// Register the user (screepsmod-auth open registration). The
-    /// password is exposed into the request body ONLY — never logged.
-    pub async fn register(&self, server: &ServerEndpoint) -> Result<()> {
-        let body = serde_json::json!({
-            "username": server.username,
-            "password": server.password.expose_secret(),
-        });
-        let resp: ApiOkResponse = self
-            .http
-            .post(format!("{}/api/register/submit", self.base))
-            .json(&body)
-            .send()
-            .await?
-            .json()
-            .await
-            .context("parsing register response")?;
-        if resp.ok != Some(1) {
-            bail!(
-                "registering user '{}' failed: {}",
-                server.username,
-                resp.error.as_deref().unwrap_or("unknown error")
-            );
-        }
-        Ok(())
-    }
-
-    /// Sign in with the configured credentials; stores the token.
-    /// Proves the password works end-to-end (the bootstrap verification).
-    pub async fn signin(&mut self, server: &ServerEndpoint) -> Result<()> {
-        let body = serde_json::json!({
-            "email": server.username,
-            "password": server.password.expose_secret(),
-        });
-        let resp = self
-            .http
-            .post(format!("{}/api/auth/signin", self.base))
-            .json(&body)
-            .send()
-            .await?;
-        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-            bail!(
-                "signin as '{}' rejected (401) — the server-side password does not \
-                 match .screeps.yaml; run `bootstrap` to converge it",
-                server.username
-            );
-        }
-        let parsed: ApiOkResponse = resp.json().await.context("parsing signin response")?;
-        match (parsed.ok, parsed.token) {
-            (Some(1), Some(token)) => {
-                self.token = Some(token);
-                Ok(())
-            }
-            _ => bail!(
-                "signin as '{}' failed: {}",
-                server.username,
-                parsed.error.as_deref().unwrap_or("no token in response")
-            ),
-        }
-    }
-
-    /// Authenticated request helper: sends `X-Token`/`X-Username`,
-    /// adopts the refreshed token from the response header.
-    async fn authed(&mut self, req: reqwest::RequestBuilder) -> Result<ApiOkResponse> {
-        let token = self.token.clone().context("not signed in")?;
-        let resp = req
-            .header("X-Token", &token)
-            .header("X-Username", &token)
-            .send()
-            .await?;
-        if let Some(fresh) = resp.headers().get("x-token").and_then(|v| v.to_str().ok()) {
-            if !fresh.is_empty() {
-                self.token = Some(fresh.to_string());
-            }
-        }
-        let status = resp.status();
-        let body = resp.text().await?;
-        serde_json::from_str(&body)
-            .with_context(|| format!("API response (HTTP {status}) not understood: {body}"))
-    }
-
-    /// `empty` (no spawn yet), `normal` (alive), or `lost` (wiped out).
-    pub async fn world_status(&mut self) -> Result<String> {
-        let req = self
-            .http
-            .get(format!("{}/api/user/world-status", self.base));
-        let resp = self.authed(req).await?;
-        resp.status.context("no `status` in world-status response")
-    }
-
-    pub async fn place_spawn(&mut self, room: &str, x: u32, y: u32, name: &str) -> Result<()> {
-        let body = serde_json::json!({"room": room, "x": x, "y": y, "name": name});
-        let req = self
-            .http
-            .post(format!("{}/api/game/place-spawn", self.base))
-            .json(&body);
-        let resp = self.authed(req).await?;
-        if resp.ok != Some(1) {
-            bail!(
-                "place-spawn {room} ({x},{y}) rejected: {}",
-                resp.error.as_deref().unwrap_or("unknown error")
-            );
-        }
-        Ok(())
-    }
-}
-
-// ===================================================================
 // bootstrap (P0.A3)
 // ===================================================================
+//
+// (The game-API client lives in `crate::api` since P0.A5 absorbed it —
+// bootstrap drives it exactly as before.)
 
 #[derive(Debug)]
 pub enum SpawnOutcome {
@@ -978,6 +827,14 @@ mod tests {
     fn tick_and_respawn_builders() {
         assert_eq!(cmd_set_tick_duration(150), "system.setTickDuration(150)");
         assert_eq!(cmd_respawn_user("ibex"), r#"utils.respawnUser("ibex")"#);
+    }
+
+    #[test]
+    fn count_creeps_builder() {
+        assert_eq!(
+            cmd_count_creeps("6a28d4d7d9592a0060be10ef"),
+            r#"storage.db['rooms.objects'].count({type: 'creep', user: "6a28d4d7d9592a0060be10ef"})"#
+        );
     }
 
     // ---------------- response parsing ----------------

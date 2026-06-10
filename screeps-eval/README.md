@@ -14,10 +14,10 @@ Task map and acceptance criteria: [`docs/execution/phase-0.md`](../docs/executio
 | Crate scaffold, config + secrets policy, CLI surface | P0.A1 | ✅ |
 | Server lifecycle (bollard ↔ Docker Desktop) | P0.A2 | ✅ |
 | World bootstrap (server CLI) | P0.A3 | ✅ |
-| Deploy (deploy.js wrapper) | P0.A4 | ⬜ |
-| Console/metrics capture → `runs/` | P0.A5 | ⬜ |
-| Smoke loop + baselines | P0.A6 | ⬜ |
-| Secrets sweep & pins | P0.A7 | ✅ (pins incl. CLI-payload mask) / ⬜ (sweep) |
+| Deploy (deploy.js wrapper) | P0.A4 | ✅ |
+| Console/metrics capture → `runs/` | P0.A5 | ✅ |
+| Smoke loop + baselines | P0.A6 | ✅ (BASELINE-0 recorded) |
+| Secrets sweep & pins | P0.A7 | ✅ (pins incl. CLI-payload mask + ws-token drop) / ⬜ (final sweep) |
 | Operator mode (cli/tick/open/status) | P0.A8 | ✅ |
 
 ---
@@ -165,15 +165,104 @@ the value back**; it fails loudly on a mismatch. Pause/resume wrap
 `system.pauseSimulation()`/`resumeSimulation()` and print the current game
 time so you can see where it stopped.
 
+### Deploy
+
+```
+cargo run -- deploy           # release build + upload (the default)
+cargo run -- deploy --debug   # debug build (deploy.js --mode debug -> wasm-pack --dev)
+```
+
+`deploy` wraps `node js_tools/deploy.js --server <name> --mode <mode>`
+from the repo root — the script and the wasm build pipeline are **never
+modified** (operator directive). The wrapper supplies what `npm run
+deploy` normally would (the CWD and the non-secret `npm_package_name`
+env var), streams the build output live, and — critically — decides
+success from the output, because **deploy.js exits 0 even when it
+fails** (its `run().catch(console.error)` swallows errors and a failed
+wasm-pack build returns silently). Success means: the
+`Uploading to branch …` banner followed by the server's `{"ok":1}`
+response. Expect a cold build (empty `target/`) to take minutes — the
+bot builds on nightly with fat LTO; warm rebuilds are much faster.
+
+```
+deployed branch 'default' (release build) in 64s — 2.93 MiB of the 5 MiB code limit
+```
+
+deploy.js reads `.screeps.yaml` itself; no credentials ever appear on
+argv or env (verified — part of the A7 sweep).
+
+### Capture runs (`run`)
+
+```
+cargo run -- run --ticks 200                      # default scenario label "adhoc"
+cargo run -- run --ticks 2000 --scenario baseline-0
+```
+
+`run` samples the live server until N game ticks elapse, then writes a
+summary. Zero manual steps. Artifacts land in the repo-root `runs/`
+tree (gitignored), keyed by scenario + code identity per the F14
+fixture convention:
+
+```
+runs/<scenario>-<git-sha>-<stamp>/
+  console.jsonl   every console line/error, as {ts_ms, tick, kind, line}
+                  (kind: log | result | error; tick is the latest sampled
+                  game time — console events carry no tick number)
+  metrics.jsonl   one sample every 2 s: {ts_ms, tick, cpu, creeps, stats}
+                  (cpu extracted from the bot's seg-99 stats; stats is the
+                  full seg-99 JSON; creeps counted via the server CLI)
+  summary.json    scenario, git SHA, ticks observed, wall seconds,
+                  console counters (incl. panic/deser-marker counts),
+                  CPU summary (avg/max used, bucket min/last), creep counts
+```
+
+The summary is also printed human-readable:
+
+```
+scenario: baseline-0 (git bc918f9)
+ticks:    1234 -> 3234 (2000 observed) in 234.5 s wall (100 ms/tick configured)
+console:  4567 lines (4566 log, 0 results), 0 error events, 12 (ERROR) lines, 0 panics, 0 deser failures
+cpu:      used avg 4.21 / max 14.80 (limit 100), bucket min 9500 last 10000
+creeps:   0 -> 9 (max 11)
+```
+
+### Smoke loop + baselines
+
+```
+cargo run -- smoke               # full loop, 600 ticks
+cargo run -- smoke --ticks 2000  # baseline-length smoke
+```
+
+`smoke` is the one-command loop: **server up → bootstrap --reset →
+deploy → run --ticks K → summary + gate verdict**. It exits nonzero
+only on the **hard-zero gates** (plan §5 criterion 6):
+
+1. deploy failure (the deploy step errors),
+2. zero ticks observed (simulation not advancing),
+3. any console line matching the panic marker (`panicked at` — the
+   bot's panic hook output, screeps-ibex/src/panic.rs),
+4. any console line matching the deserialization-failure markers
+   (`Failed deserialization:` game_loop.rs:533, `Failed to decode stats
+   history` stats_history.rs:208).
+
+Every metric (CPU, creep counts, error-line counts) is printed but
+**never gates** — single-run metric gates are the flake generator ADR
+0015 rejects. Note `smoke` resets the world by design (bootstrap
+--reset wipes all data including memory segments).
+
+**Baselines** are fresh-bootstrap runs at the standard 100 ms tick rate,
+recorded as `run --ticks 2000 --scenario baseline-N` after a reset +
+deploy (plan D-3: 2 000 ticks reaches RCL2 + unreserved-remote
+activity). BASELINE-0 = current master before Phase-0 changes;
+BASELINE-1 repeats it after the Phase-0 fixes; the two summaries feed
+`docs/execution/baseline-0-report.md`.
+
 ### Other commands
 
 ```
 cargo run -- config           # resolved config, secrets redacted by construction
 cargo run -- open             # print/launch the web-client URL
-cargo run -- deploy              # (P0.A4) build + upload the bot
-cargo run -- run --ticks 200     # (P0.A5) capture console+metrics to runs/
-cargo run -- smoke               # (P0.A6) up -> bootstrap -> deploy -> run
-cargo test                       # all unit tests incl. the secrets pins
+cargo test                    # all unit tests incl. the secrets pins
 ```
 
 ## Configuration
@@ -256,6 +345,12 @@ are required for any flow (operator directive).
 | `registering user ... failed: Registration is automatically disabled` | The server has the `SERVER_PASSWORD` env var set (screepsmod-auth closes registration). Not set by this harness — check a custom `eval.serverConfig` base for an `env:` entry. |
 | `eval.spawn.room ... is not a valid first-spawn room` | The room lacks an unowned controller or 2 sources (the error lists valid candidates), or the world was seeded with a different map. Pick a listed room or drop `eval.spawn.room` for auto-pick. |
 | Simulation racing (hundreds of ticks/s) after a manual CLI `system.resetAllData()` | A reset flushes redis, including the tick duration — the loop runs unthrottled. `tick set 100` (or re-run `bootstrap`, which always re-applies `eval.tickMs`). |
+| `node_modules missing in ... — run npm install` from `deploy` | The deploy.js toolchain (rollup, screeps-api, …) is not installed. `npm install` once at the repo root. |
+| `deploy failed: the build failed before upload` | wasm-pack/rollup failed — the real compiler error is in the streamed output just above (deploy.js itself exits 0 on build failure; the wrapper catches it from the output). |
+| `deploy failed: upload started but no API response followed` | The upload threw (server down/unreachable). `server status`, then retry. |
+| `websocket auth failed (token rejected)` during `run` | The signin token was rejected — usually a stale server-side password. Run `bootstrap` to converge credentials, then retry. |
+| `run did not reach tick ... within the ... safety budget` | The simulation is paused (`tick resume`) or crawling far below the configured rate. Check `server status` and the tick rate. |
+| `console.jsonl` is empty/small for short runs | Normal: the bot logs sparsely at INFO in the early game, and empty per-tick console events are not written. CPU/creeps still prove liveness in `metrics.jsonl`. |
 
 ---
 
@@ -273,9 +368,17 @@ src/server_config.rs  launcher-config preparation: base -> PURE merge ->
                       location for the steamKey)
 src/docker.rs         bollard lifecycle: images/network/volumes/containers,
                       health-waits, status introspection, logs, down/destroy
-src/server.rs         server-CLI client (CliClient), bootstrap-scoped game-API
-                      client (GameApi), bootstrap flow, tick control, the
-                      setPassword mask, spawn-tile picking (pure, unit-tested)
+src/server.rs         server-CLI client (CliClient), bootstrap flow, tick
+                      control, the setPassword mask, spawn-tile picking
+                      (pure, unit-tested)
+src/api.rs            game-API HTTP client (GameApi): signin/rolling tokens,
+                      me, game time, memory segments, world status,
+                      place-spawn — endpoint shapes pinned in the module docs
+src/deploy.rs         js_tools/deploy.js wrapper: spawn from the repo root,
+                      stream output, verdict from output (exit code lies)
+src/capture.rs        console websocket + metrics sampler -> runs/ artifacts;
+                      summary aggregation + the smoke gate counters
+src/smoke.rs          up -> bootstrap --reset -> deploy -> run -> gate verdict
 src/main.rs           clap CLI (incl. the interactive REPL)
 server/config.yml     vendored KEYLESS launcher-config template (committed)
 ```
@@ -355,6 +458,91 @@ own `cli/cli.go` client speaks the same shapes):
 - **World status** — `GET /api/user/world-status` → `empty` (no spawn),
   `normal`, or `lost` (owned controller, nothing left; `bootstrap` then
   runs `utils.respawnUser` and waits for `empty`).
+
+### Console-websocket protocol (pinned live 2026-06-09)
+
+Sources: the backend socket server read from the live container
+(`@screeps/backend lib/game/socket/server.js`, `socket/user.js`,
+`@screeps/driver lib/index.js`) plus a live handshake probe.
+
+- Endpoint: `ws://host:port/socket/websocket` — the **sockjs raw
+  websocket** transport (the server installs sockjs at prefix
+  `/socket`); frames are plain text with no sockjs `a[...]` framing.
+  This is the endpoint the screepers python client family uses.
+- On connect the server sends `time <unix-ms>` then `protocol 14`.
+- Client sends `auth <token>` (a token from `POST /api/auth/signin`);
+  reply is `auth ok <fresh-token>` or `auth failed`. Because tokens are
+  rolling/consumable, the capture mints a **separate** token for the
+  socket (second signin) so the HTTP sampler's token stays valid — and
+  the fresh token in `auth ok` is dropped at parse time, so it cannot
+  reach logs or artifacts (P0.A7; pinned by
+  `capture::tests::auth_ok_token_is_dropped_at_parse_time`).
+- Client sends `subscribe user:<userId>/console` (`<userId>` = `_id`
+  from `/api/auth/me`); the server rejects `user:` channels that do not
+  match the authed user.
+- Events are text frames of `JSON.stringify([channel, data])`:
+  `["user:<id>/console", {"messages":{"log":[...],"results":[...]}}]`
+  once per tick (**also when empty** — a liveness signal), and
+  `["user:<id>/console", {"error":"..."}]` for runtime errors
+  (driver `sendConsoleMessages`/`sendConsoleError`; the backend strips
+  `userId` before emitting).
+- `gz:`-prefixed deflate frames exist only after a client opts in with
+  `gzip on`; this client never does.
+
+### Capture flow (P0.A5)
+
+```
+run --ticks N --scenario S
+  ├─ signin (HTTP sampler token)  +  /api/auth/me (user id)
+  ├─ second signin -> ws token (SecretString; exposed only into `auth `)
+  ├─ tick_first = /api/game/time;  create runs/<S>-<git-sha>-<stamp>/
+  ├─ console task: ws connect -> auth -> subscribe user:<id>/console
+  │     each event -> {ts_ms, tick≈, kind, line} -> console.jsonl
+  │     counters: log/result/error lines, (ERROR) lines, panic-marker
+  │     lines, deser-marker lines (the smoke gates read these)
+  └─ sampler loop (every 2 s) until tick >= tick_first + N:
+        /api/game/time          -> tick (also stamps console lines)
+        /api/user/memory-segment?segment=99 -> bot stats (cpu, etc.)
+        server CLI creep count  -> creeps (best-effort)
+        -> metrics.jsonl; then summary.json + gate counters
+```
+
+Safety: the run aborts (with artifacts already on disk) if the console
+socket dies mid-run, if `/api/game/time` stops answering (10 consecutive
+failures), or if a wall-clock budget of 10× nominal tick time + 2 min is
+exceeded (the server can legitimately run below the configured rate).
+
+Segment 99 is the bot's live-stats segment
+(`screeps-ibex/src/statssystem.rs` writes
+`{"shard":{"<shard>":{time,gcl,gpl,cpu:{bucket,limit,used},room,market}}}`
+every tick); segment 57 joins when ADR 0006's metrics segment lands. The
+endpoint takes only `segment=N` on a private server (no `shard` param —
+`@screeps/backend lib/game/api/user.js`).
+
+### Deploy wrapper facts (pinned from js_tools/deploy.js, unmodified)
+
+- yargs surface: `--server` (required), `--dryrun`, `--mode
+  debug|release` (default release; debug → `wasm-pack build --dev`).
+  Our `deploy --debug` maps to `--mode debug`.
+- The script reads `.screeps.yaml` itself from the CWD and authenticates
+  via `ScreepsAPI.fromConfig` — no credentials on argv/env.
+- It requires `npm_package_name` (normally set by `npm run deploy`); the
+  wrapper reads `package.json`'s `name` and sets that one env var.
+- **Exit code 0 does not mean success**: errors are swallowed by
+  `run().catch(console.error)` and a failed wasm-pack build returns
+  silently. The wrapper's verdict comes from the output (upload banner +
+  `{"ok":1}` response), unit-tested against literal output fixtures.
+
+### Smoke gates (P0.A6 — hard zeros only)
+
+`smoke` exits nonzero iff: deploy failed · zero ticks observed · any
+console line contains `panicked at` (the bot's panic-hook output,
+screeps-ibex/src/panic.rs) · any console line matches
+`Failed deserialization:` (game_loop.rs:533) or `Failed to decode stats
+history` (stats_history.rs:208). All metrics are informational — plan §5
+criterion 6 explicitly rejects single-run metric gates as flake
+generators. Serialize-side errors (`Failed serialization:`, `Encode
+failed:`) count toward `error_log_lines` but do not gate.
 
 ### Launcher schema facts (pinned from screepers/screeps-launcher @ main)
 
