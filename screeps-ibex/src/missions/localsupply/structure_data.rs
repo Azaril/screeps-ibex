@@ -10,15 +10,19 @@ use std::rc::*;
 pub type MineralExtractorPair = (RemoteObjectId<Mineral>, RemoteObjectId<StructureExtractor>);
 
 /// Range around the controller within which a container is classified as a
-/// controller (upgrade) container. The room planner places this container on
-/// an upgrade-area tile, which can be up to range 3 from the controller
-/// (screeps-foreman `ControllerInfraLayer`, matching the game's upgrade
-/// range). Classifying with a smaller radius mis-buckets a planner-placed
-/// container as a generic storage container: its deposit requests are then
-/// registered at `TransferPriority::None`, which never pairs with the
-/// storage's `TransferPriority::None` withdraw, so no energy is hauled to
-/// the controller and upgraders idle.
-pub const CONTROLLER_CONTAINER_RANGE: u32 = 3;
+/// controller (upgrade) container. This IS the planner's placement range —
+/// re-exported from screeps-foreman so classification and placement can
+/// never drift apart (the live 2-vs-3 mismatch bug class is
+/// unrepresentable). Classifying with a smaller radius mis-buckets a
+/// planner-placed container as a generic storage container: its deposit
+/// requests are then registered at `TransferPriority::None`, which never
+/// pairs with the storage's `TransferPriority::None` withdraw, so no energy
+/// is hauled to the controller and upgraders idle.
+pub use screeps_foreman::constants::CONTROLLER_CONTAINER_MAX_RANGE as CONTROLLER_CONTAINER_RANGE;
+
+/// Same contract for the controller link (foreman places it within this
+/// range; we classify any link within it as controller-feeding).
+use screeps_foreman::constants::CONTROLLER_LINK_MAX_RANGE;
 
 /// Whether a container at `container_pos` serves the controller at
 /// `controller_pos` (see [`CONTROLLER_CONTAINER_RANGE`]).
@@ -97,7 +101,9 @@ pub fn create_structure_data(room_data: &RoomData) -> Option<StructureData> {
     let controller_links: Vec<_> = controller
         .iter()
         .filter_map(|controller| {
-            let nearby_link = links.iter().find(|link| link.pos().in_range_to(controller.pos(), 3));
+            let nearby_link = links
+                .iter()
+                .find(|link| link.pos().in_range_to(controller.pos(), CONTROLLER_LINK_MAX_RANGE));
 
             nearby_link.map(|link| link.remote_id())
         })
