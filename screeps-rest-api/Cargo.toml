@@ -1,0 +1,25 @@
+[package]
+name = "screeps-rest-api"
+version = "0.1.0"
+authors = ["William Archbell <william@archbell.com>"]
+edition = "2021"
+description = "Shared Screeps HTTP/websocket API client (private servers + screeps.com): pinned endpoint shapes, token/user-pass auth, rate-limit courtesy, secrecy discipline."
+# Lifecycle: starts in-repo (workspace-excluded); extracts to a submodule
+# with its own remote once stable (Phase 0 plan, decision D-1 — same
+# lifecycle as screeps-eval/screeps-prospector; P0.A12 names this crate a
+# strong community-share candidate). Keep it self-contained: a pure
+# library, no workspace-crate deps, no repo-relative path assumptions.
+
+[dependencies]
+base64 = "0.22"
+tokio = { version = "1", features = ["time", "sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# rustls (matching reqwest's TLS choice) so wss:// works against
+# official servers; private servers use plain ws://.
+tokio-tungstenite = { version = "0.27", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+secrecy = { version = "0.10", features = ["serde"] }

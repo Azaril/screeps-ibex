@@ -11,9 +11,9 @@
 //! The pure status derivation ([`derive_room_status`]) is unit-tested
 //! offline; the async flows only sequence pinned client calls.
 
-use crate::api::{ProspectorClient, RoomMapStats};
 use crate::cache::{filter_planner_objects, validate_terrain, CachedRoom, RoomCache, RoomStatus};
 use anyhow::{Context, Result};
+use screeps_rest_api::{Client, RoomMapStats};
 use tracing::{debug, info, warn};
 
 /// Rooms per map-stats POST. The body is a JSON room list; 64 keeps
@@ -65,7 +65,7 @@ fn timestamp_active(value: Option<&serde_json::Value>, now_ms: i64) -> bool {
 /// cache. Rooms the server reports as out-of-borders are recorded as
 /// not-open (so re-scans stay cache-answerable).
 pub async fn scan_rooms(
-    client: &ProspectorClient,
+    client: &Client,
     cache: &mut RoomCache,
     rooms: &[String],
     now_unix: u64,
@@ -112,7 +112,7 @@ pub async fn scan_rooms(
 /// `status_ttl_secs`. Terrain already cached is never refetched
 /// (immutable — the cheapest call is the one not made).
 pub async fn fetch_rooms(
-    client: &ProspectorClient,
+    client: &Client,
     cache: &mut RoomCache,
     rooms: &[String],
     status_ttl_secs: u64,
@@ -199,7 +199,7 @@ pub async fn fetch_rooms(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::RoomOwner;
+    use screeps_rest_api::RoomOwner;
 
     fn stats(status: Option<&str>, own: Option<RoomOwner>) -> RoomMapStats {
         RoomMapStats {

@@ -29,20 +29,6 @@ servers:
     password: password
     branch: default
 
-# Local eval harness (screeps-eval) settings — file-driven, no env vars.
-# This file is gitignored in real use; keep this example KEYLESS.
-eval:
-  # EITHER point at an existing screeps-launcher config (used as the base,
-  # including its steamKey — e.g. a local clone of the launcher repo):
-  #serverConfig: C:\code\screeps-launcher\config.yml
-  # OR supply the Steam Web API key directly (combined with the vendored
-  # keyless template at screeps-eval/server/config.yml):
-  #steamKey: your-steam-web-api-key-here
-  ports:
-    game: 21025
-    cli: 21026
-  # Tick duration defaults (ms). Floor is 50 (server/UI degrade below).
-  tickMs: 100
 
 configs:
   # Whether to minify generated javascript for each configured server

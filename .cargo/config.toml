@@ -1,6 +1,13 @@
-# Primary build and check target is WASM (screeps-ibex deploys as wasm).
-# Install once: rustup target add wasm32-unknown-unknown
-# Then: cargo clippy -p screeps-ibex  or  npm run clippy
-# Override for host (e.g. tests): cargo build --target <host-triple>
-[build]
-target = "wasm32-unknown-unknown"
+# The bot crates deploy as wasm, but NO [build].target default is set:
+# wasm-pack (js_tools/deploy.js) always passes --target
+# wasm32-unknown-unknown to cargo itself, and a global default forces
+# every excluded host-side tool crate (screeps-eval, screeps-prospector,
+# screeps-rest-api, screeps-foreman-bench) to carry or fake a
+# machine-specific override. Install once: rustup target add
+# wasm32-unknown-unknown. Wasm-target checks for the bot crates go
+# through these aliases:
+[alias]
+clippy-wasm = ["clippy", "--target", "wasm32-unknown-unknown"]
+check-wasm = ["check", "--target", "wasm32-unknown-unknown"]
+build-wasm = ["build", "--target", "wasm32-unknown-unknown"]
+test-host = ["test"]

@@ -91,7 +91,7 @@ Serialized components include: CreepSpawning, CreepOwner, CreepRoverData, RoomDa
 
 ## 8. Conventions and safety
 
-- **Build and validation:** The project can be built and validated with Cargo. Use `cargo build -p screeps-ibex` to compile (default target is `wasm32-unknown-unknown` via `.cargo/config.toml`) and `cargo clippy -p screeps-ibex` to run Clippy for the WASM build. Ensure the target is installed: `rustup target add wasm32-unknown-unknown`. Run these to verify changes before committing.
+- **Build and validation:** Use `cargo build-wasm -p screeps-ibex` / `cargo clippy-wasm -p screeps-ibex` for the WASM target the bot deploys as (aliases in `.cargo/config.toml`; **no default target is set** — plain `cargo test`/`cargo run` are host-native everywhere, including the excluded tool crates). Ensure the target is installed: `rustup target add wasm32-unknown-unknown`. Run these to verify changes before committing.
 - **No panics in the hot path:** Avoid unwrap/expect in tick-critical code; handle errors and log instead. The game keeps running after your code returns.
 - **Idempotent and restart-safe:** Assume any tick can be the first after a VM reload. Rely on serialized state and Memory/segments, not thread_local or static mutable state for correctness.
 - **CPU:** Respect `Game.cpu` limits; avoid unbounded loops or heavy work per tick. Use the optional `profile` feature and screeps-timing to find hot spots.

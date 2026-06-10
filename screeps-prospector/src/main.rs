@@ -1,6 +1,7 @@
 //! screeps-prospector CLI — operator-facing entry point.
 //!
-//! Thin wrappers over the library (`ops`/`cache`/`score`/`place`/`api`):
+//! Thin wrappers over the library (`ops`/`cache`/`score`/`place` + the
+//! shared `screeps_rest_api` client):
 //! `scan`/`fetch` talk to the server, `score`/`recommend` run entirely
 //! offline against the cache, `place`/`auto` write to the server behind
 //! the confirmation gates (recommend-first; explicit `--yes`; `auto` is
@@ -9,7 +10,6 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use screeps_prospector::api::{enumerate_room_names, ProspectorClient, DEFAULT_MIN_DELAY_MS};
 use screeps_prospector::cache::{default_cache_path, seed_from, RoomCache};
 use screeps_prospector::config::{ProspectorConfig, DEFAULT_SERVER_NAME};
 use screeps_prospector::ops;
@@ -18,6 +18,7 @@ use screeps_prospector::score::{
     self, HeuristicWeights, PlanProfile, RecommendOptions, RecommendResult, Stage1Result,
     DEFAULT_FINALISTS, DEFAULT_PLAN_TIMEOUT_SECS,
 };
+use screeps_rest_api::{enumerate_room_names, Client, DEFAULT_MIN_DELAY_MS};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -224,14 +225,15 @@ enum CacheAction {
     /// Show the cache path and room/terrain/status counts
     #[command(alias = "info")]
     Stats,
-    /// Seed the cache by COPYING a foreman-bench map JSON (the source
-    /// file is never modified)
+    /// OPTIONAL import: copy an existing map JSON into the cache (the
+    /// source file is never modified). Not a setup step — the happy
+    /// path is `scan` + `fetch` against the live server (P0.P8); seed
+    /// exists for niche cases (sharing scans between machines,
+    /// importing offline/bench exports).
     Seed {
-        /// Source map JSON
-        #[arg(
-            long,
-            default_value = "../screeps-foreman-bench/resources/default-private-server.json"
-        )]
+        /// Source map JSON (explicit — no default; repo-relative
+        /// defaults break for external users and at crate extraction)
+        #[arg(long)]
         from: PathBuf,
         /// Overwrite an existing cache file
         #[arg(long)]
@@ -296,9 +298,9 @@ fn load_config(cli: &Cli) -> Result<ProspectorConfig> {
 
 /// Build the REST client from an already-loaded config and sign in
 /// (a no-op for token auth).
-async fn connect_with(cfg: ProspectorConfig, cli: &Cli) -> Result<ProspectorClient> {
+async fn connect_with(cfg: ProspectorConfig, cli: &Cli) -> Result<Client> {
     let base_url = cfg.base_url.clone();
-    let client = ProspectorClient::new(
+    let client = Client::new(
         cfg.base_url,
         cli.shard.clone(),
         cfg.auth,
@@ -311,7 +313,7 @@ async fn connect_with(cfg: ProspectorConfig, cli: &Cli) -> Result<ProspectorClie
     Ok(client)
 }
 
-async fn connect(cli: &Cli) -> Result<ProspectorClient> {
+async fn connect(cli: &Cli) -> Result<Client> {
     connect_with(load_config(cli)?, cli).await
 }
 

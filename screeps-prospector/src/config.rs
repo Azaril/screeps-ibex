@@ -26,22 +26,12 @@ pub const DEFAULT_SERVER_NAME: &str = "private-server";
 /// is always invoked from its own directory — fixed-path rule).
 pub const DEFAULT_CONFIG_PATH: &str = "../.screeps.yaml";
 
-/// How the client authenticates against the selected server.
-///
-/// Official servers (mmo/ptr/season) support token auth only; private
-/// servers use username/password via `POST /api/auth/signin`. When a
-/// `servers:` entry carries both, the token wins (it is the only method
-/// that works everywhere it appears).
-#[derive(Debug)]
-pub enum AuthMode {
-    /// `token:` key — sent as `X-Token`/`X-Username` headers directly.
-    Token(SecretString),
-    /// `username:` + `password:` keys — exchanged for a token at sign-in.
-    UserPass {
-        username: String,
-        password: SecretString,
-    },
-}
+/// How the client authenticates — the shared client's type, re-exported
+/// so config consumers keep one import. Selection rule (this crate's):
+/// official servers support token auth only; when a `servers:` entry
+/// carries both `token:` and `username:`+`password:`, the token wins
+/// (it is the only method that works everywhere it appears).
+pub use screeps_rest_api::AuthMode;
 
 /// Resolved configuration for one `servers:` entry.
 #[derive(Debug)]

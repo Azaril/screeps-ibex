@@ -8,19 +8,20 @@
 //!
 //! - `mongo:8`    volume `screeps-eval-mongo:/data/db`, alias `mongo`
 //! - `redis:7`    volume `screeps-eval-redis:/data`,    alias `redis`
-//! - `screepers/screeps-launcher` (PULLED from the registry — building
-//!   from the local clone is a recorded future investigation, not
-//!   Phase-0 scope): volume `screeps-eval-data:/screeps`, the merged
+//! - the launcher image (`eval.image.name`, default
+//!   `screepers/screeps-launcher:latest` pulled from the registry;
+//!   optionally BUILT from a launcher-repo clone via `image.build` —
+//!   P0.A9(d)): volume `screeps-eval-data:/screeps`, the merged
 //!   runtime config bind-mounted at `/screeps/config.yml`, env
 //!   `MONGO_HOST=mongo` / `REDIS_HOST=redis` (consumed by
 //!   screepsmod-mongo; the launcher passes its own environment through
 //!   to the server processes — launcher/server.go `os.Environ()`),
-//!   game + CLI ports published per `eval.ports`.
+//!   game + CLI ports published per `ports`.
 //!
 //! Everything is named `screeps-eval-*` so the stack is recognizable
 //! and `destroy` cannot touch anything else.
 
-use crate::config::EvalSettings;
+use crate::config::{EvalSettings, ImageSettings};
 use crate::server_config;
 use anyhow::{bail, Context, Result};
 use bollard::models::{
@@ -28,9 +29,10 @@ use bollard::models::{
     NetworkCreateRequest, NetworkingConfig, PortBinding, VolumeCreateOptions,
 };
 use bollard::query_parameters::{
-    CreateContainerOptionsBuilder, CreateImageOptionsBuilder, InspectContainerOptions,
-    ListContainersOptionsBuilder, LogsOptionsBuilder, RemoveContainerOptionsBuilder,
-    RemoveVolumeOptions, StartContainerOptions, StopContainerOptionsBuilder,
+    BuildImageOptionsBuilder, CreateContainerOptionsBuilder, CreateImageOptionsBuilder,
+    InspectContainerOptions, ListContainersOptionsBuilder, LogsOptionsBuilder,
+    RemoveContainerOptionsBuilder, RemoveVolumeOptions, StartContainerOptions,
+    StopContainerOptionsBuilder,
 };
 use bollard::Docker;
 use futures_util::StreamExt;
@@ -46,10 +48,11 @@ pub const DATA_VOLUME: &str = "screeps-eval-data";
 pub const MONGO_VOLUME: &str = "screeps-eval-mongo";
 pub const REDIS_VOLUME: &str = "screeps-eval-redis";
 
-/// Image policy (P0.A2, operator-resolved): PULL the published image by
-/// default. Building from the local launcher clone is a recorded
-/// investigation item, not Phase-0 scope.
-pub const LAUNCHER_IMAGE: &str = "screepers/screeps-launcher:latest";
+/// Image policy (P0.A2 default + P0.A9(d) build option): the launcher
+/// image name comes from `eval.image` (default
+/// [`crate::config::DEFAULT_LAUNCHER_IMAGE`], pulled; with
+/// `image.build` configured it is built from a launcher-repo clone).
+/// The databases are always pulled.
 pub const MONGO_IMAGE: &str = "mongo:8";
 pub const REDIS_IMAGE: &str = "redis:7";
 
@@ -113,6 +116,167 @@ pub async fn ensure_image(docker: &Docker, image: &str) -> Result<()> {
         }
     }
     tracing::info!(image, "pull complete");
+    Ok(())
+}
+
+/// Ensure the launcher image exists: present locally -> use it; absent
+/// with `image.build` configured -> build it; absent otherwise -> pull
+/// (P0.A9(d)).
+pub async fn ensure_launcher_image(docker: &Docker, image: &ImageSettings) -> Result<()> {
+    match docker.inspect_image(&image.name).await {
+        Ok(_) => {
+            tracing::debug!(image = %image.name, "launcher image already present");
+            return Ok(());
+        }
+        Err(e) if is_not_found(&e) => {}
+        Err(e) => return Err(e).with_context(|| format!("inspecting image {}", image.name)),
+    }
+    if image.build.is_some() {
+        build_launcher_image(docker, image).await
+    } else {
+        ensure_image(docker, &image.name).await
+    }
+}
+
+/// Build the launcher image from the configured context (P0.A9(d);
+/// `server build-image`, or automatically by `up` when the image is
+/// absent). Streams build output through tracing; bails on the first
+/// in-band build error. Docker's layer cache applies — an explicit
+/// rebuild after upstream changes is cheap.
+pub async fn build_launcher_image(docker: &Docker, image: &ImageSettings) -> Result<()> {
+    let Some(build) = &image.build else {
+        bail!(
+            "image.build is not configured in config/local.yml — `server build-image` \
+             needs an image.build.context pointing at a full screepers/screeps-launcher \
+             clone (see config/local.example.yml)"
+        );
+    };
+    let dockerfile = build.dockerfile_name();
+    let tar_bytes = build_context_tar(&build.context, dockerfile)?;
+    tracing::info!(
+        image = %image.name,
+        context = %build.context.display(),
+        dockerfile,
+        tar_kib = tar_bytes.len() / 1024,
+        "building launcher image"
+    );
+    let options = BuildImageOptionsBuilder::new()
+        .t(&image.name)
+        .dockerfile(dockerfile)
+        .rm(true)
+        .build();
+    let mut stream = docker.build_image(
+        options,
+        None,
+        Some(bollard::body_full(bytes::Bytes::from(tar_bytes))),
+    );
+    while let Some(item) = stream.next().await {
+        let info = item.with_context(|| format!("building image {}", image.name))?;
+        if let Some(error) = info.error {
+            let detail = info
+                .error_detail
+                .and_then(|d| d.message)
+                .unwrap_or_default();
+            bail!("image build failed: {error} {detail}");
+        }
+        if let Some(line) = info.stream {
+            let line = line.trim_end();
+            if !line.is_empty() {
+                tracing::info!(target: "docker_build", "{line}");
+            }
+        }
+    }
+    // Verify the tag actually exists (a stream that ends without error
+    // but also without tagging would otherwise pass silently).
+    docker
+        .inspect_image(&image.name)
+        .await
+        .with_context(|| format!("image {} not present after the build", image.name))?;
+    tracing::info!(image = %image.name, "image build complete");
+    Ok(())
+}
+
+/// PURE-ish (filesystem in, bytes out — no Docker): tar the build
+/// context for the Docker build API. Validates first: the context must
+/// be a directory containing the named Dockerfile — the upstream
+/// screepers/screeps-launcher repo root qualifies; a config-only
+/// directory (compose file + config.yml, like a typical local launcher
+/// *deployment* folder) does NOT, and gets a pointed error. `.git`
+/// directories are skipped (they dwarf the actual context). Entries use
+/// forward-slash relative names, sorted for determinism.
+pub fn build_context_tar(context: &Path, dockerfile: &str) -> Result<Vec<u8>> {
+    if !context.is_dir() {
+        bail!(
+            "image.build.context {} is not a directory — point it at a full clone of \
+             https://github.com/screepers/screeps-launcher",
+            context.display()
+        );
+    }
+    if !context.join(dockerfile).is_file() {
+        bail!(
+            "image.build.context {} has no {dockerfile} — the Dockerfile lives at the \
+             ROOT of the upstream screepers/screeps-launcher repo; a config-only \
+             directory (docker-compose.yml + config.yml) is not buildable. Clone the \
+             upstream repo and point image.build.context at the clone",
+            context.display()
+        );
+    }
+    let mut builder = tar::Builder::new(Vec::new());
+    builder.follow_symlinks(false);
+    append_dir_recursive(&mut builder, context, "")?;
+    builder
+        .into_inner()
+        .context("finalizing the build-context tar")
+}
+
+/// Append a directory's contents under `prefix` (forward-slash relative
+/// names; deterministic order; `.git` skipped at any depth).
+fn append_dir_recursive(
+    builder: &mut tar::Builder<Vec<u8>>,
+    dir: &Path,
+    prefix: &str,
+) -> Result<()> {
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .with_context(|| format!("reading build context dir {}", dir.display()))?
+        .collect::<std::io::Result<_>>()
+        .with_context(|| format!("reading build context dir {}", dir.display()))?;
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            bail!(
+                "non-UTF-8 file name {:?} in build context {}",
+                name,
+                dir.display()
+            );
+        };
+        if name == ".git" {
+            continue;
+        }
+        let tar_name = if prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("stat {}", path.display()))?;
+        if file_type.is_dir() {
+            builder
+                .append_dir(&tar_name, &path)
+                .with_context(|| format!("adding dir {} to the build tar", path.display()))?;
+            append_dir_recursive(builder, &path, &tar_name)?;
+        } else if file_type.is_file() {
+            let mut file = std::fs::File::open(&path)
+                .with_context(|| format!("opening {}", path.display()))?;
+            builder
+                .append_file(&tar_name, &mut file)
+                .with_context(|| format!("adding {} to the build tar", path.display()))?;
+        }
+        // Symlinks and other special files are skipped (follow_symlinks
+        // is off; the launcher repo has none that matter for the build).
+    }
     Ok(())
 }
 
@@ -270,7 +434,12 @@ fn redis_body() -> ContainerCreateBody {
     }
 }
 
-fn launcher_body(runtime_config: &Path, game_port: u16, cli_port: u16) -> ContainerCreateBody {
+fn launcher_body(
+    image: &str,
+    runtime_config: &Path,
+    game_port: u16,
+    cli_port: u16,
+) -> ContainerCreateBody {
     let game_key = format!("{game_port}/tcp");
     let cli_key = format!("{cli_port}/tcp");
     let binding = |host_port: u16| {
@@ -280,7 +449,7 @@ fn launcher_body(runtime_config: &Path, game_port: u16, cli_port: u16) -> Contai
         }])
     };
     ContainerCreateBody {
-        image: Some(LAUNCHER_IMAGE.to_string()),
+        image: Some(image.to_string()),
         // MONGO_HOST/REDIS_HOST: consumed by screepsmod-mongo inside the
         // server processes — the launcher passes its container env through
         // (launcher/server.go builds child env from os.Environ()).
@@ -335,9 +504,10 @@ pub async fn up(eval: &EvalSettings) -> Result<()> {
         "connected to Docker daemon"
     );
 
-    for image in [MONGO_IMAGE, REDIS_IMAGE, LAUNCHER_IMAGE] {
+    for image in [MONGO_IMAGE, REDIS_IMAGE] {
         ensure_image(&docker, image).await?;
     }
+    ensure_launcher_image(&docker, &eval.image).await?;
     ensure_network(&docker).await?;
     for volume in [DATA_VOLUME, MONGO_VOLUME, REDIS_VOLUME] {
         ensure_volume(&docker, volume).await?;
@@ -353,7 +523,12 @@ pub async fn up(eval: &EvalSettings) -> Result<()> {
     let created = ensure_container_running(
         &docker,
         LAUNCHER_CONTAINER,
-        launcher_body(&runtime_config, eval.game_port, eval.cli_port),
+        launcher_body(
+            &eval.image.name,
+            &runtime_config,
+            eval.game_port,
+            eval.cli_port,
+        ),
     )
     .await?;
 
@@ -509,7 +684,7 @@ async fn tail_logs(docker: &Docker, name: &str, n: usize) -> Vec<String> {
 /// Tail (and optionally follow) the launcher container's logs to stdout.
 pub async fn logs(follow: bool, tail: u32) -> Result<()> {
     let docker = connect()?;
-    let name = find_launcher(&docker)
+    let name = find_launcher(&docker, None)
         .await?
         .context("no launcher container found — `server up` first")?;
     let opts = LogsOptionsBuilder::new()
@@ -531,9 +706,10 @@ pub async fn logs(follow: bool, tail: u32) -> Result<()> {
 // --------------------------------------------------------------- status
 
 /// Locate the launcher container: our canonical name first, then any
-/// container running the launcher image (covers a manually-started
-/// stack, e.g. the compose reference in the launcher clone).
-async fn find_launcher(docker: &Docker) -> Result<Option<String>> {
+/// container running a launcher-ish image (the configured name when
+/// known, or anything `screeps-launcher` — covers a manually-started
+/// stack, e.g. a compose deployment).
+async fn find_launcher(docker: &Docker, image_name: Option<&str>) -> Result<Option<String>> {
     if inspect_opt(docker, LAUNCHER_CONTAINER).await?.is_some() {
         return Ok(Some(LAUNCHER_CONTAINER.to_string()));
     }
@@ -544,7 +720,7 @@ async fn find_launcher(docker: &Docker) -> Result<Option<String>> {
     for c in containers {
         if c.image
             .as_deref()
-            .is_some_and(|i| i.contains("screeps-launcher"))
+            .is_some_and(|i| i.contains("screeps-launcher") || Some(i) == image_name)
         {
             if let Some(name) = c.names.and_then(|n| n.first().cloned()) {
                 return Ok(Some(name.trim_start_matches('/').to_string()));
@@ -560,7 +736,7 @@ async fn find_launcher(docker: &Docker) -> Result<Option<String>> {
 pub async fn status(eval: &EvalSettings) -> Result<String> {
     let docker = connect()?;
     let mut out = String::new();
-    let launcher = find_launcher(&docker).await?;
+    let launcher = find_launcher(&docker, Some(&eval.image.name)).await?;
 
     let mut rows: Vec<[String; 5]> = vec![[
         "CONTAINER".into(),
@@ -748,4 +924,95 @@ pub async fn destroy() -> Result<()> {
         }
     }
     Ok(())
+}
+
+// ===================================================================
+// tests — the offline parts of the image-build path (P0.A9(d)): tar
+// construction + context validation. No Docker daemon is touched; the
+// actual `docker build` is a live-gauntlet item.
+// ===================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn temp_context(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("screeps-eval-tar-tests-{}", std::process::id()))
+            .join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Build a launcher-repo-shaped fixture context and pin the tar:
+    /// relative forward-slash entry names, deterministic order, file
+    /// contents intact, `.git` skipped.
+    #[test]
+    fn context_tar_contains_relative_entries_and_skips_git() {
+        let dir = temp_context("buildable");
+        std::fs::write(dir.join("Dockerfile"), "FROM golang AS builder\n").unwrap();
+        std::fs::write(dir.join("go.mod"), "module screeps-launcher\n").unwrap();
+        std::fs::create_dir_all(dir.join("launcher")).unwrap();
+        std::fs::write(dir.join("launcher").join("config.go"), "package launcher\n").unwrap();
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(dir.join(".git").join("HEAD"), "ref: refs/heads/main\n").unwrap();
+
+        let bytes = build_context_tar(&dir, "Dockerfile").unwrap();
+
+        let mut archive = tar::Archive::new(&bytes[..]);
+        let mut names = Vec::new();
+        let mut dockerfile_content = String::new();
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let name = entry.path().unwrap().to_string_lossy().into_owned();
+            if name == "Dockerfile" {
+                use std::io::Read;
+                entry.read_to_string(&mut dockerfile_content).unwrap();
+            }
+            names.push(name);
+        }
+        // Deterministic order (sorted per directory), forward slashes,
+        // no .git, no absolute paths.
+        assert_eq!(
+            names,
+            vec!["Dockerfile", "go.mod", "launcher", "launcher/config.go"]
+        );
+        assert_eq!(dockerfile_content, "FROM golang AS builder\n");
+    }
+
+    /// The named failure mode: a config-only launcher *deployment*
+    /// directory (compose + config.yml — e.g. C:\code\screeps-launcher)
+    /// is not a buildable context; the error must say what IS.
+    #[test]
+    fn config_only_context_is_a_clear_error() {
+        let dir = temp_context("config-only");
+        std::fs::write(dir.join("config.yml"), "steamKey: nope\n").unwrap();
+        std::fs::write(dir.join("docker-compose.yml"), "services: {}\n").unwrap();
+
+        let err = build_context_tar(&dir, "Dockerfile").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("no Dockerfile"), "got: {msg}");
+        assert!(
+            msg.contains("screepers/screeps-launcher"),
+            "error must point at the upstream repo: {msg}"
+        );
+    }
+
+    #[test]
+    fn missing_context_dir_is_a_clear_error() {
+        let missing = std::env::temp_dir().join("screeps-eval-tar-tests-definitely-missing");
+        let err = build_context_tar(&missing, "Dockerfile").unwrap_err();
+        assert!(format!("{err:#}").contains("not a directory"));
+    }
+
+    /// A custom dockerfile name is honored by the validation.
+    #[test]
+    fn custom_dockerfile_name_is_validated() {
+        let dir = temp_context("custom-dockerfile");
+        std::fs::write(dir.join("Dockerfile.custom"), "FROM scratch\n").unwrap();
+        assert!(build_context_tar(&dir, "Dockerfile.custom").is_ok());
+        assert!(build_context_tar(&dir, "Dockerfile").is_err());
+    }
 }

@@ -11,13 +11,22 @@ description = "Private-server execution, deployment, and evaluation harness for 
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "process", "io-util", "io-std", "signal"] }
+# The shared Screeps REST/websocket client (P0.A12): auth, pinned
+# endpoint set, console socket. Path dep while in-repo; becomes a git
+# dep at extraction (decision D-1).
+screeps-rest-api = { path = "../screeps-rest-api" }
 bollard = "0.19"
+# Build-context tar for `server build-image` (P0.A9(d)); bytes feeds
+# bollard::body_full.
+tar = "0.4"
+bytes = "1"
+# reqwest stays for the server-CLI client (port 21026) — that is the
+# launcher's own HTTP protocol, not the Screeps game API.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1"
-tokio-tungstenite = "0.27"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 futures-util = "0.3"
 anyhow = "1"

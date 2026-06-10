@@ -46,15 +46,48 @@
 //!   objects, user not blocked and has cpu. Success claims the
 //!   controller (level 1 + safe mode) and returns `{ok:1, newbie:true}`.
 
-use crate::api::GameApi;
-use crate::config::{EvalConfig, SpawnPreference};
+use crate::config::{BotEndpoint, EvalConfig, SpawnPreference};
 use anyhow::{anyhow, bail, Context, Result};
+use screeps_rest_api::Client;
 use secrecy::ExposeSecret;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-/// Default name for the first spawn.
-pub const SPAWN_NAME: &str = "Spawn1";
+/// Fallback name for a first spawn (used when a bot entry name
+/// sanitizes to nothing).
+pub const DEFAULT_SPAWN_NAME: &str = "Spawn1";
+
+/// Per-bot spawn name (P0.A10): the bot's `servers:` entry name,
+/// sanitized to the characters Screeps object names are safe with —
+/// so the web client shows at a glance whose spawn is whose
+/// (recommended entry names: `ibex`, `ibex-2`, ...).
+pub fn spawn_name_for(bot_entry: &str) -> String {
+    let cleaned: String = bot_entry
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if cleaned.chars().all(|c| matches!(c, '-' | '_')) {
+        DEFAULT_SPAWN_NAME.to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// Distinct-room rule (P0.A10): drop candidates already claimed by an
+/// earlier bot this run. (Belt-and-braces — the candidate query also
+/// excludes owned controllers, but that depends on server state having
+/// caught up; this is the in-run guarantee.)
+pub fn filter_excluded_rooms(rooms: Vec<String>, exclude: &HashSet<String>) -> Vec<String> {
+    rooms.into_iter().filter(|r| !exclude.contains(r)).collect()
+}
 
 // ===================================================================
 // payload masking (P0.A7(c))
@@ -499,22 +532,37 @@ pub async fn resume(cli: &CliClient) -> Result<()> {
 // bootstrap (P0.A3)
 // ===================================================================
 //
-// (The game-API client lives in `crate::api` since P0.A5 absorbed it —
-// bootstrap drives it exactly as before.)
+// (The game-API endpoints live in the shared `screeps-rest-api` crate
+// since P0.A12 — `crate::api` builds the client; bootstrap drives it
+// exactly as before.)
 
 #[derive(Debug)]
 pub enum SpawnOutcome {
     AlreadyPresent,
-    Placed { room: String, x: u32, y: u32 },
+    Placed {
+        name: String,
+        room: String,
+        x: u32,
+        y: u32,
+    },
+}
+
+/// Per-bot bootstrap result (P0.A10: one per `bots:` entry).
+#[derive(Debug)]
+pub struct BotBootstrapOutcome {
+    /// The `servers:` entry name.
+    pub name: String,
+    pub username: String,
+    pub user_created: bool,
+    pub spawn: SpawnOutcome,
+    pub world_status: String,
 }
 
 #[derive(Debug)]
 pub struct BootstrapOutcome {
     pub reset: bool,
     pub tick_ms: u64,
-    pub user_created: bool,
-    pub spawn: SpawnOutcome,
-    pub world_status: String,
+    pub bots: Vec<BotBootstrapOutcome>,
 }
 
 impl std::fmt::Display for BootstrapOutcome {
@@ -528,43 +576,56 @@ impl std::fmt::Display for BootstrapOutcome {
                 "kept (no --reset)"
             }
         )?;
-        writeln!(f, "tick:   {} ms (read back from the server)", self.tick_ms)?;
-        writeln!(
-            f,
-            "user:   {}",
-            if self.user_created {
-                "created (registered fresh)"
-            } else {
-                "existing (password converged via setPassword)"
+        write!(f, "tick:   {} ms (read back from the server)", self.tick_ms)?;
+        for bot in &self.bots {
+            writeln!(f)?;
+            writeln!(
+                f,
+                "[{}] user:   {} ({})",
+                bot.name,
+                bot.username,
+                if bot.user_created {
+                    "registered fresh"
+                } else {
+                    "existing; password converged via setPassword"
+                }
+            )?;
+            match &bot.spawn {
+                SpawnOutcome::AlreadyPresent => {
+                    writeln!(f, "[{}] spawn:  already present", bot.name)?
+                }
+                SpawnOutcome::Placed { name, room, x, y } => writeln!(
+                    f,
+                    "[{}] spawn:  '{name}' placed @ {room} ({x},{y})",
+                    bot.name
+                )?,
             }
-        )?;
-        match &self.spawn {
-            SpawnOutcome::AlreadyPresent => writeln!(f, "spawn:  already present")?,
-            SpawnOutcome::Placed { room, x, y } => {
-                writeln!(f, "spawn:  {SPAWN_NAME} placed @ {room} ({x},{y})")?
-            }
+            write!(f, "[{}] status: {}", bot.name, bot.world_status)?;
         }
-        write!(f, "status: {}", self.world_status)
+        Ok(())
     }
 }
 
-/// Reset/initialize the world to match `.screeps.yaml`:
+/// Reset/initialize the world to match the config:
 /// server up → (optional) `system.resetAllData()` + settle → tick rate
-/// re-applied (a reset wipes it — see module docs) → user registered or
-/// password converged → signed in (credential verification) → spawn
-/// placed (config preference or auto-pick) → world status verified.
+/// re-applied (a reset wipes it — see module docs) → then FOR EACH
+/// `bots:` entry (P0.A10): user registered or password converged →
+/// signed in (credential verification) → spawn placed in a room no
+/// earlier bot claimed this run (the `spawn:` preference applies to the
+/// first bot only) → world status verified.
 pub async fn bootstrap(cfg: &EvalConfig, reset: bool) -> Result<BootstrapOutcome> {
     // 1. Ensure the stack is up (idempotent; waits for the game API).
     crate::docker::up(&cfg.eval).await?;
     let cli = CliClient::new(cfg.eval.cli_port)?;
-    let mut api = GameApi::new(&cfg.server)?;
     cli.greeting().await?; // fail fast if the CLI port is dead
 
-    // 2. Optional full wipe.
+    // 2. Optional full wipe. (game_time needs no auth — any endpoint
+    //    works for the settle probe.)
     if reset {
         tracing::info!("system.resetAllData() — wiping the world (mongo re-seed + redis flush)");
         cli.send(CMD_RESET_ALL_DATA).await?;
-        wait_for_settle(&cli, &api).await?;
+        let probe = crate::api::client(&cfg.server)?;
+        wait_for_settle(&cli, &probe).await?;
     }
 
     // 3. Tick duration. ALWAYS applied: a reset leaves the loop
@@ -573,38 +634,77 @@ pub async fn bootstrap(cfg: &EvalConfig, reset: bool) -> Result<BootstrapOutcome
     let tick_ms = set_tick_ms(&cli, cfg.eval.tick_ms).await?;
     tracing::info!(tick_ms, "tick duration applied and read back");
 
-    // 4. Ensure the bot user exists with the configured password.
-    let username = &cfg.server.username;
+    // 4. Each bot identity (P0.A10), placing spawns in DISTINCT rooms.
+    let mut bots = Vec::with_capacity(cfg.bots.len());
+    let mut claimed: HashSet<String> = HashSet::new();
+    for (index, bot) in cfg.bots.iter().enumerate() {
+        // The explicit spawn preference belongs to the first bot only;
+        // later bots auto-pick (documented in config/local.example.yml).
+        let pref = if index == 0 {
+            cfg.eval.spawn.clone()
+        } else {
+            SpawnPreference::default()
+        };
+        let outcome = bootstrap_bot(&cli, bot, &pref, &claimed).await?;
+        if let SpawnOutcome::Placed { room, .. } = &outcome.spawn {
+            claimed.insert(room.clone());
+        }
+        bots.push(outcome);
+    }
+
+    Ok(BootstrapOutcome {
+        reset,
+        tick_ms,
+        bots,
+    })
+}
+
+/// Register/converge, sign in, and place a spawn for ONE bot identity.
+async fn bootstrap_bot(
+    cli: &CliClient,
+    bot: &BotEndpoint,
+    pref: &SpawnPreference,
+    exclude: &HashSet<String>,
+) -> Result<BotBootstrapOutcome> {
+    let api = crate::api::client(&bot.endpoint)?;
+    let username = &bot.endpoint.username;
+
+    // Ensure the bot user exists with the configured password.
     let user_created = if api.username_available(username).await? {
-        api.register(&cfg.server).await?;
-        tracing::info!(user = %username, "user registered (with the configured password)");
+        api.register(username, &bot.endpoint.password)
+            .await
+            .with_context(|| {
+                format!("registering user '{username}' (bots entry '{}')", bot.name)
+            })?;
+        tracing::info!(bot = %bot.name, user = %username, "user registered (with the configured password)");
         true
     } else {
         // Exists (possibly with an unknown password) — converge it.
         // P0.A7(c): the composed payload carries the real password;
         // it goes ONLY into the request body. Log the masked form.
-        let cmd = cmd_set_password(username, cfg.server.password.expose_secret());
+        let cmd = cmd_set_password(username, bot.endpoint.password.expose_secret());
         cli.send(&cmd).await?;
         tracing::info!(
+            bot = %bot.name,
             command = %mask_cli_command(&cmd),
             "existing user — password converged"
         );
         false
     };
 
-    // 5. Sign in — proves the configured credentials work.
-    api.signin(&cfg.server).await?;
-    tracing::info!(user = %username, "signin OK (token acquired)");
+    // Sign in — proves the configured credentials work.
+    crate::api::signin(&api, &bot.endpoint).await?;
+    tracing::info!(bot = %bot.name, user = %username, "signin OK (token acquired)");
 
-    // 6. Spawn placement.
-    let mut status = api.world_status().await?;
+    // Spawn placement.
+    let mut status = api.world_status().await?.status;
     if status == "lost" {
         // Wiped out: clear the remains, then place anew.
-        tracing::info!("world status 'lost' — respawning the user before placement");
+        tracing::info!(bot = %bot.name, "world status 'lost' — respawning the user before placement");
         cli.send(&cmd_respawn_user(username)).await?;
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            status = api.world_status().await?;
+            status = api.world_status().await?.status;
             if status == "empty" {
                 break;
             }
@@ -615,26 +715,32 @@ pub async fn bootstrap(cfg: &EvalConfig, reset: bool) -> Result<BootstrapOutcome
         }
     }
     let spawn = if status == "normal" {
-        tracing::info!("spawn already present (world status 'normal')");
+        tracing::info!(bot = %bot.name, "spawn already present (world status 'normal')");
         SpawnOutcome::AlreadyPresent
     } else {
-        let placed = place_first_spawn(&cli, &mut api, &cfg.eval.spawn).await?;
-        tracing::info!(room = %placed.0, x = placed.1, y = placed.2, "spawn placed");
+        let spawn_name = spawn_name_for(&bot.name);
+        let placed = place_first_spawn(cli, &api, pref, exclude, &spawn_name).await?;
+        tracing::info!(bot = %bot.name, room = %placed.0, x = placed.1, y = placed.2, "spawn placed");
         SpawnOutcome::Placed {
+            name: spawn_name,
             room: placed.0,
             x: placed.1,
             y: placed.2,
         }
     };
 
-    // 7. Verify.
-    let world_status = api.world_status().await?;
+    // Verify.
+    let world_status = api.world_status().await?.status;
     if world_status != "normal" {
-        bail!("bootstrap finished but world status is {world_status:?}, expected \"normal\"");
+        bail!(
+            "bootstrap of bot '{}' finished but its world status is {world_status:?}, \
+             expected \"normal\"",
+            bot.name
+        );
     }
-    Ok(BootstrapOutcome {
-        reset,
-        tick_ms,
+    Ok(BotBootstrapOutcome {
+        name: bot.name.clone(),
+        username: username.clone(),
         user_created,
         spawn,
         world_status,
@@ -643,7 +749,7 @@ pub async fn bootstrap(cfg: &EvalConfig, reset: bool) -> Result<BootstrapOutcome
 
 /// After `resetAllData` the API keeps answering but the world re-seeds;
 /// wait until both the game API and the CLI respond sensibly again.
-async fn wait_for_settle(cli: &CliClient, api: &GameApi) -> Result<()> {
+async fn wait_for_settle(cli: &CliClient, api: &Client) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let api_ok = api.game_time().await.is_ok();
@@ -658,40 +764,48 @@ async fn wait_for_settle(cli: &CliClient, api: &GameApi) -> Result<()> {
     }
 }
 
-/// Place the first spawn per the `eval.spawn` preference:
+/// Place a first spawn per the `spawn:` preference:
 /// - room+x+y → exactly there (no fallback; explicit config wins or fails),
 /// - room only → auto-pick a tile in that room,
 /// - nothing → auto-pick room (central candidates first) and tile.
+///
+/// `exclude` holds rooms claimed by earlier bots this run (P0.A10
+/// distinct-room rule); `spawn_name` is the per-bot spawn name.
 async fn place_first_spawn(
     cli: &CliClient,
-    api: &mut GameApi,
+    api: &Client,
     pref: &SpawnPreference,
+    exclude: &HashSet<String>,
+    spawn_name: &str,
 ) -> Result<(String, u32, u32)> {
     match (&pref.room, pref.x, pref.y) {
         (Some(room), Some(x), Some(y)) => {
-            api.place_spawn(room, x, y, SPAWN_NAME)
+            if exclude.contains(room) {
+                bail!("spawn.room {room} was already claimed by an earlier bot this run");
+            }
+            api.place_spawn(room, x, y, spawn_name)
                 .await
-                .with_context(|| {
-                    format!("explicit eval.spawn placement at {room} ({x},{y}) failed")
-                })?;
+                .with_context(|| format!("explicit spawn placement at {room} ({x},{y}) failed"))?;
             return Ok((room.clone(), x, y));
         }
         (None, x, y) if x.is_some() || y.is_some() => {
-            bail!("eval.spawn.x/y are only honored together with eval.spawn.room");
+            bail!("spawn.x/y are only honored together with spawn.room");
         }
         (Some(_), x, y) if x.is_some() != y.is_some() => {
-            bail!("eval.spawn needs both x and y (or neither, for auto-pick)");
+            bail!("spawn needs both x and y (or neither, for auto-pick)");
         }
         _ => {}
     }
 
     let candidates = parse_candidate_rooms(&cli.send(&cmd_candidate_rooms()).await?)?;
+    let candidates = filter_excluded_rooms(candidates, exclude);
     let rooms: Vec<String> = match &pref.room {
         Some(room) => {
             if !candidates.contains(room) {
                 bail!(
-                    "eval.spawn.room {room} is not a valid first-spawn room \
-                     (needs an unowned controller + ≥2 sources); candidates: {}",
+                    "spawn.room {room} is not a valid first-spawn room \
+                     (needs an unowned controller + ≥2 sources, and must not be \
+                     claimed by an earlier bot); candidates: {}",
                     candidates.join(", ")
                 );
             }
@@ -712,11 +826,11 @@ async fn place_first_spawn(
             continue;
         }
         for (x, y) in tiles {
-            match api.place_spawn(room, x, y, SPAWN_NAME).await {
-                Ok(()) => return Ok((room.clone(), x, y)),
+            match api.place_spawn(room, x, y, spawn_name).await {
+                Ok(_) => return Ok((room.clone(), x, y)),
                 Err(e) => {
                     tracing::debug!(room = %room, x, y, "placement rejected: {e:#}");
-                    last_err = Some(e);
+                    last_err = Some(anyhow::Error::from(e));
                 }
             }
         }
@@ -1015,5 +1129,57 @@ mod tests {
         assert_eq!(parse_room_name("W0S0"), Some((-1.0, -1.0)));
         assert_eq!(parse_room_name("sim"), None);
         assert_eq!(parse_room_name(""), None);
+    }
+
+    // ---------------- multi-bot helpers (P0.A10) ----------------
+
+    /// Per-bot spawn names: the entry name, sanitized; junk falls back.
+    #[test]
+    fn spawn_names_derive_from_bot_entries() {
+        assert_eq!(spawn_name_for("ibex"), "ibex");
+        assert_eq!(spawn_name_for("ibex-2"), "ibex-2");
+        assert_eq!(spawn_name_for("private-server"), "private-server");
+        assert_eq!(spawn_name_for("my bot!"), "my-bot-");
+        // Nothing usable left -> the historical default.
+        assert_eq!(spawn_name_for(""), DEFAULT_SPAWN_NAME);
+        assert_eq!(spawn_name_for("---"), DEFAULT_SPAWN_NAME);
+    }
+
+    #[test]
+    fn excluded_rooms_are_filtered() {
+        let rooms = vec!["W1N1".to_string(), "W2N2".to_string(), "W3N3".to_string()];
+        let exclude: HashSet<String> = ["W2N2".to_string()].into();
+        assert_eq!(
+            filter_excluded_rooms(rooms.clone(), &exclude),
+            vec!["W1N1", "W3N3"]
+        );
+        assert_eq!(filter_excluded_rooms(rooms, &HashSet::new()).len(), 3);
+    }
+
+    /// THE distinct-room pin: simulate three bots assigning sequentially
+    /// from the same candidate set — every assignment must differ
+    /// (each bot takes the best non-claimed room, then claims it).
+    #[test]
+    fn sequential_bots_get_distinct_rooms() {
+        let candidates = vec![
+            "W9N8".to_string(),
+            "W1N1".to_string(),
+            "W5N3".to_string(),
+            "W5N8".to_string(),
+            "W3N4".to_string(),
+        ];
+        let mut claimed: HashSet<String> = HashSet::new();
+        let mut assigned = Vec::new();
+        for _bot in 0..3 {
+            let open = filter_excluded_rooms(candidates.clone(), &claimed);
+            let pick = sort_rooms_for_spawn(open)
+                .into_iter()
+                .next()
+                .expect("candidates must outnumber bots in this fixture");
+            claimed.insert(pick.clone());
+            assigned.push(pick);
+        }
+        let distinct: HashSet<&String> = assigned.iter().collect();
+        assert_eq!(distinct.len(), 3, "rooms must be distinct: {assigned:?}");
     }
 }

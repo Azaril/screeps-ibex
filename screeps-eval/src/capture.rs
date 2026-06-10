@@ -1,35 +1,11 @@
 //! Console + metrics capture into `runs/` artifacts (P0.A5) and the
 //! `run --ticks N` loop.
 //!
-//! ## Pinned console-websocket protocol (live server 2026-06-09 +
-//! container sources)
-//!
-//! - Endpoint: `ws://host:port/socket/websocket` — the sockjs **raw
-//!   websocket** transport of the backend socket server
-//!   (`@screeps/backend lib/game/socket/server.js`:
-//!   `socketServer.installHandlers(server, {prefix: '/socket'})`);
-//!   messages are plain text frames with no sockjs `a[...]` framing.
-//!   Same endpoint the python client family uses.
-//! - On connect the server writes `time <unix-ms>` then `protocol 14`
-//!   (socket/server.js `conn.write('time ...')`; observed live).
-//! - Client sends `auth <token>` (token from `POST /api/auth/signin`);
-//!   server replies `auth ok <fresh-token>` or `auth failed`
-//!   (socket/server.js auth handler — `authlib.checkToken` then
-//!   `genToken`). The fresh token is **dropped at parse time** and never
-//!   reaches logs or artifacts (P0.A7).
-//! - Client sends `subscribe user:<userId>/console`; the server rejects
-//!   `user:`-prefixed channels that do not match the authed user.
-//! - Events are text frames of `JSON.stringify([channel, data])`:
-//!   - `["user:<id>/console", {"messages":{"log":[...],"results":[...]}}]`
-//!     — one per tick, **also when empty** (a useful liveness signal);
-//!   - `["user:<id>/console", {"error":"..."}]` — runtime errors.
-//!
-//!   Source: `@screeps/driver lib/index.js:368` (`sendConsoleMessages`)
-//!   and `:409` (`sendConsoleError`); the backend strips the `userId`
-//!   field before emitting (`socket/user.js:28-33`).
-//! - `gz:`-prefixed deflate frames exist only after a client sends
-//!   `gzip on` (socket/server.js); this client never does, so frames
-//!   stay plaintext.
+//! The console-websocket PROTOCOL (frames, auth/subscribe handshake,
+//! payload flattening) lives in the shared `screeps-rest-api` crate
+//! (P0.A12) — `screeps_rest_api::socket` pins it with citations. This
+//! module owns what is harness-specific: the run loop, the JSONL
+//! artifact records, the gate counters, and the summary.
 //!
 //! ## Bot error markers (the P0.A6 smoke gates pin these)
 //!
@@ -56,12 +32,11 @@
 //! - Creep count (best-effort) via the server CLI:
 //!   `storage.db['rooms.objects'].count({type:'creep',user:<id>})`.
 
-use crate::api::GameApi;
 use crate::config::EvalConfig;
 use crate::server::CliClient;
 use anyhow::{anyhow, bail, Context, Result};
-use futures_util::{SinkExt, StreamExt};
-use secrecy::{ExposeSecret, SecretString};
+use screeps_rest_api::{console_lines, ConsoleSocket};
+use secrecy::SecretString;
 use serde::Serialize;
 use serde_json::Value;
 use std::io::Write;
@@ -69,7 +44,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio_tungstenite::tungstenite::Message;
+
+/// Where a console line came from — the shared client's protocol enum,
+/// re-exported under the established name (it serializes lowercase into
+/// `console.jsonl`, pinned by `console_jsonl_record_shape`).
+pub use screeps_rest_api::ConsoleLineKind as ConsoleKind;
 
 /// Metrics sample cadence. At the 100 ms smoke tick rate this is one
 /// sample every ~20 ticks; console capture is continuous regardless.
@@ -79,74 +58,8 @@ pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 pub const STATS_SEGMENT: u8 = 99;
 
 // ===================================================================
-// socket-frame parsing (pure)
+// the console.jsonl record
 // ===================================================================
-
-#[derive(Debug, PartialEq)]
-pub enum SocketFrame {
-    /// `time <unix-ms>` greeting.
-    Time(u64),
-    /// `protocol <n>` greeting.
-    Protocol(u32),
-    /// `auth ok <token>` — the refreshed token is DROPPED here, by
-    /// construction: it must never reach logs or artifacts (P0.A7).
-    AuthOk,
-    AuthFailed,
-    /// `["<channel>", <payload>]` event.
-    Channel {
-        channel: String,
-        payload: Value,
-    },
-    /// Heartbeats/unrecognized — ignored.
-    Other,
-}
-
-pub fn parse_socket_frame(text: &str) -> SocketFrame {
-    if let Some(rest) = text.strip_prefix("time ") {
-        if let Ok(ms) = rest.trim().parse() {
-            return SocketFrame::Time(ms);
-        }
-    }
-    if let Some(rest) = text.strip_prefix("protocol ") {
-        if let Ok(v) = rest.trim().parse() {
-            return SocketFrame::Protocol(v);
-        }
-    }
-    if text.starts_with("auth ok") {
-        return SocketFrame::AuthOk;
-    }
-    if text.trim() == "auth failed" {
-        return SocketFrame::AuthFailed;
-    }
-    if text.starts_with('[') {
-        if let Ok(Value::Array(mut arr)) = serde_json::from_str::<Value>(text) {
-            if arr.len() == 2 {
-                if let Value::String(channel) = arr.remove(0) {
-                    return SocketFrame::Channel {
-                        channel,
-                        payload: arr.remove(0),
-                    };
-                }
-            }
-        }
-    }
-    SocketFrame::Other
-}
-
-// ===================================================================
-// console-event shaping (pure)
-// ===================================================================
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ConsoleKind {
-    /// `messages.log[]` — `console.log` output (all bot logging).
-    Log,
-    /// `messages.results[]` — console-command evaluation results.
-    Result,
-    /// the `error` field — runtime errors/aborts from the engine.
-    Error,
-}
 
 /// One `console.jsonl` record.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -159,49 +72,6 @@ pub struct ConsoleLine {
     pub tick: Option<u64>,
     pub kind: ConsoleKind,
     pub line: String,
-}
-
-/// Flatten a console-channel payload into JSONL records.
-pub fn console_lines_from_payload(
-    payload: &Value,
-    ts_ms: u64,
-    tick: Option<u64>,
-) -> Vec<ConsoleLine> {
-    let mut out = Vec::new();
-    let mut push = |kind: ConsoleKind, v: &Value| {
-        let line = match v {
-            Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        out.push(ConsoleLine {
-            ts_ms,
-            tick,
-            kind,
-            line,
-        });
-    };
-    if let Some(messages) = payload.get("messages") {
-        for v in messages
-            .get("log")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            push(ConsoleKind::Log, v);
-        }
-        for v in messages
-            .get("results")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            push(ConsoleKind::Result, v);
-        }
-    }
-    if let Some(err) = payload.get("error") {
-        push(ConsoleKind::Error, err);
-    }
-    out
 }
 
 // ===================================================================
@@ -514,14 +384,13 @@ pub async fn run(cfg: &EvalConfig, ticks: u64, scenario: &str) -> Result<RunArti
     tracing::info!("run artifacts: {}", dir.display());
 
     // HTTP sampler client + identity.
-    let mut api = GameApi::new(&cfg.server)?;
-    api.signin(&cfg.server).await?;
+    let api = crate::api::connect(&cfg.server).await?;
     let user = api.me().await?;
     // Separate token for the websocket (tokens are rolling — sharing
     // one between the socket auth and the HTTP sampler breaks one side).
-    let ws_token = api.fresh_token(&cfg.server).await?;
+    let ws_token = api.fresh_token().await?;
 
-    let tick_first = api.game_time().await?;
+    let tick_first = api.game_time().await?.time;
     let target = tick_first + ticks;
     let started_at_ms = unix_ms();
     let started = Instant::now();
@@ -567,7 +436,8 @@ pub async fn run(cfg: &EvalConfig, ticks: u64, scenario: &str) -> Result<RunArti
         }
 
         let tick = match api.game_time().await {
-            Ok(t) => {
+            Ok(r) => {
+                let t = r.time;
                 consecutive_failures = 0;
                 last_tick.store(t, Ordering::Relaxed);
                 tick_last = tick_last.max(t);
@@ -584,8 +454,10 @@ pub async fn run(cfg: &EvalConfig, ticks: u64, scenario: &str) -> Result<RunArti
         };
 
         let stats: Option<Value> = match api.memory_segment(STATS_SEGMENT).await {
-            Ok(Some(raw)) if !raw.is_empty() => serde_json::from_str(&raw).ok(),
-            Ok(_) => None,
+            Ok(resp) => match resp.data {
+                Some(raw) if !raw.is_empty() => serde_json::from_str(&raw).ok(),
+                _ => None,
+            },
             Err(e) => {
                 tracing::warn!("seg-{STATS_SEGMENT} read failed: {e:#}");
                 None
@@ -689,43 +561,13 @@ async fn console_capture_task(
     counters: Arc<Mutex<ConsoleCounters>>,
     mut stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
-    let (ws, _) = tokio_tungstenite::connect_async(&ws_url)
+    // The shared client owns the protocol: greeting frames, the `auth`
+    // handshake (the token goes straight into the socket and the
+    // `auth ok <fresh-token>` reply is dropped at parse time — P0.A7),
+    // the channel subscribe, and ping/pong.
+    let mut socket = ConsoleSocket::connect(&ws_url, token, &user_id)
         .await
         .with_context(|| format!("connecting console websocket {ws_url}"))?;
-    let (mut sink, mut stream) = ws.split();
-
-    // The ONLY exposure of the websocket token: straight into the socket,
-    // never into logs or artifacts (P0.A7). The `auth ok <fresh-token>`
-    // reply is dropped inside parse_socket_frame.
-    sink.send(Message::text(format!("auth {}", token.expose_secret())))
-        .await
-        .context("sending websocket auth")?;
-
-    // Greeting frames (`time`, `protocol`) arrive first; wait for auth.
-    let auth_deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let remaining = auth_deadline
-            .checked_duration_since(Instant::now())
-            .context("websocket auth timed out")?;
-        let msg = tokio::time::timeout(remaining, stream.next())
-            .await
-            .map_err(|_| anyhow!("websocket auth timed out"))?
-            .context("websocket closed during auth")?
-            .context("websocket error during auth")?;
-        match msg {
-            Message::Text(t) => match parse_socket_frame(&t) {
-                SocketFrame::AuthOk => break,
-                SocketFrame::AuthFailed => bail!("websocket auth failed (token rejected)"),
-                _ => continue,
-            },
-            Message::Ping(p) => sink.send(Message::Pong(p)).await?,
-            _ => continue,
-        }
-    }
-
-    sink.send(Message::text(format!("subscribe user:{user_id}/console")))
-        .await
-        .context("subscribing to the console channel")?;
     tracing::info!("console capture live (channel user:{user_id}/console)");
 
     let mut file = std::io::BufWriter::new(
@@ -739,39 +581,37 @@ async fn console_capture_task(
                     break;
                 }
             }
-            msg = stream.next() => {
-                let Some(msg) = msg else {
-                    file.flush()?;
-                    bail!("console websocket closed by the server");
-                };
-                match msg.context("console websocket error")? {
-                    Message::Text(t) => {
-                        if let SocketFrame::Channel { channel, payload } = parse_socket_frame(&t) {
-                            if !channel.ends_with("/console") {
-                                continue;
-                            }
-                            let tick = Some(last_tick.load(Ordering::Relaxed));
-                            for line in console_lines_from_payload(&payload, unix_ms(), tick) {
-                                if let Ok(mut c) = counters.lock() {
-                                    c.record(&line);
-                                }
-                                serde_json::to_writer(&mut file, &line)
-                                    .context("writing console.jsonl")?;
-                                file.write_all(b"\n")?;
-                                since_flush += 1;
-                            }
-                            if since_flush >= 50 {
-                                file.flush()?;
-                                since_flush = 0;
-                            }
-                        }
-                    }
-                    Message::Ping(p) => sink.send(Message::Pong(p)).await?,
-                    Message::Close(_) => {
+            event = socket.next_event() => {
+                let event = match event {
+                    Ok(event) => event,
+                    Err(e) => {
                         file.flush()?;
-                        bail!("console websocket closed by the server");
+                        return Err(e).context("console websocket");
                     }
-                    _ => {}
+                };
+                if !event.channel.ends_with("/console") {
+                    continue;
+                }
+                let ts_ms = unix_ms();
+                let tick = Some(last_tick.load(Ordering::Relaxed));
+                for payload_line in console_lines(&event.payload) {
+                    let line = ConsoleLine {
+                        ts_ms,
+                        tick,
+                        kind: payload_line.kind,
+                        line: payload_line.line,
+                    };
+                    if let Ok(mut c) = counters.lock() {
+                        c.record(&line);
+                    }
+                    serde_json::to_writer(&mut file, &line)
+                        .context("writing console.jsonl")?;
+                    file.write_all(b"\n")?;
+                    since_flush += 1;
+                }
+                if since_flush >= 50 {
+                    file.flush()?;
+                    since_flush = 0;
                 }
             }
         }
@@ -788,77 +628,12 @@ async fn console_capture_task(
 mod tests {
     use super::*;
 
-    // ---------------- socket frames ----------------
+    // ---------------- the console.jsonl record ----------------
+    // (Socket-frame parsing and payload flattening are pinned in the
+    // shared screeps-rest-api crate's tests.)
 
-    /// Literal greeting frames observed live.
-    #[test]
-    fn parses_greeting_frames() {
-        assert_eq!(
-            parse_socket_frame("time 1781061591846"),
-            SocketFrame::Time(1781061591846)
-        );
-        assert_eq!(parse_socket_frame("protocol 14"), SocketFrame::Protocol(14));
-    }
-
-    /// P0.A7 pin: the refreshed token in `auth ok <token>` is dropped at
-    /// parse time — the parsed frame carries no token material.
-    #[test]
-    fn auth_ok_token_is_dropped_at_parse_time() {
-        let fake_token = "ffffffffffffffffffffffffffffffffffffffff";
-        let frame = parse_socket_frame(&format!("auth ok {fake_token}"));
-        assert_eq!(frame, SocketFrame::AuthOk);
-        assert!(
-            !format!("{frame:?}").contains(fake_token),
-            "token leaked through SocketFrame"
-        );
-        assert_eq!(parse_socket_frame("auth failed"), SocketFrame::AuthFailed);
-    }
-
-    /// The exact (empty) console frame observed live post-subscribe.
-    #[test]
-    fn parses_live_console_frame() {
-        let frame = parse_socket_frame(
-            r#"["user:6a28d4d7d9592a0060be10ef/console",{"messages":{"log":[],"results":[]}}]"#,
-        );
-        let SocketFrame::Channel { channel, payload } = frame else {
-            panic!("expected a channel frame");
-        };
-        assert_eq!(channel, "user:6a28d4d7d9592a0060be10ef/console");
-        assert!(console_lines_from_payload(&payload, 0, None).is_empty());
-    }
-
-    #[test]
-    fn unknown_frames_are_other() {
-        assert_eq!(parse_socket_frame("h"), SocketFrame::Other);
-        assert_eq!(parse_socket_frame(""), SocketFrame::Other);
-        assert_eq!(parse_socket_frame("[1,2,3]"), SocketFrame::Other);
-        assert_eq!(parse_socket_frame("[not json"), SocketFrame::Other);
-    }
-
-    // ---------------- console shaping ----------------
-
-    #[test]
-    fn console_payload_flattens_log_results_and_error() {
-        let payload: Value = serde_json::from_str(
-            r#"{"messages":{"log":["(INFO) screeps_ibex: tick","(ERROR) x: boom"],"results":["undefined"]}}"#,
-        )
-        .unwrap();
-        let lines = console_lines_from_payload(&payload, 42, Some(7));
-        assert_eq!(lines.len(), 3);
-        assert_eq!(lines[0].kind, ConsoleKind::Log);
-        assert_eq!(lines[0].line, "(INFO) screeps_ibex: tick");
-        assert_eq!(lines[0].tick, Some(7));
-        assert_eq!(lines[2].kind, ConsoleKind::Result);
-
-        // @screeps/driver lib/index.js:409 — sendConsoleError shape.
-        let payload: Value =
-            serde_json::from_str(r#"{"error":"Error: wasm trap\n  at ..."}"#).unwrap();
-        let lines = console_lines_from_payload(&payload, 42, None);
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].kind, ConsoleKind::Error);
-        assert!(lines[0].line.starts_with("Error: wasm trap"));
-    }
-
+    /// Pins the artifact shape end-to-end, including the lowercase
+    /// `kind` from the shared crate's `ConsoleLineKind`.
     #[test]
     fn console_jsonl_record_shape() {
         let line = ConsoleLine {

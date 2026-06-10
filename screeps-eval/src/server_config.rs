@@ -1,6 +1,9 @@
-//! Launcher-config preparation: load a base screeps-launcher
-//! `config.yml`, merge in the runtime-only settings, and write the
-//! result under `target/runtime/` for the container bind-mount (P0.A2).
+//! Launcher-config preparation: merge the vendored keyless template
+//! (`config/server.yml`) with the runtime-only settings from
+//! `config/local.yml` and write the result under `target/runtime/` for
+//! the container bind-mount (P0.A2; config layout per P0.A9(b) — the
+//! external-base `serverConfig:` indirection was dropped, the steamKey
+//! comes straight from `config/local.yml`).
 //!
 //! Schema source (pinned during P0.A2 investigation, 2026-06-09):
 //! screepers/screeps-launcher @ main, `launcher/config.go`:
@@ -30,9 +33,9 @@ use secrecy::{ExposeSecret, SecretString};
 use serde_yaml::{Mapping, Value};
 use std::path::{Path, PathBuf};
 
-/// The vendored keyless launcher-config template — the merge base when
-/// `eval.serverConfig` is not set. Committed; MUST stay keyless.
-pub const LAUNCHER_TEMPLATE: &str = include_str!("../server/config.yml");
+/// The vendored keyless launcher-config template — always the merge
+/// base (P0.A9(b)). Committed; MUST stay keyless.
+pub const LAUNCHER_TEMPLATE: &str = include_str!("../config/server.yml");
 
 /// Where the merged runtime config is written, relative to this crate.
 /// Compile-time crate root is acceptable while the crate lives in-repo
@@ -43,20 +46,12 @@ pub fn runtime_dir() -> PathBuf {
         .join("runtime")
 }
 
-/// Load the base launcher config: the file named by `eval.serverConfig`
-/// (used verbatim, including its steamKey) or the vendored template.
-pub fn load_base_config(eval: &EvalSettings) -> Result<String> {
-    match &eval.server_config {
-        Some(path) => std::fs::read_to_string(path)
-            .with_context(|| format!("reading eval.serverConfig base {}", path.display())),
-        None => Ok(LAUNCHER_TEMPLATE.to_string()),
-    }
-}
-
 /// PURE merge of a base launcher config with the harness-controlled
 /// runtime settings. No I/O; unit-tested with literal fixtures.
 ///
-/// Rules (P0.A2):
+/// Rules (P0.A2; production always passes [`LAUNCHER_TEMPLATE`] as the
+/// base since P0.A9(b) — the base parameter stays so the merge is pure
+/// and testable against literal bases):
 /// - steamKey: a key already present in the base **wins**; otherwise
 ///   `eval_steam_key` is inserted; neither present is an error (the
 ///   screeps backend cannot start without one).
@@ -94,9 +89,9 @@ pub fn merge_launcher_config(
                 );
             }
             None => bail!(
-                "no Steam key available: the base launcher config has no steamKey \
-                 and eval.steamKey is not set in .screeps.yaml — set one of them \
-                 (the screeps backend cannot start without it)"
+                "no Steam key available: set steamKey in screeps-eval/config/local.yml \
+                 (copy config/local.example.yml; the screeps backend cannot start \
+                 without it)"
             ),
         }
     }
@@ -153,12 +148,12 @@ pub fn write_runtime_config(merged: &Value) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// One-stop: base (eval.serverConfig | vendored template) -> merge ->
-/// `target/runtime/config.yml`. Returns the runtime config path.
+/// One-stop: vendored template -> merge with `config/local.yml`
+/// settings -> `target/runtime/config.yml`. Returns the runtime config
+/// path.
 pub fn prepare_runtime_config(eval: &EvalSettings) -> Result<PathBuf> {
-    let base = load_base_config(eval)?;
     let merged = merge_launcher_config(
-        &base,
+        LAUNCHER_TEMPLATE,
         eval.steam_key.as_ref(),
         eval.game_port,
         eval.cli_port,
@@ -236,7 +231,7 @@ mod tests {
         let err = merge_launcher_config("mods: []\n", None, 21025, 21026, 100).unwrap_err();
         let msg = format!("{err:#}");
         assert!(
-            msg.contains("eval.steamKey"),
+            msg.contains("config/local.yml"),
             "error must say how to fix it: {msg}"
         );
     }

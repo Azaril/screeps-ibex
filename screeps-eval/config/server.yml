@@ -1,11 +1,12 @@
-# Vendored KEYLESS screeps-launcher config template (P0.A2).
+# Vendored KEYLESS screeps-launcher config template (P0.A2; relocated to
+# config/ by P0.A9(b)).
 #
 # This file is committed and must NEVER contain a steamKey. At runtime the
-# harness merges a key in-memory — from `eval.steamKey` in the gitignored
-# `.screeps.yaml` (or from the base config named by `eval.serverConfig`,
-# which replaces this template entirely) — and writes the merged result to
-# screeps-eval/target/runtime/config.yml (gitignored), which is what gets
-# bind-mounted into the launcher container at /screeps/config.yml.
+# harness merges a key in-memory — from `steamKey:` in the gitignored
+# `config/local.yml` (documented by config/local.example.yml) — and writes
+# the merged result to screeps-eval/target/runtime/config.yml (gitignored),
+# which is what gets bind-mounted into the launcher container at
+# /screeps/config.yml.
 #
 # Schema source: screepers/screeps-launcher (main branch), launcher/config.go
 # + config.sample.yml + README.md. Kept close to the upstream sample's

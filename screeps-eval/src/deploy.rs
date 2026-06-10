@@ -174,10 +174,27 @@ fn parse_used_mib(banner_rest: &str) -> Option<f64> {
 // the wrapper
 // ===================================================================
 
-/// Build + upload the bot via `node js_tools/deploy.js --server <name>
+/// Argv for the deploy.js invocation (pure — pinned by a unit test).
+/// `server_entry` is the `.screeps.yaml` `servers:` entry the upload
+/// targets: the harness's own `--server-name` by default, or a bot
+/// entry selected via `deploy --user <entry>` (P0.A10) — deploy.js
+/// resolves the entry's credentials itself either way.
+pub fn deploy_args(server_entry: &str, debug: bool) -> Vec<String> {
+    [
+        "js_tools/deploy.js",
+        "--server",
+        server_entry,
+        "--mode",
+        if debug { "debug" } else { "release" },
+    ]
+    .map(str::to_string)
+    .to_vec()
+}
+
+/// Build + upload the bot via `node js_tools/deploy.js --server <entry>
 /// --mode <debug|release>` from the repo root. Output streams through
 /// tracing as it happens; success is decided by [`parse_deploy_output`].
-pub async fn deploy(cfg: &EvalConfig, server_name: &str, debug: bool) -> Result<DeployReport> {
+pub async fn deploy(cfg: &EvalConfig, server_entry: &str, debug: bool) -> Result<DeployReport> {
     let root = find_repo_root(cfg)?;
     if !root.join("node_modules").is_dir() {
         bail!(
@@ -188,11 +205,9 @@ pub async fn deploy(cfg: &EvalConfig, server_name: &str, debug: bool) -> Result<
     }
     let pkg = package_name(&root)?;
     let mode = if debug { "debug" } else { "release" };
+    let args = deploy_args(server_entry, debug);
 
-    tracing::info!(
-        "deploy: node js_tools/deploy.js --server {server_name} --mode {mode} (cwd {})",
-        root.display()
-    );
+    tracing::info!("deploy: node {} (cwd {})", args.join(" "), root.display());
     tracing::info!(
         "the full wasm build runs now (nightly toolchain, LTO) — a cold build \
          takes several minutes; output streams below"
@@ -200,11 +215,7 @@ pub async fn deploy(cfg: &EvalConfig, server_name: &str, debug: bool) -> Result<
 
     let start = Instant::now();
     let mut child = tokio::process::Command::new("node")
-        .arg("js_tools/deploy.js")
-        .arg("--server")
-        .arg(server_name)
-        .arg("--mode")
-        .arg(mode)
+        .args(&args)
         .current_dir(&root)
         // deploy.js:32 — normally set by `npm run deploy`; non-secret.
         .env("npm_package_name", &pkg)
@@ -367,6 +378,32 @@ mod tests {
             parse_deploy_output(&[]),
             DeployVerdict::Failed { .. }
         ));
+    }
+
+    /// P0.A10: `deploy --user <entry>` selects the upload identity by
+    /// passing `--server <entry>` through to deploy.js, unchanged.
+    #[test]
+    fn deploy_args_target_the_selected_entry() {
+        assert_eq!(
+            deploy_args("ibex-2", false),
+            [
+                "js_tools/deploy.js",
+                "--server",
+                "ibex-2",
+                "--mode",
+                "release"
+            ]
+        );
+        assert_eq!(
+            deploy_args("private-server", true),
+            [
+                "js_tools/deploy.js",
+                "--server",
+                "private-server",
+                "--mode",
+                "debug"
+            ]
+        );
     }
 
     #[test]

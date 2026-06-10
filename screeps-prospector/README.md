@@ -14,7 +14,8 @@ position the foreman layout itself wants, so the spawn you place on day
 one is already part of an optimal base plan.
 
 Library-first: every CLI capability is a library function
-(`screeps_prospector::{ops, cache, score, place, api, config}`), so other
+(`screeps_prospector::{ops, cache, score, place, config}` over the
+shared [`screeps-rest-api`](../screeps-rest-api) client), so other
 tools (e.g. the `screeps-eval` harness) can drive the same code paths.
 
 ---
@@ -79,11 +80,14 @@ default API pacing (600 ms) is sized for screeps.com.
 
 ### Quick start — fully offline
 
-No server needed: seed the cache from a
-[screeps-foreman-bench](../screeps-foreman-bench) map dump and score it.
+No server needed: import an existing map JSON (any file in the
+foreman-bench map shape — e.g. a [screeps-foreman-bench](../screeps-foreman-bench)
+export, if you have that repo) and score it. **This is an optional
+import path, not a setup step** — with a server, `scan` + `fetch`
+(above) is the happy path.
 
 ```console
-$ cargo run -- cache seed          # copies the bench private-server map
+$ cargo run -- cache seed --from path/to/map.json
 $ cargo run -- score               # stage-1 heuristic table
 $ cargo run -- recommend --top 3   # + foreman planning for the top 3
 ```
@@ -157,11 +161,13 @@ Private-server end-to-end: world-status check → scan whole map → fetch
 open rooms → recommend → place the best room's spawn tile. Refused
 outright against official servers — no flag combination unlocks it.
 
-#### `cache stats` / `cache seed [--from <map.json>] [--force]`
+#### `cache stats` / `cache seed --from <map.json> [--force]`
 
 `stats` (alias `info`): path, room/terrain/status counts. `seed` copies
-a foreman-bench map JSON in as the cache (the source file is never
-modified); default source is the bench's private-server map.
+a map JSON (foreman-bench shape) in as the cache (the source file is
+never modified). `--from` is **required** — there is no default path
+(repo-relative defaults break for external users; P0.P8); seeding is an
+optional import for niche cases, not part of setup.
 
 ### MMO (screeps.com) — recommend-first flow
 
@@ -200,8 +206,8 @@ zero API calls.
 
 | Module      | Responsibility |
 |-------------|----------------|
-| `config`    | `.screeps.yaml` parsing, server selection, `SecretString` secrets policy, the official-server classification (`is_official`) |
-| `api`       | REST client: signin/token auth + rotation, world-size/map-stats/room-terrain/room-objects/room-status/world-status/place-spawn/respawn, courtesy rate limit, typed error envelope |
+| `config`    | `.screeps.yaml` parsing, server selection, `SecretString` secrets policy, the official-server classification (`is_official`); re-exports the shared `AuthMode` |
+| *(shared)* [`screeps-rest-api`](../screeps-rest-api) | REST client (P0.A12 — one client, not N): signin/token auth + rotation, world-size/map-stats/room-terrain/room-objects/room-status/world-status/place-spawn/respawn (+ memory segments, code upload, console socket for the other consumers), courtesy rate limit, typed error envelope |
 | `cache`     | File-backed room cache in the foreman-bench map-JSON shape; upsert semantics; terrain decode bridge to `FastRoomTerrain` |
 | `ops`       | `scan`/`fetch` flows over client + cache; pure status derivation |
 | `score`     | Two-stage scoring: stage-1 heuristics, stage-2 offline foreman planning, first-spawn extraction |
@@ -212,11 +218,13 @@ zero API calls.
 
 Endpoint shapes are pinned from public client implementations — never
 guessed — and unit-tested against recorded/literal fixtures (no network
-in tests). Sources, cited per-method in `src/api.rs`:
-[Qionglu735/screeps_tool `screeps_api.py`](https://github.com/Qionglu735/screeps_tool/blob/master/screeps_api.py)
-(the operator reference), screepers/python-screeps `screepsapi.py`,
-screepers/node-screeps-api `Endpoints.md`, and
-docs.screeps.com/auth-tokens.html for the official rate limits.
+in tests). Since P0.A12 the pins live in the shared
+[`screeps-rest-api`](../screeps-rest-api) crate (sources cited
+per-method there: the operator-referenced
+[Qionglu735/screeps_tool `screeps_api.py`](https://github.com/Qionglu735/screeps_tool/blob/master/screeps_api.py),
+screepers/python-screeps `screepsapi.py`, screepers/node-screeps-api
+`Endpoints.md`, the live private server, and
+docs.screeps.com/auth-tokens.html for the official rate limits).
 Notable pinned behaviors: username goes in the signin `email` field;
 the session token is sent as both `X-Token` and `X-Username`; a
 response `X-Token` header ≥ 40 chars rotates the stored token; the
@@ -299,18 +307,22 @@ performs zero network I/O.
 
 Same lifecycle as `screeps-eval` (Phase-0 decision D-1): in-repo and
 workspace-excluded now, extracted to its own repository once stable.
-The crate is self-contained except for two documented seams: the
-credentials path (`../.screeps.yaml`, overridable via `--config`) and
-the `screeps-foreman` path dependency (plus its `[patch]` table for
-foreman's git deps — `screeps-cache`/`screeps-common` redirected to
-local clones, mirroring the bench). At extraction the path deps become
-git deps and the patch table collapses.
+The crate is self-contained except for three documented seams: the
+credentials path (`../.screeps.yaml`, overridable via `--config`), the
+`screeps-rest-api` path dependency (the shared Screeps client, same
+D-1 lifecycle), and the `screeps-foreman` path dependency (plus its
+`[patch]` table for foreman's git deps —
+`screeps-cache`/`screeps-common` redirected to local clones, mirroring
+the bench). At extraction the path deps become git deps and the patch
+table collapses.
 
 ### Verification status
 
 Offline behavior (P0.P1–P0.P3 + the offline half of P0.P4) is fully
-tested: 54 tests against literal/recorded fixtures and a copy of the
-bench map, no network, no Docker. **Deferred:** the live private-server
-`auto --yes` end-to-end (the P0.P4 "done when") runs once the
-Workstream-A eval-server work settles and a private server is available
-— the Workstream-P live-test constraint keeps this build offline.
+tested: 43 tests in this crate against literal/recorded fixtures and a
+copy of the bench map (plus the endpoint-shape pins, now 28 tests in
+the shared `screeps-rest-api` crate), no network, no Docker.
+**Deferred:** the live private-server `auto --yes` end-to-end (the
+P0.P4 "done when") runs once the Workstream-A eval-server work settles
+and a private server is available — the Workstream-P live-test
+constraint keeps this build offline.

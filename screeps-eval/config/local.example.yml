@@ -1,0 +1,60 @@
+# screeps-eval local configuration — TEMPLATE (P0.A9(b)).
+#
+# Copy this file to `config/local.yml` (gitignored via this crate's
+# .gitignore) and fill in your values. `config/local.yml` is the ONLY
+# place the Steam key lives; server CREDENTIALS stay in the repo-root
+# `.screeps.yaml` (`servers:` entries — shared with deploy.js and
+# screeps-prospector). Every key below is optional except `steamKey`
+# (required before `server up` can start the stack).
+#
+# This example file is committed and must stay KEYLESS.
+
+# Steam Web API key (https://steamcommunity.com/dev/apikey). Merged into
+# the launcher config at runtime; the merged file lands ONLY under the
+# gitignored screeps-eval/target/runtime/ (secrets policy P0.A7).
+#steamKey: your-steam-web-api-key-here
+
+# Published game/API and server-CLI ports (host side AND in-container —
+# the merge forces the binds so one number applies end to end).
+# Defaults: 21025 / 21026.
+#ports:
+#  game: 21025
+#  cli: 21026
+
+# Tick duration in ms, written to serverConfig.tickRate at merge time.
+# Default 100 (the smoke/eval rate); floor 50 (server/UI degrade below —
+# plan D-2); use 1000 for comfortable watching.
+#tickMs: 100
+
+# First-spawn placement preference for `bootstrap`, applied to the FIRST
+# entry of `bots:` (later bots always auto-pick a distinct room).
+# room alone = auto-pick a tile in that room; room+x+y = exact placement
+# (no fallback); absent = auto-pick room and tile.
+#spawn:
+#  room: W5N3
+#  x: 18
+#  y: 14
+
+# Bot identities to bootstrap (P0.A10): each name is a `servers:` entry
+# in ../.screeps.yaml (same host/port as this stack, its own
+# username/password). `bootstrap` registers each user and places each
+# spawn in a DISTINCT room; `deploy --user <entry>` targets one of them.
+# Default: ["private-server"]. Recommendation: name bot entries after
+# the bot (ibex, ibex-2, ...) so your own name stays the operator.
+#bots:
+#  - ibex
+#  - ibex-2
+
+# Launcher image policy (P0.A9(d)). Default: pull
+# screepers/screeps-launcher:latest from the registry. To build a local
+# image instead, point `build.context` at a FULL clone of
+# https://github.com/screepers/screeps-launcher (the Dockerfile lives at
+# that repo's root — a config-only directory like a docker-compose
+# checkout is NOT buildable). `server build-image` builds it explicitly;
+# `server up` builds automatically when the image is absent and `build:`
+# is configured.
+#image:
+#  name: screepers/screeps-launcher:local
+#  build:
+#    context: C:\code\screeps-launcher-src
+#    dockerfile: Dockerfile   # optional; default "Dockerfile"

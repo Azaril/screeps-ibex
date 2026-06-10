@@ -6,7 +6,6 @@
 
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
-use screeps_eval::api::GameApi;
 use screeps_eval::config::{EvalConfig, DEFAULT_SERVER_NAME, TICK_MS_FLOOR, TICK_MS_SMOKE};
 use screeps_eval::server::{mask_cli_command, CliClient};
 use std::io::IsTerminal;
@@ -19,7 +18,9 @@ use std::path::PathBuf;
     version
 )]
 struct Cli {
-    /// Path to .screeps.yaml (default: walk up from the current directory)
+    /// Path to the credentials file (fixed default: ../.screeps.yaml
+    /// next to this crate — the only override; eval settings live in
+    /// config/local.yml, see config/local.example.yml)
     #[arg(long, global = true)]
     config: Option<PathBuf>,
 
@@ -50,6 +51,10 @@ enum Command {
         /// Deploy a debug build (deploy.js --mode debug -> wasm-pack --dev)
         #[arg(long)]
         debug: bool,
+        /// Bot identity to deploy as: a .screeps.yaml servers: entry
+        /// (default: --server-name). Passes --server <entry> to deploy.js
+        #[arg(long)]
+        user: Option<String>,
     },
     /// Run for N ticks, capturing console + metrics to runs/
     Run {
@@ -100,6 +105,9 @@ enum ServerAction {
     /// Container table (state, health, discovered published ports) +
     /// live game-API and CLI-port probes
     Status,
+    /// Build the launcher image from config/local.yml's image.build
+    /// context (a full screepers/screeps-launcher clone)
+    BuildImage,
     /// Print the launcher container's logs
     Logs {
         /// Keep streaming new output (Ctrl-C to stop)
@@ -152,7 +160,7 @@ async fn main() -> Result<()> {
         Command::Tick { action } => {
             let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
             let client = CliClient::new(cfg.eval.cli_port)?;
-            let api = GameApi::new(&cfg.server)?;
+            let api = screeps_eval::api::client(&cfg.server)?;
             match action {
                 TickAction::Set { ms } => {
                     if ms < TICK_MS_FLOOR {
@@ -172,7 +180,7 @@ async fn main() -> Result<()> {
                 }
                 TickAction::Pause => {
                     screeps_eval::server::pause(&client).await?;
-                    let time = api.game_time().await.ok();
+                    let time = api.game_time().await.ok().map(|r| r.time);
                     match time {
                         Some(t) => println!("simulation paused at tick {t}"),
                         None => println!("simulation paused"),
@@ -180,7 +188,7 @@ async fn main() -> Result<()> {
                 }
                 TickAction::Resume => {
                     screeps_eval::server::resume(&client).await?;
-                    let time = api.game_time().await.ok();
+                    let time = api.game_time().await.ok().map(|r| r.time);
                     match time {
                         Some(t) => println!("simulation resumed (tick {t})"),
                         None => println!("simulation resumed"),
@@ -214,6 +222,12 @@ async fn main() -> Result<()> {
                     let report = screeps_eval::docker::status(&cfg.eval).await?;
                     println!("{report}");
                 }
+                ServerAction::BuildImage => {
+                    let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
+                    let docker = screeps_eval::docker::connect()?;
+                    screeps_eval::docker::build_launcher_image(&docker, &cfg.eval.image).await?;
+                    println!("built image {}", cfg.eval.image.name);
+                }
                 ServerAction::Logs { follow, tail } => {
                     screeps_eval::docker::logs(follow, tail).await?;
                 }
@@ -240,9 +254,12 @@ async fn main() -> Result<()> {
                 None => repl(&client).await,
             }
         }
-        Command::Deploy { debug } => {
+        Command::Deploy { debug, user } => {
             let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
-            let report = screeps_eval::deploy::deploy(&cfg, &cli.server_name, debug).await?;
+            // --user selects the bot identity (P0.A10); default is the
+            // harness's own server entry.
+            let entry = user.as_deref().unwrap_or(&cli.server_name);
+            let report = screeps_eval::deploy::deploy(&cfg, entry, debug).await?;
             println!("{report}");
             Ok(())
         }

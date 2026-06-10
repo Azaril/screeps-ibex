@@ -12,7 +12,10 @@ description = "Spawn-site selection tool for screeps-ibex: scan/fetch/score room
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# The shared Screeps REST client (P0.A12): auth, pinned endpoint set,
+# rate-limit courtesy. Path dep while in-repo; becomes a git dep at
+# extraction (decision D-1).
+screeps-rest-api = { path = "../screeps-rest-api" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
