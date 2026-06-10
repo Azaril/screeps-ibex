@@ -1,6 +1,6 @@
 # Phase 0 Execution Plan — Baseline Tooling, Cleanup & Critical Fixes
 
-- **Status:** Active (drives implementation)
+- **Status:** **Complete** — all workstreams delivered incl. P0.P7; exit criterion 8 awaits the operator's formal sign-off (their pass already exercised the surface and drove a real fix). Exit audit recorded in §6; baseline comparison in [baseline-0-report.md](baseline-0-report.md).
 - **Date:** 2026-06-09
 - **Precedes:** ADR-driven rewrite increments ([rewrite plan](../plans/rewrite-plan.md) Inc 0–9). Phase 0 ≈ a concrete slice of Increment 0 (harness + test substrate) + the safe Increment-1 quick-wins, executed **before** any ADR pillar work begins.
 - **Related:** [ADR 0006](../design/0006-eval-and-iteration-harness.md) (harness design — authoritative for components/endpoints), [ADR 0015](../design/0015-testing-and-validation-strategy.md) (test taxonomy; Phase 0 stands up the L0 lane), [component-test-plans](../plans/component-test-plans.md) (F1–F19 fixture registry), [proposed-fixes](../plans/proposed-fixes.md) (Group A — the fix specs live there; this plan sequences them), [ADR 0008](../design/0008-combat-and-squad-architecture.md) (the verified dead-code inventory).
@@ -151,3 +151,25 @@ Both baselines are **fresh-bootstrap runs of K ticks at the same tick duration**
 **Out of scope (deferred to their increments):** CpuGovernor/pathfinding facade (Inc 1), serialization version header + dedicated cost-matrix segment (Inc 2 — D1 is the *interim* only), all Group B fixes, scenario library/opponent bots, `screeps-testkit` fixtures beyond need, any ADR pillar implementation.
 
 **Operator decision points:** **D-1 — RESOLVED:** in-repo now, extract to a submodule once stable (§1). **D-2 — RESOLVED (operator):** tick-rate **floor is 50 ms** — at/below that the server and UI start failing to keep up (operator experience). Defaults: smoke runs **100 ms** (safely above the floor), manual watching **1000 ms**; `tick set` (P0.A8) accepts anything ≥ 50 ms, warns below 100 ms. Wall-clock expectations still per the honesty note: the server may not sustain the configured rate once creeps exist, and first boot includes a multi-minute in-container npm install (A2's health-wait tolerates it). **D-3 (default unless vetoed):** K = 2,000 ticks for baselines — reaches **RCL2 + unreserved remote activity** on a fresh world ("first remotes" with reservers is *not* reachable at RCL2, whose 550 max spawn energy is below a CLAIM+MOVE reserver's 650 cost).
+
+---
+
+## 6. Exit audit (recorded 2026-06-10; gauntlet wave + post-audit completions)
+
+| # | Criterion | Verdict | Evidence |
+|---|---|---|---|
+| 1 | One green smoke from cold Docker | **MET** | `screeps-ibex-eval smoke --ticks 600` PASS (`runs/smoke-d7d0d7a-…`); cold-boot path verified at A2/A8 |
+| 2 | Host test lane green incl. spawn-ordering + redaction pins | **MET** | bot 27/27 via `cargo test-host`; redaction pins green in kit/prospector/rest-api |
+| 3 | Secrets: pins + sweep + gitignore | **MET** | A7 final sweep traced six credential values — zero hits outside the two sanctioned steamKey locations; masked `setPassword` transcript; `git check-ignore` confirms all five paths |
+| 4 | Supplanted code removed; KEEP list intact | **MET** | C1/C2 in `d6eb76d`; KEEP-listed items untouched |
+| 5 | All D-rows landed with pins; clippy-wasm clean | **MET** | `segments.rs` registry; pins green; D4 deferred to Inc 1 by its own row |
+| 6 | Baselines recorded; comparison committed | **MET** | BASELINE-0 + BASELINE-1 (via screeps-pack); comparison table in baseline-0-report.md — CPU max 55.0→28.8, zero panics/deser/errors |
+| 7 | C1 break absorbed by sanctioned reset; MMO guard held | **MET** | every reset was eval-server `bootstrap --reset`; MMO never deployed |
+| 8 | Operator mode verified personally | **PARTIAL → operator** | all commands exercised live by automation + the operator's sign-off pass found and drove the fix of the pack-defaults bug (`4cc3a5c`); formal sign-off is the operator's call |
+| 9 | Documentation current (Usage then Design) | **MET** | kit/ibex-eval/prospector/pack READMEs current incl. BuildKit/CRLF, spawnPlacement, P6 verdict |
+| 10 | Prospector delivers | **MET** | live `auto --yes` placed W2N2 (19,22); offline deterministic; MMO recommend-first gated |
+| 11 | screeps-pack lands, npm-free, no legacy surface | **MET** | parity gate green (PARITY.md); server-kit library-driven; shell-out deleted; BASELINE-1 deployed through it; repo docs name it primary (`9631866`) |
+| A14 | Split + reference sweep | **MET** | kit has zero ibex policy (synthetic-marker-verified); sweep complete (`d7d0d7a`/`9631866`); Docker object names keep the legacy prefix deliberately until D-1 extraction |
+| P7 | Shared room scoring → foreman | **MET** | `screeps_foreman::room_scoring` landed (foreman `3e4a937`): RoomScorer trait + WeightedPipeline + ScoringContext; prospector stage-1 delegates with **bit-identical rankings** (43/43 tests, unchanged expectations); both-target verified (foreman 14/14 host, check-wasm clean for foreman AND the bot); Inc-7 claim.rs consumption spec'd in ADR 0009 |
+
+**Notable post-phase facts:** the FSM-cap `(ERROR)` line did not recur in BASELINE-1 (run variance — owned by ADR 0003/Inc 6, keep watching); the game-api fork js-sys incompatibility is filed as a background task; `C:\code\screeps-launcher-src` is the buildable launcher clone (LF checkout); the eval stack was left UP with the ibex colony running.

@@ -78,6 +78,8 @@ Introduce a **room-graph / connectivity model** keyed by stable `RoomName` (neve
 
 **5. Replaces linear distance at the empire layer (IBEX-032).** Expansion eligibility (`claim.rs`, `colony.rs`, `scout.rs`) reads **route distance from the room-graph** instead of Manhattan delta, with a reachability check, so claimers/escorts are never sent to linearly-close-but-route-unreachable rooms.
 
+> **Scoring substrate landed early (P0.P7, 2026-06-10):** `screeps_foreman::room_scoring` now exists — the shared composable candidate-scoring module (RoomScorer trait + WeightedPipeline + ScoringContext; prospector's stage-1 is already a consumer with bit-identical rankings). The Inc-7 form of this item: `claim.rs` replaces its bespoke `source_score`/`walkability_score`/`distance_score` with the `WeightedPipeline` — core scorers over `RoomFacts` built from live `RoomData` terrain/statics, composed via `ScoringContext` with `RouteDistanceToOwnedScorer` fed from `RoomRouteCache` route distances (absent entry = unreachable, gated before scoring) and `ProximityToSelectedScorer(Near)` over owned rooms — keeping foreman `PlanScore.total` as the separate stage-2 term it already uses.
+
 ## Alternatives Considered
 
 | Option | Pros | Cons |

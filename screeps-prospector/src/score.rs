@@ -1,12 +1,18 @@
-//! Two-stage spawn-site scoring (P0.P3).
+//! Two-stage spawn-site scoring (P0.P3; stage 1 shared since P0.P7).
 //!
 //! STAGE 1 — cheap heuristics over the cache: source count (2 strongly
 //! preferred), controller presence, mineral presence/type, swamp
 //! fraction, wall fraction, exit count/distribution. Each subscore is in
 //! `[0, 1]`; the total is a weighted average ([`HeuristicWeights`],
-//! operator-configurable). Rooms missing cached data are FETCH-LISTED
-//! ([`NeedsFetch`]) rather than silently skipped — the caller can print
-//! the exact `fetch` command to fill the gap.
+//! operator-configurable). THE SCORING ITSELF LIVES IN
+//! [`screeps_foreman::room_scoring`] (P0.P7 — one room-candidate
+//! scoring implementation shared with live Ibex claim/expansion and
+//! bench calibration); this module is prospector's POLICY SHELL: cache
+//! fetch-listing, CLI weight mapping onto the shared
+//! [`WeightedPipeline`], disqualification reporting, and stage 2.
+//! Rooms missing cached data are FETCH-LISTED ([`NeedsFetch`]) rather
+//! than silently skipped — the caller can print the exact `fetch`
+//! command to fill the gap.
 //!
 //! STAGE 2 — offline foreman planning for the top-N finalists: a
 //! [`PlannerRoomDataSource`] over the cached terrain+objects (the
@@ -37,7 +43,7 @@
 //! iterate reproducibly) — pinned by the stage-2 test running a room
 //! twice and comparing.
 
-use crate::cache::{CachedRoom, MineralInfo, RoomCache, TERRAIN_LEN};
+use crate::cache::{CachedRoom, MineralInfo, RoomCache};
 use anyhow::{Context, Result};
 use screeps_foreman::layer::PlacementLayer;
 use screeps_foreman::layers::{
@@ -48,7 +54,11 @@ use screeps_foreman::pipeline::CpuBudget;
 use screeps_foreman::plan::{Plan, PlanScore};
 use screeps_foreman::planner::{tick_planning, PlanResult, PlannerBuilder};
 use screeps_foreman::room_data::{PlanLocation, PlannerRoomDataSource};
-use screeps_foreman::terrain::{FastRoomTerrain, TerrainFlags};
+use screeps_foreman::room_scoring::{
+    self, ControllerScorer, ExitScorer, MineralFact, MineralScorer, RoomFacts, RoomScorer,
+    ScoringContext, SourceCountScorer, SwampScorer, WallsScorer, WeightedPipeline,
+};
+use screeps_foreman::terrain::FastRoomTerrain;
 use screeps_foreman::StructureType;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
@@ -60,10 +70,6 @@ pub const DEFAULT_FINALISTS: usize = 8;
 /// planning of a bench room completes well under this; the budget only
 /// exists so a pathological room cannot hang `recommend`.
 pub const DEFAULT_PLAN_TIMEOUT_SECS: u64 = 120;
-
-/// Exit-tile count at which the exit subscore bottoms out (a fully open
-/// 50x50 border has 196 exit tiles; typical rooms have 30-150).
-const EXIT_TILE_CAP: usize = 200;
 
 // ---------------------------------------------------------------------------
 // Stage 1 — cheap heuristics
@@ -92,119 +98,74 @@ pub struct HeuristicWeights {
     pub exits: f32,
 }
 
+impl HeuristicWeights {
+    /// Map these weights onto the shared pipeline, scorers in the
+    /// canonical (weighted-average accumulation) order: sources,
+    /// controller, mineral, swamp, walls, exits.
+    fn to_pipeline(&self) -> WeightedPipeline {
+        WeightedPipeline::new()
+            .with_weighted(SourceCountScorer, self.sources)
+            .with_weighted(ControllerScorer, self.controller)
+            .with_weighted(MineralScorer, self.mineral)
+            .with_weighted(SwampScorer, self.swamp)
+            .with_weighted(WallsScorer, self.walls)
+            .with_weighted(ExitScorer, self.exits)
+    }
+}
+
 impl Default for HeuristicWeights {
+    /// One source of truth: the shared scorers' default weights
+    /// (`screeps_foreman::room_scoring`).
     fn default() -> Self {
         HeuristicWeights {
-            sources: 3.0,
-            controller: 2.0,
-            mineral: 0.5,
-            swamp: 1.0,
-            walls: 0.5,
-            exits: 1.0,
+            sources: SourceCountScorer.default_weight(),
+            controller: ControllerScorer.default_weight(),
+            mineral: MineralScorer.default_weight(),
+            swamp: SwampScorer.default_weight(),
+            walls: WallsScorer.default_weight(),
+            exits: ExitScorer.default_weight(),
         }
     }
 }
 
-/// Terrain-derived facts for one room (pure function of the 2500-tile
-/// terrain buffer).
-#[derive(Debug, Clone, PartialEq)]
-pub struct TerrainMetrics {
-    /// Swamp tiles / non-wall tiles (swamps matter only where creeps walk).
-    pub swamp_fraction: f32,
-    /// Wall tiles / all 2500 tiles.
-    pub wall_fraction: f32,
-    /// Passable border tiles (`FastRoomTerrain::get_exits`).
-    pub exit_tiles: usize,
-    /// Number of room sides (top/right/bottom/left) with at least one exit.
-    pub exit_sides: usize,
-}
+/// Terrain-derived facts for one room — the shared module's
+/// [`room_scoring::TerrainStats`] under this crate's historical name.
+pub type TerrainMetrics = room_scoring::TerrainStats;
 
-/// Compute [`TerrainMetrics`] from decoded terrain.
+/// Compute [`TerrainMetrics`] from decoded terrain (delegates to
+/// [`room_scoring::terrain_stats`]).
 pub fn terrain_metrics(terrain: &FastRoomTerrain) -> TerrainMetrics {
-    let mut walls = 0usize;
-    let mut swamps = 0usize;
-    for y in 0..50u8 {
-        for x in 0..50u8 {
-            let flags = terrain.get_xy(x, y);
-            if flags.contains(TerrainFlags::WALL) {
-                walls += 1;
-            } else if flags.contains(TerrainFlags::SWAMP) {
-                swamps += 1;
-            }
-        }
-    }
-    let exits = terrain.get_exits();
-    // Sides: top (y=0), right (x=49), bottom (y=49), left (x=0). Corner
-    // tiles count for both adjacent sides.
-    let mut sides = [false; 4];
-    for exit in &exits {
-        if exit.y() == 0 {
-            sides[0] = true;
-        }
-        if exit.x() == 49 {
-            sides[1] = true;
-        }
-        if exit.y() == 49 {
-            sides[2] = true;
-        }
-        if exit.x() == 0 {
-            sides[3] = true;
-        }
-    }
-    let non_wall = (TERRAIN_LEN - walls).max(1);
-    TerrainMetrics {
-        swamp_fraction: swamps as f32 / non_wall as f32,
-        wall_fraction: walls as f32 / TERRAIN_LEN as f32,
-        exit_tiles: exits.len(),
-        exit_sides: sides.iter().filter(|s| **s).count(),
-    }
+    room_scoring::terrain_stats(terrain)
 }
 
-/// Source-count subscore: 2 strongly preferred (the standard claim
-/// target), 1 viable but slow, 3+ unusual (SK-adjacent layouts), 0
-/// useless.
+/// Source-count subscore ([`room_scoring::source_count_curve`]): 2
+/// strongly preferred (the standard claim target), 1 viable but slow,
+/// 3+ unusual (SK-adjacent layouts), 0 useless.
 pub fn source_count_score(count: usize) -> f32 {
-    match count {
-        0 => 0.0,
-        1 => 0.45,
-        2 => 1.0,
-        3 => 0.65,
-        _ => 0.5,
+    room_scoring::source_count_curve(count)
+}
+
+/// Bridge the cache's mineral record into the shared fact type.
+fn mineral_fact(info: &MineralInfo) -> MineralFact {
+    MineralFact {
+        location: PlanLocation::new(info.x as i8, info.y as i8),
+        mineral_type: info.mineral_type.clone(),
     }
 }
 
-/// Mineral subscore: presence is most of the value; the type bonus
-/// prefers X (catalyst — every tier-3 boost needs it), then H/O (the
-/// base feedstocks).
+/// Mineral subscore ([`room_scoring::mineral_curve`]): presence is most
+/// of the value; the type bonus prefers X (catalyst — every tier-3
+/// boost needs it), then H/O (the base feedstocks).
 pub fn mineral_score(mineral: Option<&MineralInfo>) -> f32 {
-    match mineral {
-        None => 0.0,
-        Some(info) => {
-            let type_bonus = match info.mineral_type.as_deref() {
-                Some("X") => 0.2,
-                Some("H") | Some("O") => 0.15,
-                _ => 0.1,
-            };
-            0.8 + type_bonus
-        }
-    }
+    room_scoring::mineral_curve(mineral.map(mineral_fact).as_ref())
 }
 
-/// Exit subscore: fewer exit tiles on fewer sides = a cheaper, more
-/// defensible perimeter. 0 exits would mean a sealed (unreachable) room
-/// — scored 0 as almost certainly bad data.
+/// Exit subscore ([`room_scoring::exit_curve`]): fewer exit tiles on
+/// fewer sides = a cheaper, more defensible perimeter. 0 exits would
+/// mean a sealed (unreachable) room — scored 0 as almost certainly bad
+/// data.
 pub fn exit_score(exit_tiles: usize, exit_sides: usize) -> f32 {
-    if exit_tiles == 0 {
-        return 0.0;
-    }
-    let side_score = match exit_sides {
-        0 | 1 => 1.0,
-        2 => 0.75,
-        3 => 0.5,
-        _ => 0.25,
-    };
-    let tile_score = 1.0 - (exit_tiles.min(EXIT_TILE_CAP) as f32 / EXIT_TILE_CAP as f32);
-    0.5 * side_score + 0.5 * tile_score
+    room_scoring::exit_curve(exit_tiles, exit_sides)
 }
 
 /// Stage-1 result for one room: total, every subscore, and the raw
@@ -268,59 +229,37 @@ pub fn heuristic_for_room(
     let metrics = terrain_metrics(&terrain);
     let summary = room.objects_summary();
 
-    let sources_score = source_count_score(summary.sources.len());
-    let controller_score = if summary.controller.is_some() {
-        1.0
-    } else {
-        0.0
+    // Bridge the cache record into the shared fact DTO and run the
+    // shared pipeline. Stage 1 is context-free here (the cache has no
+    // selected/owned rooms); context scorers compose at the call sites
+    // that have context.
+    let to_plan = |&(x, y): &(i32, i32)| PlanLocation::new(x as i8, y as i8);
+    let facts = RoomFacts {
+        room: room.room.clone(),
+        terrain: metrics,
+        sources: summary.sources.iter().map(to_plan).collect(),
+        controller: summary.controller.as_ref().map(to_plan),
+        mineral: summary.mineral.as_ref().map(mineral_fact),
     };
-    let mineral = mineral_score(summary.mineral.as_ref());
-    let swamp_score = 1.0 - metrics.swamp_fraction;
-    let walls_score = 1.0 - metrics.wall_fraction;
-    let exits = exit_score(metrics.exit_tiles, metrics.exit_sides);
-
-    let weight_sum = weights.sources
-        + weights.controller
-        + weights.mineral
-        + weights.swamp
-        + weights.walls
-        + weights.exits;
-    let total = if weight_sum > 0.0 {
-        (weights.sources * sources_score
-            + weights.controller * controller_score
-            + weights.mineral * mineral
-            + weights.swamp * swamp_score
-            + weights.walls * walls_score
-            + weights.exits * exits)
-            / weight_sum
-    } else {
-        0.0
-    };
-
-    let disqualified = if summary.controller.is_none() {
-        Some(
-            "no controller in cached objects — unclaimable, foreman planning would fail".to_owned(),
-        )
-    } else if summary.sources.is_empty() {
-        Some("no sources in cached objects — foreman planning would fail".to_owned())
-    } else {
-        None
-    };
+    let scored = weights
+        .to_pipeline()
+        .score_room(&facts, &ScoringContext::default());
+    let subscore = |name: &str| scored.subscore(name).unwrap_or(0.0);
 
     Ok(HeuristicScore {
         room: room.room.clone(),
-        total,
-        sources_score,
-        controller_score,
-        mineral_score: mineral,
-        swamp_score,
-        walls_score,
-        exits_score: exits,
+        total: scored.total,
+        sources_score: subscore("sources"),
+        controller_score: subscore("controller"),
+        mineral_score: subscore("mineral"),
+        swamp_score: subscore("swamp"),
+        walls_score: subscore("walls"),
+        exits_score: subscore("exits"),
         source_count: summary.sources.len(),
         has_controller: summary.controller.is_some(),
         mineral_type: summary.mineral.and_then(|m| m.mineral_type),
         metrics,
-        disqualified,
+        disqualified: scored.disqualified,
     })
 }
 
@@ -723,7 +662,7 @@ pub fn recommend(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::{CachedRoom, RoomStatus};
+    use crate::cache::{CachedRoom, RoomStatus, TERRAIN_LEN};
     use std::path::{Path, PathBuf};
 
     /// Bench seed fixture — READ-ONLY; stage-2 tests operate on a COPY.
