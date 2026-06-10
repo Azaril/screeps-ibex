@@ -1,0 +1,162 @@
+# Phase 1 Execution Plan — Survivable: Metrics, Score, Governor, Containment
+
+> **Scope:** Increment-0 remainder + Increment 1 of [`../plans/rewrite-plan.md`](../plans/rewrite-plan.md) → exit at **M0 (Verifiable) + M1 (Survivable)**. M1 is the table-stakes milestone: after it, the bot can no longer permanently die to its own CPU use (review Field Report C, IBEX-003/016/025) — the one failure class that ends a colony rather than denting it.
+>
+> **Living document.** §1 (Design) describes the long-term end state and changes only when a design decision changes. §2 (Execution) is the work tracker: statuses, decisions, baselines, and resume notes are updated as work lands — task IDs (`P1.*`) appear in commit messages exactly like Phase 0's `P0.*`. If you are resuming cold: read §2.0 status log first, then the task tables.
+>
+> **Status: NOT STARTED** (authored 2026-06-10).
+
+---
+
+## 1. Design — the end state
+
+Five subsystems, all behind seams that outlive this phase. ADR references are authoritative for rationale; this section pins what Phase 1 builds toward so the executor never needs to re-derive intent.
+
+### 1.1 Always-on metrics segment (seg 57) — [ADR 0006](../design/0006-eval-and-iteration-harness.md), [0002 registry](../design/0002-serialization.md)
+
+A versioned, always-on telemetry block the bot emits every tick to **segment 57** (already reserved in `segments.rs`), decoupled from the debug/visualization flag. Schema versioned from day one (field additions bump the version; the harness reads versioned). Initial fields (0006 + 0005 + 0004 consumers):
+
+- `cpu_used`, `cpu_limit`, `tick_limit`, `bucket`, **`bucket_trend`** (the governor's input and the death-spiral alarm's signal), `gcl`/`gpl`
+- `intents_by_category` (intent cost = 0.2 each is CPU ground truth)
+- `gcl_progress`, per-room `rcl/rcl_progress`, stored-energy, energy throughput
+- creep counts (by role class), mission/operation counts, threat summary, deaths
+- `restart_counter`, `deser_failures`, `panics_caught`, `serialize_skipped` — **distinguishing `shed` (intentional, governor) from `aborted` (containment caught)** (0005)
+- pathfinding: ops spent vs pool, `repath_count` (exists today but is written-never-read), simultaneous-repath count, saturation events (0004 step 2)
+- segment-IO watermark: chunk counts + fullness (0002 prep — routed here instead of the log line)
+
+**Seam contract:** the segment shape is a draft S-contract file this phase (0015 registry); the harness's reader and the bot's writer share the schema type through a host-compilable module so encode/decode is kernel-testable.
+
+### 1.2 Colony-health score, scenarios & gates — [ADR 0006](../design/0006-eval-and-iteration-harness.md), [component-test-plans §15](../plans/component-test-plans.md)
+
+`screeps-ibex-eval` grows from "hard-zero smoke" to the **computable objective function** (rewrite-plan §1): survival (gating) · CPU headroom · economic growth · military win-rate, fixed-weight, per-scenario-normalized. Pieces:
+
+- **Scenario config** (versioned, per §15.2): map/terrain, spawn placement, opponent, fault-injection schedule, seeds, gate expressions. First scenario: **economy bring-up** (exists informally as the smoke run — gets a config file and becomes the parity-recording substrate).
+- **Score + baseline differ**: runs land under `runs/` keyed (scenario, git SHA) — already the layout; the differ automates the BASELINE-0-vs-1 comparison that was done by hand, and flags regressions beyond threshold.
+- **Increment gate mode**: N=9 on-demand seeded runs that may gate immediately (0015; the earned-gating soak rule is nightly-lane only).
+- **CPU-pressure inducer** (F10): debug-console synthetic CPU burner (§15.4 candidate (i)) — *the entry gate for every Increment-1 validation below*.
+- **Fault injection**: forced reset, induced pressure, and the combination ("forced reset with active war" is the M1 acceptance scenario). **Reset mechanism — read this twice:** the probe is a **state-preserving global/VM reset** — the bot's one-shot `Memory._features.reset.*` flags (read by `features::load_reset`, `game_loop.rs`) or the redeploy-identical-code path proven in Phase 0 D1. `system.resetAllData()` is a **world wipe** (mongo re-seed + redis flush: spawns, creeps, segments, any active war all gone) — it bootstraps fresh-world scenarios and can NEVER be the reset probe; Phase 0 D1 recorded exactly this trap.
+
+### 1.3 CpuGovernor + budgeted pathfinding facade — [ADR 0004](../design/0004-cpu-governance-and-load-shedding.md)
+
+- **Governor**: a global resource computing a tier — `Normal / Conserve / Critical` — from bucket + trend (pure decision kernel, fixture-tested). Read at the top of every expensive system; replaces/generalizes the ~6–8 scattered `can_execute_cpu` sites. **Authoritative shed order** lives in 0004 (never-shed set: defense, spawn, haul, movement, `serialize_world`; war recompute/expansion/visuals shed first). Changes to the shed registry amend the ADR — that rule continues.
+- **Facade**: ONE budgeted pathfinding entry point with a shared per-tick ops pool scaled by tier. The mature rover budget is the inner layer (generalized, not replaced); `find_route` is charged to the pool (IBEX-039); `findnearest.rs` + `compute_nearest_spawn_distances` get `.max_ops` (IBEX-035); repath storms are capped; the `MIN_PATHFIND_OPS` floor stays so creeps never fully freeze (non-negotiable #1).
+- **Cache persistence** (step 5, rides the already-landed seg-55 fix): persist/warm `RoomRouteCache` and reduce cost-matrix rebuild to change-event/TTL on stable layers (IBEX-017/038).
+- War cadences move off 1 (IBEX-021) **with** the governor (measured, not blind constants — defense ~2 / offense ~10–20 / recompute ~50), including the `RoomThreatData` immutable-borrow restructure.
+
+### 1.4 Containment + scheduler seam — [ADR 0005](../design/0005-runtime-and-scheduling-model.md)
+
+- **Tick-level containment so `serialize_world` always runs.** Mechanism is an explicit in-phase decision (P1.C1): JS try/catch around the WASM call (robust under `panic="abort"`) **vs** switching the profile to `panic="unwind"` + `catch_unwind` (build-config change, not a format break). Decision criteria: wasm size/CPU cost, fidelity of the caught-panic telemetry, interplay with the screeps driver's error handling.
+- **`env.tick`-advance correctness**: the advance moves after a successful `serialize_world` (today it precedes `run_systems`), so an aborted tick cannot silently commit a half-applied world.
+- **Priority-scheduler seam at parity**: a scheduler hook wrapping `run_systems` introduced with the SAME order and no shedding, verified by **shadow-dispatch parity** (old + new schedulers over the same live tick, diffed through shadow intent sinks — NOT record/replay; `GameView` is only a skeleton this phase). The governor reads tiers between scheduler stages. Shedding is enabled only after parity holds.
+- **Narrowed panics**: IBEX-008 visual-flush per-target size guard + finite-coordinate clamp (the remaining named reachable panic; IBEX-010 already landed).
+
+### 1.5 Intent sink + differ — [ADR 0003 §A2](../design/0003-behavior-modeling.md), [0015 F4](../design/0015-testing-and-validation-strategy.md), IBEX-029
+
+All intents — **including combat's ~23 bare `attack/ranged_attack/heal/move` sites** — flow through the one guarded sink (`jobs/actions.rs` is pipeline authority; the dead `UNSET` flag gets consumed or deleted). The **intent differ** is built here as the parity instrument for the scheduler seam (and later the Inc-6 FSM pilot); IBEX-029 is its first consumer. This was reconciled from ADR 0003's "alongside Inc 6": the differ exists at Inc 1 per 0015, and routing combat intents is exactly what makes shadow-dispatch parity trustworthy.
+
+### 1.6 Riders (small, design-settled, land where convenient)
+
+- **0007 step 2–3**: two-phase `TransferSnapshot` snapshot-then-assign (matcher becomes pure `(snapshot, creep) → tickets`); governor-gated re-match cadence (Conserve raises cadence, Critical rides existing tickets; new High-priority demands exempt).
+- **0009 D1**: planner restart backoff (IBEX-037, `restart_attempts` + `Failed` state behind the 2000-tick replan gate, serde(default)) + gather-BFS budget (IBEX-036); warn-not-silent on seg-60 encode failure.
+- **0011 step 0**: executor quick-wins — engine-true renew energy decrement `ceil(1.2·cost/3/len)`, renew pass behind the priority gate (renew never consumes a lane a CRITICAL/HIGH spawn wants).
+- **0013 P0 remainder**: power-bank feasibility window (`kill_time(dps)+dist·50+spawn+200 ≤ ticks_to_decay` replacing `dist·50+500`), 20×ATTACK attacker cap (IBEX-043's fix landed; this is the economics half).
+- **G-13 half**: wire the dead `check_movement_failure` stuck-recovery (IBEX-015). (IBEX-040 shove-walkability is **NOT Phase-1 scope** — it is a `screeps-rover` submodule change that consumes the 0004 cached structure cost layer once P1.B5 stabilizes it; proposed-fixes and the rewrite plan both mark it not-Inc-1. It enters a later phase.)
+- **0012 M1 interim market trust** (IBEX-018): trailing multi-day median + exposure caps. *Stretch — may slip to Phase 2 (Inc 2) without harm; it is Inc 1–2 in the plan.*
+
+### 1.7 Kernel-test completion (Inc-0 tail) — [ADR 0015](../design/0015-testing-and-validation-strategy.md)
+
+Tranche-1 kernel coverage grows from ~33 toward ~60 as this phase's pure logic lands (governor decision function, score terms, segment-schema round-trip, facade budget arithmetic, formation geometry — the one named Inc-0 kernel still missing). The kernel-vs-shell rule applies: extracted pure logic ships with tests; strategy tweaks need none. `GameView` lands as a **skeleton trait only** (the seam name + the metrics/pressure reads this phase actually needs — no big-bang abstraction).
+
+### 1.8 Explicitly OUT of Phase 1
+
+Serialization Stage 1 (version header / reject-and-reset / fuzz — Phase 2 = Inc 2, which carries the Inc-2 sanctioned reset of deployed state), anything Inc 3+ (SquadStore, cohesion, FSM), seg-57 *consumers* beyond the governor/harness (posture, P&L), and all LOW-confidence Inc 7–9 material. The renderer corruption fix (Field Report H) stays opportunistic: containment (1.4) already prevents its worst symptom.
+
+---
+
+## 2. Execution — work tracking (living)
+
+### 2.0 Status log (newest first)
+
+- **2026-06-10** — Document authored; phase not started. Prerequisites all in place: Phase 0 substrate complete (exit audit §6 of [`phase-0.md`](phase-0.md)), seg 57 reserved in `segments.rs`, rover budget healthy, baselines BASELINE-0/1 recorded. Operator context: an MMO respawn (prospector flow) may run concurrently — coordinate deploys; the private-server eval stack is the validation environment for everything here.
+
+### 2.1 Conventions
+
+- Task IDs `P1.<workstream><n>` in every commit touching the task. Update the Status column in the same commit when a task completes (`unstarted → in-progress → done (commit)`).
+- Leaf-first commits for submodule work (none expected this phase — all work is in `screeps-ibex` + `screeps-ibex-eval` unless the rover budget generalization needs a `screeps-rover` change; if it does, commit rover first).
+- Every seam lands with its **draft contract file** (0015 S-registry). Host + wasm lanes both green before a task is `done`.
+- Validation scenario runs land under `runs/` keyed (scenario, git SHA); gate mode is N=9 seeded runs.
+
+### 2.2 Workstream A — metrics + score substrate (Inc-0 remainder; M0 closure)
+
+| ID | Task | Depends on | Validation | Status |
+|---|---|---|---|---|
+| P1.A1 | Seg-57 schema type (host-compilable module, versioned) + bot-side emitter, all §1.1 fields it can fill today; route the 0002 watermark into it | — | schema encode/decode kernel round-trip; smoke-run shows the segment populated every tick | unstarted |
+| P1.A2 | Harness reader: capture seg 57 (replacing/augmenting the seg-99 live-stats read) into run artifacts | P1.A1 | a smoke run's artifacts contain parsed seg-57 series | unstarted |
+| P1.A3 | Scenario config format (versioned; §15.2 fields) + port the economy-bringup smoke to it | — | same smoke behavior from a config file | unstarted |
+| P1.A4 | Colony-health score computation + baseline store/differ (automates the BASELINE comparison table) | P1.A2, P1.A3 | score computed for a BASELINE-1-era run; differ flags an injected regression | unstarted |
+| P1.A5 | CPU-pressure inducer (debug-console synthetic burner) + forced-reset-under-pressure composite scenario | P1.A3 | pressure scenario drives bucket down measurably and recovers | unstarted |
+| P1.A6 | `GameView` skeleton trait (seam name + the reads this phase needs) | — | compiles both targets; S-contract draft committed | unstarted |
+| P1.A7 | Tranche-1 kernel completion as logic extracts (incl. formation geometry) + F3 `MemoryArbiter` double in the testkit (Inc-0 infra, effort S — Inc 2's fuzz/corpus suite consumes it) | rolling | `cargo test` green; count recorded here at phase close | unstarted |
+
+### 2.3 Workstream B — CpuGovernor + pathfinding facade (ADR 0004)
+
+| ID | Task | Depends on | Validation | Status |
+|---|---|---|---|---|
+| P1.B1 | Step-1 quick-wins: `.max_ops` on findnearest + `compute_nearest_spawn_distances`; bucket-guard `RoomRouteCache::compute_route` | — | kernel tests where pure; smoke unchanged | unstarted |
+| P1.B2 | Step-2 telemetry: bucket trend, ticks-since-progress, repath storms (read `repath_count`), ops saturation → seg 57 | P1.A1 | fields visible in captured runs | unstarted |
+| P1.B3 | Step-3 governor: pure tier kernel (bucket+trend fixtures) + resource + the ~6 site conversions + authoritative shed order | P1.B2 | fixture tests (bucket/trend profiles: crash, slow-drain, recovery, sustained-Critical); pressure scenario sheds in ADR order, never-shed set untouched | unstarted |
+| P1.B4 | Step-4 facade: shared ops pool scaled by tier; rover budget inner; `find_route` charged; repath cap; `MIN_PATHFIND_OPS` floor | P1.B3 | pressure scenario: ops pool respected, no creep freeze; budget arithmetic kernel-tested | unstarted |
+| P1.B5 | Step-5 cache persistence/warm + cost-matrix TTL (IBEX-017/038) | P1.B4 | forced-reset scenario: no full-rebuild spike on the post-reset tick | unstarted |
+| P1.B6 | War cadences off 1 (IBEX-021) + `RoomThreatData` borrow restructure, governor-coordinated | P1.B3 | war scenario at parity; recompute CPU drops visibly in seg 57 | unstarted |
+
+### 2.4 Workstream C — containment + scheduler + intent sink (ADR 0005, 0003 §A2, 0015 F4)
+
+| ID | Task | Depends on | Validation | Status |
+|---|---|---|---|---|
+| P1.C1 | **Decision task**: containment mechanism (JS boundary vs `panic="unwind"`) — record the decision + criteria here and in ADR 0005 | — | decision recorded; spike measurements attached | unstarted |
+| P1.C2 | Tick-level containment per P1.C1 + panic/serialize-skipped counters (shed vs aborted) → seg 57; `env.tick` advance moved after successful serialize | P1.C1, P1.A1 | induced panic: tick aborts loudly, serialize still runs, counters increment, no restart loop | unstarted |
+| P1.C3 | Intent differ (F4) + shadow intent sinks | — | differ detects an injected intent change; deterministic ordering only (no record/replay) | unstarted |
+| P1.C4 | One guarded intent sink incl. combat's bare sites (IBEX-029); consume-or-delete the dead `UNSET` flag | P1.C3 | differ shows byte-identical intents pre/post conversion on the war scenario | unstarted |
+| P1.C5 | Priority-scheduler seam at parity (same order, no shedding), shadow-dispatch verified; then enable governor-driven shedding between stages | P1.C3, **P1.C4**, P1.B3 | shadow-dispatch parity clean over N=9 runs; shedding then activates per tier without parity drift in never-shed systems | unstarted |
+| P1.C6 | IBEX-008 visual-flush size guard + finite-coordinate clamp | — | renderer-on smoke completes; clamp kernel-tested | unstarted |
+
+### 2.5 Workstream D — riders (§1.6)
+
+| ID | Task | Depends on | Validation | Status |
+|---|---|---|---|---|
+| P1.D1 | 0007 two-phase `TransferSnapshot` + pure matcher seam | — | host tests on the pure matcher (S6 contract draft); smoke parity | unstarted |
+| P1.D2 | 0007 governor-gated re-match cadence | P1.B3, P1.D1 | Conserve scenario: re-match rate drops, deliveries keep flowing | unstarted |
+| P1.D3 | 0009 step-1 planner hardening (D1 restart backoff IBEX-037 + anchor memoization, gather-BFS budget IBEX-036, loud seg-60 encode failure) | — | induced plan-failure scenario: bounded retries, loud failure | unstarted |
+| P1.D4 | 0011 step-0 executor quick-wins (renew math, renew behind priority gate) | — | kernel test on renew math; spawn-pressure smoke parity | unstarted |
+| P1.D5 | 0013 P0 **subset**: feasibility window formula + 20×ATTACK cap (P0's launch re-scoring by spawn pressure and the `power_bank_duo()` adopt-or-delete decision stay open on the ADR row) | — | kernel test on the window formula | unstarted |
+| P1.D6 | IBEX-015 stuck-recovery wiring | — | stuck-creep scenario recovers | unstarted |
+| P1.D7 | *(stretch)* 0012 M1 market trust interim (IBEX-018) | — | adversarial pricing fixtures (T1/T2 subset) | unstarted |
+
+### 2.6 Sequencing
+
+```
+A1 → A2 → A4        (metrics → capture → score)        ─┐
+A3 ──────┘                                              ├→ V1 (M0 audit)
+A5 (pressure)  A6/A7 (rolling)                          ─┘
+B1 → B2 → B3 → B4 → B5      (governor chain)            ─┐
+            └→ B6                                        ├→ V2 (M1 audit)
+C1 → C2        C3 → C4 → C5        C6                   ─┘
+D1 → D2;  D3..D7 anywhere after their deps
+```
+
+Workstreams A/B/C/D interleave freely except where the Depends-on column says otherwise. Suggested first commit chain: A1 → B2 → B3 (the governor is the highest-value single artifact and only needs the metrics fields it reads).
+
+### 2.7 Exit criteria (the M0+M1 audit — fill at phase close like phase-0 §6)
+
+| # | Criterion | Source | Status |
+|---|---|---|---|
+| 1 | Seg-57 versioned metrics emitted every tick and captured by the harness | M0 / 0006 | — |
+| 2 | Colony-health score computable from a run; baseline differ automated; BASELINE-2 recorded (scenario, git SHA) | M0 / 0006 | — |
+| 3 | Increment-gate mode runnable (N=9 seeded) | 0015 | — |
+| 4 | Pressure scenario: bot makes progress under induced CPU pressure, **no restart loop, no death-spiral alarm** | M1 / 0004 | — |
+| 5 | Forced reset with active war: progress continues; post-reset tick has no cost-matrix rebuild spike | M1 / 0004 | — |
+| 6 | **No tick ever skips `serialize_world`** (counters prove shed≠aborted; induced panic contained) | M1 / 0005 | — |
+| 7 | Shadow-dispatch parity clean before shedding enabled; intent differ operational; combat intents through the sink | 0005/0003/0015 | — |
+| 8 | All new seams have draft contract files; host + wasm lanes green; kernel count recorded | 0015 | — |
+| 9 | Rewrite-plan §3 Status cells + §7 changelog updated; Phase 2 (Inc 2) entry confirmed unblocked | process | — |
+| 10 | Operator sign-off | operator | — |
