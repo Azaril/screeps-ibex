@@ -20,16 +20,55 @@ use std::path::PathBuf;
 )]
 struct Cli {
     /// Bot crate Cargo.toml (or a workspace root with exactly one
-    /// cdylib member)
-    #[arg(long, global = true, default_value = "Cargo.toml")]
-    manifest_path: PathBuf,
+    /// cdylib member). Default: ./Cargo.toml if the current directory
+    /// has one, else ../Cargo.toml relative to this crate (the
+    /// in-repo layout, where screeps-pack is a workspace-excluded
+    /// sibling of the bot — the convention all the tool crates share).
+    #[arg(long, global = true)]
+    manifest_path: Option<PathBuf>,
 
-    /// SS3 credentials file (servers: entries + configs:)
-    #[arg(long, global = true, default_value = ".screeps.yaml")]
-    creds: PathBuf,
+    /// SS3 credentials file (servers: entries + configs:). Default:
+    /// ./.screeps.yaml if present, else ../.screeps.yaml relative to
+    /// this crate (the sibling-crate convention).
+    #[arg(long, global = true)]
+    creds: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Command,
+}
+
+/// Resolve a default path: prefer `name` in the current directory
+/// (external users running from their bot crate), falling back to
+/// `../name` anchored at this crate (the in-repo sibling layout).
+/// An explicit flag always wins and is used verbatim.
+fn resolve_default(explicit: Option<PathBuf>, name: &str) -> PathBuf {
+    if let Some(p) = explicit {
+        return p;
+    }
+    let cwd_candidate = PathBuf::from(name);
+    // "Exists in cwd" wins — except when that file is screeps-pack's OWN
+    // copy (running `cargo run` from inside this crate in-repo): the
+    // tool's own manifest is never the bot, so fall through to the
+    // sibling convention.
+    let is_own_file = || {
+        let own = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(name);
+        matches!(
+            (cwd_candidate.canonicalize(), own.canonicalize()),
+            (Ok(a), Ok(b)) if a == b
+        )
+    };
+    if cwd_candidate.exists() && !is_own_file() {
+        return cwd_candidate;
+    }
+    let crate_anchored = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join(name);
+    if crate_anchored.exists() {
+        return crate_anchored;
+    }
+    // Neither exists: return the cwd form so the error message names
+    // the conventional location.
+    cwd_candidate
 }
 
 #[derive(Subcommand)]
@@ -73,6 +112,8 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    let manifest_path = resolve_default(cli.manifest_path, "Cargo.toml");
+    let creds = resolve_default(cli.creds, ".screeps.yaml");
     match cli.command {
         Command::Deploy {
             server,
@@ -80,8 +121,8 @@ async fn main() -> Result<()> {
             dryrun,
         } => {
             let options = PackOptions {
-                manifest_path: cli.manifest_path,
-                creds_path: cli.creds,
+                manifest_path: manifest_path.clone(),
+                creds_path: creds.clone(),
                 server,
                 debug,
             };
@@ -97,8 +138,8 @@ async fn main() -> Result<()> {
         }
         Command::Build { server, debug } => {
             let options = PackOptions {
-                manifest_path: cli.manifest_path,
-                creds_path: cli.creds,
+                manifest_path: manifest_path.clone(),
+                creds_path: creds.clone(),
                 server,
                 debug,
             };
@@ -106,7 +147,7 @@ async fn main() -> Result<()> {
             println!("{outcome}");
             Ok(())
         }
-        Command::Check { server } => check(cli.manifest_path, cli.creds, server),
+        Command::Check { server } => check(manifest_path, creds, server),
     }
 }
 
