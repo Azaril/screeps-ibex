@@ -1,0 +1,50 @@
+# Vendored KEYLESS screeps-launcher config template (P0.A2).
+#
+# This file is committed and must NEVER contain a steamKey. At runtime the
+# harness merges a key in-memory — from `eval.steamKey` in the gitignored
+# `.screeps.yaml` (or from the base config named by `eval.serverConfig`,
+# which replaces this template entirely) — and writes the merged result to
+# screeps-eval/target/runtime/config.yml (gitignored), which is what gets
+# bind-mounted into the launcher container at /screeps/config.yml.
+#
+# Schema source: screepers/screeps-launcher (main branch), launcher/config.go
+# + config.sample.yml + README.md. Kept close to the upstream sample's
+# recommended defaults.
+
+# Mods (upstream README "Recommended mods"):
+# - screepsmod-mongo: REQUIRED for this stack — switches storage to the
+#   mongo+redis containers (reads MONGO_HOST/REDIS_HOST from container env;
+#   the launcher passes its own env through to server processes,
+#   launcher/server.go `os.Environ()`).
+# - screepsmod-auth: password auth (`setPassword`) for the HTTP API.
+# - screepsmod-admin-utils: enables the `serverConfig:` section below
+#   (tickRate etc.) and extra CLI utilities.
+mods:
+  - screepsmod-mongo
+  - screepsmod-auth
+  - screepsmod-admin-utils
+
+# NPC bot AI available to `bots.spawn(...)` (upstream sample default).
+bots:
+  simplebot: screepsbot-zeswarm
+
+# Backend process env (launcher/config.go ConfigEnv, yaml tag `env`).
+# CLI_HOST/CLI_PORT are the *server-side bind* of the screeps CLI server —
+# launcher defaults are 127.0.0.1:21026 (config.go NewConfig), i.e.
+# unreachable from outside the container. The harness FORCES these at merge
+# time regardless of what this file says; they are spelled out here so the
+# template documents the intent.
+env:
+  backend:
+    GAME_HOST: 0.0.0.0     # launcher default; the game/API bind
+    GAME_PORT: "21025"     # launcher default
+    CLI_HOST: 0.0.0.0      # NON-default: bind the CLI for host access
+    CLI_PORT: "21026"      # launcher default port, non-default bind
+
+# Requires screepsmod-admin-utils. tickRate is in milliseconds and is a
+# lower bound (upstream README). The harness overwrites it at merge time
+# with `eval.tickMs` (default 100; floor 50 — Phase 0 decision D-2).
+serverConfig:
+  tickRate: 100
+  welcomeText: |
+    <h1 style="text-align: center;">screeps-eval private server</h1>

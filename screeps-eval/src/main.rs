@@ -72,18 +72,39 @@ enum Command {
 
 #[derive(Subcommand)]
 enum ServerAction {
+    /// Start the stack (pull images / create / start as needed) and wait
+    /// until the game API answers. First boot takes ~10 min (in-container
+    /// npm install); warm restarts are fast.
     Up,
+    /// Stop the containers; keep containers, network, and volumes
+    /// (the next `up` is a warm restart)
     Down,
-    /// Down + remove containers, network, and volumes (fresh next Up)
-    Destroy,
+    /// Remove containers, network, AND volumes — all world data is lost
+    Destroy {
+        /// Confirm the data loss
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Container table (state, health, discovered published ports) +
+    /// live game-API and CLI-port probes
     Status,
-    Logs,
+    /// Print the launcher container's logs
+    Logs {
+        /// Keep streaming new output (Ctrl-C to stop)
+        #[arg(long, short)]
+        follow: bool,
+        /// Number of trailing lines to show
+        #[arg(long, default_value_t = 100)]
+        tail: u32,
+    },
 }
 
 #[derive(Subcommand)]
 enum TickAction {
     /// Set the tick duration in milliseconds (floor: 50 ms)
-    Set { ms: u64 },
+    Set {
+        ms: u64,
+    },
     Pause,
     Resume,
 }
@@ -127,7 +148,37 @@ async fn main() -> Result<()> {
             }
             bail!("tick control lands with P0.A3/P0.A8 (server-CLI client)")
         }
-        Command::Server { .. } => bail!("server lifecycle lands with P0.A2 (bollard)"),
+        Command::Server { action } => {
+            match action {
+                ServerAction::Up => {
+                    let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
+                    screeps_eval::docker::up(&cfg.eval).await?;
+                    let report = screeps_eval::docker::status(&cfg.eval).await?;
+                    println!("{report}");
+                }
+                ServerAction::Down => screeps_eval::docker::down().await?,
+                ServerAction::Destroy { yes } => {
+                    if !yes {
+                        bail!(
+                            "`server destroy` removes the containers, the {net} network, and \
+                             the volumes — ALL world data is lost. Re-run with --yes to confirm \
+                             (use `server down` to stop while keeping data).",
+                            net = screeps_eval::docker::NETWORK
+                        );
+                    }
+                    screeps_eval::docker::destroy().await?;
+                }
+                ServerAction::Status => {
+                    let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
+                    let report = screeps_eval::docker::status(&cfg.eval).await?;
+                    println!("{report}");
+                }
+                ServerAction::Logs { follow, tail } => {
+                    screeps_eval::docker::logs(follow, tail).await?;
+                }
+            }
+            Ok(())
+        }
         Command::Bootstrap { .. } => bail!("bootstrap lands with P0.A3"),
         Command::Deploy { .. } => bail!("deploy lands with P0.A4"),
         Command::Run { .. } => bail!("run/capture lands with P0.A5"),
