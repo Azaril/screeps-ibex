@@ -160,23 +160,49 @@ pub async fn build_launcher_image(docker: &Docker, image: &ImageSettings) -> Res
     };
     let dockerfile = build.dockerfile_name();
     let tar_bytes = build_context_tar(&build.context, dockerfile)?;
+    // bollard's BuildImageOptions ALWAYS serializes `platform`, and an
+    // empty value is rejected by newer daemons (Docker 29, live
+    // 2026-06-10: `failed to parse platform : "" is an invalid OS
+    // component`). Build for the daemon's own platform: `/version`
+    // reports Go-convention `Os`/`Arch` values ("linux"/"amd64"),
+    // which are exactly the components the build endpoint accepts.
+    let version = docker
+        .version()
+        .await
+        .context("querying the daemon version (for the build platform)")?;
+    let platform = match (version.os.as_deref(), version.arch.as_deref()) {
+        (Some(os), Some(arch)) => format!("{os}/{arch}"),
+        _ => bail!("the Docker daemon did not report Os/Arch — cannot pick a build platform"),
+    };
     tracing::info!(
         image = %image.name,
         context = %build.context.display(),
         dockerfile,
+        platform = %platform,
         tar_kib = tar_bytes.len() / 1024,
-        "building launcher image"
+        "building launcher image (BuildKit)"
     );
+    // BuildKit, not the classic builder: the upstream launcher
+    // Dockerfile uses `FROM --platform=$BUILDPLATFORM`, `RUN
+    // --mount=type=cache`, and heredoc RUN blocks — all BuildKit-only
+    // (the classic builder leaves $BUILDPLATFORM empty and fails with
+    // `failed to parse platform : ""`; verified live 2026-06-10).
+    // BuildKit requires a session id alongside the builder version.
+    let session = format!("screeps-server-kit-build-{}", std::process::id());
     let options = BuildImageOptionsBuilder::new()
         .t(&image.name)
         .dockerfile(dockerfile)
+        .platform(&platform)
         .rm(true)
+        .version(bollard::query_parameters::BuilderVersion::BuilderBuildKit)
+        .session(&session)
         .build();
     let mut stream = docker.build_image(
         options,
         None,
         Some(bollard::body_full(bytes::Bytes::from(tar_bytes))),
     );
+    let mut last_log = Instant::now();
     while let Some(item) = stream.next().await {
         let info = item.with_context(|| format!("building image {}", image.name))?;
         if let Some(error) = info.error {
@@ -186,10 +212,27 @@ pub async fn build_launcher_image(docker: &Docker, image: &ImageSettings) -> Res
                 .unwrap_or_default();
             bail!("image build failed: {error} {detail}");
         }
+        // Classic-builder text lines (kept for non-BuildKit daemons).
         if let Some(line) = info.stream {
             let line = line.trim_end();
             if !line.is_empty() {
                 tracing::info!(target: "docker_build", "{line}");
+            }
+        }
+        // BuildKit progress arrives as status graphs; surface vertex
+        // errors immediately, log step names (throttled).
+        if let Some(bollard::models::BuildInfoAux::BuildKit(status)) = info.aux {
+            for vertex in &status.vertexes {
+                if !vertex.error.is_empty() {
+                    bail!("image build failed: {} ({})", vertex.error, vertex.name);
+                }
+                if vertex.started.is_some()
+                    && vertex.completed.is_none()
+                    && last_log.elapsed() > Duration::from_secs(3)
+                {
+                    tracing::info!(target: "docker_build", "{}", vertex.name);
+                    last_log = Instant::now();
+                }
             }
         }
     }

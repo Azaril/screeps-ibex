@@ -303,7 +303,29 @@ refusal matrix unit-tested:
 `place` prints the exact API call before gating; a refused command
 performs zero network I/O.
 
-### Extraction plan
+### `screeps-game-api` types — P0.P6 verdict: NOT adopted (blocked)
+
+Investigated 2026-06-10 (timeboxed): using the local
+`../screeps-game-api` fork's pure types (`local::RoomName`, coordinate
+types, terrain enums) host-side instead of treating room names as
+opaque strings.
+
+**Blocked by a dependency-version skew, not by the wasm externs.** The
+fork (0.23.1) declares `js-sys = "0.3"`; a fresh resolution in this
+crate's graph picks current js-sys (0.3.100), against which the fork
+fails to compile with E0282 type-inference errors (two call sites:
+`src/objects/impls/store.rs:44` and the analogous `Object::keys`
+caller — newer js-sys gave `Object::keys` a type parameter). The bot
+workspace compiles only because its committed `Cargo.lock` pins js-sys
+0.3.85; that pin cannot be replicated here cleanly — js-sys 0.3.85
+requires `wasm-bindgen = "=0.2.108"`, which conflicts with the rest of
+this crate's already-locked graph (it also contains screeps-foreman's
+crates-io `screeps-game-api 0.23` copy). The clean unblock is a small
+upstream-quality fork fix (annotate the two `Object::keys` call sites),
+which is outside this crate's scope (AGENTS.md §7). Until then this
+crate keeps room names as opaque keys — it performs no room-name
+arithmetic, so the cost is validation-only. Revisit when the fork
+compiles against current js-sys.
 
 Same lifecycle as `screeps-server-kit` (Phase-0 decision D-1): in-repo and
 workspace-excluded now, extracted to its own repository once stable.
@@ -320,9 +342,17 @@ table collapses.
 
 Offline behavior (P0.P1–P0.P3 + the offline half of P0.P4) is fully
 tested: 43 tests in this crate against literal/recorded fixtures and a
-copy of the bench map (plus the endpoint-shape pins, now 28 tests in
+copy of the bench map (plus the endpoint-shape pins, now 29 tests in
 the shared `screeps-rest-api` crate), no network, no Docker.
-**Deferred:** the live private-server `auto --yes` end-to-end (the
-P0.P4 "done when") runs once the Workstream-A eval-server work settles
-and a private server is available — the Workstream-P live-test
-constraint keeps this build offline.
+
+**Live (2026-06-10):** the private-server `auto --yes` end-to-end (the
+P0.P4 "done when") ran green against the eval stack — scan (144 rooms,
+35 open) → fetch → recommend (8 full-profile foreman plans) → placed
+the best room's plan-derived spawn tile (W2N2 (19,22) on the default
+map), with the world-status guard verified (`empty` → proceed;
+`normal` → refuse). The same run caught and pinned one live shape: the
+private server returns room-objects **without** an `ok` field (fixed +
+fixture-pinned in `screeps-rest-api`). The `screeps-server-kit`
+bootstrap integration (`spawnPlacement: prospector` in its
+`config/local.yml`) is also live-verified — it drives this crate's
+`ops`/`score` as a library and places the identical room/tile.

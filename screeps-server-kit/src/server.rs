@@ -46,7 +46,7 @@
 //!   objects, user not blocked and has cpu. Success claims the
 //!   controller (level 1 + safe mode) and returns `{ok:1, newbie:true}`.
 
-use crate::config::{BotEndpoint, KitConfig, SpawnPreference};
+use crate::config::{BotEndpoint, KitConfig, SpawnPlacement, SpawnPreference};
 use anyhow::{anyhow, bail, Context, Result};
 use screeps_rest_api::Client;
 use secrecy::ExposeSecret;
@@ -645,7 +645,7 @@ pub async fn bootstrap(cfg: &KitConfig, reset: bool) -> Result<BootstrapOutcome>
         } else {
             SpawnPreference::default()
         };
-        let outcome = bootstrap_bot(&cli, bot, &pref, &claimed).await?;
+        let outcome = bootstrap_bot(&cli, bot, &pref, cfg.stack.spawn_placement, &claimed).await?;
         if let SpawnOutcome::Placed { room, .. } = &outcome.spawn {
             claimed.insert(room.clone());
         }
@@ -664,6 +664,7 @@ async fn bootstrap_bot(
     cli: &CliClient,
     bot: &BotEndpoint,
     pref: &SpawnPreference,
+    placement: SpawnPlacement,
     exclude: &HashSet<String>,
 ) -> Result<BotBootstrapOutcome> {
     let api = crate::api::client(&bot.endpoint)?;
@@ -719,7 +720,7 @@ async fn bootstrap_bot(
         SpawnOutcome::AlreadyPresent
     } else {
         let spawn_name = spawn_name_for(&bot.name);
-        let placed = place_first_spawn(cli, &api, pref, exclude, &spawn_name).await?;
+        let placed = place_first_spawn(cli, &api, pref, placement, exclude, &spawn_name).await?;
         tracing::info!(bot = %bot.name, room = %placed.0, x = placed.1, y = placed.2, "spawn placed");
         SpawnOutcome::Placed {
             name: spawn_name,
@@ -769,12 +770,15 @@ async fn wait_for_settle(cli: &CliClient, api: &Client) -> Result<()> {
 /// - room only → auto-pick a tile in that room,
 /// - nothing → auto-pick room (central candidates first) and tile.
 ///
+/// The auto-pick path is selected by `placement` (P0.P4 follow-on):
+/// the kit's built-in picker (default) or the prospector pipeline.
 /// `exclude` holds rooms claimed by earlier bots this run (P0.A10
 /// distinct-room rule); `spawn_name` is the per-bot spawn name.
 async fn place_first_spawn(
     cli: &CliClient,
     api: &Client,
     pref: &SpawnPreference,
+    placement: SpawnPlacement,
     exclude: &HashSet<String>,
     spawn_name: &str,
 ) -> Result<(String, u32, u32)> {
@@ -795,6 +799,10 @@ async fn place_first_spawn(
             bail!("spawn needs both x and y (or neither, for auto-pick)");
         }
         _ => {}
+    }
+
+    if placement == SpawnPlacement::Prospector {
+        return place_via_prospector(api, pref.room.as_deref(), exclude, spawn_name).await;
     }
 
     let candidates = parse_candidate_rooms(&cli.send(&cmd_candidate_rooms()).await?)?;
@@ -838,6 +846,82 @@ async fn place_first_spawn(
     Err(last_err
         .map(|e| e.context("every candidate placement was rejected"))
         .unwrap_or_else(|| anyhow!("no buildable spawn tile in any candidate room")))
+}
+
+/// Prospector-backed auto-pick (P0.P4 follow-on, `spawnPlacement:
+/// prospector`): scan the whole map for open rooms, fetch
+/// terrain/objects into an in-memory cache, run the two-stage
+/// recommend pipeline (cheap heuristics -> offline foreman room plans
+/// for the finalists), and place the best room's plan-derived spawn
+/// tile. Slower than the kit picker — each finalist gets a full room
+/// plan — but the spawn lands where the eventual base layout wants it.
+///
+/// No fallback to the kit picker: like the explicit-preference path,
+/// the configured mode wins or fails loudly. `pref_room` (a room-only
+/// `spawn:` preference) restricts the candidate set to that room;
+/// `exclude` applies the P0.A10 distinct-room rule.
+async fn place_via_prospector(
+    api: &Client,
+    pref_room: Option<&str>,
+    exclude: &HashSet<String>,
+    spawn_name: &str,
+) -> Result<(String, u32, u32)> {
+    use screeps_prospector::cache::RoomCache;
+    use screeps_prospector::{ops, score};
+
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // In-memory, per-call cache: bootstrap runs against a just-reset
+    // world, so persisting scan results would only risk staleness.
+    let mut cache = RoomCache::default();
+
+    let world = api.world_size().await?;
+    let rooms = screeps_rest_api::enumerate_room_names(world.width, world.height);
+    let scan = ops::scan_rooms(api, &mut cache, &rooms, now_unix).await?;
+    let mut open: Vec<String> = cache
+        .open_rooms()
+        .map(|r| r.room.clone())
+        .filter(|r| !exclude.contains(r))
+        .collect();
+    tracing::info!(
+        scanned = scan.scanned,
+        open = open.len(),
+        "prospector placement: scan complete"
+    );
+    if let Some(room) = pref_room {
+        if !open.iter().any(|r| r == room) {
+            bail!(
+                "spawn.room {room} is not open for spawning (or was claimed by an \
+                 earlier bot this run); open candidates: {}",
+                open.join(", ")
+            );
+        }
+        open = vec![room.to_owned()];
+    }
+    if open.is_empty() {
+        bail!("no open candidate rooms for prospector placement (is the world seeded?)");
+    }
+
+    ops::fetch_rooms(api, &mut cache, &open, 3600, now_unix).await?;
+    let result = score::recommend(&cache, &open, &score::RecommendOptions::default());
+    let best = result
+        .recommendations
+        .first()
+        .context("prospector placement: no candidate room produced a viable plan")?;
+    let (x, y) = (u32::from(best.spawn.0), u32::from(best.spawn.1));
+    tracing::info!(
+        room = %best.room,
+        x,
+        y,
+        plan_score = best.plan_score.total,
+        "prospector placement: best plan selected"
+    );
+    api.place_spawn(&best.room, x, y, spawn_name)
+        .await
+        .with_context(|| format!("prospector placement at {} ({x},{y}) failed", best.room))?;
+    Ok((best.room.clone(), x, y))
 }
 
 // ===================================================================

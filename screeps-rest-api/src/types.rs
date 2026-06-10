@@ -150,6 +150,12 @@ pub struct TerrainEntry {
 /// `GET /api/game/room-objects` response.
 #[derive(Debug, Deserialize)]
 pub struct RoomObjectsResponse {
+    /// DEFAULTED: the live private server (screeps-launcher stack,
+    /// recorded 2026-06-10) returns `{objects, users}` with NO `ok`
+    /// field for this endpoint, while python-screeps documents `ok: 1`
+    /// (screeps.com). Errors are classified by the `{"error": ...}`
+    /// envelope before the typed parse, so `ok` carries no signal here.
+    #[serde(default)]
     pub ok: i32,
     /// Lazily-typed: per-type fields vary wildly. Callers filter these
     /// down to whatever subset they consume.
@@ -338,8 +344,30 @@ mod tests {
         }"#;
         let parsed: RoomObjectsResponse =
             parse_api_response(200, fixture, "room-objects response").unwrap();
+        assert_eq!(parsed.ok, 1);
         assert_eq!(parsed.objects.len(), 3);
         assert_eq!(parsed.objects[2]["mineralType"], "H");
+    }
+
+    /// RECORDED SHAPE: room-objects on the live private server
+    /// (screeps-launcher stack, 2026-06-10) — NO `ok` field:
+    /// `{"objects":[{"_id":"03a407734e2b07f","room":"W5N5","type":"source",...}],"users":{...}}`.
+    /// Caught live by the first prospector `auto` run (P0.P4); `ok` is
+    /// defaulted so both shapes parse.
+    #[test]
+    fn room_objects_without_ok_field_parses_live_private_server_shape() {
+        let fixture = r#"{
+            "objects": [
+                {"_id": "03a407734e2b07f", "room": "W5N5", "type": "source", "x": 5, "y": 5, "energy": 4000, "energyCapacity": 4000, "ticksToRegeneration": 300, "nextRegenerationTime": null},
+                {"_id": "834761653eb3bb2", "type": "mineral", "mineralType": "K", "mineralAmount": 50191.29600747557, "x": 42, "y": 32}
+            ],
+            "users": {}
+        }"#;
+        let parsed: RoomObjectsResponse =
+            parse_api_response(200, fixture, "room-objects response").unwrap();
+        assert_eq!(parsed.ok, 0, "absent ok defaults");
+        assert_eq!(parsed.objects.len(), 2);
+        assert_eq!(parsed.objects[1]["mineralType"], "K");
     }
 
     /// RECORDED SHAPE: room-status `room:` wrapper (live server shape

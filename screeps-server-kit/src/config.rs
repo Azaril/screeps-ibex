@@ -3,10 +3,11 @@
 //!
 //! Two files, two concerns:
 //! - **`../.screeps.yaml`** (repo root, gitignored) — server CREDENTIALS
-//!   only (`servers:` entries; the same unified file deploy.js and
+//!   only (`servers:` entries; the same unified file screeps-pack and
 //!   screeps-prospector read). `--config` overrides this path and is the
-//!   only override. Any other top-level section (`configs:`, a leftover
-//!   `eval:`) is ignored.
+//!   only override. Any other top-level section (a leftover `eval:`) is
+//!   ignored here — `configs:` is consumed by screeps-pack, which reads
+//!   the file itself at deploy time.
 //! - **`config/local.yml`** (crate-local, gitignored via this crate's
 //!   `.gitignore`) — server-stack settings: `steamKey`, `ports`, `tickMs`,
 //!   `spawn`, `bots` (P0.A10), `image` (P0.A9(d)). The committed
@@ -130,6 +131,9 @@ pub struct StackSettings {
     /// that room; room+x+y = exact placement (no fallback); nothing =
     /// auto-pick room and tile.
     pub spawn: SpawnPreference,
+    /// Which auto-picker `bootstrap` uses when no exact spawn tile is
+    /// configured (P0.P4 follow-on). Default: the kit's built-in picker.
+    pub spawn_placement: SpawnPlacement,
     /// Bot identities to bootstrap (P0.A10): names of `servers:`
     /// entries in `.screeps.yaml`. Default `["private-server"]`.
     pub bots: Vec<String>,
@@ -145,6 +149,25 @@ pub struct SpawnPreference {
     pub room: Option<String>,
     pub x: Option<u32>,
     pub y: Option<u32>,
+}
+
+/// How `bootstrap` picks a first-spawn room/tile when no explicit
+/// `spawn.room`+`x`+`y` is configured (P0.P4 follow-on integration —
+/// `spawnPlacement:` in config/local.yml):
+/// - `kit` (default): the built-in picker — central candidate rooms,
+///   POI-centroid tile ranking. Fast, no planning.
+/// - `prospector`: the screeps-prospector two-stage pipeline (cheap
+///   heuristics -> offline foreman room planning) — the spawn lands on
+///   the tile the eventual base layout wants it on. Slower (full room
+///   plans for the finalists).
+///
+/// An explicit `spawn.room`+`x`+`y` always wins over either mode.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpawnPlacement {
+    #[default]
+    Kit,
+    Prospector,
 }
 
 /// The optional `image:` block (P0.A9(d)).
@@ -193,6 +216,7 @@ impl Default for StackSettings {
             cli_port: DEFAULT_CLI_PORT,
             tick_ms: TICK_MS_SMOKE,
             spawn: SpawnPreference::default(),
+            spawn_placement: SpawnPlacement::default(),
             bots: vec![DEFAULT_SERVER_NAME.to_string()],
             image: ImageSettings::default(),
         }
@@ -269,6 +293,8 @@ struct RawLocal {
     tick_ms: Option<u64>,
     #[serde(default)]
     spawn: RawLocalSpawn,
+    /// `spawnPlacement: kit | prospector` (P0.P4 follow-on).
+    spawn_placement: Option<SpawnPlacement>,
     bots: Option<Vec<String>>,
     image: Option<RawLocalImage>,
 }
@@ -319,6 +345,7 @@ impl From<RawLocal> for StackSettings {
                 x: raw.spawn.x,
                 y: raw.spawn.y,
             },
+            spawn_placement: raw.spawn_placement.unwrap_or_default(),
             bots: raw.bots.unwrap_or(defaults.bots),
             image: match raw.image {
                 None => defaults.image,
@@ -502,6 +529,7 @@ spawn:
   room: W5N3
   x: 18
   y: 14
+spawnPlacement: prospector
 bots:
   - ibex
   - ibex-2
@@ -553,6 +581,7 @@ image:
         assert_eq!(eval.spawn.room.as_deref(), Some("W5N3"));
         assert_eq!(eval.spawn.x, Some(18));
         assert_eq!(eval.spawn.y, Some(14));
+        assert_eq!(eval.spawn_placement, SpawnPlacement::Prospector);
         assert_eq!(eval.bots, vec!["ibex", "ibex-2"]);
         assert_eq!(eval.image.name, "screepers/screeps-launcher:local");
         let build = eval.image.build.as_ref().unwrap();
@@ -575,6 +604,8 @@ image:
             assert_eq!(eval.cli_port, DEFAULT_CLI_PORT);
             assert_eq!(eval.tick_ms, TICK_MS_SMOKE);
             assert!(eval.spawn.room.is_none());
+            // P0.P4 follow-on: the kit picker stays the default.
+            assert_eq!(eval.spawn_placement, SpawnPlacement::Kit);
             // P0.A10 compat: the default bots list is the historical
             // single entry.
             assert_eq!(eval.bots, vec![DEFAULT_SERVER_NAME]);
@@ -608,6 +639,24 @@ image:
         let eval = StackSettings::from_local_yaml_str("image:\n  name: my/launcher:dev\n").unwrap();
         assert_eq!(eval.image.name, "my/launcher:dev");
         assert!(eval.image.build.is_none());
+    }
+
+    /// The P0.P4 follow-on flag: `spawnPlacement: kit | prospector`,
+    /// kit by default (the operator's minimal-config directive — one
+    /// optional key, no sub-settings), junk values are clear errors.
+    #[test]
+    fn spawn_placement_flag_parses_with_kit_default() {
+        let eval = StackSettings::from_local_yaml_str("spawnPlacement: kit\n").unwrap();
+        assert_eq!(eval.spawn_placement, SpawnPlacement::Kit);
+        let eval = StackSettings::from_local_yaml_str("spawnPlacement: prospector\n").unwrap();
+        assert_eq!(eval.spawn_placement, SpawnPlacement::Prospector);
+        // Absent key -> the kit picker (default).
+        let eval = StackSettings::from_local_yaml_str("tickMs: 100\n").unwrap();
+        assert_eq!(eval.spawn_placement, SpawnPlacement::Kit);
+        // Junk value -> a clear error naming the file.
+        let err = StackSettings::from_local_yaml_str("spawnPlacement: foreman\n").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("local.yml"), "should point at the file: {msg}");
     }
 
     #[test]

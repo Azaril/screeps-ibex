@@ -30,12 +30,18 @@ Fresh world (`bootstrap --reset`: 11×11 default map, user registered, Spawn1 pl
 3. **Bucket never moved off 10,000** — no pressure at this scale, as expected; the death-spiral class is unobservable in a 1-room baseline (harness pressure scenarios come with Increment 0/1 per ADR 0006/0015).
 4. Growth to 38 creeps in ~2,000 ticks with stable CPU is a healthy economic bring-up — a good reference curve for the BASELINE-1 comparison.
 
-## BASELINE-1 comparison (to fill at phase end)
+## BASELINE-1 comparison (recorded 2026-06-10, post-Phase-0)
+
+Artifact: `runs/baseline-1-d7d0d7a-20260610-064147/` · bot at `d7d0d7a` (post B/C/D fixes + cleanup) · **deployed via `screeps-pack`** (rust-native, npm-free; wasm byte-identical to the deploy.js artifact per `screeps-pack/PARITY.md`) · same scenario shape (fresh world, kit spawn placement W7N4 (25,30) — apples-to-apples).
 
 | Metric | BASELINE-0 | BASELINE-1 | Note |
 |---|---|---|---|
-| Ticks observed | 2,009 | — | |
-| Creeps max | 38 | — | |
-| CPU avg / max | 7.60 / 55.01 | — | |
-| Panic / deser lines | 0 / 0 | 0 / 0 required | the hard gates |
-| `(ERROR)` lines | 1 (FSM cap) | — | informational |
+| Ticks observed | 2,009 | **2,003** (373→2,376; 195.7 s; ~97.7 ms/tick sustained) | |
+| Creeps max | 38 | **37** (1→35 at end) | comparable bring-up curve |
+| CPU avg / max | 7.60 / 55.01 | **5.78 / 28.79** | max nearly halved; plausibly the D-fix set (seg-55 retention, dead-code removal, store-query simplification) — single-run, **informational** per plan §5, not a gate |
+| Bucket | 10,000 flat | 10,000 flat | no pressure at this scale, as expected |
+| Panic / deser lines | 0 / 0 | **0 / 0** | the hard gates — GREEN |
+| `(ERROR)` lines | 1 (FSM cap, tick 200) | **0** | the UpgradeJob 20-transition cap did not recur this run — likely run variance (no Phase-0 change touched the FSM); keep watching, owned by ADR 0003/Inc 6 |
+| Code size | 2.99 MiB | **2.96 MiB** | the ~950 removed lines, visible in the binary |
+
+**Hard-zero verdict: PASS.** Phase 0 changed ~75 bot-crate files, removed two mission types and a serialized format shape, and the bot's behavior brought up a colony indistinguishably-or-better vs the pre-phase baseline — with the Critical segment-55 wipe gone (live-probed) and every gate green.

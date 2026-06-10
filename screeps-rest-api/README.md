@@ -250,10 +250,10 @@ Made when unifying (P0.A12 — "keep the better-evidenced shape"):
 4. **Rate-limit courtesy.** Prospector's configurable min-delay won
    (eval had none); eval passes `Duration::ZERO` for its local server.
 5. **401 on signin.** Eval special-cased HTTP 401 with an
-   operator-actionable message. That stays in eval (`screeps-eval`'s
-   `api::signin`) — the shared client reports the plain
-   `ApiError::Http { status: 401, .. }` and consumers attach their
-   own remediation text.
+   operator-actionable message. That stays with the consumer (now
+   `screeps-server-kit`'s `api::signin`) — the shared client reports
+   the plain `ApiError::Http { status: 401, .. }` and consumers attach
+   their own remediation text.
 
 ### Extraction / community-share plan
 

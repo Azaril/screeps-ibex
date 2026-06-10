@@ -59,8 +59,11 @@ enum Command {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "screeps_ibex_eval=info,screeps_server_kit=info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                // screeps_prospector: progress lines when bootstrap
+                // runs with `spawnPlacement: prospector` (P0.P4).
+                "screeps_ibex_eval=info,screeps_server_kit=info,screeps_prospector=info".into()
+            }),
         )
         .init();
 

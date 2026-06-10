@@ -1,64 +1,34 @@
-//! Deploy orchestration — today a wrapper around the repo's
-//! `js_tools/deploy.js` (P0.A4). Deploying *some crate* to *some server
-//! entry* is bot-agnostic, which is why this lives in the kit.
+//! Deploy orchestration — a library call into **`screeps-pack`**
+//! (P0.A13, cut over after the parity gate went green; evidence:
+//! `../screeps-pack/PARITY.md`).
 //!
-//! ## The `screeps-pack` seam (P0.A13)
+//! The pipeline (all inside screeps-pack): `cargo build --target
+//! wasm32-unknown-unknown` honoring the `.screeps.yaml`
+//! `configs.wasm-pack-options` per-server → lockfile-matched
+//! wasm-bindgen (`--target nodejs`) → CJS glue (loader template +
+//! anchored bindgen patch) → wasm-opt (binaryen, pinned) → upload via
+//! the shared `screeps-rest-api` client. Deploying *some crate* to
+//! *some server entry* is bot-agnostic, which is why this seam lives in
+//! the kit; the public surface (`deploy(cfg, server_entry, debug)` →
+//! [`DeployReport`]) is the contract consumers keep calling.
 //!
-//! THIS MODULE is the integration point where the rust-native
-//! `screeps-pack` deployment tool plugs in: at the A13 cutover,
-//! [`deploy`] becomes a library call into screeps-pack (cargo build →
-//! wasm-bindgen → glue → upload via the shared `screeps-rest-api`
-//! client) and the deploy.js shell-out below is **deleted** — the
-//! public surface (`deploy(cfg, server_entry, debug)` + [`DeployReport`])
-//! is the contract consumers keep calling.
-//!
-//! OPERATOR DIRECTIVE (phase-0.md P0.A4): until that cutover, the deploy
-//! script and the wasm build pipeline (wasm-pack/rollup/npm) are
-//! **never modified** — this module wraps the script: working directory,
-//! environment, output streaming, and honest success detection.
-//!
-//! ## Pinned facts from `js_tools/deploy.js` (read 2026-06-09, unmodified)
-//!
-//! - yargs options (deploy.js:15-30): `--server <name>` (required; the
-//!   `.screeps.yaml` `servers:` entry), `--dryrun` (bool, default false),
-//!   `--mode debug|release` (default release). `--mode debug` maps to
-//!   `wasm-pack build --dev` (deploy.js:85) — that is what our
-//!   `deploy --debug` passes through.
-//! - The script reads `.screeps.yaml` ITSELF from its CWD (deploy.js:38)
-//!   and authenticates via `ScreepsAPI.fromConfig(server)` (deploy.js:156)
-//!   — **no credentials on argv or env** (verified; the A7 sweep relies
-//!   on this).
-//! - It requires the `npm_package_name` env var (deploy.js:32), normally
-//!   injected by `npm run deploy`. The wrapper reads `package.json`'s
-//!   `name` and sets that one (non-secret) variable so plain `node`
-//!   invocation works identically.
-//! - **The exit code is NOT a success signal.** `run().catch(console.error)`
-//!   (deploy.js:178) exits 0 after printing any error; a wasm-pack failure
-//!   returns silently (deploy.js:169-171: `if (build_result.status !== 0)
-//!   return`); an unknown server entry logs and returns (deploy.js:41-44).
-//!   Success is therefore detected from output: the upload banner
-//!   `Uploading to branch <b>; using <x> MiB of 5.0 MiB ...`
-//!   (deploy.js:151,155) followed by the API response JSON
-//!   (deploy.js:158, `{"ok":1}` from the private server's
-//!   `POST /api/user/code`).
+//! The bot project is located from the kit's own config anchor: the
+//! credentials file's directory (`../.screeps.yaml` → the repo root)
+//! is the workspace root, and screeps-pack resolves the single cdylib
+//! member from there — no js_tools/, no package.json, no node. The
+//! npm pipeline (`js_tools/deploy.js`) remains in the repo ONLY as an
+//! optional user-customization escape hatch; nothing here invokes it.
 
 use crate::config::KitConfig;
-use anyhow::{bail, Context, Result};
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, BufReader};
-
-/// Whole-deploy budget. The wasm build is nightly + fat LTO; a cold
-/// first build (empty target dir) can take many minutes, warm rebuilds
-/// are far quicker. Generous on purpose — progress streams live.
-pub const DEPLOY_BUDGET: Duration = Duration::from_secs(40 * 60);
+use anyhow::{Context, Result};
+use screeps_pack::PackOptions;
+use std::path::Path;
+use std::time::Duration;
 
 #[derive(Debug)]
 pub struct DeployReport {
     pub branch: String,
-    /// Parsed from the upload banner (informational).
+    /// Size of the uploaded module map against the 5 MiB code limit.
     pub used_mib: Option<f64>,
     pub mode: &'static str,
     pub duration: Duration,
@@ -78,352 +48,103 @@ impl std::fmt::Display for DeployReport {
     }
 }
 
-/// Locate the repo root deploy.js must run from: the directory holding
-/// `.screeps.yaml` (which the script reads from CWD), validated to also
-/// contain the script and its `package.json`.
-pub fn find_repo_root(cfg: &KitConfig) -> Result<PathBuf> {
-    let root = cfg
+/// The screeps-pack request for a deploy as `server_entry` (pure —
+/// pinned by a unit test): credentials = the file the kit's config came
+/// from; the bot manifest = the workspace root next to it (screeps-pack
+/// resolves the single cdylib member from there).
+pub fn pack_options(cfg: &KitConfig, server_entry: &str, debug: bool) -> Result<PackOptions> {
+    let creds_path = cfg
         .source_path
-        .as_deref()
-        .and_then(Path::parent)
-        .context("config was not loaded from a file — cannot locate the repo root")?;
-    for required in ["js_tools/deploy.js", "package.json"] {
-        if !root.join(required).is_file() {
-            bail!(
-                "{required} not found in {} — deploy must run from the bot repo's \
-                 root (the directory containing .screeps.yaml, with a deploy.js \
-                 pipeline at js_tools/deploy.js)",
-                root.display()
-            );
-        }
-    }
-    Ok(root.to_path_buf())
+        .clone()
+        .context("config was not loaded from a file — cannot locate the bot repo")?;
+    let root = creds_path
+        .parent()
+        .map(Path::to_path_buf)
+        .context("credentials file has no parent directory")?;
+    Ok(PackOptions {
+        manifest_path: root.join("Cargo.toml"),
+        creds_path,
+        server: server_entry.to_string(),
+        debug,
+    })
 }
 
-/// `package.json` `name` — substituted for the `npm_package_name` env
-/// var that `npm run deploy` would set (deploy.js:32 requires it).
-fn package_name(root: &Path) -> Result<String> {
-    let raw = std::fs::read_to_string(root.join("package.json"))
-        .with_context(|| format!("reading {}", root.join("package.json").display()))?;
-    let json: serde_json::Value = serde_json::from_str(&raw).context("parsing package.json")?;
-    json.get("name")
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-        .context("package.json has no `name` field")
-}
-
-// ===================================================================
-// output verdict (pure — deploy.js exits 0 even on failure)
-// ===================================================================
-
-#[derive(Debug, PartialEq)]
-pub enum DeployVerdict {
-    Uploaded {
-        branch: String,
-        used_mib: Option<f64>,
-    },
-    Failed {
-        reason: String,
-    },
-}
-
-/// Decide success from the script's output (see module docs for why the
-/// exit code cannot be trusted). Success = the upload banner followed by
-/// an API response JSON object with `ok: 1`.
-pub fn parse_deploy_output(lines: &[String]) -> DeployVerdict {
-    let mut upload: Option<(usize, String, Option<f64>)> = None;
-    for (i, line) in lines.iter().enumerate() {
-        if let Some(rest) = line.strip_prefix("Uploading to branch ") {
-            let branch = rest.split(';').next().unwrap_or("").trim().to_string();
-            upload = Some((i, branch, parse_used_mib(rest)));
-        }
-    }
-    let Some((idx, branch, used_mib)) = upload else {
-        // deploy.js:169-171 — a failed wasm-pack/rollup build returns
-        // silently after the "Building in <mode> mode" banner.
-        if lines.iter().any(|l| l.starts_with("Building in ")) {
-            return DeployVerdict::Failed {
-                reason: "the build failed before upload (wasm-pack/rollup; deploy.js \
-                         exits 0 on build failure — see its output above)"
-                    .into(),
-            };
-        }
-        return DeployVerdict::Failed {
-            reason: "no build/upload output recognized — deploy.js likely failed \
-                     before building (e.g. unknown --server entry, deploy.js:41-44)"
-                .into(),
-        };
-    };
-    // deploy.js:158 prints JSON.stringify(response) after the banner.
-    for line in &lines[idx + 1..] {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
-            continue;
-        };
-        if !v.is_object() {
-            continue;
-        }
-        if v.get("ok").and_then(serde_json::Value::as_i64) == Some(1) {
-            return DeployVerdict::Uploaded { branch, used_mib };
-        }
-        return DeployVerdict::Failed {
-            reason: format!("upload API response was not ok: {}", line.trim()),
-        };
-    }
-    DeployVerdict::Failed {
-        reason: "upload started but no API response followed (the upload threw; \
-                 deploy.js:178 prints the error and exits 0)"
-            .into(),
-    }
-}
-
-/// `default; using 2.93 MiB of 5.0 MiB code size limit (58.62%)` → 2.93
-fn parse_used_mib(banner_rest: &str) -> Option<f64> {
-    let after = banner_rest.split("using ").nth(1)?;
-    after.split_whitespace().next()?.parse().ok()
-}
-
-// ===================================================================
-// the wrapper
-// ===================================================================
-
-/// Argv for the deploy.js invocation (pure — pinned by a unit test).
-/// `server_entry` is the `.screeps.yaml` `servers:` entry the upload
-/// targets: the kit's own `--server-name` by default, or a bot
-/// entry selected via `deploy --user <entry>` (P0.A10) — deploy.js
-/// resolves the entry's credentials itself either way.
-pub fn deploy_args(server_entry: &str, debug: bool) -> Vec<String> {
-    [
-        "js_tools/deploy.js",
-        "--server",
-        server_entry,
-        "--mode",
-        if debug { "debug" } else { "release" },
-    ]
-    .map(str::to_string)
-    .to_vec()
-}
-
-/// Build + upload the bot via `node js_tools/deploy.js --server <entry>
-/// --mode <debug|release>` from the repo root. Output streams through
-/// tracing as it happens; success is decided by [`parse_deploy_output`].
+/// Build + upload the bot as `server_entry` via screeps-pack (library
+/// call). `server_entry` is the `.screeps.yaml` `servers:` entry the
+/// upload targets: the kit's own acting identity by default, or a bot
+/// entry selected via `deploy --user <entry>` (P0.A10) — its
+/// credentials AND its per-server build flags both come from that
+/// entry. Build/tool progress streams through tracing as it happens.
 pub async fn deploy(cfg: &KitConfig, server_entry: &str, debug: bool) -> Result<DeployReport> {
-    let root = find_repo_root(cfg)?;
-    if !root.join("node_modules").is_dir() {
-        bail!(
-            "node_modules missing in {} — run `npm install` there once \
-             (deploy.js needs its rollup/screeps-api toolchain)",
-            root.display()
-        );
-    }
-    let pkg = package_name(&root)?;
-    let mode = if debug { "debug" } else { "release" };
-    let args = deploy_args(server_entry, debug);
-
-    tracing::info!("deploy: node {} (cwd {})", args.join(" "), root.display());
+    let options = pack_options(cfg, server_entry, debug)?;
     tracing::info!(
-        "the full wasm build runs now (nightly toolchain, LTO) — a cold build \
-         takes several minutes; output streams below"
+        "deploy: screeps-pack --server {} ({} build) — a cold wasm build takes \
+         minutes; progress streams below",
+        server_entry,
+        options.mode_str()
     );
-
-    let start = Instant::now();
-    let mut child = tokio::process::Command::new("node")
-        .args(&args)
-        .current_dir(&root)
-        // deploy.js:32 — normally set by `npm run deploy`; non-secret.
-        .env("npm_package_name", &pkg)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("spawning node — is Node.js installed and on PATH?")?;
-
-    // Stream both pipes line-by-line into tracing AND a transcript for
-    // the verdict. wasm-pack/cargo run with stdio:'inherit' inside
-    // deploy.js (deploy.js:87), so their progress arrives here too.
-    let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let stdout = child.stdout.take().context("no stdout pipe")?;
-    let stderr = child.stderr.take().context("no stderr pipe")?;
-    let out_task = tokio::spawn(stream_lines(stdout, lines.clone(), false));
-    let err_task = tokio::spawn(stream_lines(stderr, lines.clone(), true));
-
-    let status = match tokio::time::timeout(DEPLOY_BUDGET, child.wait()).await {
-        Ok(status) => status.context("waiting for deploy.js")?,
-        Err(_) => {
-            let _ = child.kill().await;
-            bail!(
-                "deploy.js exceeded the {:?} budget — killed. Check the streamed \
-                 output above (a cold nightly wasm build is slow, but not THIS slow).",
-                DEPLOY_BUDGET
-            );
-        }
+    let outcome = screeps_pack::deploy(&options).await?;
+    let report = DeployReport {
+        branch: outcome.branch,
+        used_mib: Some(outcome.used_mib),
+        mode: outcome.mode,
+        duration: outcome.duration,
     };
-    let _ = out_task.await;
-    let _ = err_task.await;
-    let lines = Arc::try_unwrap(lines)
-        .map(|m| m.into_inner().unwrap_or_default())
-        .unwrap_or_default();
-
-    if !status.success() {
-        bail!(
-            "deploy.js exited with {status} (a crash — its own failures exit 0). \
-             Last output:\n{}",
-            tail(&lines, 15)
-        );
-    }
-    match parse_deploy_output(&lines) {
-        DeployVerdict::Uploaded { branch, used_mib } => {
-            let report = DeployReport {
-                branch,
-                used_mib,
-                mode,
-                duration: start.elapsed(),
-            };
-            tracing::info!("{report}");
-            Ok(report)
-        }
-        DeployVerdict::Failed { reason } => bail!(
-            "deploy failed: {reason}\nlast output:\n{}",
-            tail(&lines, 15)
-        ),
-    }
+    tracing::info!("{report}");
+    Ok(report)
 }
 
-async fn stream_lines(
-    pipe: impl tokio::io::AsyncRead + Unpin,
-    sink: Arc<Mutex<Vec<String>>>,
-    is_stderr: bool,
-) {
-    let mut reader = BufReader::new(pipe).lines();
-    while let Ok(Some(line)) = reader.next_line().await {
-        if is_stderr {
-            // cargo/wasm-pack progress arrives on stderr — informational.
-            tracing::info!(target: "deploy_js", "! {line}");
+/// Tiny helper so the log line above can name the mode without
+/// duplicating the debug→mode mapping everywhere.
+trait ModeStr {
+    fn mode_str(&self) -> &'static str;
+}
+impl ModeStr for PackOptions {
+    fn mode_str(&self) -> &'static str {
+        if self.debug {
+            "debug"
         } else {
-            tracing::info!(target: "deploy_js", "{line}");
-        }
-        if let Ok(mut v) = sink.lock() {
-            v.push(line);
+            "release"
         }
     }
-}
-
-fn tail(lines: &[String], n: usize) -> String {
-    let start = lines.len().saturating_sub(n);
-    lines[start..].join("\n")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
-    fn s(v: &[&str]) -> Vec<String> {
-        v.iter().map(|s| s.to_string()).collect()
+    fn cfg_with_source(source: Option<PathBuf>) -> KitConfig {
+        let creds = "servers:\n  private-server:\n    host: 127.0.0.1\n    port: 21025\n    username: ibex\n    password: not-a-real-pw\n";
+        let mut cfg = KitConfig::from_yaml_strs(creds, None, Some("private-server")).unwrap();
+        cfg.source_path = source;
+        cfg
     }
 
-    /// Literal output shapes from deploy.js:151-158 (success path).
+    /// THE SEAM PIN (P0.A10/A13): the pack request points credentials at
+    /// the kit's own config source and the manifest at the workspace
+    /// root next to it; `--user <entry>` passes through as the server
+    /// entry; `--debug` maps to a debug build.
     #[test]
-    fn verdict_success_requires_banner_and_ok_response() {
-        let lines = s(&[
-            "Building in release mode",
-            "[INFO]: Compiling to Wasm...",
-            "Uploading to branch default; using 2.93 MiB of 5.0 MiB code size limit (58.62%)",
-            r#"{"ok":1}"#,
-        ]);
-        assert_eq!(
-            parse_deploy_output(&lines),
-            DeployVerdict::Uploaded {
-                branch: "default".into(),
-                used_mib: Some(2.93),
-            }
-        );
+    fn pack_options_map_the_kit_config() {
+        let cfg = cfg_with_source(Some(PathBuf::from(r"C:\repo\.screeps.yaml")));
+        let options = pack_options(&cfg, "ibex-2", false).unwrap();
+        assert_eq!(options.creds_path, PathBuf::from(r"C:\repo\.screeps.yaml"));
+        assert_eq!(options.manifest_path, PathBuf::from(r"C:\repo\Cargo.toml"));
+        assert_eq!(options.server, "ibex-2");
+        assert!(!options.debug);
+
+        let debug = pack_options(&cfg, "private-server", true).unwrap();
+        assert!(debug.debug);
+        assert_eq!(debug.mode_str(), "debug");
     }
 
-    /// deploy.js:169-171 — wasm-pack failure returns silently, exit 0.
+    /// A config not loaded from a file cannot locate the bot repo —
+    /// clear error, not a panic.
     #[test]
-    fn verdict_build_failure_is_detected_despite_exit_zero() {
-        let lines = s(&[
-            "Building in release mode",
-            "error[E0308]: mismatched types",
-            "[ERROR]: Compiling your crate to WebAssembly failed",
-        ]);
-        let DeployVerdict::Failed { reason } = parse_deploy_output(&lines) else {
-            panic!("build failure must not pass");
-        };
-        assert!(reason.contains("build failed"), "got: {reason}");
-    }
-
-    /// deploy.js:178 — run().catch(console.error): an upload throw is
-    /// printed (not JSON) and the process exits 0.
-    #[test]
-    fn verdict_upload_throw_is_a_failure() {
-        let lines = s(&[
-            "Building in release mode",
-            "Uploading to branch default; using 2.93 MiB of 5.0 MiB code size limit (58.62%)",
-            "Error: connect ECONNREFUSED 127.0.0.1:21025",
-        ]);
-        let DeployVerdict::Failed { reason } = parse_deploy_output(&lines) else {
-            panic!("upload throw must not pass");
-        };
-        assert!(reason.contains("no API response"), "got: {reason}");
-    }
-
-    #[test]
-    fn verdict_not_ok_response_is_a_failure() {
-        let lines = s(&[
-            "Uploading to branch default; using 0.50 MiB of 5.0 MiB code size limit (10.00%)",
-            r#"{"error":"code length exceeds 5 MiB limit"}"#,
-        ]);
-        let DeployVerdict::Failed { reason } = parse_deploy_output(&lines) else {
-            panic!("not-ok response must not pass");
-        };
-        assert!(reason.contains("not ok"), "got: {reason}");
-    }
-
-    /// deploy.js:41-44 — unknown server entry logs and returns, exit 0.
-    #[test]
-    fn verdict_unknown_server_is_a_failure() {
-        let lines = s(&["no configuration found for server foo in .screeps.yaml"]);
-        assert!(matches!(
-            parse_deploy_output(&lines),
-            DeployVerdict::Failed { .. }
-        ));
-        assert!(matches!(
-            parse_deploy_output(&[]),
-            DeployVerdict::Failed { .. }
-        ));
-    }
-
-    /// P0.A10: `deploy --user <entry>` selects the upload identity by
-    /// passing `--server <entry>` through to deploy.js, unchanged.
-    #[test]
-    fn deploy_args_target_the_selected_entry() {
-        assert_eq!(
-            deploy_args("ibex-2", false),
-            [
-                "js_tools/deploy.js",
-                "--server",
-                "ibex-2",
-                "--mode",
-                "release"
-            ]
-        );
-        assert_eq!(
-            deploy_args("private-server", true),
-            [
-                "js_tools/deploy.js",
-                "--server",
-                "private-server",
-                "--mode",
-                "debug"
-            ]
-        );
-    }
-
-    #[test]
-    fn used_mib_parses_from_banner() {
-        assert_eq!(
-            parse_used_mib("default; using 2.93 MiB of 5.0 MiB code size limit (58.62%)"),
-            Some(2.93)
-        );
-        assert_eq!(parse_used_mib("default"), None);
+    fn missing_source_path_is_a_clear_error() {
+        let cfg = cfg_with_source(None);
+        let err = pack_options(&cfg, "private-server", false).unwrap_err();
+        assert!(format!("{err:#}").contains("not loaded from a file"));
     }
 }

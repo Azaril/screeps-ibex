@@ -136,7 +136,7 @@ A1 ──→ A2 ──→ A3 ──→ A4 ──→ A5 ──→ A6 ─→ BASEL
 Both baselines are **fresh-bootstrap runs of K ticks at the same tick duration**, so the comparison is apples-to-apples; the comparison report (committed) is the first artifact of the regression-diffing discipline ADR 0006 §7 builds out.
 
 **Exit criteria (all must hold):**
-1. `cd screeps-eval && cargo run -- smoke` is **one green command** from a cold Docker Desktop.
+1. `cd screeps-ibex-eval && cargo run -- smoke` is **one green command** from a cold Docker Desktop.
 2. `cargo test-host` green, including the spawn-ordering and redaction pins.
 3. Secrets: redaction pin passes; a manual sweep of `runs/` artifacts and harness logs finds no credential material; `.gitignore` covers `runs/`.
 4. Supplanted code removed (C1/C2); KEEP list intact and documented above.
@@ -144,7 +144,7 @@ Both baselines are **fresh-bootstrap runs of K ticks at the same tick duration**
 6. BASELINE-0 and BASELINE-1 recorded; comparison report committed. **Gate only on hard zeros** (zero panics, zero deser failures, deploy succeeded, ticks observed > 0) — the metric comparison (CPU, creep counts) is **informational** in `baseline-0-report.md`, not a gate: a single-run exact metric gate is precisely the flake generator ADR 0015 rejects, and no N-seed machinery exists yet.
 7. The one Memory/format break (C1) was absorbed by the sanctioned BASELINE-1 bring-up reset — **no unsanctioned drop of live/MMO state occurred** (eval-server `bootstrap --reset` is a state drop by design and doesn't count; the §0 MMO guard held).
 8. **Operator mode works end-to-end (P0.A8):** cold-start → watch → `tick set` → pause/resume → tear down, each a single command, verified by the operator personally.
-9. **Documentation delivered (operator directive):** `screeps-eval/README.md` contains detailed **Usage** (every command, the config shape, the secrets rules, troubleshooting the known failure modes) followed by a **Design** section (module map, the config/merge flow, port discovery, why workspace-excluded, extraction plan) — current with the shipped behavior, not the plan.
+9. **Documentation delivered (operator directive):** `screeps-server-kit/README.md` + `screeps-ibex-eval/README.md` contain detailed **Usage** (every command, the config shape, the secrets rules, troubleshooting the known failure modes) followed by a **Design** section (module map, the config/merge flow, port discovery, why workspace-excluded, extraction plan) — current with the shipped behavior, not the plan.
 10. **Prospector delivers (Workstream P):** `recommend` ranks rooms offline against the bench fixtures with plan-derived spawn tiles; a live private-server `auto --yes` placed an optimally-sited spawn at least once; MMO mode is recommend-first with explicit-confirm placement, documented in its own README (Usage, then Design).
 11. **Rust-native deploy lands (P0.A13):** `screeps-pack` builds + uploads the bot with the parity gate green (module-map diff, wasm byte-compare, 600-tick smoke); it is the **standalone deployment tool** — `screeps-pack deploy --server <entry>` works for every `.screeps.yaml` entry including token-auth MMO/PTR/season — and server-kit deploy runs it as a library; **npm/node are required by NO standard user or test workflow**; the `--legacy` flag + shell-out are deleted from screeps-eval; repo docs (AGENTS.md §8, READMEs) name screeps-pack as the primary deploy path; `js_tools/deploy.js` + npm remain only as an optional user-customization escape hatch; the parity report is committed.
 

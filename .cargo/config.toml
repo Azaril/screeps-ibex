@@ -1,5 +1,6 @@
 # The bot crates deploy as wasm, but NO [build].target default is set:
-# wasm-pack (js_tools/deploy.js) always passes --target
+# wasm-pack (the legacy js_tools/deploy.js path; screeps-pack is the primary
+# deploy tool since P0.A13) always passes --target
 # wasm32-unknown-unknown to cargo itself, and a global default forces
 # every excluded host-side tool crate (screeps-server-kit, screeps-ibex-eval, screeps-prospector,
 # screeps-rest-api, screeps-foreman-bench) to carry or fake a

@@ -16,6 +16,7 @@ exclude = [
     "screeps-ibex-eval",
     "screeps-prospector",
     "screeps-rest-api",
+    "screeps-pack",
 ]
 
 [profile.release]

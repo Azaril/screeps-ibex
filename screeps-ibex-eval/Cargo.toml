@@ -19,3 +19,14 @@ clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# screeps-server-kit -> screeps-prospector -> screeps-foreman brings git
+# dependencies into this build graph; [patch] tables apply only from the
+# BUILD ROOT, and this crate is workspace-excluded (its own root) — so
+# the redirects must be repeated here (mirrors
+# ../screeps-prospector/Cargo.toml).
+[patch.'https://github.com/Azaril/screeps-cache']
+screeps-cache = { path = "../screeps-cache" }
+
+[patch.'https://github.com/Azaril/screeps-common']
+screeps-common = { path = "../screeps-common" }

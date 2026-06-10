@@ -18,7 +18,20 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "proce
 # endpoint set, console socket. Path dep while in-repo; becomes a git
 # dep at extraction (decision D-1).
 screeps-rest-api = { path = "../screeps-rest-api" }
-bollard = "0.19"
+# The deployment pipeline (P0.A13): cargo build -> wasm-bindgen -> glue
+# -> wasm-opt -> code upload, driven as a library by deploy.rs. Same
+# in-repo/extraction lifecycle (D-1) as the other siblings.
+screeps-pack = { path = "../screeps-pack" }
+# Optional spawn-site selection for `bootstrap` (P0.P4 follow-on):
+# `spawnPlacement: prospector` in config/local.yml routes first-spawn
+# placement through the prospector's two-stage scan/fetch/recommend
+# pipeline. Same in-repo/extraction lifecycle (D-1).
+screeps-prospector = { path = "../screeps-prospector" }
+# buildkit_providerless: the upstream screeps-launcher Dockerfile is
+# BuildKit-only (`FROM --platform=$BUILDPLATFORM`, `RUN --mount`,
+# heredocs) — the classic /build endpoint cannot build it (P0.A9(d),
+# verified live 2026-06-10).
+bollard = { version = "0.19", features = ["buildkit_providerless"] }
 # Build-context tar for `server build-image` (P0.A9(d)); bytes feeds
 # bollard::body_full.
 tar = "0.4"
@@ -37,3 +50,15 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 secrecy = { version = "0.10", features = ["serde"] }
+
+# screeps-prospector pulls in screeps-foreman, whose own dependencies are
+# git URLs; redirect them to the local clones exactly as the prospector's
+# manifest does. [patch] tables apply only from the BUILD ROOT — this
+# crate is workspace-excluded (its own root), so the prospector's patch
+# table does not reach builds started here (mirrors
+# ../screeps-prospector/Cargo.toml).
+[patch.'https://github.com/Azaril/screeps-cache']
+screeps-cache = { path = "../screeps-cache" }
+
+[patch.'https://github.com/Azaril/screeps-common']
+screeps-common = { path = "../screeps-common" }

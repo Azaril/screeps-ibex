@@ -53,14 +53,16 @@ enum Command {
         #[arg(long)]
         reset: bool,
     },
-    /// Build and upload the bot to the private server (wraps the repo's
-    /// js_tools/deploy.js; the full wasm build runs — first builds are slow)
+    /// Build and upload the bot via screeps-pack (cargo build ->
+    /// wasm-bindgen -> glue -> wasm-opt -> upload; first builds are slow)
     Deploy {
-        /// Deploy a debug build (deploy.js --mode debug -> wasm-pack --dev)
+        /// Deploy a debug build (cargo build without --release; the dev
+        /// wasm-opt profile)
         #[arg(long)]
         debug: bool,
         /// Bot identity to deploy as: a .screeps.yaml servers: entry
-        /// (default: --server-name). Passes --server <entry> to deploy.js
+        /// (default: --server-name) — selects both the upload
+        /// credentials and that entry's per-server build flags
         #[arg(long)]
         user: Option<String>,
     },
@@ -127,7 +129,9 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "screeps_server_kit=info".into()),
+                // screeps_prospector: progress lines when bootstrap
+                // runs with `spawnPlacement: prospector` (P0.P4).
+                .unwrap_or_else(|_| "screeps_server_kit=info,screeps_prospector=info".into()),
         )
         .init();
 

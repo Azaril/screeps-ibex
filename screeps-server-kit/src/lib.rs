@@ -26,8 +26,9 @@
 //! - [`api`]           — shared-client construction + signin
 //!   diagnostics (the endpoints themselves live in the shared
 //!   `screeps-rest-api` crate)
-//! - [`deploy`]        — deploy orchestration (wraps a deploy.js
-//!   pipeline today; the `screeps-pack` library seam lands here)
+//! - [`deploy`]        — deploy orchestration: a library call into
+//!   `screeps-pack` (cargo build -> wasm-bindgen -> glue -> wasm-opt
+//!   -> upload via `screeps-rest-api`; P0.A13)
 //! - [`capture`]       — console capture + metrics -> runs/ artifacts,
 //!   parameterized by the caller's marker spec (the websocket protocol
 //!   lives in `screeps-rest-api`)

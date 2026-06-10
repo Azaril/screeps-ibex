@@ -35,6 +35,15 @@
 #  x: 18
 #  y: 14
 
+# Which auto-picker `bootstrap` uses when no exact spawn tile is set
+# (P0.P4). `kit` (default): the built-in picker — central candidate
+# rooms, POI-centroid tile; fast. `prospector`: the screeps-prospector
+# two-stage pipeline (cheap heuristics -> offline foreman room plans for
+# the finalists) — slower (about a minute or more on the default map),
+# but the spawn lands on the tile the eventual base layout wants.
+# An explicit spawn room+x+y always wins over either mode.
+#spawnPlacement: kit
+
 # Bot identities to bootstrap (P0.A10): each name is a `servers:` entry
 # in ../.screeps.yaml (same host/port as this stack, its own
 # username/password). `bootstrap` registers each user and places each
@@ -50,9 +59,11 @@
 # image instead, point `build.context` at a FULL clone of
 # https://github.com/screepers/screeps-launcher (the Dockerfile lives at
 # that repo's root — a config-only directory like a docker-compose
-# checkout is NOT buildable). `server build-image` builds it explicitly;
-# `server up` builds automatically when the image is absent and `build:`
-# is configured.
+# checkout is NOT buildable; on Windows clone with
+# `git clone -c core.autocrlf=false` — CRLF breaks the Dockerfile's
+# heredocs). `server build-image` builds it explicitly; `server up`
+# builds automatically when the image is absent and `build:` is
+# configured.
 #image:
 #  name: screepers/screeps-launcher:local
 #  build:

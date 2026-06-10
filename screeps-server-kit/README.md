@@ -14,8 +14,10 @@ contains no bot-specific log strings, gates, or scenario logic. What
 crate that supplies a marker spec to the capture mechanism and drives
 the same library — this repo's consumer is
 [`screeps-ibex-eval`](../screeps-ibex-eval) (the `smoke`/`run` commands live there).
-Companion crate: [`screeps-rest-api`](../screeps-rest-api), the shared
-HTTP/websocket client every endpoint call goes through.
+Companion crates: [`screeps-rest-api`](../screeps-rest-api), the shared
+HTTP/websocket client every endpoint call goes through, and
+[`screeps-pack`](../screeps-pack), the npm-free build + deploy pipeline
+`deploy` drives as a library.
 
 ---
 
@@ -186,33 +188,32 @@ time so you can see where it stopped.
 
 ```
 cargo run -- deploy                # release build + upload as the acting identity
-cargo run -- deploy --debug        # debug build (deploy.js --mode debug -> wasm-pack --dev)
+cargo run -- deploy --debug        # debug build (cargo without --release; dev wasm-opt profile)
 cargo run -- deploy --user ibex-2  # deploy as another bot identity
 ```
 
 `--user <entry>` selects which `.screeps.yaml` `servers:` entry the
-upload authenticates as (default: the acting identity below) — that is the whole
-multi-bot deploy story: each bot is just another entry. Today `deploy`
-wraps `node js_tools/deploy.js --server <entry> --mode <mode>` from the
-repo root (the directory `.screeps.yaml` was loaded from): it supplies
-what `npm run deploy` normally would (the CWD and the non-secret
-`npm_package_name` env var), streams the build output live, and —
-critically — decides success from the output, because **deploy.js exits
-0 even when it fails** (its `run().catch(console.error)` swallows errors
-and a failed wasm-pack build returns silently). Success means: the
-`Uploading to branch …` banner followed by the server's `{"ok":1}`
-response. Expect a cold build to take minutes; warm rebuilds are much
-faster.
+upload authenticates as (default: the acting identity below) — that is
+the whole multi-bot deploy story: each bot is just another entry.
+`deploy` is a **library call into [`screeps-pack`](../screeps-pack)**
+(P0.A13; parity evidence: `../screeps-pack/PARITY.md`): cargo build for
+`wasm32-unknown-unknown` honoring the entry's
+`configs.wasm-pack-options` flags → wasm-bindgen (version resolved from
+the bot's `Cargo.lock`, prebuilt CLI downloaded + cached under the
+target dir) → CJS loader/glue generation → wasm-opt → upload through
+the shared `screeps-rest-api` client. **No npm, no node** — the
+toolchain is cargo + two cached prebuilt binaries. The bot project is
+found from the credentials file's directory (the workspace root next to
+`.screeps.yaml`); screeps-pack resolves the single cdylib member.
 
-> **The `screeps-pack` seam (P0.A13):** `deploy.rs` is the integration
-> point where the rust-native `screeps-pack` deployment tool plugs in —
-> at its cutover, `deploy()` becomes a library call into screeps-pack
-> (cargo build → wasm-bindgen → glue → upload via `screeps-rest-api`)
-> and the deploy.js shell-out is deleted; the public surface
-> (`deploy(cfg, server_entry, debug)` → `DeployReport`) stays.
+Expect a cold build to take minutes (nightly + build-std + LTO); warm
+rebuilds take seconds. The repo's `js_tools/deploy.js` npm pipeline
+remains ONLY as an optional user-customization escape hatch — nothing
+in this crate invokes it.
 
-deploy.js reads `.screeps.yaml` itself; no credentials ever appear on
-argv or env (verified — part of the secrets sweep).
+screeps-pack reads `.screeps.yaml` itself; credentials never appear on
+argv, env, or in logs (SecretString end to end — part of the secrets
+sweep).
 
 ### Capture runs (library)
 
@@ -376,6 +377,14 @@ at that repo's root. `server build-image` builds and tags it
 configured and the image is absent. The context is tarred and sent to
 the Docker daemon (`.git` is skipped); build output streams live.
 
+The build runs through **BuildKit** (with the daemon's own os/arch as
+the platform) — the upstream Dockerfile is BuildKit-only
+(`FROM --platform=$BUILDPLATFORM`, `RUN --mount=type=cache`, heredoc
+`RUN` blocks; the classic builder fails on it with
+`failed to parse platform : ""`). On Windows, clone the launcher repo
+with `git clone -c core.autocrlf=false ...` — a CRLF checkout breaks
+the Dockerfile's bash heredocs (`exit code: 2` in the `useradd` step).
+
 > A launcher *deployment* directory (just `config.yml` +
 > `docker-compose.yml`) is **not** a buildable context — the validation
 > error tells you exactly that.
@@ -419,6 +428,7 @@ the Docker daemon (`.git` is skipped); build output streams live.
 | `config/local.yml has an unexpected shape` | A typo'd key (the parser rejects unknown fields by design). Compare against `config/local.example.yml` — keys are camelCase (`steamKey`, `tickMs`). |
 | `resolving bots entry '<name>'` | Every `bots:` name in `config/local.yml` must be a `servers:` entry in `../.screeps.yaml` with `username`+`password` (token-auth entries like `mmo` cannot be bots). |
 | `image.build.context ... has no Dockerfile` from `build-image` | The context is a launcher *deployment* dir (config + compose), not the launcher *source* repo. Clone <https://github.com/screepers/screeps-launcher> and point `image.build.context` at the clone root. |
+| `image build failed: ... exit code: 2 ([stage-1 2/4] RUN <<-EOT bash)` | CRLF checkout: the Dockerfile's bash heredocs break under Windows line-ending conversion. Re-clone with `git clone -c core.autocrlf=false`. |
 | Port already in use (create/start error mentioning `0.0.0.0:21025`) | Another server holds the port. Stop it, or set `ports.game/cli` in `config/local.yml` to free ports, `server destroy --yes`, `server up`. |
 | Changed `ports` but `status` shows the old ones | Published ports are fixed at container creation; `up` warns about this. `server destroy --yes` then `server up`. |
 | `server CLI tcp://127.0.0.1:21026 -> refused/timeout` in `status` | The CLI bind is forced to `0.0.0.0` in the merged config, but if you're running a foreign/manually-started stack (which binds in-container `127.0.0.1` by default and publishes no CLI port), use the fallback: `docker exec -it screeps-eval-launcher screeps-launcher cli` (substitute the container name from `status`). |
@@ -428,9 +438,9 @@ the Docker daemon (`.git` is skipped); build output streams live.
 | `registering user ... failed: Registration is automatically disabled` | The server has the `SERVER_PASSWORD` env var set (screepsmod-auth closes registration). Not set by this kit. |
 | `spawn.room ... is not a valid first-spawn room` | The room lacks an unowned controller or 2 sources, or was claimed by an earlier bot (the error lists valid candidates), or the world was seeded with a different map. Pick a listed room or drop `spawn.room` for auto-pick. |
 | Simulation racing (hundreds of ticks/s) after a manual CLI `system.resetAllData()` | A reset flushes redis, including the tick duration — the loop runs unthrottled. `tick set 100` (or re-run `bootstrap`, which always re-applies `tickMs`). |
-| `node_modules missing in ... — run npm install` from `deploy` | The deploy.js toolchain is not installed. `npm install` once at the repo root. |
-| `deploy failed: the build failed before upload` | wasm-pack/rollup failed — the real compiler error is in the streamed output just above (deploy.js itself exits 0 on build failure; the wrapper catches it from the output). |
-| `deploy failed: upload started but no API response followed` | The upload threw (server down/unreachable). `server status`, then retry. |
+| `cargo build failed` from `deploy` | The real compiler error is in the streamed output just above. Common toolchain gaps: nightly not installed (`rust-toolchain.toml` pins it), missing `rust-src` component (build-std needs it), missing `wasm32-unknown-unknown` target. |
+| `wasm-bindgen ... emitted JS whose wasm-load tail does not match` from `deploy` | The bot's `Cargo.lock` moved to a wasm-bindgen version whose output screeps-pack's anchored glue patcher has not been verified against. See `../screeps-pack/src/glue.rs` (`VERIFIED_BINDGEN_OUTPUT`). |
+| `uploading ... modules to ...` failed | The upload threw (server down/unreachable, or signin rejected). `server status`, then retry; `bootstrap` converges a stale password. |
 | `websocket auth failed (token rejected)` during a capture run | The signin token was rejected — usually a stale server-side password. Run `bootstrap` to converge credentials, then retry. |
 | `run did not reach tick ... within the ... safety budget` | The simulation is paused (`tick resume`) or crawling far below the configured rate. Check `server status` and the tick rate. |
 | `console.jsonl` is empty/small for short runs | Normal if the bot logs sparsely and empty per-tick console events are not written. CPU/creeps still prove liveness in `metrics.jsonl`. |
@@ -464,10 +474,10 @@ src/api.rs            thin adapter over the SHARED screeps-rest-api client:
                       client construction from ServerEndpoint + the
                       401-signin diagnostic; the endpoints themselves are
                       pinned + fixture-tested in ../screeps-rest-api
-src/deploy.rs         deploy orchestration: today a js_tools/deploy.js
-                      wrapper (spawn from the repo root, stream output,
-                      verdict from output — the exit code lies); THE
-                      screeps-pack integration seam (P0.A13)
+src/deploy.rs         deploy orchestration: a library call into
+                      ../screeps-pack (cargo build -> wasm-bindgen ->
+                      glue -> wasm-opt -> upload; P0.A13 — the deploy.js
+                      shell-out was deleted at the parity cutover)
 src/capture.rs        run loop + metrics sampler -> runs/ artifacts; summary
                       aggregation + marker counters, parameterized by the
                       caller's MarkerSpec/CaptureSpec (no bot strings here;
@@ -625,19 +635,21 @@ parse time inside the shared client, so it cannot reach logs or
 artifacts (pinned by `screeps-rest-api`'s
 `auth_ok_token_is_dropped_at_parse_time`).
 
-### Deploy wrapper facts (pinned from js_tools/deploy.js, unmodified)
+### Deploy facts (the screeps-pack library seam, P0.A13)
 
-- yargs surface: `--server` (required), `--dryrun`, `--mode
-  debug|release` (default release; debug → `wasm-pack build --dev`).
-  Our `deploy --debug` maps to `--mode debug`.
-- The script reads `.screeps.yaml` itself from the CWD and authenticates
-  via `ScreepsAPI.fromConfig` — no credentials on argv/env.
-- It requires `npm_package_name` (normally set by `npm run deploy`); the
-  wrapper reads `package.json`'s `name` and sets that one env var.
-- **Exit code 0 does not mean success**: errors are swallowed by
-  `run().catch(console.error)` and a failed wasm-pack build returns
-  silently. The wrapper's verdict comes from the output (upload banner +
-  `{"ok":1}` response), unit-tested against literal output fixtures.
+- `deploy(cfg, server_entry, debug)` builds a `screeps_pack::PackOptions`
+  (pinned by `deploy::tests::pack_options_map_the_kit_config`):
+  credentials = the file the kit's config was loaded from; bot manifest
+  = `Cargo.toml` next to it (screeps-pack resolves the workspace's
+  single cdylib member); `--user <entry>` passes through as the server
+  entry, selecting both upload credentials and that entry's
+  `configs.wasm-pack-options` build flags.
+- Errors are real `Result`s end to end — there is no exit-code/output
+  parsing anymore (the old deploy.js wrapper needed it because the
+  script exited 0 on failure; that machinery was deleted at the A13
+  cutover).
+- Parity vs the npm pipeline (module map, byte-identical wasm, green
+  600-tick smoke) is recorded in `../screeps-pack/PARITY.md`.
 
 ### Launcher schema facts (pinned from screepers/screeps-launcher @ main)
 
