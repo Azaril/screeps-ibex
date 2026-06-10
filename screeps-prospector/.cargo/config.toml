@@ -1,0 +1,13 @@
+# screeps-prospector is a HOST-NATIVE tool (tokio/reqwest cannot target wasm).
+# The repo root pins [build].target = wasm32-unknown-unknown for the bot
+# crates; cargo config discovery is CWD-based and child values override
+# parent values for scalar keys, so invocations from inside this
+# directory build host-native without --target.
+#
+# NOTE: this pins the Windows dev-box triple (Phase 0, P0.P1 per the A1
+# pattern — revisit when A9(e) settles target forcing). CI and
+# non-Windows hosts pass --target explicitly (or adjust at extraction).
+# Invoking via --manifest-path from the repo root does NOT pick this up
+# (discovery walks from CWD) — cd into screeps-prospector/ instead.
+[build]
+target = "x86_64-pc-windows-msvc"
