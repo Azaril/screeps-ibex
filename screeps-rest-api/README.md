@@ -109,21 +109,26 @@ and the client models both:
   `DEFAULT_MIN_DELAY_MS` (600 ms) is sized for the global
   120 requests/minute token limit; pass `Duration::ZERO` against a
   local private server.
-- **Per-endpoint quotas — proactive pacing** (`quota` module): the
+- **Per-endpoint quotas — evidence-based pacing** (`quota` module): the
   routes below carry hourly/daily quotas *on top of* the global cap.
-  Pacing at 600 ms burns a 60/hour quota in 36 s and then every further
-  call 429s for the rest of the hour — so for **official targets**
-  (`is_official_target`: token auth or a screeps.com URL; override with
-  `Client::quota_pacing`) the client spaces calls per endpoint to fit
-  the quota (60/hour ⇒ one per 60 s sustained). Private servers enforce
-  no quotas (no rate-limit middleware in `@screeps/backend`; verified
-  live 2026-06-10) and keep the plain min-delay.
-- **Headers are ground truth, the table is the prior:** screeps.com
-  answers with `X-RateLimit-Limit` / `-Remaining` / `-Reset` (epoch
-  seconds — node-screeps-api `buildRateLimit`,
-  dist/ScreepsAPI.js:1238-1254). When present they override the static
-  table: pacing becomes `time_to_reset / remaining` (faster while the
-  window is unspent, a hard wait until reset when `remaining == 0`).
+  For **official targets** (`is_official_target`: token auth or a
+  screeps.com URL) the client tracks each route and slows down only
+  when the server itself evidences limiting — only the response
+  distinguishes a normal token from one with the noratelimit opt-out
+  (verified live 2026-06-10: a noratelimit token receives no rate-limit
+  headers and never 429s, so static pacing would slow it 50× for
+  nothing). Private servers enforce no quotas (no rate-limit middleware
+  in `@screeps/backend`; verified live 2026-06-10) and keep the plain
+  min-delay.
+- **Headers are ground truth, the table is the worst-case prior:**
+  screeps.com answers limited tokens with `X-RateLimit-Limit` /
+  `-Remaining` / `-Reset` (epoch seconds — node-screeps-api
+  `buildRateLimit`, dist/ScreepsAPI.js:1238-1254). When present they
+  engage pacing at `time_to_reset / remaining` (a hard wait until reset
+  when `remaining == 0`); absent any evidence, calls run free and the
+  table only powers the worst-case ETA math consumers print (e.g.
+  prospector's `plan_scan`/`plan_fetch`). The worst case for a limited
+  token is one 429 per window, absorbed by the backoff below.
 - **HTTP 429 — back off and resume:** `parse_retry_after_ms` extracts
   the wait from the official message (observed live: `Rate limit
   exceeded, retry after 3548835ms or disable rate limiting using this
@@ -161,9 +166,10 @@ fetched 2026-06-10), identical to the vendored
 | POST | `/api/user/memory` | 240/day | 360 s | :1435 |
 | POST | `/api/user/memory-segment` | 60/hour | 60 s | :1436 |
 
-The first call to an endpoint is never delayed — sustained spacing
-applies from the second call on, so single-shot operations (one code
-upload, one segment read) pay nothing.
+The sustained-spacing column is the worst-case **average** for a
+rate-limited token, not a schedule: no call is delayed until the server
+evidences limiting, so single-shot operations (one code upload, one
+segment read) and runs that fit inside one window pay nothing.
 
 ### Error envelope
 
@@ -195,7 +201,7 @@ websocket `auth` frame — never into logs or error text.
 
 | Module | Responsibility |
 |---|---|
-| `client` | `Client` + `AuthMode` + `is_official_target`: signin/rolling-token adoption, shard injection (query param on GETs, body key on POSTs), courtesy throttle, official quota pacing + 429 backoff-and-resume, one typed method per endpoint |
+| `client` | `Client` + `AuthMode` + `is_official_target`: signin/rolling-token adoption, shard injection (query param on GETs, body key on POSTs), courtesy throttle, evidence-based quota pacing + 429 backoff-and-resume, one typed method per endpoint |
 | `types`  | typed response structs, each fixture-tested; `enumerate_room_names` (the server's room-coordinate scheme) |
 | `code`   | the `POST /api/user/code` module map: JS-source modules as plain strings, wasm modules as `{binary: <base64>}` |
 | `quota`  | the pinned per-endpoint quota table, `X-RateLimit-*` header parsing, 429 retry-after parsing, `QuotaTracker` pacing math (pure, unit-tested) |

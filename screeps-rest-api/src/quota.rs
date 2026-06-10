@@ -14,15 +14,25 @@
 //! `scan --all` died with "Rate limit exceeded, retry after 3548835ms"
 //! ≈ 59 min, a full window's wait).
 //!
-//! THE QUOTA TABLE (the static prior) is pinned from the canonical
-//! community client, screepers/node-screeps-api — `src/ScreepsAPI.ts`
-//! (master, fetched 2026-06-10), identical to the vendored
+//! PACING IS EVIDENCE-BASED: only the server's response distinguishes
+//! a normal token from one with the noratelimit opt-out (verified live
+//! 2026-06-10: a noratelimit token receives NO `X-RateLimit-*` headers
+//! and never 429s — any static pacing would slow it 50x for nothing).
+//! A [`QuotaTracker`] therefore admits calls freely until evidence
+//! arrives: `X-RateLimit-Limit` / `X-RateLimit-Remaining` /
+//! `X-RateLimit-Reset` headers (reset = Unix epoch SECONDS —
+//! `buildRateLimit`, dist/ScreepsAPI.js:1238-1254 computes
+//! `toReset: reset - now_secs`) pace the remainder of the window, and a
+//! 429's retry-after marks the window spent (the client backs off and
+//! resumes — worst case for a limited token is ONE 429 per window).
+//!
+//! THE QUOTA TABLE is pinned from the canonical community client,
+//! screepers/node-screeps-api — `src/ScreepsAPI.ts` (master, fetched
+//! 2026-06-10), identical to the vendored
 //! `node_modules/screeps-api@1.16.1` `dist/ScreepsAPI.js:1417-1438`
-//! (READ-ONLY). HEADERS ARE GROUND TRUTH: screeps.com answers API calls
-//! with `X-RateLimit-Limit` / `X-RateLimit-Remaining` /
-//! `X-RateLimit-Reset` (reset = Unix epoch SECONDS — `buildRateLimit`,
-//! dist/ScreepsAPI.js:1238-1254 computes `toReset: reset - now_secs`),
-//! and a [`QuotaTracker`] prefers them over the table when present.
+//! (READ-ONLY). It no longer brakes anything: it feeds the WORST-CASE
+//! ETA planning math (prospector's `plan_scan`/`plan_fetch`) and names
+//! which endpoints are worth tracking at all.
 //!
 //! Private servers enforce none of this (`@screeps/backend` has no
 //! rate-limit middleware; verified on the live eval container
@@ -53,7 +63,8 @@ pub struct EndpointQuota {
 
 impl EndpointQuota {
     /// The call spacing that fits the quota indefinitely
-    /// (`period / limit`, e.g. 60/hour -> one call per 60 s).
+    /// (`period / limit`, e.g. 60/hour -> one call per 60 s). Used for
+    /// worst-case ETA planning, not for pacing — see [`QuotaTracker`].
     pub fn sustained_spacing(&self) -> Duration {
         self.period / self.limit.max(1)
     }
@@ -130,19 +141,25 @@ pub fn parse_retry_after_ms(message: &str) -> Option<u64> {
     rest[..digits_len].parse().ok()
 }
 
-/// Per-endpoint pacing state: spaces calls PROACTIVELY so the quota is
-/// never burned ahead of the window (60/hour -> one call per 60 s
-/// sustained) instead of bursting it in 36 s and then 429ing for the
-/// rest of the hour.
+/// Per-endpoint pacing state: EVIDENCE-BASED. Calls run free until the
+/// server itself says this token is limited — via `X-RateLimit-*`
+/// headers or a live 429 — because the response is the only ground
+/// truth that distinguishes a normal token from one with the
+/// noratelimit opt-out (verified live 2026-06-10: a noratelimit token
+/// receives NO rate-limit headers and no 429s, so any static pacing
+/// would slow it 50x for nothing).
 ///
-/// Two layers, ground truth winning:
-/// - **Static prior** (no headers seen, or the observed window has
-///   passed): space calls at `period / limit` — safe regardless of
-///   where the server's window boundary lies.
+/// - **No evidence**: zero delay. The pinned table stays the
+///   worst-case ETA prior for planning ([`EndpointQuota`]), not a
+///   brake. Worst case for a limited token is one 429 per window —
+///   absorbed by the client's backoff-and-resume, after which this
+///   tracker holds further calls until the stated reset.
 /// - **Header ground truth** (fresh `X-RateLimit-*` observation):
 ///   space at `time_to_reset / remaining`, which fits exactly what the
-///   server says is left — faster than the prior when the window is
-///   mostly unspent, and a hard wait until reset when `remaining == 0`.
+///   server says is left; a hard wait until reset when
+///   `remaining == 0`.
+/// - **A 429** ([`QuotaTracker::observe_rate_limited`]): the window is
+///   spent until the server's retry-after.
 ///
 /// Pure math over caller-supplied [`Instant`]s — unit-tested offline.
 #[derive(Debug)]
@@ -171,8 +188,9 @@ impl QuotaTracker {
     }
 
     /// How long the caller must wait before the next call to this
-    /// endpoint. Zero for the first call (and whenever the spacing has
-    /// already elapsed).
+    /// endpoint. Zero unless the server has given evidence of limiting
+    /// (a fresh `X-RateLimit-*` observation or a 429) whose window is
+    /// still open.
     pub fn required_delay(&self, now: Instant) -> Duration {
         // Ground truth is only trusted while its window is still open.
         let ground = match (self.remaining, self.reset_at) {
@@ -186,7 +204,11 @@ impl QuotaTracker {
                 let to_reset = reset_at.saturating_duration_since(now);
                 to_reset / u32::try_from(remaining).unwrap_or(u32::MAX)
             }
-            None => self.quota.sustained_spacing(),
+            // No evidence this token is limited: run free. A
+            // noratelimit token stays here forever; a limited token
+            // lands one 429 worst-case and the observation above takes
+            // over for the rest of the window.
+            None => return Duration::ZERO,
         };
         match self.last_call {
             Some(last) => (last + spacing).saturating_duration_since(now),
@@ -275,8 +297,8 @@ mod tests {
         assert!(endpoint_quota("POST", "/api/game/place-spawn").is_none());
     }
 
-    /// 60/hour means one call per 60 s sustained — the spacing that
-    /// would have saved the operator's `scan --all`.
+    /// 60/hour means one call per 60 s sustained — the worst-case ETA
+    /// math the planning printouts cite.
     #[test]
     fn sustained_spacing_math() {
         assert_eq!(
@@ -297,9 +319,11 @@ mod tests {
         );
     }
 
-    /// Static prior: first call free, then `period/limit` apart.
+    /// No evidence of limiting -> no pacing, ever. This is the
+    /// noratelimit-token steady state (verified live 2026-06-10: such
+    /// tokens receive no rate-limit headers and never 429).
     #[test]
-    fn tracker_spaces_calls_on_the_static_prior() {
+    fn tracker_is_permissive_without_evidence() {
         let mut tracker = QuotaTracker::new(map_stats_quota());
         let t0 = Instant::now();
         assert_eq!(
@@ -307,33 +331,22 @@ mod tests {
             Duration::ZERO,
             "first call free"
         );
-        tracker.record_call(t0);
-        assert_eq!(
-            tracker.required_delay(t0),
-            Duration::from_secs(60),
-            "second call waits the sustained spacing"
-        );
-        // 45 s later: 15 s of spacing left.
-        assert_eq!(
-            tracker.required_delay(t0 + Duration::from_secs(45)),
-            Duration::from_secs(15)
-        );
-        // Past the spacing: free again.
-        assert_eq!(
-            tracker.required_delay(t0 + Duration::from_secs(61)),
-            Duration::ZERO
-        );
+        // Burst far past the table's 60/hour: still free — the table
+        // is an ETA prior, not a brake.
+        for _ in 0..100 {
+            tracker.record_call(t0);
+            assert_eq!(tracker.required_delay(t0), Duration::ZERO);
+        }
     }
 
-    /// Header ground truth beats the prior: a half-spent window with
-    /// plenty remaining allows faster pacing; near-empty slows it.
+    /// Header ground truth engages pacing: a window with plenty
+    /// remaining paces gently; near-empty slows hard.
     #[test]
     fn tracker_prefers_header_ground_truth() {
         let mut tracker = QuotaTracker::new(map_stats_quota());
         let t0 = Instant::now();
         tracker.record_call(t0);
-        // 30 min to reset, 60 calls remaining -> 30 s spacing (faster
-        // than the 60 s prior).
+        // 30 min to reset, 60 calls remaining -> 30 s spacing.
         tracker.observe_headers(
             RateLimitInfo {
                 limit: 60,
@@ -375,9 +388,8 @@ mod tests {
             1_000_000,
         );
         assert_eq!(tracker.required_delay(t0), Duration::from_secs(3549));
-        // Once the window has passed, ground truth is stale and the
-        // prior takes over (spacing measured from the old last_call has
-        // long elapsed -> free).
+        // Once the window has passed, the evidence is stale — back to
+        // running free until the server objects again.
         assert_eq!(
             tracker.required_delay(t0 + Duration::from_secs(3550)),
             Duration::ZERO

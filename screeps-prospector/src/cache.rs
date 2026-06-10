@@ -268,10 +268,17 @@ impl RoomCache {
     /// claimability gate existed flag highways/source-keeper rooms
     /// open, and this retroactively sanitizes them so `fetch
     /// --all-open` doesn't burn the room-terrain quota on them.
-    pub fn open_rooms(&self) -> impl Iterator<Item = &CachedRoom> {
+    ///
+    /// Protection policy: respawn-area rooms are ALWAYS included —
+    /// respawning is the prospector's primary workflow, and the server
+    /// enforces actual eligibility at place-spawn time. Novice-area
+    /// rooms are excluded unless `include_novice`: they only admit
+    /// qualifying low-GCL accounts (`--include-novice` at the CLI).
+    pub fn open_rooms(&self, include_novice: bool) -> impl Iterator<Item = &CachedRoom> {
         self.rooms
             .iter()
             .filter(|r| r.spawn_status.map(|s| s.open).unwrap_or(false))
+            .filter(move |r| include_novice || !r.spawn_status.map(|s| s.novice).unwrap_or(false))
             .filter(|r| room_name_claimable(&r.room))
     }
 
@@ -492,6 +499,44 @@ mod tests {
         let scanned = loaded.get("W6N5").unwrap();
         assert!(!scanned.has_terrain());
         assert!(scanned.spawn_status.unwrap().novice);
+    }
+
+    /// The protection policy on read: respawn-area rooms are always
+    /// open-selectable (respawn-first workflow; the server checks real
+    /// eligibility at placement), novice-area rooms only with
+    /// `include_novice`.
+    #[test]
+    fn open_rooms_protection_policy() {
+        let mut cache = RoomCache::default();
+        let with_status = |name: &str, open: bool, novice: bool, respawn: bool| CachedRoom {
+            spawn_status: Some(RoomStatus {
+                open,
+                novice,
+                respawn,
+            }),
+            ..CachedRoom::new(name)
+        };
+        cache.upsert(with_status("W1N1", true, false, false));
+        cache.upsert(with_status("W2N1", true, false, true)); // respawn area
+        cache.upsert(with_status("W3N1", true, true, false)); // novice area
+        cache.upsert(with_status("W4N1", false, true, true)); // not open at all
+
+        let names = |include_novice: bool| -> Vec<&str> {
+            cache
+                .open_rooms(include_novice)
+                .map(|r| r.room.as_str())
+                .collect()
+        };
+        assert_eq!(
+            names(false),
+            vec!["W1N1", "W2N1"],
+            "respawn-area included by default, novice-area excluded"
+        );
+        assert_eq!(
+            names(true),
+            vec!["W1N1", "W2N1", "W3N1"],
+            "--include-novice widens; closed rooms stay out either way"
+        );
     }
 
     #[test]

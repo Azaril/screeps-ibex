@@ -57,6 +57,12 @@ const FETCH_SAVE_EVERY: usize = 16;
 pub struct ScanSummary {
     pub scanned: usize,
     pub open: usize,
+    /// Of the open rooms, how many sit in an active respawn area
+    /// (included in default selections — respawn-first workflow).
+    pub respawn: usize,
+    /// Of the open rooms, how many sit in an active novice area
+    /// (excluded from default selections unless `--include-novice`).
+    pub novice: usize,
     /// Rooms skipped because the cache already had a status fresher
     /// than the scan TTL (resume support).
     pub skipped_fresh: usize,
@@ -106,10 +112,9 @@ pub fn validate_shard_choice(shard: Option<&str>, available: &[String]) -> Resul
             "this server is sharded — pass --shard (available: {})",
             listed()
         ),
-        Some(s) if !available.iter().any(|a| a == s) => bail!(
-            "unknown shard '{s}'; available: {}",
-            listed()
-        ),
+        Some(s) if !available.iter().any(|a| a == s) => {
+            bail!("unknown shard '{s}'; available: {}", listed())
+        }
         Some(_) => Ok(()),
     }
 }
@@ -338,6 +343,12 @@ pub async fn scan_rooms_resumable(
             summary.scanned += 1;
             if status.open {
                 summary.open += 1;
+                if status.respawn {
+                    summary.respawn += 1;
+                }
+                if status.novice {
+                    summary.novice += 1;
+                }
             }
             cache.upsert(CachedRoom {
                 spawn_status: Some(status),

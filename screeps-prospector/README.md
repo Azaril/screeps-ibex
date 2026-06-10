@@ -105,7 +105,8 @@ the cache.
 
 Global flags (all commands): `--server-name <entry>`, `--shard <name>`,
 `--config <path>` (credentials file), `--cache-file <path>` (default
-`cache/<shard-or-server>.json`), `--min-delay-ms <ms>`.
+`cache/<shard-or-server>.json`), `--min-delay-ms <ms>`,
+`--include-novice` (see `scan` below).
 
 #### `scan --rooms W1N1,W2N1 | --all [--status-ttl-secs 3600]`
 
@@ -113,9 +114,15 @@ Batched `map-stats` over the named rooms (or the whole map, enumerated
 via `world-size`). Records per-room spawnability in the cache:
 `open` (exists, unowned, unreserved, and claimable by name — highways
 and source-keeper rooms are excluded, since map-stats reports those as
-`"normal"` too), plus `novice`/`respawn` protection flags surfaced
-separately (whether you can use such rooms depends on your account —
-you decide). Batches are 1000 rooms per call,
+`"normal"` too), plus `novice`/`respawn` protection flags.
+
+The default selections (`fetch`, `score`, `recommend`, `auto`) apply a
+protection policy on top of `open`: **respawn-area rooms are always
+included** (respawning is the prospector's primary workflow; the server
+verifies actual eligibility at place-spawn) and **novice-area rooms are
+excluded** unless you pass the global `--include-novice` (novice areas
+only admit qualifying low-GCL accounts). Explicit `--rooms` lists are
+never filtered. Batches are 1000 rooms per call,
 so an MMO shard's ~15k rooms is **15 map-stats calls** — a quarter of
 the 60/hour quota. **Resumable:** the cache is saved after every batch,
 and re-runs skip rooms whose cached status is fresher than
@@ -212,23 +219,36 @@ from node-screeps-api):
 | `GET room-terrain` (fetch) | **360/hour** | one call / 10 s |
 | `GET room-objects` (fetch) | global only | 600 ms |
 
-The shared client paces the quota-capped endpoints **proactively** for
-official server entries (it prefers the server's `X-RateLimit-*`
-headers when present — faster while the hourly window is unspent), and
-on a 429 it logs `rate limited; resuming in Xs (endpoint quota: …)`,
-waits, and resumes instead of killing the run. Long waits (≥ 2 min)
-print once the sanctioned opt-out
+Pacing is **evidence-based** — the table above is a worst-case bound,
+not a schedule. Calls run at full speed until screeps.com itself
+reports limiting: `X-RateLimit-*` response headers pace out the rest of
+the window, and a 429 logs `rate limited; resuming in Xs (endpoint
+quota: …)`, waits out the server's stated retry-after, and resumes
+instead of killing the run — worst case **one 429 per window**. Long
+waits (≥ 2 min) print once the sanctioned opt-out
 (`https://screeps.com/a/#!/account/auth-tokens/noratelimit` — disable
 rate limiting per token, your choice to use).
 
-What that means in practice, with the **ETA printed up front** before
-the first call:
+A token with the noratelimit opt-out enabled needs **no
+configuration**: it receives no rate-limit headers and never 429s
+(verified live 2026-06-10), so nothing ever slows it. The opt-out lifts
+the global 120/minute cap too, so the only knob worth touching is the
+courtesy delay:
+
+```console
+$ cargo run --release -- --server-name mmo --shard shardX --min-delay-ms 100 fetch
+```
+
+What that means in practice, with the **worst-case ETA printed up
+front** before the first call:
 
 - `scan --all` on a ~15k-room shard → 15 map-stats calls (1000
-  rooms/batch) → **≈ 14 min** sustained, well inside one hourly window.
-- `fetch` of N open rooms → N room-terrain calls at 10 s spacing → e.g.
-  300 rooms ≈ 50 min, **printed before starting** with the suggestion
-  to scope `--rooms` to a region instead.
+  rooms/batch) → inside one 60/hour window, so it completes at full
+  speed (seconds) for every token.
+- `fetch` of N open rooms → N room-terrain calls → full speed until the
+  server pushes back; a rate-limited token averages 360 rooms per
+  hourly window (≈ 10 s/room) on big runs, **printed before starting**
+  with the suggestion to scope `--rooms` to a region instead.
 
 Everything is **resumable**: scan saves the cache after every batch and
 skips fresh statuses on re-run; fetch skips rooms whose terrain+objects

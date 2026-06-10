@@ -880,8 +880,11 @@ async fn place_via_prospector(
     let world = api.world_size().await?;
     let rooms = screeps_rest_api::enumerate_room_names(world.width, world.height);
     let scan = ops::scan_rooms(api, &mut cache, &rooms, now_unix).await?;
+    // include_novice: false is moot here — private servers have no
+    // novice/respawn protections (the flags derive from timestamps the
+    // open backend never sets).
     let mut open: Vec<String> = cache
-        .open_rooms()
+        .open_rooms(false)
         .map(|r| r.room.clone())
         .filter(|r| !exclude.contains(r))
         .collect();

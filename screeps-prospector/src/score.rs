@@ -302,8 +302,9 @@ pub enum RoomSelection {
     Explicit,
     /// `--all`: every cached room.
     AllCached,
-    /// Default: rooms the cache flags open for spawning.
-    OpenRooms,
+    /// Default: rooms the cache flags open for spawning (respawn-area
+    /// rooms always included; novice-area rooms per the flag).
+    OpenRooms { include_novice: bool },
     /// Default, but the cache carries no scan statuses at all (e.g. a
     /// pure bench seed) — fall back to every cached room.
     AllCachedNoStatuses,
@@ -314,7 +315,19 @@ impl std::fmt::Display for RoomSelection {
         match self {
             RoomSelection::Explicit => write!(f, "rooms passed via --rooms"),
             RoomSelection::AllCached => write!(f, "all cached rooms (--all)"),
-            RoomSelection::OpenRooms => write!(f, "rooms the cache flags open for spawning"),
+            RoomSelection::OpenRooms {
+                include_novice: false,
+            } => write!(
+                f,
+                "rooms the cache flags open for spawning; novice-area rooms excluded \
+                 (--include-novice to widen)"
+            ),
+            RoomSelection::OpenRooms {
+                include_novice: true,
+            } => write!(
+                f,
+                "rooms the cache flags open for spawning, novice-area rooms included"
+            ),
             RoomSelection::AllCachedNoStatuses => write!(
                 f,
                 "all cached rooms (cache has no scan statuses — run `scan` to narrow to open rooms)"
@@ -324,12 +337,14 @@ impl std::fmt::Display for RoomSelection {
 }
 
 /// Resolve the room list for scoring: explicit `--rooms` wins, then
-/// `--all`, then the cache's open rooms — falling back to all cached
+/// `--all`, then the cache's open rooms (respawn-area always in,
+/// novice-area only with `include_novice`) — falling back to all cached
 /// rooms when no statuses exist (offline bench-seeded caches).
 pub fn select_rooms(
     cache: &RoomCache,
     explicit: Option<Vec<String>>,
     all: bool,
+    include_novice: bool,
 ) -> (Vec<String>, RoomSelection) {
     if let Some(rooms) = explicit {
         return (rooms, RoomSelection::Explicit);
@@ -346,8 +361,11 @@ pub fn select_rooms(
     }
     if cache.rooms.iter().any(|r| r.spawn_status.is_some()) {
         (
-            cache.open_rooms().map(|r| r.room.clone()).collect(),
-            RoomSelection::OpenRooms,
+            cache
+                .open_rooms(include_novice)
+                .map(|r| r.room.clone())
+                .collect(),
+            RoomSelection::OpenRooms { include_novice },
         )
     } else {
         (all_names(), RoomSelection::AllCachedNoStatuses)
@@ -878,30 +896,50 @@ mod tests {
     fn select_rooms_policy() {
         let mut cache = fixture_cache();
         // No statuses at all -> default falls back to every cached room.
-        let (rooms, selection) = select_rooms(&cache, None, false);
+        let (rooms, selection) = select_rooms(&cache, None, false, false);
         assert_eq!(selection, RoomSelection::AllCachedNoStatuses);
         assert_eq!(rooms.len(), cache.rooms.len());
 
-        // With statuses, the default narrows to open rooms.
+        // With statuses, the default narrows to open rooms — respawn-
+        // area rooms included, novice-area rooms only on request.
         cache.rooms[0].spawn_status = Some(RoomStatus {
             open: true,
             novice: false,
-            respawn: false,
+            respawn: true,
         });
         cache.rooms[1].spawn_status = Some(RoomStatus {
+            open: true,
+            novice: true,
+            respawn: false,
+        });
+        cache.rooms[2].spawn_status = Some(RoomStatus {
             open: false,
             novice: false,
             respawn: false,
         });
-        let (rooms, selection) = select_rooms(&cache, None, false);
-        assert_eq!(selection, RoomSelection::OpenRooms);
-        assert_eq!(rooms, vec!["W1N1".to_owned()]);
+        let novice_room = cache.rooms[1].room.clone();
+        let (rooms, selection) = select_rooms(&cache, None, false, false);
+        assert_eq!(
+            selection,
+            RoomSelection::OpenRooms {
+                include_novice: false
+            }
+        );
+        assert_eq!(rooms, vec!["W1N1".to_owned()], "respawn in, novice out");
+        let (rooms, selection) = select_rooms(&cache, None, false, true);
+        assert_eq!(
+            selection,
+            RoomSelection::OpenRooms {
+                include_novice: true
+            }
+        );
+        assert_eq!(rooms, vec!["W1N1".to_owned(), novice_room]);
 
-        // --all and --rooms override.
-        let (rooms, selection) = select_rooms(&cache, None, true);
+        // --all and --rooms override (no protection filtering).
+        let (rooms, selection) = select_rooms(&cache, None, true, false);
         assert_eq!(selection, RoomSelection::AllCached);
         assert_eq!(rooms.len(), cache.rooms.len());
-        let (rooms, selection) = select_rooms(&cache, Some(vec!["W7N7".to_owned()]), true);
+        let (rooms, selection) = select_rooms(&cache, Some(vec!["W7N7".to_owned()]), true, false);
         assert_eq!(selection, RoomSelection::Explicit);
         assert_eq!(rooms, vec!["W7N7".to_owned()]);
     }

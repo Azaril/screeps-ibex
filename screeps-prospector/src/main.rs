@@ -52,6 +52,14 @@ struct Cli {
     #[arg(long, global = true, default_value_t = DEFAULT_MIN_DELAY_MS)]
     min_delay_ms: u64,
 
+    /// Include novice-area rooms in the default "open" selections
+    /// (fetch/score/recommend/auto). Off by default: novice areas only
+    /// admit qualifying low-GCL accounts. Respawn-area rooms are always
+    /// included — the server checks actual eligibility at place-spawn.
+    /// Explicit --rooms lists are never filtered.
+    #[arg(long, global = true)]
+    include_novice: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -415,8 +423,11 @@ fn fmt_quota(quota: &screeps_rest_api::EndpointQuota) -> String {
 }
 
 /// MMO quota reasoning, printed BEFORE any scan network call (official
-/// servers only): call count, the per-endpoint quota driving the ETA,
-/// and the region-scoping suggestion for long runs.
+/// servers only): call count, the per-endpoint quota driving the
+/// worst-case ETA, and the region-scoping suggestion for long runs.
+/// The ETA is a BOUND: calls run at full speed until screeps.com
+/// actually reports limiting (headers/429) — a noratelimit token never
+/// slows down at all.
 fn print_scan_plan(plan: &ops::ScanPlan, official: bool) {
     if !official {
         return;
@@ -430,8 +441,8 @@ fn print_scan_plan(plan: &ops::ScanPlan, official: bool) {
         ops::MAP_STATS_CHUNK
     );
     println!(
-        "  map-stats quota on screeps.com: {} => ETA <= {} (sustained pacing; faster while the \
-         hourly window is unspent)",
+        "  map-stats quota on screeps.com: {} => worst-case ETA {} for a rate-limited token; \
+         runs at full speed until the server pushes back (noratelimit tokens never slow)",
         fmt_quota(&plan.quota),
         fmt_eta(plan.eta_secs)
     );
@@ -443,7 +454,8 @@ fn print_scan_plan(plan: &ops::ScanPlan, official: bool) {
     }
 }
 
-/// MMO quota reasoning for fetch: room-terrain (360/hour) dominates.
+/// MMO quota reasoning for fetch: room-terrain (360/hour) dominates the
+/// worst case. The ETA is a BOUND — see [`print_scan_plan`].
 fn print_fetch_plan(plan: &ops::FetchPlan, official: bool) {
     if !official {
         return;
@@ -460,7 +472,8 @@ fn print_fetch_plan(plan: &ops::FetchPlan, official: bool) {
         plan.rooms_total
     );
     println!(
-        "  ETA <= {} (sustained pacing; faster while the hourly windows are unspent)",
+        "  worst-case ETA {} for a rate-limited token; runs at full speed until the server \
+         pushes back (noratelimit tokens never slow)",
         fmt_eta(plan.eta_secs)
     );
     if plan.eta_secs > 600 {
@@ -551,10 +564,13 @@ async fn main() -> Result<()> {
             .await?;
             cache.save(&cache_path)?;
             println!(
-                "scanned {} rooms ({} skipped, status fresh): {} open for spawning -> {}",
+                "scanned {} rooms ({} skipped, status fresh): {} open for spawning \
+                 ({} respawn-area, {} novice-area) -> {}",
                 summary.scanned,
                 summary.skipped_fresh,
                 summary.open,
+                summary.respawn,
+                summary.novice,
                 cache_path.display()
             );
             if summary.open == 0 && summary.scanned >= 10 {
@@ -575,8 +591,24 @@ async fn main() -> Result<()> {
             let room_names = match rooms {
                 Some(list) => parse_room_list(list),
                 // --all-open and the bare default are the same thing:
-                // every room the cache currently flags open.
-                None => cache.open_rooms().map(|r| r.room.clone()).collect(),
+                // every room the cache currently flags open (novice-
+                // area rooms only with --include-novice).
+                None => {
+                    let names: Vec<String> = cache
+                        .open_rooms(cli.include_novice)
+                        .map(|r| r.room.clone())
+                        .collect();
+                    if !cli.include_novice {
+                        let novice_only = cache.open_rooms(true).count() - names.len();
+                        if novice_only > 0 {
+                            println!(
+                                "note: {novice_only} novice-area room(s) excluded \
+                                 (pass --include-novice to fetch them too)"
+                            );
+                        }
+                    }
+                    names
+                }
             };
             if room_names.is_empty() {
                 bail!(
@@ -624,7 +656,8 @@ async fn main() -> Result<()> {
         } => {
             let cache = load_cache_or_explain(&resolve_cache_path(&cli))?;
             let explicit = rooms.as_deref().map(parse_room_list);
-            let (room_names, selection) = score::select_rooms(&cache, explicit, *all);
+            let (room_names, selection) =
+                score::select_rooms(&cache, explicit, *all, cli.include_novice);
             if room_names.is_empty() {
                 bail!("nothing to score: {selection}");
             }
@@ -641,7 +674,8 @@ async fn main() -> Result<()> {
         } => {
             let cache = load_cache_or_explain(&resolve_cache_path(&cli))?;
             let explicit = rooms.as_deref().map(parse_room_list);
-            let (room_names, selection) = score::select_rooms(&cache, explicit, *all);
+            let (room_names, selection) =
+                score::select_rooms(&cache, explicit, *all, cli.include_novice);
             if room_names.is_empty() {
                 bail!("nothing to recommend: {selection}");
             }
@@ -733,7 +767,10 @@ async fn main() -> Result<()> {
             .await?;
             cache.save(&cache_path)?;
             println!("scan: {} rooms, {} open", scan.scanned, scan.open);
-            let open: Vec<String> = cache.open_rooms().map(|r| r.room.clone()).collect();
+            let open: Vec<String> = cache
+                .open_rooms(cli.include_novice)
+                .map(|r| r.room.clone())
+                .collect();
             if open.is_empty() {
                 bail!("no rooms are open for spawning on this server");
             }
@@ -801,12 +838,20 @@ async fn main() -> Result<()> {
                     .iter()
                     .filter(|r| r.spawn_status.is_some())
                     .count();
-                let open = cache.open_rooms().count();
+                let open = cache.open_rooms(false).count();
+                let novice_only = cache.open_rooms(true).count() - open;
+                let respawn = cache
+                    .open_rooms(false)
+                    .filter(|r| r.spawn_status.map(|s| s.respawn).unwrap_or(false))
+                    .count();
                 println!("cache:        {}", cache_path.display());
                 println!("description:  {}", cache.description);
                 println!("rooms:        {}", cache.rooms.len());
                 println!("with terrain: {with_terrain}");
-                println!("with status:  {with_status} ({open} open)");
+                println!(
+                    "with status:  {with_status} ({open} open — {respawn} respawn-area; \
+                     plus {novice_only} novice-area, needs --include-novice)"
+                );
             }
             CacheAction::Seed { from, force } => {
                 let cache_path = resolve_cache_path(&cli);
@@ -873,6 +918,19 @@ mod tests {
         assert_eq!(fmt_quota(&map_stats), "60/hour");
         let code = screeps_rest_api::endpoint_quota("POST", "/api/user/code").unwrap();
         assert_eq!(fmt_quota(&code), "240/day");
+    }
+
+    /// `--include-novice` defaults off (novice areas only admit
+    /// qualifying accounts) and parses globally, before or after the
+    /// subcommand.
+    #[test]
+    fn include_novice_flag_parses_and_defaults_off() {
+        let cli = Cli::try_parse_from(["screeps-prospector", "score"]).unwrap();
+        assert!(!cli.include_novice, "novice-area rooms excluded by default");
+        let cli = Cli::try_parse_from(["screeps-prospector", "--include-novice", "fetch"]).unwrap();
+        assert!(cli.include_novice);
+        let cli = Cli::try_parse_from(["screeps-prospector", "score", "--include-novice"]).unwrap();
+        assert!(cli.include_novice);
     }
 
     #[test]

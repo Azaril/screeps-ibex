@@ -8,12 +8,14 @@
 //! see also the shape catalogue in [`crate::types`].
 //!
 //! RATE LIMITS (official servers): on top of the courtesy `min_delay`
-//! (the global 120/minute cap), calls to per-endpoint-capped routes are
-//! PROACTIVELY spaced to fit the official hourly/daily quotas, with
-//! `X-RateLimit-*` response headers preferred over the static table —
-//! see [`crate::quota`]. A 429 backs off for the server's stated
-//! retry-after and RESUMES instead of failing the caller's whole run.
-//! Private servers (no quotas, no headers) keep the plain `min_delay`.
+//! (the global 120/minute cap), per-endpoint-capped routes are paced on
+//! EVIDENCE — calls run free until the server demonstrates limiting via
+//! `X-RateLimit-*` headers or a 429, after which the endpoint's tracker
+//! holds calls to fit the rest of the window (see [`crate::quota`]; a
+//! noratelimit token shows neither signal and is never slowed). A 429
+//! backs off for the server's stated retry-after and RESUMES instead of
+//! failing the caller's whole run. Private servers (no quotas, no
+//! headers) keep the plain `min_delay`.
 //!
 //! SECRETS: passwords/tokens live in [`SecretString`]; they are exposed
 //! only into the signin/register request bodies and the `X-Token`/
@@ -121,8 +123,9 @@ pub struct Client {
     token: Mutex<Option<SecretString>>,
     min_delay: Duration,
     last_request: Mutex<Option<Instant>>,
-    /// Endpoint-quota pacing engaged? Auto-detected via
-    /// [`is_official_target`]; override with [`Client::quota_pacing`].
+    /// Endpoint-quota tracking engaged? Auto-detected via
+    /// [`is_official_target`]. Tracking, not braking: calls run free
+    /// until the server evidences limiting (headers/429).
     official: bool,
     /// Per-endpoint pacing state, keyed by (method, path) for the
     /// routes in [`crate::quota::endpoint_quota`]'s table.
@@ -172,17 +175,10 @@ impl Client {
         })
     }
 
-    /// Override the auto-detected endpoint-quota pacing (engaged for
-    /// official targets per [`is_official_target`]). Power users with a
-    /// noratelimit token can pass `false`; a private server fronting
-    /// screeps.com-style limits could pass `true`.
-    pub fn quota_pacing(mut self, enabled: bool) -> Self {
-        self.official = enabled;
-        self
-    }
-
-    /// Whether endpoint-quota pacing is engaged (the official-server
-    /// classification, unless overridden via [`Client::quota_pacing`]).
+    /// Whether endpoint-quota tracking is engaged (the official-server
+    /// classification). No opt-out exists because none is needed: the
+    /// trackers only slow calls after the server itself evidences
+    /// limiting, so a noratelimit token runs at full speed untouched.
     pub fn is_official(&self) -> bool {
         self.official
     }
@@ -555,10 +551,12 @@ impl Client {
         *last = Some(Instant::now());
     }
 
-    /// PROACTIVE endpoint-quota pacing (official targets only): wait
-    /// until the endpoint's [`QuotaTracker`] admits the next call, then
-    /// claim the slot. Loops because the lock is dropped across the
-    /// sleep (a long wait must not block unrelated endpoints).
+    /// Evidence-based endpoint-quota pacing (official targets only):
+    /// wait until the endpoint's [`QuotaTracker`] admits the next call,
+    /// then claim the slot. Zero wait until the server has evidenced
+    /// limiting (headers/429) for this endpoint. Loops because the lock
+    /// is dropped across the sleep (a long wait must not block
+    /// unrelated endpoints).
     async fn wait_for_endpoint_quota(&self, method: &'static str, path: &'static str) {
         if !self.official {
             return;
@@ -874,9 +872,9 @@ mod tests {
 
     /// The official classification (mirrors prospector's MMO-safety
     /// rule, P0.P4): token auth OR a screeps.com URL — and it drives
-    /// whether quota pacing engages on a new client.
+    /// whether quota tracking engages on a new client.
     #[test]
-    fn official_target_classification_drives_quota_pacing() {
+    fn official_target_classification_drives_quota_tracking() {
         let token = || AuthMode::Token(SecretString::from(FAKE_TOKEN));
         let userpass = || AuthMode::UserPass {
             username: "ibex".to_owned(),
@@ -900,10 +898,7 @@ mod tests {
             Duration::from_millis(DEFAULT_MIN_DELAY_MS),
         )
         .unwrap();
-        assert!(mmo.is_official(), "quota pacing auto-engages on MMO");
-        // The sanctioned opt-out: noratelimit token holders can switch
-        // the pacing off explicitly.
-        assert!(!mmo.quota_pacing(false).is_official());
+        assert!(mmo.is_official(), "quota tracking auto-engages on MMO");
 
         let private =
             Client::new("http://127.0.0.1:21025", None, userpass(), Duration::ZERO).unwrap();
