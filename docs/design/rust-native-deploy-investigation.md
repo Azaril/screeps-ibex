@@ -83,9 +83,9 @@ Clone: `C:\code\trunk`. Patterns worth stealing (web-app parts ignored):
 
 ## 3. Proposed architecture
 
-**Crate: `screeps-pack`** — library + CLI, started as a workspace-excluded peer dir (`screeps-pack/`, the `screeps-eval`/`screeps-prospector` lifecycle: in-repo → extract to own remote when stable). Binary doubles as a cargo subcommand (`cargo screeps-pack deploy …` via the `cargo-screeps-pack` shim) — but plain `screeps-pack deploy` is the primary UX, mirroring deploy.js.
+**Crate: `screeps-pack`** — library + CLI, started as a workspace-excluded peer dir (`screeps-pack/`, the `screeps-server-kit`/`screeps-prospector` lifecycle: in-repo → extract to own remote when stable). Binary doubles as a cargo subcommand (`cargo screeps-pack deploy …` via the `cargo-screeps-pack` shim) — but plain `screeps-pack deploy` is the primary UX, mirroring deploy.js.
 
-Pipeline (each step = a library module; the CLI is a thin clap wrapper, same pattern as `screeps-eval`):
+Pipeline (each step = a library module; the CLI is a thin clap wrapper, same pattern as `screeps-server-kit`):
 
 | Step | Mechanism | Source of truth |
 |---|---|---|

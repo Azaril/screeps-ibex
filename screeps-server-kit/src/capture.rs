@@ -1,38 +1,29 @@
-//! Console + metrics capture into `runs/` artifacts (P0.A5) and the
+//! Console + metrics capture into `runs/` artifacts, and the
 //! `run --ticks N` loop.
+//!
+//! **Mechanism only** (P0.A14): this module owns the run loop, the JSONL
+//! artifact records, the counters, and the summary — but it knows
+//! nothing about any particular bot. What counts as a panic line, a
+//! deserialization failure, or an error-level log line is supplied by
+//! the caller as a [`MarkerSpec`] (policy; this repo's lives in
+//! `screeps-ibex-eval`'s `gates` module), and which memory segment carries the
+//! bot's live stats is supplied via [`CaptureSpec`].
 //!
 //! The console-websocket PROTOCOL (frames, auth/subscribe handshake,
 //! payload flattening) lives in the shared `screeps-rest-api` crate
-//! (P0.A12) — `screeps_rest_api::socket` pins it with citations. This
-//! module owns what is harness-specific: the run loop, the JSONL
-//! artifact records, the gate counters, and the summary.
-//!
-//! ## Bot error markers (the P0.A6 smoke gates pin these)
-//!
-//! Console line format is `(<LEVEL>) <target>: <message>`
-//! (screeps-ibex/src/logging.rs:32). Gate markers:
-//! - **panic**: the panic hook formats `PanicHookInfo` Display — the
-//!   message contains `panicked at` — and logs it via `log::error!`
-//!   (screeps-ibex/src/panic.rs:23-28,55).
-//! - **deserialization failure**: `Failed deserialization: <e>`
-//!   (screeps-ibex/src/game_loop.rs:533) and `Failed to decode stats
-//!   history` (screeps-ibex/src/stats_history.rs:208).
-//!   Serialize-side errors (`Failed serialization:` game_loop.rs:424,
-//!   `Encode failed:` game_loop.rs:429) are counted under
-//!   `error_log_lines` but are not deser-gate markers.
+//! (P0.A12) — `screeps_rest_api::socket` pins it with citations.
 //!
 //! ## Metrics sources
 //!
 //! - `GET /api/game/time` per sample (tick progress).
-//! - `GET /api/user/memory-segment?segment=99` — the bot's live stats
-//!   JSON (screeps-ibex/src/statssystem.rs:339-351 writes
-//!   `{"shard":{"<shard>":{time,gcl,gpl,cpu:{bucket,limit,used},room,market}}}`
-//!   to segment 99 every tick). Segment 57 (ADR 0006 metrics segment)
-//!   joins when it lands.
+//! - `GET /api/user/memory-segment?segment=N` (`CaptureSpec::stats_segment`)
+//!   — the bot's live stats JSON. CPU extraction ([`cpu_from_stats`])
+//!   understands the common screeps-stats shard shape
+//!   `{"shard":{"<name>":{"cpu":{bucket,limit,used},...}}}`.
 //! - Creep count (best-effort) via the server CLI:
 //!   `storage.db['rooms.objects'].count({type:'creep',user:<id>})`.
 
-use crate::config::EvalConfig;
+use crate::config::KitConfig;
 use crate::server::CliClient;
 use anyhow::{anyhow, bail, Context, Result};
 use screeps_rest_api::{console_lines, ConsoleSocket};
@@ -50,12 +41,54 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// `console.jsonl`, pinned by `console_jsonl_record_shape`).
 pub use screeps_rest_api::ConsoleLineKind as ConsoleKind;
 
-/// Metrics sample cadence. At the 100 ms smoke tick rate this is one
-/// sample every ~20 ticks; console capture is continuous regardless.
+/// Metrics sample cadence. At a 100 ms tick rate this is one sample
+/// every ~20 ticks; console capture is continuous regardless.
 pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 
-/// The bot's live-stats segment (statssystem.rs:340).
-pub const STATS_SEGMENT: u8 = 99;
+// ===================================================================
+// the caller-supplied capture policy
+// ===================================================================
+
+/// The bot-specific log markers the counters classify against. The kit
+/// COUNTS; the consumer crate decides what the markers ARE (and pins
+/// them against its bot's sources) — e.g. `screeps-ibex-eval`'s gates module.
+#[derive(Debug, Clone, Default)]
+pub struct MarkerSpec {
+    /// Substrings identifying a panic in the bot's console output
+    /// (counted into [`ConsoleCounters::panic_lines`], any line kind).
+    pub panic_markers: Vec<String>,
+    /// Substrings identifying a state-deserialization failure
+    /// (counted into [`ConsoleCounters::deser_failure_lines`]).
+    pub deser_markers: Vec<String>,
+    /// Prefix of an error-level line in the bot's log format (counted
+    /// into [`ConsoleCounters::error_log_lines`], `log`-kind only).
+    pub error_log_prefix: Option<String>,
+}
+
+impl MarkerSpec {
+    pub fn is_panic_line(&self, line: &str) -> bool {
+        self.panic_markers.iter().any(|m| line.contains(m.as_str()))
+    }
+
+    pub fn is_deser_failure_line(&self, line: &str) -> bool {
+        self.deser_markers.iter().any(|m| line.contains(m.as_str()))
+    }
+
+    fn is_error_log_line(&self, line: &str) -> bool {
+        self.error_log_prefix
+            .as_deref()
+            .is_some_and(|p| line.starts_with(p))
+    }
+}
+
+/// Everything a [`run`] needs to know about the bot under capture.
+#[derive(Debug, Clone, Default)]
+pub struct CaptureSpec {
+    pub markers: MarkerSpec,
+    /// Memory segment polled for the bot's live-stats JSON each sample
+    /// (`None` disables stats/CPU sampling).
+    pub stats_segment: Option<u8>,
+}
 
 // ===================================================================
 // the console.jsonl record
@@ -74,30 +107,8 @@ pub struct ConsoleLine {
     pub line: String,
 }
 
-// ===================================================================
-// error markers (pure; pinned in the module docs)
-// ===================================================================
-
-/// screeps-ibex/src/panic.rs:28 — `PanicHookInfo` Display.
-pub const PANIC_MARKER: &str = "panicked at";
-/// screeps-ibex/src/game_loop.rs:533 and stats_history.rs:208.
-pub const DESER_FAILURE_MARKERS: &[&str] =
-    &["Failed deserialization:", "Failed to decode stats history"];
-
-pub fn is_panic_line(line: &str) -> bool {
-    line.contains(PANIC_MARKER)
-}
-
-pub fn is_deser_failure_line(line: &str) -> bool {
-    DESER_FAILURE_MARKERS.iter().any(|m| line.contains(m))
-}
-
-/// `(ERROR) <target>: ...` — the fern console format (logging.rs:32).
-fn is_error_log_line(line: &str) -> bool {
-    line.starts_with("(ERROR)")
-}
-
-/// Counters aggregated over a run's console stream.
+/// Counters aggregated over a run's console stream, classified against
+/// the caller's [`MarkerSpec`].
 #[derive(Debug, Default, Clone, PartialEq, Serialize)]
 pub struct ConsoleCounters {
     /// Total JSONL records written (non-empty events only).
@@ -106,31 +117,32 @@ pub struct ConsoleCounters {
     pub result_lines: u64,
     /// `error`-kind events from the engine (thrown errors/aborts).
     pub error_events: u64,
-    /// `(ERROR)`-level bot log lines (informational superset).
+    /// Error-level bot log lines per `error_log_prefix` (informational
+    /// superset).
     pub error_log_lines: u64,
-    /// HARD-ZERO gate: lines matching [`PANIC_MARKER`] (any kind).
+    /// HARD-ZERO gate material: lines matching `panic_markers` (any kind).
     pub panic_lines: u64,
-    /// HARD-ZERO gate: lines matching [`DESER_FAILURE_MARKERS`].
+    /// HARD-ZERO gate material: lines matching `deser_markers`.
     pub deser_failure_lines: u64,
 }
 
 impl ConsoleCounters {
-    pub fn record(&mut self, line: &ConsoleLine) {
+    pub fn record(&mut self, line: &ConsoleLine, markers: &MarkerSpec) {
         self.lines += 1;
         match line.kind {
             ConsoleKind::Log => {
                 self.log_lines += 1;
-                if is_error_log_line(&line.line) {
+                if markers.is_error_log_line(&line.line) {
                     self.error_log_lines += 1;
                 }
             }
             ConsoleKind::Result => self.result_lines += 1,
             ConsoleKind::Error => self.error_events += 1,
         }
-        if is_panic_line(&line.line) {
+        if markers.is_panic_line(&line.line) {
             self.panic_lines += 1;
         }
-        if is_deser_failure_line(&line.line) {
+        if markers.is_deser_failure_line(&line.line) {
             self.deser_failure_lines += 1;
         }
     }
@@ -140,7 +152,7 @@ impl ConsoleCounters {
 // metrics shaping (pure)
 // ===================================================================
 
-/// CPU stats as the bot publishes them (statssystem.rs `CpuStats`).
+/// CPU stats as published in the common screeps-stats shard shape.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct CpuSample {
     pub bucket: f64,
@@ -148,7 +160,7 @@ pub struct CpuSample {
     pub used: f64,
 }
 
-/// Extract the CPU block from the seg-99 stats JSON
+/// Extract the CPU block from a stats JSON in the common shard shape
 /// (`{"shard":{"<name>":{"cpu":{bucket,limit,used},...}}}`).
 pub fn cpu_from_stats(stats: &Value) -> Option<CpuSample> {
     let shards = stats.get("shard")?.as_object()?;
@@ -170,13 +182,13 @@ pub struct MetricsSample {
     pub cpu: Option<CpuSample>,
     /// Own-creep count via the server CLI (best-effort).
     pub creeps: Option<u64>,
-    /// Full parsed seg-99 stats (informational; None until the bot
-    /// writes the segment).
+    /// Full parsed stats-segment JSON (informational; None until the
+    /// bot writes the segment, or when no segment is configured).
     pub stats: Option<Value>,
 }
 
 // ===================================================================
-// summary (pure aggregation + the smoke gates)
+// summary (pure aggregation + the hard-zero gates)
 // ===================================================================
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -233,25 +245,27 @@ pub struct Summary {
 }
 
 impl Summary {
-    /// The P0.A6 smoke gates — **HARD ZEROS only** (phase-0.md §5 exit
-    /// criterion 6): zero ticks observed, any panic line, any deser
-    /// failure. (Deploy failure gates earlier, in the deploy step.)
-    /// Every metric (CPU, creeps, error counts) is informational.
-    pub fn gate_failures(&self) -> Vec<String> {
+    /// The smoke gates — **HARD ZEROS only**: zero ticks observed, any
+    /// panic-marker line, any deser-marker line. (Deploy failure gates
+    /// earlier, in the deploy step.) Every metric (CPU, creeps, error
+    /// counts) is informational — single-run metric gates are flake
+    /// generators. `markers` is the same spec the counters were
+    /// classified against (it only shapes the failure messages).
+    pub fn gate_failures(&self, markers: &MarkerSpec) -> Vec<String> {
         let mut failures = Vec::new();
         if self.ticks_observed == 0 {
             failures.push("zero ticks observed (simulation not advancing)".to_string());
         }
         if self.console.panic_lines > 0 {
             failures.push(format!(
-                "{} console line(s) matching the panic marker ({PANIC_MARKER:?})",
-                self.console.panic_lines
+                "{} console line(s) matching the panic marker(s) {:?}",
+                self.console.panic_lines, markers.panic_markers
             ));
         }
         if self.console.deser_failure_lines > 0 {
             failures.push(format!(
-                "{} console line(s) matching deserialization-failure markers {DESER_FAILURE_MARKERS:?}",
-                self.console.deser_failure_lines
+                "{} console line(s) matching deserialization-failure markers {:?}",
+                self.console.deser_failure_lines, markers.deser_markers
             ));
         }
         failures
@@ -272,7 +286,7 @@ impl std::fmt::Display for Summary {
         )?;
         writeln!(
             f,
-            "console:  {} lines ({} log, {} results), {} error events, {} (ERROR) lines, {} panics, {} deser failures",
+            "console:  {} lines ({} log, {} results), {} error events, {} error-level lines, {} panics, {} deser failures",
             self.console.lines,
             self.console.log_lines,
             self.console.result_lines,
@@ -287,7 +301,7 @@ impl std::fmt::Display for Summary {
                 "cpu:      used avg {:.2} / max {:.2} (limit {}), bucket min {} last {}",
                 cpu.used_avg, cpu.used_max, cpu.limit, cpu.bucket_min, cpu.bucket_last
             )?,
-            None => writeln!(f, "cpu:      (no seg-99 stats seen)")?,
+            None => writeln!(f, "cpu:      (no stats-segment data seen)")?,
         }
         match &self.creeps {
             Some(c) => write!(f, "creeps:   {} -> {} (max {})", c.first, c.last, c.max)?,
@@ -327,14 +341,14 @@ fn unix_ms() -> u64 {
 
 /// Wall-clock safety stop for a run: 10× the nominal tick budget plus
 /// slack (the server may run well below the configured rate once creeps
-/// exist — plan D-2 honesty note).
+/// exist).
 fn run_budget(ticks: u64, tick_ms: u64) -> Duration {
     Duration::from_millis(ticks.saturating_mul(tick_ms).saturating_mul(10))
         + Duration::from_secs(120)
 }
 
 // ===================================================================
-// the run loop (P0.A5: `run --ticks N [--scenario NAME]`)
+// the run loop (`run --ticks N [--scenario NAME]`)
 // ===================================================================
 
 pub struct RunArtifacts {
@@ -344,7 +358,7 @@ pub struct RunArtifacts {
 
 /// Repo root = the directory `.screeps.yaml` was loaded from (where the
 /// gitignored `runs/` tree lives).
-fn repo_root(cfg: &EvalConfig) -> Result<PathBuf> {
+fn repo_root(cfg: &KitConfig) -> Result<PathBuf> {
     cfg.source_path
         .as_deref()
         .and_then(Path::parent)
@@ -370,8 +384,15 @@ async fn git_short_sha(repo_root: &Path) -> Result<String> {
 
 /// Capture console + metrics until `ticks` game ticks elapse, then
 /// write `summary.json`. Artifacts land in
-/// `runs/<scenario>-<git-sha>-<stamp>/{console.jsonl,metrics.jsonl,summary.json}`.
-pub async fn run(cfg: &EvalConfig, ticks: u64, scenario: &str) -> Result<RunArtifacts> {
+/// `runs/<scenario>-<git-sha>-<stamp>/{console.jsonl,metrics.jsonl,summary.json}`
+/// under the repo root (the directory `.screeps.yaml` was loaded from).
+/// `spec` supplies the bot-specific markers and stats segment.
+pub async fn run(
+    cfg: &KitConfig,
+    ticks: u64,
+    scenario: &str,
+    spec: &CaptureSpec,
+) -> Result<RunArtifacts> {
     if ticks == 0 {
         bail!("--ticks must be at least 1");
     }
@@ -394,7 +415,7 @@ pub async fn run(cfg: &EvalConfig, ticks: u64, scenario: &str) -> Result<RunArti
     let target = tick_first + ticks;
     let started_at_ms = unix_ms();
     let started = Instant::now();
-    let budget = run_budget(ticks, cfg.eval.tick_ms);
+    let budget = run_budget(ticks, cfg.stack.tick_ms);
 
     // Shared state between the console task and the sampler.
     let last_tick = Arc::new(AtomicU64::new(tick_first));
@@ -405,6 +426,7 @@ pub async fn run(cfg: &EvalConfig, ticks: u64, scenario: &str) -> Result<RunArti
         ws_token,
         user.id.clone(),
         dir.join("console.jsonl"),
+        spec.markers.clone(),
         last_tick.clone(),
         counters.clone(),
         stop_rx,
@@ -414,7 +436,7 @@ pub async fn run(cfg: &EvalConfig, ticks: u64, scenario: &str) -> Result<RunArti
     let mut metrics_file = std::io::BufWriter::new(
         std::fs::File::create(dir.join("metrics.jsonl")).context("creating metrics.jsonl")?,
     );
-    let cli = CliClient::new(cfg.eval.cli_port).ok(); // creep counts: best-effort
+    let cli = CliClient::new(cfg.stack.cli_port).ok(); // creep counts: best-effort
     let mut cpu_samples: Vec<CpuSample> = Vec::new();
     let mut creep_counts: Vec<u64> = Vec::new();
     let mut samples = 0u64;
@@ -453,15 +475,18 @@ pub async fn run(cfg: &EvalConfig, ticks: u64, scenario: &str) -> Result<RunArti
             }
         };
 
-        let stats: Option<Value> = match api.memory_segment(STATS_SEGMENT).await {
-            Ok(resp) => match resp.data {
-                Some(raw) if !raw.is_empty() => serde_json::from_str(&raw).ok(),
-                _ => None,
+        let stats: Option<Value> = match spec.stats_segment {
+            Some(segment) => match api.memory_segment(segment).await {
+                Ok(resp) => match resp.data {
+                    Some(raw) if !raw.is_empty() => serde_json::from_str(&raw).ok(),
+                    _ => None,
+                },
+                Err(e) => {
+                    tracing::warn!("seg-{segment} read failed: {e:#}");
+                    None
+                }
             },
-            Err(e) => {
-                tracing::warn!("seg-{STATS_SEGMENT} read failed: {e:#}");
-                None
-            }
+            None => None,
         };
         let cpu = stats.as_ref().and_then(cpu_from_stats);
         if let Some(c) = cpu {
@@ -529,7 +554,7 @@ pub async fn run(cfg: &EvalConfig, ticks: u64, scenario: &str) -> Result<RunArti
         git_sha: sha,
         started_at_ms,
         wall_seconds: started.elapsed().as_secs_f64(),
-        tick_ms_configured: cfg.eval.tick_ms,
+        tick_ms_configured: cfg.stack.tick_ms,
         tick_first,
         tick_last,
         ticks_observed: tick_last.saturating_sub(tick_first),
@@ -552,11 +577,13 @@ pub async fn run(cfg: &EvalConfig, ticks: u64, scenario: &str) -> Result<RunArti
 // console websocket task
 // ===================================================================
 
+#[allow(clippy::too_many_arguments)]
 async fn console_capture_task(
     ws_url: String,
     token: SecretString,
     user_id: String,
     path: PathBuf,
+    markers: MarkerSpec,
     last_tick: Arc<AtomicU64>,
     counters: Arc<Mutex<ConsoleCounters>>,
     mut stop: tokio::sync::watch::Receiver<bool>,
@@ -602,7 +629,7 @@ async fn console_capture_task(
                         line: payload_line.line,
                     };
                     if let Ok(mut c) = counters.lock() {
-                        c.record(&line);
+                        c.record(&line, &markers);
                     }
                     serde_json::to_writer(&mut file, &line)
                         .context("writing console.jsonl")?;
@@ -621,12 +648,24 @@ async fn console_capture_task(
 }
 
 // ===================================================================
-// tests — pure parts against literal fixtures (live shapes 2026-06-09)
+// tests — the mechanism, against SYNTHETIC markers (the real bot
+// markers are policy and are pinned in the consumer crate, e.g.
+// screeps-ibex-eval's gates module)
 // ===================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A deliberately bot-agnostic spec: proves classification is
+    /// driven by the caller's spec, not by built-in strings.
+    fn synthetic_markers() -> MarkerSpec {
+        MarkerSpec {
+            panic_markers: vec!["KABOOM:".to_string()],
+            deser_markers: vec!["LOAD-FAIL-A:".to_string(), "LOAD-FAIL-B:".to_string()],
+            error_log_prefix: Some("[err]".to_string()),
+        }
+    }
 
     // ---------------- the console.jsonl record ----------------
     // (Socket-frame parsing and payload flattening are pinned in the
@@ -640,49 +679,38 @@ mod tests {
             ts_ms: 1781061591846,
             tick: Some(7435),
             kind: ConsoleKind::Log,
-            line: "(INFO) screeps_ibex: hello".into(),
+            line: "(INFO) some_bot: hello".into(),
         };
         assert_eq!(
             serde_json::to_string(&line).unwrap(),
-            r#"{"ts_ms":1781061591846,"tick":7435,"kind":"log","line":"(INFO) screeps_ibex: hello"}"#
+            r#"{"ts_ms":1781061591846,"tick":7435,"kind":"log","line":"(INFO) some_bot: hello"}"#
         );
     }
 
     // ---------------- markers + counters ----------------
 
-    /// The panic hook output (panic.rs:28 — std PanicHookInfo Display)
-    /// through the fern console format (logging.rs:32).
+    /// Marker matching is substring-based, line-kind-independent for
+    /// panic/deser, and prefix-based for error-level lines.
     #[test]
-    fn panic_marker_matches_hook_output() {
-        let line = "(ERROR) screeps_ibex::panic: panicked at 'index out of bounds', src/lib.rs:1:1";
-        assert!(is_panic_line(line));
-        // Modern rustc Display variant (message on the next line).
-        assert!(is_panic_line(
-            "(ERROR) screeps_ibex::panic: panicked at src/missions/data.rs:66:13:"
-        ));
-        assert!(!is_panic_line("(INFO) screeps_ibex: spawning hauler"));
-    }
+    fn marker_spec_classifies_by_supplied_strings_only() {
+        let spec = synthetic_markers();
+        assert!(spec.is_panic_line("xx KABOOM: it broke"));
+        assert!(!spec.is_panic_line("panicked at 'x'")); // a FOREIGN bot's marker — not ours
+        assert!(spec.is_deser_failure_line("LOAD-FAIL-B: bad bytes"));
+        assert!(!spec.is_deser_failure_line("Failed deserialization: e"));
+        assert!(spec.is_error_log_line("[err] something"));
+        assert!(!spec.is_error_log_line("info [err]"));
 
-    /// game_loop.rs:533 + stats_history.rs:208 are deser-gate markers;
-    /// serialize-side failures are NOT (game_loop.rs:424/:429).
-    #[test]
-    fn deser_markers_match_pinned_sources() {
-        assert!(is_deser_failure_line(
-            "(ERROR) screeps_ibex::game_loop: Failed deserialization: invalid value"
-        ));
-        assert!(is_deser_failure_line(
-            "(WARN) screeps_ibex::stats_history: Failed to decode stats history, using default: x"
-        ));
-        assert!(!is_deser_failure_line(
-            "(ERROR) screeps_ibex::game_loop: Failed serialization: oops"
-        ));
-        assert!(!is_deser_failure_line(
-            "(ERROR) screeps_ibex::game_loop: Encode failed: oops"
-        ));
+        // An empty spec counts nothing as a marker.
+        let empty = MarkerSpec::default();
+        assert!(!empty.is_panic_line("KABOOM: x"));
+        assert!(!empty.is_deser_failure_line("LOAD-FAIL-A: x"));
+        assert!(!empty.is_error_log_line("[err] x"));
     }
 
     #[test]
-    fn counters_classify_lines() {
+    fn counters_classify_lines_against_the_spec() {
+        let spec = synthetic_markers();
         let mut c = ConsoleCounters::default();
         let mk = |kind, line: &str| ConsoleLine {
             ts_ms: 0,
@@ -690,32 +718,32 @@ mod tests {
             kind,
             line: line.into(),
         };
-        c.record(&mk(ConsoleKind::Log, "(INFO) a: fine"));
-        c.record(&mk(ConsoleKind::Log, "(ERROR) a: bad but not gating"));
-        c.record(&mk(
-            ConsoleKind::Log,
-            "(ERROR) screeps_ibex::panic: panicked at 'x', s.rs:1:1",
-        ));
-        c.record(&mk(
-            ConsoleKind::Log,
-            "(ERROR) screeps_ibex::game_loop: Failed deserialization: e",
-        ));
-        c.record(&mk(ConsoleKind::Result, "undefined"));
-        c.record(&mk(ConsoleKind::Error, "Error: thrown"));
+        c.record(&mk(ConsoleKind::Log, "(INFO) a: fine"), &spec);
+        c.record(&mk(ConsoleKind::Log, "[err] bad but not gating"), &spec);
+        c.record(
+            &mk(ConsoleKind::Log, "[err] KABOOM: panic-equivalent"),
+            &spec,
+        );
+        c.record(
+            &mk(ConsoleKind::Log, "[err] LOAD-FAIL-A: state gone"),
+            &spec,
+        );
+        c.record(&mk(ConsoleKind::Result, "undefined"), &spec);
+        c.record(&mk(ConsoleKind::Error, "Error: thrown"), &spec);
         assert_eq!(c.lines, 6);
         assert_eq!(c.log_lines, 4);
         assert_eq!(c.result_lines, 1);
         assert_eq!(c.error_events, 1);
-        assert_eq!(c.error_log_lines, 3); // all (ERROR)-prefixed log lines
+        assert_eq!(c.error_log_lines, 3); // all [err]-prefixed log lines
         assert_eq!(c.panic_lines, 1);
         assert_eq!(c.deser_failure_lines, 1);
     }
 
     // ---------------- metrics ----------------
 
-    /// The seg-99 shape statssystem.rs:339-351 writes.
+    /// The common screeps-stats shard shape.
     #[test]
-    fn cpu_extracts_from_seg99_stats() {
+    fn cpu_extracts_from_shard_stats_shape() {
         let stats: Value = serde_json::from_str(
             r#"{"shard":{"shard0":{"time":7435,"gcl":{"progress":1,"progress_total":2,"level":1},
                 "cpu":{"bucket":10000,"limit":100,"used":12.5},"room":{},"market":{"credits":0}}}}"#,
@@ -779,11 +807,13 @@ mod tests {
         }
     }
 
-    /// HARD ZEROS only (phase-0.md §5 criterion 6) — metrics never gate.
+    /// HARD ZEROS only — metrics never gate; the failure messages name
+    /// the caller's markers.
     #[test]
     fn gates_are_hard_zeros_only() {
+        let spec = synthetic_markers();
         assert!(summary_with(ConsoleCounters::default(), 600)
-            .gate_failures()
+            .gate_failures(&spec)
             .is_empty());
 
         // Error lines / error events do NOT gate (informational).
@@ -794,11 +824,11 @@ mod tests {
             error_events: 2,
             ..Default::default()
         };
-        assert!(summary_with(noisy, 600).gate_failures().is_empty());
+        assert!(summary_with(noisy, 600).gate_failures(&spec).is_empty());
 
         assert_eq!(
             summary_with(ConsoleCounters::default(), 0)
-                .gate_failures()
+                .gate_failures(&spec)
                 .len(),
             1
         );
@@ -806,12 +836,17 @@ mod tests {
             panic_lines: 1,
             ..Default::default()
         };
-        assert_eq!(summary_with(panicking, 600).gate_failures().len(), 1);
+        let failures = summary_with(panicking, 600).gate_failures(&spec);
+        assert_eq!(failures.len(), 1);
+        assert!(
+            failures[0].contains("KABOOM:"),
+            "gate message must name the caller's marker: {failures:?}"
+        );
         let deser = ConsoleCounters {
             deser_failure_lines: 2,
             ..Default::default()
         };
-        let failures = summary_with(deser, 0).gate_failures();
+        let failures = summary_with(deser, 0).gate_failures(&spec);
         assert_eq!(failures.len(), 2);
     }
 

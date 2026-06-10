@@ -1,4 +1,4 @@
-//! Game-API access for the harness — a thin adapter over the SHARED
+//! Game-API access for the kit — a thin adapter over the SHARED
 //! [`screeps_rest_api`] client (P0.A12: one API client, not N).
 //!
 //! The endpoint plumbing that used to live here (signin/rolling
@@ -6,7 +6,7 @@
 //! register/check-username, place-spawn, the websocket URL) moved to
 //! `screeps-rest-api`, where every shape is pinned with citations and
 //! fixture-tested. This module only:
-//! - builds a [`Client`] from the harness's [`ServerEndpoint`] (private
+//! - builds a [`Client`] from the kit's [`ServerEndpoint`] (private
 //!   server: no shard parameter, no courtesy delay needed), and
 //! - maps a 401 signin rejection to the operator-actionable message
 //!   (the server-side password diverged — `bootstrap` converges it).

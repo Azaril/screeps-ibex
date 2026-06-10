@@ -1,32 +1,39 @@
-//! screeps-eval CLI — operator-facing entry point.
+//! screeps-server-kit CLI — the operator-facing entry point for the
+//! GENERIC private-server toolkit: stack lifecycle, world bootstrap,
+//! deploy, server-CLI passthrough, tick control.
 //!
-//! Two users, equal priority (Phase 0 plan, Workstream A intro): the
-//! automation harness and the operator's manual iteration loop. Every
-//! subcommand is a thin wrapper over a library function.
+//! Two users, equal priority: automation built on the library (e.g.
+//! this repo's `screeps-ibex-eval` smoke/run loop) and the operator's manual
+//! iteration loop. Every subcommand is a thin wrapper over a library
+//! function — bot-specific evaluation commands (`smoke`, `run`) live in
+//! the consumer crate, which drives the same library.
 
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
-use screeps_eval::config::{EvalConfig, DEFAULT_SERVER_NAME, TICK_MS_FLOOR, TICK_MS_SMOKE};
-use screeps_eval::server::{mask_cli_command, CliClient};
+use screeps_server_kit::config::{KitConfig, TICK_MS_FLOOR, TICK_MS_SMOKE};
+use screeps_server_kit::server::{mask_cli_command, CliClient};
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
-    name = "screeps-eval",
-    about = "Private-server execution, deployment & evaluation harness for screeps-ibex",
+    name = "screeps-server-kit",
+    about = "Local private-server toolkit for Screeps bot development: \
+             stack lifecycle, world bootstrap, deploy, tick control",
     version
 )]
 struct Cli {
     /// Path to the credentials file (fixed default: ../.screeps.yaml
-    /// next to this crate — the only override; eval settings live in
+    /// next to this crate — the only override; stack settings live in
     /// config/local.yml, see config/local.example.yml)
     #[arg(long, global = true)]
     config: Option<PathBuf>,
 
-    /// Server entry name in .screeps.yaml
-    #[arg(long, global = true, default_value = DEFAULT_SERVER_NAME)]
-    server_name: String,
+    /// Server entry name in .screeps.yaml the kit acts as (default:
+    /// the first bots: entry from config/local.yml, falling back to
+    /// "private-server")
+    #[arg(long, global = true)]
+    server_name: Option<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -39,13 +46,14 @@ enum Command {
         #[command(subcommand)]
         action: ServerAction,
     },
-    /// Reset/initialize the world: password, tick rate, spawn placement
+    /// Reset/initialize the world: users, passwords, tick rate, spawn
+    /// placement — one spawn per configured bots: entry, distinct rooms
     Bootstrap {
         /// Wipe all server data first (system.resetAllData)
         #[arg(long)]
         reset: bool,
     },
-    /// Build and upload the bot to the private server (wraps
+    /// Build and upload the bot to the private server (wraps the repo's
     /// js_tools/deploy.js; the full wasm build runs — first builds are slow)
     Deploy {
         /// Deploy a debug build (deploy.js --mode debug -> wasm-pack --dev)
@@ -55,21 +63,6 @@ enum Command {
         /// (default: --server-name). Passes --server <entry> to deploy.js
         #[arg(long)]
         user: Option<String>,
-    },
-    /// Run for N ticks, capturing console + metrics to runs/
-    Run {
-        #[arg(long, default_value_t = 200)]
-        ticks: u64,
-        /// Scenario label for the runs/<scenario>-<git-sha>-<stamp>/ dir
-        #[arg(long, default_value = "adhoc")]
-        scenario: String,
-    },
-    /// One-shot: server up -> bootstrap --reset -> deploy -> run -> summary.
-    /// Exits nonzero on the hard-zero gates (deploy failure, zero ticks,
-    /// panic lines, deserialization-failure lines); metrics never gate.
-    Smoke {
-        #[arg(long, default_value_t = screeps_eval::smoke::SMOKE_TICKS_DEFAULT)]
-        ticks: u64,
     },
     /// Interactive passthrough to the server CLI (operator mode)
     Cli {
@@ -134,7 +127,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "screeps_eval=info".into()),
+                .unwrap_or_else(|_| "screeps_server_kit=info".into()),
         )
         .init();
 
@@ -142,13 +135,13 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Command::Config => {
-            let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
+            let cfg = KitConfig::load(cli.config.as_deref(), cli.server_name.as_deref())?;
             // Safe by construction: SecretString fields Debug-redact (P0.A7 pin).
             println!("{cfg:#?}");
             Ok(())
         }
         Command::Open => {
-            let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
+            let cfg = KitConfig::load(cli.config.as_deref(), cli.server_name.as_deref())?;
             let url = cfg.server.http_base();
             println!("web client: {url}/");
             // Best-effort launch; printing alone satisfies the command.
@@ -158,28 +151,28 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Command::Tick { action } => {
-            let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
-            let client = CliClient::new(cfg.eval.cli_port)?;
-            let api = screeps_eval::api::client(&cfg.server)?;
+            let cfg = KitConfig::load(cli.config.as_deref(), cli.server_name.as_deref())?;
+            let client = CliClient::new(cfg.stack.cli_port)?;
+            let api = screeps_server_kit::api::client(&cfg.server)?;
             match action {
                 TickAction::Set { ms } => {
                     if ms < TICK_MS_FLOOR {
                         bail!(
                             "tick {ms} ms is below the {TICK_MS_FLOOR} ms floor \
-                             (server/UI cannot keep up — plan D-2)"
+                             (server/UI cannot keep up)"
                         );
                     }
                     if ms < TICK_MS_SMOKE {
                         eprintln!(
-                            "warning: {ms} ms is below the {TICK_MS_SMOKE} ms smoke default — \
-                             the server may not keep up (plan D-2)"
+                            "warning: {ms} ms is below the {TICK_MS_SMOKE} ms default — \
+                             the server may not keep up"
                         );
                     }
-                    let applied = screeps_eval::server::set_tick_ms(&client, ms).await?;
+                    let applied = screeps_server_kit::server::set_tick_ms(&client, ms).await?;
                     println!("tick duration: {applied} ms (read back from the server)");
                 }
                 TickAction::Pause => {
-                    screeps_eval::server::pause(&client).await?;
+                    screeps_server_kit::server::pause(&client).await?;
                     let time = api.game_time().await.ok().map(|r| r.time);
                     match time {
                         Some(t) => println!("simulation paused at tick {t}"),
@@ -187,7 +180,7 @@ async fn main() -> Result<()> {
                     }
                 }
                 TickAction::Resume => {
-                    screeps_eval::server::resume(&client).await?;
+                    screeps_server_kit::server::resume(&client).await?;
                     let time = api.game_time().await.ok().map(|r| r.time);
                     match time {
                         Some(t) => println!("simulation resumed (tick {t})"),
@@ -200,50 +193,51 @@ async fn main() -> Result<()> {
         Command::Server { action } => {
             match action {
                 ServerAction::Up => {
-                    let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
-                    screeps_eval::docker::up(&cfg.eval).await?;
-                    let report = screeps_eval::docker::status(&cfg.eval).await?;
+                    let cfg = KitConfig::load(cli.config.as_deref(), cli.server_name.as_deref())?;
+                    screeps_server_kit::docker::up(&cfg.stack).await?;
+                    let report = screeps_server_kit::docker::status(&cfg.stack).await?;
                     println!("{report}");
                 }
-                ServerAction::Down => screeps_eval::docker::down().await?,
+                ServerAction::Down => screeps_server_kit::docker::down().await?,
                 ServerAction::Destroy { yes } => {
                     if !yes {
                         bail!(
                             "`server destroy` removes the containers, the {net} network, and \
                              the volumes — ALL world data is lost. Re-run with --yes to confirm \
                              (use `server down` to stop while keeping data).",
-                            net = screeps_eval::docker::NETWORK
+                            net = screeps_server_kit::docker::NETWORK
                         );
                     }
-                    screeps_eval::docker::destroy().await?;
+                    screeps_server_kit::docker::destroy().await?;
                 }
                 ServerAction::Status => {
-                    let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
-                    let report = screeps_eval::docker::status(&cfg.eval).await?;
+                    let cfg = KitConfig::load(cli.config.as_deref(), cli.server_name.as_deref())?;
+                    let report = screeps_server_kit::docker::status(&cfg.stack).await?;
                     println!("{report}");
                 }
                 ServerAction::BuildImage => {
-                    let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
-                    let docker = screeps_eval::docker::connect()?;
-                    screeps_eval::docker::build_launcher_image(&docker, &cfg.eval.image).await?;
-                    println!("built image {}", cfg.eval.image.name);
+                    let cfg = KitConfig::load(cli.config.as_deref(), cli.server_name.as_deref())?;
+                    let docker = screeps_server_kit::docker::connect()?;
+                    screeps_server_kit::docker::build_launcher_image(&docker, &cfg.stack.image)
+                        .await?;
+                    println!("built image {}", cfg.stack.image.name);
                 }
                 ServerAction::Logs { follow, tail } => {
-                    screeps_eval::docker::logs(follow, tail).await?;
+                    screeps_server_kit::docker::logs(follow, tail).await?;
                 }
             }
             Ok(())
         }
         Command::Bootstrap { reset } => {
-            let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
-            let outcome = screeps_eval::server::bootstrap(&cfg, reset).await?;
+            let cfg = KitConfig::load(cli.config.as_deref(), cli.server_name.as_deref())?;
+            let outcome = screeps_server_kit::server::bootstrap(&cfg, reset).await?;
             println!("{outcome}");
             println!("web client: {}/", cfg.server.http_base());
             Ok(())
         }
         Command::Cli { command } => {
-            let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
-            let client = CliClient::new(cfg.eval.cli_port)?;
+            let cfg = KitConfig::load(cli.config.as_deref(), cli.server_name.as_deref())?;
+            let client = CliClient::new(cfg.stack.cli_port)?;
             match command {
                 // One-shot: print the (masked) response and exit.
                 Some(cmd) => {
@@ -255,50 +249,27 @@ async fn main() -> Result<()> {
             }
         }
         Command::Deploy { debug, user } => {
-            let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
-            // --user selects the bot identity (P0.A10); default is the
-            // harness's own server entry.
-            let entry = user.as_deref().unwrap_or(&cli.server_name);
-            let report = screeps_eval::deploy::deploy(&cfg, entry, debug).await?;
+            let cfg = KitConfig::load(cli.config.as_deref(), cli.server_name.as_deref())?;
+            // --user selects the bot identity; default is the kit's own
+            // server entry.
+            let entry = user.as_deref().unwrap_or(&cfg.server_name);
+            let report = screeps_server_kit::deploy::deploy(&cfg, entry, debug).await?;
             println!("{report}");
             Ok(())
-        }
-        Command::Run { ticks, scenario } => {
-            let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
-            let artifacts = screeps_eval::capture::run(&cfg, ticks, &scenario).await?;
-            println!("artifacts: {}", artifacts.dir.display());
-            println!("{}", artifacts.summary);
-            Ok(())
-        }
-        Command::Smoke { ticks } => {
-            let cfg = EvalConfig::load(cli.config.as_deref(), &cli.server_name)?;
-            let report = screeps_eval::smoke::smoke(&cfg, &cli.server_name, ticks).await?;
-            println!("deploy:   {}", report.deploy);
-            println!("artifacts: {}", report.artifacts.dir.display());
-            println!("{}", report.artifacts.summary);
-            if report.gate_failures.is_empty() {
-                println!("smoke: PASS (all hard-zero gates green)");
-                Ok(())
-            } else {
-                for failure in &report.gate_failures {
-                    eprintln!("smoke gate FAILED: {failure}");
-                }
-                bail!("smoke failed {} gate(s)", report.gate_failures.len());
-            }
         }
     }
 }
 
-/// Interactive REPL against the server CLI (P0.A8). Every line that we
-/// echo and every response body passes through [`mask_cli_command`] —
-/// the vm echoes command source in error stacks, so even responses can
-/// carry a typed password (P0.A7(c)).
+/// Interactive REPL against the server CLI. Every line that we echo and
+/// every response body passes through [`mask_cli_command`] — the vm
+/// echoes command source in error stacks, so even responses can carry a
+/// typed password (P0.A7(c)).
 async fn repl(client: &CliClient) -> Result<()> {
     use std::io::Write;
     use tokio::io::{AsyncBufReadExt, BufReader};
 
     println!("{}", client.greeting().await?);
-    println!("(screeps-eval REPL — quit/exit or Ctrl-C to leave; setPassword arguments are masked in echoed output)");
+    println!("(screeps-server-kit REPL — quit/exit or Ctrl-C to leave; setPassword arguments are masked in echoed output)");
 
     // When stdin is piped (operator scripting), echo each command so the
     // transcript is readable — masked.

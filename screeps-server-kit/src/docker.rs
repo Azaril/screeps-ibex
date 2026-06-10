@@ -8,7 +8,7 @@
 //!
 //! - `mongo:8`    volume `screeps-eval-mongo:/data/db`, alias `mongo`
 //! - `redis:7`    volume `screeps-eval-redis:/data`,    alias `redis`
-//! - the launcher image (`eval.image.name`, default
+//! - the launcher image (`image.name` in `config/local.yml`, default
 //!   `screepers/screeps-launcher:latest` pulled from the registry;
 //!   optionally BUILT from a launcher-repo clone via `image.build` —
 //!   P0.A9(d)): volume `screeps-eval-data:/screeps`, the merged
@@ -20,8 +20,15 @@
 //!
 //! Everything is named `screeps-eval-*` so the stack is recognizable
 //! and `destroy` cannot touch anything else.
+//!
+//! NOTE (P0.A14): the `screeps-eval-*` object names predate this crate's
+//! split/rename to screeps-server-kit and are KEPT deliberately —
+//! renaming them would orphan every existing stack (containers, the
+//! installed-server data volume, the world databases) on operator
+//! machines and force a cold first boot. Candidate rename at the D-1
+//! extraction, behind an explicit migration.
 
-use crate::config::{EvalSettings, ImageSettings};
+use crate::config::{ImageSettings, StackSettings};
 use crate::server_config;
 use anyhow::{bail, Context, Result};
 use bollard::models::{
@@ -48,8 +55,8 @@ pub const DATA_VOLUME: &str = "screeps-eval-data";
 pub const MONGO_VOLUME: &str = "screeps-eval-mongo";
 pub const REDIS_VOLUME: &str = "screeps-eval-redis";
 
-/// Image policy (P0.A2 default + P0.A9(d) build option): the launcher
-/// image name comes from `eval.image` (default
+/// Image policy (pull by default, optional local build): the launcher
+/// image name comes from the `image:` config block (default
 /// [`crate::config::DEFAULT_LAUNCHER_IMAGE`], pulled; with
 /// `image.build` configured it is built from a launcher-repo clone).
 /// The databases are always pulled.
@@ -488,10 +495,10 @@ fn launcher_body(
 /// Bring the stack up: merge+write the runtime config, pull missing
 /// images, create network/volumes/containers as needed, start
 /// everything, and wait until the game API answers.
-pub async fn up(eval: &EvalSettings) -> Result<()> {
+pub async fn up(stack: &StackSettings) -> Result<()> {
     // Fail fast on config problems (e.g. no steamKey anywhere) before
     // touching Docker at all.
-    let runtime_config = server_config::prepare_runtime_config(eval)?;
+    let runtime_config = server_config::prepare_runtime_config(stack)?;
     tracing::info!(
         path = %runtime_config.display(),
         "merged launcher config written (gitignored; carries the steamKey — never commit/log it)"
@@ -507,7 +514,7 @@ pub async fn up(eval: &EvalSettings) -> Result<()> {
     for image in [MONGO_IMAGE, REDIS_IMAGE] {
         ensure_image(&docker, image).await?;
     }
-    ensure_launcher_image(&docker, &eval.image).await?;
+    ensure_launcher_image(&docker, &stack.image).await?;
     ensure_network(&docker).await?;
     for volume in [DATA_VOLUME, MONGO_VOLUME, REDIS_VOLUME] {
         ensure_volume(&docker, volume).await?;
@@ -519,15 +526,15 @@ pub async fn up(eval: &EvalSettings) -> Result<()> {
     wait_container_healthy(&docker, MONGO_CONTAINER, Duration::from_secs(120)).await?;
     wait_container_healthy(&docker, REDIS_CONTAINER, Duration::from_secs(120)).await?;
 
-    warn_if_launcher_ports_stale(&docker, eval).await?;
+    warn_if_launcher_ports_stale(&docker, stack).await?;
     let created = ensure_container_running(
         &docker,
         LAUNCHER_CONTAINER,
         launcher_body(
-            &eval.image.name,
+            &stack.image.name,
             &runtime_config,
-            eval.game_port,
-            eval.cli_port,
+            stack.game_port,
+            stack.cli_port,
         ),
     )
     .await?;
@@ -544,19 +551,19 @@ pub async fn up(eval: &EvalSettings) -> Result<()> {
             budget.as_secs()
         );
     }
-    let elapsed = wait_api_ready(&docker, eval.game_port, budget).await?;
+    let elapsed = wait_api_ready(&docker, stack.game_port, budget).await?;
     tracing::info!(
         "server is up: game API answering on http://127.0.0.1:{} after {:.0?}",
-        eval.game_port,
+        stack.game_port,
         elapsed
     );
     Ok(())
 }
 
 /// An existing launcher container keeps the published ports it was
-/// created with — if `eval.ports` changed since, `up` would silently
+/// created with — if the configured `ports` changed since, `up` would silently
 /// publish the old ones. Detect and tell the operator what to do.
-async fn warn_if_launcher_ports_stale(docker: &Docker, eval: &EvalSettings) -> Result<()> {
+async fn warn_if_launcher_ports_stale(docker: &Docker, stack: &StackSettings) -> Result<()> {
     let Some(inspect) = inspect_opt(docker, LAUNCHER_CONTAINER).await? else {
         return Ok(());
     };
@@ -564,15 +571,15 @@ async fn warn_if_launcher_ports_stale(docker: &Docker, eval: &EvalSettings) -> R
         .host_config
         .and_then(|hc| hc.port_bindings)
         .unwrap_or_default();
-    let want_game = format!("{}/tcp", eval.game_port);
-    let want_cli = format!("{}/tcp", eval.cli_port);
+    let want_game = format!("{}/tcp", stack.game_port);
+    let want_cli = format!("{}/tcp", stack.cli_port);
     if !bindings.contains_key(&want_game) || !bindings.contains_key(&want_cli) {
         tracing::warn!(
-            "existing launcher container publishes {:?}, but eval.ports wants {}/{} — \
+            "existing launcher container publishes {:?}, but the configured ports want {}/{} — \
              ports are fixed at container creation; run `server destroy --yes` then `server up`",
             bindings.keys().collect::<Vec<_>>(),
-            eval.game_port,
-            eval.cli_port
+            stack.game_port,
+            stack.cli_port
         );
     }
     Ok(())
@@ -733,10 +740,10 @@ async fn find_launcher(docker: &Docker, image_name: Option<&str>) -> Result<Opti
 /// Human-readable status: container table (state, health, the ACTUAL
 /// published ports discovered from inspect — works against a manually-
 /// started stack too), plus a live API ping and a CLI TCP probe.
-pub async fn status(eval: &EvalSettings) -> Result<String> {
+pub async fn status(stack: &StackSettings) -> Result<String> {
     let docker = connect()?;
     let mut out = String::new();
-    let launcher = find_launcher(&docker, Some(&eval.image.name)).await?;
+    let launcher = find_launcher(&docker, Some(&stack.image.name)).await?;
 
     let mut rows: Vec<[String; 5]> = vec![[
         "CONTAINER".into(),
@@ -798,14 +805,14 @@ pub async fn status(eval: &EvalSettings) -> Result<String> {
                     let host_port = b.host_port.as_deref().unwrap_or("?");
                     ports.push(format!("{container_port} -> {host_ip}:{host_port}"));
                     // Map container-side ports to discovered host ports
-                    // using the eval config (fall back to launcher
+                    // using the configured ports (fall back to launcher
                     // defaults 21025/21026 for a foreign stack).
                     let host_port_num: Option<u16> = host_port.parse().ok();
-                    if container_port == &format!("{}/tcp", eval.game_port)
+                    if container_port == &format!("{}/tcp", stack.game_port)
                         || container_port == "21025/tcp"
                     {
                         discovered_game_port = discovered_game_port.or(host_port_num);
-                    } else if container_port == &format!("{}/tcp", eval.cli_port)
+                    } else if container_port == &format!("{}/tcp", stack.cli_port)
                         || container_port == "21026/tcp"
                     {
                         discovered_cli_port = discovered_cli_port.or(host_port_num);
@@ -837,8 +844,8 @@ pub async fn status(eval: &EvalSettings) -> Result<String> {
     out.push('\n');
 
     // Live probes on the DISCOVERED ports (config ports as fallback).
-    let game_port = discovered_game_port.unwrap_or(eval.game_port);
-    let cli_port = discovered_cli_port.unwrap_or(eval.cli_port);
+    let game_port = discovered_game_port.unwrap_or(stack.game_port);
+    let cli_port = discovered_cli_port.unwrap_or(stack.cli_port);
 
     let api_url = format!("http://127.0.0.1:{game_port}/api/version");
     let client = reqwest::Client::builder()

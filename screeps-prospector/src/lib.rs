@@ -4,7 +4,7 @@
 //! recommend, and place a spawn on explicit confirmation.
 //!
 //! Library-first: every capability the CLI exposes is a library
-//! function, so `screeps-eval bootstrap` (the P0.P4 integration) and
+//! function, so `screeps-server-kit` bootstrap (the P0.P4 integration) and
 //! tests drive the same code paths the operator does. See
 //! `docs/execution/phase-0.md` Workstream P for the task map (P0.P1-P5).
 //!

@@ -1,5 +1,5 @@
 //! screeps-rest-api — the ONE Screeps HTTP/websocket API client shared
-//! by the host-side tooling (`screeps-eval`, `screeps-prospector`, the
+//! by the host-side tooling (`screeps-server-kit`, `screeps-ibex-eval`, `screeps-prospector`, the
 //! future rust-native deploy tool), per Phase-0 task P0.A12: one API
 //! client, not N — one place where endpoint shapes are pinned, with
 //! source citations, so the tooling stays honest about API interaction.

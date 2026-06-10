@@ -1,0 +1,21 @@
+[package]
+name = "screeps-ibex-eval"
+version = "0.1.0"
+authors = ["William Archbell <william@archbell.com>"]
+edition = "2021"
+description = "Evaluation POLICY for screeps-ibex: the smoke gates (ibex's pinned log markers), run/baseline scenario orchestration, and the smoke/run CLI — built on the generic screeps-server-kit mechanism."
+# POLICY crate (Phase 0 plan, P0.A14): this is where "correct/healthy
+# for ibex" is defined — the panic/deser log-marker strings pinned from
+# the bot crate, the stats segment, the smoke loop. All mechanism
+# (Docker stack, bootstrap, deploy, capture) comes from screeps-server-kit.
+# Workspace-excluded like its dependency (decision D-1 lifecycle).
+
+[dependencies]
+# The generic private-server toolkit (P0.A14 mechanism/policy split).
+# Path dep while in-repo; becomes a git dep at the D-1 extraction.
+screeps-server-kit = { path = "../screeps-server-kit" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

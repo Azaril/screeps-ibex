@@ -2,9 +2,9 @@
 # config/ by P0.A9(b)).
 #
 # This file is committed and must NEVER contain a steamKey. At runtime the
-# harness merges a key in-memory — from `steamKey:` in the gitignored
+# kit merges a key in-memory — from `steamKey:` in the gitignored
 # `config/local.yml` (documented by config/local.example.yml) — and writes
-# the merged result to screeps-eval/target/runtime/config.yml (gitignored),
+# the merged result to this crate's target/runtime/config.yml (gitignored),
 # which is what gets bind-mounted into the launcher container at
 # /screeps/config.yml.
 #
@@ -32,7 +32,7 @@ bots:
 # Backend process env (launcher/config.go ConfigEnv, yaml tag `env`).
 # CLI_HOST/CLI_PORT are the *server-side bind* of the screeps CLI server —
 # launcher defaults are 127.0.0.1:21026 (config.go NewConfig), i.e.
-# unreachable from outside the container. The harness FORCES these at merge
+# unreachable from outside the container. The kit FORCES these at merge
 # time regardless of what this file says; they are spelled out here so the
 # template documents the intent.
 env:
@@ -43,9 +43,9 @@ env:
     CLI_PORT: "21026"      # launcher default port, non-default bind
 
 # Requires screepsmod-admin-utils. tickRate is in milliseconds and is a
-# lower bound (upstream README). The harness overwrites it at merge time
-# with `eval.tickMs` (default 100; floor 50 — Phase 0 decision D-2).
+# lower bound (upstream README). The kit overwrites it at merge time
+# with `tickMs` from config/local.yml (default 100; floor 50).
 serverConfig:
   tickRate: 100
   welcomeText: |
-    <h1 style="text-align: center;">screeps-eval private server</h1>
+    <h1 style="text-align: center;">screeps-server-kit private server</h1>

@@ -6,7 +6,7 @@ edition = "2021"
 description = "Shared Screeps HTTP/websocket API client (private servers + screeps.com): pinned endpoint shapes, token/user-pass auth, rate-limit courtesy, secrecy discipline."
 # Lifecycle: starts in-repo (workspace-excluded); extracts to a submodule
 # with its own remote once stable (Phase 0 plan, decision D-1 — same
-# lifecycle as screeps-eval/screeps-prospector; P0.A12 names this crate a
+# lifecycle as screeps-server-kit/screeps-prospector; P0.A12 names this crate a
 # strong community-share candidate). Keep it self-contained: a pure
 # library, no workspace-crate deps, no repo-relative path assumptions.
 

@@ -1,5 +1,5 @@
 //! The scan/fetch flows shared by the CLI and (later, P0.P4) the
-//! `screeps-eval bootstrap` integration. Library-first: the CLI is a
+//! `screeps-server-kit` bootstrap integration. Library-first: the CLI is a
 //! thin wrapper over these.
 //!
 //! - [`scan_rooms`]: batched `map-stats` (statName `owner0`) over a room

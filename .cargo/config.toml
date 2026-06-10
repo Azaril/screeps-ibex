@@ -1,7 +1,7 @@
 # The bot crates deploy as wasm, but NO [build].target default is set:
 # wasm-pack (js_tools/deploy.js) always passes --target
 # wasm32-unknown-unknown to cargo itself, and a global default forces
-# every excluded host-side tool crate (screeps-eval, screeps-prospector,
+# every excluded host-side tool crate (screeps-server-kit, screeps-ibex-eval, screeps-prospector,
 # screeps-rest-api, screeps-foreman-bench) to carry or fake a
 # machine-specific override. Install once: rustup target add
 # wasm32-unknown-unknown. Wasm-target checks for the bot crates go

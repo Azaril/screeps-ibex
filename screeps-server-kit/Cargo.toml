@@ -1,9 +1,12 @@
 [package]
-name = "screeps-eval"
+name = "screeps-server-kit"
 version = "0.1.0"
 authors = ["William Archbell <william@archbell.com>"]
 edition = "2021"
-description = "Private-server execution, deployment, and evaluation harness for screeps-ibex (library + CLI)."
+description = "Local private-server toolkit for Screeps bot development: Docker stack lifecycle, world bootstrap, tick control, deploy orchestration, and console/metrics capture (library + operator CLI)."
+# MECHANISM crate (Phase 0 plan, P0.A14): everything here is bot-agnostic —
+# bot-specific evaluation POLICY (smoke gates, scenario orchestration)
+# lives in consumers such as ../screeps-ibex-eval.
 # Lifecycle: starts in-repo (workspace-excluded); extracts to a submodule
 # with its own remote once stable (Phase 0 plan, decision D-1). Keep this
 # crate self-contained: no workspace-crate deps, no repo-relative path

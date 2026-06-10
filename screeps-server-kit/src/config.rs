@@ -1,5 +1,5 @@
-//! Configuration loading for the eval harness — file-driven, FIXED paths
-//! (P0.A9; no environment variables, no directory walking).
+//! Configuration loading for the server kit — file-driven, FIXED paths
+//! (no environment variables, no directory walking).
 //!
 //! Two files, two concerns:
 //! - **`../.screeps.yaml`** (repo root, gitignored) — server CREDENTIALS
@@ -8,7 +8,7 @@
 //!   only override. Any other top-level section (`configs:`, a leftover
 //!   `eval:`) is ignored.
 //! - **`config/local.yml`** (crate-local, gitignored via this crate's
-//!   `.gitignore`) — eval-stack settings: `steamKey`, `ports`, `tickMs`,
+//!   `.gitignore`) — server-stack settings: `steamKey`, `ports`, `tickMs`,
 //!   `spawn`, `bots` (P0.A10), `image` (P0.A9(d)). The committed
 //!   `config/local.example.yml` documents every key. Absent file = all
 //!   defaults (commands that need the steamKey fail with a pointer to
@@ -19,11 +19,9 @@
 //! artifacts there, the crate is always driven via `cargo run` while it
 //! lives in-repo (decision D-1) so the compile-time path is valid, and
 //! config resolution must not silently change (or vanish) when a command
-//! runs from an unexpected directory — the operator convention is still
-//! "cd screeps-eval first" (the child `.cargo/config.toml` target pin is
-//! cwd-discovered), but a cwd mistake now fails at the build-target
-//! level, never by reading the wrong config. Revisit at extraction,
-//! together with `runtime_dir()`.
+//! runs from an unexpected directory — the convention is "cd into this
+//! crate first", and a cwd mistake must never read the wrong config.
+//! Revisit at extraction, together with `runtime_dir()`.
 //!
 //! SECRETS POLICY (Phase 0 plan P0.A7): every credential lives in a
 //! [`SecretString`] from the moment it is parsed — `Debug`/`Display`
@@ -78,17 +76,23 @@ pub fn local_config_path() -> PathBuf {
     crate_dir().join("config").join("local.yml")
 }
 
-/// Top-level config consumed by the harness and the CLI.
+/// Top-level config consumed by the kit and the CLIs built on it.
 #[derive(Debug)]
-pub struct EvalConfig {
-    /// The `servers:` entry selected by `--server-name` — the identity
+pub struct KitConfig {
+    /// The RESOLVED acting-identity entry name: an explicit
+    /// `--server-name` wins; otherwise the FIRST `bots:` entry (the kit
+    /// acts as a bot, and the bots list is the source of truth — the
+    /// default bots list is `["private-server"]`, so the historical
+    /// default survives when no `bots:` is configured).
+    pub server_name: String,
+    /// The `servers:` entry named by `server_name` — the identity
     /// server-level commands (`run`, `smoke`, default `deploy`) act as.
     pub server: ServerEndpoint,
     /// One resolved endpoint per `bots:` entry (P0.A10) — `bootstrap`
     /// registers and places a spawn for each.
     pub bots: Vec<BotEndpoint>,
-    /// Eval-stack settings from `config/local.yml` (defaults if absent).
-    pub eval: EvalSettings,
+    /// Server-stack settings from `config/local.yml` (defaults if absent).
+    pub stack: StackSettings,
     /// Where the credentials file was found (also locates the repo root
     /// for `deploy`/`runs/`).
     pub source_path: Option<PathBuf>,
@@ -103,9 +107,9 @@ pub struct BotEndpoint {
 }
 
 /// The `config/local.yml` settings — file-driven server-stack
-/// configuration (P0.A2/A9; no host env vars, operator directive).
+/// configuration (no host env vars, operator directive).
 #[derive(Debug)]
-pub struct EvalSettings {
+pub struct StackSettings {
     /// Steam Web API key, merged into the launcher config at runtime.
     /// Lives in the merged runtime config under `target/runtime/`
     /// (gitignored) — never in the committed template, never in logs.
@@ -181,9 +185,9 @@ impl Default for ImageSettings {
     }
 }
 
-impl Default for EvalSettings {
+impl Default for StackSettings {
     fn default() -> Self {
-        EvalSettings {
+        StackSettings {
             steam_key: None,
             game_port: DEFAULT_GAME_PORT,
             cli_port: DEFAULT_CLI_PORT,
@@ -220,7 +224,7 @@ struct RawUnifiedConfig {
     /// token auth and has no `username`) must not break parsing of the
     /// entries we actually select. Unknown top-level sections
     /// (`configs:`, a leftover `eval:`) are ignored by default serde —
-    /// the harness no longer reads anything but `servers:` here.
+    /// the kit no longer reads anything but `servers:` here.
     servers: HashMap<String, serde_yaml::Value>,
 }
 
@@ -298,11 +302,11 @@ struct RawLocalImageBuild {
     dockerfile: Option<String>,
 }
 
-impl From<RawLocal> for EvalSettings {
+impl From<RawLocal> for StackSettings {
     fn from(raw: RawLocal) -> Self {
-        let defaults = EvalSettings::default();
+        let defaults = StackSettings::default();
         let tick_ms = raw.tick_ms.unwrap_or(defaults.tick_ms);
-        EvalSettings {
+        StackSettings {
             steam_key: raw.steam_key,
             game_port: raw.ports.game.unwrap_or(defaults.game_port),
             cli_port: raw.ports.cli.unwrap_or(defaults.cli_port),
@@ -332,25 +336,26 @@ impl From<RawLocal> for EvalSettings {
     }
 }
 
-impl EvalSettings {
+impl StackSettings {
     /// Parse `config/local.yml` content. An empty/whitespace-only file
     /// (or, at the caller, an absent one) yields all defaults.
     pub fn from_local_yaml_str(yaml: &str) -> Result<Self> {
         if yaml.trim().is_empty() {
-            return Ok(EvalSettings::default());
+            return Ok(StackSettings::default());
         }
         let raw: RawLocal =
             serde_yaml::from_str(yaml).context("config/local.yml has an unexpected shape")?;
-        Ok(EvalSettings::from(raw))
+        Ok(StackSettings::from(raw))
     }
 }
 
-impl EvalConfig {
+impl KitConfig {
     /// Load from the fixed paths: credentials at `../.screeps.yaml`
     /// (or `explicit`, the only override) + settings at
     /// `config/local.yml` (optional). `server_name` selects the
-    /// `servers:` entry the harness acts as.
-    pub fn load(explicit: Option<&Path>, server_name: &str) -> Result<Self> {
+    /// `servers:` entry the kit acts as; `None` means the FIRST `bots:`
+    /// entry (see [`KitConfig::server_name`]).
+    pub fn load(explicit: Option<&Path>, server_name: Option<&str>) -> Result<Self> {
         let creds_path = explicit
             .map(Path::to_path_buf)
             .unwrap_or_else(default_creds_path);
@@ -363,14 +368,14 @@ impl EvalConfig {
         })?;
 
         let local_path = local_config_path();
-        let eval = match std::fs::read_to_string(&local_path) {
-            Ok(raw) => EvalSettings::from_local_yaml_str(&raw)
+        let stack = match std::fs::read_to_string(&local_path) {
+            Ok(raw) => StackSettings::from_local_yaml_str(&raw)
                 .with_context(|| format!("parsing {}", local_path.display()))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => EvalSettings::default(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => StackSettings::default(),
             Err(e) => return Err(e).with_context(|| format!("reading {}", local_path.display())),
         };
 
-        let mut cfg = Self::from_parts(&creds_raw, eval, server_name)
+        let mut cfg = Self::from_parts(&creds_raw, stack, server_name)
             .with_context(|| format!("parsing {}", creds_path.display()))?;
         cfg.source_path = Some(creds_path);
         Ok(cfg)
@@ -379,10 +384,25 @@ impl EvalConfig {
     /// Assemble from already-parsed pieces (separated from I/O for
     /// testability — tests construct configs from literals, never from
     /// the real, secret-bearing files).
-    pub fn from_parts(creds_yaml: &str, eval: EvalSettings, server_name: &str) -> Result<Self> {
+    pub fn from_parts(
+        creds_yaml: &str,
+        stack: StackSettings,
+        server_name: Option<&str>,
+    ) -> Result<Self> {
         let raw: RawUnifiedConfig = serde_yaml::from_str(creds_yaml)?;
-        let server = resolve_entry(&raw, server_name)?;
-        let bots = eval
+        // Acting identity: explicit name wins; otherwise the first
+        // `bots:` entry — the kit acts AS a bot, and a configured bots
+        // list supersedes the historical fixed default (which survives
+        // via the default bots list `["private-server"]`). Discovered
+        // live (first multi-bot smoke): with `bots: [ibex, ibex-2]`, a
+        // fixed `private-server` default deploys as an identity
+        // `bootstrap` never registered -> guaranteed 401.
+        let server_name = server_name
+            .map(str::to_string)
+            .or_else(|| stack.bots.first().cloned())
+            .unwrap_or_else(|| DEFAULT_SERVER_NAME.to_string());
+        let server = resolve_entry(&raw, &server_name)?;
+        let bots = stack
             .bots
             .iter()
             .map(|name| {
@@ -398,10 +418,11 @@ impl EvalConfig {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(EvalConfig {
+        Ok(KitConfig {
+            server_name,
             server,
             bots,
-            eval,
+            stack,
             source_path: None,
         })
     }
@@ -410,13 +431,13 @@ impl EvalConfig {
     pub fn from_yaml_strs(
         creds_yaml: &str,
         local_yaml: Option<&str>,
-        server_name: &str,
+        server_name: Option<&str>,
     ) -> Result<Self> {
-        let eval = match local_yaml {
-            Some(yaml) => EvalSettings::from_local_yaml_str(yaml)?,
-            None => EvalSettings::default(),
+        let stack = match local_yaml {
+            Some(yaml) => StackSettings::from_local_yaml_str(yaml)?,
+            None => StackSettings::default(),
         };
-        Self::from_parts(creds_yaml, eval, server_name)
+        Self::from_parts(creds_yaml, stack, server_name)
     }
 }
 
@@ -497,11 +518,14 @@ image:
     /// anyone swaps it for a plain `String`.
     #[test]
     fn debug_output_redacts_secrets() {
-        let cfg =
-            EvalConfig::from_yaml_strs(FAKE_CREDS_MULTI, Some(FAKE_LOCAL_FULL), "private-server")
-                .unwrap();
+        let cfg = KitConfig::from_yaml_strs(
+            FAKE_CREDS_MULTI,
+            Some(FAKE_LOCAL_FULL),
+            Some("private-server"),
+        )
+        .unwrap();
         assert!(
-            cfg.eval.steam_key.is_some(),
+            cfg.stack.steam_key.is_some(),
             "fixture must exercise steamKey"
         );
         assert_eq!(cfg.bots.len(), 2, "fixture must exercise bot endpoints");
@@ -521,7 +545,7 @@ image:
 
     #[test]
     fn local_yaml_parses_fully() {
-        let eval = EvalSettings::from_local_yaml_str(FAKE_LOCAL_FULL).unwrap();
+        let eval = StackSettings::from_local_yaml_str(FAKE_LOCAL_FULL).unwrap();
         assert!(eval.steam_key.is_some());
         assert_eq!(eval.game_port, 31025);
         assert_eq!(eval.cli_port, 31026);
@@ -540,11 +564,11 @@ image:
     #[test]
     fn absent_or_empty_local_yaml_yields_defaults() {
         for eval in [
-            EvalSettings::from_local_yaml_str("").unwrap(),
-            EvalSettings::from_local_yaml_str("  \n").unwrap(),
-            EvalConfig::from_yaml_strs(FAKE_CREDS, None, "private-server")
+            StackSettings::from_local_yaml_str("").unwrap(),
+            StackSettings::from_local_yaml_str("  \n").unwrap(),
+            KitConfig::from_yaml_strs(FAKE_CREDS, None, Some("private-server"))
                 .unwrap()
-                .eval,
+                .stack,
         ] {
             assert!(eval.steam_key.is_none());
             assert_eq!(eval.game_port, DEFAULT_GAME_PORT);
@@ -561,7 +585,7 @@ image:
 
     #[test]
     fn partial_local_yaml_fills_defaults_and_clamps_tick_floor() {
-        let eval = EvalSettings::from_local_yaml_str("tickMs: 10\n").unwrap();
+        let eval = StackSettings::from_local_yaml_str("tickMs: 10\n").unwrap();
         assert_eq!(eval.game_port, DEFAULT_GAME_PORT);
         assert_eq!(eval.cli_port, DEFAULT_CLI_PORT);
         // 10 ms is below the operator-established floor: clamped, not error.
@@ -574,21 +598,21 @@ image:
     #[test]
     fn image_block_defaults() {
         let eval =
-            EvalSettings::from_local_yaml_str("image:\n  build:\n    context: /tmp/launcher\n")
+            StackSettings::from_local_yaml_str("image:\n  build:\n    context: /tmp/launcher\n")
                 .unwrap();
         assert_eq!(eval.image.name, DEFAULT_LAUNCHER_IMAGE);
         let build = eval.image.build.as_ref().unwrap();
         assert_eq!(build.dockerfile_name(), "Dockerfile");
 
         // Name-only override (no build): still a pull, different tag.
-        let eval = EvalSettings::from_local_yaml_str("image:\n  name: my/launcher:dev\n").unwrap();
+        let eval = StackSettings::from_local_yaml_str("image:\n  name: my/launcher:dev\n").unwrap();
         assert_eq!(eval.image.name, "my/launcher:dev");
         assert!(eval.image.build.is_none());
     }
 
     #[test]
     fn misspelled_local_key_is_a_clear_error() {
-        let err = EvalSettings::from_local_yaml_str("steamkey: oops-wrong-case\n").unwrap_err();
+        let err = StackSettings::from_local_yaml_str("steamkey: oops-wrong-case\n").unwrap_err();
         let msg = format!("{err:#}");
         assert!(
             msg.contains("local.yml"),
@@ -598,7 +622,7 @@ image:
 
     #[test]
     fn parses_creds_and_endpoint_defaults() {
-        let cfg = EvalConfig::from_yaml_strs(FAKE_CREDS, None, "private-server").unwrap();
+        let cfg = KitConfig::from_yaml_strs(FAKE_CREDS, None, Some("private-server")).unwrap();
         assert_eq!(cfg.server.host, "127.0.0.1");
         assert_eq!(cfg.server.port, 21025);
         assert_eq!(cfg.server.username, "ibex");
@@ -613,10 +637,10 @@ image:
     /// P0.A10: each `bots:` entry resolves to its own endpoint.
     #[test]
     fn bots_resolve_to_distinct_endpoints() {
-        let cfg = EvalConfig::from_yaml_strs(
+        let cfg = KitConfig::from_yaml_strs(
             FAKE_CREDS_MULTI,
             Some("bots:\n  - ibex\n  - ibex-2\n"),
-            "private-server",
+            Some("private-server"),
         )
         .unwrap();
         assert_eq!(cfg.bots.len(), 2);
@@ -626,23 +650,58 @@ image:
         assert_eq!(cfg.bots[1].endpoint.username, "ibex-2");
     }
 
+    /// The acting-identity resolution (first live multi-bot lesson):
+    /// no explicit `--server-name` -> the FIRST `bots:` entry; an
+    /// explicit name always wins; no `bots:` configured -> the
+    /// historical default (via the default bots list).
+    #[test]
+    fn acting_identity_defaults_to_first_bot() {
+        // bots configured, no explicit name -> bots[0].
+        let cfg = KitConfig::from_yaml_strs(
+            FAKE_CREDS_MULTI,
+            Some("bots:\n  - ibex\n  - ibex-2\n"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(cfg.server_name, "ibex");
+        assert_eq!(cfg.server.username, "ibex");
+
+        // Explicit name wins over the bots list.
+        let cfg = KitConfig::from_yaml_strs(
+            FAKE_CREDS_MULTI,
+            Some("bots:\n  - ibex\n  - ibex-2\n"),
+            Some("ibex-2"),
+        )
+        .unwrap();
+        assert_eq!(cfg.server_name, "ibex-2");
+        assert_eq!(cfg.server.username, "ibex-2");
+
+        // No bots: section at all -> default bots list -> private-server.
+        let cfg = KitConfig::from_yaml_strs(FAKE_CREDS, None, None).unwrap();
+        assert_eq!(cfg.server_name, DEFAULT_SERVER_NAME);
+        assert_eq!(cfg.server.username, "ibex");
+    }
+
     /// A bots entry that is missing — or token-shaped (no
     /// username/password) — is a clear, named error.
     #[test]
     fn bad_bots_entries_are_clear_errors() {
-        let err = EvalConfig::from_yaml_strs(
+        let err = KitConfig::from_yaml_strs(
             FAKE_CREDS_MULTI,
             Some("bots: [nonexistent]\n"),
-            "private-server",
+            Some("private-server"),
         )
         .unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("'nonexistent'"), "unhelpful error: {msg}");
         assert!(msg.contains("bots"), "should blame the bots list: {msg}");
 
-        let err =
-            EvalConfig::from_yaml_strs(FAKE_CREDS_MULTI, Some("bots: [mmo]\n"), "private-server")
-                .unwrap_err();
+        let err = KitConfig::from_yaml_strs(
+            FAKE_CREDS_MULTI,
+            Some("bots: [mmo]\n"),
+            Some("private-server"),
+        )
+        .unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("unexpected shape"), "got: {msg}");
         assert!(msg.contains("'mmo'"), "should name the entry: {msg}");
@@ -672,19 +731,19 @@ eval:
   serverConfig: C:\stale\launcher\config.yml
   tickMs: 9999
 "#;
-        let cfg = EvalConfig::from_yaml_strs(yaml, None, "private-server").unwrap();
+        let cfg = KitConfig::from_yaml_strs(yaml, None, Some("private-server")).unwrap();
         assert_eq!(cfg.server.host, "127.0.0.1");
         // The leftover eval: section is IGNORED — settings come from
         // config/local.yml (here: defaults), not from .screeps.yaml.
-        assert_eq!(cfg.eval.tick_ms, TICK_MS_SMOKE);
+        assert_eq!(cfg.stack.tick_ms, TICK_MS_SMOKE);
         // ...and selecting the odd-shaped entry gives a clear error, not a panic.
-        let err = EvalConfig::from_yaml_strs(yaml, None, "mmo").unwrap_err();
+        let err = KitConfig::from_yaml_strs(yaml, None, Some("mmo")).unwrap_err();
         assert!(format!("{err:#}").contains("unexpected shape"));
     }
 
     #[test]
     fn unknown_server_name_is_a_clear_error() {
-        let err = EvalConfig::from_yaml_strs(FAKE_CREDS, None, "mmo").unwrap_err();
+        let err = KitConfig::from_yaml_strs(FAKE_CREDS, None, Some("mmo")).unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("'mmo'"), "unhelpful error: {msg}");
         assert!(

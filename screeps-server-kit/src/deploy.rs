@@ -1,10 +1,21 @@
-//! Deploy wrapper around `js_tools/deploy.js` (P0.A4).
+//! Deploy orchestration — today a wrapper around the repo's
+//! `js_tools/deploy.js` (P0.A4). Deploying *some crate* to *some server
+//! entry* is bot-agnostic, which is why this lives in the kit.
 //!
-//! OPERATOR DIRECTIVE (phase-0.md P0.A4): the deploy script and the wasm
-//! build pipeline (wasm-pack/rollup/npm) are **never modified** — this
-//! module wraps the script: working directory, environment, output
-//! streaming, and honest success detection. Native `POST /api/user/code`
-//! is deferred indefinitely.
+//! ## The `screeps-pack` seam (P0.A13)
+//!
+//! THIS MODULE is the integration point where the rust-native
+//! `screeps-pack` deployment tool plugs in: at the A13 cutover,
+//! [`deploy`] becomes a library call into screeps-pack (cargo build →
+//! wasm-bindgen → glue → upload via the shared `screeps-rest-api`
+//! client) and the deploy.js shell-out below is **deleted** — the
+//! public surface (`deploy(cfg, server_entry, debug)` + [`DeployReport`])
+//! is the contract consumers keep calling.
+//!
+//! OPERATOR DIRECTIVE (phase-0.md P0.A4): until that cutover, the deploy
+//! script and the wasm build pipeline (wasm-pack/rollup/npm) are
+//! **never modified** — this module wraps the script: working directory,
+//! environment, output streaming, and honest success detection.
 //!
 //! ## Pinned facts from `js_tools/deploy.js` (read 2026-06-09, unmodified)
 //!
@@ -31,7 +42,7 @@
 //!   (deploy.js:158, `{"ok":1}` from the private server's
 //!   `POST /api/user/code`).
 
-use crate::config::EvalConfig;
+use crate::config::KitConfig;
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -70,7 +81,7 @@ impl std::fmt::Display for DeployReport {
 /// Locate the repo root deploy.js must run from: the directory holding
 /// `.screeps.yaml` (which the script reads from CWD), validated to also
 /// contain the script and its `package.json`.
-pub fn find_repo_root(cfg: &EvalConfig) -> Result<PathBuf> {
+pub fn find_repo_root(cfg: &KitConfig) -> Result<PathBuf> {
     let root = cfg
         .source_path
         .as_deref()
@@ -79,8 +90,9 @@ pub fn find_repo_root(cfg: &EvalConfig) -> Result<PathBuf> {
     for required in ["js_tools/deploy.js", "package.json"] {
         if !root.join(required).is_file() {
             bail!(
-                "{required} not found in {} — deploy must run from the screeps-ibex \
-                 repo root (the directory containing .screeps.yaml)",
+                "{required} not found in {} — deploy must run from the bot repo's \
+                 root (the directory containing .screeps.yaml, with a deploy.js \
+                 pipeline at js_tools/deploy.js)",
                 root.display()
             );
         }
@@ -176,7 +188,7 @@ fn parse_used_mib(banner_rest: &str) -> Option<f64> {
 
 /// Argv for the deploy.js invocation (pure — pinned by a unit test).
 /// `server_entry` is the `.screeps.yaml` `servers:` entry the upload
-/// targets: the harness's own `--server-name` by default, or a bot
+/// targets: the kit's own `--server-name` by default, or a bot
 /// entry selected via `deploy --user <entry>` (P0.A10) — deploy.js
 /// resolves the entry's credentials itself either way.
 pub fn deploy_args(server_entry: &str, debug: bool) -> Vec<String> {
@@ -194,7 +206,7 @@ pub fn deploy_args(server_entry: &str, debug: bool) -> Vec<String> {
 /// Build + upload the bot via `node js_tools/deploy.js --server <entry>
 /// --mode <debug|release>` from the repo root. Output streams through
 /// tracing as it happens; success is decided by [`parse_deploy_output`].
-pub async fn deploy(cfg: &EvalConfig, server_entry: &str, debug: bool) -> Result<DeployReport> {
+pub async fn deploy(cfg: &KitConfig, server_entry: &str, debug: bool) -> Result<DeployReport> {
     let root = find_repo_root(cfg)?;
     if !root.join("node_modules").is_dir() {
         bail!(

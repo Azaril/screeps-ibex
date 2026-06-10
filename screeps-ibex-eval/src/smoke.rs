@@ -2,7 +2,9 @@
 //! `server up` → `bootstrap --reset` → `deploy` → `run --ticks K` →
 //! summary + gate verdict.
 //!
-//! Gates are **HARD ZEROS only** (phase-0.md §5 exit criterion 6):
+//! Mechanism comes from `screeps_server_kit`; the GATES are ibex policy
+//! ([`crate::gates`]) and are **HARD ZEROS only** (phase-0.md §5 exit
+//! criterion 6):
 //! 1. deploy failure (the deploy step errors out),
 //! 2. zero ticks observed,
 //! 3. any console panic line,
@@ -12,10 +14,10 @@
 //! never gates — single-run metric gates are the flake generator ADR
 //! 0015 rejects.
 
-use crate::capture::RunArtifacts;
-use crate::config::EvalConfig;
-use crate::deploy::DeployReport;
 use anyhow::Result;
+use screeps_server_kit::capture::RunArtifacts;
+use screeps_server_kit::config::KitConfig;
+use screeps_server_kit::deploy::DeployReport;
 
 /// Default tick count for a smoke run (~1 minute of game time at the
 /// 100 ms smoke tick rate — enough to see spawning + early panics).
@@ -32,21 +34,23 @@ pub struct SmokeReport {
 /// gates fail — the caller decides the exit code (the CLI exits nonzero
 /// on any gate failure). Infrastructure failures (server, bootstrap,
 /// deploy, capture) are `Err` as usual.
-pub async fn smoke(cfg: &EvalConfig, server_name: &str, ticks: u64) -> Result<SmokeReport> {
+pub async fn smoke(cfg: &KitConfig, ticks: u64) -> Result<SmokeReport> {
+    let spec = crate::gates::capture_spec();
+
     tracing::info!("smoke 1/4: server up");
-    crate::docker::up(&cfg.eval).await?;
+    screeps_server_kit::docker::up(&cfg.stack).await?;
 
     tracing::info!("smoke 2/4: bootstrap --reset (fresh world)");
-    let outcome = crate::server::bootstrap(cfg, true).await?;
+    let outcome = screeps_server_kit::server::bootstrap(cfg, true).await?;
     tracing::info!("bootstrap complete:\n{outcome}");
 
     tracing::info!("smoke 3/4: deploy (release)");
-    let deploy = crate::deploy::deploy(cfg, server_name, false).await?;
+    let deploy = screeps_server_kit::deploy::deploy(cfg, &cfg.server_name, false).await?;
 
     tracing::info!("smoke 4/4: run --ticks {ticks} --scenario smoke");
-    let artifacts = crate::capture::run(cfg, ticks, "smoke").await?;
+    let artifacts = screeps_server_kit::capture::run(cfg, ticks, "smoke", &spec).await?;
 
-    let gate_failures = artifacts.summary.gate_failures();
+    let gate_failures = artifacts.summary.gate_failures(&spec.markers);
     Ok(SmokeReport {
         deploy,
         artifacts,

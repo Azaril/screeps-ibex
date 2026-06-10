@@ -2,7 +2,7 @@
 //!
 //! Fixed-path pattern (the P0.A9(c) precedent): the crate is always
 //! invoked from its own directory, so credentials default to
-//! `../.screeps.yaml` (the same file the deploy tooling and screeps-eval
+//! `../.screeps.yaml` (the same file the deploy tooling and screeps-server-kit
 //! read) and `--config` is the only override. No directory walking, no
 //! environment variables (operator directive).
 //!

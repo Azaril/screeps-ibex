@@ -16,7 +16,7 @@ one is already part of an optimal base plan.
 Library-first: every CLI capability is a library function
 (`screeps_prospector::{ops, cache, score, place, config}` over the
 shared [`screeps-rest-api`](../screeps-rest-api) client), so other
-tools (e.g. the `screeps-eval` harness) can drive the same code paths.
+tools (e.g. the `screeps-server-kit` toolkit) can drive the same code paths.
 
 ---
 
@@ -305,7 +305,7 @@ performs zero network I/O.
 
 ### Extraction plan
 
-Same lifecycle as `screeps-eval` (Phase-0 decision D-1): in-repo and
+Same lifecycle as `screeps-server-kit` (Phase-0 decision D-1): in-repo and
 workspace-excluded now, extracted to its own repository once stable.
 The crate is self-contained except for three documented seams: the
 credentials path (`../.screeps.yaml`, overridable via `--config`), the

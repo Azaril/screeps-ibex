@@ -6,7 +6,7 @@ edition = "2021"
 description = "Spawn-site selection tool for screeps-ibex: scan/fetch/score rooms, recommend and place spawns (library + CLI)."
 # Lifecycle: starts in-repo (workspace-excluded); extracts to a submodule
 # with its own remote once stable (Phase 0 plan, Workstream P — same
-# lifecycle as screeps-eval, decision D-1). Keep this crate self-contained
+# lifecycle as screeps-server-kit, decision D-1). Keep this crate self-contained
 # beyond two documented seams: creds at ../.screeps.yaml (runtime only)
 # and the ../screeps-foreman path dep (becomes a git dep at extraction).
 

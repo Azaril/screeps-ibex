@@ -554,7 +554,7 @@ Iteration tax: threat-score *weights* and posture thresholds — dwell/flap beha
 
 ### §15 Telemetry, metrics & the harness itself (testing the tester)
 
-Modules: seg-57 emitters, `stats_history.rs`, the colony-health scorer, the eval harness (`screeps-eval`), scenario library, replay tooling, and the renderer/visual flush path (the `VisualBackend` collector — adopted here after adversarial review found it absorbed nowhere). **ADR 0006 owns the harness; this section extends it** with the pieces downstream ADRs assumed but nobody owned.
+Modules: seg-57 emitters, `stats_history.rs`, the colony-health scorer, the eval harness (`screeps-server-kit`/`screeps-ibex-eval`), scenario library, replay tooling, and the renderer/visual flush path (the `VisualBackend` collector — adopted here after adversarial review found it absorbed nowhere). **ADR 0006 owns the harness; this section extends it** with the pieces downstream ADRs assumed but nobody owned.
 
 **(a) Critical invariants**
 1. Seg-57 is **one versioned schema with one registry** (dedup #16 — eight contributing ADRs, single owner here); version header on ALL metric segments (seg 56/99 included).
@@ -571,7 +571,7 @@ Modules: seg-57 emitters, `stats_history.rs`, the colony-health scorer, the eval
 | L0 | scorer term computations on synthetic seg-57 series; baseline differ on synthetic `runs/` artifacts; seg-57 encode/decode round-trip (via §1 helpers) | scorer + registry |
 | L0 | `intent_cost_table_matches_engine` — the orphaned ADR 0004 "validate intent costs against the open-source engine" (orphan #8 resolved: a host test comparing our `intent_cost(category)` table against constants extracted from the cloned engine source, cited per [`engine-mechanics.md`](../references/engine-mechanics.md)) | cost table |
 | L2 | golden: score-schema snapshot (gap §4 sub-metrics: `energy_throughput/cpu_used`, `gcl_per_upgrade_energy`, `spawn_utilization`, `boost_coverage`, `deterrence_events`, `intel_freshness`, `market_pnl`); **dual-scoring re-baseline recorded once at the Inc-8 boundary** | scorer config |
-| L5 | harness self-test: re-run a pinned known-good SHA on a pinned scenario → score within tolerance (the harness's own regression test); kill-server-mid-run → infra-failure verdict, not bot-failure | screeps-eval |
+| L5 | harness self-test: re-run a pinned known-good SHA on a pinned scenario → score within tolerance (the harness's own regression test); kill-server-mid-run → infra-failure verdict, not bot-failure | screeps-server-kit/screeps-ibex-eval |
 | L0 | `visual_watermark_and_finite_coord_clamp` — the kernel half of the rewrite-plan §6 renderer rollback row (IBEX-008): visual-payload watermark math + every coordinate clamped finite/in-range before the (Result-narrowed, per ADR 0005) flush | visual payload builder / `VisualBackend` collector |
 | L5 | **renderer-on smoke variant** — one smoke run per increment executes with visuals enabled: zero visual-flush errors, no corrupted-rendering events, payload under watermark (the rewrite-plan §6 renderer rollback trigger, exercised rather than assumed) | F9 smoke (renderer-on) |
 | L6 | wasted-move-intent rate emitted (gap G-13's threshold metric — added to the F13 schema so the traffic-solver trigger is observable); MMO seg-57 stream as source of truth for the gap-§4 ratios (harness validates behavior only) | seg-57 nightly |

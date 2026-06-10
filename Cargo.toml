@@ -10,7 +10,13 @@ members = [
     "screeps-foreman",
     "screeps-visual",
 ]
-exclude = ["screeps-foreman-bench", "screeps-eval", "screeps-prospector", "screeps-rest-api"]
+exclude = [
+    "screeps-foreman-bench",
+    "screeps-server-kit",
+    "screeps-ibex-eval",
+    "screeps-prospector",
+    "screeps-rest-api",
+]
 
 [profile.release]
 panic = "abort"

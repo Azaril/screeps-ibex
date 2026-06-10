@@ -46,7 +46,7 @@
 //!   objects, user not blocked and has cpu. Success claims the
 //!   controller (level 1 + safe mode) and returns `{ok:1, newbie:true}`.
 
-use crate::config::{BotEndpoint, EvalConfig, SpawnPreference};
+use crate::config::{BotEndpoint, KitConfig, SpawnPreference};
 use anyhow::{anyhow, bail, Context, Result};
 use screeps_rest_api::Client;
 use secrecy::ExposeSecret;
@@ -613,10 +613,10 @@ impl std::fmt::Display for BootstrapOutcome {
 /// signed in (credential verification) → spawn placed in a room no
 /// earlier bot claimed this run (the `spawn:` preference applies to the
 /// first bot only) → world status verified.
-pub async fn bootstrap(cfg: &EvalConfig, reset: bool) -> Result<BootstrapOutcome> {
+pub async fn bootstrap(cfg: &KitConfig, reset: bool) -> Result<BootstrapOutcome> {
     // 1. Ensure the stack is up (idempotent; waits for the game API).
-    crate::docker::up(&cfg.eval).await?;
-    let cli = CliClient::new(cfg.eval.cli_port)?;
+    crate::docker::up(&cfg.stack).await?;
+    let cli = CliClient::new(cfg.stack.cli_port)?;
     cli.greeting().await?; // fail fast if the CLI port is dead
 
     // 2. Optional full wipe. (game_time needs no auth — any endpoint
@@ -631,7 +631,7 @@ pub async fn bootstrap(cfg: &EvalConfig, reset: bool) -> Result<BootstrapOutcome
     // 3. Tick duration. ALWAYS applied: a reset leaves the loop
     //    unthrottled (verified live), and bootstrap's contract is
     //    "world matches config".
-    let tick_ms = set_tick_ms(&cli, cfg.eval.tick_ms).await?;
+    let tick_ms = set_tick_ms(&cli, cfg.stack.tick_ms).await?;
     tracing::info!(tick_ms, "tick duration applied and read back");
 
     // 4. Each bot identity (P0.A10), placing spawns in DISTINCT rooms.
@@ -641,7 +641,7 @@ pub async fn bootstrap(cfg: &EvalConfig, reset: bool) -> Result<BootstrapOutcome
         // The explicit spawn preference belongs to the first bot only;
         // later bots auto-pick (documented in config/local.example.yml).
         let pref = if index == 0 {
-            cfg.eval.spawn.clone()
+            cfg.stack.spawn.clone()
         } else {
             SpawnPreference::default()
         };

@@ -4,7 +4,7 @@ The shared [Screeps](https://screeps.com) HTTP/websocket API client used
 by this repo's host-side tooling — and usable by any Rust tool that
 talks to a Screeps server (private servers and screeps.com alike).
 
-One client, not N (Phase-0 task P0.A12): `screeps-eval` (the
+One client, not N (Phase-0 task P0.A12): `screeps-server-kit` + `screeps-ibex-eval` (the
 private-server eval harness) and `screeps-prospector` (spawn-site
 selection) used to carry independent endpoint implementations; this
 crate is the single place where the endpoint set is implemented, every

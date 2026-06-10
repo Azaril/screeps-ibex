@@ -24,10 +24,10 @@
 //!
 //! SECRETS: the merged [`serde_yaml::Value`] carries the steamKey.
 //! It is never logged or Debug-printed; it is serialized only by
-//! [`write_runtime_config`] into `screeps-eval/target/runtime/`
+//! [`write_runtime_config`] into this crate's `target/runtime/`
 //! (gitignored via the repo-global `target` rule; swept by P0.A7).
 
-use crate::config::EvalSettings;
+use crate::config::StackSettings;
 use anyhow::{bail, Context, Result};
 use secrecy::{ExposeSecret, SecretString};
 use serde_yaml::{Mapping, Value};
@@ -46,15 +46,15 @@ pub fn runtime_dir() -> PathBuf {
         .join("runtime")
 }
 
-/// PURE merge of a base launcher config with the harness-controlled
+/// PURE merge of a base launcher config with the kit-controlled
 /// runtime settings. No I/O; unit-tested with literal fixtures.
 ///
 /// Rules (P0.A2; production always passes [`LAUNCHER_TEMPLATE`] as the
 /// base since P0.A9(b) — the base parameter stays so the merge is pure
 /// and testable against literal bases):
 /// - steamKey: a key already present in the base **wins**; otherwise
-///   `eval_steam_key` is inserted; neither present is an error (the
-///   screeps backend cannot start without one).
+///   `local_steam_key` (from `config/local.yml`) is inserted; neither
+///   present is an error (the screeps backend cannot start without one).
 /// - CLI bind: `env.backend.CLI_HOST` forced to `0.0.0.0` and
 ///   `CLI_PORT` to `cli_port` — always, whatever the base says.
 /// - Game bind: `env.backend.GAME_HOST`/`GAME_PORT` forced likewise.
@@ -62,7 +62,7 @@ pub fn runtime_dir() -> PathBuf {
 ///   (screepsmod-admin-utils consumes it).
 pub fn merge_launcher_config(
     base_yaml: &str,
-    eval_steam_key: Option<&SecretString>,
+    local_steam_key: Option<&SecretString>,
     game_port: u16,
     cli_port: u16,
     tick_ms: u64,
@@ -81,7 +81,7 @@ pub fn merge_launcher_config(
     let base_has_key = matches!(map.get("steamKey"), Some(Value::String(s)) if !s.trim().is_empty())
         || matches!(map.get("steamKeyFile"), Some(Value::String(s)) if !s.trim().is_empty());
     if !base_has_key {
-        match eval_steam_key {
+        match local_steam_key {
             Some(key) => {
                 map.insert(
                     Value::from("steamKey"),
@@ -89,7 +89,7 @@ pub fn merge_launcher_config(
                 );
             }
             None => bail!(
-                "no Steam key available: set steamKey in screeps-eval/config/local.yml \
+                "no Steam key available: set steamKey in screeps-server-kit/config/local.yml \
                  (copy config/local.example.yml; the screeps backend cannot start \
                  without it)"
             ),
@@ -151,13 +151,13 @@ pub fn write_runtime_config(merged: &Value) -> Result<PathBuf> {
 /// One-stop: vendored template -> merge with `config/local.yml`
 /// settings -> `target/runtime/config.yml`. Returns the runtime config
 /// path.
-pub fn prepare_runtime_config(eval: &EvalSettings) -> Result<PathBuf> {
+pub fn prepare_runtime_config(stack: &StackSettings) -> Result<PathBuf> {
     let merged = merge_launcher_config(
         LAUNCHER_TEMPLATE,
-        eval.steam_key.as_ref(),
-        eval.game_port,
-        eval.cli_port,
-        eval.tick_ms,
+        stack.steam_key.as_ref(),
+        stack.game_port,
+        stack.cli_port,
+        stack.tick_ms,
     )?;
     write_runtime_config(&merged)
 }
