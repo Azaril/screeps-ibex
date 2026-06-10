@@ -48,3 +48,7 @@ nbproject
 # Config w/ secrets #
 #####################
 .screeps.yaml
+
+# Eval harness run artifacts #
+##############################
+runs/

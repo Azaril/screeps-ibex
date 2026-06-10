@@ -10,7 +10,7 @@ members = [
     "screeps-foreman",
     "screeps-visual",
 ]
-exclude = ["screeps-foreman-bench"]
+exclude = ["screeps-foreman-bench", "screeps-eval"]
 
 [profile.release]
 panic = "abort"
