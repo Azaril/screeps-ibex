@@ -512,18 +512,11 @@ impl SquadContext {
     /// 3. Greedily assign healers to the most urgent targets, preferring
     ///    adjacent heal (12 HP/part) over ranged heal (4 HP/part).
     /// 4. Avoid over-healing: once a target's deficit is covered, move on.
-    pub fn compute_heal_assignments(
-        &self,
-        creep_owners: Option<&ReadStorage<'_, CreepOwner>>,
-    ) -> Vec<HealAssignment> {
+    pub fn compute_heal_assignments(&self, creep_owners: Option<&ReadStorage<'_, CreepOwner>>) -> Vec<HealAssignment> {
         let mut assignments = Vec::new();
 
         // Collect healers.
-        let healers: Vec<_> = self
-            .members
-            .iter()
-            .filter(|m| m.heal_power > 0 && m.position.is_some())
-            .collect();
+        let healers: Vec<_> = self.members.iter().filter(|m| m.heal_power > 0 && m.position.is_some()).collect();
 
         if healers.is_empty() {
             return assignments;
@@ -593,9 +586,7 @@ impl SquadContext {
 
                 // Prefer the healer that provides the most healing.
                 // Break ties by preferring adjacent heal.
-                if heal_amount > best_heal_amount
-                    || (heal_amount == best_heal_amount && !ranged && best_ranged)
-                {
+                if heal_amount > best_heal_amount || (heal_amount == best_heal_amount && !ranged && best_ranged) {
                     best_healer_idx = Some(i);
                     best_heal_amount = heal_amount;
                     best_ranged = ranged;
@@ -640,18 +631,13 @@ impl SquadContext {
                 if target.damage_taken_last_tick > 0 || target.current_hits < target.max_hits {
                     let healer_pos = healer.position.unwrap();
                     let range = healer_pos.get_range_to(target.position.unwrap());
-                    let creep_id =
-                        creep_owners.and_then(|co| co.get(target.entity)).map(|co| co.owner);
+                    let creep_id = creep_owners.and_then(|co| co.get(target.entity)).map(|co| co.owner);
 
                     assignments.push(HealAssignment {
                         healer: healer.entity,
                         target: target.entity,
                         target_id: creep_id,
-                        expected_heal: if range > 1 {
-                            healer.heal_power * 4
-                        } else {
-                            healer.heal_power * 12
-                        },
+                        expected_heal: if range > 1 { healer.heal_power * 4 } else { healer.heal_power * 12 },
                     });
                 }
             }
@@ -680,11 +666,7 @@ impl SquadContext {
     /// initialized for all members.
     pub fn apply_heal_assignments(&mut self, assignments: &[HealAssignment]) {
         for assignment in assignments {
-            if let Some(member) = self
-                .members
-                .iter_mut()
-                .find(|m| m.entity == assignment.healer)
-            {
+            if let Some(member) = self.members.iter_mut().find(|m| m.entity == assignment.healer) {
                 if let Some(ref mut orders) = member.tick_orders {
                     orders.heal_target = assignment.target_id;
                 } else {
@@ -749,14 +731,8 @@ impl SquadContext {
     /// Issue retreat tick orders for all members.
     /// Members move toward the retreat rally point (or centroid) to stay together,
     /// with heal assignments applied so healers prioritize damaged squad members.
-    pub fn issue_retreat_orders(
-        &mut self,
-        rally_point: Option<Position>,
-        creep_owners: Option<&ReadStorage<'_, CreepOwner>>,
-    ) {
-        let retreat_pos = rally_point
-            .or(self.rally_point)
-            .or_else(|| self.compute_retreat_centroid());
+    pub fn issue_retreat_orders(&mut self, rally_point: Option<Position>, creep_owners: Option<&ReadStorage<'_, CreepOwner>>) {
+        let retreat_pos = rally_point.or(self.rally_point).or_else(|| self.compute_retreat_centroid());
 
         // Compute heal assignments for the retreat.
         let heal_assignments = self.compute_heal_assignments(creep_owners);

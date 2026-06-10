@@ -190,7 +190,7 @@ impl Operation for ColonyOperation {
         system_data: &mut OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
-        let should_run = self.last_run.map(|t| game::time() - t >= 50).unwrap_or(true);
+        let should_run = self.last_run.map(|t| game::time().saturating_sub(t) >= 50).unwrap_or(true);
 
         if !should_run {
             return Ok(OperationResult::Running);

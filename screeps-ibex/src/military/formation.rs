@@ -279,7 +279,8 @@ pub fn advance_squad_virtual_position(squad: &mut SquadContext, destination: Pos
                         return true;
                     }
                     is_near_room_edge_toward(p, destination)
-                }).unwrap_or(false)
+                })
+                .unwrap_or(false)
             })
             .count();
         let near_edge_quorum = members_near_edge as f32 >= living_count as f32 * STRICT_QUORUM_RATIO;
@@ -315,7 +316,8 @@ pub fn advance_squad_virtual_position(squad: &mut SquadContext, destination: Pos
                         squad.strict_hold_ticks = 0;
                         true
                     } else {
-                        squad.strict_hold_ticks >= STRICT_QUORUM_TICKS && in_formation_count as f32 >= living_count as f32 * STRICT_QUORUM_RATIO
+                        squad.strict_hold_ticks >= STRICT_QUORUM_TICKS
+                            && in_formation_count as f32 >= living_count as f32 * STRICT_QUORUM_RATIO
                     }
                 }
             }
@@ -346,8 +348,7 @@ pub fn advance_squad_virtual_position(squad: &mut SquadContext, destination: Pos
                     squad.strict_hold_ticks += 1;
                     // Force advance after a shorter timeout to avoid permanent blocks
                     // when pathfinding can't reach the exact formation tile.
-                    squad.strict_hold_ticks >= STRICT_QUORUM_TICKS
-                        && loose_in_formation as f32 >= living_count as f32 * STRICT_QUORUM_RATIO
+                    squad.strict_hold_ticks >= STRICT_QUORUM_TICKS && loose_in_formation as f32 >= living_count as f32 * STRICT_QUORUM_RATIO
                 }
             }
         }

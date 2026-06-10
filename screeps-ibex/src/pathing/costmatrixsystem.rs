@@ -1,9 +1,7 @@
+use crate::segments::COST_MATRIX_SEGMENT;
 use screeps::*;
 use screeps_rover::*;
 use specs::prelude::*;
-
-/// Segment ID used for cost matrix cache persistence.
-pub const COST_MATRIX_SEGMENT: u32 = 55;
 
 /// Load a `CostMatrixCache` from the given RawMemory segment, or return a
 /// default (empty) cache if the segment is not active or cannot be decoded.

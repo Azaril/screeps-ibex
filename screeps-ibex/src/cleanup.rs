@@ -17,7 +17,8 @@ pub struct MissionCleanup {
     pub entity: Entity,
     pub owner: Option<Entity>,
     pub children: Vec<Entity>,
-    pub room: Entity,
+    /// `None` when the mission is fully degraded and has no room to clean up.
+    pub room: Option<Entity>,
 }
 
 /// Context extracted at queue-time for an operation deletion.
@@ -257,7 +258,7 @@ impl<'a> System<'a> for EntityCleanupSystem {
             }
 
             // Remove from RoomData.missions.
-            if let Some(rd) = room_data.get_mut(mc.room) {
+            if let Some(rd) = mc.room.and_then(|room| room_data.get_mut(room)) {
                 rd.remove_mission(mc.entity);
             }
 

@@ -206,7 +206,7 @@ impl RoomDynamicVisibilityData {
     }
 
     pub fn age(&self) -> u32 {
-        game::time() - self.update_tick
+        game::time().saturating_sub(self.update_tick)
     }
 
     pub fn visible(&self) -> bool {
@@ -433,12 +433,7 @@ impl RoomData {
             .any(|s| s.owner().is_some() && !s.my());
 
         let tower_dps_at_edge = structures.as_ref().map(|s| {
-            let positions: Vec<Position> = s
-                .towers()
-                .iter()
-                .filter(|t| !t.my())
-                .map(|t| t.pos())
-                .collect();
+            let positions: Vec<Position> = s.towers().iter().filter(|t| !t.my()).map(|t| t.pos()).collect();
             crate::military::damage::tower_dps_at_room_edge(self.name, &positions)
         });
 

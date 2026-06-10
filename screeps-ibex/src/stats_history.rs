@@ -5,6 +5,7 @@
 
 use crate::memorysystem::MemoryArbiter;
 use crate::room::data::RoomData;
+use crate::segments::STATS_HISTORY_SEGMENT;
 use crate::serialize;
 use crate::visualization::VisualizationData;
 use log::*;
@@ -12,9 +13,6 @@ use screeps::{game, RoomName};
 use serde::{Deserialize, Serialize};
 use specs::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
-
-/// Dedicated segment for stats history persistence.
-pub const STATS_HISTORY_SEGMENT: u32 = 56;
 
 /// Maximum encoded size (in bytes) that we allow for the stats segment.
 /// Segments hold up to 100 KB of string, but MemoryArbiter warns at 50 KiB.
@@ -155,13 +153,10 @@ impl StatsHistoryData {
 
         // Trim tiers from coarsest (day) to finest (recent), halving each tier
         // across all rooms until the data fits.
-        let tier_accessors: Vec<fn(&mut RoomStatsHistory) -> &mut VecDeque<RoomStatsSnapshot>> = vec![
-            |h| &mut h.day,
-            |h| &mut h.hour,
-            |h| &mut h.ten_min,
-            |h| &mut h.minute,
-            |h| &mut h.recent,
-        ];
+        let tier_accessors: Vec<fn(&mut RoomStatsHistory) -> &mut VecDeque<RoomStatsSnapshot>> =
+            vec![|h| &mut h.day, |h| &mut h.hour, |h| &mut h.ten_min, |h| &mut h.minute, |h| {
+                &mut h.recent
+            }];
 
         for accessor in &tier_accessors {
             for history in trimmed.rooms.values_mut() {
@@ -171,10 +166,7 @@ impl StatsHistoryData {
             }
             match serialize::encode_to_string(&trimmed) {
                 Ok(enc) if enc.len() <= MAX_ENCODED_SIZE => {
-                    warn!(
-                        "Stats history trimmed to fit segment (encoded {} bytes)",
-                        enc.len()
-                    );
+                    warn!("Stats history trimmed to fit segment (encoded {} bytes)", enc.len());
                     return Ok(enc);
                 }
                 Ok(_) => continue,

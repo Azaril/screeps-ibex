@@ -121,7 +121,11 @@ impl Active {
         if dynamic_visibility_data.visible() {
             if dynamic_visibility_data.hostile_creeps() || dynamic_visibility_data.hostile_structures() {
                 self.last_hostiles = Some(game::time());
-            } else if self.last_hostiles.map(|last| game::time() - last >= 20).unwrap_or(false) {
+            } else if self
+                .last_hostiles
+                .map(|last| game::time().saturating_sub(last) >= 20)
+                .unwrap_or(false)
+            {
                 return Ok(Some(DefendState::idle(std::marker::PhantomData)));
             }
         }
@@ -188,8 +192,8 @@ impl Mission for DefendMission {
         self.owner.take();
     }
 
-    fn get_room(&self) -> Entity {
-        self.context.defend_room_data
+    fn get_room(&self) -> Option<Entity> {
+        Some(self.context.defend_room_data)
     }
 
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> String {

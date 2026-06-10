@@ -81,8 +81,8 @@ impl Mission for TowerMission {
         self.owner.take();
     }
 
-    fn get_room(&self) -> Entity {
-        self.room_data
+    fn get_room(&self) -> Option<Entity> {
+        Some(self.room_data)
     }
 
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {

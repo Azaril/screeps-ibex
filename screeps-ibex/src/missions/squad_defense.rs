@@ -263,7 +263,7 @@ impl Rallying {
         // Rally timeout is shorter for defense (50 ticks) since the room is under attack.
         let rally_timeout = state_context
             .rally_start_tick
-            .map(|start| game::time() - start > 50)
+            .map(|start| game::time().saturating_sub(start) > 50)
             .unwrap_or(true);
 
         // Check if the defend room is visible and if we have members there.
@@ -474,8 +474,8 @@ impl Mission for SquadDefenseMission {
         self.owner.take();
     }
 
-    fn get_room(&self) -> Entity {
-        self.context.defend_room_data
+    fn get_room(&self) -> Option<Entity> {
+        Some(self.context.defend_room_data)
     }
 
     fn remove_creep(&mut self, entity: Entity) {

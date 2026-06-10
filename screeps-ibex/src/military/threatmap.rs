@@ -307,10 +307,7 @@ impl<'a> System<'a> for ThreatAssessmentSystem {
                 .unwrap_or((false, false));
 
             let has_nukes = !incoming_nukes.is_empty();
-            let has_invader_core = room_data
-                .get_structures()
-                .map(|s| !s.invader_cores().is_empty())
-                .unwrap_or(false);
+            let has_invader_core = room_data.get_structures().map(|s| !s.invader_cores().is_empty()).unwrap_or(false);
 
             let threat_level = classify_threat(&hostile_creep_infos, has_nukes, has_invader_core);
 
@@ -344,5 +341,84 @@ impl<'a> System<'a> for ThreatAssessmentSystem {
                 threat_data_storage.remove(entity);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::military::{NPC_INVADER, NPC_SOURCE_KEEPER};
+    use screeps::RoomCoordinate;
+
+    // Informational snapshot of current `classify_threat` behavior. This is
+    // NOT a spec -- it pins what the classifier does today so behavioral
+    // drift during Phase 0 (and the rewrite increments) is visible.
+
+    fn hostile(owner: &str, melee_dps: f32, ranged_dps: f32, heal_per_tick: f32, boosted: bool) -> HostileCreepInfo {
+        HostileCreepInfo {
+            position: Position::new(
+                RoomCoordinate::new(25).expect("valid coordinate"),
+                RoomCoordinate::new(25).expect("valid coordinate"),
+                "E0N0".parse().expect("valid room name"),
+            ),
+            owner: owner.to_string(),
+            hits: 1000,
+            hits_max: 1000,
+            melee_dps,
+            ranged_dps,
+            heal_per_tick,
+            tough_hp: 0.0,
+            work_parts: 0,
+            boosted,
+        }
+    }
+
+    #[test]
+    fn classify_threat_snapshot_no_hostiles() {
+        assert_eq!(classify_threat(&[], false, false), ThreatLevel::None);
+        // An invader core with no creeps still registers as Invader.
+        assert_eq!(classify_threat(&[], false, true), ThreatLevel::Invader);
+        // Nukes dominate everything.
+        assert_eq!(classify_threat(&[], true, false), ThreatLevel::NukeIncoming);
+    }
+
+    #[test]
+    fn classify_threat_snapshot_npc_hostiles() {
+        // Source Keepers alone are residents, not a threat.
+        let sk = [hostile(NPC_SOURCE_KEEPER, 120.0, 0.0, 0.0, false)];
+        assert_eq!(classify_threat(&sk, false, false), ThreatLevel::SourceKeeper);
+
+        // Source Keepers plus an invader core escalate to Invader.
+        assert_eq!(classify_threat(&sk, false, true), ThreatLevel::Invader);
+
+        // Invader NPCs classify as Invader.
+        let invader = [hostile(NPC_INVADER, 30.0, 0.0, 0.0, false)];
+        assert_eq!(classify_threat(&invader, false, false), ThreatLevel::Invader);
+    }
+
+    #[test]
+    fn classify_threat_snapshot_player_hostiles() {
+        // Unarmed player creep: scout.
+        let scout = [hostile("somePlayer", 0.0, 0.0, 0.0, false)];
+        assert_eq!(classify_threat(&scout, false, false), ThreatLevel::PlayerScout);
+
+        // Single armed, unboosted player creep: raid.
+        let raid = [hostile("somePlayer", 30.0, 0.0, 0.0, false)];
+        assert_eq!(classify_threat(&raid, false, false), ThreatLevel::PlayerRaid);
+
+        // Any boosted attacker escalates to siege.
+        let boosted = [hostile("somePlayer", 30.0, 0.0, 0.0, true)];
+        assert_eq!(classify_threat(&boosted, false, false), ThreatLevel::PlayerSiege);
+
+        // High sustained DPS with healing support escalates to siege.
+        let sustained = [
+            hostile("somePlayer", 150.0, 60.0, 0.0, false),
+            hostile("somePlayer", 0.0, 0.0, 120.0, false),
+        ];
+        assert_eq!(classify_threat(&sustained, false, false), ThreatLevel::PlayerSiege);
+
+        // Four or more armed player creeps escalate to siege.
+        let four: Vec<_> = (0..4).map(|_| hostile("somePlayer", 30.0, 0.0, 0.0, false)).collect();
+        assert_eq!(classify_threat(&four, false, false), ThreatLevel::PlayerSiege);
     }
 }

@@ -230,9 +230,7 @@ impl<'a> System<'a> for MovementUpdateSystem {
         let cpu_limit = screeps::game::cpu::limit() as f64;
         let bucket = screeps::game::cpu::bucket();
         // Under normal conditions use GCL limit; when bucket is at/above threshold allow burst up to tick_limit.
-        let budget_ceiling = if pathing_features.bucket_burst_threshold == 0
-            || bucket >= pathing_features.bucket_burst_threshold
-        {
+        let budget_ceiling = if pathing_features.bucket_burst_threshold == 0 || bucket >= pathing_features.bucket_burst_threshold {
             tick_limit
         } else {
             cpu_limit
@@ -293,11 +291,7 @@ impl<'a> System<'a> for MovementUpdateSystem {
         // Pathfinding headroom: do not start find_route unless (used + headroom) <= cap (find_route is unbounded).
         // Normal mode: headroom = cap so we never start pathfinding (saves CPU).
         // Burst mode: headroom 80 so we only start when we have 80 CPU headroom, allowing one pathfind and capping blow-through.
-        let pathfinding_headroom = if normal_mode {
-            Some(movement_cap)
-        } else {
-            Some(80.0)
-        };
+        let pathfinding_headroom = if normal_mode { Some(movement_cap) } else { Some(80.0) };
         system.set_pathfinding_headroom(pathfinding_headroom);
 
         let request_count = movement_data.request_count();
@@ -305,11 +299,7 @@ impl<'a> System<'a> for MovementUpdateSystem {
 
         let movement_cpu_used = get_cpu() - movement_start_cpu;
         if movement_cpu_used > 80.0 {
-            log::info!(
-                "movement: {:.1} CPU, {} requests",
-                movement_cpu_used,
-                request_count
-            );
+            log::info!("movement: {:.1} CPU, {} requests", movement_cpu_used, request_count);
         }
 
         *data.movement_results = results;

@@ -125,7 +125,11 @@ pub trait Mission {
 
     fn owner_complete(&mut self, owner: Entity);
 
-    fn get_room(&self) -> Entity;
+    /// The room entity this mission is associated with, used by cleanup to
+    /// remove the mission from the room's mission list. `None` means the
+    /// mission is fully degraded and has no room to clean up (callers treat
+    /// it as a no-op).
+    fn get_room(&self) -> Option<Entity>;
 
     fn get_children(&self) -> Vec<Entity> {
         Vec::new()

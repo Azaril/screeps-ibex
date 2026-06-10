@@ -151,3 +151,70 @@ impl<'a> System<'a> for RepairQueueClearSystem {
         queue.clear();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::remoteobjectid::RemoteObjectId;
+    use screeps::RoomCoordinate;
+
+    // Pin: the HP-fraction tie-breaker guards `max_hits == 0` (treated as
+    // fraction 1.0, i.e. "not damaged") instead of dividing by zero. The
+    // review's RepairQueue-NaN concern was REFUTED because of this guard --
+    // lock it so it stays.
+
+    fn test_room() -> RoomName {
+        "E0N0".parse().expect("valid room name")
+    }
+
+    fn test_request(priority: RepairPriority, current_hits: u32, max_hits: u32, id_hex: &str) -> RepairRequest {
+        let room = test_room();
+        let pos = Position::new(
+            RoomCoordinate::new(25).expect("valid coordinate"),
+            RoomCoordinate::new(25).expect("valid coordinate"),
+            room,
+        );
+
+        RepairRequest {
+            structure_id: RemoteStructureIdentifier::Container(RemoteObjectId::new_from_components(
+                id_hex.parse().expect("valid object id"),
+                pos,
+            )),
+            priority,
+            current_hits,
+            max_hits,
+            room,
+        }
+    }
+
+    #[test]
+    fn get_best_target_handles_zero_max_hits_without_panic() {
+        let mut queue = RepairQueue::default();
+        queue.request_repair(test_request(RepairPriority::Medium, 0, 0, "5bbcab9099d4e7f1f9fb1be1"));
+
+        let best = queue.get_best_target(test_room(), None).expect("expected a target");
+        assert_eq!(best.max_hits, 0);
+    }
+
+    #[test]
+    fn get_best_target_prefers_damaged_over_zero_max_hits() {
+        let mut queue = RepairQueue::default();
+        // Same priority: the zero-max-hits entry scores as fraction 1.0
+        // ("undamaged") and must lose to a genuinely damaged structure.
+        queue.request_repair(test_request(RepairPriority::Medium, 0, 0, "5bbcab9099d4e7f1f9fb1be1"));
+        queue.request_repair(test_request(RepairPriority::Medium, 50, 100, "5bbcab9099d4e7f1f9fb1be2"));
+
+        let best = queue.get_best_target(test_room(), None).expect("expected a target");
+        assert_eq!(best.max_hits, 100);
+    }
+
+    #[test]
+    fn get_best_target_orders_by_priority_first() {
+        let mut queue = RepairQueue::default();
+        queue.request_repair(test_request(RepairPriority::Low, 1, 100, "5bbcab9099d4e7f1f9fb1be1"));
+        queue.request_repair(test_request(RepairPriority::Critical, 99, 100, "5bbcab9099d4e7f1f9fb1be2"));
+
+        let best = queue.get_best_target(test_room(), None).expect("expected a target");
+        assert_eq!(best.priority, RepairPriority::Critical);
+    }
+}

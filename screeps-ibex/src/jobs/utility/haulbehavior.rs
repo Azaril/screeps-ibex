@@ -23,12 +23,8 @@ pub fn get_new_pickup_state_fill_resource<F, R>(
 where
     F: Fn(TransferWithdrawTicket) -> R,
 {
-    let capacity = creep.store().get_capacity(None);
-    let store_types = creep.store().store_types();
-    let used_capacity = store_types.iter().map(|r| creep.store().get_used_capacity(Some(*r))).sum::<u32>();
-    //TODO: Fix this when double resource counting bug is fixed.
-    //let used_capacity = creep.store().get_used_capacity(None);
-    let free_capacity = capacity - used_capacity;
+    // Safe on general stores (engine-mechanics folklore row 26).
+    let free_capacity = creep.store().get_free_capacity(None).max(0) as u32;
 
     if free_capacity > 0 {
         let mut desired_resources = HashMap::new();
@@ -75,12 +71,8 @@ pub fn get_new_nearby_pickup_state_fill_resource<F, R>(
 where
     F: Fn(TransferWithdrawTicket) -> R,
 {
-    let capacity = creep.store().get_capacity(None);
-    let store_types = creep.store().store_types();
-    let used_capacity = store_types.iter().map(|r| creep.store().get_used_capacity(Some(*r))).sum::<u32>();
-    //TODO: Fix this when double resource counting bug is fixed.
-    //let used_capacity = creep.store().get_used_capacity(None);
-    let free_capacity = capacity - used_capacity;
+    // Safe on general stores (engine-mechanics folklore row 26).
+    let free_capacity = creep.store().get_free_capacity(None).max(0) as u32;
 
     if free_capacity > 0 {
         let mut desired_resources = HashMap::new();
@@ -383,11 +375,8 @@ where
     F: Fn(TransferWithdrawTicket, Vec<TransferDepositTicket>) -> R,
     TF: Fn(&TransferTarget) -> bool + Copy,
 {
-    let capacity = creep.store().get_capacity(None);
-    let store_types = creep.store().store_types();
-    let used_capacity = store_types.iter().map(|r| creep.store().get_used_capacity(Some(*r))).sum::<u32>();
-    //let used_capacity = creep.store().get_used_capacity(None);
-    let available_capacity = capacity - used_capacity;
+    // Safe on general stores (engine-mechanics folklore row 26).
+    let available_capacity = creep.store().get_free_capacity(None).max(0) as u32;
 
     get_new_pickup_and_delivery_state(
         creep,
@@ -474,12 +463,8 @@ where
             room_data: tick_context.system_data.room_data,
         };
 
-        let capacity = creep.store().get_capacity(None);
-        let store_types = creep.store().store_types();
-        let used_capacity = store_types.iter().map(|r| creep.store().get_used_capacity(Some(*r))).sum::<u32>();
-        //TODO: Fix this when double resource counting bug is fixed.
-        //let used_capacity = creep.store().get_used_capacity(None);
-        let free_capacity = capacity - used_capacity;
+        // Safe on general stores (engine-mechanics folklore row 26).
+        let free_capacity = creep.store().get_free_capacity(None).max(0) as u32;
 
         let mut available_capacity = TransferCapacity::Finite(free_capacity);
 

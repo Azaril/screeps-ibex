@@ -576,7 +576,7 @@ impl Operation for AttackOperation {
         // Recon runs every tick (cheap: just requests visibility and checks data).
         // Prepare and Execute use the 20-tick cadence since they involve heavier work.
         let is_recon = self.phase == AttackPhase::Recon;
-        let should_run = is_recon || self.last_run.map(|t| game::time() - t >= 20).unwrap_or(true);
+        let should_run = is_recon || self.last_run.map(|t| game::time().saturating_sub(t) >= 20).unwrap_or(true);
         if !should_run {
             return Ok(OperationResult::Running);
         }
@@ -605,14 +605,13 @@ impl Operation for AttackOperation {
                     let room_entity = system_data.mapping.get_room(&self.target_room);
 
                     // Prefer live visibility for the most accurate intel.
-                    let have_live_intel = room_entity
+                    // Bind the room data in the condition itself so the
+                    // guard and the access cannot drift apart (IBEX-019).
+                    let live_room_data = room_entity
                         .and_then(|e| system_data.room_data.get(e))
-                        .and_then(|rd| rd.get_dynamic_visibility_data())
-                        .map(|d| d.visible())
-                        .unwrap_or(false);
+                        .filter(|rd| rd.get_dynamic_visibility_data().map(|d| d.visible()).unwrap_or(false));
 
-                    if have_live_intel {
-                        let room_data = system_data.room_data.get(room_entity.unwrap()).unwrap();
+                    if let Some(room_data) = live_room_data {
                         self.analyze_target(room_data);
                         self.phase = AttackPhase::Prepare;
                         // Fall through to Prepare in the same tick.
@@ -634,7 +633,7 @@ impl Operation for AttackOperation {
 
                     // Recon timeout handling: don't blindly attack.
                     if let Some(recon_tick) = self.recon_requested {
-                        if game::time() - recon_tick > 200 {
+                        if game::time().saturating_sub(recon_tick) > 200 {
                             // For manual flags, keep waiting -- the player wants this.
                             // For automated targets, abort if we can't get intel.
                             match &self.attack_reason {

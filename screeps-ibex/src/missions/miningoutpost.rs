@@ -683,8 +683,8 @@ impl Mission for MiningOutpostMission {
         self.owner.take();
     }
 
-    fn get_room(&self) -> Entity {
-        self.context.outpost_room_data
+    fn get_room(&self) -> Option<Entity> {
+        Some(self.context.outpost_room_data)
     }
 
     fn get_children(&self) -> Vec<Entity> {

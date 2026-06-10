@@ -357,3 +357,54 @@ pub fn decode_buffer_from_string(data: &str) -> Result<Vec<u8>, String> {
 
     Ok(decompressed_data)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Pins for the pure bincode -> gzip -> base64 helpers used by the segment
+    // serialization pipeline. These lock the encode/decode contract so format
+    // work (ADR 0002) starts from a verified baseline.
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    struct TestPayload {
+        id: u32,
+        name: String,
+        values: Vec<u16>,
+        flag: Option<bool>,
+    }
+
+    #[test]
+    fn encode_decode_round_trips_typed_data() {
+        let original = TestPayload {
+            id: 42,
+            name: "round-trip".to_string(),
+            values: vec![0, 1, 2, 65535],
+            flag: Some(true),
+        };
+
+        let encoded = encode_to_string(original.clone()).expect("encode failed");
+        let decoded: TestPayload = decode_from_string(&encoded).expect("decode failed");
+
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn encode_decode_round_trips_raw_buffer() {
+        let buffer: Vec<u8> = (0..=255u8).cycle().take(4096).collect();
+
+        let encoded = encode_buffer_to_string(&buffer).expect("encode failed");
+        // The segment chunking in game_loop relies on single-byte characters.
+        assert!(encoded.is_ascii());
+
+        let decoded = decode_buffer_from_string(&encoded).expect("decode failed");
+        assert_eq!(decoded, buffer);
+    }
+
+    #[test]
+    fn decode_rejects_invalid_input() {
+        assert!(decode_buffer_from_string("!!! not base64 !!!").is_err());
+        // Valid base64, but not gzip data.
+        assert!(decode_buffer_from_string(&BASE64_STANDARD.encode(b"not gzip")).is_err());
+    }
+}

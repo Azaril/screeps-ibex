@@ -91,12 +91,7 @@ impl MoveToRoom {
 
         if let Some(ref orders) = tick_orders {
             if matches!(orders.movement, TickMovement::Formation) {
-                if let Some(target_tile) = get_formation_target(
-                    state_context.squad_entity,
-                    creep_entity,
-                    tick_context,
-                    creep_pos,
-                ) {
+                if let Some(target_tile) = get_formation_target(state_context.squad_entity, creep_entity, tick_context, creep_pos) {
                     tick_context
                         .runtime_data
                         .movement
@@ -164,7 +159,7 @@ impl CombatResponse {
 
         let timed_out = state_context
             .combat_response_start
-            .map(|start| game::time() - start > COMBAT_RESPONSE_TIMEOUT)
+            .map(|start| game::time().saturating_sub(start) > COMBAT_RESPONSE_TIMEOUT)
             .unwrap_or(false);
 
         if !threats_nearby || timed_out {
@@ -203,14 +198,8 @@ impl CombatResponse {
 
         // Pipeline B: Ranged attack (prefer focus target).
         if has_active_part(creep, Part::RangedAttack) {
-            let in_range_3_count = hostiles
-                .iter()
-                .filter(|c| creep_pos.get_range_to(c.pos()) <= 3)
-                .count();
-            let in_range_1_count = hostiles
-                .iter()
-                .filter(|c| creep_pos.get_range_to(c.pos()) <= 1)
-                .count();
+            let in_range_3_count = hostiles.iter().filter(|c| creep_pos.get_range_to(c.pos()) <= 3).count();
+            let in_range_1_count = hostiles.iter().filter(|c| creep_pos.get_range_to(c.pos()) <= 1).count();
 
             if in_range_1_count >= 3 || (in_range_3_count >= 3 && in_range_1_count >= 1) {
                 let _ = creep.ranged_mass_attack();
@@ -238,10 +227,7 @@ impl CombatResponse {
 
         // Pipeline C: Heal -- resolve assigned target by ID, else best nearby.
         if has_active_part(creep, Part::Heal) {
-            let heal_target = tick_orders
-                .as_ref()
-                .and_then(|o| o.heal_target)
-                .and_then(|id| id.resolve());
+            let heal_target = tick_orders.as_ref().and_then(|o| o.heal_target).and_then(|id| id.resolve());
             if let Some(target) = heal_target {
                 let range = creep_pos.get_range_to(target.pos());
                 if range <= 1 {
@@ -366,19 +352,11 @@ impl Engaged {
 
     // ── Ordered attack ──
 
-    fn execute_attack_with_orders(
-        creep: &Creep,
-        creep_pos: Position,
-        orders: &TickOrders,
-        tick_context: &mut JobTickContext,
-    ) {
+    fn execute_attack_with_orders(creep: &Creep, creep_pos: Position, orders: &TickOrders, tick_context: &mut JobTickContext) {
         let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
 
         // Resolve the focus target from the AttackTarget enum.
-        let focus_creep: Option<Creep> = orders
-            .attack_target
-            .as_ref()
-            .and_then(|t| t.resolve_creep());
+        let focus_creep: Option<Creep> = orders.attack_target.as_ref().and_then(|t| t.resolve_creep());
 
         // Pipeline A: Melee attack adjacent hostile -- prefer focus target.
         if has_active_part(creep, Part::Attack) {
@@ -404,14 +382,8 @@ impl Engaged {
 
         // Pipeline B: Ranged attack -- focus fire the squad's designated target.
         if has_active_part(creep, Part::RangedAttack) {
-            let in_range_3_count = hostiles
-                .iter()
-                .filter(|c| creep_pos.get_range_to(c.pos()) <= 3)
-                .count();
-            let in_range_1_count = hostiles
-                .iter()
-                .filter(|c| creep_pos.get_range_to(c.pos()) <= 1)
-                .count();
+            let in_range_3_count = hostiles.iter().filter(|c| creep_pos.get_range_to(c.pos()) <= 3).count();
+            let in_range_1_count = hostiles.iter().filter(|c| creep_pos.get_range_to(c.pos()) <= 1).count();
 
             if in_range_3_count > 0 {
                 // Mass attack when multiple hostiles are stacked on us.
@@ -461,12 +433,7 @@ impl Engaged {
 
     // ── Ordered heal ──
 
-    fn execute_heal_with_orders(
-        creep: &Creep,
-        creep_pos: Position,
-        orders: &TickOrders,
-        tick_context: &mut JobTickContext,
-    ) {
+    fn execute_heal_with_orders(creep: &Creep, creep_pos: Position, orders: &TickOrders, tick_context: &mut JobTickContext) {
         if !has_active_part(creep, Part::Heal) {
             return;
         }
@@ -683,10 +650,7 @@ impl Retreating {
 
         // Pipeline C: Heal -- resolve assigned target by ID, else best nearby.
         if has_active_part(creep, Part::Heal) {
-            let heal_target = tick_orders
-                .as_ref()
-                .and_then(|o| o.heal_target)
-                .and_then(|id| id.resolve());
+            let heal_target = tick_orders.as_ref().and_then(|o| o.heal_target).and_then(|id| id.resolve());
             if let Some(target) = heal_target {
                 let range = creep_pos.get_range_to(target.pos());
                 if range <= 1 {
@@ -788,12 +752,7 @@ fn execute_formation_movement(
 ) {
     let creep_pos = tick_context.runtime_data.owner.pos();
     let moved = (|| {
-        let target_tile = get_formation_target(
-            state_context.squad_entity,
-            creep_entity,
-            tick_context,
-            creep_pos,
-        )?;
+        let target_tile = get_formation_target(state_context.squad_entity, creep_entity, tick_context, creep_pos)?;
         tick_context
             .runtime_data
             .movement

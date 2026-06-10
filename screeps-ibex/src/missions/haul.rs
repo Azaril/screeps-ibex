@@ -129,8 +129,8 @@ impl Mission for HaulMission {
         self.owner.take();
     }
 
-    fn get_room(&self) -> Entity {
-        self.room_data
+    fn get_room(&self) -> Option<Entity> {
+        Some(self.room_data)
     }
 
     fn remove_creep(&mut self, entity: Entity) {
@@ -187,7 +187,7 @@ impl Mission for HaulMission {
         let pickup_rooms = &[room_data.name];
 
         let mut stats = self.stats.access(
-            |s| game::time() - s.last_updated >= 20 && room_visible,
+            |s| game::time().saturating_sub(s.last_updated) >= 20 && room_visible,
             || Self::update_stats(transfer_queue, &transfer_queue_data, pickup_rooms, &home_room_names),
         );
         let stats = stats.get();

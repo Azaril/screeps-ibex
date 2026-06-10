@@ -351,8 +351,8 @@ impl Mission for ColonyMission {
         self.owner.take();
     }
 
-    fn get_room(&self) -> Entity {
-        self.context.room_data
+    fn get_room(&self) -> Option<Entity> {
+        Some(self.context.room_data)
     }
 
     fn get_children(&self) -> Vec<Entity> {

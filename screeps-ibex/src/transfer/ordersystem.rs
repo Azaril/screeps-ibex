@@ -267,6 +267,14 @@ impl OrderQueueSystem {
                                     if transferable_units >= params.minimum_sale_amount {
                                         let transfer_cost = (energy_transfer_cost_per_unit * transferable_units as f64).ceil();
 
+                                        // Tripwire (IBEX-046): the comparator below coalesces
+                                        // NaN to Equal; assert finiteness at the source instead.
+                                        debug_assert!(transfer_cost.is_finite(), "transfer cost not finite: {transfer_cost}");
+                                        debug_assert!(
+                                            effective_price_per_unit.is_finite(),
+                                            "effective price not finite: {effective_price_per_unit}"
+                                        );
+
                                         return Some((o.id(), o.price(), params.resource, transfer_amount, transfer_cost, effective_price_per_unit));
                                     }
                                 }

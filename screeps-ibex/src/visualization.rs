@@ -8,8 +8,8 @@
 
 use crate::creep::CreepOwner;
 use crate::jobs::data::JobData;
-use crate::missions::data::MissionData;
 use crate::military::squad::SquadContext;
+use crate::missions::data::MissionData;
 use crate::operations::data::OperationData;
 use crate::room::data::RoomData;
 use crate::spawnsystem::SpawnQueue;

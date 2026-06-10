@@ -108,14 +108,8 @@ impl Idle {
             }
 
             if let Some(container) = state_context.container_target.and_then(|id| id.resolve()) {
-                let capacity = container.store().get_capacity(None);
-                let store_types = container.store().store_types();
-                let used_capacity = store_types
-                    .iter()
-                    .map(|r| container.store().get_used_capacity(Some(*r)))
-                    .sum::<u32>();
-
-                if used_capacity < capacity {
+                // Safe on general stores (engine-mechanics folklore row 26).
+                if container.store().get_free_capacity(None) > 0 {
                     return Some(LinkMineState::deposit_container());
                 }
             }

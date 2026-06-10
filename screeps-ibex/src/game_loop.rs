@@ -24,6 +24,7 @@ use crate::room::roomplansystem::*;
 use crate::room::roomplanvisualizesystem::*;
 use crate::room::updateroomsystem::*;
 use crate::room::visibilitysystem::*;
+use crate::segments::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use crate::stats_history::StatsHistorySystem;
@@ -207,12 +208,14 @@ fn repair_entity_integrity(world: &mut World) {
                 }
             }
 
-            // Room
-            let room = mission.get_room();
-            if !is_valid(room) {
-                error!("INTEGRITY: dead room {:?} on mission {:?}, scheduling deletion", room, entity);
-                missions_to_delete.push(entity);
-                continue;
+            // Room (None = degraded mission with no room reference; the
+            // mission's own failure path handles its teardown).
+            if let Some(room) = mission.get_room() {
+                if !is_valid(room) {
+                    error!("INTEGRITY: dead room {:?} on mission {:?}, scheduling deletion", room, entity);
+                    missions_to_delete.push(entity);
+                    continue;
+                }
             }
 
             // Children
@@ -431,6 +434,26 @@ fn serialize_world(world: &World, segments: &[u32]) {
                 }
             };
 
+            // Chunk-count watermark (IBEX-013/014): track how close the
+            // encoded payload is to exhausting the component segments so the
+            // 50..=54 shrink stays demonstrably safe as the empire grows.
+            let chunk_count = encoded_data.len().div_ceil(1024 * 50).max(1);
+            if chunk_count + 1 >= self.segments.len() {
+                warn!(
+                    "Serialized world state near segment capacity: {} of {} chunk(s) used ({} encoded bytes)",
+                    chunk_count,
+                    self.segments.len(),
+                    encoded_data.len()
+                );
+            } else {
+                debug!(
+                    "Serialized world state: {} of {} chunk(s) used ({} encoded bytes)",
+                    chunk_count,
+                    self.segments.len(),
+                    encoded_data.len()
+                );
+            }
+
             let mut segments = self.segments.iter();
 
             for chunk in encoded_data.as_bytes().chunks(1024 * 50) {
@@ -550,9 +573,6 @@ thread_local! {
     static ENVIRONMENT: RefCell<Option<GameEnvironment>> = const { RefCell::new(None) };
 }
 
-/// Segment IDs used for ECS component serialization (world state).
-const COMPONENT_SEGMENTS: &[u32] = &[50, 51, 52, 53, 54, 55];
-
 fn create_environment() -> GameEnvironment {
     info!("Initializing game environment");
 
@@ -579,11 +599,9 @@ fn create_environment() -> GameEnvironment {
     // Stats history (visualization): persisted across VM restarts. Load
     // callback deserializes the data into a world resource on first use.
     arbiter.register(
-        SegmentRequirement::new("stats_history", vec![crate::stats_history::STATS_HISTORY_SEGMENT]).on_load(Box::new(
-            |world: &mut World| {
-                crate::stats_history::load_stats_history(world);
-            },
-        )),
+        SegmentRequirement::new("stats_history", vec![STATS_HISTORY_SEGMENT]).on_load(Box::new(|world: &mut World| {
+            crate::stats_history::load_stats_history(world);
+        })),
     );
 
     world.insert(arbiter);

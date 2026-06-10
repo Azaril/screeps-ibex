@@ -32,6 +32,10 @@ pub struct SpawnRequest {
 
 impl SpawnRequest {
     pub fn new(description: String, body: &[Part], priority: f32, token: Option<SpawnToken>, callback: SpawnQueueCallback) -> SpawnRequest {
+        // Tripwire (IBEX-046): the queue comparator coalesces NaN to Equal;
+        // assert finiteness where the priority is produced instead.
+        debug_assert!(priority.is_finite(), "spawn request priority not finite: {priority}");
+
         SpawnRequest {
             description,
             body: body.to_vec(),
@@ -96,13 +100,10 @@ impl SpawnQueue {
 
     /// Submit a renew request for a creep in the given room. Ephemeral; cleared when queue is processed.
     pub fn request_renew(&mut self, room: Entity, creep_entity: Entity, ticks_to_live: u32) {
-        self.renew_requests
-            .entry(room)
-            .or_default()
-            .push(RenewRequest {
-                creep_entity,
-                ticks_to_live,
-            });
+        self.renew_requests.entry(room).or_default().push(RenewRequest {
+            creep_entity,
+            ticks_to_live,
+        });
     }
 
     pub fn clear(&mut self) {
@@ -209,7 +210,10 @@ impl SpawnQueueSystem {
                     None => continue,
                 };
                 let creep_pos = creep.pos();
-                if let Some(idx) = spawns.iter().position(|s| s.is_active() && s.spawning().is_none() && creep_pos.get_range_to(s.pos()) <= 1) {
+                if let Some(idx) = spawns
+                    .iter()
+                    .position(|s| s.is_active() && s.spawning().is_none() && creep_pos.get_range_to(s.pos()) <= 1)
+                {
                     match spawns[idx].renew_creep(&creep) {
                         Ok(()) => {
                             debug!(
@@ -288,7 +292,12 @@ impl<'a> System<'a> for SpawnQueueSystem {
 
         for room_entity in all_rooms {
             let requests = data.spawn_queue.requests.get(&room_entity).map(|v| v.as_slice()).unwrap_or(&[]);
-            let renew_requests = data.spawn_queue.renew_requests.get(&room_entity).map(|v| v.as_slice()).unwrap_or(&[]);
+            let renew_requests = data
+                .spawn_queue
+                .renew_requests
+                .get(&room_entity)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
             match Self::process_room_spawns(&data, room_entity, requests, renew_requests, &mut spawned_tokens) {
                 Ok(()) => {}
                 Err(err) => warn!("Failed spawning for room: {}", err),
@@ -306,5 +315,77 @@ impl<'a> System<'a> for SpawnQueueSystem {
         *data.spawn_queue_snapshot = snapshot;
 
         data.spawn_queue.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_request(priority: f32) -> SpawnRequest {
+        SpawnRequest::new(format!("test-{}", priority), &[Part::Move], priority, None, Box::new(|_, _| {}))
+    }
+
+    /// Pin: the spawn queue orders requests DESCENDING by priority (highest
+    /// first). `process_room_spawns` consumes requests front-to-back, so the
+    /// front of the vec must be the most important creep.
+    ///
+    /// WHY the comparator in `SpawnQueue::request` must not be "fixed": it
+    /// intentionally passes the *new* request's priority as the left-hand
+    /// side of `partial_cmp` (the reverse of a conventional ascending
+    /// `binary_search_by` probe comparison), which yields a descending
+    /// insertion order. The original review flagged this as an inverted
+    /// comparator; that finding was REFUTED (see
+    /// docs/reviews/ibex-review-report.md, spawn-ordering seed). Rewriting it
+    /// as a "natural" ascending comparison would invert spawn priorities so
+    /// the least important creep spawns first.
+    #[test]
+    fn spawn_queue_orders_requests_descending_by_priority() {
+        let mut world = specs::World::new();
+        let room = world.create_entity().build();
+
+        let mut queue = SpawnQueue::default();
+        queue.request(room, test_request(0.0));
+        queue.request(room, test_request(100.0));
+        queue.request(room, test_request(50.0));
+
+        let priorities: Vec<f32> = queue
+            .iter_requests()
+            .find(|(entity, _)| **entity == room)
+            .map(|(_, requests)| requests.iter().map(|r| r.priority()).collect())
+            .expect("expected requests for room");
+
+        assert_eq!(priorities, vec![100.0, 50.0, 0.0]);
+    }
+
+    /// Pin (IBEX-046): non-finite priorities trip the debug assert at the
+    /// request source in debug builds (tests/sim).
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "priority not finite")]
+    fn spawn_request_rejects_non_finite_priority_in_debug() {
+        let _ = test_request(f32::NAN);
+    }
+
+    /// Pin: equal-priority requests stay adjacent and do not disturb the
+    /// descending order around them.
+    #[test]
+    fn spawn_queue_keeps_descending_order_with_equal_priorities() {
+        let mut world = specs::World::new();
+        let room = world.create_entity().build();
+
+        let mut queue = SpawnQueue::default();
+        queue.request(room, test_request(25.0));
+        queue.request(room, test_request(75.0));
+        queue.request(room, test_request(25.0));
+        queue.request(room, test_request(100.0));
+
+        let priorities: Vec<f32> = queue
+            .iter_requests()
+            .find(|(entity, _)| **entity == room)
+            .map(|(_, requests)| requests.iter().map(|r| r.priority()).collect())
+            .expect("expected requests for room");
+
+        assert_eq!(priorities, vec![100.0, 75.0, 25.0, 25.0]);
     }
 }

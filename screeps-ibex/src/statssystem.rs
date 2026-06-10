@@ -1,5 +1,6 @@
 use super::memorysystem::*;
 use crate::room::data::*;
+use crate::segments::LIVE_STATS_SEGMENT;
 use screeps::*;
 use serde::ser::SerializeMap;
 use serde::*;
@@ -337,15 +338,15 @@ impl<'a> System<'a> for StatsSystem {
     type SystemData = StatsSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        data.memory_arbiter.request(99);
+        data.memory_arbiter.request(LIVE_STATS_SEGMENT);
 
-        if data.memory_arbiter.is_active(99) {
+        if data.memory_arbiter.is_active(LIVE_STATS_SEGMENT) {
             let stats = Stats {
                 shard: Self::get_shards_stats(&data),
             };
 
             if let Ok(stats_data) = serde_json::to_string(&stats) {
-                data.memory_arbiter.set(99, &stats_data);
+                data.memory_arbiter.set(LIVE_STATS_SEGMENT, &stats_data);
             }
         }
     }

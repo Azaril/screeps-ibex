@@ -74,8 +74,8 @@ impl Mission for WallRepairMission {
         self.owner.take();
     }
 
-    fn get_room(&self) -> Entity {
-        self.room_data
+    fn get_room(&self) -> Option<Entity> {
+        Some(self.room_data)
     }
 
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
@@ -164,10 +164,7 @@ impl Mission for WallRepairMission {
             None => return Ok(MissionResult::Running),
         };
 
-        let has_hostiles = room_data
-            .get_creeps()
-            .map(|c| !c.hostile().is_empty())
-            .unwrap_or(false);
+        let has_hostiles = room_data.get_creeps().map(|c| !c.hostile().is_empty()).unwrap_or(false);
 
         if has_hostiles {
             self.ticks_since_hostiles = 0;

@@ -302,6 +302,10 @@ pub struct VisibilityRequest {
 
 impl VisibilityRequest {
     pub fn new(room_name: RoomName, priority: f32, allowed_types: VisibilityRequestFlags) -> Self {
+        // Tripwire (IBEX-046): the queue comparator coalesces NaN to Equal;
+        // assert finiteness where the priority is produced instead.
+        debug_assert!(priority.is_finite(), "visibility request priority not finite: {priority}");
+
         Self {
             room_name,
             priority,
@@ -314,12 +318,37 @@ impl VisibilityRequest {
     /// scouts that are already alive — the `ScoutOperation` will not spawn new
     /// missions for them.
     pub fn new_opportunistic(room_name: RoomName, priority: f32, allowed_types: VisibilityRequestFlags) -> Self {
+        debug_assert!(priority.is_finite(), "visibility request priority not finite: {priority}");
+
         Self {
             room_name,
             priority,
             allowed_types,
             opportunistic: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pin (IBEX-046): non-finite priorities trip the debug assert at the
+    /// request source in debug builds (tests/sim).
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "priority not finite")]
+    fn visibility_request_rejects_non_finite_priority_in_debug() {
+        let room: RoomName = "E0N0".parse().expect("valid room name");
+        let _ = VisibilityRequest::new(room, f32::NAN, VisibilityRequestFlags::ALL);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "priority not finite")]
+    fn opportunistic_visibility_request_rejects_non_finite_priority_in_debug() {
+        let room: RoomName = "E0N0".parse().expect("valid room name");
+        let _ = VisibilityRequest::new_opportunistic(room, f32::INFINITY, VisibilityRequestFlags::SCOUT);
     }
 }
 

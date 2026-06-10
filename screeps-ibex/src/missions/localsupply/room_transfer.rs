@@ -3,7 +3,6 @@ use crate::missions::data::*;
 use crate::missions::missionsystem::*;
 use crate::remoteobjectid::*;
 use crate::serialize::*;
-use crate::store::*;
 use crate::transfer::transfersystem::*;
 use screeps::*;
 use screeps_cache::*;
@@ -88,7 +87,7 @@ impl RoomTransferMission {
 
         let structure_data_rc = system_data.supply_structure_cache.get_room(self.room_name);
         let mut structure_data = structure_data_rc.maybe_access(
-            |d| game::time() - d.last_updated >= 10 && has_visibility,
+            |d| game::time().saturating_sub(d.last_updated) >= 10 && has_visibility,
             || create_structure_data(room_data),
         );
         let structure_data = structure_data.get().ok_or("Expected structure data")?;
@@ -164,7 +163,7 @@ impl RoomTransferMission {
             let has_visibility = room_data.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false);
 
             let mut structure_data = structure_data.maybe_access(
-                |d| game::time() - d.last_updated >= 10 && has_visibility,
+                |d| game::time().saturating_sub(d.last_updated) >= 10 && has_visibility,
                 || create_structure_data(room_data),
             );
             let Some(structure_data) = structure_data.get() else {
@@ -192,7 +191,7 @@ impl RoomTransferMission {
             let has_visibility = room_data.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false);
 
             let mut structure_data = structure_data.maybe_access(
-                |d| game::time() - d.last_updated >= 10 && has_visibility,
+                |d| game::time().saturating_sub(d.last_updated) >= 10 && has_visibility,
                 || create_structure_data(room_data),
             );
             let Some(structure_data) = structure_data.get() else {
@@ -300,7 +299,8 @@ impl RoomTransferMission {
 
         for container_id in storage_containers {
             if let Some(container) = container_id.resolve() {
-                let container_free_capacity = container.expensive_store_free_capacity();
+                // Safe on general stores (engine-mechanics folklore row 26).
+                let container_free_capacity = container.store().get_free_capacity(None).max(0) as u32;
                 if container_free_capacity > 0 {
                     let transfer_request = TransferDepositRequest::new(
                         TransferTarget::Container(*container_id),
@@ -596,8 +596,8 @@ impl Mission for RoomTransferMission {
         self.owner.take();
     }
 
-    fn get_room(&self) -> Entity {
-        self.room_data
+    fn get_room(&self) -> Option<Entity> {
+        Some(self.room_data)
     }
 
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {

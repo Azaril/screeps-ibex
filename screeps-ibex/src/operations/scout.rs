@@ -127,7 +127,6 @@ impl Operation for ScoutOperation {
         // always queued for scouting.
         Self::inject_flag_scout_requests(system_data.visibility);
 
-
         // Check if there are scout-eligible entries that need servicing.
         if !system_data.visibility.has_unclaimed_scout_eligible() {
             return Ok(OperationResult::Running);
@@ -149,7 +148,7 @@ impl Operation for ScoutOperation {
         for mission_entity in self.scout_missions.iter() {
             if let Some(mission) = system_data.mission_data.get(*mission_entity) {
                 let room_entity = mission.as_mission().get_room();
-                if let Some(room_data) = system_data.room_data.get(room_entity) {
+                if let Some(room_data) = room_entity.and_then(|e| system_data.room_data.get(e)) {
                     rooms_with_missions.insert(room_data.name);
                 }
             }

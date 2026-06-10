@@ -64,11 +64,7 @@ pub fn drain_heal_parts_for_dps(dps: f32) -> u32 {
 /// Tower DPS at a typical drain position (room edge, north side).
 /// Drains sit at the edge to maximize range from towers; this approximates that.
 pub fn tower_dps_at_room_edge(room_name: RoomName, tower_positions: &[Position]) -> f32 {
-    let edge_pos = Position::new(
-        RoomCoordinate::new(25).unwrap(),
-        RoomCoordinate::new(0).unwrap(),
-        room_name,
-    );
+    let edge_pos = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(0).unwrap(), room_name);
     total_tower_damage(tower_positions, edge_pos)
 }
 

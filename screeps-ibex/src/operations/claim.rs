@@ -657,7 +657,7 @@ impl ClaimOperation {
             for mission_entity in self.claim_missions.iter() {
                 if let Some(mission) = system_data.mission_data.get(*mission_entity) {
                     let target_entity = mission.as_mission().get_room();
-                    if let Some(target_room) = system_data.room_data.get(target_entity) {
+                    if let Some(target_room) = target_entity.and_then(|e| system_data.room_data.get(e)) {
                         let home_names: Vec<RoomName> = mission
                             .as_mission_type::<ClaimMission>()
                             .map(|cm| {
@@ -800,7 +800,7 @@ impl Operation for ClaimOperation {
         for mission_entity in self.claim_missions.iter() {
             if let Some(mission) = ctx.mission_data.get(*mission_entity) {
                 let room_entity = mission.as_mission().get_room();
-                if let Some(room) = ctx.room_data.get(room_entity) {
+                if let Some(room) = room_entity.and_then(|e| ctx.room_data.get(e)) {
                     let home_names: Vec<String> = mission
                         .as_mission_type::<ClaimMission>()
                         .map(|cm| {

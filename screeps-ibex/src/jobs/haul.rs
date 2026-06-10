@@ -163,12 +163,9 @@ impl Pickup {
                 .filter_map(|e| tick_context.system_data.room_data.get(*e))
                 .collect_vec();
 
-            let capacity = creep.store().get_capacity(None);
-            let store_types = creep.store().store_types();
-            let used_capacity = store_types.iter().map(|r| creep.store().get_used_capacity(Some(*r))).sum::<u32>();
-            //TODO: Fix this when double resource counting bug is fixed.
-            //let used_capacity = creep.store().get_used_capacity(None);
-            let free_capacity = capacity - used_capacity;
+            // get_used_capacity(None) is a memoized single sum in the current
+            // engine -- safe on general stores (engine-mechanics folklore row 26).
+            let free_capacity = creep.store().get_free_capacity(None).max(0) as u32;
 
             let mut available_capacity = TransferCapacity::Finite(free_capacity);
 

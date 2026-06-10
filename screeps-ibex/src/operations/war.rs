@@ -102,6 +102,20 @@ impl DefenseEscalation {
 // WarOperation
 // ---------------------------------------------------------------------------
 
+/// War's own bookkeeping for one active child AttackOperation: the entity,
+/// its target room, and the reason it was launched.
+///
+/// The reason is recorded HERE, at launch time, because war is the module
+/// that decided it (AGENTS.md §8: keep the information with its owner) --
+/// concurrency gates like the power-bank cap filter this list instead of
+/// asking the generic operation surface what kind of attack an entity is.
+#[derive(Clone, ConvertSaveload)]
+pub struct ActiveAttack {
+    entity: Entity,
+    room: RoomName,
+    reason: super::attack::AttackReason,
+}
+
 /// Unified military coordinator singleton. Manages both offense
 /// (AttackOperations) and defense (SquadDefenseMission, NukeDefenseMission,
 /// SafeModeMission, WallRepairMission).
@@ -119,10 +133,8 @@ pub struct WarOperation {
     last_offense_tick: Option<u32>,
     last_recompute_tick: Option<u32>,
 
-    /// Child AttackOperation entities (offense), paired with their target room.
-    /// Stored as parallel vecs for ConvertSaveload compatibility.
-    active_attack_entities: EntityVec<Entity>,
-    active_attack_rooms: Vec<RoomName>,
+    /// Child AttackOperations (offense): entity + target room + launch reason.
+    active_attacks: EntityVec<ActiveAttack>,
 
     /// Rooms with manually placed 'defend' flags (persisted so we don't
     /// re-scan flags every tick -- just refresh periodically).
@@ -157,8 +169,7 @@ impl WarOperation {
             last_defense_tick: None,
             last_offense_tick: None,
             last_recompute_tick: None,
-            active_attack_entities: EntityVec::new(),
-            active_attack_rooms: Vec::new(),
+            active_attacks: EntityVec::new(),
             defend_flag_rooms: Vec::new(),
             max_concurrent_attacks: 1,
             max_concurrent_power_banks: 1,
@@ -557,11 +568,11 @@ impl WarOperation {
         self.cleanup_dead_attacks(system_data);
 
         // Don't launch new attacks if at capacity.
-        if self.active_attack_entities.len() as u32 >= self.max_concurrent_attacks {
+        if self.active_attacks.len() as u32 >= self.max_concurrent_attacks {
             if features.military.debug_log {
                 info!(
                     "[War] Offense at capacity ({}/{})",
-                    self.active_attack_entities.len(),
+                    self.active_attacks.len(),
                     self.max_concurrent_attacks
                 );
             }
@@ -633,7 +644,7 @@ impl WarOperation {
             info!(
                 "[War] Offense scan: {} threat rooms, {} active attacks (cap {}), economy={}",
                 threat_rooms.len(),
-                self.active_attack_entities.len(),
+                self.active_attacks.len(),
                 self.max_concurrent_attacks,
                 system_data.economy.total_stored_energy
             );
@@ -763,12 +774,12 @@ impl WarOperation {
                 // Only farm power banks if we have significant economy and
                 // enough time remaining to actually extract the power.
                 let min_ticks_needed = (min_distance * 50) + 500;
-                let power_bank_count = self
-                    .active_attack_rooms
-                    .iter()
-                    .zip(self.active_attack_entities.iter())
-                    .filter(|(_, _)| true) // Count all active -- we'll filter below
-                    .count() as u32;
+                // Count only attacks launched as power-bank farms
+                // (AttackReason::PowerBank) against the power-bank cap;
+                // unrelated attacks must not consume power-bank slots
+                // (IBEX-043). War recorded the reason at launch, so this is
+                // a filter over its own bookkeeping.
+                let power_bank_count = count_power_bank_attacks(&self.active_attacks);
 
                 if power >= 1000
                     && ticks_to_decay > min_ticks_needed
@@ -897,7 +908,7 @@ impl WarOperation {
         // ── 4. Launch attacks for top candidates ─────────────────────────
 
         for candidate in candidates {
-            if self.active_attack_entities.len() as u32 >= self.max_concurrent_attacks {
+            if self.active_attacks.len() as u32 >= self.max_concurrent_attacks {
                 break;
             }
 
@@ -916,11 +927,11 @@ impl WarOperation {
                 system_data.updater.create_entity(system_data.entities),
                 Some(runtime_data.entity),
                 candidate.room,
-                reason,
+                reason.clone(),
             )
             .build();
 
-            self.add_active_attack(attack_entity, candidate.room);
+            self.add_active_attack(attack_entity, candidate.room, reason);
 
             // Force a home room rebalance on the next tick so the new attack
             // gets home rooms assigned promptly rather than waiting up to
@@ -952,15 +963,12 @@ impl WarOperation {
 
         let war_debug = crate::features::features().military.debug_log;
 
-        for i in 0..self.active_attack_entities.len() {
-            let entity = self.active_attack_entities[i];
+        for attack in self.active_attacks.iter() {
+            let entity = attack.entity;
             if !system_data.entities.is_alive(entity) {
                 continue;
             }
-            let room_name = match self.active_attack_rooms.get(i) {
-                Some(r) => *r,
-                None => continue,
-            };
+            let room_name = attack.room;
 
             // Read threat data from the room entity's component.
             let room_entity = system_data.mapping.get_room(&room_name);
@@ -1046,8 +1054,8 @@ impl WarOperation {
 
         // Also request visibility for rooms we're actively attacking but
         // don't currently have fresh data for.
-        for room_name in &self.active_attack_rooms {
-            let room_entity = system_data.mapping.get_room(room_name);
+        for attack in self.active_attacks.iter() {
+            let room_entity = system_data.mapping.get_room(&attack.room);
             let has_fresh_data = room_entity
                 .and_then(|e| system_data.threat_data.get(e))
                 .map(|d| current_tick.saturating_sub(d.last_seen) < 50)
@@ -1056,7 +1064,7 @@ impl WarOperation {
             if !has_fresh_data {
                 system_data
                     .visibility
-                    .request(VisibilityRequest::new(*room_name, 1.0, VisibilityRequestFlags::ALL));
+                    .request(VisibilityRequest::new(attack.room, 1.0, VisibilityRequestFlags::ALL));
             }
         }
 
@@ -1113,16 +1121,12 @@ impl WarOperation {
         }
 
         // Collect active attacks: (entity, target_room_name).
-        let mut attacks: Vec<(Entity, RoomName)> = Vec::new();
-        for i in 0..self.active_attack_entities.len() {
-            let entity = self.active_attack_entities[i];
-            if !system_data.entities.is_alive(entity) {
-                continue;
-            }
-            if let Some(&target_room) = self.active_attack_rooms.get(i) {
-                attacks.push((entity, target_room));
-            }
-        }
+        let attacks: Vec<(Entity, RoomName)> = self
+            .active_attacks
+            .iter()
+            .filter(|a| system_data.entities.is_alive(a.entity))
+            .map(|a| (a.entity, a.room))
+            .collect();
 
         if attacks.is_empty() {
             return;
@@ -1244,7 +1248,7 @@ impl WarOperation {
 
     /// Check if we already have an active attack targeting this room.
     fn is_attacking_room(&self, room: RoomName) -> bool {
-        self.active_attack_rooms.contains(&room)
+        self.active_attacks.iter().any(|a| a.room == room)
     }
 
     /// Compute the minimum route distance from any home room to a target room.
@@ -1271,49 +1275,47 @@ impl WarOperation {
 
     /// Get the attack operation entity targeting a given room, if any.
     pub fn get_attack_for_room(&self, room: RoomName) -> Option<Entity> {
-        self.active_attack_rooms
-            .iter()
-            .position(|r| *r == room)
-            .and_then(|idx| self.active_attack_entities.get(idx).copied())
+        self.active_attacks.iter().find(|a| a.room == room).map(|a| a.entity)
     }
 
-    /// Add a new active attack, maintaining parallel vecs.
-    fn add_active_attack(&mut self, entity: Entity, room: RoomName) {
-        self.active_attack_entities.push(entity);
-        self.active_attack_rooms.push(room);
+    /// Record a newly launched attack with the reason war launched it for.
+    fn add_active_attack(&mut self, entity: Entity, room: RoomName, reason: super::attack::AttackReason) {
+        self.active_attacks.push(ActiveAttack { entity, room, reason });
     }
 
-    /// Remove an active attack by entity, maintaining parallel vecs.
+    /// Remove an active attack by entity.
     fn remove_active_attack(&mut self, entity: Entity) {
-        if let Some(idx) = self.active_attack_entities.iter().position(|e| *e == entity) {
-            self.active_attack_entities.remove(idx);
-            if idx < self.active_attack_rooms.len() {
-                self.active_attack_rooms.remove(idx);
-            }
-        }
+        self.active_attacks.retain(|a| a.entity != entity);
     }
 
     /// Clean up dead/completed attack operations from tracking.
     fn cleanup_dead_attacks(&mut self, system_data: &OperationExecutionSystemData) {
-        let mut i = 0;
-        while i < self.active_attack_entities.len() {
-            if !system_data.entities.is_alive(self.active_attack_entities[i]) {
-                self.active_attack_entities.remove(i);
-                if i < self.active_attack_rooms.len() {
-                    self.active_attack_rooms.remove(i);
-                }
-            } else {
-                i += 1;
-            }
-        }
-
-        // Safety: ensure vecs stay in sync.
-        self.active_attack_rooms.truncate(self.active_attack_entities.len());
+        self.active_attacks.retain(|a| system_data.entities.is_alive(a.entity));
     }
 
     fn should_run_tier(&self, last_tick: Option<u32>, cadence: u32) -> bool {
-        last_tick.map(|t| game::time() - t >= cadence).unwrap_or(true)
+        cadence_elapsed(game::time(), last_tick, cadence)
     }
+}
+
+/// Whether `cadence` ticks have elapsed since `last_tick` (or it never ran).
+///
+/// Uses `saturating_sub` so a persisted tick from the "future" (private
+/// server time reset, restored snapshot) yields "not elapsed yet" instead of
+/// a u32 underflow, which would abort the tick under panic="abort"
+/// (IBEX-044).
+fn cadence_elapsed(now: u32, last_tick: Option<u32>, cadence: u32) -> bool {
+    last_tick.map(|t| now.saturating_sub(t) >= cadence).unwrap_or(true)
+}
+
+/// Count active attacks that war launched as power-bank farms
+/// (`AttackReason::PowerBank`). Feeds the `max_concurrent_power_banks` gate
+/// (IBEX-043): the reason is war's own bookkeeping, recorded at launch.
+fn count_power_bank_attacks(attacks: &[ActiveAttack]) -> u32 {
+    attacks
+        .iter()
+        .filter(|a| matches!(a.reason, super::attack::AttackReason::PowerBank { .. }))
+        .count() as u32
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -1332,27 +1334,18 @@ impl Operation for WarOperation {
     }
 
     fn repair_entity_refs(&mut self, is_valid: &dyn Fn(Entity) -> bool) {
-        let before = self.active_attack_entities.len();
-        let mut i = 0;
-        while i < self.active_attack_entities.len() {
-            if !is_valid(self.active_attack_entities[i]) {
-                error!(
-                    "INTEGRITY: dead attack entity {:?} removed from WarOperation",
-                    self.active_attack_entities[i]
-                );
-                self.active_attack_entities.remove(i);
-                if i < self.active_attack_rooms.len() {
-                    self.active_attack_rooms.remove(i);
-                }
-            } else {
-                i += 1;
+        let before = self.active_attacks.len();
+        self.active_attacks.retain(|a| {
+            let valid = is_valid(a.entity);
+            if !valid {
+                error!("INTEGRITY: dead attack entity {:?} removed from WarOperation", a.entity);
             }
-        }
-        self.active_attack_rooms.truncate(self.active_attack_entities.len());
-        if self.active_attack_entities.len() < before {
+            valid
+        });
+        if self.active_attacks.len() < before {
             warn!(
                 "INTEGRITY: removed {} dead attack ref(s) from WarOperation",
-                before - self.active_attack_entities.len()
+                before - self.active_attacks.len()
             );
         }
     }
@@ -1364,10 +1357,8 @@ impl Operation for WarOperation {
         // Offense section.
         {
             let mut offense_items = Vec::new();
-            for i in 0..self.active_attack_rooms.len() {
-                if i < self.active_attack_entities.len() {
-                    offense_items.push(format!("-> {}", self.active_attack_rooms[i]));
-                }
+            for attack in self.active_attacks.iter() {
+                offense_items.push(format!("-> {}", attack.room));
             }
             let label = if features.military.offense {
                 if offense_items.is_empty() {
@@ -1440,5 +1431,98 @@ impl Operation for WarOperation {
 
         // WarOperation is a singleton -- it never completes.
         Ok(OperationResult::Running)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Pin (IBEX-044): cadence checks must not underflow when the persisted
+    // tick is ahead of the current time (private-server time reset, restored
+    // snapshot). The boundary behavior is "cadence not elapsed yet" -- a
+    // benign skip, never a panic.
+
+    #[test]
+    fn cadence_elapsed_never_run_returns_true() {
+        assert!(cadence_elapsed(100, None, 1));
+        assert!(cadence_elapsed(0, None, 50));
+    }
+
+    #[test]
+    fn cadence_elapsed_normal_progression() {
+        assert!(!cadence_elapsed(100, Some(100), 1));
+        assert!(cadence_elapsed(101, Some(100), 1));
+        assert!(!cadence_elapsed(149, Some(100), 50));
+        assert!(cadence_elapsed(150, Some(100), 50));
+    }
+
+    #[test]
+    fn cadence_elapsed_future_last_tick_is_benign() {
+        // Stored tick ahead of "now" must not panic and must report
+        // "not elapsed" for any cadence >= 1.
+        assert!(!cadence_elapsed(100, Some(10_000), 1));
+        assert!(!cadence_elapsed(0, Some(u32::MAX), 50));
+    }
+
+    // Pin (IBEX-043): the power-bank concurrency gate counts only attacks
+    // war launched as power-bank farms (AttackReason::PowerBank), using the
+    // reason recorded in war's own ActiveAttack bookkeeping -- never "all
+    // active attacks", and never a predicate on the generic operation
+    // surface (AGENTS.md §8).
+
+    use super::super::attack::AttackReason;
+
+    fn active_attack(world: &mut specs::World, reason: AttackReason) -> ActiveAttack {
+        ActiveAttack {
+            entity: world.create_entity().build(),
+            room: "E1N1".parse().expect("valid room name"),
+            reason,
+        }
+    }
+
+    #[test]
+    fn power_bank_counter_counts_only_power_bank_attacks() {
+        let mut world = specs::World::new();
+
+        // Three non-power-bank attacks plus one power-bank farm: the counter
+        // feeding `max_concurrent_power_banks` must see exactly 1, so
+        // unrelated attacks cannot exhaust the power-bank slots.
+        let attacks = vec![
+            active_attack(&mut world, AttackReason::Flag),
+            active_attack(&mut world, AttackReason::InvaderCreeps),
+            active_attack(&mut world, AttackReason::ThreatResponse),
+            active_attack(&mut world, AttackReason::PowerBank { power: 4000 }),
+        ];
+
+        assert_eq!(count_power_bank_attacks(&attacks), 1);
+        assert_eq!(count_power_bank_attacks(&[]), 0);
+    }
+
+    #[test]
+    fn power_bank_counter_reason_matrix() {
+        let mut world = specs::World::new();
+
+        let reasons = [
+            (AttackReason::Flag, 0),
+            (AttackReason::ThreatResponse, 0),
+            (AttackReason::Expansion, 0),
+            (AttackReason::ResourceDenial, 0),
+            (AttackReason::InvaderCore { level: 2 }, 0),
+            (AttackReason::InvaderCreeps, 0),
+            (AttackReason::SourceKeeper, 0),
+            (AttackReason::PowerBank { power: 3000 }, 1),
+            (AttackReason::ProactiveDefense, 0),
+        ];
+
+        for (reason, expected) in reasons {
+            let attacks = [active_attack(&mut world, reason.clone())];
+            assert_eq!(
+                count_power_bank_attacks(&attacks),
+                expected,
+                "power-bank count mismatch for reason {:?}",
+                reason
+            );
+        }
     }
 }

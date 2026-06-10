@@ -759,8 +759,8 @@ impl Mission for LabsMission {
         self.owner.take();
     }
 
-    fn get_room(&self) -> Entity {
-        self.context.room_data
+    fn get_room(&self) -> Option<Entity> {
+        Some(self.context.room_data)
     }
 
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> String {

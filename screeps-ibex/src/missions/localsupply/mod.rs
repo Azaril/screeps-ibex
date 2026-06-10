@@ -140,7 +140,7 @@ impl LocalSupplyMission {
             {
                 let structure_data_rc = system_data.supply_structure_cache.get_room(room_name);
                 let mut sd = structure_data_rc.maybe_access(
-                    |d| game::time() - d.last_updated >= 10 && has_visibility,
+                    |d| game::time().saturating_sub(d.last_updated) >= 10 && has_visibility,
                     || create_structure_data(room_data),
                 );
                 let _ = sd.get();
@@ -280,8 +280,8 @@ impl Mission for LocalSupplyMission {
         self.owner.take();
     }
 
-    fn get_room(&self) -> Entity {
-        self.room_data
+    fn get_room(&self) -> Option<Entity> {
+        Some(self.room_data)
     }
 
     fn get_children(&self) -> Vec<Entity> {

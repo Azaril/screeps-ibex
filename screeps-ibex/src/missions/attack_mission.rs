@@ -240,10 +240,7 @@ fn has_claim_parts(creep: &Creep) -> bool {
     creep.body().iter().any(|p| p.part() == Part::Claim)
 }
 
-fn gather_creeps_needing_renew(
-    squad_ctx: &SquadContext,
-    creep_owner: &specs::ReadStorage<'_, CreepOwner>,
-) -> Vec<(Entity, u32)> {
+fn gather_creeps_needing_renew(squad_ctx: &SquadContext, creep_owner: &specs::ReadStorage<'_, CreepOwner>) -> Vec<(Entity, u32)> {
     let mut out = Vec::new();
     for member in squad_ctx.members.iter() {
         let creep = match creep_owner.get(member.entity).and_then(|co| co.owner.resolve()) {
@@ -262,10 +259,7 @@ fn gather_creeps_needing_renew(
     out
 }
 
-fn room_has_idle_spawn(
-    room_entity: Entity,
-    room_data: &specs::WriteStorage<'_, crate::room::data::RoomData>,
-) -> bool {
+fn room_has_idle_spawn(room_entity: Entity, room_data: &specs::WriteStorage<'_, crate::room::data::RoomData>) -> bool {
     let rd = match room_data.get(room_entity) {
         Some(r) => r,
         None => return false,
@@ -305,10 +299,7 @@ fn formation_dest_adjacent_to_spawn(
         let nx = (x as i32).saturating_add(dx);
         let ny = (y as i32).saturating_add(dy);
         if (1..=48).contains(&nx) && (1..=48).contains(&ny) {
-            if let (Some(rx), Some(ry)) = (
-                RoomCoordinate::new(nx as u8).ok(),
-                RoomCoordinate::new(ny as u8).ok(),
-            ) {
+            if let (Some(rx), Some(ry)) = (RoomCoordinate::new(nx as u8).ok(), RoomCoordinate::new(ny as u8).ok()) {
                 return Some(Position::new(rx, ry, room_name));
             }
         }
@@ -534,7 +525,10 @@ impl Spawning {
         match &planned.deploy_condition {
             DeployCondition::Immediate => true,
             DeployCondition::AfterSquad { index, state } => ctx.squads.get(*index).map(|s| s.state >= *state).unwrap_or(false),
-            DeployCondition::AfterDelay { ticks } => ctx.start_tick.map(|start| game::time() - start >= *ticks).unwrap_or(false),
+            DeployCondition::AfterDelay { ticks } => ctx
+                .start_tick
+                .map(|start| game::time().saturating_sub(start) >= *ticks)
+                .unwrap_or(false),
             DeployCondition::AfterTargetHPPercent { .. } => {
                 // HP-based deployment is checked during Engaging phase.
                 false
@@ -788,9 +782,7 @@ fn all_squads_wiped(system_data: &MissionExecutionSystemData, state_context: &At
             .squad_entities
             .get(idx)
             .and_then(|&e| system_data.squad_contexts.get(e));
-        squad_ctx
-            .map(|ctx| ctx.ever_had_members())
-            .unwrap_or(s.spawn_complete)
+        squad_ctx.map(|ctx| ctx.ever_had_members()).unwrap_or(s.spawn_complete)
     });
 
     if !any_ever_had {
@@ -822,12 +814,7 @@ fn tower_dps_at_target_room(system_data: &MissionExecutionSystemData, target_roo
         }
     }
     let structures = rd.get_structures()?;
-    let positions: Vec<Position> = structures
-        .towers()
-        .iter()
-        .filter(|t| !t.my())
-        .map(|t| t.pos())
-        .collect();
+    let positions: Vec<Position> = structures.towers().iter().filter(|t| !t.my()).map(|t| t.pos()).collect();
     Some(crate::military::damage::tower_dps_at_room_edge(target_room, &positions))
 }
 
@@ -906,12 +893,11 @@ impl Engaging {
             };
 
             // Read squad centroid from cached member positions (updated by SquadUpdateSystem).
-            let squad_center =
-                if let Some(squad_ctx) = system_data.squad_contexts.get(squad_entity) {
-                    squad_ctx.members.iter().filter_map(|m| m.position).next()
-                } else {
-                    None
-                };
+            let squad_center = if let Some(squad_ctx) = system_data.squad_contexts.get(squad_entity) {
+                squad_ctx.members.iter().filter_map(|m| m.position).next()
+            } else {
+                None
+            };
 
             let target_room = state_context.squads[squad_idx].target_room;
             let focus = Self::compute_focus_target(target_room, squad_center, system_data);
@@ -957,8 +943,7 @@ impl Engaging {
                 }
 
                 // 4. Compute and apply heal assignments on top of attack orders.
-                let heal_assignments =
-                    squad_ctx.compute_heal_assignments(Some(system_data.creep_owner));
+                let heal_assignments = squad_ctx.compute_heal_assignments(Some(system_data.creep_owner));
                 squad_ctx.apply_heal_assignments(&heal_assignments);
 
                 // 5. Advance the squad's virtual position toward the focus target
@@ -967,13 +952,7 @@ impl Engaging {
                 let target_room = state_context.squads[squad_idx].target_room;
                 let destination = attack_target
                     .and_then(|t| t.pos())
-                    .unwrap_or_else(|| {
-                        Position::new(
-                            RoomCoordinate::new(25).unwrap(),
-                            RoomCoordinate::new(25).unwrap(),
-                            target_room,
-                        )
-                    });
+                    .unwrap_or_else(|| Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), target_room));
                 advance_squad_virtual_position(squad_ctx, destination);
             }
         }
@@ -1083,11 +1062,7 @@ impl Engaging {
                         // Priority 1: hostiles with HEAL parts.
                         let healer = hostiles
                             .iter()
-                            .filter(|c| {
-                                c.body()
-                                    .iter()
-                                    .any(|p| p.part() == Part::Heal && p.hits() > 0)
-                            })
+                            .filter(|c| c.body().iter().any(|p| p.part() == Part::Heal && p.hits() > 0))
                             .min_by_key(|c| c.hits());
 
                         if let Some(target) = healer {
@@ -1112,15 +1087,12 @@ impl Engaging {
 
                     if !hostile_structures.is_empty() {
                         // Prioritize: invader cores > spawns > towers > other.
-                        let best =
-                            hostile_structures
-                                .iter()
-                                .min_by_key(|s| match s.structure_type() {
-                                    StructureType::InvaderCore => 0u32,
-                                    StructureType::Spawn => 1,
-                                    StructureType::Tower => 2,
-                                    _ => 10,
-                                });
+                        let best = hostile_structures.iter().min_by_key(|s| match s.structure_type() {
+                            StructureType::InvaderCore => 0u32,
+                            StructureType::Spawn => 1,
+                            StructureType::Tower => 2,
+                            _ => 10,
+                        });
 
                         if let Some(target) = best {
                             return Some((target.pos(), None));
@@ -1617,7 +1589,7 @@ impl Retreating {
         }
 
         // Retreat timeout: after 200 ticks of retreating, abort.
-        let retreat_age = state_context.start_tick.map(|s| game::time() - s).unwrap_or(0);
+        let retreat_age = state_context.start_tick.map(|s| game::time().saturating_sub(s)).unwrap_or(0);
 
         if retreat_age > 200 {
             return Ok(Some(AttackMissionState::mission_complete(std::marker::PhantomData)));
@@ -1735,16 +1707,18 @@ impl AttackMission {
             children: vec![
                 SummaryContent::Text(format!("wave {}/{}", ctx.current_wave, ctx.max_waves)),
                 SummaryContent::Text(format!("succeeded: {}", ctx.mission_succeeded)),
-                SummaryContent::Text(format!(
-                    "age: {}",
-                    age.map(|a| a.to_string()).unwrap_or_else(|| "-".into())
-                )),
+                SummaryContent::Text(format!("age: {}", age.map(|a| a.to_string()).unwrap_or_else(|| "-".into()))),
                 SummaryContent::Text(format!(
                     "exploit_age: {}",
                     exploit_age.map(|a| a.to_string()).unwrap_or_else(|| "-".into())
                 )),
                 SummaryContent::Text(format!("haulers_spawned: {}", ctx.exploit_haulers_spawned)),
-                SummaryContent::Text(format!("homes: {} squads: {} plans: {}", ctx.home_room_datas.len(), ctx.squad_entities.len(), ctx.force_plan.len())),
+                SummaryContent::Text(format!(
+                    "homes: {} squads: {} plans: {}",
+                    ctx.home_room_datas.len(),
+                    ctx.squad_entities.len(),
+                    ctx.force_plan.len()
+                )),
             ],
         });
 
@@ -1885,36 +1859,33 @@ impl Mission for AttackMission {
         self.owner.take();
     }
 
-    fn get_room(&self) -> Entity {
+    fn get_room(&self) -> Option<Entity> {
         // Return the first home room for cleanup purposes.
         // The operation also attaches the mission to the target room;
         // the integrity pass in repair_entity_integrity handles removing
         // stale mission references from all rooms.
         //
         // If home rooms have been cleaned up (e.g. integrity repair removed
-        // dead entities), fall back to the owner entity. The cleanup system
-        // uses this to remove the mission from the room's mission list; if
-        // the entity doesn't correspond to a room, the removal is a no-op.
+        // dead entities), fall back to the owner entity, then the first
+        // squad entity. The cleanup system uses this to remove the mission
+        // from the room's mission list; a non-room entity makes the removal
+        // a no-op. A fully degraded mission (no home rooms, no owner, no
+        // squad entities) returns None instead of panicking (IBEX-020) --
+        // callers treat it as "no room to clean up".
         if let Some(entity) = self.context.home_room_datas.first() {
-            *entity
+            Some(*entity)
         } else if let Some(owner) = *self.owner {
             error!(
                 "[AttackMission] get_room: no home rooms for {}, using owner",
                 self.context.target_room
             );
-            owner
+            Some(owner)
         } else {
             error!(
                 "[AttackMission] get_room: no home rooms and no owner for {}",
                 self.context.target_room
             );
-            // Return the first squad entity as a last resort. The cleanup
-            // system will fail to find a room for it, which is acceptable.
-            self.context
-                .squad_entities
-                .first()
-                .copied()
-                .expect("AttackMission must have at least one entity reference")
+            self.context.squad_entities.first().copied()
         }
     }
 

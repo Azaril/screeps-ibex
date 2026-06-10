@@ -112,8 +112,8 @@ impl Mission for ScoutMission {
         self.owner.take();
     }
 
-    fn get_room(&self) -> Entity {
-        self.room_data
+    fn get_room(&self) -> Option<Entity> {
+        Some(self.room_data)
     }
 
     fn remove_creep(&mut self, entity: Entity) {

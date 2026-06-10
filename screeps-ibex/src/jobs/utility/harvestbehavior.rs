@@ -4,7 +4,6 @@ use crate::jobs::context::*;
 use crate::jobs::utility::movebehavior::mark_working;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
-use crate::store::*;
 use screeps::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -79,8 +78,9 @@ where
 
     //TODO: Check visibility cache and cancel if not reachable etc.?
 
+    // Safe on general stores (engine-mechanics folklore row 26).
     if !ignore_creep_capacity
-        && creep.expensive_store_free_capacity() == 0
+        && creep.store().get_free_capacity(None) <= 0
         && !tick_context.action_flags.contains(SimultaneousActionFlags::TRANSFER)
     {
         return Some(next_state());

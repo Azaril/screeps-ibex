@@ -177,9 +177,9 @@ fn try_harvest_mine_target(creep: &Creep, mine_target: &StaticMineTarget, tick_c
 impl Harvest {
     fn tick(&mut self, state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
         let creep = tick_context.runtime_data.owner;
-        let container_exists = state_context.container_target.resolve().is_some();
 
-        if container_exists {
+        // Bind the container once -- no re-resolve + unwrap below (IBEX-009).
+        if let Some(container) = state_context.container_target.resolve() {
             let displaced = state_context.is_displaced(creep);
 
             if displaced {
@@ -198,7 +198,6 @@ impl Harvest {
             // container — when displaced, resources drop on the ground and
             // will be picked up, which is better than idling).
             if !displaced {
-                let container = state_context.container_target.resolve().unwrap();
                 let work_parts = creep.body().iter().filter(|p| p.part() == Part::Work).count() as u32;
 
                 let mining_power = match state_context.mine_target {

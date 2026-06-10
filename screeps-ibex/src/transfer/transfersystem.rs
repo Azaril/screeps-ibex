@@ -23,6 +23,17 @@ pub enum TransferPriority {
     None = 3,
 }
 
+/// Compute a transfer "value" (resources per unit of distance/cost) with a
+/// guarded divisor so a degenerate input (zero length/cost) cannot produce
+/// NaN or infinity feeding the priority comparators (IBEX-046). The
+/// comparators keep their `unwrap_or(Equal)` runtime backstop; the
+/// `debug_assert!` here is the tripwire at the value source.
+fn finite_transfer_value(resources: u32, divisor: f32) -> f32 {
+    let value = (resources as f32) / divisor.max(1.0);
+    debug_assert!(value.is_finite(), "transfer value not finite: {value}");
+    value
+}
+
 pub const ACTIVE_TRANSFER_PRIORITIES: &[TransferPriority] = &[TransferPriority::High, TransferPriority::Medium, TransferPriority::Low];
 pub const ALL_TRANSFER_PRIORITIES: &[TransferPriority] = &[
     TransferPriority::High,
@@ -164,6 +175,21 @@ impl TransferTarget {
         }
     }
 
+    /// One-shot (per VM session) warning for the invalid nuker-withdraw
+    /// pairing. Logging only -- not used for any control flow.
+    fn warn_once_nuker_withdraw() {
+        thread_local! {
+            static WARNED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+
+        WARNED.with(|warned| {
+            if !warned.get() {
+                warned.set(true);
+                warn!("Attempted to withdraw resources from a nuker -- invalid TransferTarget pairing (returning InvalidArgs)");
+            }
+        });
+    }
+
     fn withdraw_resource_amount_from_id<T>(
         target: &RemoteObjectId<T>,
         creep: &Creep,
@@ -205,7 +231,14 @@ impl TransferTarget {
             TransferTarget::Lab(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
             TransferTarget::Factory(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
             //TODO: Split pickup and deposit targets.
-            TransferTarget::Nuker(_id) => panic!("Attempting to withdraw resources from a nuker."),
+            TransferTarget::Nuker(_id) => {
+                // A nuker cannot be a withdraw source (see the raid.rs
+                // structure registration). Return an error instead of
+                // panicking -- under panic="abort" a panic here aborts the
+                // whole tick and skips serialize_world (IBEX-010).
+                Self::warn_once_nuker_withdraw();
+                Err(ErrorCode::InvalidArgs)
+            }
             TransferTarget::PowerSpawn(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
         }
     }
@@ -1834,7 +1867,7 @@ impl TransferQueue {
                     .iter()
                     .flat_map(|(_, entries)| entries.iter().map(|e| e.amount))
                     .sum::<u32>();
-                let value = (resources as f32) / (pickup_length as f32 + delivery_length as f32);
+                let value = finite_transfer_value(resources, pickup_length as f32 + delivery_length as f32);
 
                 (pickup, delivery, value)
             })
@@ -2054,7 +2087,7 @@ impl TransferQueue {
                 .sum::<u32>();
 
             let length = anchor_location.get_range_to(&delivery.target.pos());
-            let value = (resources as f32) / (length as f32);
+            let value = finite_transfer_value(resources, length as f32);
 
             (delivery, value)
         })
@@ -2101,7 +2134,7 @@ impl TransferQueue {
                 let cost_per_unit = super::utility::calc_transaction_cost_fractional(anchor_location, to);
 
                 let cost = (cost_per_unit * resources as f64).ceil();
-                let value = (resources as f32) / (cost as f32);
+                let value = finite_transfer_value(resources, cost as f32);
 
                 (delivery, value)
             })
@@ -2435,5 +2468,37 @@ impl<'a> System<'a> for TransferQueueUpdateSystem {
 
     fn run(&mut self, mut data: Self::SystemData) {
         data.transfer_queue.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Pin (IBEX-046): transfer value computations guard their divisors so a
+    // zero length/cost cannot produce NaN or infinity for the priority
+    // comparators.
+
+    #[test]
+    fn finite_transfer_value_guards_zero_divisor() {
+        assert_eq!(finite_transfer_value(0, 0.0), 0.0);
+        assert_eq!(finite_transfer_value(10, 0.0), 10.0);
+    }
+
+    #[test]
+    fn finite_transfer_value_normal_cases() {
+        assert_eq!(finite_transfer_value(10, 5.0), 2.0);
+        assert_eq!(finite_transfer_value(0, 5.0), 0.0);
+        // Sub-1 divisors are clamped up to 1.
+        assert_eq!(finite_transfer_value(10, 0.5), 10.0);
+    }
+
+    #[test]
+    fn finite_transfer_value_is_always_finite() {
+        for resources in [0u32, 1, 100, 1_000_000] {
+            for divisor in [0.0f32, 0.25, 1.0, 50.0, 10_000.0] {
+                assert!(finite_transfer_value(resources, divisor).is_finite());
+            }
+        }
     }
 }

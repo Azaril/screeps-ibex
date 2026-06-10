@@ -1,6 +1,7 @@
 use super::data::*;
 use crate::entitymappingsystem::*;
 use crate::memorysystem::*;
+use crate::segments::PLANNER_MEMORY_SEGMENT;
 use crate::visualize::RoomVisualizer;
 use log::*;
 use screeps::*;
@@ -24,6 +25,10 @@ pub struct RoomPlanRequest {
 
 impl RoomPlanRequest {
     pub fn new(room: Entity, priority: f32) -> RoomPlanRequest {
+        // Tripwire (IBEX-046): the queue comparator coalesces NaN to Equal;
+        // assert finiteness where the priority is produced instead.
+        debug_assert!(priority.is_finite(), "room plan request priority not finite: {priority}");
+
         RoomPlanRequest { room, priority }
     }
 }
@@ -228,7 +233,7 @@ enum PlanTickResult {
     Failed(String),
 }
 
-/// Persistent planner running state, serialized to segment 60.
+/// Persistent planner running state, serialized to `PLANNER_MEMORY_SEGMENT`.
 #[derive(Deserialize, Serialize, Default)]
 pub struct RoomPlannerData {
     running_state: Option<RoomPlannerRunningData>,
@@ -237,8 +242,6 @@ pub struct RoomPlannerData {
 // ---------------------------------------------------------------------------
 // RoomPlanSystem — planning only, no visualization
 // ---------------------------------------------------------------------------
-
-pub const PLANNER_MEMORY_SEGMENT: u32 = 60;
 
 #[derive(SystemData)]
 pub struct RoomPlanSystemData<'a> {
@@ -320,7 +323,11 @@ impl<'a> System<'a> for RoomPlanSystem {
 
         if crate::features::features().construction.plan {
             let has_pending = !data.room_plan_queue.requests.is_empty()
-                || data.memory_arbiter.get(PLANNER_MEMORY_SEGMENT).map(|d| !d.is_empty()).unwrap_or(false);
+                || data
+                    .memory_arbiter
+                    .get(PLANNER_MEMORY_SEGMENT)
+                    .map(|d| !d.is_empty())
+                    .unwrap_or(false);
             if let Some((max_cpu, tick_limit)) = Self::get_cpu_budget(has_pending) {
                 if data.memory_arbiter.is_active(PLANNER_MEMORY_SEGMENT) {
                     let Some(planner_data) = data.memory_arbiter.get(PLANNER_MEMORY_SEGMENT) else {
