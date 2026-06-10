@@ -100,17 +100,70 @@ configured token (official tokens are not consumed).
 
 ### Rate-limit behavior
 
-- **Courtesy min-delay:** the client sleeps so that at least `min_delay`
-  elapses between any two requests. `DEFAULT_MIN_DELAY_MS` (600 ms) is
-  sized for screeps.com's global 120 requests/minute token limit; pass
-  `Duration::ZERO` against a local private server.
-- **HTTP 429** is surfaced as `ApiError::RateLimited` with the server's
-  retry message — the client does **not** auto-retry; callers decide.
-- Official per-endpoint caps to plan around (sources:
-  docs.screeps.com/auth-tokens.html + the node-screeps-api limit table):
-  GET room-terrain 360/hour, GET memory-segment 360/hour, POST
-  memory-segment 60/hour, POST map-stats 60/hour, POST user/code
-  240/day.
+screeps.com enforces **two layers** of limits on auth tokens
+([docs.screeps.com/auth-tokens.html](https://docs.screeps.com/auth-tokens.html)),
+and the client models both:
+
+- **Global cap — courtesy min-delay:** the client sleeps so that at
+  least `min_delay` elapses between any two requests.
+  `DEFAULT_MIN_DELAY_MS` (600 ms) is sized for the global
+  120 requests/minute token limit; pass `Duration::ZERO` against a
+  local private server.
+- **Per-endpoint quotas — proactive pacing** (`quota` module): the
+  routes below carry hourly/daily quotas *on top of* the global cap.
+  Pacing at 600 ms burns a 60/hour quota in 36 s and then every further
+  call 429s for the rest of the hour — so for **official targets**
+  (`is_official_target`: token auth or a screeps.com URL; override with
+  `Client::quota_pacing`) the client spaces calls per endpoint to fit
+  the quota (60/hour ⇒ one per 60 s sustained). Private servers enforce
+  no quotas (no rate-limit middleware in `@screeps/backend`; verified
+  live 2026-06-10) and keep the plain min-delay.
+- **Headers are ground truth, the table is the prior:** screeps.com
+  answers with `X-RateLimit-Limit` / `-Remaining` / `-Reset` (epoch
+  seconds — node-screeps-api `buildRateLimit`,
+  dist/ScreepsAPI.js:1238-1254). When present they override the static
+  table: pacing becomes `time_to_reset / remaining` (faster while the
+  window is unspent, a hard wait until reset when `remaining == 0`).
+- **HTTP 429 — back off and resume:** `parse_retry_after_ms` extracts
+  the wait from the official message (observed live: `Rate limit
+  exceeded, retry after 3548835ms or disable rate limiting using this
+  link: …`), the client logs `rate limited; resuming in Xs (endpoint
+  quota: …)`, sleeps, and **retries the request** (bounded: 3 attempts
+  per request, a single wait is capped at 2 h — beyond that the
+  `ApiError::RateLimited` is surfaced). A wait ≥ 2 min also prints
+  **once** the sanctioned opt-out: signed-in token owners can disable
+  rate limiting per token at
+  `https://screeps.com/a/#!/account/auth-tokens/noratelimit`
+  (node-screeps-api's `rateLimitResetUrl`). Printed, never opened.
+
+#### The pinned per-endpoint quota table
+
+Pinned from screepers/node-screeps-api — `src/ScreepsAPI.ts` (master,
+fetched 2026-06-10), identical to the vendored
+`node_modules/screeps-api@1.16.1` `dist/ScreepsAPI.js:1417-1438`
+(READ-ONLY). Global: **120/minute** (:1418).
+
+| Method | Endpoint | Quota | Sustained spacing | Source line |
+|---|---|---|---|---|
+| GET | `/api/game/room-terrain` | 360/hour | 10 s | :1420 |
+| GET | `/api/user/code` | 60/hour | 60 s | :1421 |
+| GET | `/api/user/memory` | 1440/day | 60 s | :1422 |
+| GET | `/api/user/memory-segment` | 360/hour | 10 s | :1423 |
+| GET | `/api/game/market/orders-index` | 60/hour | 60 s | :1424 |
+| GET | `/api/game/market/orders` | 60/hour | 60 s | :1425 |
+| GET | `/api/game/market/my-orders` | 60/hour | 60 s | :1426 |
+| GET | `/api/game/market/stats` | 60/hour | 60 s | :1427 |
+| GET | `/api/game/user/money-history` | 60/hour | 60 s | :1428 |
+| POST | `/api/user/console` | 360/hour | 10 s | :1431 |
+| POST | `/api/game/map-stats` | 60/hour | 60 s | :1432 |
+| POST | `/api/user/code` | 240/day | 360 s | :1433 |
+| POST | `/api/user/set-active-branch` | 240/day | 360 s | :1434 |
+| POST | `/api/user/memory` | 240/day | 360 s | :1435 |
+| POST | `/api/user/memory-segment` | 60/hour | 60 s | :1436 |
+
+The first call to an endpoint is never delayed — sustained spacing
+applies from the second call on, so single-shot operations (one code
+upload, one segment read) pay nothing.
 
 ### Error envelope
 
@@ -118,7 +171,8 @@ Every method returns `Result<TypedResponse, ApiError>`:
 
 - `{"error": "..."}` bodies (which arrive **with HTTP 200**) →
   `ApiError::Server { message }` — checked before the typed parse;
-- HTTP 429 → `ApiError::RateLimited`;
+- HTTP 429 → `ApiError::RateLimited` (surfaced only after the bounded
+  backoff-and-resume retries above are exhausted);
 - other non-2xx → `ApiError::Http { status, body }` (body truncated);
 - JSON that fits none of the pinned shapes → `ApiError::Decode`;
 - transport/websocket failures → `Transport` / `Socket` /
@@ -141,9 +195,10 @@ websocket `auth` frame — never into logs or error text.
 
 | Module | Responsibility |
 |---|---|
-| `client` | `Client` + `AuthMode`: signin/rolling-token adoption, shard injection (query param on GETs, body key on POSTs), courtesy throttle, one typed method per endpoint |
+| `client` | `Client` + `AuthMode` + `is_official_target`: signin/rolling-token adoption, shard injection (query param on GETs, body key on POSTs), courtesy throttle, official quota pacing + 429 backoff-and-resume, one typed method per endpoint |
 | `types`  | typed response structs, each fixture-tested; `enumerate_room_names` (the server's room-coordinate scheme) |
 | `code`   | the `POST /api/user/code` module map: JS-source modules as plain strings, wasm modules as `{binary: <base64>}` |
+| `quota`  | the pinned per-endpoint quota table, `X-RateLimit-*` header parsing, 429 retry-after parsing, `QuotaTracker` pacing math (pure, unit-tested) |
 | `socket` | console websocket: `parse_socket_frame`, the `ConsoleSocket` handshake (auth → subscribe), `console_lines` payload flattening |
 | `error`  | `ApiError` + the envelope-first response classification |
 
@@ -271,11 +326,16 @@ room names, pending the P6 verdict.
 
 ### Verification status
 
-28 unit tests against recorded/literal fixtures (no network, no
+39 unit tests against recorded/literal fixtures (no network, no
 Docker): every response shape in the endpoint table, the error
-envelope/429/decode matrix, the code-upload wire shape + base64
+envelope/429/decode matrix, the quota table + `QuotaTracker` spacing
+math + `X-RateLimit-*` header sets + the live 429 retry-after string,
+the official-target classification, the code-upload wire shape + base64
 vectors, socket frames + payload flattening, and the secrecy redaction
 pins. The HTTP+websocket paths were live-verified in their previous
 in-consumer form during the eval bring-up (2026-06-09); the first
 post-extraction live gauntlet is the eval smoke loop (runs separately —
-the eval stack is shared infrastructure).
+the eval stack is shared infrastructure). The quota pacing/backoff path
+against real screeps.com headers is pinned from fixtures only — to be
+confirmed on the operator's next MMO run (the local private server
+sends no rate-limit headers).

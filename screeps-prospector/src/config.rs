@@ -131,9 +131,12 @@ impl ProspectorConfig {
     /// token-only, and a token entry pointed anywhere deserves the same
     /// caution) OR its URL targets screeps.com. Official entries refuse
     /// `auto` outright and require `--i-understand-this-is-mmo` for
-    /// `place` — see [`crate::place`].
+    /// `place` — see [`crate::place`]. The rule itself lives in the
+    /// shared client ([`screeps_rest_api::is_official_target`]), where
+    /// it also engages per-endpoint quota pacing — one classification,
+    /// both consumers.
     pub fn is_official(&self) -> bool {
-        matches!(self.auth, AuthMode::Token(_)) || self.base_url.contains("screeps.com")
+        screeps_rest_api::is_official_target(&self.base_url, &self.auth)
     }
 }
 

@@ -1,10 +1,19 @@
 //! The async REST client: auth, shard injection, courtesy rate limit,
-//! rolling-token adoption, and a typed method per pinned endpoint.
+//! official-server endpoint-quota pacing, rolling-token adoption, and a
+//! typed method per pinned endpoint.
 //!
 //! Construct via [`Client::new`], call [`sign_in`](Client::sign_in)
 //! once (a no-op for token auth), then use the endpoint methods. Every
 //! method's doc comment cites the source(s) its shape was pinned from —
 //! see also the shape catalogue in [`crate::types`].
+//!
+//! RATE LIMITS (official servers): on top of the courtesy `min_delay`
+//! (the global 120/minute cap), calls to per-endpoint-capped routes are
+//! PROACTIVELY spaced to fit the official hourly/daily quotas, with
+//! `X-RateLimit-*` response headers preferred over the static table —
+//! see [`crate::quota`]. A 429 backs off for the server's stated
+//! retry-after and RESUMES instead of failing the caller's whole run.
+//! Private servers (no quotas, no headers) keep the plain `min_delay`.
 //!
 //! SECRETS: passwords/tokens live in [`SecretString`]; they are exposed
 //! only into the signin/register request bodies and the `X-Token`/
@@ -14,6 +23,10 @@
 
 use crate::code::CodeModules;
 use crate::error::{parse_api_response, ApiError};
+use crate::quota::{
+    endpoint_quota, parse_rate_limit_headers, parse_retry_after_ms, QuotaTracker, RateLimitInfo,
+    NO_RATE_LIMIT_URL,
+};
 use crate::socket::ws_url_from_http_base;
 use crate::types::{
     MapStatsResponse, MemorySegmentResponse, OkResponse, RoomObjectsResponse, RoomStatusResponse,
@@ -22,6 +35,8 @@ use crate::types::{
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 
@@ -36,6 +51,26 @@ pub const DEFAULT_MIN_DELAY_MS: u64 = 600;
 /// Per-request timeout. Generous: `system.resetAllData()`-adjacent
 /// reads on a busy private server can be slow, and screeps.com can lag.
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How many times one logical request rides out a 429 before the error
+/// is surfaced. Each retry waits the server's stated retry-after, so
+/// this bounds attempts, not time (see [`MAX_RATE_LIMIT_WAIT`]).
+const RATE_LIMIT_RETRIES: u32 = 3;
+
+/// Upper bound on a single backoff/quota wait. Hourly windows fit
+/// comfortably (the longest observed live wait was ~59 min); a wait
+/// beyond this (a burned DAILY quota, e.g. POST /api/user/code at
+/// 240/day) is surfaced as the error instead of silently parking the
+/// process for hours.
+const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(2 * 3600);
+
+/// 429 backoff when the server's retry-after could not be parsed and no
+/// `X-RateLimit-Reset` ground truth is available.
+const DEFAULT_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(60);
+
+/// Waits at or above this print (once per client) the sanctioned
+/// noratelimit opt-out hint.
+const NORATELIMIT_HINT_THRESHOLD: Duration = Duration::from_secs(120);
 
 /// Tokens shorter than this are not treated as rotation material — the
 /// python-screeps client's acceptance rule for the `X-Token` response
@@ -63,9 +98,20 @@ pub enum AuthMode {
     },
 }
 
-/// Async REST client over `reqwest` with a courtesy rate limit and
-/// rotating-token auth. Interior mutability throughout — every endpoint
-/// method takes `&self`.
+/// OFFICIAL-server classification (shared with consumers — prospector's
+/// MMO-safety gates use the same rule, P0.P4): a target is official
+/// when it authenticates by token (official servers are token-only,
+/// and a token entry pointed anywhere deserves the same caution) OR its
+/// URL targets screeps.com. Official targets get per-endpoint quota
+/// pacing ([`crate::quota`]); private servers keep the plain min-delay.
+pub fn is_official_target(base_url: &str, auth: &AuthMode) -> bool {
+    matches!(auth, AuthMode::Token(_)) || base_url.contains("screeps.com")
+}
+
+/// Async REST client over `reqwest` with a courtesy rate limit,
+/// official-server endpoint-quota pacing, and rotating-token auth.
+/// Interior mutability throughout — every endpoint method takes
+/// `&self`.
 pub struct Client {
     http: reqwest::Client,
     base_url: String,
@@ -75,6 +121,14 @@ pub struct Client {
     token: Mutex<Option<SecretString>>,
     min_delay: Duration,
     last_request: Mutex<Option<Instant>>,
+    /// Endpoint-quota pacing engaged? Auto-detected via
+    /// [`is_official_target`]; override with [`Client::quota_pacing`].
+    official: bool,
+    /// Per-endpoint pacing state, keyed by (method, path) for the
+    /// routes in [`crate::quota::endpoint_quota`]'s table.
+    quotas: Mutex<HashMap<(&'static str, &'static str), QuotaTracker>>,
+    /// The noratelimit hint is printed at most once per client.
+    noratelimit_hint_shown: AtomicBool,
 }
 
 impl Client {
@@ -102,15 +156,35 @@ impl Client {
             AuthMode::Token(token) => Some(SecretString::from(token.expose_secret())),
             AuthMode::UserPass { .. } => None,
         };
+        let base_url = base_url.into();
+        let official = is_official_target(&base_url, &auth);
         Ok(Client {
             http,
-            base_url: base_url.into(),
+            base_url,
             shard,
             auth,
             token: Mutex::new(initial_token),
             min_delay,
             last_request: Mutex::new(None),
+            official,
+            quotas: Mutex::new(HashMap::new()),
+            noratelimit_hint_shown: AtomicBool::new(false),
         })
+    }
+
+    /// Override the auto-detected endpoint-quota pacing (engaged for
+    /// official targets per [`is_official_target`]). Power users with a
+    /// noratelimit token can pass `false`; a private server fronting
+    /// screeps.com-style limits could pass `true`.
+    pub fn quota_pacing(mut self, enabled: bool) -> Self {
+        self.official = enabled;
+        self
+    }
+
+    /// Whether endpoint-quota pacing is engaged (the official-server
+    /// classification, unless overridden via [`Client::quota_pacing`]).
+    pub fn is_official(&self) -> bool {
+        self.official
     }
 
     /// The HTTP base URL this client targets.
@@ -262,6 +336,10 @@ impl Client {
     /// creepsProduced|energyConstruction|energyControl|energyCreeps|
     /// energyHarvested with interval suffix 0|8|180|1440; `owner0`/`claim0`
     /// return ownership with no separate stat block (Endpoints.md).
+    /// Official-server cap: 60/hour (ScreepsAPI.js:1432) — but `rooms`
+    /// is an ARRAY with no documented size cap (neither reference
+    /// client chunks it; the open backend takes 8 MB bodies), so batch
+    /// big and the cap stops mattering.
     /// Sources: screeps_api.py (body keys), python-screeps (shard in
     /// body), Endpoints.md (response shape).
     pub async fn map_stats(
@@ -455,7 +533,101 @@ impl Client {
         *last = Some(Instant::now());
     }
 
-    /// Send with auth headers, accept token rotation, classify the body.
+    /// PROACTIVE endpoint-quota pacing (official targets only): wait
+    /// until the endpoint's [`QuotaTracker`] admits the next call, then
+    /// claim the slot. Loops because the lock is dropped across the
+    /// sleep (a long wait must not block unrelated endpoints).
+    async fn wait_for_endpoint_quota(&self, method: &'static str, path: &'static str) {
+        if !self.official {
+            return;
+        }
+        let Some(quota) = endpoint_quota(method, path) else {
+            return;
+        };
+        loop {
+            let delay = {
+                let mut quotas = self.quotas.lock().await;
+                let tracker = quotas
+                    .entry((method, path))
+                    .or_insert_with(|| QuotaTracker::new(quota));
+                let now = Instant::now();
+                let delay = tracker.required_delay(now);
+                if delay.is_zero() {
+                    tracker.record_call(now);
+                    return;
+                }
+                delay
+            };
+            self.maybe_print_noratelimit_hint(delay);
+            if delay >= Duration::from_secs(30) {
+                tracing::info!(
+                    "endpoint quota pacing: waiting {}s before {method} {path}",
+                    delay.as_secs()
+                );
+            } else {
+                tracing::debug!("endpoint quota pacing: waiting {delay:?} before {method} {path}");
+            }
+            tokio::time::sleep(delay).await;
+        }
+    }
+
+    /// Adopt `X-RateLimit-*` ground truth for a quota-tabled endpoint
+    /// (the static table is the prior, headers win — see [`crate::quota`]).
+    async fn observe_quota_headers(
+        &self,
+        method: &'static str,
+        path: &'static str,
+        info: RateLimitInfo,
+    ) {
+        if !self.official {
+            return;
+        }
+        let Some(quota) = endpoint_quota(method, path) else {
+            return;
+        };
+        self.quotas
+            .lock()
+            .await
+            .entry((method, path))
+            .or_insert_with(|| QuotaTracker::new(quota))
+            .observe_headers(info, Instant::now(), unix_now_secs());
+    }
+
+    /// Record a live 429 in the endpoint's tracker so the proactive
+    /// pacing also knows the window is spent.
+    async fn observe_rate_limited(&self, method: &'static str, path: &'static str, wait: Duration) {
+        let Some(quota) = endpoint_quota(method, path) else {
+            return;
+        };
+        self.quotas
+            .lock()
+            .await
+            .entry((method, path))
+            .or_insert_with(|| QuotaTracker::new(quota))
+            .observe_rate_limited(wait, Instant::now());
+    }
+
+    /// Before a LONG wait (>= 2 min), tell the operator ONCE about the
+    /// sanctioned opt-out: screeps.com lets a signed-in token owner
+    /// disable rate limiting per auth token (node-screeps-api's
+    /// `rateLimitResetUrl`). Printed, never opened — the choice is theirs.
+    fn maybe_print_noratelimit_hint(&self, wait: Duration) {
+        if wait >= NORATELIMIT_HINT_THRESHOLD
+            && !self.noratelimit_hint_shown.swap(true, Ordering::Relaxed)
+        {
+            tracing::warn!(
+                "long rate-limit wait ahead ({}s). screeps.com offers a per-token opt-out: \
+                 open {NO_RATE_LIMIT_URL} while signed in to disable rate limiting for your \
+                 auth token",
+                wait.as_secs()
+            );
+        }
+    }
+
+    /// Send with auth headers, accept token rotation, classify the body;
+    /// on official 429s, back off for the server's stated retry-after
+    /// and RESUME (bounded — see [`RATE_LIMIT_RETRIES`] /
+    /// [`MAX_RATE_LIMIT_WAIT`]) instead of failing the caller's run.
     ///
     /// Auth headers: the most recent token is sent as BOTH `X-Token` and
     /// `X-Username` (screeps_api.py / python-screeps; verified live).
@@ -465,41 +637,110 @@ impl Client {
     /// replaces the stored token. Private-server tokens are CONSUMED by
     /// use (screepsmod-auth), so adoption is mandatory there;
     /// Endpoints.md documents the rotation contract.
+    ///
+    /// Rate-limit headers: `X-RateLimit-Limit`/`-Remaining`/`-Reset`
+    /// (reset = epoch seconds) are read off every response and fed to
+    /// the endpoint's tracker (node-screeps-api `buildRateLimit`,
+    /// dist/ScreepsAPI.js:1238-1254).
     async fn execute<T: DeserializeOwned>(
         &self,
+        method: &'static str,
+        path: &'static str,
         request: reqwest::RequestBuilder,
         context: &'static str,
     ) -> Result<T, ApiError> {
-        self.throttle().await;
-        let request = {
-            let token = self.token.lock().await;
-            match token.as_ref() {
-                Some(token) => {
-                    let value = token.expose_secret();
-                    request.header("X-Token", value).header("X-Username", value)
+        let mut attempt: u32 = 0;
+        loop {
+            self.wait_for_endpoint_quota(method, path).await;
+            self.throttle().await;
+            // Clone per attempt: the original stays replayable for the
+            // 429 backoff-and-resume path (bodies here are buffered
+            // JSON, always cloneable).
+            let attempt_request = request.try_clone().ok_or_else(|| {
+                ApiError::Other(format!("{method} {path}: request not cloneable for retry"))
+            })?;
+            let attempt_request = {
+                let token = self.token.lock().await;
+                match token.as_ref() {
+                    Some(token) => {
+                        let value = token.expose_secret();
+                        attempt_request
+                            .header("X-Token", value)
+                            .header("X-Username", value)
+                    }
+                    None => attempt_request,
                 }
-                None => request,
+            };
+            let response = attempt_request.send().await?;
+            if let Some(rotated) = response
+                .headers()
+                .get("X-Token")
+                .and_then(|v| v.to_str().ok())
+            {
+                if rotated.len() >= TOKEN_ROTATION_MIN_LEN {
+                    tracing::trace!("adopting rotated session token");
+                    *self.token.lock().await = Some(SecretString::from(rotated));
+                }
             }
-        };
-        let response = request.send().await?;
-        if let Some(rotated) = response
-            .headers()
-            .get("X-Token")
-            .and_then(|v| v.to_str().ok())
-        {
-            if rotated.len() >= TOKEN_ROTATION_MIN_LEN {
-                tracing::trace!("adopting rotated session token");
-                *self.token.lock().await = Some(SecretString::from(rotated));
+            let header = |name: &str| {
+                response
+                    .headers()
+                    .get(name)
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned)
+            };
+            let rate_info = parse_rate_limit_headers(
+                header("x-ratelimit-limit").as_deref(),
+                header("x-ratelimit-remaining").as_deref(),
+                header("x-ratelimit-reset").as_deref(),
+            );
+            if let Some(info) = rate_info {
+                self.observe_quota_headers(method, path, info).await;
+            }
+            let status = response.status().as_u16();
+            let body = response.text().await?;
+            match parse_api_response::<T>(status, &body, context) {
+                Err(ApiError::RateLimited { message }) if attempt < RATE_LIMIT_RETRIES => {
+                    attempt += 1;
+                    // The server's own retry-after is the ground truth;
+                    // header reset is the fallback; then a flat default.
+                    let wait = parse_retry_after_ms(&message)
+                        .map(Duration::from_millis)
+                        .or_else(|| {
+                            rate_info.filter(|info| info.remaining == 0).map(|info| {
+                                Duration::from_secs(
+                                    info.reset_epoch_secs.saturating_sub(unix_now_secs()),
+                                )
+                            })
+                        })
+                        .unwrap_or(DEFAULT_RATE_LIMIT_BACKOFF);
+                    if wait > MAX_RATE_LIMIT_WAIT {
+                        tracing::warn!(
+                            "rate limited with a {}s retry-after (> {}s bound) — giving up on \
+                             {method} {path}; re-run later, completed work is preserved by \
+                             callers that persist incrementally",
+                            wait.as_secs(),
+                            MAX_RATE_LIMIT_WAIT.as_secs()
+                        );
+                        return Err(ApiError::RateLimited { message });
+                    }
+                    self.observe_rate_limited(method, path, wait).await;
+                    self.maybe_print_noratelimit_hint(wait);
+                    tracing::warn!(
+                        "rate limited; resuming in {}s (endpoint quota: {method} {path}, \
+                         attempt {attempt}/{RATE_LIMIT_RETRIES})",
+                        wait.as_secs()
+                    );
+                    tokio::time::sleep(wait).await;
+                }
+                other => return other,
             }
         }
-        let status = response.status().as_u16();
-        let body = response.text().await?;
-        parse_api_response(status, &body, context)
     }
 
     async fn get<T: DeserializeOwned>(
         &self,
-        path: &str,
+        path: &'static str,
         mut query: Vec<(&'static str, String)>,
         context: &'static str,
     ) -> Result<T, ApiError> {
@@ -510,14 +751,14 @@ impl Client {
             .http
             .get(format!("{}{path}", self.base_url))
             .query(&query);
-        self.execute(request, context).await
+        self.execute("GET", path, request, context).await
     }
 
     /// POST with the shard injected into the body (python-screeps puts
     /// shard in the JSON body for POST endpoints).
     async fn post<T: DeserializeOwned>(
         &self,
-        path: &str,
+        path: &'static str,
         mut body: serde_json::Value,
         context: &'static str,
     ) -> Result<T, ApiError> {
@@ -531,7 +772,7 @@ impl Client {
     /// code upload are account-level, not shard-level).
     async fn post_unsharded<T: DeserializeOwned>(
         &self,
-        path: &str,
+        path: &'static str,
         body: serde_json::Value,
         context: &'static str,
     ) -> Result<T, ApiError> {
@@ -539,8 +780,17 @@ impl Client {
             .http
             .post(format!("{}{path}", self.base_url))
             .json(&body);
-        self.execute(request, context).await
+        self.execute("POST", path, request, context).await
     }
+}
+
+/// Unix seconds now — anchors `X-RateLimit-Reset` (epoch seconds) to
+/// monotonic [`Instant`]s for the trackers.
+fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -598,5 +848,46 @@ mod tests {
     fn token_rotation_length_rule() {
         assert!("f".repeat(40).len() >= TOKEN_ROTATION_MIN_LEN);
         assert!("unauthorized".len() < TOKEN_ROTATION_MIN_LEN);
+    }
+
+    /// The official classification (mirrors prospector's MMO-safety
+    /// rule, P0.P4): token auth OR a screeps.com URL — and it drives
+    /// whether quota pacing engages on a new client.
+    #[test]
+    fn official_target_classification_drives_quota_pacing() {
+        let token = || AuthMode::Token(SecretString::from(FAKE_TOKEN));
+        let userpass = || AuthMode::UserPass {
+            username: "ibex".to_owned(),
+            password: SecretString::from(FAKE_PW),
+        };
+        assert!(is_official_target("https://screeps.com", &token()));
+        assert!(
+            is_official_target("http://127.0.0.1:21025", &token()),
+            "token auth gets MMO-grade caution even against a private host"
+        );
+        assert!(is_official_target(
+            "https://screeps.com/season",
+            &userpass()
+        ));
+        assert!(!is_official_target("http://127.0.0.1:21025", &userpass()));
+
+        let mmo = Client::new(
+            "https://screeps.com",
+            Some("shard3".to_owned()),
+            token(),
+            Duration::from_millis(DEFAULT_MIN_DELAY_MS),
+        )
+        .unwrap();
+        assert!(mmo.is_official(), "quota pacing auto-engages on MMO");
+        // The sanctioned opt-out: noratelimit token holders can switch
+        // the pacing off explicitly.
+        assert!(!mmo.quota_pacing(false).is_official());
+
+        let private =
+            Client::new("http://127.0.0.1:21025", None, userpass(), Duration::ZERO).unwrap();
+        assert!(
+            !private.is_official(),
+            "private servers keep plain min-delay"
+        );
     }
 }

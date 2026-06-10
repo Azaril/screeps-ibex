@@ -101,14 +101,18 @@ Global flags (all commands): `--server-name <entry>`, `--shard <name>`,
 `--config <path>` (credentials file), `--cache-file <path>` (default
 `cache/<shard-or-server>.json`), `--min-delay-ms <ms>`.
 
-#### `scan --rooms W1N1,W2N1 | --all`
+#### `scan --rooms W1N1,W2N1 | --all [--status-ttl-secs 3600]`
 
 Batched `map-stats` over the named rooms (or the whole map, enumerated
 via `world-size`). Records per-room spawnability in the cache:
 `open` (exists, unowned, unreserved), plus `novice`/`respawn`
 protection flags surfaced separately (whether you can use such rooms
-depends on your account — you decide). On an MMO shard `--all` is
-~15k rooms ≈ 230 API calls ≈ 2.5 minutes at the default pacing.
+depends on your account — you decide). Batches are 1000 rooms per call,
+so an MMO shard's ~15k rooms is **15 map-stats calls** — a quarter of
+the 60/hour quota. **Resumable:** the cache is saved after every batch,
+and re-runs skip rooms whose cached status is fresher than
+`--status-ttl-secs` (default 3600; `0` = rescan everything), so an
+interrupted scan loses at most one batch.
 
 #### `fetch [--rooms W1N1,… | --all-open] [--status-ttl-secs 3600]`
 
@@ -116,9 +120,12 @@ Fetches terrain (`room-terrain?encoded=1`) and planner objects
 (`room-objects`, filtered to sources/controller/mineral) into the cache.
 The default (and `--all-open`) is every room the cache flags open — run
 `scan` first. Terrain is immutable: once cached, never refetched (the
-cheapest API call is the one not made — terrain is the rate-limited
-endpoint on MMO at 360/hour). Statuses older than the TTL are refreshed
-in one batched call.
+cheapest API call is the one not made — terrain is the quota-capped
+endpoint on MMO at 360/hour). Planner objects are positionally
+immutable too, so rooms with terrain **and** objects cached are skipped
+entirely — interrupted runs resume. Progress is saved incrementally
+(every status batch / every 16 rooms). Statuses older than the TTL are
+refreshed in batched calls.
 
 #### `score [--rooms … | --all] [--w-* weights]`
 
@@ -180,11 +187,46 @@ $ cargo run -- --server-name mmo --shard shard3 place \
 ```
 
 Prefer `scan --rooms` over `--all` on MMO (scan the area you actually
-want to settle). Rate limits: tokens get 120 requests/minute globally
-and per-endpoint caps (room-terrain: 360/hour); the client paces itself
-(`--min-delay-ms`, default 600) and surfaces HTTP 429 as a clear error
-(it does not auto-retry). The cache exists precisely so re-runs cost
-zero API calls.
+want to settle) — but `--all` is survivable now: see below.
+
+#### MMO quota realities
+
+screeps.com limits auth tokens on **two layers**
+([auth-tokens docs](https://docs.screeps.com/auth-tokens.html); the
+per-endpoint table is pinned in
+[`screeps-rest-api`](../screeps-rest-api/README.md#the-pinned-per-endpoint-quota-table)
+from node-screeps-api):
+
+| What prospector calls | Quota | Sustained pacing |
+|---|---|---|
+| everything (global) | 120/minute | `--min-delay-ms`, default 600 |
+| `POST map-stats` (scan + status refresh) | **60/hour** | one call / 60 s |
+| `GET room-terrain` (fetch) | **360/hour** | one call / 10 s |
+| `GET room-objects` (fetch) | global only | 600 ms |
+
+The shared client paces the quota-capped endpoints **proactively** for
+official server entries (it prefers the server's `X-RateLimit-*`
+headers when present — faster while the hourly window is unspent), and
+on a 429 it logs `rate limited; resuming in Xs (endpoint quota: …)`,
+waits, and resumes instead of killing the run. Long waits (≥ 2 min)
+print once the sanctioned opt-out
+(`https://screeps.com/a/#!/account/auth-tokens/noratelimit` — disable
+rate limiting per token, your choice to use).
+
+What that means in practice, with the **ETA printed up front** before
+the first call:
+
+- `scan --all` on a ~15k-room shard → 15 map-stats calls (1000
+  rooms/batch) → **≈ 14 min** sustained, well inside one hourly window.
+- `fetch` of N open rooms → N room-terrain calls at 10 s spacing → e.g.
+  300 rooms ≈ 50 min, **printed before starting** with the suggestion
+  to scope `--rooms` to a region instead.
+
+Everything is **resumable**: scan saves the cache after every batch and
+skips fresh statuses on re-run; fetch skips rooms whose terrain+objects
+are already cached and saves incrementally. An interrupted run (Ctrl-C,
+network, an exhausted window) loses at most one batch, and the cache
+exists precisely so re-runs cost zero API calls.
 
 ### Troubleshooting
 
@@ -206,10 +248,10 @@ zero API calls.
 
 | Module      | Responsibility |
 |-------------|----------------|
-| `config`    | `.screeps.yaml` parsing, server selection, `SecretString` secrets policy, the official-server classification (`is_official`); re-exports the shared `AuthMode` |
-| *(shared)* [`screeps-rest-api`](../screeps-rest-api) | REST client (P0.A12 — one client, not N): signin/token auth + rotation, world-size/map-stats/room-terrain/room-objects/room-status/world-status/place-spawn/respawn (+ memory segments, code upload, console socket for the other consumers), courtesy rate limit, typed error envelope |
+| `config`    | `.screeps.yaml` parsing, server selection, `SecretString` secrets policy, the official-server classification (`is_official`, delegating to the shared `is_official_target`); re-exports the shared `AuthMode` |
+| *(shared)* [`screeps-rest-api`](../screeps-rest-api) | REST client (P0.A12 — one client, not N): signin/token auth + rotation, world-size/map-stats/room-terrain/room-objects/room-status/world-status/place-spawn/respawn (+ memory segments, code upload, console socket for the other consumers), courtesy rate limit + official per-endpoint quota pacing with 429 backoff-and-resume, typed error envelope |
 | `cache`     | File-backed room cache in the foreman-bench map-JSON shape; upsert semantics; terrain decode bridge to `FastRoomTerrain` |
-| `ops`       | `scan`/`fetch` flows over client + cache; pure status derivation |
+| `ops`       | `scan`/`fetch` flows over client + cache (resumable: per-batch persistence, fresh-status / fully-fetched skipping); quota call-count/ETA planning (`plan_scan`/`plan_fetch`); pure status derivation |
 | `score`     | Two-stage scoring: stage-1 heuristics, stage-2 offline foreman planning, first-spawn extraction |
 | `place`     | Confirmation gates (the MMO safety model) + placement description |
 | `main`      | Thin clap CLI over all of the above |
@@ -341,9 +383,14 @@ table collapses.
 ### Verification status
 
 Offline behavior (P0.P1–P0.P3 + the offline half of P0.P4) is fully
-tested: 43 tests in this crate against literal/recorded fixtures and a
-copy of the bench map (plus the endpoint-shape pins, now 29 tests in
-the shared `screeps-rest-api` crate), no network, no Docker.
+tested: 51 tests in this crate against literal/recorded fixtures and a
+copy of the bench map (plus the endpoint-shape and quota/rate-limit
+pins, now 39 tests in the shared `screeps-rest-api` crate), no network,
+no Docker. The MMO quota plan math (batch construction for a 14 884-room
+shard, sustained ETAs, resume skipping) is unit-tested pure; the
+pacing/backoff behavior against real screeps.com headers awaits the
+operator's next MMO run (the local private server enforces no limits
+and sends no rate-limit headers).
 
 **Live (2026-06-10):** the private-server `auto --yes` end-to-end (the
 P0.P4 "done when") ran green against the eval stack — scan (144 rooms,

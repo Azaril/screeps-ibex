@@ -122,15 +122,20 @@ impl PlanArgs {
 #[derive(Subcommand)]
 enum Command {
     /// Discover rooms open for spawning (batched map-stats) and record
-    /// their status in the cache
+    /// their status in the cache. Resumable: progress is saved after
+    /// every batch, and re-runs skip rooms with a fresh cached status
     Scan {
         /// Comma-separated room names (e.g. W5N5,W6N5)
         #[arg(long)]
         rooms: Option<String>,
-        /// Enumerate the whole map via world-size instead (large on MMO
-        /// shards: ~15k rooms => ~230 calls at the courtesy delay)
+        /// Enumerate the whole map via world-size instead (an MMO shard
+        /// is ~15k rooms => ~15 batched map-stats calls)
         #[arg(long)]
         all: bool,
+        /// Skip rooms whose cached status is fresher than this many
+        /// seconds (0 = rescan everything)
+        #[arg(long, default_value_t = 3600)]
+        status_ttl_secs: u64,
     },
     /// Fetch terrain + planner objects into the cache (terrain is
     /// immutable: cached rooms are never refetched)
@@ -313,10 +318,6 @@ async fn connect_with(cfg: ProspectorConfig, cli: &Cli) -> Result<Client> {
     Ok(client)
 }
 
-async fn connect(cli: &Cli) -> Result<Client> {
-    connect_with(load_config(cli)?, cli).await
-}
-
 // ---- table printing ----
 
 fn print_stage1_table(stage1: &Stage1Result) {
@@ -357,6 +358,84 @@ fn print_fetch_list(stage1: &Stage1Result) {
     }
     let rooms: Vec<&str> = stage1.needs_fetch.iter().map(|n| n.room.as_str()).collect();
     println!("  -> fetch --rooms {}", rooms.join(","));
+}
+
+/// Human ETA: seconds -> "Ns" / "Nm Ss" / "Nh Mm".
+fn fmt_eta(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m {:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h {:02}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+/// "60/hour" / "240/day" — the quota the ETA reasoning cites.
+fn fmt_quota(quota: &screeps_rest_api::EndpointQuota) -> String {
+    let period = match quota.period.as_secs() {
+        3600 => "hour".to_owned(),
+        86_400 => "day".to_owned(),
+        secs => format!("{secs}s"),
+    };
+    format!("{}/{period}", quota.limit)
+}
+
+/// MMO quota reasoning, printed BEFORE any scan network call (official
+/// servers only): call count, the per-endpoint quota driving the ETA,
+/// and the region-scoping suggestion for long runs.
+fn print_scan_plan(plan: &ops::ScanPlan, official: bool) {
+    if !official {
+        return;
+    }
+    println!(
+        "MMO quota plan: {} room(s) to scan ({} fresh in cache, skipped) -> {} map-stats call(s) \
+         of up to {} rooms",
+        plan.rooms_to_scan,
+        plan.skipped_fresh,
+        plan.calls,
+        ops::MAP_STATS_CHUNK
+    );
+    println!(
+        "  map-stats quota on screeps.com: {} => ETA <= {} (sustained pacing; faster while the \
+         hourly window is unspent)",
+        fmt_quota(&plan.quota),
+        fmt_eta(plan.eta_secs)
+    );
+    if plan.eta_secs > 600 {
+        println!(
+            "  tip: scope --rooms to the region you want to settle; progress persists after \
+             every batch, so an interrupted run resumes where it stopped"
+        );
+    }
+}
+
+/// MMO quota reasoning for fetch: room-terrain (360/hour) dominates.
+fn print_fetch_plan(plan: &ops::FetchPlan, official: bool) {
+    if !official {
+        return;
+    }
+    println!(
+        "MMO quota plan: {} room-terrain call(s) ({}) + {} room-objects call(s) (global \
+         120/minute) + {} status batch(es) ({}); {} of {} room(s) already complete, skipped",
+        plan.terrain_calls,
+        fmt_quota(&plan.terrain_quota),
+        plan.object_calls,
+        plan.status_calls,
+        fmt_quota(&plan.status_quota),
+        plan.skipped_complete,
+        plan.rooms_total
+    );
+    println!(
+        "  ETA <= {} (sustained pacing; faster while the hourly windows are unspent)",
+        fmt_eta(plan.eta_secs)
+    );
+    if plan.eta_secs > 600 {
+        println!(
+            "  tip: fetch a region first (--rooms ...); progress persists incrementally, so an \
+             interrupted run resumes where it stopped"
+        );
+    }
 }
 
 fn print_recommendations(result: &RecommendResult) {
@@ -401,10 +480,16 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Command::Scan { rooms, all } => {
+        Command::Scan {
+            rooms,
+            all,
+            status_ttl_secs,
+        } => {
             let cache_path = resolve_cache_path(&cli);
             let mut cache = load_or_new_cache(&cache_path, &cli)?;
-            let client = connect(&cli).await?;
+            let cfg = load_config(&cli)?;
+            let official = cfg.is_official();
+            let client = connect_with(cfg, &cli).await?;
             let room_names = match (rooms, all) {
                 (Some(list), _) => parse_room_list(list),
                 (None, true) => {
@@ -413,14 +498,26 @@ async fn main() -> Result<()> {
                 }
                 (None, false) => bail!(
                     "pass --rooms W1N1,W2N1,... or --all (enumerates the whole map \
-                     via world-size; ~15k rooms on an MMO shard)"
+                     via world-size; ~15k rooms on an MMO shard => ~15 batched calls)"
                 ),
             };
-            let summary = ops::scan_rooms(&client, &mut cache, &room_names, now_unix()).await?;
+            // ETA up front, before the first map-stats call.
+            let plan = ops::plan_scan(&cache, &room_names, now_unix(), *status_ttl_secs);
+            print_scan_plan(&plan, official);
+            let summary = ops::scan_rooms_resumable(
+                &client,
+                &mut cache,
+                &room_names,
+                now_unix(),
+                Some(&cache_path),
+                *status_ttl_secs,
+            )
+            .await?;
             cache.save(&cache_path)?;
             println!(
-                "scanned {} rooms: {} open for spawning -> {}",
+                "scanned {} rooms ({} skipped, status fresh): {} open for spawning -> {}",
                 summary.scanned,
+                summary.skipped_fresh,
                 summary.open,
                 cache_path.display()
             );
@@ -444,21 +541,34 @@ async fn main() -> Result<()> {
                      cache knows which rooms are open"
                 );
             }
-            let client = connect(&cli).await?;
-            let summary = ops::fetch_rooms(
+            let cfg = load_config(&cli)?;
+            let official = cfg.is_official();
+            let client = connect_with(cfg, &cli).await?;
+            // ETA up front, before the first call.
+            let plan = ops::plan_fetch(
+                &cache,
+                &room_names,
+                *status_ttl_secs,
+                now_unix(),
+                cli.min_delay_ms,
+            );
+            print_fetch_plan(&plan, official);
+            let summary = ops::fetch_rooms_resumable(
                 &client,
                 &mut cache,
                 &room_names,
                 *status_ttl_secs,
                 now_unix(),
+                Some(&cache_path),
             )
             .await?;
             cache.save(&cache_path)?;
             println!(
-                "fetched {} rooms ({} terrains fetched, {} already cached, {} statuses refreshed) -> {}",
+                "fetched {} rooms ({} terrains fetched, {} already cached, {} complete rooms skipped, {} statuses refreshed) -> {}",
                 summary.fetched_objects,
                 summary.fetched_terrain,
                 summary.skipped_terrain,
+                summary.skipped_complete,
                 summary.refreshed_status,
                 cache_path.display()
             );
@@ -564,10 +674,19 @@ async fn main() -> Result<()> {
             }
             println!("world-status: {} — proceeding", world.status);
 
-            // 1. Scan the whole map for open rooms.
+            // 1. Scan the whole map for open rooms (TTL 0: `auto` is a
+            // fresh end-to-end decision, never a resume).
             let world_size = client.world_size().await?;
             let room_names = enumerate_room_names(world_size.width, world_size.height);
-            let scan = ops::scan_rooms(&client, &mut cache, &room_names, now_unix()).await?;
+            let scan = ops::scan_rooms_resumable(
+                &client,
+                &mut cache,
+                &room_names,
+                now_unix(),
+                Some(&cache_path),
+                0,
+            )
+            .await?;
             cache.save(&cache_path)?;
             println!("scan: {} rooms, {} open", scan.scanned, scan.open);
             let open: Vec<String> = cache.open_rooms().map(|r| r.room.clone()).collect();
@@ -576,8 +695,15 @@ async fn main() -> Result<()> {
             }
 
             // 2. Fetch terrain + objects for the open rooms.
-            let fetch =
-                ops::fetch_rooms(&client, &mut cache, &open, *status_ttl_secs, now_unix()).await?;
+            let fetch = ops::fetch_rooms_resumable(
+                &client,
+                &mut cache,
+                &open,
+                *status_ttl_secs,
+                now_unix(),
+                Some(&cache_path),
+            )
+            .await?;
             cache.save(&cache_path)?;
             println!(
                 "fetch: {} terrains fetched, {} already cached",
@@ -662,6 +788,47 @@ mod tests {
     #[test]
     fn cli_definition_is_consistent() {
         Cli::command().debug_assert();
+    }
+
+    /// Scan's resume TTL parses with its documented default and 0
+    /// (= full rescan) stays accepted.
+    #[test]
+    fn scan_status_ttl_parses_with_default() {
+        let cli = Cli::try_parse_from(["screeps-prospector", "scan", "--all"]).unwrap();
+        let Command::Scan {
+            status_ttl_secs, ..
+        } = cli.command
+        else {
+            panic!("expected scan");
+        };
+        assert_eq!(status_ttl_secs, 3600);
+        let cli = Cli::try_parse_from([
+            "screeps-prospector",
+            "scan",
+            "--all",
+            "--status-ttl-secs",
+            "0",
+        ])
+        .unwrap();
+        let Command::Scan {
+            status_ttl_secs, ..
+        } = cli.command
+        else {
+            panic!("expected scan");
+        };
+        assert_eq!(status_ttl_secs, 0);
+    }
+
+    /// The ETA strings the quota plan prints.
+    #[test]
+    fn eta_and_quota_formatting() {
+        assert_eq!(fmt_eta(45), "45s");
+        assert_eq!(fmt_eta(840), "14m 00s");
+        assert_eq!(fmt_eta(3600 + 120), "1h 02m");
+        let map_stats = screeps_rest_api::endpoint_quota("POST", "/api/game/map-stats").unwrap();
+        assert_eq!(fmt_quota(&map_stats), "60/hour");
+        let code = screeps_rest_api::endpoint_quota("POST", "/api/user/code").unwrap();
+        assert_eq!(fmt_quota(&code), "240/day");
     }
 
     #[test]

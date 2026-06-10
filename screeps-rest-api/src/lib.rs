@@ -16,8 +16,12 @@
 //!   to a cited source and fixture-tested
 //! - [`code`]   — the `POST /api/user/code` module map (string + binary
 //!   modules) for code upload
+//! - [`quota`]  — the official per-endpoint quota table (pinned from
+//!   node-screeps-api), `X-RateLimit-*` header parsing, 429 retry-after
+//!   parsing, and the [`QuotaTracker`] pacing math
 //! - [`client`] — [`Client`]: auth (token / user+pass with rolling
-//!   X-Token adoption), shard injection, courtesy rate limit, and the
+//!   X-Token adoption), shard injection, courtesy rate limit +
+//!   official-server quota pacing with 429 backoff-and-resume, and the
 //!   typed endpoint methods
 //! - [`socket`] — the console websocket: frame parsing, the
 //!   auth/subscribe handshake ([`ConsoleSocket`]), console-payload
@@ -36,12 +40,19 @@
 pub mod client;
 pub mod code;
 pub mod error;
+pub mod quota;
 pub mod socket;
 pub mod types;
 
-pub use client::{AuthMode, Client, DEFAULT_MIN_DELAY_MS, DEFAULT_REQUEST_TIMEOUT};
+pub use client::{
+    is_official_target, AuthMode, Client, DEFAULT_MIN_DELAY_MS, DEFAULT_REQUEST_TIMEOUT,
+};
 pub use code::{CodeModule, CodeModules};
 pub use error::ApiError;
+pub use quota::{
+    endpoint_quota, parse_rate_limit_headers, parse_retry_after_ms, EndpointQuota, QuotaTracker,
+    RateLimitInfo, NO_RATE_LIMIT_URL,
+};
 pub use socket::{
     console_lines, parse_socket_frame, ws_url_from_http_base, ConsoleEvent, ConsoleLineKind,
     ConsolePayloadLine, ConsoleSocket, SocketFrame,
