@@ -52,7 +52,13 @@ construction (pinned by tests). The file is read at runtime only; tests
 never touch it. Nothing secret is ever written to the cache.
 
 Select the entry with `--server-name` (default: `private-server`).
-Official servers also need `--shard` (e.g. `--shard shard3`).
+screeps.com targets also need `--shard` (e.g. `--shard shard3`) —
+enforced when the server exposes its shard list: the CLI checks the
+flag against `/api/game/shards/info` up front and the error names the
+available shards, instead of letting a scan spend quota-capped calls
+to learn the shard was missing or misspelled. Note the cache is
+per-shard (`cache/<shard>.json`), so every later command needs the
+same `--shard`.
 
 ### Quick start — private server
 
@@ -105,9 +111,11 @@ Global flags (all commands): `--server-name <entry>`, `--shard <name>`,
 
 Batched `map-stats` over the named rooms (or the whole map, enumerated
 via `world-size`). Records per-room spawnability in the cache:
-`open` (exists, unowned, unreserved), plus `novice`/`respawn`
-protection flags surfaced separately (whether you can use such rooms
-depends on your account — you decide). Batches are 1000 rooms per call,
+`open` (exists, unowned, unreserved, and claimable by name — highways
+and source-keeper rooms are excluded, since map-stats reports those as
+`"normal"` too), plus `novice`/`respawn` protection flags surfaced
+separately (whether you can use such rooms depends on your account —
+you decide). Batches are 1000 rooms per call,
 so an MMO shard's ~15k rooms is **15 map-stats calls** — a quarter of
 the 60/hour quota. **Resumable:** the cache is saved after every batch,
 and re-runs skip rooms whose cached status is fresher than

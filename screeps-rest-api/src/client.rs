@@ -30,8 +30,8 @@ use crate::quota::{
 use crate::socket::ws_url_from_http_base;
 use crate::types::{
     MapStatsResponse, MemorySegmentResponse, OkResponse, RoomObjectsResponse, RoomStatusResponse,
-    RoomTerrainResponse, SignInResponse, TimeResponse, UserInfo, WorldSizeResponse,
-    WorldStatusResponse,
+    RoomTerrainResponse, ShardsInfoResponse, SignInResponse, TimeResponse, UserInfo,
+    WorldSizeResponse, WorldStatusResponse,
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
@@ -314,6 +314,28 @@ impl Client {
     /// (path, `without_auth=True`); python-screeps `worldsize` (shard).
     pub async fn world_size(&self) -> Result<WorldSizeResponse, ApiError> {
         self.get("/api/game/world-size", Vec::new(), "world-size response")
+            .await
+    }
+
+    /// `GET /api/game/shards/info` -> `{ok, shards: [{name, ...}]}`.
+    /// Global limiter only (not in ScreepsAPI.js's per-endpoint table).
+    /// Sources: node-screeps-api raw.game.shards.info, Endpoints.md.
+    ///
+    /// Why we expose it: a MISSING shard fails map-stats with "invalid
+    /// shard" (verified live 2026-06-10) — but only AFTER a
+    /// quota-bearing call has been spent — and the shard list itself
+    /// changes over time (shardX showed up alongside shard0..shard3 in
+    /// the live 2026-06-10 response). Callers targeting official
+    /// servers should validate the chosen shard against this list
+    /// before paying for a scan.
+    ///
+    /// Note [`Self::get`] injects the client's own `shard` into the
+    /// query, so this request carries the very value being validated;
+    /// screeps.com ignores the parameter here today, but if it ever
+    /// starts validating it, a typo'd shard degrades this lookup to
+    /// the caller's fallback path rather than producing a clean list.
+    pub async fn shards_info(&self) -> Result<ShardsInfoResponse, ApiError> {
+        self.get("/api/game/shards/info", Vec::new(), "shards-info response")
             .await
     }
 

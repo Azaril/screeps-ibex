@@ -60,5 +60,6 @@ pub use socket::{
 pub use types::{
     enumerate_room_names, MapStatsResponse, MemorySegmentResponse, OkResponse, RoomMapStats,
     RoomObjectsResponse, RoomOwner, RoomStatusEntry, RoomStatusResponse, RoomTerrainResponse,
-    TerrainEntry, TimeResponse, UserInfo, WorldSizeResponse, WorldStatusResponse,
+    ShardInfo, ShardsInfoResponse, TerrainEntry, TimeResponse, UserInfo, WorldSizeResponse,
+    WorldStatusResponse,
 };

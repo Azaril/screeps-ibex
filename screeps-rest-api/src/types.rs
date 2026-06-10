@@ -88,6 +88,24 @@ pub struct WorldSizeResponse {
     pub height: u32,
 }
 
+/// `GET /api/game/shards/info` response. Official servers list their
+/// shards here (shard0..shard3 plus shardX in the live 2026-06-10
+/// screeps.com response — the list changes over time, never hard-code
+/// it); private servers without a shards mod return an error instead.
+#[derive(Debug, Deserialize)]
+pub struct ShardsInfoResponse {
+    pub ok: i32,
+    pub shards: Vec<ShardInfo>,
+}
+
+/// Per-shard entry of the shards-info response. Only the name is
+/// load-bearing for us; the live payload also carries tick/cpu/room
+/// statistics, all ignored.
+#[derive(Debug, Deserialize)]
+pub struct ShardInfo {
+    pub name: String,
+}
+
 /// `POST /api/game/map-stats` response.
 #[derive(Debug, Deserialize)]
 pub struct MapStatsResponse {
@@ -259,6 +277,26 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.id, "6a28d4d7d9592a0060be10ef");
         assert_eq!(parsed.username, "Azaril");
+    }
+
+    /// DOCUMENTED SHAPE: GET /api/game/shards/info (node-screeps-api,
+    /// Endpoints.md) — per-shard stats blocks must be tolerated and
+    /// only the names extracted.
+    #[test]
+    fn shards_info_fixture_parses() {
+        let parsed: ShardsInfoResponse = parse_api_response(
+            200,
+            r#"{"ok":1,"shards":[
+                {"name":"shard0","rooms":3025,"users":410,"tick":4123.5,"cpuLimit":100,"lastTicks":[4100,4150]},
+                {"name":"shard1","rooms":2916,"users":380,"tick":3050.0},
+                {"name":"shard2"},
+                {"name":"shard3"}
+            ]}"#,
+            "shards-info response",
+        )
+        .unwrap();
+        let names: Vec<&str> = parsed.shards.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["shard0", "shard1", "shard2", "shard3"]);
     }
 
     /// RECORDED SHAPES: GET /api/user/memory-segment — never-written

@@ -104,7 +104,9 @@ pub struct CachedRoom {
 /// Spawnability flags derived from map-stats (see `ops::derive_room_status`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomStatus {
-    /// Room exists, is `"normal"`, and is unowned/unreserved.
+    /// Room exists, is `"normal"`, is unowned/unreserved, AND is
+    /// claimable by name ([`room_name_claimable`] — highways and
+    /// source-keeper rooms are excluded).
     #[serde(default)]
     pub open: bool,
     /// Active novice-area protection (spawnable by novice accounts only).
@@ -113,6 +115,55 @@ pub struct RoomStatus {
     /// Active respawn-area protection (official server).
     #[serde(default)]
     pub respawn: bool,
+}
+
+/// Whether a room can hold a controller at all, from the standard map
+/// sector layout (each 10x10 sector: coordinates ending in 0 are
+/// controller-less highways; the central 3x3 block — both coordinates
+/// ending in 4..=6 — is the source-keeper core with the 5,5 portal
+/// room). The rule operates on the NUMBERS in the room name (`W15N15`
+/// → 5,5 → core), matching how the official map is generated (the
+/// bench's shard0..shard3 dumps agree on all 77,776 rooms: the DB
+/// `bus` highway flag equals the %10==0 rule exactly, and no room
+/// with a controller is name-excluded); private servers using the
+/// standard map generator follow the same layout. Unparseable names
+/// are conservatively unclaimable.
+///
+/// CAVEATS: this is a NECESSARY condition, not sufficient — shard0
+/// has at least one controller-less `"normal"` room that passes the
+/// name rule (W22S49 in the bench dump), so `open` stays best-effort
+/// and fetch/score verify actual objects. Hand-built custom maps can
+/// break the convention entirely. The filter exists to keep
+/// `scan --all` from flagging ~30% of an MMO shard's rooms
+/// (highways/SK) open and burning the room-terrain fetch quota on
+/// them.
+pub fn room_name_claimable(room: &str) -> bool {
+    fn axis(s: &str) -> Option<(u32, &str)> {
+        let digits = s.chars().take_while(char::is_ascii_digit).count();
+        if digits == 0 {
+            return None;
+        }
+        Some((s[..digits].parse().ok()?, &s[digits..]))
+    }
+    let Some(rest) = room.strip_prefix(['W', 'E']) else {
+        return false;
+    };
+    let Some((x, rest)) = axis(rest) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix(['N', 'S']) else {
+        return false;
+    };
+    let Some((y, rest)) = axis(rest) else {
+        return false;
+    };
+    if !rest.is_empty() {
+        return false;
+    }
+    let (xm, ym) = (x % 10, y % 10);
+    let highway = xm == 0 || ym == 0;
+    let sk_core = (4..=6).contains(&xm) && (4..=6).contains(&ym);
+    !highway && !sk_core
 }
 
 /// Structured view over the bench-shaped `objects` array.
@@ -212,11 +263,16 @@ impl RoomCache {
         self.rooms.iter().find(|r| r.room == room)
     }
 
-    /// Rooms currently flagged open for spawning.
+    /// Rooms currently flagged open for spawning. Re-applies
+    /// [`room_name_claimable`] on read: cache files written before the
+    /// claimability gate existed flag highways/source-keeper rooms
+    /// open, and this retroactively sanitizes them so `fetch
+    /// --all-open` doesn't burn the room-terrain quota on them.
     pub fn open_rooms(&self) -> impl Iterator<Item = &CachedRoom> {
         self.rooms
             .iter()
             .filter(|r| r.spawn_status.map(|s| s.open).unwrap_or(false))
+            .filter(|r| room_name_claimable(&r.room))
     }
 
     /// Merge a record in. Semantics:

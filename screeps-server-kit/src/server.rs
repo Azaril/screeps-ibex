@@ -901,7 +901,12 @@ async fn place_via_prospector(
         open = vec![room.to_owned()];
     }
     if open.is_empty() {
-        bail!("no open candidate rooms for prospector placement (is the world seeded?)");
+        bail!(
+            "no open candidate rooms for prospector placement (is the world \
+             seeded? note highway/source-keeper rooms are excluded by the \
+             standard sector-layout name rule — custom maps that break the \
+             convention won't surface candidates)"
+        );
     }
 
     ops::fetch_rooms(api, &mut cache, &open, 3600, now_unix).await?;

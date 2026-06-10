@@ -288,7 +288,9 @@ fn load_or_new_cache(path: &Path, cli: &Cli) -> Result<RoomCache> {
 fn load_cache_or_explain(path: &Path) -> Result<RoomCache> {
     if !path.exists() {
         bail!(
-            "no cache at {} (run `scan`+`fetch`, or `cache seed` for offline use)",
+            "no cache at {} (run `scan`+`fetch`, or `cache seed` for offline use; \
+             if you scanned with --shard, pass the same one — cache files are \
+             per-shard)",
             path.display()
         );
     }
@@ -302,9 +304,20 @@ fn load_config(cli: &Cli) -> Result<ProspectorConfig> {
 }
 
 /// Build the REST client from an already-loaded config and sign in
-/// (a no-op for token auth).
+/// (a no-op for token auth). screeps.com targets additionally get
+/// their `--shard` checked against `/api/game/shards/info` BEFORE any
+/// quota-bearing call: a missing shard fails map-stats with a bare
+/// "invalid shard" (verified live 2026-06-10) after the call is
+/// already spent, and the validation error can list the actual
+/// choices — which change over time (shardX joined shard0..shard3).
+///
+/// The gate keys on the HOST, not on `cfg.is_official()`: official
+/// classification covers any token-auth entry (quota caution), but a
+/// token-auth PRIVATE server is legitimately shardless and has no
+/// shards/info route — it must keep connecting exactly as before.
 async fn connect_with(cfg: ProspectorConfig, cli: &Cli) -> Result<Client> {
     let base_url = cfg.base_url.clone();
+    let screeps_com = base_url.contains("screeps.com");
     let client = Client::new(
         cfg.base_url,
         cli.shard.clone(),
@@ -315,6 +328,26 @@ async fn connect_with(cfg: ProspectorConfig, cli: &Cli) -> Result<Client> {
         .sign_in()
         .await
         .with_context(|| format!("signing in to {base_url}"))?;
+    if screeps_com {
+        match client.shards_info().await {
+            Ok(info) => {
+                let names: Vec<String> = info.shards.into_iter().map(|s| s.name).collect();
+                ops::validate_shard_choice(cli.shard.as_deref(), &names)?;
+            }
+            // screeps.com flavors without the endpoint (e.g. season
+            // variants): can't list, but still refuse to run shardless
+            // — that fails later with worse errors.
+            Err(err) => match cli.shard.as_deref() {
+                Some(shard) => {
+                    tracing::warn!("could not validate --shard {shard}: {err}");
+                }
+                None => bail!(
+                    "screeps.com is sharded and the shard list could not be \
+                     fetched ({err}); pass --shard explicitly (e.g. shard3)"
+                ),
+            },
+        }
+    }
     Ok(client)
 }
 
@@ -473,7 +506,10 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "screeps_prospector=info".into()),
+                // screeps_rest_api included by default: its warns carry
+                // the rate-limit backoff/resume notices — invisible
+                // backoff looks like a hang.
+                .unwrap_or_else(|_| "screeps_prospector=info,screeps_rest_api=info".into()),
         )
         .init();
 
@@ -521,6 +557,13 @@ async fn main() -> Result<()> {
                 summary.open,
                 cache_path.display()
             );
+            if summary.open == 0 && summary.scanned >= 10 {
+                println!(
+                    "note: nothing came back open — every scanned room is owned, \
+                     reserved, out-of-borders/nonexistent, or unclaimable \
+                     (highway/source-keeper). If that's unexpected, check --shard."
+                );
+            }
         }
         Command::Fetch {
             rooms,
@@ -538,7 +581,8 @@ async fn main() -> Result<()> {
             if room_names.is_empty() {
                 bail!(
                     "no rooms to fetch: pass --rooms, or run `scan` first so the \
-                     cache knows which rooms are open"
+                     cache knows which rooms are open (if you scanned with \
+                     --shard, pass the same one — cache files are per-shard)"
                 );
             }
             let cfg = load_config(&cli)?;

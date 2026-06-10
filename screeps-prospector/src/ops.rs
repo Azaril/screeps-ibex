@@ -23,8 +23,11 @@
 //! The pure status derivation ([`derive_room_status`]) is unit-tested
 //! offline; the async flows only sequence pinned client calls.
 
-use crate::cache::{filter_planner_objects, validate_terrain, CachedRoom, RoomCache, RoomStatus};
-use anyhow::{Context, Result};
+use crate::cache::{
+    filter_planner_objects, room_name_claimable, validate_terrain, CachedRoom, RoomCache,
+    RoomStatus,
+};
+use anyhow::{bail, Context, Result};
 use screeps_rest_api::{endpoint_quota, Client, EndpointQuota, RoomMapStats};
 use std::path::Path;
 use std::time::Duration;
@@ -72,19 +75,42 @@ pub struct FetchSummary {
 
 /// Pure: map-stats entry → spawnability flags.
 ///
-/// `open` is conservative: the room must exist (`status == "normal"`)
-/// and be unowned/unreserved. Novice/respawn protections are surfaced
-/// as separate flags rather than folded into `open`, because their
-/// spawnability depends on the account's own state — the operator
-/// decides. `now_ms` is Unix epoch milliseconds (the unit the server
-/// uses for `novice`/`respawnArea`/`openTime`).
-pub fn derive_room_status(stats: &RoomMapStats, now_ms: i64) -> RoomStatus {
+/// `open` is conservative: the room must exist (`status == "normal"`),
+/// be unowned/unreserved, AND be claimable by name
+/// ([`room_name_claimable`] — map-stats reports highways and
+/// source-keeper rooms as `status: "normal"` too, verified live on
+/// shard3 2026-06-10, but a spawn can only be placed in a room with a
+/// controller). Novice/respawn protections are surfaced as separate
+/// flags rather than folded into `open`, because their spawnability
+/// depends on the account's own state — the operator decides. `now_ms`
+/// is Unix epoch milliseconds (the unit the server uses for
+/// `novice`/`respawnArea`/`openTime`).
+pub fn derive_room_status(room: &str, stats: &RoomMapStats, now_ms: i64) -> RoomStatus {
     let normal = stats.status.as_deref() == Some("normal");
     let owned = stats.own.is_some();
     RoomStatus {
-        open: normal && !owned,
+        open: normal && !owned && room_name_claimable(room),
         novice: timestamp_active(stats.novice.as_ref(), now_ms),
         respawn: timestamp_active(stats.respawn_area.as_ref(), now_ms),
+    }
+}
+
+/// Pure: shard choice vs the server's shard list (official servers
+/// only — see [`screeps_rest_api::Client::shards_info`] for why the
+/// missing-shard failure mode is cryptic and quota-wasting without
+/// this).
+pub fn validate_shard_choice(shard: Option<&str>, available: &[String]) -> Result<()> {
+    let listed = || available.join(", ");
+    match shard {
+        None => bail!(
+            "this server is sharded — pass --shard (available: {})",
+            listed()
+        ),
+        Some(s) if !available.iter().any(|a| a == s) => bail!(
+            "unknown shard '{s}'; available: {}",
+            listed()
+        ),
+        Some(_) => Ok(()),
     }
 }
 
@@ -303,7 +329,7 @@ pub async fn scan_rooms_resumable(
             let status = response
                 .stats
                 .get(room)
-                .map(|entry| derive_room_status(entry, now_ms))
+                .map(|entry| derive_room_status(room, entry, now_ms))
                 .unwrap_or(RoomStatus {
                     open: false,
                     novice: false,
@@ -386,7 +412,7 @@ pub async fn fetch_rooms_resumable(
         for room in chunk {
             if let Some(entry) = response.stats.get(room) {
                 cache.upsert(CachedRoom {
-                    spawn_status: Some(derive_room_status(entry, now_ms)),
+                    spawn_status: Some(derive_room_status(room, entry, now_ms)),
                     fetched_at: Some(now_unix),
                     ..CachedRoom::new(room.clone())
                 });
@@ -498,8 +524,8 @@ mod tests {
     }
 
     #[test]
-    fn unowned_normal_room_is_open() {
-        let s = derive_room_status(&stats(Some("normal"), None), NOW_MS);
+    fn unowned_normal_claimable_room_is_open() {
+        let s = derive_room_status("W11N11", &stats(Some("normal"), None), NOW_MS);
         assert_eq!(
             s,
             RoomStatus {
@@ -519,7 +545,7 @@ mod tests {
                 level: 8,
             }),
         );
-        assert!(!derive_room_status(&owned, NOW_MS).open);
+        assert!(!derive_room_status("W11N11", &owned, NOW_MS).open);
         // level 0 = reserved (Endpoints.md claim0 note) — still not open.
         let reserved = stats(
             Some("normal"),
@@ -528,13 +554,69 @@ mod tests {
                 level: 0,
             }),
         );
-        assert!(!derive_room_status(&reserved, NOW_MS).open);
+        assert!(!derive_room_status("W11N11", &reserved, NOW_MS).open);
     }
 
     #[test]
     fn out_of_borders_is_not_open() {
-        assert!(!derive_room_status(&stats(Some("out of borders"), None), NOW_MS).open);
-        assert!(!derive_room_status(&stats(None, None), NOW_MS).open);
+        let oob = stats(Some("out of borders"), None);
+        assert!(!derive_room_status("W11N11", &oob, NOW_MS).open);
+        assert!(!derive_room_status("W11N11", &stats(None, None), NOW_MS).open);
+    }
+
+    /// PINNED FROM LIVE FAILURE (shard3, 2026-06-10): map-stats reported
+    /// highway W10N10 and SK-core portal room W15N15 as `status:
+    /// "normal"`/unowned, and scan flagged both open — neither can hold
+    /// a spawn (no controller). Claimability must gate `open`.
+    #[test]
+    fn unclaimable_rooms_are_not_open_even_when_normal_and_unowned() {
+        let s = stats(Some("normal"), None);
+        assert!(!derive_room_status("W10N10", &s, NOW_MS).open, "highway");
+        assert!(!derive_room_status("W15N15", &s, NOW_MS).open, "portal");
+        assert!(!derive_room_status("W14N16", &s, NOW_MS).open, "SK core");
+    }
+
+    #[test]
+    fn room_name_claimability_follows_the_sector_layout() {
+        // Highways: either coordinate ending in 0.
+        for name in ["W10N10", "W0N3", "E20S5", "W7N30", "E0S0"] {
+            assert!(!room_name_claimable(name), "{name} is a highway");
+        }
+        // Source-keeper core: BOTH coordinates ending in 4..=6
+        // (the 5,5 member is the portal room).
+        for name in ["W14N14", "W15N15", "E4S6", "W26N34", "E16S25"] {
+            assert!(!room_name_claimable(name), "{name} is SK core/portal");
+        }
+        // One coordinate in 4..=6 alone is an ordinary claimable room.
+        for name in ["W15N11", "W11N15", "E4S9", "W11N11", "E7S3", "W19N29"] {
+            assert!(room_name_claimable(name), "{name} is claimable");
+        }
+        // Multi-digit coordinates use the printed numbers too.
+        assert!(!room_name_claimable("W115N15"), "115,15 -> 5,5 portal");
+        assert!(!room_name_claimable("W110N3"), "110 -> highway");
+        assert!(room_name_claimable("W115N13"), "115,13 -> 5,3 claimable");
+        // Unparseable names are conservatively unclaimable (incl.
+        // numeric overflow past u32).
+        for name in ["", "W1", "11N11", "W1X1", "WN", "W1N1N1", "sim"] {
+            assert!(!room_name_claimable(name), "{name:?} must not parse");
+        }
+        assert!(!room_name_claimable("W99999999999N1"), "overflow");
+    }
+
+    #[test]
+    fn shard_validation_demands_a_known_shard() {
+        let shards: Vec<String> = ["shard0", "shard1", "shard2", "shard3"]
+            .map(String::from)
+            .into();
+        assert!(validate_shard_choice(Some("shard3"), &shards).is_ok());
+        let missing = validate_shard_choice(None, &shards).unwrap_err();
+        assert!(missing.to_string().contains("--shard"), "{missing}");
+        assert!(missing.to_string().contains("shard3"), "{missing}");
+        // A typo'd shard must be rejected client-side with the real
+        // choices, instead of paying for a scan call to learn it.
+        let typo = validate_shard_choice(Some("shard9"), &shards).unwrap_err();
+        assert!(typo.to_string().contains("shard9"), "{typo}");
+        assert!(typo.to_string().contains("shard0"), "{typo}");
     }
 
     #[test]
@@ -542,14 +624,14 @@ mod tests {
         let mut s = stats(Some("normal"), None);
         s.novice = Some(serde_json::json!(NOW_MS + 1_000_000));
         s.respawn_area = Some(serde_json::json!(NOW_MS - 1_000_000));
-        let derived = derive_room_status(&s, NOW_MS);
+        let derived = derive_room_status("W11N11", &s, NOW_MS);
         assert!(derived.open, "protection flags do not close a room");
         assert!(derived.novice, "future novice timestamp = active");
         assert!(!derived.respawn, "past respawn timestamp = expired");
         // null timestamps (the common case) are inactive.
         let mut s = stats(Some("normal"), None);
         s.novice = Some(serde_json::Value::Null);
-        assert!(!derive_room_status(&s, NOW_MS).novice);
+        assert!(!derive_room_status("W11N11", &s, NOW_MS).novice);
     }
 
     /// Resume semantics: fresh statuses are skipped, stale/unknown
