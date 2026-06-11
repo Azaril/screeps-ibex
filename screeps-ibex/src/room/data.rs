@@ -135,15 +135,6 @@ impl Display for RoomDisposition {
 }
 
 impl RoomDisposition {
-    pub fn name(&self) -> Option<String> {
-        match self {
-            RoomDisposition::Neutral => None,
-            RoomDisposition::Mine => Some(crate::globals::user::name()),
-            RoomDisposition::Friendly(name) => Some(name.clone()),
-            RoomDisposition::Hostile(name) => Some(name.clone()),
-        }
-    }
-
     pub fn neutral(&self) -> bool {
         matches!(self, RoomDisposition::Neutral)
     }
@@ -352,12 +343,12 @@ impl RoomData {
         self.missions.retain(|e| f(*e));
     }
 
-    pub fn update(&mut self, room: &Room) {
+    pub fn update(&mut self, room: &Room, username: &str) {
         if self.static_visibility_data.is_none() {
             self.static_visibility_data = Some(Self::create_static_visibility_data(room));
         }
 
-        self.dynamic_visibility_data = Some(self.create_dynamic_visibility_data(room));
+        self.dynamic_visibility_data = Some(self.create_dynamic_visibility_data(room, username));
     }
 
     fn create_static_visibility_data(room: &Room) -> RoomStaticVisibilityData {
@@ -382,14 +373,18 @@ impl RoomData {
         }
     }
 
-    fn name_option_to_disposition(name: Option<String>) -> RoomDisposition {
-        name.map(Self::name_to_disposition).unwrap_or_else(|| RoomDisposition::Neutral)
+    fn name_option_to_disposition(name: Option<String>, username: &str) -> RoomDisposition {
+        name.map(|name| Self::name_to_disposition(name, username))
+            .unwrap_or_else(|| RoomDisposition::Neutral)
     }
 
-    fn name_to_disposition(name: String) -> RoomDisposition {
+    /// Friendly/hostile classification against the bot's own identity
+    /// (`username` from the [`crate::identity::BotIdentity`] Resource —
+    /// statics-review M6).
+    fn name_to_disposition(name: String, username: &str) -> RoomDisposition {
         let friends: &[String] = &[];
 
-        if name == crate::globals::user::name() {
+        if name == username {
             RoomDisposition::Mine
         } else if friends.iter().any(|friend_name| &name == friend_name) {
             RoomDisposition::Friendly(name)
@@ -398,17 +393,17 @@ impl RoomData {
         }
     }
 
-    fn create_dynamic_visibility_data(&self, room: &Room) -> RoomDynamicVisibilityData {
+    fn create_dynamic_visibility_data(&self, room: &Room, username: &str) -> RoomDynamicVisibilityData {
         let controller = room.controller();
 
         let controller_owner_name = controller.as_ref().and_then(|c| c.owner().map(|o| o.username()));
-        let controller_owner_disposition = Self::name_option_to_disposition(controller_owner_name);
+        let controller_owner_disposition = Self::name_option_to_disposition(controller_owner_name, username);
 
         let controller_reservation_name = controller.as_ref().and_then(|c| c.reservation()).map(|r| r.username());
-        let controller_reservation_disposition = Self::name_option_to_disposition(controller_reservation_name);
+        let controller_reservation_disposition = Self::name_option_to_disposition(controller_reservation_name, username);
 
         let sign = controller.as_ref().and_then(|c| c.sign()).map(|s| RoomSign {
-            user: Self::name_to_disposition(s.username()),
+            user: Self::name_to_disposition(s.username(), username),
             message: s.text(),
         });
 

@@ -1,7 +1,6 @@
 use crate::cleanup::*;
 use crate::creep::*;
 use crate::entitymappingsystem::*;
-use crate::globals::*;
 use crate::jobs::data::*;
 use crate::jobs::jobsystem::*;
 use crate::memorysystem::*;
@@ -865,8 +864,11 @@ pub fn tick() {
             })
             .next();
 
+        // BotIdentity Resource (M6): refreshed when derivable; the prior
+        // value (or the empty Default) holds when no owned room is
+        // visible — the same keep-last semantics the old static had.
         if let Some(username) = username {
-            user::set_name(&username);
+            env.world.insert(crate::identity::BotIdentity { username });
         }
 
         //

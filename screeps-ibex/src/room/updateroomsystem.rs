@@ -7,6 +7,7 @@ pub struct UpdateRoomDataSystemData<'a> {
     entities: Entities<'a>,
     room_data: WriteStorage<'a, RoomData>,
     updater: Read<'a, LazyUpdate>,
+    identity: Read<'a, crate::identity::BotIdentity>,
 }
 
 pub struct UpdateRoomDataSystem;
@@ -20,7 +21,7 @@ impl<'a> System<'a> for UpdateRoomDataSystem {
 
         for (_entity, room_data) in (&data.entities, &mut data.room_data).join() {
             if let Some(room) = rooms.get(room_data.name) {
-                room_data.update(&room);
+                room_data.update(&room, &data.identity.username);
             }
         }
     }
