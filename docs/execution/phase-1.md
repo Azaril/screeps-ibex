@@ -69,7 +69,7 @@ Tranche-1 kernel coverage grows from ~33 toward ~60 as this phase's pure logic l
 
 ### 1.8 Explicitly OUT of Phase 1
 
-Serialization Stage 1 (version header / reject-and-reset / fuzz — Phase 2 = Inc 2, which carries the Inc-2 sanctioned reset of deployed state), anything Inc 3+ (SquadStore, cohesion, FSM), seg-57 *consumers* beyond the governor/harness (posture, P&L), and all LOW-confidence Inc 7–9 material. The renderer corruption fix (Field Report H) stays opportunistic: containment (1.4) already prevents its worst symptom.
+Serialization beyond loud-failure semantics — per the **reset-anytime policy** (rewrite-plan §0, operator 2026-06-10) state may be dropped at any increment, so version headers / migration / snapshot-corpus / fuzz are all deferred to the one holistic serialization pass at the Inc-7 entry; Inc 2's rescoped remainder (loud decode-failure reset, watermark→seg-57, IBEX-049) is small and may ride this phase or the next as convenient. Also out: anything Inc 3+ (SquadStore, cohesion, FSM), seg-57 *consumers* beyond the governor/harness (posture, P&L), and all LOW-confidence Inc 7–9 material. The renderer corruption fix (Field Report H) stays opportunistic: containment (1.4) already prevents its worst symptom.
 
 ---
 
