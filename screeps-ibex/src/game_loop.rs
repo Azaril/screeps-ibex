@@ -58,87 +58,123 @@ use std::collections::HashSet;
 /// where `SystemInstance` is a value expression (unit struct literal).
 macro_rules! for_each_system {
     ($op:ident) => {
-        // === Pre-pass ===
-        $op!(WaitForSpawnSystem, "wait_for_spawn");
-        $op!(CleanupCreepsSystem, "cleanup_creeps");
+        // P1.C5 (ADR 0005): the scheduler seam. Every system carries a
+        // shed class; declaration order IS execution order (parity with
+        // the pre-seam flat list by construction). `Always` = the
+        // never-shed set and its inputs; `SkipUnderCritical` = work
+        // whose absence for a few ticks is harmless by design
+        // (visual/observational output, resumable planning). Adding a
+        // system without thinking about its class is impossible now —
+        // that's the seam's point.
+        // === Pre-pass (inputs for everything incl. defense) ===
+        $op!(WaitForSpawnSystem, "wait_for_spawn", StageClass::Always);
+        $op!(CleanupCreepsSystem, "cleanup_creeps", StageClass::Always);
         // Flush creep deaths immediately so missions see accurate counts.
         // The system is a no-op when the queue is empty, so the second
         // invocation after RunJobSystem costs nothing when there are no
         // mid-tick mission/operation deletions.
-        $op!(EntityCleanupSystem, "entity_cleanup_prepass");
-        $op!(CreateRoomDataSystem, "create_room_data");
-        $op!(UpdateRoomDataSystem, "update_room_data");
-        $op!(EntityMappingSystem, "entity_mapping");
-        $op!(ThreatAssessmentSystem, "threat_assessment");
-        $op!(EconomyAssessmentSystem, "economy_assessment");
+        $op!(EntityCleanupSystem, "entity_cleanup_prepass", StageClass::Always);
+        $op!(CreateRoomDataSystem, "create_room_data", StageClass::Always);
+        $op!(UpdateRoomDataSystem, "update_room_data", StageClass::Always);
+        $op!(EntityMappingSystem, "entity_mapping", StageClass::Always);
+        $op!(ThreatAssessmentSystem, "threat_assessment", StageClass::Always);
+        $op!(EconomyAssessmentSystem, "economy_assessment", StageClass::Always);
         // === Main-pass: Cleanup ===
-        $op!(RepairQueueClearSystem, "repair_queue_clear");
-        $op!(ClearVisualizationSystem, "clear_visualization");
-        $op!(VisibilityQueueCleanupSystem, "visibility_cleanup");
-        $op!(CostMatrixClearSystem, "cost_matrix_clear");
-        $op!(RoomStatusCacheClearSystem, "room_status_cache_clear");
-        // === Main-pass: Pre-run ===
-        $op!(OperationManagerSystem, "operations_manager");
-        $op!(PreRunOperationSystem, "pre_run_operations");
-        $op!(PreRunMissionSystem, "pre_run_missions");
-        $op!(PreRunSquadUpdateSystem, "pre_run_squad_update");
-        $op!(PreRunJobSystem, "pre_run_jobs");
+        $op!(RepairQueueClearSystem, "repair_queue_clear", StageClass::Always);
+        $op!(ClearVisualizationSystem, "clear_visualization", StageClass::Always);
+        $op!(VisibilityQueueCleanupSystem, "visibility_cleanup", StageClass::Always);
+        $op!(CostMatrixClearSystem, "cost_matrix_clear", StageClass::Always);
+        $op!(RoomStatusCacheClearSystem, "room_status_cache_clear", StageClass::Always);
+        // === Main-pass: Pre-run (defense/spawn/haul live below) ===
+        $op!(OperationManagerSystem, "operations_manager", StageClass::Always);
+        $op!(PreRunOperationSystem, "pre_run_operations", StageClass::Always);
+        $op!(PreRunMissionSystem, "pre_run_missions", StageClass::Always);
+        $op!(PreRunSquadUpdateSystem, "pre_run_squad_update", StageClass::Always);
+        $op!(PreRunJobSystem, "pre_run_jobs", StageClass::Always);
         // === Main-pass: Execution ===
-        $op!(RunOperationSystem, "run_operations");
-        $op!(RunMissionSystem, "run_missions");
-        $op!(RunSquadUpdateSystem, "run_squad_update");
-        $op!(RunJobSystem, "run_jobs");
+        $op!(RunOperationSystem, "run_operations", StageClass::Always);
+        $op!(RunMissionSystem, "run_missions", StageClass::Always);
+        $op!(RunSquadUpdateSystem, "run_squad_update", StageClass::Always);
+        $op!(RunJobSystem, "run_jobs", StageClass::Always);
         // === Entity cleanup: process all pending deletions ===
-        $op!(EntityCleanupSystem, "entity_cleanup");
-        $op!(MovementUpdateSystem, "movement");
-        // === Main-pass: Observer ===
-        $op!(ObserverSystem, "observer");
-        // === Main-pass: Summarization ===
-        $op!(SummarizeOperationSystem, "summarize_operations");
-        $op!(SummarizeMissionSystem, "summarize_missions");
-        $op!(SummarizeJobSystem, "summarize_jobs");
-        $op!(SummarizeRoomVisibilitySystem, "summarize_room_visibility");
-        $op!(VisibilityVisualizationSystem, "visibility_viz");
-        $op!(TransferStatsSnapshotSystem, "transfer_stats_snapshot");
-        $op!(AggregateSummarySystem, "aggregate_summary");
-        // === Main-pass: Queues ===
-        $op!(SpawnQueueSystem, "spawn_queue");
-        $op!(TransferQueueUpdateSystem, "transfer_queue");
-        $op!(OrderQueueSystem, "order_queue");
-        // === Main-pass: Room Planning ===
-        $op!(RoomPlanSystem, "room_plan");
-        $op!(RoomPlanVisualizeSystem, "room_plan_visualize");
-        // === Main-pass: Stats and Visualization ===
-        $op!(StatsSystem, "stats");
-        $op!(StatsHistorySystem, "stats_history");
-        $op!(CpuTrackingSystem, "cpu_tracking");
-        $op!(MetricsSystem, "metrics");
-        $op!(RenderSystem, "render");
-        $op!(ApplyVisualsSystem, "apply_visuals");
-        // === Main-pass: Persistence ===
-        $op!(VisibilityQueueSyncSystem, "visibility_sync");
-        $op!(CostMatrixStoreSystem, "cost_matrix_store");
-        $op!(MemoryArbiterSystem, "memory");
+        $op!(EntityCleanupSystem, "entity_cleanup", StageClass::Always);
+        $op!(MovementUpdateSystem, "movement", StageClass::Always);
+        // === Main-pass: Observer (intel — shed-first class, ADR 0004) ===
+        $op!(ObserverSystem, "observer", StageClass::SkipUnderCritical);
+        // === Main-pass: Summarization (feeds visualization only) ===
+        $op!(SummarizeOperationSystem, "summarize_operations", StageClass::SkipUnderCritical);
+        $op!(SummarizeMissionSystem, "summarize_missions", StageClass::SkipUnderCritical);
+        $op!(SummarizeJobSystem, "summarize_jobs", StageClass::SkipUnderCritical);
+        $op!(SummarizeRoomVisibilitySystem, "summarize_room_visibility", StageClass::SkipUnderCritical);
+        $op!(VisibilityVisualizationSystem, "visibility_viz", StageClass::SkipUnderCritical);
+        $op!(TransferStatsSnapshotSystem, "transfer_stats_snapshot", StageClass::SkipUnderCritical);
+        $op!(AggregateSummarySystem, "aggregate_summary", StageClass::SkipUnderCritical);
+        // === Main-pass: Queues (spawn/haul — never shed) ===
+        $op!(SpawnQueueSystem, "spawn_queue", StageClass::Always);
+        $op!(TransferQueueUpdateSystem, "transfer_queue", StageClass::Always);
+        $op!(OrderQueueSystem, "order_queue", StageClass::Always);
+        // === Main-pass: Room Planning (resumable by design — seg-60) ===
+        $op!(RoomPlanSystem, "room_plan", StageClass::SkipUnderCritical);
+        $op!(RoomPlanVisualizeSystem, "room_plan_visualize", StageClass::SkipUnderCritical);
+        // === Main-pass: Stats and Visualization (telemetry NEVER sheds
+        // — the governor is blind without it; render is visual-only) ===
+        $op!(StatsSystem, "stats", StageClass::Always);
+        $op!(StatsHistorySystem, "stats_history", StageClass::Always);
+        $op!(CpuTrackingSystem, "cpu_tracking", StageClass::Always);
+        $op!(MetricsSystem, "metrics", StageClass::Always);
+        $op!(RenderSystem, "render", StageClass::SkipUnderCritical);
+        $op!(ApplyVisualsSystem, "apply_visuals", StageClass::SkipUnderCritical);
+        // === Main-pass: Persistence (never shed) ===
+        $op!(VisibilityQueueSyncSystem, "visibility_sync", StageClass::Always);
+        $op!(CostMatrixStoreSystem, "cost_matrix_store", StageClass::Always);
+        $op!(MemoryArbiterSystem, "memory", StageClass::Always);
     };
 }
 
-/// Call `RunNow::setup` for every system in the tick list.
+/// Shed class for the scheduler seam (P1.C5). `Always` = the ADR 0004
+/// never-shed set (defense, spawn, haul, movement, persistence) plus
+/// their inputs and the telemetry the governor itself depends on.
+/// `SkipUnderCritical` = work whose absence is harmless by design:
+/// visual/observational output and seg-60-resumable planning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StageClass {
+    Always,
+    SkipUnderCritical,
+}
+
+impl StageClass {
+    fn runs(self, tier: crate::cpugovernor::Tier) -> bool {
+        match self {
+            StageClass::Always => true,
+            StageClass::SkipUnderCritical => tier != crate::cpugovernor::Tier::Critical,
+        }
+    }
+}
+
+/// Call `RunNow::setup` for every system in the tick list (shed class
+/// irrelevant at setup — every system's resources must register).
 fn setup_systems(world: &mut World) {
     macro_rules! do_setup {
-        ($sys:expr, $label:expr) => {
+        ($sys:expr, $label:expr, $class:expr) => {
             RunNow::setup(&mut $sys, world);
         };
     }
     for_each_system!(do_setup);
 }
 
-/// Run every system in the tick list sequentially.
-/// Each system call is followed by `world.maintain()`.
+/// The scheduler (P1.C5): run the tick list in declaration order, each
+/// system followed by `world.maintain()`, skipping systems whose shed
+/// class doesn't run at the tick's governor tier. The tier is read
+/// ONCE so the whole tick sees a consistent shedding decision.
 /// When `timing` is true, per-system CPU cost is measured and logged.
 fn run_systems(world: &mut World, timing: bool) {
+    let tier = crate::cpugovernor::tier();
+    let mut shed_count = 0u32;
     macro_rules! do_run {
-        ($sys:expr, $label:expr) => {
-            if timing {
+        ($sys:expr, $label:expr, $class:expr) => {
+            if !$class.runs(tier) {
+                shed_count += 1;
+            } else if timing {
                 let before = game::cpu::get_used();
                 $sys.run_now(world);
                 world.maintain();
@@ -151,6 +187,9 @@ fn run_systems(world: &mut World, timing: bool) {
         };
     }
     for_each_system!(do_run);
+    if shed_count > 0 {
+        debug!("scheduler: shed {} system(s) under {:?}", shed_count, tier);
+    }
 }
 
 /// Pre-serialization integrity check and repair.
