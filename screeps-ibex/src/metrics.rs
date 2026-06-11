@@ -69,23 +69,12 @@ pub fn record_deser_failure() {
     DESER_FAILURES.fetch_add(1, Ordering::Relaxed);
 }
 
-/// A panic caught by the tick containment boundary (wired at P1.C2).
-#[allow(dead_code)]
-pub fn record_panic_caught() {
-    PANICS_CAUGHT.fetch_add(1, Ordering::Relaxed);
-}
-
-/// `serialize_world` intentionally shed by the governor (P1.C2/C5).
-#[allow(dead_code)]
-pub fn record_serialize_skipped_shed() {
-    SERIALIZE_SKIPPED_SHED.fetch_add(1, Ordering::Relaxed);
-}
-
-/// `serialize_world` lost to an aborted tick (containment, P1.C2).
-#[allow(dead_code)]
-pub fn record_serialize_skipped_aborted() {
-    SERIALIZE_SKIPPED_ABORTED.fetch_add(1, Ordering::Relaxed);
-}
+// NOTE: panics_caught / serialize_skipped_aborted have NO Rust-side
+// record fns by design — the containment boundary is the JS loader
+// (P1.C1 decision); their values are seeded from
+// `Memory._metrics.aborted_ticks` in [`tick_start`]. A shed-skip of
+// serialize is unreachable by construction (never-shed set, ADR 0004);
+// the counter exists so the schema can prove it stays zero.
 
 /// The 0002 chunk watermark, routed into the metrics block (Inc-2
 /// rescope): how many component segments the last serialize consumed.

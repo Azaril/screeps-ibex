@@ -118,12 +118,6 @@ pub fn tier() -> Tier {
     snapshot().tier
 }
 
-/// The tick's bucket trend (bucket-units/tick; negative = draining).
-#[allow(dead_code)]
-pub fn bucket_trend() -> f64 {
-    snapshot().trend
-}
-
 /// The legacy CPU bar check, now reading the tick-start snapshot:
 /// `bucket >= tick_limit * bar`. Exactly the formula the scattered
 /// `game::cpu` sites used — behavior-preserving by construction.
