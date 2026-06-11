@@ -194,11 +194,19 @@ pub fn create_structure_data(room_data: &RoomData) -> Option<StructureData> {
 /// Compute the pathfinding distance from the nearest spawn to each target
 /// position. Uses `pathfinder::search` with `plain_cost=2`, `swamp_cost=10`
 /// so that roads (cost 1) are preferred, matching real creep movement.
+///
+/// Ops-capped (P1.B1 / IBEX-035, ADR 0004 step 1): this runs spawns ×
+/// targets searches per structure-data refresh; spawn and targets share
+/// a room, so 1000 ops is generous (engine default is 2000). A capped
+/// incomplete search reports `u32::MAX` exactly like an unreachable
+/// target — callers already treat that as "very far".
 fn compute_nearest_spawn_distances(
     spawns: &[RemoteObjectId<StructureSpawn>],
     source_positions: impl Iterator<Item = screeps::Position>,
     mineral_positions: impl Iterator<Item = screeps::Position>,
 ) -> HashMap<screeps::Position, u32> {
+    const NEAREST_SPAWN_MAX_OPS: u32 = 1000;
+
     let mut distances = HashMap::new();
 
     if spawns.is_empty() {
@@ -211,7 +219,10 @@ fn compute_nearest_spawn_distances(
         let min_distance = spawns
             .iter()
             .map(|spawn_id| {
-                let options = pathfinder::SearchOptions::default().plain_cost(2).swamp_cost(10);
+                let options = pathfinder::SearchOptions::default()
+                    .plain_cost(2)
+                    .swamp_cost(10)
+                    .max_ops(NEAREST_SPAWN_MAX_OPS);
                 let result = pathfinder::search(spawn_id.pos(), target_pos, 1, Some(options));
                 if result.incomplete() {
                     u32::MAX

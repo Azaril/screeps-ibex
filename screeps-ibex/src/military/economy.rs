@@ -184,17 +184,24 @@ impl RoomRouteCache {
     }
 
     /// Get the cached route distance, or compute and cache it.
+    ///
+    /// Bucket-guarded (P1.B1 / ADR 0004 step 1): under a Critical
+    /// governor tier, TTL-expired entries are served STALE instead of
+    /// recomputed — `find_route` storms are exactly the leak the
+    /// governor exists to stop, and a stale route (ownership changes
+    /// are slow) is strictly better than a fabricated answer. Missing
+    /// entries still compute at any tier: callers need SOME answer,
+    /// and a single find_route is not the storm.
     pub fn get_route_distance(&mut self, from: RoomName, to: RoomName, current_tick: u32) -> &CachedRoute {
         let ttl = self.ttl;
 
-        // Check if existing entry is expired and needs recomputation.
-        let needs_recompute = self
-            .routes
-            .get(&(from, to))
+        let entry = self.routes.get(&(from, to));
+        let missing = entry.is_none();
+        let expired = entry
             .map(|entry| current_tick.saturating_sub(entry.cached_at) > ttl)
-            .unwrap_or(true);
+            .unwrap_or(false);
 
-        if needs_recompute {
+        if should_recompute_route(missing, expired, crate::cpugovernor::tier()) {
             let route = Self::compute_route(from, to, current_tick);
             self.routes.insert((from, to), route);
         }
@@ -267,6 +274,34 @@ impl RoomRouteCache {
         } else {
             None
         }
+    }
+}
+
+/// Pure recompute decision for [`RoomRouteCache::get_route_distance`]
+/// (P1.B1 bucket-guard): missing entries always compute; expired
+/// entries recompute except under Critical, where stale is served.
+fn should_recompute_route(missing: bool, expired: bool, tier: crate::cpugovernor::Tier) -> bool {
+    missing || (expired && tier != crate::cpugovernor::Tier::Critical)
+}
+
+#[cfg(test)]
+mod route_guard_tests {
+    use super::should_recompute_route;
+    use crate::cpugovernor::Tier;
+
+    #[test]
+    fn stale_routes_are_served_under_critical_only() {
+        for tier in [Tier::Normal, Tier::Conserve, Tier::Critical] {
+            // Missing entries always compute — a single find_route is
+            // not the storm the guard exists to stop.
+            assert!(should_recompute_route(true, false, tier), "{tier:?}");
+            // Fresh entries never recompute.
+            assert!(!should_recompute_route(false, false, tier), "{tier:?}");
+        }
+        // Expired: recompute normally, serve stale under Critical.
+        assert!(should_recompute_route(false, true, Tier::Normal));
+        assert!(should_recompute_route(false, true, Tier::Conserve));
+        assert!(!should_recompute_route(false, true, Tier::Critical));
     }
 }
 
