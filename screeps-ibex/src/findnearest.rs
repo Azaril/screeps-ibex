@@ -25,7 +25,17 @@ impl Path {
 /// A single 50×50 room cannot usefully consume more than ~500 ops; a
 /// search that exhausts this cap returns an incomplete/empty path,
 /// which every caller already treats as "no path".
+///
+/// P1.B4: each search additionally draws its ops from the mission-side
+/// pool ([`crate::pathbudget`]) — the per-search cap bounds one
+/// search, the pool bounds the tick's AGGREGATE.
 const SAME_ROOM_MAX_OPS: u32 = 500;
+
+/// Pool-clamped per-search ops grant (0 = pool exhausted, search
+/// returns the empty path the callers already handle).
+fn same_room_ops() -> u32 {
+    crate::pathbudget::take(SAME_ROOM_MAX_OPS)
+}
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl PathFinderHelpers {
@@ -33,19 +43,31 @@ impl PathFinderHelpers {
         // PathFinder.search ignores creeps by default. It also ignores structures unless
         // a room_callback providing a CostMatrix is given.
         // TODO: Add room_callback with structure costs if structure avoidance is needed.
-        let options = pathfinder::SearchOptions::default().max_rooms(1).max_ops(SAME_ROOM_MAX_OPS);
+        let ops = same_room_ops();
+        if ops == 0 {
+            return Path(Vec::new());
+        }
+        let options = pathfinder::SearchOptions::default().max_rooms(1).max_ops(ops);
         let result = pathfinder::search(start_pos, end_pos, 0, Some(options));
         Path(result.path())
     }
 
     pub fn same_room_ignore_creeps_range_1(start_pos: Position, end_pos: Position) -> Path {
-        let options = pathfinder::SearchOptions::default().max_rooms(1).max_ops(SAME_ROOM_MAX_OPS);
+        let ops = same_room_ops();
+        if ops == 0 {
+            return Path(Vec::new());
+        }
+        let options = pathfinder::SearchOptions::default().max_rooms(1).max_ops(ops);
         let result = pathfinder::search(start_pos, end_pos, 1, Some(options));
         Path(result.path())
     }
 
     pub fn same_room_ignore_creeps_range_3(start_pos: Position, end_pos: Position) -> Path {
-        let options = pathfinder::SearchOptions::default().max_rooms(1).max_ops(SAME_ROOM_MAX_OPS);
+        let ops = same_room_ops();
+        if ops == 0 {
+            return Path(Vec::new());
+        }
+        let options = pathfinder::SearchOptions::default().max_rooms(1).max_ops(ops);
         let result = pathfinder::search(start_pos, end_pos, 3, Some(options));
         Path(result.path())
     }
@@ -53,13 +75,21 @@ impl PathFinderHelpers {
     pub fn same_room_ignore_creeps_and_structures(start_pos: Position, end_pos: Position) -> Path {
         // PathFinder.search ignores both creeps and structures by default,
         // which matches the intent of this method.
-        let options = pathfinder::SearchOptions::default().max_rooms(1).max_ops(SAME_ROOM_MAX_OPS);
+        let ops = same_room_ops();
+        if ops == 0 {
+            return Path(Vec::new());
+        }
+        let options = pathfinder::SearchOptions::default().max_rooms(1).max_ops(ops);
         let result = pathfinder::search(start_pos, end_pos, 0, Some(options));
         Path(result.path())
     }
 
     pub fn same_room_ignore_creeps_and_structures_range_1(start_pos: Position, end_pos: Position) -> Path {
-        let options = pathfinder::SearchOptions::default().max_rooms(1).max_ops(SAME_ROOM_MAX_OPS);
+        let ops = same_room_ops();
+        if ops == 0 {
+            return Path(Vec::new());
+        }
+        let options = pathfinder::SearchOptions::default().max_rooms(1).max_ops(ops);
         let result = pathfinder::search(start_pos, end_pos, 1, Some(options));
         Path(result.path())
     }

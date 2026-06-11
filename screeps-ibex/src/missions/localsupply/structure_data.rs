@@ -219,10 +219,16 @@ fn compute_nearest_spawn_distances(
         let min_distance = spawns
             .iter()
             .map(|spawn_id| {
+                // P1.B4: drawn from the mission ops pool; a zero grant
+                // degrades to the capped-incomplete u32::MAX semantic.
+                let ops = crate::pathbudget::take(NEAREST_SPAWN_MAX_OPS);
+                if ops == 0 {
+                    return u32::MAX;
+                }
                 let options = pathfinder::SearchOptions::default()
                     .plain_cost(2)
                     .swamp_cost(10)
-                    .max_ops(NEAREST_SPAWN_MAX_OPS);
+                    .max_ops(ops);
                 let result = pathfinder::search(spawn_id.pos(), target_pos, 1, Some(options));
                 if result.incomplete() {
                     u32::MAX

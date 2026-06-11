@@ -167,6 +167,8 @@ pub fn tick_start(world: &mut World) {
     let bucket = game::cpu::bucket();
     state.push_bucket_sample(bucket);
     cpugovernor::refresh(bucket, state.trend(), game::cpu::tick_limit());
+    // The mission-side pathfinding pool follows the tier (P1.B4).
+    crate::pathbudget::reset(cpugovernor::tier());
 }
 
 #[derive(SystemData)]
@@ -255,11 +257,16 @@ impl MetricsSystem {
             governor: Some(GovernorMetrics {
                 tier: cpugovernor::tier().as_str().to_string(),
             }),
-            pathing: Some(PathingMetrics {
-                ops_used: MOVEMENT_OPS_CONSUMED.load(Ordering::Relaxed),
-                ops_pool: MOVEMENT_OPS_CAP.load(Ordering::Relaxed),
-                repath_count: MOVEMENT_REPATHS.load(Ordering::Relaxed),
-                move_failures: MOVEMENT_FAILURES.load(Ordering::Relaxed),
+            pathing: Some({
+                let (mission_pool, mission_used) = crate::pathbudget::snapshot();
+                PathingMetrics {
+                    ops_used: MOVEMENT_OPS_CONSUMED.load(Ordering::Relaxed),
+                    ops_pool: MOVEMENT_OPS_CAP.load(Ordering::Relaxed),
+                    repath_count: MOVEMENT_REPATHS.load(Ordering::Relaxed),
+                    move_failures: MOVEMENT_FAILURES.load(Ordering::Relaxed),
+                    mission_ops_pool: mission_pool,
+                    mission_ops_used: mission_used,
+                }
             }),
             intents: Some({
                 let (counts, digest) = crate::intents::snapshot();

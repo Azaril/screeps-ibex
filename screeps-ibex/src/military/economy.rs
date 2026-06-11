@@ -202,8 +202,15 @@ impl RoomRouteCache {
             .unwrap_or(false);
 
         if should_recompute_route(missing, expired, crate::cpugovernor::tier()) {
-            let route = Self::compute_route(from, to, current_tick);
-            self.routes.insert((from, to), route);
+            // P1.B4: charge the mission ops pool (find_route has no ops
+            // parameter — nominal accounting + admission control).
+            // Missing entries compute even on a zero grant — callers
+            // need SOME answer; only TTL refreshes yield to the pool.
+            let granted = crate::pathbudget::take(crate::pathbudget::FIND_ROUTE_NOMINAL_OPS);
+            if missing || granted > 0 {
+                let route = Self::compute_route(from, to, current_tick);
+                self.routes.insert((from, to), route);
+            }
         }
 
         self.routes.get(&(from, to)).unwrap()

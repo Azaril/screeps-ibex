@@ -178,6 +178,12 @@ pub struct PathingMetrics {
     /// transient-tolerance work (ADR 0003 A6).
     #[serde(default)]
     pub move_failures: u32,
+    /// Mission-side ops pool this tick (P1.B4; tier-scaled).
+    #[serde(default)]
+    pub mission_ops_pool: u32,
+    /// Mission-side ops consumed from the pool this tick.
+    #[serde(default)]
+    pub mission_ops_used: u32,
 }
 
 impl MetricsBlock {

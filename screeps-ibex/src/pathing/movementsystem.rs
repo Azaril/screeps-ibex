@@ -255,6 +255,17 @@ impl<'a> System<'a> for MovementUpdateSystem {
         let pathfinding_cpu_available = (remaining - reserve - move_action_reserve).max(0.0);
         let pathfinding_cpu_cap = pathing_features.pathfinding_cpu_budget.min(pathfinding_cpu_available);
         let mut pathfinding_ops = (pathfinding_cpu_cap * 1000.0) as u32;
+
+        // P1.B4 governor coordination: movement is never-shed but its
+        // pathfinding generosity scales with the tier (the MIN floor
+        // below still applies — creeps never fully freeze, ADR 0004's
+        // non-negotiable). Movement does NOT draw from the mission
+        // pool; this is its independent budget, tier-scaled.
+        pathfinding_ops = match crate::cpugovernor::tier() {
+            crate::cpugovernor::Tier::Normal => pathfinding_ops,
+            crate::cpugovernor::Tier::Conserve => pathfinding_ops / 2,
+            crate::cpugovernor::Tier::Critical => pathfinding_ops / 4,
+        };
         // Ensure at least one pathfinding can run to avoid deadlock (no progress across ticks).
         const MIN_PATHFIND_OPS: u32 = 2000;
         if movement_data.request_count() > 0 && pathfinding_ops == 0 && remaining > (MIN_PATHFIND_OPS as f64 / 1000.0) + MOVE_ACTION_CPU {
