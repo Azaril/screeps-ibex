@@ -826,6 +826,22 @@ pub fn tick() {
         crate::metrics::tick_start(&mut env.world);
 
         //
+        // Harness fault injection (P1.A5): synthetic CPU burn, set via
+        // `Memory._features.eval.cpu_burn_ms` by pressure scenarios.
+        // Burned at the top of the tick so the governor and everything
+        // it sheds see honest pressure.
+        //
+
+        let burn_ms = features.eval.cpu_burn_ms;
+        if burn_ms > 0 {
+            let end = game::cpu::get_used() + burn_ms as f64;
+            while game::cpu::get_used() < end {
+                std::hint::black_box(());
+            }
+            debug!("eval cpu burner: consumed {} ms", burn_ms);
+        }
+
+        //
         // Execution — systems run sequentially with maintain() after each.
         //
 

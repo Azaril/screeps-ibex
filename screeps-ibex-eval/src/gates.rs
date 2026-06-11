@@ -63,6 +63,9 @@ pub fn capture_spec() -> CaptureSpec {
         markers: marker_spec(),
         stats_segment: Some(STATS_SEGMENT),
         metrics_segment: Some(METRICS_SEGMENT),
+        // Fault injections are per-scenario (P1.A3/A5): the scenario
+        // runner fills them from the fault schedule.
+        console_injections: Vec::new(),
     }
 }
 

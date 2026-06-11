@@ -17,6 +17,7 @@ screeps-server-kit = { path = "../screeps-server-kit" }
 # The seg-57 metrics schema (P1.A2 reader side — same crate the bot
 # writes with, so the contract cannot drift).
 screeps-ibex-metrics = { path = "../screeps-ibex-metrics" }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 clap = { version = "4", features = ["derive"] }

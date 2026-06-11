@@ -17,4 +17,6 @@
 //! regression diffing land here — they are ibex policy, not mechanism.
 
 pub mod gates;
+pub mod scenario;
+pub mod score;
 pub mod smoke;

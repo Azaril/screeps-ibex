@@ -425,6 +425,19 @@ pub struct VisibilityFeatures {
     pub visualize: bool,
 }
 
+/// Harness-only knobs (P1.A5): set from the eval harness via console
+/// injection (`Memory._features.eval.* = …`), never by gameplay code.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EvalFeatures {
+    /// Synthetic CPU burn per tick, in ms (0 = off). The harness's
+    /// pressure scenarios set this to drain the bucket on demand
+    /// (component-test-plans §15.4 candidate (i)); the burn happens at
+    /// the top of the tick (game_loop) so the governor and the
+    /// shedding it drives see honest pressure.
+    pub cpu_burn_ms: u32,
+}
+
 // ─── Top-level features ────────────────────────────────────────────────────────
 
 /// All feature flags, loaded once per tick from `Memory._features`.
@@ -450,6 +463,8 @@ pub struct Features {
     /// Log per-system CPU timing for each ECS system in the game loop.
     /// When enabled, each system's CPU cost is measured and logged at info level.
     pub system_timing: bool,
+    /// Harness-only fault-injection knobs (P1.A5).
+    pub eval: EvalFeatures,
 }
 
 // ─── Thread-local cache ────────────────────────────────────────────────────────

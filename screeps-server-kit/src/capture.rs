@@ -93,6 +93,25 @@ pub struct CaptureSpec {
     /// block whose schema lives in `screeps-ibex-metrics`). Captured
     /// raw-parsed: the kit stays bot-agnostic, callers interpret.
     pub metrics_segment: Option<u8>,
+    /// Fault-injection schedule (P1.A5): console expressions fired once
+    /// when the OBSERVED tick count crosses `at_observed_tick` (checked
+    /// at the sampling cadence, so firing lags by up to one sample
+    /// interval). The expression runs in the user's runtime next tick —
+    /// callers use it to set `Memory` flags their bot reads (cpu
+    /// burner, one-shot reset triggers). The kit stays bot-agnostic.
+    pub console_injections: Vec<ConsoleInjection>,
+}
+
+/// One scheduled console-expression injection (see
+/// [`CaptureSpec::console_injections`]).
+#[derive(Debug, Clone)]
+pub struct ConsoleInjection {
+    /// Fires once the run has OBSERVED this many ticks.
+    pub at_observed_tick: u64,
+    /// JS evaluated in the user's runtime at the next tick.
+    pub expression: String,
+    /// Human-readable label for logs.
+    pub label: String,
 }
 
 // ===================================================================
@@ -468,6 +487,7 @@ pub async fn run(
     let mut tick_last = tick_first;
     let mut consecutive_failures = 0u32;
     let mut last_progress = Instant::now();
+    let mut injections_fired = vec![false; spec.console_injections.len()];
 
     loop {
         tokio::time::sleep(SAMPLE_INTERVAL).await;
@@ -499,6 +519,26 @@ pub async fn run(
                 None
             }
         };
+
+        // Fault injections: fire each once when its observed-tick
+        // threshold is crossed (lag bounded by the sample interval).
+        let observed_now = tick_last.saturating_sub(tick_first);
+        for (i, injection) in spec.console_injections.iter().enumerate() {
+            if !injections_fired[i] && observed_now >= injection.at_observed_tick {
+                injections_fired[i] = true;
+                match api.console(&injection.expression).await {
+                    Ok(_) => tracing::info!(
+                        "fault injection '{}' fired at observed tick {observed_now} (scheduled {})",
+                        injection.label,
+                        injection.at_observed_tick
+                    ),
+                    Err(e) => tracing::warn!(
+                        "fault injection '{}' FAILED to send: {e:#}",
+                        injection.label
+                    ),
+                }
+            }
+        }
 
         let stats: Option<Value> = match spec.stats_segment {
             Some(segment) => read_segment_json(&api, segment).await,

@@ -508,6 +508,23 @@ impl Client {
         .await
     }
 
+    /// `POST /api/user/console` — body `{"expression": <js>, "shard": ...}`
+    /// -> `{ok: 1}`. The expression executes ONCE in the user's runtime
+    /// (the same isolated VM the bot runs in) at the start of the next
+    /// tick — which is what makes it the harness's generic
+    /// fault-injection hook (P1.A5): setting `Memory._features.*` flags
+    /// the bot reads (cpu burner, one-shot resets) without any
+    /// server-side privileges. Official-server cap: 360/hour
+    /// (ScreepsAPI.js:1431). Sources: python-screeps `console(cmd)`
+    /// (`{expression, shard}` body); node-screeps-api
+    /// `user.console`.
+    pub async fn console(&self, expression: &str) -> Result<OkResponse, ApiError> {
+        let body = serde_json::json!({
+            "expression": expression,
+        });
+        self.post("/api/user/console", body, "console response").await
+    }
+
     // -------------------------------------------------- code upload
 
     /// `POST /api/user/code` — body `{branch, modules, _hash}` ->
