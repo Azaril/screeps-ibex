@@ -1,0 +1,10 @@
+[package]
+name = "screeps-ibex-metrics"
+version = "0.1.0"
+authors = ["William Archbell"]
+edition = "2021"
+description = "Seg-57 metrics schema shared by the bot (writer) and the eval harness (reader) — ADR 0006, P1.A1"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

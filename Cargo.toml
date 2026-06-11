@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "screeps-ibex",
+    "screeps-ibex-metrics",
     "screeps-cache",
     "screeps-common",
     "screeps-rover",

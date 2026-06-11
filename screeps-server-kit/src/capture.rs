@@ -88,6 +88,11 @@ pub struct CaptureSpec {
     /// Memory segment polled for the bot's live-stats JSON each sample
     /// (`None` disables stats/CPU sampling).
     pub stats_segment: Option<u8>,
+    /// Memory segment polled for the bot's versioned metrics block each
+    /// sample (`None` disables; for ibex this is seg 57 — the ADR 0006
+    /// block whose schema lives in `screeps-ibex-metrics`). Captured
+    /// raw-parsed: the kit stays bot-agnostic, callers interpret.
+    pub metrics_segment: Option<u8>,
 }
 
 // ===================================================================
@@ -185,6 +190,10 @@ pub struct MetricsSample {
     /// Full parsed stats-segment JSON (informational; None until the
     /// bot writes the segment, or when no segment is configured).
     pub stats: Option<Value>,
+    /// Full parsed metrics-segment JSON (`CaptureSpec::metrics_segment`;
+    /// None until the bot writes it, or when unconfigured).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<Value>,
 }
 
 // ===================================================================
@@ -366,6 +375,22 @@ fn repo_root(cfg: &KitConfig) -> Result<PathBuf> {
         .context("config was not loaded from a file — cannot locate runs/")
 }
 
+/// Read a memory segment and parse it as JSON; `None` for empty,
+/// unwritten, unparseable, or failed reads (failures warn — segment
+/// sampling is best-effort and must not abort a run).
+async fn read_segment_json(api: &screeps_rest_api::Client, segment: u8) -> Option<Value> {
+    match api.memory_segment(segment).await {
+        Ok(resp) => match resp.data {
+            Some(raw) if !raw.is_empty() => serde_json::from_str::<Value>(&raw).ok(),
+            _ => None,
+        },
+        Err(e) => {
+            tracing::warn!("seg-{segment} read failed: {e:#}");
+            None
+        }
+    }
+}
+
 async fn git_short_sha(repo_root: &Path) -> Result<String> {
     let out = tokio::process::Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])
@@ -476,16 +501,11 @@ pub async fn run(
         };
 
         let stats: Option<Value> = match spec.stats_segment {
-            Some(segment) => match api.memory_segment(segment).await {
-                Ok(resp) => match resp.data {
-                    Some(raw) if !raw.is_empty() => serde_json::from_str(&raw).ok(),
-                    _ => None,
-                },
-                Err(e) => {
-                    tracing::warn!("seg-{segment} read failed: {e:#}");
-                    None
-                }
-            },
+            Some(segment) => read_segment_json(&api, segment).await,
+            None => None,
+        };
+        let metrics: Option<Value> = match spec.metrics_segment {
+            Some(segment) => read_segment_json(&api, segment).await,
             None => None,
         };
         let cpu = stats.as_ref().and_then(cpu_from_stats);
@@ -511,6 +531,7 @@ pub async fn run(
             cpu,
             creeps,
             stats,
+            metrics,
         };
         serde_json::to_writer(&mut metrics_file, &sample).context("writing metrics.jsonl")?;
         metrics_file.write_all(b"\n")?;

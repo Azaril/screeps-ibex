@@ -24,6 +24,7 @@ use crate::room::roomplansystem::*;
 use crate::room::roomplanvisualizesystem::*;
 use crate::room::updateroomsystem::*;
 use crate::room::visibilitysystem::*;
+use crate::metrics::MetricsSystem;
 use crate::segments::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
@@ -111,6 +112,7 @@ macro_rules! for_each_system {
         $op!(StatsSystem, "stats");
         $op!(StatsHistorySystem, "stats_history");
         $op!(CpuTrackingSystem, "cpu_tracking");
+        $op!(MetricsSystem, "metrics");
         $op!(RenderSystem, "render");
         $op!(ApplyVisualsSystem, "apply_visuals");
         // === Main-pass: Persistence ===
@@ -437,7 +439,9 @@ fn serialize_world(world: &World, segments: &[u32]) {
             // Chunk-count watermark (IBEX-013/014): track how close the
             // encoded payload is to exhausting the component segments so the
             // 50..=54 shrink stays demonstrably safe as the empire grows.
+            // Also routed into the seg-57 metrics block (Inc-2 rescope).
             let chunk_count = encoded_data.len().div_ceil(1024 * 50).max(1);
+            crate::metrics::record_segment_chunks(chunk_count as u32);
             if chunk_count + 1 >= self.segments.len() {
                 warn!(
                     "Serialized world state near segment capacity: {} of {} chunk(s) used ({} encoded bytes)",
@@ -528,7 +532,15 @@ fn deserialize_world(world: &World, segments: &[u32]) {
                 .join("");
 
             if !encoded_data.is_empty() {
-                let decoded_data = decode_buffer_from_string(&encoded_data).unwrap_or_else(|_| Vec::new());
+                // The decode path was previously SILENT (decode→empty =
+                // a spontaneous empty world). Loud + counted now
+                // (P1.A1 / Inc-2 rescope); falling through to an empty
+                // payload is the reset itself — sanctioned, with a cause.
+                let decoded_data = decode_buffer_from_string(&encoded_data).unwrap_or_else(|e| {
+                    error!("Failed deserialization: segment decode failed, resetting world state: {}", e);
+                    crate::metrics::record_deser_failure();
+                    Vec::new()
+                });
 
                 let mut deserializer = Deserializer::from_slice(&decoded_data, DefaultOptions::new());
 
@@ -553,7 +565,10 @@ fn deserialize_world(world: &World, segments: &[u32]) {
                 )
                 .map(|_| ())
                 .map_err(|e| e.to_string())
-                .unwrap_or_else(|e| error!("Failed deserialization: {}", e));
+                .unwrap_or_else(|e| {
+                    error!("Failed deserialization: {}", e);
+                    crate::metrics::record_deser_failure();
+                });
             }
         }
     }
@@ -801,6 +816,14 @@ pub fn tick() {
         if let Some(username) = username {
             user::set_name(&username);
         }
+
+        //
+        // Tick-start metrics sample + CpuGovernor snapshot refresh
+        // (P1.A1/P1.B3): every system reads ONE consistent governor
+        // view for the whole tick.
+        //
+
+        crate::metrics::tick_start(&mut env.world);
 
         //
         // Execution — systems run sequentially with maintain() after each.

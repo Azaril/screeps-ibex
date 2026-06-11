@@ -16,7 +16,7 @@
 //! | 50–54 | ECS component payload (`COMPONENT_SEGMENTS`)                |
 //! | 55    | cost-matrix cache (`COST_MATRIX_SEGMENT`)                   |
 //! | 56    | stats history (`STATS_HISTORY_SEGMENT`)                     |
-//! | 57    | *reserved:* metrics block (ADR 0006)                        |
+//! | 57    | metrics block (`METRICS_SEGMENT`, ADR 0006 / P1.A1)         |
 //! | 58    | *reserved:* market risk ledger + TradeGovernor (ADR 0012)   |
 //! | 60    | room-planner resume state (`PLANNER_MEMORY_SEGMENT`)        |
 //! | 61    | *reserved:* RoomGraph + inter-room road sets (ADR 0009)     |
@@ -43,6 +43,11 @@ pub const COST_MATRIX_SEGMENT: u32 = 55;
 /// Stats history ring buffers (`stats_history`).
 pub const STATS_HISTORY_SEGMENT: u32 = 56;
 
+/// Always-on versioned metrics block (`metrics`; ADR 0006/P1.A1 — the
+/// schema lives in the `screeps-ibex-metrics` crate, shared with the
+/// eval harness reader).
+pub const METRICS_SEGMENT: u32 = 57;
+
 /// Room-planner resume state (`room::roomplansystem`).
 pub const PLANNER_MEMORY_SEGMENT: u32 = 60;
 
@@ -55,7 +60,7 @@ pub const LIVE_STATS_SEGMENT: u32 = 99;
 const OTHER_SEGMENT_IDS: &[u32] = &[
     COST_MATRIX_SEGMENT,
     STATS_HISTORY_SEGMENT,
-    57, // reserved: metrics block (ADR 0006)
+    METRICS_SEGMENT,
     58, // reserved: market risk ledger + TradeGovernor state (ADR 0012 M3)
     PLANNER_MEMORY_SEGMENT,
     61, // reserved: RoomGraph + inter-room road sets (ADR 0009)

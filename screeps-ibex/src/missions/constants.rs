@@ -7,7 +7,10 @@ pub fn get_desired_storage_amount(resource: ResourceType) -> u32 {
     }
 }
 
+/// Bucket-multiplier bars consumed by [`can_execute_cpu`]: work runs
+/// only while `bucket >= tick_limit * bar`.
 #[allow(clippy::enum_variant_names)]
+#[derive(Clone, Copy)]
 pub enum CpuBar {
     IdlePriority = 7,
     LowPriority = 5,
@@ -16,6 +19,9 @@ pub enum CpuBar {
     CriticalPriority = 2,
 }
 
+/// Reads the CpuGovernor's tick-start snapshot (P1.B3) instead of the
+/// live game API — same formula, one tick-consistent source. New code
+/// wanting tiered behavior should read `cpugovernor::tier()` directly.
 pub fn can_execute_cpu(bar: CpuBar) -> bool {
-    game::cpu::bucket() as f64 >= (game::cpu::tick_limit() * bar as u32 as f64)
+    crate::cpugovernor::can_execute_cpu(bar)
 }

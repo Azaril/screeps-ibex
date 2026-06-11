@@ -8,6 +8,7 @@ static ALLOC: talc::TalckWasm = unsafe { talc::TalckWasm::new_global() };
 
 mod cleanup;
 mod constants;
+mod cpugovernor;
 mod creep;
 mod entitymappingsystem;
 mod features;
@@ -19,6 +20,7 @@ mod logging;
 mod machine_tick;
 mod memory_helper;
 mod memorysystem;
+mod metrics;
 mod military;
 mod missions;
 mod operations;

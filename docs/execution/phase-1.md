@@ -4,7 +4,7 @@
 >
 > **Living document.** §1 (Design) describes the long-term end state and changes only when a design decision changes. §2 (Execution) is the work tracker: statuses, decisions, baselines, and resume notes are updated as work lands — task IDs (`P1.*`) appear in commit messages exactly like Phase 0's `P0.*`. If you are resuming cold: read §2.0 status log first, then the task tables.
 >
-> **Status: NOT STARTED** (authored 2026-06-10).
+> **Status: IN PROGRESS** (started 2026-06-10).
 
 ---
 
@@ -77,7 +77,8 @@ Serialization beyond loud-failure semantics — per the **reset-anytime policy**
 
 ### 2.0 Status log (newest first)
 
-- **2026-06-10** — Document authored; phase not started. Prerequisites all in place: Phase 0 substrate complete (exit audit §6 of [`phase-0.md`](phase-0.md)), seg 57 reserved in `segments.rs`, rover budget healthy, baselines BASELINE-0/1 recorded. Operator context: an MMO respawn (prospector flow) may run concurrently — coordinate deploys; the private-server eval stack is the validation environment for everything here.
+- **2026-06-10 (b)** — **P1.A1 + P1.A2 + P1.B3 landed** (+ the trend half of P1.B2). New `screeps-ibex-metrics` schema crate (workspace member; v1 block, additive-evolution rules pinned by tests); bot `MetricsSystem` emits seg 57 every tick (registered after `CpuTrackingSystem`; active-segment count stays ≤10); fault counters wired into the deser paths — INCLUDING the previously-silent decode→empty path, now loud + counted (Inc-2 rescope rider) — and the 0002 chunk watermark; `metrics::tick_start` samples the bucket window and refreshes the `cpugovernor` snapshot before dispatch. `cpugovernor`: pure `compute_tier` kernel (boundary + profile fixtures), tick-start snapshot (a static, not an ECS resource — the legacy call sites are free functions without `SystemData` access; documented), all 6 `can_execute_cpu` sites now read it via delegation (behavior-preserving by construction — same formula, tick-start values). Kit `CaptureSpec.metrics_segment` + eval seg-57 capture/parse seam (`parse_metrics_block`) with pin tests. Validation: full host+wasm suites green; live smoke = the acceptance run for the segment-populated check. **Open on these tasks:** B3's shed-order consumers (cadences/visuals shed on tier) land with B6/C5; B2's pathing fields await the rover-side plumbing. **Acceptance run PASSED** (`runs/smoke-93a4a2d-20260611-001910`): 610 ticks, zero panics/deser, all 30 capture samples carry parsed v=1 blocks (tier=normal, trend, fault counters, chunk watermark 1/5). Known limitation: `vm_fresh` is a one-tick flag and the sampler polls every ~16 ticks, so restarts can be missed — B2 follow-up: a Memory-persisted `vm_starts` counter (Memory survives VM resets; the heap doesn't).
+- **2026-06-10 (a)** — Document authored. Prerequisites all in place: Phase 0 substrate complete (exit audit §6 of [`phase-0.md`](phase-0.md)), seg 57 reserved in `segments.rs`, rover budget healthy, baselines BASELINE-0/1 recorded. Operator context: an MMO respawn (prospector flow) may run concurrently — coordinate deploys; the private-server eval stack is the validation environment for everything here.
 
 ### 2.1 Conventions
 
@@ -90,8 +91,8 @@ Serialization beyond loud-failure semantics — per the **reset-anytime policy**
 
 | ID | Task | Depends on | Validation | Status |
 |---|---|---|---|---|
-| P1.A1 | Seg-57 schema type (host-compilable module, versioned) + bot-side emitter, all §1.1 fields it can fill today; route the 0002 watermark into it | — | schema encode/decode kernel round-trip; smoke-run shows the segment populated every tick | unstarted |
-| P1.A2 | Harness reader: capture seg 57 (replacing/augmenting the seg-99 live-stats read) into run artifacts | P1.A1 | a smoke run's artifacts contain parsed seg-57 series | unstarted |
+| P1.A1 | Seg-57 schema type (host-compilable module, versioned) + bot-side emitter, all §1.1 fields it can fill today; route the 0002 watermark into it | — | schema encode/decode kernel round-trip; smoke-run shows the segment populated every tick | **done** (`screeps-ibex-metrics` crate + `metrics.rs`; smoke = acceptance) |
+| P1.A2 | Harness reader: capture seg 57 (replacing/augmenting the seg-99 live-stats read) into run artifacts | P1.A1 | a smoke run's artifacts contain parsed seg-57 series | **done** (kit `metrics_segment` + eval `parse_metrics_block`) |
 | P1.A3 | Scenario config format (versioned; §15.2 fields) + port the economy-bringup smoke to it | — | same smoke behavior from a config file | unstarted |
 | P1.A4 | Colony-health score computation + baseline store/differ (automates the BASELINE comparison table) | P1.A2, P1.A3 | score computed for a BASELINE-1-era run; differ flags an injected regression | unstarted |
 | P1.A5 | CPU-pressure inducer (debug-console synthetic burner) + forced-reset-under-pressure composite scenario | P1.A3 | pressure scenario drives bucket down measurably and recovers | unstarted |
@@ -103,8 +104,8 @@ Serialization beyond loud-failure semantics — per the **reset-anytime policy**
 | ID | Task | Depends on | Validation | Status |
 |---|---|---|---|---|
 | P1.B1 | Step-1 quick-wins: `.max_ops` on findnearest + `compute_nearest_spawn_distances`; bucket-guard `RoomRouteCache::compute_route` | — | kernel tests where pure; smoke unchanged | unstarted |
-| P1.B2 | Step-2 telemetry: bucket trend, ticks-since-progress, repath storms (read `repath_count`), ops saturation → seg 57 | P1.A1 | fields visible in captured runs | unstarted |
-| P1.B3 | Step-3 governor: pure tier kernel (bucket+trend fixtures) + resource + the ~6 site conversions + authoritative shed order | P1.B2 | fixture tests (bucket/trend profiles: crash, slow-drain, recovery, sustained-Critical); pressure scenario sheds in ADR order, never-shed set untouched | unstarted |
+| P1.B2 | Step-2 telemetry: bucket trend, ticks-since-progress, repath storms (read `repath_count`), ops saturation → seg 57 | P1.A1 | fields visible in captured runs | **in-progress** (bucket trend ✓ in A1; pathing fields await rover plumbing) |
+| P1.B3 | Step-3 governor: pure tier kernel (bucket+trend fixtures) + tick-start snapshot + the 6 site conversions + authoritative shed order | P1.B2 | fixture tests (bucket/trend profiles: crash, slow-drain, recovery, sustained-Critical); pressure scenario sheds in ADR order, never-shed set untouched | **mostly done** (`cpugovernor.rs`: kernel+fixtures+snapshot+conversions; shed-order CONSUMERS land with B6/C5; pressure-scenario validation awaits P1.A5) |
 | P1.B4 | Step-4 facade: shared ops pool scaled by tier; rover budget inner; `find_route` charged; repath cap; `MIN_PATHFIND_OPS` floor | P1.B3 | pressure scenario: ops pool respected, no creep freeze; budget arithmetic kernel-tested | unstarted |
 | P1.B5 | Step-5 cache persistence/warm + cost-matrix TTL (IBEX-017/038) | P1.B4 | forced-reset scenario: no full-rebuild spike on the post-reset tick | unstarted |
 | P1.B6 | War cadences off 1 (IBEX-021) + `RoomThreatData` borrow restructure, governor-coordinated | P1.B3 | war scenario at parity; recompute CPU drops visibly in seg 57 | unstarted |

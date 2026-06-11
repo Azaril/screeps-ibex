@@ -14,6 +14,10 @@ description = "Evaluation POLICY for screeps-ibex: the smoke gates (ibex's pinne
 # The generic private-server toolkit (P0.A14 mechanism/policy split).
 # Path dep while in-repo; becomes a git dep at the D-1 extraction.
 screeps-server-kit = { path = "../screeps-server-kit" }
+# The seg-57 metrics schema (P1.A2 reader side — same crate the bot
+# writes with, so the contract cannot drift).
+screeps-ibex-metrics = { path = "../screeps-ibex-metrics" }
+serde_json = "1.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
