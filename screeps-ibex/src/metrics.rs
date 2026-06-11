@@ -44,6 +44,17 @@ static PANICS_CAUGHT: AtomicU32 = AtomicU32::new(0);
 static SERIALIZE_SKIPPED_SHED: AtomicU32 = AtomicU32::new(0);
 static SERIALIZE_SKIPPED_ABORTED: AtomicU32 = AtomicU32::new(0);
 static SEGMENT_CHUNKS_USED: AtomicU32 = AtomicU32::new(0);
+static MOVEMENT_OPS_CAP: AtomicU32 = AtomicU32::new(0);
+static MOVEMENT_OPS_CONSUMED: AtomicU32 = AtomicU32::new(0);
+static MOVEMENT_REPATHS: AtomicU32 = AtomicU32::new(0);
+
+/// Per-tick movement telemetry (P1.B2): recorded by the movement
+/// system after `process()`, emitted in the block's `pathing` section.
+pub fn record_movement_stats(stats: screeps_rover::MovementTickStats) {
+    MOVEMENT_OPS_CAP.store(stats.ops_budget_cap, Ordering::Relaxed);
+    MOVEMENT_OPS_CONSUMED.store(stats.ops_consumed, Ordering::Relaxed);
+    MOVEMENT_REPATHS.store(stats.repaths, Ordering::Relaxed);
+}
 
 /// A component-pipeline deserialization failure, INCLUDING the
 /// base64/decompress decode path (previously silent: decode→empty).
@@ -86,11 +97,16 @@ fn fault_counters() -> FaultCounters {
     }
 }
 
-/// Heap-resident emitter state: the bucket window and the fresh-VM
-/// flag. Default (= post-reset) state starts fresh with an empty window.
+/// Heap-resident emitter state: the bucket window, the fresh-VM flag,
+/// and the Memory-persisted VM-start counter. Default (= post-reset)
+/// state starts fresh with an empty window.
 pub struct MetricsState {
     bucket_window: VecDeque<i32>,
     fresh: bool,
+    /// Bumped in `Memory._metrics.vm_starts` once per VM lifetime
+    /// (Memory survives resets; the heap doesn't) — the restart
+    /// counter samplers can't miss, unlike the one-tick `vm_fresh`.
+    vm_starts: u32,
 }
 
 impl Default for MetricsState {
@@ -98,8 +114,17 @@ impl Default for MetricsState {
         MetricsState {
             bucket_window: VecDeque::with_capacity(BUCKET_WINDOW),
             fresh: true,
+            vm_starts: 0,
         }
     }
+}
+
+/// Increment and persist the VM-start counter (called once per VM
+/// lifetime from [`tick_start`]).
+fn bump_vm_starts() -> u32 {
+    let next = crate::memory_helper::path_f64("_metrics.vm_starts").unwrap_or(0.0) as u32 + 1;
+    crate::memory_helper::path_set("_metrics.vm_starts", next as f64);
+    next
 }
 
 impl MetricsState {
@@ -122,6 +147,9 @@ impl MetricsState {
 /// every system reads a consistent governor view for the whole tick.
 pub fn tick_start(world: &mut World) {
     let mut state = world.entry::<MetricsState>().or_insert_with(MetricsState::default);
+    if state.fresh && state.vm_starts == 0 {
+        state.vm_starts = bump_vm_starts();
+    }
     let bucket = game::cpu::bucket();
     state.push_bucket_sample(bucket);
     cpugovernor::refresh(bucket, state.trend(), game::cpu::tick_limit());
@@ -186,6 +214,7 @@ impl MetricsSystem {
             v: METRICS_SCHEMA_VERSION,
             tick: game::time(),
             vm_fresh,
+            vm_starts: data.state.vm_starts,
             cpu: CpuMetrics {
                 used: game::cpu::get_used(),
                 limit: game::cpu::limit() as f64,
@@ -212,7 +241,11 @@ impl MetricsSystem {
             governor: Some(GovernorMetrics {
                 tier: cpugovernor::tier().as_str().to_string(),
             }),
-            pathing: None,
+            pathing: Some(PathingMetrics {
+                ops_used: MOVEMENT_OPS_CONSUMED.load(Ordering::Relaxed),
+                ops_pool: MOVEMENT_OPS_CAP.load(Ordering::Relaxed),
+                repath_count: MOVEMENT_REPATHS.load(Ordering::Relaxed),
+            }),
         }
     }
 }

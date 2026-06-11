@@ -297,6 +297,9 @@ impl<'a> System<'a> for MovementUpdateSystem {
         let request_count = movement_data.request_count();
         let results = system.process(&mut external, movement_data);
 
+        // P1.B2: per-tick pathfinding telemetry into the seg-57 block.
+        crate::metrics::record_movement_stats(system.tick_stats());
+
         let movement_cpu_used = get_cpu() - movement_start_cpu;
         if movement_cpu_used > 80.0 {
             log::info!("movement: {:.1} CPU, {} requests", movement_cpu_used, request_count);

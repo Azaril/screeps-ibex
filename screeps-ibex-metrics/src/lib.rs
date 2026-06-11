@@ -34,10 +34,15 @@ pub struct MetricsBlock {
     /// Game tick this block describes.
     pub tick: u32,
     /// True on the FIRST block emitted after a global (VM/heap) reset.
-    /// The harness counts these as restarts — there is no in-game
-    /// persistent restart counter that survives the reset itself.
+    /// One-tick flag — samplers can miss it; prefer [`Self::vm_starts`].
     #[serde(default)]
     pub vm_fresh: bool,
+    /// Cumulative VM starts, persisted in `Memory._metrics.vm_starts`
+    /// (Memory survives VM resets; the heap doesn't) — the robust
+    /// restart counter samplers can't miss. 0 = writer predates the
+    /// field.
+    #[serde(default)]
+    pub vm_starts: u32,
     pub cpu: CpuMetrics,
     pub gcl: LevelProgress,
     pub gpl: LevelProgress,
@@ -189,6 +194,7 @@ mod tests {
             v: METRICS_SCHEMA_VERSION,
             tick: 12345,
             vm_fresh: true,
+            vm_starts: 3,
             cpu: CpuMetrics {
                 used: 12.5,
                 limit: 100.0,
