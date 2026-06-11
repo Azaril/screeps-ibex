@@ -15,6 +15,7 @@ mod features;
 mod findnearest;
 mod game_loop;
 mod globals;
+mod intents;
 mod jobs;
 mod logging;
 mod machine_tick;

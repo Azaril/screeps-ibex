@@ -192,7 +192,7 @@ impl CombatResponse {
                     .min_by_key(|c| c.hits())
             };
             if let Some(target) = target {
-                let _ = creep.attack(target);
+                crate::intents::attack(creep, &mut tick_context.action_flags, target, target.pos());
             }
         }
 
@@ -202,7 +202,7 @@ impl CombatResponse {
             let in_range_1_count = hostiles.iter().filter(|c| creep_pos.get_range_to(c.pos()) <= 1).count();
 
             if in_range_1_count >= 3 || (in_range_3_count >= 3 && in_range_1_count >= 1) {
-                let _ = creep.ranged_mass_attack();
+                crate::intents::ranged_mass_attack(creep, &mut tick_context.action_flags);
             } else {
                 let target = if let Some(ref focus) = focus_creep {
                     if creep_pos.get_range_to(focus.pos()) <= 3 {
@@ -220,7 +220,7 @@ impl CombatResponse {
                         .min_by_key(|c| c.hits())
                 };
                 if let Some(target) = target {
-                    let _ = creep.ranged_attack(target);
+                    crate::intents::ranged_attack(creep, &mut tick_context.action_flags, target, target.pos());
                 }
             }
         }
@@ -231,9 +231,9 @@ impl CombatResponse {
             if let Some(target) = heal_target {
                 let range = creep_pos.get_range_to(target.pos());
                 if range <= 1 {
-                    let _ = creep.heal(&target);
+                    crate::intents::heal(creep, &mut tick_context.action_flags, &target, target.pos());
                 } else if range <= 3 {
-                    let _ = creep.ranged_heal(&target);
+                    crate::intents::ranged_heal(creep, &mut tick_context.action_flags, &target, target.pos());
                 } else {
                     heal_best_nearby(creep, tick_context);
                 }
@@ -376,7 +376,7 @@ impl Engaged {
                     .min_by_key(|c| c.hits())
             };
             if let Some(target) = target {
-                let _ = creep.attack(target);
+                crate::intents::attack(creep, &mut tick_context.action_flags, target, target.pos());
             }
         }
 
@@ -388,7 +388,7 @@ impl Engaged {
             if in_range_3_count > 0 {
                 // Mass attack when multiple hostiles are stacked on us.
                 if in_range_1_count >= 3 || (in_range_3_count >= 3 && in_range_1_count >= 1) {
-                    let _ = creep.ranged_mass_attack();
+                    crate::intents::ranged_mass_attack(creep, &mut tick_context.action_flags);
                 } else {
                     // Focus fire: prefer the exact focus target by ID.
                     let target = if let Some(ref focus) = focus_creep {
@@ -407,7 +407,7 @@ impl Engaged {
                             .min_by_key(|c| c.hits())
                     };
                     if let Some(target) = target {
-                        let _ = creep.ranged_attack(target);
+                        crate::intents::ranged_attack(creep, &mut tick_context.action_flags, target, target.pos());
                     }
                 }
             } else {
@@ -424,7 +424,7 @@ impl Engaged {
                     });
                 if let Some(target) = target {
                     if let Some(attackable) = target.as_attackable() {
-                        let _ = creep.ranged_attack(attackable);
+                        crate::intents::ranged_attack(creep, &mut tick_context.action_flags, attackable, target.pos());
                     }
                 }
             }
@@ -442,9 +442,9 @@ impl Engaged {
         if let Some(target) = orders.heal_target.and_then(|id| id.resolve()) {
             let range = creep_pos.get_range_to(target.pos());
             if range <= 1 {
-                let _ = creep.heal(&target);
+                crate::intents::heal(creep, &mut tick_context.action_flags, &target, target.pos());
             } else if range <= 3 {
-                let _ = creep.ranged_heal(&target);
+                crate::intents::ranged_heal(creep, &mut tick_context.action_flags, &target, target.pos());
             } else {
                 // Assigned target out of range -- heal best nearby instead.
                 heal_best_nearby(creep, tick_context);
@@ -475,7 +475,7 @@ impl Engaged {
                     });
                 if let Some(target) = target {
                     if let Some(attackable) = target.as_attackable() {
-                        let _ = creep.ranged_attack(attackable);
+                        crate::intents::ranged_attack(creep, &mut tick_context.action_flags, attackable, target.pos());
                     }
                 }
             }
@@ -492,7 +492,7 @@ impl Engaged {
                     });
                 if let Some(target) = target {
                     if let Some(attackable) = target.as_attackable() {
-                        let _ = creep.attack(attackable);
+                        crate::intents::attack(creep, &mut tick_context.action_flags, attackable, target.pos());
                     }
                 }
             }
@@ -506,7 +506,7 @@ impl Engaged {
                 .filter(|c| creep_pos.get_range_to(c.pos()) <= 1)
                 .min_by_key(|c| c.hits())
             {
-                let _ = creep.attack(target);
+                crate::intents::attack(creep, &mut tick_context.action_flags, target, target.pos());
             }
         }
 
@@ -515,7 +515,7 @@ impl Engaged {
             let in_range_1: usize = hostiles.iter().filter(|c| creep_pos.get_range_to(c.pos()) <= 1).count();
 
             if in_range_1 >= 3 {
-                let _ = creep.ranged_mass_attack();
+                crate::intents::ranged_mass_attack(creep, &mut tick_context.action_flags);
             } else {
                 let target = hostiles
                     .iter()
@@ -523,7 +523,7 @@ impl Engaged {
                     .min_by_key(|c| c.hits());
 
                 if let Some(target) = target {
-                    let _ = creep.ranged_attack(target);
+                    crate::intents::ranged_attack(creep, &mut tick_context.action_flags, target, target.pos());
                 }
             }
         }
@@ -637,14 +637,14 @@ impl Retreating {
 
         // Pipeline B: Ranged mass attack while retreating.
         if has_active_part(creep, Part::RangedAttack) {
-            let _ = creep.ranged_mass_attack();
+            crate::intents::ranged_mass_attack(creep, &mut tick_context.action_flags);
         }
 
         // Pipeline A: Melee attack if adjacent.
         if has_active_part(creep, Part::Attack) {
             let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
             if let Some(target) = hostiles.iter().find(|c| creep_pos.get_range_to(c.pos()) <= 1) {
-                let _ = creep.attack(target);
+                crate::intents::attack(creep, &mut tick_context.action_flags, target, target.pos());
             }
         }
 
@@ -654,9 +654,9 @@ impl Retreating {
             if let Some(target) = heal_target {
                 let range = creep_pos.get_range_to(target.pos());
                 if range <= 1 {
-                    let _ = creep.heal(&target);
+                    crate::intents::heal(creep, &mut tick_context.action_flags, &target, target.pos());
                 } else if range <= 3 {
-                    let _ = creep.ranged_heal(&target);
+                    crate::intents::ranged_heal(creep, &mut tick_context.action_flags, &target, target.pos());
                 } else {
                     heal_best_nearby(creep, tick_context);
                 }
@@ -706,13 +706,14 @@ fn heal_best_nearby(creep: &Creep, tick_context: &mut JobTickContext) {
         .min_by_key(|c| c.hits());
 
     if let Some(target) = adjacent_damaged {
-        let _ = creep.heal(target);
+        crate::intents::heal(creep, &mut tick_context.action_flags, target, target.pos());
         return;
     }
 
     // Self-heal if damaged.
     if creep.hits() < creep.hits_max() {
-        let _ = creep.heal(creep);
+        let creep_pos = creep.pos();
+        crate::intents::heal(creep, &mut tick_context.action_flags, creep, creep_pos);
         return;
     }
 
@@ -726,7 +727,7 @@ fn heal_best_nearby(creep: &Creep, tick_context: &mut JobTickContext) {
         .min_by_key(|c| c.hits());
 
     if let Some(target) = ranged_damaged {
-        let _ = creep.ranged_heal(target);
+        crate::intents::ranged_heal(creep, &mut tick_context.action_flags, target, target.pos());
     }
 }
 

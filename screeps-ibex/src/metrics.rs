@@ -153,6 +153,7 @@ impl MetricsState {
 /// CpuGovernor snapshot from the window trend. Runs BEFORE dispatch so
 /// every system reads a consistent governor view for the whole tick.
 pub fn tick_start(world: &mut World) {
+    crate::intents::reset_tick();
     let mut state = world.entry::<MetricsState>().or_insert_with(MetricsState::default);
     if state.fresh && state.vm_starts == 0 {
         state.vm_starts = bump_vm_starts();
@@ -259,6 +260,17 @@ impl MetricsSystem {
                 ops_pool: MOVEMENT_OPS_CAP.load(Ordering::Relaxed),
                 repath_count: MOVEMENT_REPATHS.load(Ordering::Relaxed),
                 move_failures: MOVEMENT_FAILURES.load(Ordering::Relaxed),
+            }),
+            intents: Some({
+                let (counts, digest) = crate::intents::snapshot();
+                IntentMetrics {
+                    attack: counts[0],
+                    ranged_attack: counts[1],
+                    ranged_mass_attack: counts[2],
+                    heal: counts[3],
+                    ranged_heal: counts[4],
+                    digest: format!("{digest:016x}"),
+                }
             }),
         }
     }

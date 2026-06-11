@@ -64,6 +64,29 @@ pub struct MetricsBlock {
     /// Pathfinding budget view (P1.B2/B4) — absent until the facade lands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pathing: Option<PathingMetrics>,
+    /// Guarded-intent recorder view (P1.C3) — combat categories first;
+    /// grows as more pipelines route through the sink.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intents: Option<IntentMetrics>,
+}
+
+/// Per-tick guarded-intent counts + the order-sensitive stream digest
+/// (the P1.C5 shadow-dispatch parity instrument).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct IntentMetrics {
+    #[serde(default)]
+    pub attack: u32,
+    #[serde(default)]
+    pub ranged_attack: u32,
+    #[serde(default)]
+    pub ranged_mass_attack: u32,
+    #[serde(default)]
+    pub heal: u32,
+    #[serde(default)]
+    pub ranged_heal: u32,
+    /// Chained FNV-1a over the tick's intent tuples, hex-encoded.
+    #[serde(default)]
+    pub digest: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -241,6 +264,7 @@ mod tests {
             },
             governor: Some(GovernorMetrics { tier: "normal".into() }),
             pathing: None,
+            intents: None,
         }
     }
 
