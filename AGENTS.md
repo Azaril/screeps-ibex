@@ -83,6 +83,8 @@ Serialized components include: CreepSpawning, CreepOwner, CreepRoverData, RoomDa
 
 ### Serialization format and migration
 
+> **Rewrite-period override (operator, 2026-06-10):** the rules below are SUPERSEDED until the Increment-7 holistic serialization pass by the **reset-anytime policy** — serialized state may be dropped at any increment, no migration paths or back-compat machinery are built, and the only standing requirement is that every reset is **loud** (logged cause, never a silent empty world). See [`docs/plans/rewrite-plan.md`](docs/plans/rewrite-plan.md) §0 and [`docs/guides/engineering-practices.md`](docs/guides/engineering-practices.md) EP-5.1. The paragraphs below describe the post-rewrite steady state.
+
 - **Changing serialization format or serialized data across ticks requires careful attention.** Losing memory state is costly to recover from: the colony must rebuild from scratch (rooms, jobs, operations, missions, spawn queue, etc.). Treat serialized format as a contract.
 - **There is no programmatic way to recover from a deserialization error.** The current code path does not handle deserialization failure gracefully; the only recovery is a **full reset of state** (e.g. via the reset flags that clear environment and/or memory). Do not introduce changes that make existing segment data fail to deserialize unless a reset is acceptable.
 - **Newly added fields must have defaults.** When you add fields to types that are serialized (components or structs in the serialization list in `game_loop.rs`), old data stored in RawMemory was produced without those fields. You must ensure backward compatibility: use `Default` implementations, `#[serde(default)]`, or equivalent so that deserializing old payloads yields sensible values for the new fields rather than failing or leaving them uninitialized.
@@ -96,6 +98,7 @@ Serialized components include: CreepSpawning, CreepOwner, CreepRoverData, RoomDa
 
 ## 8. Conventions and safety
 
+- **Engineering practices doc:** the project's cross-cutting review rules (state/statics policy, loud-failure semantics, budget discipline, testing rules, commit conventions) live in [`docs/guides/engineering-practices.md`](docs/guides/engineering-practices.md) with stable `EP-*` IDs — consult it for any review and when this section conflicts with it, it wins.
 - **Build and validation:** Use `cargo build-wasm -p screeps-ibex` / `cargo clippy-wasm -p screeps-ibex` for the WASM target the bot deploys as (aliases in `.cargo/config.toml`; **no default target is set** — plain `cargo test`/`cargo run` are host-native everywhere, including the excluded tool crates). Ensure the target is installed: `rustup target add wasm32-unknown-unknown`. Run these to verify changes before committing.
 - **No panics in the hot path:** Avoid unwrap/expect in tick-critical code; handle errors and log instead. The game keeps running after your code returns.
 - **Idempotent and restart-safe:** Assume any tick can be the first after a VM reload. Rely on serialized state and Memory/segments, not thread_local or static mutable state for correctness.
@@ -105,7 +108,7 @@ Serialized components include: CreepSpawning, CreepOwner, CreepRoverData, RoomDa
 
 ## 9. Git and workflow
 
-- **Feature branches:** Do changes on feature branches so they can be reviewed via pull requests when required. Avoid committing directly to the main integration branch (e.g. `master`) for changes that need review.
+- **Feature branches:** Do changes on feature branches so they can be reviewed via pull requests when required. Avoid committing directly to the main integration branch (e.g. `master`) for changes that need review. *Rewrite-period override (operator): work lands directly on `master` until revisited — see [`docs/guides/engineering-practices.md`](docs/guides/engineering-practices.md) EP-10.4.*
 - **Commit messages:** Write commit messages that efficiently summarize the change and follow git commit best practices (e.g. imperative mood, clear scope, optional body for why when useful).
 - **Submodules:** The project uses git submodules (screeps-cache, screeps-foreman, screeps-machine, screeps-rover, screeps-timing, etc.). When committing changes that touch both the main repo and submodules, **commit in the correct order**: leaf repos first (e.g. submodule repos), then update the superproject to point to the new submodule commits. This keeps history consistent and avoids broken references.
 - **screeps-game-api:** The `screeps-game-api` directory is a **shared library** (game bindings used by other projects). It is patched from `../screeps-game-api` and is not a submodule of this repo. **Upstream changes must go through pull requests** (e.g. to rustyscreeps/screeps-game-api or the canonical host). Locally, work-in-progress changes in that folder are fine while developing; when landing changes, open or use a PR for the screeps-game-api repo rather than pushing directly to a shared branch.

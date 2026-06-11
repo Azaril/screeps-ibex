@@ -13,5 +13,6 @@ Outputs produced by reviews, analyses, planning, and agent/workflow tasks live h
 | `docs/design/` | ADRs and design notes (entity model, serialization, behavior modeling, CPU governance). |
 | `docs/references/` | External references & prior art (Overmind, engine source, docs, telemetry) and engine-mechanics ground truth. |
 | `docs/execution/` | Execution plans driving implementation (Phase 0 baseline → increments), with stable task IDs and baseline reports. |
+| `docs/guides/` | Standing guidance referenced during work — e.g. [`engineering-practices.md`](guides/engineering-practices.md), the review-reference rule set. |
 
 Add new subfolders by artifact type as needed. Hand-maintained top-level docs (`AGENTS.md`, `todo.md`) stay where they are.
