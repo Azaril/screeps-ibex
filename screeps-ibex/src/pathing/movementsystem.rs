@@ -300,6 +300,21 @@ impl<'a> System<'a> for MovementUpdateSystem {
         // P1.B2: per-tick pathfinding telemetry into the seg-57 block.
         crate::metrics::record_movement_stats(system.tick_stats());
 
+        // P1.D6 / IBEX-015: surface the give-up results the jobs used
+        // to silently ignore (recovery wiring = Inc 6, ADR 0003 A6).
+        let move_failures = results
+            .results
+            .values()
+            .filter(|result| match result {
+                MovementResult::Failed(_) => true,
+                MovementResult::Stuck { ticks } => {
+                    *ticks >= crate::jobs::utility::movebehavior::STUCK_REPORT_THRESHOLD
+                }
+                _ => false,
+            })
+            .count() as u32;
+        crate::metrics::record_movement_failures(move_failures);
+
         let movement_cpu_used = get_cpu() - movement_start_cpu;
         if movement_cpu_used > 80.0 {
             log::info!("movement: {:.1} CPU, {} requests", movement_cpu_used, request_count);

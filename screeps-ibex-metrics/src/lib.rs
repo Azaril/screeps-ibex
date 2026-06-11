@@ -149,6 +149,12 @@ pub struct PathingMetrics {
     pub ops_pool: u32,
     #[serde(default)]
     pub repath_count: u32,
+    /// Movement results the rover gave up on this tick (path not
+    /// found / stuck past threshold / blocked) — the IBEX-015 signal,
+    /// surfaced for telemetry; job-level RECOVERY lands with the Inc-6
+    /// transient-tolerance work (ADR 0003 A6).
+    #[serde(default)]
+    pub move_failures: u32,
 }
 
 impl MetricsBlock {

@@ -230,6 +230,15 @@ impl ClaimOperation {
     /// Run BFS room discovery, populate cached candidates and unknown rooms,
     /// request visibility, and transition to Scouting.
     fn run_discover(&mut self, system_data: &mut OperationExecutionSystemData) {
+        // Expansion is in the shed-first class (ADR 0004's authoritative
+        // order): under Critical, skip discovery this cadence — the
+        // phase machine stays in Discover and retries when pressure
+        // clears (P1.D3, the governor's first expansion consumer).
+        if crate::cpugovernor::tier() == crate::cpugovernor::Tier::Critical {
+            log::debug!("expansion discovery shed (governor Critical)");
+            return;
+        }
+
         let gather_system_data = GatherSystemData {
             entities: system_data.entities,
             mapping: system_data.mapping,

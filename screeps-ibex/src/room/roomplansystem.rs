@@ -51,7 +51,21 @@ impl RoomPlanQueue {
 #[derive(Clone, Deserialize, Serialize)]
 pub enum RoomPlanState {
     Valid(Plan),
-    Failed { time: u32 },
+    Failed {
+        time: u32,
+        /// Consecutive failures — drives the exponential replan backoff
+        /// (P1.D3 / IBEX-037: a room that cannot plan must not thrash
+        /// the multi-tick planner every 2000 ticks forever).
+        #[serde(default)]
+        attempts: u32,
+    },
+}
+
+/// Replan backoff (P1.D3 / IBEX-037): base 2000 ticks, doubling per
+/// consecutive failure, capped at 16× (32k ticks ≈ 9 real-time hours
+/// at 1 s/tick) — terrain rarely changes, but ownership/structures do.
+pub fn replan_backoff_ticks(attempts: u32) -> u32 {
+    2000u32.saturating_mul(1 << attempts.min(4))
 }
 
 impl RoomPlanState {
@@ -297,6 +311,15 @@ impl RoomPlanSystem {
         Some((budget_cpu, tick_limit))
     }
 
+    /// Consecutive-failure count for the NEXT `Failed` state: prior
+    /// failures + 1, or 0 for a first failure (P1.D3 backoff input).
+    fn next_failure_attempts(room_plan_data_storage: &WriteStorage<RoomPlanData>, room: Entity) -> u32 {
+        match room_plan_data_storage.get(room).map(|d| &d.state) {
+            Some(RoomPlanState::Failed { attempts, .. }) => attempts.saturating_add(1),
+            _ => 0,
+        }
+    }
+
     fn attach_plan_state(
         room_plan_data_storage: &mut WriteStorage<RoomPlanData>,
         room: Entity,
@@ -338,7 +361,7 @@ impl<'a> System<'a> for RoomPlanSystem {
                         match crate::serialize::decode_from_string(&planner_data) {
                             Ok(state) => state,
                             Err(err) => {
-                                info!("Failed to decode planner state, resetting. Err: {}", err);
+                                log::warn!("Planner resume-state decode failed (seg 60), restarting planning from scratch: {}", err);
                                 RoomPlannerData::default()
                             }
                         }
@@ -351,8 +374,9 @@ impl<'a> System<'a> for RoomPlanSystem {
                             if let Some(plan_data) = data.room_plan_data.get(room) {
                                 match plan_data.state {
                                     RoomPlanState::Valid(_) => crate::features::features().construction.force_plan,
-                                    RoomPlanState::Failed { time } => {
-                                        game::time() >= time + 2000 && crate::features::features().construction.allow_replan
+                                    RoomPlanState::Failed { time, attempts } => {
+                                        game::time() >= time.saturating_add(replan_backoff_ticks(attempts))
+                                            && crate::features::features().construction.allow_replan
                                     }
                                 }
                             } else {
@@ -405,10 +429,11 @@ impl<'a> System<'a> for RoomPlanSystem {
                                     Ok(PlanTickResult::Complete(None)) => {
                                         info!("Planning complete but no viable plan found. Room: {}", room_data.name);
 
+                                        let attempts = Self::next_failure_attempts(&data.room_plan_data, room_entity);
                                         if let Err(err) = Self::attach_plan_state(
                                             &mut data.room_plan_data,
                                             room_entity,
-                                            RoomPlanState::Failed { time: game::time() },
+                                            RoomPlanState::Failed { time: game::time(), attempts },
                                         ) {
                                             info!("Failed to attach plan to room! Room: {} - Error: {}", room_data.name, err);
                                         }
@@ -418,10 +443,11 @@ impl<'a> System<'a> for RoomPlanSystem {
                                     Ok(PlanTickResult::Failed(msg)) => {
                                         info!("Planning failed! Room: {} - Error: {}", room_data.name, msg);
 
+                                        let attempts = Self::next_failure_attempts(&data.room_plan_data, room_entity);
                                         if let Err(err) = Self::attach_plan_state(
                                             &mut data.room_plan_data,
                                             room_entity,
-                                            RoomPlanState::Failed { time: game::time() },
+                                            RoomPlanState::Failed { time: game::time(), attempts },
                                         ) {
                                             info!("Failed to attach plan to room! Room: {} - Error: {}", room_data.name, err);
                                         }
@@ -447,8 +473,16 @@ impl<'a> System<'a> for RoomPlanSystem {
                         planner_state.running_state = None;
                     }
 
-                    if let Ok(output_planner_data) = crate::serialize::encode_to_string(&planner_state) {
-                        data.memory_arbiter.set(PLANNER_MEMORY_SEGMENT, &output_planner_data);
+                    match crate::serialize::encode_to_string(&planner_state) {
+                        Ok(output_planner_data) => {
+                            data.memory_arbiter.set(PLANNER_MEMORY_SEGMENT, &output_planner_data);
+                        }
+                        // Loud, not silent (P1.D3 / ADR 0009 step 1): a
+                        // dropped write here silently restarts multi-tick
+                        // planning from scratch next tick.
+                        Err(err) => {
+                            log::error!("Planner resume-state encode failed (seg 60); in-progress planning will restart: {}", err);
+                        }
                     }
                 }
             }
@@ -465,5 +499,23 @@ impl<'a> System<'a> for RoomPlanSystem {
 impl screeps_foreman::RoomVisualizer for RoomVisualizer {
     fn render(&mut self, location: screeps_common::Location, structure: StructureType) {
         screeps_visual::render::render_structure(self, location.x() as f32, location.y() as f32, structure, 1.0);
+    }
+}
+
+#[cfg(test)]
+mod plan_backoff_tests {
+    use super::replan_backoff_ticks;
+
+    /// P1.D3 / IBEX-037: exponential, capped — a room that can't plan
+    /// retries at 2k, 4k, 8k, 16k, then every 32k ticks, never faster.
+    #[test]
+    fn replan_backoff_doubles_then_caps() {
+        assert_eq!(replan_backoff_ticks(0), 2_000);
+        assert_eq!(replan_backoff_ticks(1), 4_000);
+        assert_eq!(replan_backoff_ticks(2), 8_000);
+        assert_eq!(replan_backoff_ticks(3), 16_000);
+        assert_eq!(replan_backoff_ticks(4), 32_000);
+        assert_eq!(replan_backoff_ticks(5), 32_000);
+        assert_eq!(replan_backoff_ticks(u32::MAX), 32_000);
     }
 }

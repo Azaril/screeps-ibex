@@ -115,6 +115,13 @@ pub fn gather_home_rooms(system_data: &GatherSystemData, min_rcl: u32) -> Vec<En
         .collect()
 }
 
+/// Hard ceiling on rooms one gather BFS may visit (P1.D3 / IBEX-036):
+/// `describe_exits` + status lookups per room are cheap individually
+/// but unbudgeted breadth-first growth from many seed rooms is exactly
+/// the leak class ADR 0004 closes. Hitting the cap logs and truncates
+/// — discovery picks up the frontier on its next cadence.
+pub const MAX_GATHER_VISITED_ROOMS: usize = 256;
+
 pub fn gather_candidate_rooms<F>(
     system_data: &GatherSystemData,
     seed_rooms: &[Entity],
@@ -162,6 +169,15 @@ where
     let mut distance = 1;
 
     while !expansion_rooms.is_empty() && distance <= max_distance {
+        if visited_rooms.len() >= MAX_GATHER_VISITED_ROOMS {
+            log::warn!(
+                "gather BFS truncated at {} visited rooms (distance {} of {}) — budget cap (IBEX-036)",
+                visited_rooms.len(),
+                distance,
+                max_distance
+            );
+            break;
+        }
         let next_rooms: HashMap<RoomName, HashSet<Entity>> = std::mem::take(&mut expansion_rooms);
 
         for (source_room_name, home_room_entities) in next_rooms.into_iter() {

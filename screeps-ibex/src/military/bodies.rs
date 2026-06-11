@@ -425,14 +425,17 @@ pub fn sk_healer_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
 
 // ─── Specialized body definitions (Phase 6) ────────────────────────────────
 
-/// Power bank attacker body -- heavy ATTACK + MOVE.
-/// Needs ~25 ATTACK parts (750 DPS) to destroy a 2M HP bank in ~2667 ticks.
-/// Must be paired with a healer to survive 50% damage reflection (375 damage/tick).
+/// Power bank attacker body -- heavy ATTACK + MOVE, capped at 20×ATTACK
+/// (P1.D5 / ADR 0013 D1.2): the bank reflects 50% of damage dealt, and
+/// the duo healer maxes at 25×HEAL = 300 heal/tick — 20×ATTACK deals
+/// 600 (300 reflected, exactly healable; kill in ~3334 ticks), while
+/// the old 25×ATTACK cap reflected 375/tick and out-damaged its own
+/// healer.
 pub fn power_bank_attacker_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
     SpawnBodyDefinition {
         maximum_energy: max_energy,
         minimum_repeat: Some(5),
-        maximum_repeat: Some(25),
+        maximum_repeat: Some(20),
         pre_body: &[],
         repeat_body: &[Part::Attack, Part::Move],
         post_body: &[],

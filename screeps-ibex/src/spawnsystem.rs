@@ -197,44 +197,6 @@ impl SpawnQueueSystem {
         let next_spawn_ticks = Self::next_spawn_duration_ticks(requests, spawned_tokens);
         let renew_ttl_threshold = next_spawn_ticks.saturating_add(50);
 
-        if room_has_energy_for_renew && !renew_requests.is_empty() {
-            let mut renew_sorted: Vec<&RenewRequest> = renew_requests.iter().collect();
-            renew_sorted.sort_by_key(|r| r.ticks_to_live);
-
-            for renew in renew_sorted {
-                if renew.ticks_to_live >= renew_ttl_threshold && next_spawn_ticks > 0 {
-                    continue;
-                }
-                let creep = match data.creep_owner.get(renew.creep_entity).and_then(|co| co.owner.resolve()) {
-                    Some(c) => c,
-                    None => continue,
-                };
-                let creep_pos = creep.pos();
-                if let Some(idx) = spawns
-                    .iter()
-                    .position(|s| s.is_active() && s.spawning().is_none() && creep_pos.get_range_to(s.pos()) <= 1)
-                {
-                    match spawns[idx].renew_creep(&creep) {
-                        Ok(()) => {
-                            debug!(
-                                "[SpawnQueue] Renewed {} (ttl={}) at {}",
-                                creep.name(),
-                                renew.ticks_to_live,
-                                spawns[idx].name()
-                            );
-                            let body_cost: u32 = creep.body().iter().map(|p| p.part().cost()).sum();
-                            let renew_cost = (body_cost * 2) / 5;
-                            available_energy = available_energy.saturating_sub(renew_cost);
-                            spawns.remove(idx);
-                        }
-                        Err(e) => {
-                            debug!("[SpawnQueue] renew_creep failed for {}: {:?}", creep.name(), e);
-                        }
-                    }
-                }
-            }
-        }
-
         let system_data = SpawnQueueExecutionSystemData { updater: &data.updater };
 
         for request in requests {
@@ -275,8 +237,65 @@ impl SpawnQueueSystem {
             }
         }
 
+        // Renew pass — BEHIND the priority gate (P1.D4 / ADR 0011 step
+        // 0): spawn requests are priority-sorted and take their lanes
+        // first; renew only uses spawns no pending request claimed, so
+        // a renew can never consume a lane a CRITICAL/HIGH spawn wants
+        // (the pre-D4 ordering ran renew first).
+        if room_has_energy_for_renew && !renew_requests.is_empty() {
+            let mut renew_sorted: Vec<&RenewRequest> = renew_requests.iter().collect();
+            renew_sorted.sort_by_key(|r| r.ticks_to_live);
+
+            for renew in renew_sorted {
+                if renew.ticks_to_live >= renew_ttl_threshold && next_spawn_ticks > 0 {
+                    continue;
+                }
+                let creep = match data.creep_owner.get(renew.creep_entity).and_then(|co| co.owner.resolve()) {
+                    Some(c) => c,
+                    None => continue,
+                };
+                let creep_pos = creep.pos();
+                if let Some(idx) = spawns
+                    .iter()
+                    .position(|s| s.is_active() && s.spawning().is_none() && creep_pos.get_range_to(s.pos()) <= 1)
+                {
+                    match spawns[idx].renew_creep(&creep) {
+                        Ok(()) => {
+                            debug!(
+                                "[SpawnQueue] Renewed {} (ttl={}) at {}",
+                                creep.name(),
+                                renew.ticks_to_live,
+                                spawns[idx].name()
+                            );
+                            let body_cost: u32 = creep.body().iter().map(|p| p.part().cost()).sum();
+                            let renew_cost = renew_energy_cost(body_cost, creep.body().len());
+                            available_energy = available_energy.saturating_sub(renew_cost);
+                            spawns.remove(idx);
+                        }
+                        Err(e) => {
+                            debug!("[SpawnQueue] renew_creep failed for {}: {:?}", creep.name(), e);
+                        }
+                    }
+                }
+            }
+        }
+        let _ = available_energy;
+
         Ok(())
     }
+}
+
+/// Engine-true renew energy cost (P1.D4 / ADR 0011 step 0):
+/// `ceil(SPAWN_RENEW_RATIO · body_cost / CREEP_SPAWN_TIME / body_len)`
+/// = `ceil(1.2 · cost / 3 / len)` — the engine's
+/// `renew-creep` intent processor formula. The pre-D4 estimate
+/// (`cost·2/5`) over-charged ~10x for typical bodies, depleting the
+/// room's modeled energy and skipping spawns that were affordable.
+pub fn renew_energy_cost(body_cost: u32, body_len: usize) -> u32 {
+    if body_len == 0 {
+        return 0;
+    }
+    ((1.2 * body_cost as f64) / 3.0 / body_len as f64).ceil() as u32
 }
 
 impl<'a> System<'a> for SpawnQueueSystem {
@@ -365,6 +384,21 @@ mod tests {
     #[should_panic(expected = "priority not finite")]
     fn spawn_request_rejects_non_finite_priority_in_debug() {
         let _ = test_request(f32::NAN);
+    }
+
+    /// Engine-true renew cost: ceil(1.2·cost/3/len) — pinned against
+    /// the engine's renew-creep intent formula (P1.D4 / ADR 0011).
+    #[test]
+    fn renew_cost_matches_engine_formula() {
+        // 10-part 1000-energy body: ceil(1.2·1000/3/10) = 40
+        // (the pre-D4 estimate charged 400 — 10x).
+        assert_eq!(renew_energy_cost(1000, 10), 40);
+        // Single 50-cost part: ceil(1.2·50/3/1) = 20.
+        assert_eq!(renew_energy_cost(50, 1), 20);
+        // Rounding up: 3 parts, 250 energy → ceil(33.33) = 34.
+        assert_eq!(renew_energy_cost(250, 3), 34);
+        // Degenerate empty body.
+        assert_eq!(renew_energy_cost(0, 0), 0);
     }
 
     /// Pin: equal-priority requests stay adjacent and do not disturb the

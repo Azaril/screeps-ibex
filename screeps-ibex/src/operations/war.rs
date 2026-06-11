@@ -773,7 +773,7 @@ impl WarOperation {
             if let Some((power, ticks_to_decay)) = power_bank_info {
                 // Only farm power banks if we have significant economy and
                 // enough time remaining to actually extract the power.
-                let min_ticks_needed = (min_distance * 50) + 500;
+                let min_ticks_needed = power_bank_min_ticks_needed(min_distance);
                 // Count only attacks launched as power-bank farms
                 // (AttackReason::PowerBank) against the power-bank cap;
                 // unrelated attacks must not consume power-bank slots
@@ -1308,6 +1308,28 @@ fn cadence_elapsed(now: u32, last_tick: Option<u32>, cadence: u32) -> bool {
     last_tick.map(|t| now.saturating_sub(t) >= cadence).unwrap_or(true)
 }
 
+/// Power-bank launch feasibility window (P1.D5 / ADR 0013 D1.2): the
+/// farm only fits the bank's decay window when kill time AT THE DUO'S
+/// CAPPED DPS + travel + serial duo spawn + a margin all fit. The
+/// pre-D5 window (`dist·50 + 500`) ignored kill time entirely (~3.3k
+/// ticks), green-lighting banks that could never be finished.
+fn power_bank_min_ticks_needed(min_distance: u32) -> u32 {
+    /// Engine: POWER_BANK_HITS.
+    const BANK_HITS: u32 = 2_000_000;
+    /// bodies.rs `power_bank_attacker_body` cap (healer-matched).
+    const DUO_ATTACK_PARTS: u32 = 20;
+    /// ATTACK_POWER = 30 hits/part/tick.
+    const DUO_DPS: u32 = DUO_ATTACK_PARTS * 30;
+    /// Serial spawn of the duo: (20 ATTACK + 20 MOVE) + (25 HEAL +
+    /// 25 MOVE) parts × 3 ticks/part.
+    const DUO_SPAWN_TICKS: u32 = (40 + 50) * 3;
+    /// Slack for rally, lair dodges, and the loot haul-out.
+    const MARGIN_TICKS: u32 = 200;
+
+    let kill_ticks = BANK_HITS / DUO_DPS;
+    kill_ticks + (min_distance * 50) + DUO_SPAWN_TICKS + MARGIN_TICKS
+}
+
 /// Count active attacks that war launched as power-bank farms
 /// (`AttackReason::PowerBank`). Feeds the `max_concurrent_power_banks` gate
 /// (IBEX-043): the reason is war's own bookkeeping, recorded at launch.
@@ -1437,6 +1459,22 @@ impl Operation for WarOperation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// P1.D5 / ADR 0013 D1.2: the feasibility window must include kill
+    /// time — at 20×ATTACK (600 dps) a 2M bank takes 3333 ticks, so
+    /// even a zero-distance bank needs >3.5k ticks of decay left; the
+    /// pre-D5 window claimed 500.
+    #[test]
+    fn power_bank_window_includes_kill_time() {
+        let zero_dist = power_bank_min_ticks_needed(0);
+        assert_eq!(zero_dist, 3333 + 270 + 200, "{zero_dist}");
+        // Distance adds 50 ticks/room.
+        assert_eq!(power_bank_min_ticks_needed(4) - zero_dist, 200);
+        // A freshly-spawned bank (5000 decay) IS farmable nearby…
+        assert!(power_bank_min_ticks_needed(5) < 5000);
+        // …but never at 25+ rooms out.
+        assert!(power_bank_min_ticks_needed(25) > 5000);
+    }
 
     // Pin (IBEX-044): cadence checks must not underflow when the persisted
     // tick is ahead of the current time (private-server time reset, restored

@@ -47,6 +47,7 @@ static SEGMENT_CHUNKS_USED: AtomicU32 = AtomicU32::new(0);
 static MOVEMENT_OPS_CAP: AtomicU32 = AtomicU32::new(0);
 static MOVEMENT_OPS_CONSUMED: AtomicU32 = AtomicU32::new(0);
 static MOVEMENT_REPATHS: AtomicU32 = AtomicU32::new(0);
+static MOVEMENT_FAILURES: AtomicU32 = AtomicU32::new(0);
 
 /// Per-tick movement telemetry (P1.B2): recorded by the movement
 /// system after `process()`, emitted in the block's `pathing` section.
@@ -54,6 +55,12 @@ pub fn record_movement_stats(stats: screeps_rover::MovementTickStats) {
     MOVEMENT_OPS_CAP.store(stats.ops_budget_cap, Ordering::Relaxed);
     MOVEMENT_OPS_CONSUMED.store(stats.ops_consumed, Ordering::Relaxed);
     MOVEMENT_REPATHS.store(stats.repaths, Ordering::Relaxed);
+}
+
+/// Movement results the rover gave up on this tick (P1.D6 / IBEX-015:
+/// the previously-dead detection signal, surfaced; recovery = Inc 6).
+pub fn record_movement_failures(count: u32) {
+    MOVEMENT_FAILURES.store(count, Ordering::Relaxed);
 }
 
 /// A component-pipeline deserialization failure, INCLUDING the
@@ -245,6 +252,7 @@ impl MetricsSystem {
                 ops_used: MOVEMENT_OPS_CONSUMED.load(Ordering::Relaxed),
                 ops_pool: MOVEMENT_OPS_CAP.load(Ordering::Relaxed),
                 repath_count: MOVEMENT_REPATHS.load(Ordering::Relaxed),
+                move_failures: MOVEMENT_FAILURES.load(Ordering::Relaxed),
             }),
         }
     }
