@@ -47,6 +47,11 @@ pub enum Fault {
     /// One-shot state-preserving global reset (environment rebuild from
     /// segments) at the given observed tick.
     GlobalReset { at_observed_tick: u64 },
+    /// Deliberate bot panic shortly after the given observed tick — the
+    /// P1.C2 containment probe (loader catch → halt → fresh VM; the
+    /// run's gates WILL report the panic line — that's the point; the
+    /// verdict for containment scenarios is the counter inspection).
+    PanicOnce { at_observed_tick: u64 },
 }
 
 /// JS guard chain creating `Memory._features.<group>` then assigning.
@@ -99,11 +104,26 @@ impl Scenario {
         scenario
     }
 
+    /// P1.C2 containment acceptance: a deliberate panic mid-run. The
+    /// panic gate WILL flag this run (expected); the verdict is the
+    /// counter inspection: aborted_ticks=1, vm_starts=2, colony alive.
+    pub fn builtin_panic_containment(ticks: u64) -> Scenario {
+        Scenario {
+            v: SCENARIO_SCHEMA_VERSION,
+            name: "panic-containment".into(),
+            ticks,
+            faults: vec![Fault::PanicOnce {
+                at_observed_tick: ticks / 2,
+            }],
+        }
+    }
+
     pub fn builtin(name: &str, ticks: u64) -> Option<Scenario> {
         match name {
             "smoke" => Some(Self::builtin_smoke(ticks)),
             "pressure" => Some(Self::builtin_pressure(ticks)),
             "reset-under-pressure" => Some(Self::builtin_reset_under_pressure(ticks)),
+            "panic-containment" => Some(Self::builtin_panic_containment(ticks)),
             _ => None,
         }
     }
@@ -150,6 +170,15 @@ impl Scenario {
                         at_observed_tick: *at_observed_tick,
                         expression: feature_set("reset", "environment=true"),
                         label: "global reset (environment)".into(),
+                    });
+                }
+                Fault::PanicOnce { at_observed_tick } => {
+                    out.push(ConsoleInjection {
+                        at_observed_tick: *at_observed_tick,
+                        // Game.time evaluates at injection time in the
+                        // user VM; +2 clears the injection tick itself.
+                        expression: feature_set("eval", "panic_at_tick=Game.time+2"),
+                        label: "deliberate panic (containment probe)".into(),
                     });
                 }
             }

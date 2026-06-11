@@ -436,6 +436,12 @@ pub struct EvalFeatures {
     /// the top of the tick (game_loop) so the governor and the
     /// shedding it drives see honest pressure.
     pub cpu_burn_ms: u32,
+    /// Deliberate panic when `game::time() == panic_at_tick` (0 = off)
+    /// — the P1.C2 containment acceptance probe. Keyed to an ABSOLUTE
+    /// tick rather than a clear-on-fire flag: the panicking tick's
+    /// Memory writes are lost with the abort, but time moves past the
+    /// trigger during the halt/reload cycle, so it self-disarms.
+    pub panic_at_tick: u32,
 }
 
 // ─── Top-level features ────────────────────────────────────────────────────────

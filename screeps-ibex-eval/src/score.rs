@@ -157,6 +157,7 @@ mod tests {
             v: METRICS_SCHEMA_VERSION,
             tick,
             vm_fresh: false,
+            vm_starts: 1,
             cpu: CpuMetrics {
                 used,
                 limit: 100.0,

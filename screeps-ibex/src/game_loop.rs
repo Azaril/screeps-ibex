@@ -776,7 +776,12 @@ pub fn tick() {
             env.loaded = true;
         }
 
-        env.tick = Some(current_time);
+        // env.tick advances AFTER a successful serialize (end of this
+        // function), not here (P1.C2 / ADR 0005): a tick that aborts
+        // mid-way must not leave the surviving environment claiming it
+        // completed. (Under the loader's halt-containment the env dies
+        // with the VM anyway — this is correctness-by-construction for
+        // any future containment that keeps the env alive.)
 
         //
         // Room plan reset — remove all plans so every room replans.
@@ -841,6 +846,13 @@ pub fn tick() {
             debug!("eval cpu burner: consumed {} ms", burn_ms);
         }
 
+        // Containment acceptance probe (P1.C2): deliberate panic at an
+        // exact tick — exercises the loader's catch/halt boundary and
+        // the abort accounting end to end. Self-disarms (see features).
+        if features.eval.panic_at_tick > 0 && game::time() == features.eval.panic_at_tick {
+            panic!("eval fault injection: deliberate panic at tick {}", game::time());
+        }
+
         //
         // Execution — systems run sequentially with maintain() after each.
         //
@@ -867,6 +879,10 @@ pub fn tick() {
         //
 
         serialize_world(&env.world, COMPONENT_SEGMENTS);
+
+        // The tick is committed only once its state is serialized
+        // (P1.C2 — see the note at the old advance site).
+        env.tick = Some(current_time);
     });
 }
 

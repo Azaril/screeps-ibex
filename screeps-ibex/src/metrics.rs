@@ -156,6 +156,12 @@ pub fn tick_start(world: &mut World) {
     let mut state = world.entry::<MetricsState>().or_insert_with(MetricsState::default);
     if state.fresh && state.vm_starts == 0 {
         state.vm_starts = bump_vm_starts();
+        // Containment accounting (P1.C2): the loader counts caught
+        // aborts in Memory (the heap dies with the halt). An aborted
+        // tick is both a caught panic and a lost serialize.
+        let aborted = crate::memory_helper::path_f64("_metrics.aborted_ticks").unwrap_or(0.0) as u32;
+        PANICS_CAUGHT.store(aborted, Ordering::Relaxed);
+        SERIALIZE_SKIPPED_ABORTED.store(aborted, Ordering::Relaxed);
     }
     let bucket = game::cpu::bucket();
     state.push_bucket_sample(bucket);

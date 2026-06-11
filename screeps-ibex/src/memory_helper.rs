@@ -32,19 +32,32 @@ pub fn path_f64(path: &str) -> Option<f64> {
     }
 }
 
-/// Set a value at a dotted path in the Memory object.
+/// Set a value at a dotted path in the Memory object, CREATING missing
+/// intermediate objects (P1.C2 fix: the old early-return on a missing
+/// intermediate silently dropped writes — `_metrics.vm_starts` on a
+/// fresh world no-opped until something else happened to create
+/// `Memory._metrics`, observed live in the panic-containment run).
 pub fn path_set(path: &str, value: impl Into<JsValue>) {
     let parts: Vec<&str> = path.split('.').collect();
     if parts.is_empty() {
         return;
     }
     let mut current = root();
+    if current.is_undefined() || current.is_null() {
+        return;
+    }
     for key in &parts[..parts.len() - 1] {
-        let next = js_sys::Reflect::get(&current, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED);
+        let key_js = JsValue::from_str(key);
+        let next = js_sys::Reflect::get(&current, &key_js).unwrap_or(JsValue::UNDEFINED);
         if next.is_undefined() || next.is_null() {
-            return;
+            let created: JsValue = js_sys::Object::new().into();
+            if js_sys::Reflect::set(&current, &key_js, &created).is_err() {
+                return;
+            }
+            current = created;
+        } else {
+            current = next;
         }
-        current = next;
     }
     if let Some(last_key) = parts.last() {
         let _ = js_sys::Reflect::set(&current, &JsValue::from_str(last_key), &value.into());

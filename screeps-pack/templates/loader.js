@@ -51,6 +51,18 @@ function loaded_loop() {
             running = false;
         } catch (error) {
             console.log(`caught exception, will halt next tick: ${error}`);
+            // P1.C2 containment accounting: this tick's serialize was lost
+            // (state rolls back one tick — loud, never silent). The counter
+            // lives in Memory because the heap dies with the halt(); the
+            // bot emits it into the seg-57 metrics block. Out-of-CPU
+            // cancellations (no exception) are not counted here — they
+            // surface via the Memory-persisted vm_starts counter instead.
+            try {
+                Memory._metrics = Memory._metrics || {};
+                Memory._metrics.aborted_ticks = (Memory._metrics.aborted_ticks || 0) + 1;
+            } catch (counterError) {
+                console.log(`abort-counter write failed: ${counterError}`);
+            }
             // not logging stack since we've already logged the stack trace from rust via the panic
             // hook and that one is generally better, but if we need it, uncomment:
 
