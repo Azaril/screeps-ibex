@@ -14,6 +14,7 @@ mod entitymappingsystem;
 mod features;
 mod findnearest;
 mod game_loop;
+mod gameview;
 mod globals;
 mod intents;
 mod jobs;

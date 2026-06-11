@@ -56,6 +56,12 @@ pub struct MemoryArbiter {
     requests: HashSet<u32>,
     /// Declared segment requirements (registered during environment creation).
     requirements: Vec<SegmentRequirement>,
+    /// In-memory segment backing for host tests (P1.A7 / ADR 0015 F3):
+    /// when set, get/set/is_active never touch RawMemory, making the
+    /// segment pipeline kernel-testable. Test-only by construction —
+    /// no production constructor sets it.
+    #[cfg(test)]
+    fake_segments: Option<std::collections::HashMap<u32, String>>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -65,6 +71,21 @@ impl MemoryArbiter {
             active: None,
             requests: HashSet::new(),
             requirements: Vec::new(),
+            #[cfg(test)]
+            fake_segments: None,
+        }
+    }
+
+    /// The F3 test double (ADR 0015): every segment id reads as active
+    /// and reads/writes hit an in-memory map instead of RawMemory. The
+    /// Inc-2 round-trip/corpus/fuzz suites build on this.
+    #[cfg(test)]
+    pub fn test_double() -> MemoryArbiter {
+        MemoryArbiter {
+            active: Some((0..100).collect()),
+            requests: HashSet::new(),
+            requirements: Vec::new(),
+            fake_segments: Some(std::collections::HashMap::new()),
         }
     }
 
@@ -82,18 +103,32 @@ impl MemoryArbiter {
     }
 
     pub fn is_active(&mut self, segment: u32) -> bool {
+        #[cfg(test)]
+        if self.fake_segments.is_some() {
+            return self.active.as_ref().map(|a| a.contains(&segment)).unwrap_or(false);
+        }
         self.active
             .get_or_insert_with(|| raw_memory::segments().keys().map(|k| k as u32).collect())
             .contains(&segment)
     }
 
     pub fn get(&self, segment: u32) -> Option<String> {
+        #[cfg(test)]
+        if let Some(fake) = &self.fake_segments {
+            return fake.get(&segment).cloned();
+        }
         raw_memory::segments().get(segment as u8)
     }
 
     pub fn set(&mut self, segment: u32, data: &str) {
         if data.len() > 50 * 1024 {
             error!("Memory segment too large - Segment: {} - Data: {}", segment, data);
+        }
+
+        #[cfg(test)]
+        if let Some(fake) = &mut self.fake_segments {
+            fake.insert(segment, data.to_owned());
+            return;
         }
 
         let global = js_sys::global();
@@ -233,5 +268,29 @@ impl<'a> System<'a> for MemoryArbiterSystem {
 
     fn run(&mut self, mut data: Self::SystemData) {
         data.memory_arbiter.flush();
+    }
+}
+
+#[cfg(test)]
+mod arbiter_double_tests {
+    use super::*;
+
+    /// P1.A7 / ADR 0015 F3: the segment pipeline runs entirely
+    /// in-memory under the double — the substrate the Inc-2
+    /// round-trip/corpus/fuzz suites consume.
+    #[test]
+    fn test_double_round_trips_segments_without_js() {
+        let mut arbiter = MemoryArbiter::test_double();
+        assert!(arbiter.is_active(57));
+        assert_eq!(arbiter.get(57), None);
+        arbiter.set(57, r#"{"v":1}"#);
+        assert_eq!(arbiter.get(57).as_deref(), Some(r#"{"v":1}"#));
+        // Chunked-style writes across the component range round-trip.
+        for (i, seg) in crate::segments::COMPONENT_SEGMENTS.iter().enumerate() {
+            arbiter.set(*seg, &format!("chunk-{i}"));
+        }
+        for (i, seg) in crate::segments::COMPONENT_SEGMENTS.iter().enumerate() {
+            assert_eq!(arbiter.get(*seg).as_deref(), Some(format!("chunk-{i}").as_str()));
+        }
     }
 }
