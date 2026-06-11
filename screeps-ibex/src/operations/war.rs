@@ -147,10 +147,28 @@ pub struct WarOperation {
     max_concurrent_power_banks: u32,
 }
 
-// Cadence constants (ticks).
-const DEFENSE_CADENCE: u32 = 1;
-const OFFENSE_CADENCE: u32 = 1;
-const RECOMPUTE_CADENCE: u32 = 1;
+// Cadence constants (ticks) — P1.B6 / IBEX-021: every tier ran at 1,
+// making war the heaviest per-tick consumer (the review's death-spiral
+// contributor). Raised to the values this struct's own doc comment
+// always intended; the governor stretches the sheddable tiers further
+// under pressure ([`effective_cadence`]).
+const DEFENSE_CADENCE: u32 = 2;
+const OFFENSE_CADENCE: u32 = 10;
+const RECOMPUTE_CADENCE: u32 = 50;
+
+/// Governor-coordinated cadence stretch (ADR 0004 shed order): defense
+/// is in the never-shed set and keeps its base cadence at every tier;
+/// offense/recompute stretch ×2 under Conserve and ×4 under Critical.
+fn effective_cadence(base: u32, tier: crate::cpugovernor::Tier, is_defense: bool) -> u32 {
+    if is_defense {
+        return base;
+    }
+    match tier {
+        crate::cpugovernor::Tier::Normal => base,
+        crate::cpugovernor::Tier::Conserve => base.saturating_mul(2),
+        crate::cpugovernor::Tier::Critical => base.saturating_mul(4),
+    }
+}
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl WarOperation {
@@ -1433,20 +1451,22 @@ impl Operation for WarOperation {
         system_data: &mut OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
-        // Defense scan: every 1-2 ticks (fast, cheap).
-        if self.should_run_tier(self.last_defense_tick, DEFENSE_CADENCE) {
+        let tier = crate::cpugovernor::tier();
+
+        // Defense scan: never-shed — base cadence at every tier.
+        if self.should_run_tier(self.last_defense_tick, effective_cadence(DEFENSE_CADENCE, tier, true)) {
             self.last_defense_tick = Some(game::time());
             self.run_defense_scan(system_data, runtime_data);
         }
 
-        // Offense evaluation: every 10-20 ticks.
-        if self.should_run_tier(self.last_offense_tick, OFFENSE_CADENCE) {
+        // Offense evaluation: sheddable — stretches under pressure.
+        if self.should_run_tier(self.last_offense_tick, effective_cadence(OFFENSE_CADENCE, tier, false)) {
             self.last_offense_tick = Some(game::time());
             self.run_offense_evaluation(system_data, runtime_data);
         }
 
-        // Heavy recompute: every 50+ ticks.
-        if self.should_run_tier(self.last_recompute_tick, RECOMPUTE_CADENCE) {
+        // Heavy recompute: sheddable — stretches under pressure.
+        if self.should_run_tier(self.last_recompute_tick, effective_cadence(RECOMPUTE_CADENCE, tier, false)) {
             self.last_recompute_tick = Some(game::time());
             self.run_heavy_recompute(system_data, runtime_data);
         }
@@ -1459,6 +1479,24 @@ impl Operation for WarOperation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// P1.B6 / IBEX-021: defense never stretches; offense/recompute
+    /// stretch ×2/×4 under Conserve/Critical.
+    #[test]
+    fn war_cadences_stretch_with_the_governor() {
+        use crate::cpugovernor::Tier;
+        for tier in [Tier::Normal, Tier::Conserve, Tier::Critical] {
+            assert_eq!(effective_cadence(DEFENSE_CADENCE, tier, true), DEFENSE_CADENCE, "{tier:?}");
+        }
+        assert_eq!(effective_cadence(OFFENSE_CADENCE, Tier::Normal, false), 10);
+        assert_eq!(effective_cadence(OFFENSE_CADENCE, Tier::Conserve, false), 20);
+        assert_eq!(effective_cadence(OFFENSE_CADENCE, Tier::Critical, false), 40);
+        assert_eq!(effective_cadence(RECOMPUTE_CADENCE, Tier::Critical, false), 200);
+        // The raise itself is load-bearing (IBEX-021: all three were 1).
+        assert_eq!(DEFENSE_CADENCE, 2);
+        assert_eq!(OFFENSE_CADENCE, 10);
+        assert_eq!(RECOMPUTE_CADENCE, 50);
+    }
 
     /// P1.D5 / ADR 0013 D1.2: the feasibility window must include kill
     /// time — at 20×ATTACK (600 dps) a 2M bank takes 3333 ticks, so
