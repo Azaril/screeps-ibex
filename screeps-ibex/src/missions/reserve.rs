@@ -143,7 +143,8 @@ impl Mission for ReserveMission {
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
         let controller_id = static_visibility_data.controller().ok_or("Expected a controller")?;
 
-        let can_spawn = can_execute_cpu(CpuBar::MediumPriority) && crate::features::features().remote_mine.reserve && self.allow_spawning;
+        let can_spawn =
+            system_data.governor.can_execute_cpu(CpuBar::MediumPriority) && crate::features::features().remote_mine.reserve && self.allow_spawning;
 
         if !can_spawn {
             return Ok(MissionResult::Running);

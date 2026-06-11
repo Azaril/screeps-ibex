@@ -219,7 +219,7 @@ impl Mission for UpgradeMission {
         let at_max_level = controller_levels(controller_level as u32).is_none();
 
         //TODO: Need better calculation for maximum number of upgraders.
-        let max_upgraders = if can_execute_cpu(CpuBar::MediumPriority) {
+        let max_upgraders = if system_data.governor.can_execute_cpu(CpuBar::MediumPriority) {
             if are_hostile_creeps || at_max_level {
                 1
             } else if has_excess_energy {

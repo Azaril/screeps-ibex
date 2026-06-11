@@ -1,15 +1,21 @@
 use super::dismantle::*;
-use crate::findnearest::*;
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
 use crate::jobs::utility::movebehavior::mark_working;
+use crate::pathing::pathfinderservice::PathfinderService;
 use crate::room::data::*;
 use crate::structureidentifier::*;
 use screeps::*;
 use screeps_rover::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn get_new_dismantle_state<F, R>(creep: &Creep, dismantle_room: &RoomData, ignore_storage: bool, state_map: F) -> Option<R>
+pub fn get_new_dismantle_state<F, R>(
+    creep: &Creep,
+    dismantle_room: &RoomData,
+    ignore_storage: bool,
+    pathfinder: &mut PathfinderService,
+    state_map: F,
+) -> Option<R>
 where
     F: Fn(RemoteStructureIdentifier) -> R,
 {
@@ -38,11 +44,7 @@ where
             .map(|&s| s.clone());
 
         if best_structure.is_none() {
-            best_structure = dismantle_structures
-                .into_iter()
-                .cloned()
-                //TODO: Remove clone when find_nearest is fixed.
-                .find_nearest_from(creep_pos, PathFinderHelpers::same_room_ignore_creeps_range_1);
+            best_structure = pathfinder.nearest_by_path(creep_pos, dismantle_structures.into_iter().cloned(), 1);
         }
 
         if let Some(structure) = best_structure {

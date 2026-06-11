@@ -22,8 +22,9 @@
 //! (ADR 0004); the game loop refreshes the governor snapshot from this
 //! window at tick start via [`bucket_window_trend`].
 
-use crate::cpugovernor;
+use crate::cpugovernor::GovernorSnapshot;
 use crate::memorysystem::*;
+use crate::pathing::pathfinderservice::PathfinderService;
 use crate::missions::data::MissionData;
 use crate::operations::data::OperationData;
 use crate::room::data::*;
@@ -138,26 +139,34 @@ impl MetricsState {
     }
 }
 
-/// Tick-start hook (game_loop): sample the bucket, refresh the
-/// CpuGovernor snapshot from the window trend. Runs BEFORE dispatch so
-/// every system reads a consistent governor view for the whole tick.
+/// Tick-start hook (game_loop): sample the bucket, then insert the
+/// tick's [`GovernorSnapshot`] Resource and re-arm the
+/// [`PathfinderService`] pool at its tier (statics-review M1/M4). Runs
+/// BEFORE dispatch so every system reads a consistent governor view
+/// for the whole tick.
 pub fn tick_start(world: &mut World) {
     crate::intents::reset_tick();
-    let mut state = world.entry::<MetricsState>().or_insert_with(MetricsState::default);
-    if state.fresh && state.vm_starts == 0 {
-        state.vm_starts = bump_vm_starts();
-        // Containment accounting (P1.C2): the loader counts caught
-        // aborts in Memory (the heap dies with the halt). An aborted
-        // tick is both a caught panic and a lost serialize.
-        let aborted = crate::memory_helper::path_f64("_metrics.aborted_ticks").unwrap_or(0.0) as u32;
-        PANICS_CAUGHT.store(aborted, Ordering::Relaxed);
-        SERIALIZE_SKIPPED_ABORTED.store(aborted, Ordering::Relaxed);
-    }
-    let bucket = game::cpu::bucket();
-    state.push_bucket_sample(bucket);
-    cpugovernor::refresh(bucket, state.trend(), game::cpu::tick_limit());
-    // The mission-side pathfinding pool follows the tier (P1.B4).
-    crate::pathbudget::reset(cpugovernor::tier());
+    let (bucket, trend) = {
+        let mut state = world.entry::<MetricsState>().or_insert_with(MetricsState::default);
+        if state.fresh && state.vm_starts == 0 {
+            state.vm_starts = bump_vm_starts();
+            // Containment accounting (P1.C2): the loader counts caught
+            // aborts in Memory (the heap dies with the halt). An aborted
+            // tick is both a caught panic and a lost serialize.
+            let aborted = crate::memory_helper::path_f64("_metrics.aborted_ticks").unwrap_or(0.0) as u32;
+            PANICS_CAUGHT.store(aborted, Ordering::Relaxed);
+            SERIALIZE_SKIPPED_ABORTED.store(aborted, Ordering::Relaxed);
+        }
+        let bucket = game::cpu::bucket();
+        state.push_bucket_sample(bucket);
+        (bucket, state.trend())
+    };
+    let snapshot = GovernorSnapshot::compute(bucket, trend, game::cpu::tick_limit());
+    world.insert(snapshot);
+    world
+        .entry::<PathfinderService>()
+        .or_insert_with(PathfinderService::default)
+        .begin_tick(snapshot.tier);
 }
 
 #[derive(SystemData)]
@@ -168,6 +177,8 @@ pub struct MetricsSystemData<'a> {
     operation_data: ReadStorage<'a, OperationData>,
     state: Write<'a, MetricsState>,
     memory_arbiter: WriteExpect<'a, MemoryArbiter>,
+    governor: Read<'a, GovernorSnapshot>,
+    pathfinder: Read<'a, PathfinderService>,
 }
 
 pub struct MetricsSystem;
@@ -244,10 +255,10 @@ impl MetricsSystem {
             rooms: Self::room_metrics(data),
             faults: fault_counters(),
             governor: Some(GovernorMetrics {
-                tier: cpugovernor::tier().as_str().to_string(),
+                tier: data.governor.tier.as_str().to_string(),
             }),
             pathing: Some({
-                let (mission_pool, mission_used) = crate::pathbudget::snapshot();
+                let (mission_pool, mission_used) = data.pathfinder.snapshot();
                 PathingMetrics {
                     ops_used: MOVEMENT_OPS_CONSUMED.load(Ordering::Relaxed),
                     ops_pool: MOVEMENT_OPS_CAP.load(Ordering::Relaxed),

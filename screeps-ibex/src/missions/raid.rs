@@ -199,7 +199,7 @@ impl Mission for RaidMission {
             }
         }
 
-        let can_spawn = can_execute_cpu(CpuBar::LowPriority) && self.allow_spawning;
+        let can_spawn = system_data.governor.can_execute_cpu(CpuBar::LowPriority) && self.allow_spawning;
 
         if !can_spawn {
             return Ok(MissionResult::Running);

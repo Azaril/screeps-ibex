@@ -265,6 +265,7 @@ pub struct RoomPlanSystemData<'a> {
     room_data: WriteStorage<'a, RoomData>,
     room_plan_data: WriteStorage<'a, RoomPlanData>,
     room_plan_queue: Write<'a, RoomPlanQueue>,
+    governor: Read<'a, crate::cpugovernor::GovernorSnapshot>,
 }
 
 pub struct RoomPlanSystem;
@@ -274,9 +275,9 @@ impl RoomPlanSystem {
     /// remaining CPU and a reserve (like movement), never exceeds the tick limit, and
     /// ensures at least some work when there are pending requests to avoid deadlock.
     /// Planning runs only when bucket is at or above bucket_threshold (0 = always allow).
-    fn get_cpu_budget(has_pending_request: bool) -> Option<(f64, f64)> {
+    /// `bucket` comes from the governor snapshot (M1: the one CPU-pressure truth).
+    fn get_cpu_budget(has_pending_request: bool, bucket: i32) -> Option<(f64, f64)> {
         let construction = crate::features::features().construction;
-        let bucket = game::cpu::bucket();
         if construction.bucket_threshold > 0 && bucket < construction.bucket_threshold {
             return None;
         }
@@ -351,7 +352,7 @@ impl<'a> System<'a> for RoomPlanSystem {
                     .get(PLANNER_MEMORY_SEGMENT)
                     .map(|d| !d.is_empty())
                     .unwrap_or(false);
-            if let Some((max_cpu, tick_limit)) = Self::get_cpu_budget(has_pending) {
+            if let Some((max_cpu, tick_limit)) = Self::get_cpu_budget(has_pending, data.governor.bucket) {
                 if data.memory_arbiter.is_active(PLANNER_MEMORY_SEGMENT) {
                     let Some(planner_data) = data.memory_arbiter.get(PLANNER_MEMORY_SEGMENT) else {
                         return;

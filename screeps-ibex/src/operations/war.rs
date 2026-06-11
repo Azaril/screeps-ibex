@@ -699,7 +699,7 @@ impl WarOperation {
             }
 
             // Compute minimum distance from any home room.
-            let min_distance = self.min_distance_to_homes(room_name, &home_rooms, system_data.route_cache, current_tick);
+            let min_distance = self.min_distance_to_homes(room_name, &home_rooms, system_data.pathfinder, current_tick);
 
             // Skip rooms that are too far away (> 10 hops).
             if min_distance > 10 {
@@ -1102,7 +1102,7 @@ impl WarOperation {
 
             // Check if this room is adjacent to one of our rooms.
             let near_home = home_rooms.iter().any(|&home| {
-                let route = system_data.route_cache.get_route_distance(home, room_name, current_tick);
+                let route = system_data.pathfinder.route_distance(home, room_name, current_tick);
                 route.reachable && route.hops <= 2
             });
 
@@ -1157,7 +1157,7 @@ impl WarOperation {
                 home_rooms
                     .iter()
                     .map(|(_, home_name)| {
-                        let route = system_data.route_cache.get_route_distance(*home_name, *target, current_tick);
+                        let route = system_data.pathfinder.route_distance(*home_name, *target, current_tick);
                         if route.reachable {
                             route.hops
                         } else {
@@ -1274,13 +1274,13 @@ impl WarOperation {
         &self,
         target: RoomName,
         home_rooms: &[RoomName],
-        route_cache: &mut crate::military::economy::RoomRouteCache,
+        pathfinder: &mut crate::pathing::pathfinderservice::PathfinderService,
         current_tick: u32,
     ) -> u32 {
         home_rooms
             .iter()
             .map(|&home| {
-                let route = route_cache.get_route_distance(home, target, current_tick);
+                let route = pathfinder.route_distance(home, target, current_tick);
                 if route.reachable {
                     route.hops
                 } else {
@@ -1451,7 +1451,7 @@ impl Operation for WarOperation {
         system_data: &mut OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
-        let tier = crate::cpugovernor::tier();
+        let tier = system_data.governor.tier;
 
         // Defense scan: never-shed — base cadence at every tier.
         if self.should_run_tier(self.last_defense_tick, effective_cadence(DEFENSE_CADENCE, tier, true)) {

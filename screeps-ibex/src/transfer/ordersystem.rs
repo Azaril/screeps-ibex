@@ -98,6 +98,7 @@ pub struct OrderQueueSystemData<'a> {
     updater: Read<'a, LazyUpdate>,
     entities: Entities<'a>,
     room_data: WriteStorage<'a, RoomData>,
+    governor: Read<'a, crate::cpugovernor::GovernorSnapshot>,
 }
 
 struct PassiveOrderParameters {
@@ -338,7 +339,7 @@ impl<'a> System<'a> for OrderQueueSystem {
         let can_buy = features.market.buy && game::market::credits() > features.market.credit_reserve;
         let can_sell = features.market.sell;
 
-        let can_run = game::time().is_multiple_of(20) && can_execute_cpu(CpuBar::HighPriority) && (can_buy || can_sell);
+        let can_run = game::time().is_multiple_of(20) && data.governor.can_execute_cpu(CpuBar::HighPriority) && (can_buy || can_sell);
 
         if can_run {
             let mut order_cache = OrderCache::new();

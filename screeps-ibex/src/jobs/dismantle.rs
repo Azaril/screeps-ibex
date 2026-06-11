@@ -60,9 +60,13 @@ impl Idle {
         let in_dismantle_room = creep.room().map(|r| r.name() == dismantle_room_data.name).unwrap_or(false);
 
         if in_dismantle_room {
-            if let Some(state) =
-                get_new_dismantle_state(creep, dismantle_room_data, state_context.ignore_storage, DismantleState::dismantle)
-            {
+            if let Some(state) = get_new_dismantle_state(
+                creep,
+                dismantle_room_data,
+                state_context.ignore_storage,
+                tick_context.runtime_data.pathfinder,
+                DismantleState::dismantle,
+            ) {
                 return Some(state);
             }
         }
@@ -107,6 +111,7 @@ impl FinishedDismantle {
             tick_context.runtime_data.owner,
             dismantle_room_data,
             state_context.ignore_storage,
+            tick_context.runtime_data.pathfinder,
             DismantleState::dismantle,
         )
         .or_else(|| Some(DismantleState::idle()))

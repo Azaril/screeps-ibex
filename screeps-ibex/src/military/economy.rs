@@ -1,4 +1,4 @@
-use screeps::*;
+﻿use screeps::*;
 use specs::prelude::*;
 use std::collections::HashMap;
 
@@ -77,7 +77,7 @@ impl EconomySnapshot {
     /// dropping below a safety reserve?
     ///
     /// Uses a per-room reserve of 20% of stored energy (clamped to
-    /// 5k–30k) so low-RCL rooms with little storage don't inflate
+    /// 5kâ€“30k) so low-RCL rooms with little storage don't inflate
     /// the threshold, and mature rooms keep a reasonable buffer.
     pub fn can_afford_military(&self, amount: u32) -> bool {
         let reserve: u32 = self.rooms.values().map(|r| (r.stored_energy / 5).clamp(5_000, 30_000)).sum();
@@ -86,7 +86,7 @@ impl EconomySnapshot {
 
     /// Can a specific set of rooms collectively afford `amount` energy
     /// for military spending? Each room contributes its surplus above a
-    /// per-room reserve (20% of stored, clamped 5k–30k). This is the
+    /// per-room reserve (20% of stored, clamped 5kâ€“30k). This is the
     /// preferred check when the attack has assigned home rooms.
     pub fn can_rooms_afford_military(&self, rooms: &[Entity], amount: u32) -> bool {
         let surplus: u32 = rooms
@@ -145,151 +145,6 @@ impl EconomySnapshot {
     }
 }
 
-// ---------------------------------------------------------------------------
-// RoomRouteCache
-// ---------------------------------------------------------------------------
-
-/// Cached route data for a room-to-room path.
-#[derive(Clone, Debug)]
-pub struct CachedRoute {
-    /// Number of room hops in the route (route.len()).
-    pub hops: u32,
-    /// Estimated travel time in ticks (hops * 50).
-    pub travel_ticks: u32,
-    /// Game tick when this cache entry was created.
-    pub cached_at: u32,
-    /// Whether the route was found (false = no path).
-    pub reachable: bool,
-}
-
-/// Cache of room-to-room route distances.
-/// Ephemeral resource -- survives within a VM lifecycle but not across resets.
-/// Entries are lazily populated and expire after a TTL.
-#[derive(Default)]
-pub struct RoomRouteCache {
-    /// Cached routes keyed by (from, to) room pair.
-    routes: HashMap<(RoomName, RoomName), CachedRoute>,
-    /// TTL for cache entries in ticks. Room exits are static, but room
-    /// costs change when ownership changes. 1000 ticks (~16 minutes) is
-    /// a reasonable TTL -- ownership changes are infrequent.
-    ttl: u32,
-}
-
-impl RoomRouteCache {
-    pub fn new() -> Self {
-        RoomRouteCache {
-            routes: HashMap::new(),
-            ttl: 1000,
-        }
-    }
-
-    /// Get the cached route distance, or compute and cache it.
-    ///
-    /// Bucket-guarded (P1.B1 / ADR 0004 step 1): under a Critical
-    /// governor tier, TTL-expired entries are served STALE instead of
-    /// recomputed — `find_route` storms are exactly the leak the
-    /// governor exists to stop, and a stale route (ownership changes
-    /// are slow) is strictly better than a fabricated answer. Missing
-    /// entries still compute at any tier: callers need SOME answer,
-    /// and a single find_route is not the storm.
-    pub fn get_route_distance(&mut self, from: RoomName, to: RoomName, current_tick: u32) -> &CachedRoute {
-        let ttl = self.ttl;
-
-        let entry = self.routes.get(&(from, to));
-        let missing = entry.is_none();
-        let expired = entry
-            .map(|entry| current_tick.saturating_sub(entry.cached_at) > ttl)
-            .unwrap_or(false);
-
-        if should_recompute_route(missing, expired, crate::cpugovernor::tier()) {
-            // P1.B4: charge the mission ops pool (find_route has no ops
-            // parameter — nominal accounting + admission control).
-            // Missing entries compute even on a zero grant — callers
-            // need SOME answer; only TTL refreshes yield to the pool.
-            let granted = crate::pathbudget::take(crate::pathbudget::FIND_ROUTE_NOMINAL_OPS);
-            if missing || granted > 0 {
-                let route = Self::compute_route(from, to, current_tick);
-                self.routes.insert((from, to), route);
-            }
-        }
-
-        self.routes.get(&(from, to)).unwrap()
-    }
-
-    fn compute_route(from: RoomName, to: RoomName, tick: u32) -> CachedRoute {
-        if from == to {
-            return CachedRoute {
-                hops: 0,
-                travel_ticks: 0,
-                cached_at: tick,
-                reachable: true,
-            };
-        }
-
-        // Use find_route with a room cost callback that avoids hostile rooms.
-        let options = game::map::FindRouteOptions::new().room_callback(|room_name, _from_room| {
-            // High cost for hostile rooms, normal for others.
-            // Closed rooms are handled internally by find_route.
-            if let Some(room) = game::rooms().get(room_name) {
-                if let Some(controller) = room.controller() {
-                    if controller.my() {
-                        return 1.0;
-                    }
-                    if controller.owner().is_some() {
-                        // Owned by someone else -- high cost to avoid.
-                        return 10.0;
-                    }
-                    if controller.reservation().is_some() {
-                        return 2.0;
-                    }
-                }
-            }
-            // Default cost for unknown/neutral rooms.
-            2.0
-        });
-
-        match game::map::find_route(from, to, Some(options)) {
-            Ok(steps) => {
-                let hops = steps.len() as u32;
-                CachedRoute {
-                    hops,
-                    travel_ticks: hops * 50,
-                    cached_at: tick,
-                    reachable: true,
-                }
-            }
-            Err(_) => CachedRoute {
-                hops: u32::MAX,
-                travel_ticks: u32::MAX,
-                cached_at: tick,
-                reachable: false,
-            },
-        }
-    }
-
-    /// Invalidate all cached routes involving a specific room.
-    /// Call when a room's disposition changes (ownership, hostility).
-    pub fn invalidate_room(&mut self, room: RoomName) {
-        self.routes.retain(|(from, to), _| *from != room && *to != room);
-    }
-
-    /// Convenience: estimated travel ticks, or None if unreachable.
-    pub fn travel_ticks(&mut self, from: RoomName, to: RoomName, current_tick: u32) -> Option<u32> {
-        let entry = self.get_route_distance(from, to, current_tick);
-        if entry.reachable {
-            Some(entry.travel_ticks)
-        } else {
-            None
-        }
-    }
-}
-
-/// Pure recompute decision for [`RoomRouteCache::get_route_distance`]
-/// (P1.B1 bucket-guard): missing entries always compute; expired
-/// entries recompute except under Critical, where stale is served.
-fn should_recompute_route(missing: bool, expired: bool, tier: crate::cpugovernor::Tier) -> bool {
-    missing || (expired && tier != crate::cpugovernor::Tier::Critical)
-}
 
 // ---------------------------------------------------------------------------
 // EconomyAssessmentSystem
@@ -381,26 +236,5 @@ impl<'a> System<'a> for EconomyAssessmentSystem {
 
             economy.rooms.insert(entity, room_econ);
         }
-    }
-}
-
-#[cfg(test)]
-mod route_guard_tests {
-    use super::should_recompute_route;
-    use crate::cpugovernor::Tier;
-
-    #[test]
-    fn stale_routes_are_served_under_critical_only() {
-        for tier in [Tier::Normal, Tier::Conserve, Tier::Critical] {
-            // Missing entries always compute — a single find_route is
-            // not the storm the guard exists to stop.
-            assert!(should_recompute_route(true, false, tier), "{tier:?}");
-            // Fresh entries never recompute.
-            assert!(!should_recompute_route(false, false, tier), "{tier:?}");
-        }
-        // Expired: recompute normally, serve stale under Critical.
-        assert!(should_recompute_route(false, true, Tier::Normal));
-        assert!(should_recompute_route(false, true, Tier::Conserve));
-        assert!(!should_recompute_route(false, true, Tier::Critical));
     }
 }

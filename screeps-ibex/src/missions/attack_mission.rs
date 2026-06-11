@@ -216,7 +216,7 @@ fn nearest_home_room_to_target(
     home_room_datas: &[Entity],
     room_data: &specs::WriteStorage<'_, crate::room::data::RoomData>,
     economy: &crate::military::economy::EconomySnapshot,
-    route_cache: &mut crate::military::economy::RoomRouteCache,
+    pathfinder: &mut crate::pathing::pathfinderservice::PathfinderService,
     target_room: RoomName,
     current_tick: u32,
 ) -> Option<Entity> {
@@ -227,7 +227,7 @@ fn nearest_home_room_to_target(
         if stored < RENEW_MIN_ROOM_ENERGY {
             continue;
         }
-        let cached = route_cache.get_route_distance(rd.name, target_room, current_tick);
+        let cached = pathfinder.route_distance(rd.name, target_room, current_tick);
         let dist = if cached.reachable { cached.hops } else { u32::MAX };
         if best.map(|(_, d)| dist < d).unwrap_or(true) {
             best = Some((room_entity, dist));
@@ -431,7 +431,7 @@ impl Spawning {
             &state_context.home_room_datas,
             system_data.room_data,
             system_data.economy,
-            system_data.route_cache,
+            system_data.pathfinder,
             state_context.target_room,
             game::time(),
         );
@@ -593,7 +593,7 @@ impl Rallying {
             &state_context.home_room_datas,
             system_data.room_data,
             system_data.economy,
-            system_data.route_cache,
+            system_data.pathfinder,
             state_context.target_room,
             game::time(),
         );

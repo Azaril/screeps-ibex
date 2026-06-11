@@ -27,7 +27,6 @@ mod military;
 mod missions;
 mod operations;
 mod panic;
-mod pathbudget;
 mod pathing;
 mod remoteobjectid;
 mod repairqueue;

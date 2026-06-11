@@ -21,16 +21,19 @@
 //!
 //! ## Snapshot
 //!
-//! [`refresh`] is called once at tick start (`metrics::tick_start`)
-//! with the bucket, the metrics window's trend, and `tick_limit`; all
-//! readers see that single snapshot for the whole tick. Bucket only
-//! changes between ticks, so the snapshot loses nothing vs live reads
-//! — and `can_execute_cpu` keeps its exact legacy formula
-//! (`bucket >= tick_limit * bar`), making the conversion
-//! behavior-preserving (the parity requirement on this task).
+//! [`GovernorSnapshot`] is a specs **Resource** (EP-1.2; statics-review
+//! M1 — the Phase-1 static is gone). `metrics::tick_start` computes and
+//! inserts it once per tick BEFORE dispatch; systems fetch it via
+//! `Read<GovernorSnapshot>`, and mission/operation code reads the copy
+//! on its execution system data. Bucket only changes between ticks, so
+//! the snapshot loses nothing vs live reads — and [`can_execute_cpu`]
+//! keeps its exact legacy formula (`bucket >= tick_limit * bar`),
+//! making the conversion behavior-preserving (the parity requirement
+//! on this task).
+//!
+//! [`can_execute_cpu`]: GovernorSnapshot::can_execute_cpu
 
 use crate::missions::constants::CpuBar;
-use std::sync::Mutex;
 
 /// Bucket below this is Critical outright (≈ a few hundred ticks from
 /// hard-zero at typical drain).
@@ -72,20 +75,23 @@ pub fn compute_tier(bucket: i32, trend: f64) -> Tier {
     }
 }
 
+/// The tick's CPU-pressure view: written once at tick start
+/// (`metrics::tick_start`), read everywhere. `Copy` so execution-data
+/// structs carry it by value.
 #[derive(Debug, Clone, Copy)]
-struct Snapshot {
-    bucket: i32,
-    trend: f64,
-    tick_limit: f64,
-    tier: Tier,
+pub struct GovernorSnapshot {
+    pub bucket: i32,
+    pub trend: f64,
+    pub tick_limit: f64,
+    pub tier: Tier,
 }
 
-impl Default for Snapshot {
+impl Default for GovernorSnapshot {
+    /// Pre-refresh default (first tick of a fresh VM before
+    /// `tick_start` runs, and the specs `setup` value): a healthy
+    /// posture so nothing is shed before evidence exists.
     fn default() -> Self {
-        // Pre-refresh default (first tick of a fresh VM before
-        // tick_start runs): a healthy posture so nothing is shed
-        // before evidence exists.
-        Snapshot {
+        GovernorSnapshot {
             bucket: 10_000,
             trend: 0.0,
             tick_limit: 500.0,
@@ -94,36 +100,23 @@ impl Default for Snapshot {
     }
 }
 
-static SNAPSHOT: Mutex<Option<Snapshot>> = Mutex::new(None);
-
-fn snapshot() -> Snapshot {
-    SNAPSHOT.lock().ok().and_then(|guard| *guard).unwrap_or_default()
-}
-
-/// Tick-start refresh (called from `metrics::tick_start`).
-pub fn refresh(bucket: i32, trend: f64, tick_limit: f64) {
-    let snap = Snapshot {
-        bucket,
-        trend,
-        tick_limit,
-        tier: compute_tier(bucket, trend),
-    };
-    if let Ok(mut guard) = SNAPSHOT.lock() {
-        *guard = Some(snap);
+impl GovernorSnapshot {
+    /// Build the tick's snapshot (tier derived through the pure kernel).
+    pub fn compute(bucket: i32, trend: f64, tick_limit: f64) -> Self {
+        GovernorSnapshot {
+            bucket,
+            trend,
+            tick_limit,
+            tier: compute_tier(bucket, trend),
+        }
     }
-}
 
-/// The tick's governor tier.
-pub fn tier() -> Tier {
-    snapshot().tier
-}
-
-/// The legacy CPU bar check, now reading the tick-start snapshot:
-/// `bucket >= tick_limit * bar`. Exactly the formula the scattered
-/// `game::cpu` sites used — behavior-preserving by construction.
-pub fn can_execute_cpu(bar: CpuBar) -> bool {
-    let snap = snapshot();
-    snap.bucket as f64 >= snap.tick_limit * bar as u32 as f64
+    /// The legacy CPU bar check, reading the tick-start snapshot:
+    /// `bucket >= tick_limit * bar`. Exactly the formula the scattered
+    /// `game::cpu` sites used — behavior-preserving by construction.
+    pub fn can_execute_cpu(&self, bar: CpuBar) -> bool {
+        self.bucket as f64 >= self.tick_limit * bar as u32 as f64
+    }
 }
 
 #[cfg(test)]
@@ -160,39 +153,35 @@ mod tests {
         assert_eq!(compute_tier(CONSERVE_BUCKET, 0.0), Tier::Normal);
         assert_eq!(compute_tier(CONSERVE_BUCKET - 1, 0.0), Tier::Conserve);
         assert_eq!(compute_tier(CONSERVE_BUCKET, CONSERVE_DRAIN), Tier::Normal);
-        assert_eq!(
-            compute_tier(CONSERVE_BUCKET, CONSERVE_DRAIN - 0.1),
-            Tier::Conserve
-        );
-        assert_eq!(
-            compute_tier(CONSERVE_BUCKET - 1, CRITICAL_DRAIN - 0.1),
-            Tier::Critical
-        );
+        assert_eq!(compute_tier(CONSERVE_BUCKET, CONSERVE_DRAIN - 0.1), Tier::Conserve);
+        assert_eq!(compute_tier(CONSERVE_BUCKET - 1, CRITICAL_DRAIN - 0.1), Tier::Critical);
     }
 
-    /// The snapshot-backed bar check reproduces the legacy formula.
-    #[test]
-    fn can_execute_cpu_matches_legacy_formula() {
-        refresh(2_500, 0.0, 500.0);
-        // bar thresholds: Critical=2 -> 1000, High=3 -> 1500,
-        // Medium=4 -> 2000, Low=5 -> 2500, Idle=7 -> 3500.
-        assert!(can_execute_cpu(CpuBar::CriticalPriority));
-        assert!(can_execute_cpu(CpuBar::HighPriority));
-        assert!(can_execute_cpu(CpuBar::MediumPriority));
-        assert!(can_execute_cpu(CpuBar::LowPriority));
-        assert!(!can_execute_cpu(CpuBar::IdlePriority));
-        refresh(999, 0.0, 500.0);
-        assert!(!can_execute_cpu(CpuBar::CriticalPriority));
-    }
-
-    /// Pre-refresh default is the healthy posture (nothing shed before
-    /// evidence exists).
+    /// Pre-refresh contract: the `Default` (= specs setup value, and
+    /// the first fresh-VM tick before `tick_start`) is a healthy
+    /// posture — nothing sheds before evidence exists.
     #[test]
     fn default_snapshot_is_healthy() {
-        // Note: relies on test ordering being irrelevant — we only
-        // assert the DEFAULT constructor here, not the global.
-        let snap = Snapshot::default();
+        let snap = GovernorSnapshot::default();
         assert_eq!(snap.tier, Tier::Normal);
-        assert!(snap.bucket as f64 >= snap.tick_limit * 7.0);
+        assert!(snap.can_execute_cpu(CpuBar::IdlePriority));
+    }
+
+    /// The legacy bar formula, now per-instance (no process-global
+    /// state — two snapshots coexist, the M1 test-isolation payoff).
+    #[test]
+    fn can_execute_cpu_matches_legacy_formula() {
+        // bucket 2000, tick_limit 500: 2000 >= 500*bar ⇒ bar <= 4.
+        let healthy = GovernorSnapshot::compute(2_000, 0.0, 500.0);
+        assert!(healthy.can_execute_cpu(CpuBar::CriticalPriority));
+        assert!(healthy.can_execute_cpu(CpuBar::HighPriority));
+        assert!(healthy.can_execute_cpu(CpuBar::MediumPriority));
+        assert!(!healthy.can_execute_cpu(CpuBar::LowPriority));
+        assert!(!healthy.can_execute_cpu(CpuBar::IdlePriority));
+
+        let starved = GovernorSnapshot::compute(900, 0.0, 500.0);
+        assert!(!starved.can_execute_cpu(CpuBar::CriticalPriority));
+        // The starved instance did not disturb the healthy one.
+        assert!(healthy.can_execute_cpu(CpuBar::MediumPriority));
     }
 }

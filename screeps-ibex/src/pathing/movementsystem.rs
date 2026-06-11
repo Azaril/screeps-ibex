@@ -28,6 +28,7 @@ pub struct MovementUpdateSystemData<'a> {
     cost_matrix_cache: WriteExpect<'a, CostMatrixCache>,
     room_status_cache: ReadExpect<'a, RoomStatusCache>,
     visualizer: Option<Write<'a, Visualizer>>,
+    governor: Read<'a, crate::cpugovernor::GovernorSnapshot>,
 }
 
 /// Movement visualizer that pushes intents to the screeps-ibex room
@@ -228,7 +229,9 @@ impl<'a> System<'a> for MovementUpdateSystem {
         let tick_limit = screeps::game::cpu::tick_limit();
         let get_cpu = screeps::game::cpu::get_used;
         let cpu_limit = screeps::game::cpu::limit() as f64;
-        let bucket = screeps::game::cpu::bucket();
+        // Governor snapshot is the one CPU-pressure truth (M1): no raw
+        // bucket reads bypassing it.
+        let bucket = data.governor.bucket;
         // Under normal conditions use GCL limit; when bucket is at/above threshold allow burst up to tick_limit.
         let budget_ceiling = if pathing_features.bucket_burst_threshold == 0 || bucket >= pathing_features.bucket_burst_threshold {
             tick_limit
@@ -261,7 +264,7 @@ impl<'a> System<'a> for MovementUpdateSystem {
         // below still applies — creeps never fully freeze, ADR 0004's
         // non-negotiable). Movement does NOT draw from the mission
         // pool; this is its independent budget, tier-scaled.
-        pathfinding_ops = match crate::cpugovernor::tier() {
+        pathfinding_ops = match data.governor.tier {
             crate::cpugovernor::Tier::Normal => pathfinding_ops,
             crate::cpugovernor::Tier::Conserve => pathfinding_ops / 2,
             crate::cpugovernor::Tier::Critical => pathfinding_ops / 4,

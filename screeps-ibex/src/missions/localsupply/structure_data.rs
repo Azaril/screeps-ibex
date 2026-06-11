@@ -1,3 +1,4 @@
+use crate::pathing::pathfinderservice::PathfinderService;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use itertools::*;
@@ -72,7 +73,15 @@ impl SupplyStructureCache {
     }
 }
 
-pub fn create_structure_data(room_data: &RoomData) -> Option<StructureData> {
+/// `pathfinder`: the spawn-distance precompute draws its search ops
+/// from the mission pool when the caller has the service in hand (the
+/// four mission-context refresh sites). The two transfer-generator
+/// refresh sites pass `None` — boxed generators are flushed lazily and
+/// cannot carry a `&mut` service handle; they fall back to the plain
+/// per-search cap, which is bounded (≤ spawns × targets × 1000 ops at
+/// most once per 10 ticks per room) and only fires when no mission
+/// refreshed the room's cache first (missions run before jobs).
+pub fn create_structure_data(room_data: &RoomData, pathfinder: Option<&mut PathfinderService>) -> Option<StructureData> {
     let structure_data = room_data.get_structures()?;
     let static_visibility_data = room_data.get_static_visibility_data()?;
 
@@ -172,8 +181,12 @@ pub fn create_structure_data(room_data: &RoomData) -> Option<StructureData> {
     // Precompute pathfinding distances from nearest spawn to each source and
     // mineral position. Uses `pathfinder::search` with road-aware costs so the
     // path follows roads where available.
-    let nearest_spawn_distances =
-        compute_nearest_spawn_distances(&spawn_remote_ids, sources.iter().map(|s| s.pos()), minerals.iter().map(|m| m.pos()));
+    let nearest_spawn_distances = compute_nearest_spawn_distances(
+        &spawn_remote_ids,
+        sources.iter().map(|s| s.pos()),
+        minerals.iter().map(|m| m.pos()),
+        pathfinder,
+    );
 
     Some(StructureData {
         last_updated: game::time(),
@@ -204,6 +217,7 @@ fn compute_nearest_spawn_distances(
     spawns: &[RemoteObjectId<StructureSpawn>],
     source_positions: impl Iterator<Item = screeps::Position>,
     mineral_positions: impl Iterator<Item = screeps::Position>,
+    mut pathfinder: Option<&mut PathfinderService>,
 ) -> HashMap<screeps::Position, u32> {
     const NEAREST_SPAWN_MAX_OPS: u32 = 1000;
 
@@ -219,9 +233,14 @@ fn compute_nearest_spawn_distances(
         let min_distance = spawns
             .iter()
             .map(|spawn_id| {
-                // P1.B4: drawn from the mission ops pool; a zero grant
-                // degrades to the capped-incomplete u32::MAX semantic.
-                let ops = crate::pathbudget::take(NEAREST_SPAWN_MAX_OPS);
+                // P1.B4: drawn from the mission ops pool when the service
+                // is in hand; a zero grant degrades to the
+                // capped-incomplete u32::MAX semantic. The generator
+                // fallback path (None) keeps the plain per-search cap.
+                let ops = match &mut pathfinder {
+                    Some(service) => service.take_ops(NEAREST_SPAWN_MAX_OPS),
+                    None => NEAREST_SPAWN_MAX_OPS,
+                };
                 if ops == 0 {
                     return u32::MAX;
                 }

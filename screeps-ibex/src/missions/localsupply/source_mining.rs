@@ -219,10 +219,11 @@ impl SourceMiningMission {
             && (dynamic_visibility_data.owner().mine() || dynamic_visibility_data.reservation().mine());
         let has_visibility = dynamic_visibility_data.visible();
 
+        let pathfinder = &mut *system_data.pathfinder;
         let structure_data_rc = system_data.supply_structure_cache.get_room(self.room_name);
         let mut structure_data = structure_data_rc.maybe_access(
             |d| game::time().saturating_sub(d.last_updated) >= 10 && has_visibility,
-            || create_structure_data(room_data),
+            || create_structure_data(room_data, Some(pathfinder)),
         );
 
         if structure_data.get().is_none() {

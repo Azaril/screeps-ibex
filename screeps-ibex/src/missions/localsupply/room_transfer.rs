@@ -85,10 +85,11 @@ impl RoomTransferMission {
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let has_visibility = room_data.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false);
 
+        let pathfinder = &mut *system_data.pathfinder;
         let structure_data_rc = system_data.supply_structure_cache.get_room(self.room_name);
         let mut structure_data = structure_data_rc.maybe_access(
             |d| game::time().saturating_sub(d.last_updated) >= 10 && has_visibility,
-            || create_structure_data(room_data),
+            || create_structure_data(room_data, Some(pathfinder)),
         );
         let structure_data = structure_data.get().ok_or("Expected structure data")?;
 
@@ -162,9 +163,11 @@ impl RoomTransferMission {
             let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
             let has_visibility = room_data.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false);
 
+            // Boxed generator, flushed lazily — no &mut service handle can
+            // ride here; None = plain per-search cap (see create_structure_data).
             let mut structure_data = structure_data.maybe_access(
                 |d| game::time().saturating_sub(d.last_updated) >= 10 && has_visibility,
-                || create_structure_data(room_data),
+                || create_structure_data(room_data, None),
             );
             let Some(structure_data) = structure_data.get() else {
                 return Ok(());
@@ -190,9 +193,10 @@ impl RoomTransferMission {
             let room_data = system.get_room_data(room_entity).ok_or("Expected room data")?;
             let has_visibility = room_data.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false);
 
+            // Boxed generator, flushed lazily — None = plain per-search cap.
             let mut structure_data = structure_data.maybe_access(
                 |d| game::time().saturating_sub(d.last_updated) >= 10 && has_visibility,
-                || create_structure_data(room_data),
+                || create_structure_data(room_data, None),
             );
             let Some(structure_data) = structure_data.get() else {
                 return Ok(());

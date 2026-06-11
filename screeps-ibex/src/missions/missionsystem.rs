@@ -4,9 +4,11 @@ use crate::cleanup::*;
 use crate::creep::*;
 use crate::entitymappingsystem::EntityMappingData;
 use crate::jobs::data::*;
+use crate::cpugovernor::GovernorSnapshot;
 use crate::military::boostqueue::*;
 use crate::military::economy::*;
 use crate::military::squad::SquadContext;
+use crate::pathing::pathfinderservice::PathfinderService;
 use crate::repairqueue::*;
 use crate::room::data::*;
 use crate::room::roomplansystem::*;
@@ -38,7 +40,8 @@ pub struct MissionSystemData<'a> {
     supply_structure_cache: Write<'a, SupplyStructureCache>,
     cleanup_queue: Write<'a, EntityCleanupQueue>,
     economy: Write<'a, EconomySnapshot>,
-    route_cache: Write<'a, RoomRouteCache>,
+    pathfinder: Write<'a, PathfinderService>,
+    governor: Read<'a, GovernorSnapshot>,
     squad_contexts: WriteStorage<'a, SquadContext>,
     mapping: Read<'a, EntityMappingData>,
 }
@@ -62,7 +65,9 @@ pub struct MissionExecutionSystemData<'a, 'b> {
     pub repair_queue: &'b mut RepairQueue,
     pub supply_structure_cache: &'b mut SupplyStructureCache,
     pub economy: &'b mut EconomySnapshot,
-    pub route_cache: &'b mut RoomRouteCache,
+    pub pathfinder: &'b mut PathfinderService,
+    /// The tick's CPU-pressure snapshot (Copy — read freely).
+    pub governor: GovernorSnapshot,
     pub squad_contexts: &'b mut WriteStorage<'a, SquadContext>,
     pub mapping: &'b Read<'a, EntityMappingData>,
 }
@@ -192,7 +197,8 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 repair_queue: &mut data.repair_queue,
                 supply_structure_cache: &mut data.supply_structure_cache,
                 economy: &mut data.economy,
-                route_cache: &mut data.route_cache,
+                pathfinder: &mut data.pathfinder,
+                governor: *data.governor,
                 squad_contexts: &mut data.squad_contexts,
                 mapping: &data.mapping,
             };
@@ -247,7 +253,8 @@ impl<'a> System<'a> for RunMissionSystem {
                 repair_queue: &mut data.repair_queue,
                 supply_structure_cache: &mut data.supply_structure_cache,
                 economy: &mut data.economy,
-                route_cache: &mut data.route_cache,
+                pathfinder: &mut data.pathfinder,
+                governor: *data.governor,
                 squad_contexts: &mut data.squad_contexts,
                 mapping: &data.mapping,
             };

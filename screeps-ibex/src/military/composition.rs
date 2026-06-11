@@ -1,7 +1,7 @@
-use super::bodies;
+﻿use super::bodies;
 use super::squad::SquadRole;
 use crate::creep::SpawnBodyDefinition;
-use crate::military::economy::RoomRouteCache;
+use crate::pathing::pathfinderservice::PathfinderService;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 
@@ -203,7 +203,7 @@ fn default_retreat_threshold() -> f32 {
 }
 
 impl SquadComposition {
-    // ─── Predefined compositions ────────────────────────────────────────
+    // â”€â”€â”€ Predefined compositions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// 1 ranged+heal creep, no formation.
     pub fn solo_ranged() -> Self {
@@ -472,7 +472,7 @@ impl SquadComposition {
         }
     }
 
-    // ─── Cost and timing estimation ─────────────────────────────────────
+    // â”€â”€â”€ Cost and timing estimation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Estimate the total energy cost to spawn this composition
     /// at a given energy capacity.
@@ -509,10 +509,10 @@ impl SquadComposition {
     }
 
     /// Estimate travel time from a home room to a target room (ticks).
-    /// Uses RoomRouteCache for accurate room-hop distance via find_route().
-    /// Returns None if the rooms are unreachable.
-    pub fn estimated_travel_time(route_cache: &mut RoomRouteCache, home: RoomName, target: RoomName) -> Option<u32> {
-        route_cache.travel_ticks(home, target, screeps::game::time())
+    /// Uses the PathfinderService route cache for accurate room-hop
+    /// distance via find_route(). Returns None if unreachable.
+    pub fn estimated_travel_time(pathfinder: &mut PathfinderService, home: RoomName, target: RoomName) -> Option<u32> {
+        pathfinder.travel_ticks(home, target, screeps::game::time())
     }
 
     /// Estimate useful combat time for this composition when spawned from a
@@ -520,14 +520,14 @@ impl SquadComposition {
     /// time, and CREEP_LIFE_TIME. Returns None if unreachable.
     pub fn estimated_combat_time(
         &self,
-        route_cache: &mut RoomRouteCache,
+        pathfinder: &mut PathfinderService,
         home: RoomName,
         target: RoomName,
         energy_capacity: u32,
         available_spawns: u32,
     ) -> Option<u32> {
         let spawn_time = self.estimated_spawn_time(energy_capacity, available_spawns);
-        let travel_time = Self::estimated_travel_time(route_cache, home, target)?;
+        let travel_time = Self::estimated_travel_time(pathfinder, home, target)?;
         Some(CREEP_LIFE_TIME.saturating_sub(spawn_time + travel_time))
     }
 
@@ -536,13 +536,13 @@ impl SquadComposition {
     /// <40% lifetime.
     pub fn is_viable_from(
         &self,
-        route_cache: &mut RoomRouteCache,
+        pathfinder: &mut PathfinderService,
         home: RoomName,
         target: RoomName,
         energy_capacity: u32,
         available_spawns: u32,
     ) -> bool {
-        match self.estimated_combat_time(route_cache, home, target, energy_capacity, available_spawns) {
+        match self.estimated_combat_time(pathfinder, home, target, energy_capacity, available_spawns) {
             Some(combat_time) => combat_time as f32 > CREEP_LIFE_TIME as f32 * 0.4,
             None => false,
         }

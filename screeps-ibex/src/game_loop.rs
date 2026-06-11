@@ -168,7 +168,7 @@ fn setup_systems(world: &mut World) {
 /// ONCE so the whole tick sees a consistent shedding decision.
 /// When `timing` is true, per-system CPU cost is measured and logged.
 fn run_systems(world: &mut World, timing: bool) {
-    let tier = crate::cpugovernor::tier();
+    let tier = world.read_resource::<crate::cpugovernor::GovernorSnapshot>().tier;
     let mut shed_count = 0u32;
     macro_rules! do_run {
         ($sys:expr, $label:expr, $class:expr) => {
@@ -678,7 +678,7 @@ fn create_environment() -> GameEnvironment {
     world.insert(BoostQueue::new());
     world.insert(EconomySnapshot::default());
     world.insert(SpawnQueueSnapshot::default());
-    world.insert(RoomRouteCache::new());
+    world.insert(crate::pathing::pathfinderservice::PathfinderService::default());
     world.insert(RoomStatusCache::new());
     world.register::<SquadContext>();
 

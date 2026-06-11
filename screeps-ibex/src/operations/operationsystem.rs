@@ -1,7 +1,9 @@
 use super::data::*;
 use crate::cleanup::*;
+use crate::cpugovernor::GovernorSnapshot;
 use crate::entitymappingsystem::EntityMappingData;
 use crate::military::economy::*;
+use crate::pathing::pathfinderservice::PathfinderService;
 use crate::military::threatmap::RoomThreatData;
 use crate::missions::data::*;
 use crate::room::data::*;
@@ -26,7 +28,8 @@ pub struct OperationSystemData<'a> {
     visualization_data: Option<Write<'a, VisualizationData>>,
     cleanup_queue: Write<'a, EntityCleanupQueue>,
     economy: Write<'a, EconomySnapshot>,
-    route_cache: Write<'a, RoomRouteCache>,
+    pathfinder: Write<'a, PathfinderService>,
+    governor: Read<'a, GovernorSnapshot>,
     room_status_cache: Write<'a, RoomStatusCache>,
     threat_data: ReadStorage<'a, RoomThreatData>,
 }
@@ -42,7 +45,9 @@ pub struct OperationExecutionSystemData<'a, 'b> {
     pub visibility: &'b mut VisibilityQueue,
     pub map_viz_data: Option<&'b mut MapVisualizationData>,
     pub economy: &'b mut EconomySnapshot,
-    pub route_cache: &'b mut RoomRouteCache,
+    pub pathfinder: &'b mut PathfinderService,
+    /// The tick's CPU-pressure snapshot (Copy — read freely).
+    pub governor: GovernorSnapshot,
     pub room_status_cache: &'b RoomStatusCache,
     pub threat_data: &'b ReadStorage<'a, RoomThreatData>,
 }
@@ -113,7 +118,8 @@ impl<'a> System<'a> for PreRunOperationSystem {
             visibility: &mut data.visibility,
             map_viz_data: map_viz,
             economy: &mut data.economy,
-            route_cache: &mut data.route_cache,
+            pathfinder: &mut data.pathfinder,
+            governor: *data.governor,
             room_status_cache: &data.room_status_cache,
             threat_data: &data.threat_data,
         };
@@ -148,7 +154,8 @@ impl<'a> System<'a> for RunOperationSystem {
             visibility: &mut data.visibility,
             map_viz_data: map_viz,
             economy: &mut data.economy,
-            route_cache: &mut data.route_cache,
+            pathfinder: &mut data.pathfinder,
+            governor: *data.governor,
             room_status_cache: &data.room_status_cache,
             threat_data: &data.threat_data,
         };

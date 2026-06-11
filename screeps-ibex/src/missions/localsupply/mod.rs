@@ -138,10 +138,14 @@ impl LocalSupplyMission {
 
             // Refresh structure data if stale.
             {
+                // Hoisted &mut reborrow: the refresh closure carries the
+                // pathfinder for the pool-budgeted spawn-distance
+                // precompute (disjoint field borrows on system_data).
+                let pathfinder = &mut *system_data.pathfinder;
                 let structure_data_rc = system_data.supply_structure_cache.get_room(room_name);
                 let mut sd = structure_data_rc.maybe_access(
                     |d| game::time().saturating_sub(d.last_updated) >= 10 && has_visibility,
-                    || create_structure_data(room_data),
+                    || create_structure_data(room_data, Some(pathfinder)),
                 );
                 let _ = sd.get();
             }
