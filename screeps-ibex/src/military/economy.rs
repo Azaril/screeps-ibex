@@ -284,27 +284,6 @@ fn should_recompute_route(missing: bool, expired: bool, tier: crate::cpugovernor
     missing || (expired && tier != crate::cpugovernor::Tier::Critical)
 }
 
-#[cfg(test)]
-mod route_guard_tests {
-    use super::should_recompute_route;
-    use crate::cpugovernor::Tier;
-
-    #[test]
-    fn stale_routes_are_served_under_critical_only() {
-        for tier in [Tier::Normal, Tier::Conserve, Tier::Critical] {
-            // Missing entries always compute — a single find_route is
-            // not the storm the guard exists to stop.
-            assert!(should_recompute_route(true, false, tier), "{tier:?}");
-            // Fresh entries never recompute.
-            assert!(!should_recompute_route(false, false, tier), "{tier:?}");
-        }
-        // Expired: recompute normally, serve stale under Critical.
-        assert!(should_recompute_route(false, true, Tier::Normal));
-        assert!(should_recompute_route(false, true, Tier::Conserve));
-        assert!(!should_recompute_route(false, true, Tier::Critical));
-    }
-}
-
 // ---------------------------------------------------------------------------
 // EconomyAssessmentSystem
 // ---------------------------------------------------------------------------
@@ -395,5 +374,26 @@ impl<'a> System<'a> for EconomyAssessmentSystem {
 
             economy.rooms.insert(entity, room_econ);
         }
+    }
+}
+
+#[cfg(test)]
+mod route_guard_tests {
+    use super::should_recompute_route;
+    use crate::cpugovernor::Tier;
+
+    #[test]
+    fn stale_routes_are_served_under_critical_only() {
+        for tier in [Tier::Normal, Tier::Conserve, Tier::Critical] {
+            // Missing entries always compute — a single find_route is
+            // not the storm the guard exists to stop.
+            assert!(should_recompute_route(true, false, tier), "{tier:?}");
+            // Fresh entries never recompute.
+            assert!(!should_recompute_route(false, false, tier), "{tier:?}");
+        }
+        // Expired: recompute normally, serve stale under Critical.
+        assert!(should_recompute_route(false, true, Tier::Normal));
+        assert!(should_recompute_route(false, true, Tier::Conserve));
+        assert!(!should_recompute_route(false, true, Tier::Critical));
     }
 }

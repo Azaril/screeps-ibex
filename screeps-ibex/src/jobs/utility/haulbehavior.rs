@@ -562,42 +562,6 @@ pub fn visualize_delivery(_describe_data: &mut JobDescribeData, _tickets: &[Tran
     // Visualization is handled by the central RenderSystem.
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use screeps::RoomCoordinate;
-
-    // Pin: the nearby-pickup range filter is anchored on the WORK SITE
-    // passed by the caller, never on the creep. Geometry from the live
-    // deadlock (W7N4): with the controller (39,12) as anchor and range 5,
-    // the upgrade container (36,9) must stay eligible no matter where the
-    // creep idles, while the room's storage (31,32) stays excluded.
-
-    fn pos(x: u8, y: u8) -> screeps::Position {
-        screeps::Position::new(
-            RoomCoordinate::new(x).expect("valid coordinate"),
-            RoomCoordinate::new(y).expect("valid coordinate"),
-            "W7N4".parse().expect("valid room name"),
-        )
-    }
-
-    #[test]
-    fn anchor_range_keeps_upgrade_container_eligible() {
-        assert!(within_anchor_range(pos(36, 9), pos(39, 12), 5));
-    }
-
-    #[test]
-    fn anchor_range_excludes_distant_storage() {
-        assert!(!within_anchor_range(pos(31, 32), pos(39, 12), 5));
-    }
-
-    #[test]
-    fn anchor_range_boundary_is_inclusive() {
-        assert!(within_anchor_range(pos(34, 12), pos(39, 12), 5));
-        assert!(!within_anchor_range(pos(33, 12), pos(39, 12), 5));
-    }
-}
-
 pub fn visualize_delivery_from(_describe_data: &mut JobDescribeData, _tickets: &[TransferDepositTicket], _from: RoomPosition) {
     // Visualization is handled by the central RenderSystem.
 }
@@ -645,4 +609,40 @@ where
     }
 
     Some(next_state())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use screeps::RoomCoordinate;
+
+    // Pin: the nearby-pickup range filter is anchored on the WORK SITE
+    // passed by the caller, never on the creep. Geometry from the live
+    // deadlock (W7N4): with the controller (39,12) as anchor and range 5,
+    // the upgrade container (36,9) must stay eligible no matter where the
+    // creep idles, while the room's storage (31,32) stays excluded.
+
+    fn pos(x: u8, y: u8) -> screeps::Position {
+        screeps::Position::new(
+            RoomCoordinate::new(x).expect("valid coordinate"),
+            RoomCoordinate::new(y).expect("valid coordinate"),
+            "W7N4".parse().expect("valid room name"),
+        )
+    }
+
+    #[test]
+    fn anchor_range_keeps_upgrade_container_eligible() {
+        assert!(within_anchor_range(pos(36, 9), pos(39, 12), 5));
+    }
+
+    #[test]
+    fn anchor_range_excludes_distant_storage() {
+        assert!(!within_anchor_range(pos(31, 32), pos(39, 12), 5));
+    }
+
+    #[test]
+    fn anchor_range_boundary_is_inclusive() {
+        assert!(within_anchor_range(pos(34, 12), pos(39, 12), 5));
+        assert!(!within_anchor_range(pos(33, 12), pos(39, 12), 5));
+    }
 }

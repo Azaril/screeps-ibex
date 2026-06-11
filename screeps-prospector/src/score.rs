@@ -491,7 +491,7 @@ pub fn run_planner(
                         timeout.as_secs()
                     ));
                 }
-                state = next;
+                state = *next;
             }
         }
     }
