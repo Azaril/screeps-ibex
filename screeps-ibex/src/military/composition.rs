@@ -1,4 +1,4 @@
-﻿use super::bodies;
+use super::bodies;
 use super::squad::SquadRole;
 use crate::creep::SpawnBodyDefinition;
 use crate::pathing::pathfinderservice::PathfinderService;
@@ -203,7 +203,7 @@ fn default_retreat_threshold() -> f32 {
 }
 
 impl SquadComposition {
-    // â”€â”€â”€ Predefined compositions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── Predefined compositions ────────────────────────────────────────
 
     /// 1 ranged+heal creep, no formation.
     pub fn solo_ranged() -> Self {
@@ -472,7 +472,7 @@ impl SquadComposition {
         }
     }
 
-    // â”€â”€â”€ Cost and timing estimation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── Cost and timing estimation ─────────────────────────────────────
 
     /// Estimate the total energy cost to spawn this composition
     /// at a given energy capacity.

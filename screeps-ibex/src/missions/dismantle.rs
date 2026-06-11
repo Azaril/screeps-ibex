@@ -159,7 +159,7 @@ impl Mission for DismantleMission {
         }
 
         //TODO: Add better dynamic cpu adaptation.
-        let can_spawn = crate::features::features().dismantle && self.allow_spawning && system_data.governor.can_execute_cpu(CpuBar::LowPriority);
+        let can_spawn = system_data.features.dismantle && self.allow_spawning && system_data.governor.can_execute_cpu(CpuBar::LowPriority);
 
         if !can_spawn {
             return Ok(MissionResult::Running);

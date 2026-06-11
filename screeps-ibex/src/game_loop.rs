@@ -743,16 +743,18 @@ pub fn tick() {
     crate::features::clear_reset();
 
     //
-    // Load feature flags from Memory into per-tick cache
-    // (after resets, so the cache reflects any prepare() defaults).
+    // Load feature flags from Memory (after resets, so the result
+    // reflects any prepare() defaults). Inserted into the world below
+    // as the per-tick Features Resource (M5).
     //
 
-    crate::features::load();
-    let features = crate::features::features();
+    let features = crate::features::load();
 
     ENVIRONMENT.with(|env_cell| {
         let mut env_ref = env_cell.borrow_mut();
         let env = env_ref.get_or_insert_with(create_environment);
+
+        env.world.insert(features);
 
         //
         // Memory reset — clear all registered segments.

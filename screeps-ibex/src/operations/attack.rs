@@ -567,7 +567,7 @@ impl Operation for AttackOperation {
         system_data: &mut OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
-        let features = crate::features::features();
+        let features = system_data.features;
 
         if !features.military.offense {
             return Ok(OperationResult::Running);

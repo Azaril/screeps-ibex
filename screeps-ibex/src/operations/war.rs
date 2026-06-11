@@ -197,7 +197,7 @@ impl WarOperation {
     // ── Defense scan (every 1-2 ticks) ─────────────────────────────────────
 
     fn run_defense_scan(&mut self, system_data: &mut OperationExecutionSystemData, runtime_data: &mut OperationExecutionRuntimeData) {
-        let features = crate::features::features();
+        let features = system_data.features;
 
         if !features.military.defense {
             return;
@@ -573,7 +573,7 @@ impl WarOperation {
     // ── Offense evaluation (every 10-20 ticks) ────────────────────────────
 
     fn run_offense_evaluation(&mut self, system_data: &mut OperationExecutionSystemData, runtime_data: &mut OperationExecutionRuntimeData) {
-        let features = crate::features::features();
+        let features = system_data.features;
 
         if !features.military.offense {
             if features.military.debug_log {
@@ -979,7 +979,7 @@ impl WarOperation {
 
         // ── 2. Propagate threat intel to active AttackOperations ─────────
 
-        let war_debug = crate::features::features().military.debug_log;
+        let war_debug = system_data.features.military.debug_log;
 
         for attack in self.active_attacks.iter() {
             let entity = attack.entity;
@@ -1122,7 +1122,7 @@ impl WarOperation {
 
     fn reassign_home_rooms(&self, system_data: &mut OperationExecutionSystemData) {
         let current_tick = game::time();
-        let war_debug = crate::features::features().military.debug_log;
+        let war_debug = system_data.features.military.debug_log;
 
         // Collect home rooms with spawns: (entity, room_name).
         let home_rooms: Vec<(Entity, RoomName)> = (system_data.entities, &*system_data.room_data)
@@ -1390,8 +1390,8 @@ impl Operation for WarOperation {
         }
     }
 
-    fn describe_operation(&self, _ctx: &OperationDescribeContext) -> SummaryContent {
-        let features = crate::features::features();
+    fn describe_operation(&self, ctx: &OperationDescribeContext) -> SummaryContent {
+        let features = ctx.features;
         let mut children = Vec::new();
 
         // Offense section.

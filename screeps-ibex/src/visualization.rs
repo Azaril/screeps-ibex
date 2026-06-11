@@ -117,6 +117,7 @@ pub struct SummarizeOperationSystemData<'a> {
     mission_data: ReadStorage<'a, MissionData>,
     room_data: ReadStorage<'a, RoomData>,
     op_summary: WriteStorage<'a, OperationSummaryComponent>,
+    features: Read<'a, crate::features::Features>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -131,6 +132,7 @@ impl<'a> System<'a> for SummarizeOperationSystem {
         let ctx = crate::operations::operationsystem::OperationDescribeContext {
             mission_data: &data.mission_data,
             room_data: &data.room_data,
+            features: *data.features,
         };
 
         for (entity, op_data) in (&data.entities, &data.operation_data).join() {
@@ -469,6 +471,7 @@ pub struct AggregateSummarySystemData<'a> {
     stats_history: Option<Read<'a, crate::stats_history::StatsHistoryData>>,
     transfer_stats: Option<Read<'a, crate::transfer::transfersystem::TransferStatsSnapshot>>,
     visibility_snapshot: Read<'a, crate::room::visibilitysystem::VisibilityQueueSnapshot>,
+    features: Read<'a, crate::features::Features>,
 }
 
 pub struct AggregateSummarySystem;
@@ -568,7 +571,7 @@ impl<'a> System<'a> for AggregateSummarySystem {
         // Visibility queue (global) — from VisibilityQueueSnapshot resource.
         // VisualizationData presence already implies features.visualize.on;
         // only the sub-feature flag needs checking.
-        if crate::features::features().visibility.visualize {
+        if data.features.visibility.visualize {
             const MAX_VISIBILITY_ENTRIES: usize = 15;
             for entry in data.visibility_snapshot.entries.iter().take(MAX_VISIBILITY_ENTRIES) {
                 viz.global.visibility_queue.push(VisibilityQueueSummaryEntry {
@@ -1234,6 +1237,7 @@ pub struct RenderSystemData<'a> {
     visualization_data: Option<Read<'a, VisualizationData>>,
     visualizer: Option<Write<'a, Visualizer>>,
     cpu_history: Option<Read<'a, CpuHistory>>,
+    features: Read<'a, crate::features::Features>,
 }
 
 pub struct RenderSystem;
@@ -1271,7 +1275,7 @@ impl<'a> System<'a> for RenderSystem {
         // Build visibility queue panel (below ops panel, same right column) only
         // when the visibility feature flag is on. When on but the queue is empty,
         // still show the panel with 0 entries.
-        let show_visibility_panel = crate::features::features().visibility.visualize;
+        let show_visibility_panel = data.features.visibility.visualize;
         let visibility_panel = if show_visibility_panel {
             let vis_lines: Vec<String> = viz
                 .global

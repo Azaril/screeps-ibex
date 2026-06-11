@@ -1,8 +1,6 @@
 use super::utility::*;
 use crate::missions::constants::*;
 use crate::room::data::*;
-use crate::ui::*;
-use crate::visualize::*;
 use log::*;
 use screeps::game::market::*;
 use screeps::*;
@@ -78,18 +76,6 @@ impl OrderQueue {
     pub fn clear(&mut self) {
         self.rooms.clear();
     }
-
-    fn visualize(&self, _ui: &mut UISystem, _visualizer: &mut Visualizer) {
-        if crate::features::features().transfer.visualize.orders() {
-            /*
-            for (room_name, room) in &self.rooms {
-                ui.with_room(*room_name, visualizer, |_room_ui| {
-                    //TODO: Visualize orders.
-                });
-            }
-            */
-        }
-    }
 }
 
 #[derive(SystemData)]
@@ -99,6 +85,7 @@ pub struct OrderQueueSystemData<'a> {
     entities: Entities<'a>,
     room_data: WriteStorage<'a, RoomData>,
     governor: Read<'a, crate::cpugovernor::GovernorSnapshot>,
+    features: Read<'a, crate::features::Features>,
 }
 
 struct PassiveOrderParameters {
@@ -335,7 +322,7 @@ impl<'a> System<'a> for OrderQueueSystem {
     type SystemData = OrderQueueSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        let features = crate::features::features();
+        let features = *data.features;
         let can_buy = features.market.buy && game::market::credits() > features.market.credit_reserve;
         let can_sell = features.market.sell;
 

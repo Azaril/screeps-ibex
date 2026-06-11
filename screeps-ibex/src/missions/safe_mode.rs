@@ -91,7 +91,7 @@ impl Mission for SafeModeMission {
     }
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<MissionResult, String> {
-        let features = crate::features::features();
+        let features = system_data.features;
 
         if !features.military.safe_mode {
             return Ok(MissionResult::Running);

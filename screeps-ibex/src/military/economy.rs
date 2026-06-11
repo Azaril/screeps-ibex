@@ -1,4 +1,4 @@
-﻿use screeps::*;
+use screeps::*;
 use specs::prelude::*;
 use std::collections::HashMap;
 
@@ -77,7 +77,7 @@ impl EconomySnapshot {
     /// dropping below a safety reserve?
     ///
     /// Uses a per-room reserve of 20% of stored energy (clamped to
-    /// 5kâ€“30k) so low-RCL rooms with little storage don't inflate
+    /// 5k–30k) so low-RCL rooms with little storage don't inflate
     /// the threshold, and mature rooms keep a reasonable buffer.
     pub fn can_afford_military(&self, amount: u32) -> bool {
         let reserve: u32 = self.rooms.values().map(|r| (r.stored_energy / 5).clamp(5_000, 30_000)).sum();
@@ -86,7 +86,7 @@ impl EconomySnapshot {
 
     /// Can a specific set of rooms collectively afford `amount` energy
     /// for military spending? Each room contributes its surplus above a
-    /// per-room reserve (20% of stored, clamped 5kâ€“30k). This is the
+    /// per-room reserve (20% of stored, clamped 5k–30k). This is the
     /// preferred check when the attack has assigned home rooms.
     pub fn can_rooms_afford_military(&self, rooms: &[Entity], amount: u32) -> bool {
         let surplus: u32 = rooms

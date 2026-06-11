@@ -30,6 +30,7 @@ pub struct MovementUpdateSystemData<'a> {
     visualizer: Option<Write<'a, Visualizer>>,
     governor: Read<'a, crate::cpugovernor::GovernorSnapshot>,
     metrics: Write<'a, crate::metrics::MetricsState>,
+    features: Read<'a, crate::features::Features>,
 }
 
 /// Movement visualizer that pushes intents to the screeps-ibex room
@@ -222,7 +223,7 @@ impl<'a> System<'a> for MovementUpdateSystem {
             ibex_visualizer.as_mut().map(|v| v as &mut dyn MovementVisualizer),
         );
 
-        let pathing_features = crate::features::features().pathing;
+        let pathing_features = data.features.pathing;
         system.set_reuse_path_length(pathing_features.reuse_path_length);
         system.set_max_shove_depth(pathing_features.max_shove_depth);
         system.set_friendly_creep_distance(pathing_features.friendly_creep_distance);

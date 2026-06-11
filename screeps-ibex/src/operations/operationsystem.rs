@@ -30,6 +30,7 @@ pub struct OperationSystemData<'a> {
     economy: Write<'a, EconomySnapshot>,
     pathfinder: Write<'a, PathfinderService>,
     governor: Read<'a, GovernorSnapshot>,
+    features: Read<'a, crate::features::Features>,
     room_status_cache: Write<'a, RoomStatusCache>,
     threat_data: ReadStorage<'a, RoomThreatData>,
 }
@@ -48,6 +49,8 @@ pub struct OperationExecutionSystemData<'a, 'b> {
     pub pathfinder: &'b mut PathfinderService,
     /// The tick's CPU-pressure snapshot (Copy — read freely).
     pub governor: GovernorSnapshot,
+    /// The tick's feature flags (Copy — read freely).
+    pub features: crate::features::Features,
     pub room_status_cache: &'b RoomStatusCache,
     pub threat_data: &'b ReadStorage<'a, RoomThreatData>,
 }
@@ -65,6 +68,8 @@ pub enum OperationResult {
 pub struct OperationDescribeContext<'a> {
     pub mission_data: &'a ReadStorage<'a, MissionData>,
     pub room_data: &'a ReadStorage<'a, RoomData>,
+    /// The tick's feature flags (Copy).
+    pub features: crate::features::Features,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -120,6 +125,7 @@ impl<'a> System<'a> for PreRunOperationSystem {
             economy: &mut data.economy,
             pathfinder: &mut data.pathfinder,
             governor: *data.governor,
+            features: *data.features,
             room_status_cache: &data.room_status_cache,
             threat_data: &data.threat_data,
         };
@@ -156,6 +162,7 @@ impl<'a> System<'a> for RunOperationSystem {
             economy: &mut data.economy,
             pathfinder: &mut data.pathfinder,
             governor: *data.governor,
+            features: *data.features,
             room_status_cache: &data.room_status_cache,
             threat_data: &data.threat_data,
         };

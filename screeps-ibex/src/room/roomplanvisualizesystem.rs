@@ -12,6 +12,7 @@ pub struct RoomPlanVisualizeSystemData<'a> {
     room_data: ReadStorage<'a, RoomData>,
     room_plan_data: ReadStorage<'a, RoomPlanData>,
     visualizer: Option<Write<'a, Visualizer>>,
+    features: Read<'a, crate::features::Features>,
 }
 
 /// Renders completed room plans using the screeps-visual structure visuals.
@@ -26,9 +27,7 @@ impl<'a> System<'a> for RoomPlanVisualizeSystem {
     type SystemData = RoomPlanVisualizeSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        let features = crate::features::features();
-
-        if !features.construction.visualize.plan() {
+        if !data.features.construction.visualize.plan() {
             return;
         }
 

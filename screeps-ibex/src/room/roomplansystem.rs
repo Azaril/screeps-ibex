@@ -266,6 +266,7 @@ pub struct RoomPlanSystemData<'a> {
     room_plan_data: WriteStorage<'a, RoomPlanData>,
     room_plan_queue: Write<'a, RoomPlanQueue>,
     governor: Read<'a, crate::cpugovernor::GovernorSnapshot>,
+    features: Read<'a, crate::features::Features>,
 }
 
 pub struct RoomPlanSystem;
@@ -276,8 +277,7 @@ impl RoomPlanSystem {
     /// ensures at least some work when there are pending requests to avoid deadlock.
     /// Planning runs only when bucket is at or above bucket_threshold (0 = always allow).
     /// `bucket` comes from the governor snapshot (M1: the one CPU-pressure truth).
-    fn get_cpu_budget(has_pending_request: bool, bucket: i32) -> Option<(f64, f64)> {
-        let construction = crate::features::features().construction;
+    fn get_cpu_budget(has_pending_request: bool, bucket: i32, construction: &crate::features::ConstructionFeatures) -> Option<(f64, f64)> {
         if construction.bucket_threshold > 0 && bucket < construction.bucket_threshold {
             return None;
         }
@@ -345,14 +345,15 @@ impl<'a> System<'a> for RoomPlanSystem {
     fn run(&mut self, mut data: Self::SystemData) {
         data.memory_arbiter.request(PLANNER_MEMORY_SEGMENT);
 
-        if crate::features::features().construction.plan {
+        let construction = data.features.construction;
+        if construction.plan {
             let has_pending = !data.room_plan_queue.requests.is_empty()
                 || data
                     .memory_arbiter
                     .get(PLANNER_MEMORY_SEGMENT)
                     .map(|d| !d.is_empty())
                     .unwrap_or(false);
-            if let Some((max_cpu, tick_limit)) = Self::get_cpu_budget(has_pending, data.governor.bucket) {
+            if let Some((max_cpu, tick_limit)) = Self::get_cpu_budget(has_pending, data.governor.bucket, &construction) {
                 if data.memory_arbiter.is_active(PLANNER_MEMORY_SEGMENT) {
                     let Some(planner_data) = data.memory_arbiter.get(PLANNER_MEMORY_SEGMENT) else {
                         return;
@@ -374,10 +375,9 @@ impl<'a> System<'a> for RoomPlanSystem {
                         let can_plan = |room: Entity| -> bool {
                             if let Some(plan_data) = data.room_plan_data.get(room) {
                                 match plan_data.state {
-                                    RoomPlanState::Valid(_) => crate::features::features().construction.force_plan,
+                                    RoomPlanState::Valid(_) => construction.force_plan,
                                     RoomPlanState::Failed { time, attempts } => {
-                                        game::time() >= time.saturating_add(replan_backoff_ticks(attempts))
-                                            && crate::features::features().construction.allow_replan
+                                        game::time() >= time.saturating_add(replan_backoff_ticks(attempts)) && construction.allow_replan
                                     }
                                 }
                             } else {

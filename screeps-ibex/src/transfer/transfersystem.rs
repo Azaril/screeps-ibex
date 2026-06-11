@@ -1,7 +1,6 @@
 use super::utility::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
-use crate::ui::*;
 use crate::visualize::*;
 use bitflags::*;
 use itertools::*;
@@ -2395,21 +2394,6 @@ impl TransferQueue {
         }
 
         TransferStatsSnapshot { rooms }
-    }
-
-    fn visualize(&mut self, data: &dyn TransferRequestSystemData, ui: &mut UISystem, visualizer: &mut Visualizer) {
-        if crate::features::features().transfer.visualize.demand() {
-            let room_names = self.rooms.get_all_rooms();
-
-            for room_name in room_names.iter() {
-                let room = self.get_room(data, *room_name, TransferTypeFlags::all());
-                ui.with_room(*room_name, visualizer, |room_vis| {
-                    for (target, node) in &room.nodes {
-                        node.visualize(room_vis, target.pos());
-                    }
-                });
-            }
-        }
     }
 }
 

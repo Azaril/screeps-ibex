@@ -80,7 +80,7 @@ impl Mission for NukeDefenseMission {
     }
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<MissionResult, String> {
-        let features = crate::features::features();
+        let features = system_data.features;
 
         if !features.military.nuke_defense {
             return Ok(MissionResult::Running);

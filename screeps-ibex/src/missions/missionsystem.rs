@@ -42,6 +42,7 @@ pub struct MissionSystemData<'a> {
     economy: Write<'a, EconomySnapshot>,
     pathfinder: Write<'a, PathfinderService>,
     governor: Read<'a, GovernorSnapshot>,
+    features: Read<'a, crate::features::Features>,
     squad_contexts: WriteStorage<'a, SquadContext>,
     mapping: Read<'a, EntityMappingData>,
 }
@@ -68,6 +69,8 @@ pub struct MissionExecutionSystemData<'a, 'b> {
     pub pathfinder: &'b mut PathfinderService,
     /// The tick's CPU-pressure snapshot (Copy — read freely).
     pub governor: GovernorSnapshot,
+    /// The tick's feature flags (Copy — read freely).
+    pub features: crate::features::Features,
     pub squad_contexts: &'b mut WriteStorage<'a, SquadContext>,
     pub mapping: &'b Read<'a, EntityMappingData>,
 }
@@ -199,6 +202,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 economy: &mut data.economy,
                 pathfinder: &mut data.pathfinder,
                 governor: *data.governor,
+                features: *data.features,
                 squad_contexts: &mut data.squad_contexts,
                 mapping: &data.mapping,
             };
@@ -255,6 +259,7 @@ impl<'a> System<'a> for RunMissionSystem {
                 economy: &mut data.economy,
                 pathfinder: &mut data.pathfinder,
                 governor: *data.governor,
+                features: *data.features,
                 squad_contexts: &mut data.squad_contexts,
                 mapping: &data.mapping,
             };

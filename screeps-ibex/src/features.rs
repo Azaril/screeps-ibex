@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsValue;
 
@@ -473,17 +471,6 @@ pub struct Features {
     pub eval: EvalFeatures,
 }
 
-// ─── Thread-local cache ────────────────────────────────────────────────────────
-
-thread_local! {
-    static CACHED: RefCell<Features> = RefCell::new(Features::default());
-}
-
-/// Return a copy of the cached feature flags for the current tick.
-pub fn features() -> Features {
-    CACHED.with(|c| *c.borrow())
-}
-
 // ─── JS helpers (private) ──────────────────────────────────────────────────────
 
 #[inline]
@@ -522,16 +509,21 @@ fn features_from_memory() -> Features {
 /// also runs every tick inside [`load`], so user edits to Memory between ticks
 /// are always picked up.
 pub fn prepare() {
-    load();
+    let _ = load();
 }
 
-/// Load all feature flags from `Memory._features` into the per-tick cache.
+/// Load all feature flags from `Memory._features` and return them.
 ///
-/// Must be called once at the start of every game tick, after resets have been
-/// handled.  The resolved flags (with defaults filled in for any missing keys)
-/// are written back to Memory so the user can always see and modify the
-/// complete set of feature flags in the console between ticks.
-pub fn load() {
+/// Called once at the start of every game tick, after resets have been
+/// handled; the game loop inserts the returned [`Features`] into the world
+/// as a Resource (statics-review M5 — the thread-local cache is gone;
+/// systems fetch `Read<Features>`, mission/operation code reads the copy on
+/// its execution system data). The resolved flags (with defaults filled in
+/// for any missing keys) are written back to Memory so the user can always
+/// see and modify the complete set of feature flags in the console between
+/// ticks.
+#[must_use]
+pub fn load() -> Features {
     let root = crate::memory_helper::root();
     let flags = features_from_memory();
 
@@ -552,5 +544,5 @@ pub fn load() {
         let _ = js_sys::Reflect::set(js_features.as_ref(), &JsValue::from_str("reset"), &obj);
     }
 
-    CACHED.with(|c| *c.borrow_mut() = flags);
+    flags
 }

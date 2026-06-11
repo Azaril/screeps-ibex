@@ -35,9 +35,7 @@ struct ConstructionFilter<'a> {
 }
 
 impl<'a> ConstructionFilter<'a> {
-    fn new(room: &'a Room, room_level: u8, current_sites: usize) -> Self {
-        let max_sites = crate::features::features().construction.max_construction_sites;
-
+    fn new(room: &'a Room, room_level: u8, current_sites: usize, max_sites: i32) -> Self {
         ConstructionFilter {
             room,
             room_level,
@@ -243,14 +241,19 @@ impl Mission for ConstructionMission {
         let request_plan = if let Some(room_plan_data) = system_data.room_plan_data.get(self.room_data) {
             if let Some(plan) = room_plan_data.plan() {
                 if game::time().is_multiple_of(50) {
-                    if crate::features::features().construction.execute {
+                    if system_data.features.construction.execute {
                         let construction_sites = room_data.get_construction_sites().ok_or("Expected construction sites")?;
-                        let mut filter = ConstructionFilter::new(&room, room_level, construction_sites.len());
+                        let mut filter = ConstructionFilter::new(
+                            &room,
+                            room_level,
+                            construction_sites.len(),
+                            system_data.features.construction.max_construction_sites,
+                        );
                         let ops = plan.get_build_operations(room_level, &mut filter);
                         screeps_foreman::plan::execute_operations(&room, &ops);
                     }
 
-                    if crate::features::features().construction.cleanup {
+                    if system_data.features.construction.cleanup {
                         let structures = room_data.get_structures().ok_or_else(|| {
                             let msg = format!("Expected structures - Room: {}", room_data.name);
                             log::warn!("{} at {}:{}", msg, file!(), line!());
@@ -265,13 +268,13 @@ impl Mission for ConstructionMission {
 
                 false
             } else {
-                crate::features::features().construction.allow_replan
+                system_data.features.construction.allow_replan
             }
         } else {
             true
         };
 
-        if request_plan || crate::features::features().construction.force_plan {
+        if request_plan || system_data.features.construction.force_plan {
             system_data.room_plan_queue.request(RoomPlanRequest::new(self.room_data, 1.0));
         }
 

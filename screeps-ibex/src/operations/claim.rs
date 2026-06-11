@@ -631,8 +631,7 @@ impl ClaimOperation {
     /// is enabled. Cost: O(candidates) small-vec clones, no JS calls.
     fn populate_viz_from_cache(&self, system_data: &mut OperationExecutionSystemData, currently_owned_rooms: u32, maximum_rooms: u32) {
         if let Some(map_viz) = system_data.map_viz_data.as_mut() {
-            let features = crate::features::features();
-            if !features.claim.visualize {
+            if !system_data.features.claim.visualize {
                 return;
             }
 
@@ -852,7 +851,7 @@ impl Operation for ClaimOperation {
         system_data: &mut OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
-        let features = crate::features::features();
+        let features = system_data.features;
 
         // ── 1. Count owned rooms, compute capacity, track min RCL ───────
 
