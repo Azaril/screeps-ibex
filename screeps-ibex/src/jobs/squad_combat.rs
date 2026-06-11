@@ -1,4 +1,4 @@
-use super::context::*;
+﻿use super::context::*;
 use super::jobsystem::*;
 use super::utility::movebehavior::*;
 use crate::military::formation::virtual_anchor_target;
@@ -54,13 +54,13 @@ machine!(
     }
 );
 
-// ─── Body part detection helpers ────────────────────────────────────────────
+// â”€â”€â”€ Body part detection helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 fn has_active_part(creep: &Creep, part: Part) -> bool {
     creep.body().iter().any(|p| p.part() == part && p.hits() > 0)
 }
 
-// ─── MoveToRoom ─────────────────────────────────────────────────────────────
+// â”€â”€â”€ MoveToRoom â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 impl MoveToRoom {
     pub fn tick(&mut self, state_context: &mut SquadCombatJobContext, tick_context: &mut JobTickContext) -> Option<SquadCombatState> {
@@ -128,7 +128,7 @@ impl MoveToRoom {
     }
 }
 
-// ─── CombatResponse ─────────────────────────────────────────────────────────
+// â”€â”€â”€ CombatResponse â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 impl CombatResponse {
     pub fn tick(&mut self, state_context: &mut SquadCombatJobContext, tick_context: &mut JobTickContext) -> Option<SquadCombatState> {
@@ -192,7 +192,7 @@ impl CombatResponse {
                     .min_by_key(|c| c.hits())
             };
             if let Some(target) = target {
-                crate::intents::attack(creep, &mut tick_context.action_flags, target, target.pos());
+                crate::intents::attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, target, target.pos());
             }
         }
 
@@ -202,7 +202,7 @@ impl CombatResponse {
             let in_range_1_count = hostiles.iter().filter(|c| creep_pos.get_range_to(c.pos()) <= 1).count();
 
             if in_range_1_count >= 3 || (in_range_3_count >= 3 && in_range_1_count >= 1) {
-                crate::intents::ranged_mass_attack(creep, &mut tick_context.action_flags);
+                crate::intents::ranged_mass_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder);
             } else {
                 let target = if let Some(ref focus) = focus_creep {
                     if creep_pos.get_range_to(focus.pos()) <= 3 {
@@ -220,7 +220,7 @@ impl CombatResponse {
                         .min_by_key(|c| c.hits())
                 };
                 if let Some(target) = target {
-                    crate::intents::ranged_attack(creep, &mut tick_context.action_flags, target, target.pos());
+                    crate::intents::ranged_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, target, target.pos());
                 }
             }
         }
@@ -231,9 +231,9 @@ impl CombatResponse {
             if let Some(target) = heal_target {
                 let range = creep_pos.get_range_to(target.pos());
                 if range <= 1 {
-                    crate::intents::heal(creep, &mut tick_context.action_flags, &target, target.pos());
+                    crate::intents::heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, &target, target.pos());
                 } else if range <= 3 {
-                    crate::intents::ranged_heal(creep, &mut tick_context.action_flags, &target, target.pos());
+                    crate::intents::ranged_heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, &target, target.pos());
                 } else {
                     heal_best_nearby(creep, tick_context);
                 }
@@ -283,7 +283,7 @@ impl CombatResponse {
     }
 }
 
-// ─── Engaged ────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Engaged â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 impl Engaged {
     pub fn tick(&mut self, state_context: &mut SquadCombatJobContext, tick_context: &mut JobTickContext) -> Option<SquadCombatState> {
@@ -311,7 +311,7 @@ impl Engaged {
             return Some(SquadCombatState::move_to_room());
         }
 
-        // ── Execute actions (all pipelines fire independently) ──
+        // â”€â”€ Execute actions (all pipelines fire independently) â”€â”€
 
         if let Some(ref orders) = tick_orders {
             // With tick orders: use ordered targets.
@@ -323,7 +323,7 @@ impl Engaged {
             Self::fallback_heal(creep, tick_context);
         }
 
-        // ── Movement ──
+        // â”€â”€ Movement â”€â”€
 
         if let Some(ref orders) = tick_orders {
             match &orders.movement {
@@ -350,7 +350,7 @@ impl Engaged {
         None
     }
 
-    // ── Ordered attack ──
+    // â”€â”€ Ordered attack â”€â”€
 
     fn execute_attack_with_orders(creep: &Creep, creep_pos: Position, orders: &TickOrders, tick_context: &mut JobTickContext) {
         let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
@@ -376,7 +376,7 @@ impl Engaged {
                     .min_by_key(|c| c.hits())
             };
             if let Some(target) = target {
-                crate::intents::attack(creep, &mut tick_context.action_flags, target, target.pos());
+                crate::intents::attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, target, target.pos());
             }
         }
 
@@ -388,7 +388,7 @@ impl Engaged {
             if in_range_3_count > 0 {
                 // Mass attack when multiple hostiles are stacked on us.
                 if in_range_1_count >= 3 || (in_range_3_count >= 3 && in_range_1_count >= 1) {
-                    crate::intents::ranged_mass_attack(creep, &mut tick_context.action_flags);
+                    crate::intents::ranged_mass_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder);
                 } else {
                     // Focus fire: prefer the exact focus target by ID.
                     let target = if let Some(ref focus) = focus_creep {
@@ -407,7 +407,7 @@ impl Engaged {
                             .min_by_key(|c| c.hits())
                     };
                     if let Some(target) = target {
-                        crate::intents::ranged_attack(creep, &mut tick_context.action_flags, target, target.pos());
+                        crate::intents::ranged_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, target, target.pos());
                     }
                 }
             } else {
@@ -424,14 +424,14 @@ impl Engaged {
                     });
                 if let Some(target) = target {
                     if let Some(attackable) = target.as_attackable() {
-                        crate::intents::ranged_attack(creep, &mut tick_context.action_flags, attackable, target.pos());
+                        crate::intents::ranged_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, attackable, target.pos());
                     }
                 }
             }
         }
     }
 
-    // ── Ordered heal ──
+    // â”€â”€ Ordered heal â”€â”€
 
     fn execute_heal_with_orders(creep: &Creep, creep_pos: Position, orders: &TickOrders, tick_context: &mut JobTickContext) {
         if !has_active_part(creep, Part::Heal) {
@@ -442,9 +442,9 @@ impl Engaged {
         if let Some(target) = orders.heal_target.and_then(|id| id.resolve()) {
             let range = creep_pos.get_range_to(target.pos());
             if range <= 1 {
-                crate::intents::heal(creep, &mut tick_context.action_flags, &target, target.pos());
+                crate::intents::heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, &target, target.pos());
             } else if range <= 3 {
-                crate::intents::ranged_heal(creep, &mut tick_context.action_flags, &target, target.pos());
+                crate::intents::ranged_heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, &target, target.pos());
             } else {
                 // Assigned target out of range -- heal best nearby instead.
                 heal_best_nearby(creep, tick_context);
@@ -455,7 +455,7 @@ impl Engaged {
         }
     }
 
-    // ── Fallback attack (no tick orders, body-part-aware) ──
+    // â”€â”€ Fallback attack (no tick orders, body-part-aware) â”€â”€
 
     fn fallback_attack(creep: &Creep, creep_pos: Position, tick_context: &mut JobTickContext) {
         let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
@@ -475,7 +475,7 @@ impl Engaged {
                     });
                 if let Some(target) = target {
                     if let Some(attackable) = target.as_attackable() {
-                        crate::intents::ranged_attack(creep, &mut tick_context.action_flags, attackable, target.pos());
+                        crate::intents::ranged_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, attackable, target.pos());
                     }
                 }
             }
@@ -492,7 +492,7 @@ impl Engaged {
                     });
                 if let Some(target) = target {
                     if let Some(attackable) = target.as_attackable() {
-                        crate::intents::attack(creep, &mut tick_context.action_flags, attackable, target.pos());
+                        crate::intents::attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, attackable, target.pos());
                     }
                 }
             }
@@ -506,7 +506,7 @@ impl Engaged {
                 .filter(|c| creep_pos.get_range_to(c.pos()) <= 1)
                 .min_by_key(|c| c.hits())
             {
-                crate::intents::attack(creep, &mut tick_context.action_flags, target, target.pos());
+                crate::intents::attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, target, target.pos());
             }
         }
 
@@ -515,7 +515,7 @@ impl Engaged {
             let in_range_1: usize = hostiles.iter().filter(|c| creep_pos.get_range_to(c.pos()) <= 1).count();
 
             if in_range_1 >= 3 {
-                crate::intents::ranged_mass_attack(creep, &mut tick_context.action_flags);
+                crate::intents::ranged_mass_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder);
             } else {
                 let target = hostiles
                     .iter()
@@ -523,13 +523,13 @@ impl Engaged {
                     .min_by_key(|c| c.hits());
 
                 if let Some(target) = target {
-                    crate::intents::ranged_attack(creep, &mut tick_context.action_flags, target, target.pos());
+                    crate::intents::ranged_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, target, target.pos());
                 }
             }
         }
     }
 
-    // ── Fallback heal (no tick orders) ──
+    // â”€â”€ Fallback heal (no tick orders) â”€â”€
 
     fn fallback_heal(creep: &Creep, tick_context: &mut JobTickContext) {
         if !has_active_part(creep, Part::Heal) {
@@ -538,7 +538,7 @@ impl Engaged {
         heal_best_nearby(creep, tick_context);
     }
 
-    // ── Fallback movement (no tick orders, body-part-aware) ──
+    // â”€â”€ Fallback movement (no tick orders, body-part-aware) â”€â”€
 
     fn fallback_movement(
         creep: &Creep,
@@ -613,7 +613,7 @@ impl Engaged {
     }
 }
 
-// ─── Retreating ─────────────────────────────────────────────────────────────
+// â”€â”€â”€ Retreating â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 impl Retreating {
     pub fn tick(&mut self, state_context: &mut SquadCombatJobContext, tick_context: &mut JobTickContext) -> Option<SquadCombatState> {
@@ -637,14 +637,14 @@ impl Retreating {
 
         // Pipeline B: Ranged mass attack while retreating.
         if has_active_part(creep, Part::RangedAttack) {
-            crate::intents::ranged_mass_attack(creep, &mut tick_context.action_flags);
+            crate::intents::ranged_mass_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder);
         }
 
         // Pipeline A: Melee attack if adjacent.
         if has_active_part(creep, Part::Attack) {
             let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
             if let Some(target) = hostiles.iter().find(|c| creep_pos.get_range_to(c.pos()) <= 1) {
-                crate::intents::attack(creep, &mut tick_context.action_flags, target, target.pos());
+                crate::intents::attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, target, target.pos());
             }
         }
 
@@ -654,9 +654,9 @@ impl Retreating {
             if let Some(target) = heal_target {
                 let range = creep_pos.get_range_to(target.pos());
                 if range <= 1 {
-                    crate::intents::heal(creep, &mut tick_context.action_flags, &target, target.pos());
+                    crate::intents::heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, &target, target.pos());
                 } else if range <= 3 {
-                    crate::intents::ranged_heal(creep, &mut tick_context.action_flags, &target, target.pos());
+                    crate::intents::ranged_heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, &target, target.pos());
                 } else {
                     heal_best_nearby(creep, tick_context);
                 }
@@ -691,7 +691,7 @@ impl Retreating {
     }
 }
 
-// ─── Shared helpers ─────────────────────────────────────────────────────────
+// â”€â”€â”€ Shared helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Heal the best nearby target: prefer adjacent damaged squad member, then
 /// adjacent damaged friendly, then self-heal, then ranged heal.
@@ -706,14 +706,14 @@ fn heal_best_nearby(creep: &Creep, tick_context: &mut JobTickContext) {
         .min_by_key(|c| c.hits());
 
     if let Some(target) = adjacent_damaged {
-        crate::intents::heal(creep, &mut tick_context.action_flags, target, target.pos());
+        crate::intents::heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, target, target.pos());
         return;
     }
 
     // Self-heal if damaged.
     if creep.hits() < creep.hits_max() {
         let creep_pos = creep.pos();
-        crate::intents::heal(creep, &mut tick_context.action_flags, creep, creep_pos);
+        crate::intents::heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, creep, creep_pos);
         return;
     }
 
@@ -727,7 +727,7 @@ fn heal_best_nearby(creep: &Creep, tick_context: &mut JobTickContext) {
         .min_by_key(|c| c.hits());
 
     if let Some(target) = ranged_damaged {
-        crate::intents::ranged_heal(creep, &mut tick_context.action_flags, target, target.pos());
+        crate::intents::ranged_heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, target, target.pos());
     }
 }
 
@@ -836,7 +836,7 @@ fn get_formation_target(
     ))
 }
 
-// ─── SquadCombatJob ─────────────────────────────────────────────────────────
+// â”€â”€â”€ SquadCombatJob â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SquadCombatJob {

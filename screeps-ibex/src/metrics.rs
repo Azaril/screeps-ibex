@@ -145,7 +145,10 @@ impl MetricsState {
 /// BEFORE dispatch so every system reads a consistent governor view
 /// for the whole tick.
 pub fn tick_start(world: &mut World) {
-    crate::intents::reset_tick();
+    world
+        .entry::<crate::intents::IntentRecorder>()
+        .or_insert_with(Default::default)
+        .reset();
     let (bucket, trend) = {
         let mut state = world.entry::<MetricsState>().or_insert_with(MetricsState::default);
         if state.fresh && state.vm_starts == 0 {
@@ -179,6 +182,7 @@ pub struct MetricsSystemData<'a> {
     memory_arbiter: WriteExpect<'a, MemoryArbiter>,
     governor: Read<'a, GovernorSnapshot>,
     pathfinder: Read<'a, PathfinderService>,
+    intents: Read<'a, crate::intents::IntentRecorder>,
 }
 
 pub struct MetricsSystem;
@@ -269,7 +273,7 @@ impl MetricsSystem {
                 }
             }),
             intents: Some({
-                let (counts, digest) = crate::intents::snapshot();
+                let (counts, digest) = data.intents.snapshot();
                 IntentMetrics {
                     attack: counts[0],
                     ranged_attack: counts[1],

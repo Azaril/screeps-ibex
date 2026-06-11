@@ -1,6 +1,7 @@
 use super::data::JobData;
 use crate::creep::CreepOwner;
 use crate::entitymappingsystem::*;
+use crate::intents::IntentRecorder;
 use crate::pathing::pathfinderservice::PathfinderService;
 use crate::military::squad::SquadContext;
 use crate::repairqueue::RepairQueue;
@@ -27,6 +28,7 @@ pub struct JobSystemData<'a> {
     repair_queue: Read<'a, RepairQueue>,
     visibility_queue: Write<'a, VisibilityQueue>,
     pathfinder: Write<'a, PathfinderService>,
+    intent_recorder: Write<'a, IntentRecorder>,
 }
 
 pub struct JobExecutionSystemData<'a> {
@@ -46,6 +48,7 @@ pub struct JobExecutionRuntimeData<'a> {
     pub movement_results: &'a MovementResults<Entity>,
     pub visibility_queue: &'a mut VisibilityQueue,
     pub pathfinder: &'a mut PathfinderService,
+    pub intent_recorder: &'a mut IntentRecorder,
 }
 
 pub struct JobDescribeData<'a> {
@@ -93,6 +96,7 @@ impl<'a> System<'a> for PreRunJobSystem {
                     movement_results: &data.movement_results,
                     visibility_queue: &mut data.visibility_queue,
                     pathfinder: &mut data.pathfinder,
+                    intent_recorder: &mut data.intent_recorder,
                 };
 
                 job_data.as_job().pre_run_job(&system_data, &mut runtime_data);
@@ -127,6 +131,7 @@ impl<'a> System<'a> for RunJobSystem {
                     movement_results: &data.movement_results,
                     visibility_queue: &mut data.visibility_queue,
                     pathfinder: &mut data.pathfinder,
+                    intent_recorder: &mut data.intent_recorder,
                 };
 
                 job_data.as_job().run_job(&system_data, &mut runtime_data);
