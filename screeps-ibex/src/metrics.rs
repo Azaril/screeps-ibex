@@ -8,11 +8,13 @@
 //!
 //! ## Fault counters
 //!
-//! [`FaultCounters`] events are recorded from anywhere via the
-//! `record_*` free functions (atomics — wasm is single-threaded, and
-//! atomics keep the host test lane safe). Counters are cumulative per
-//! VM lifetime; `vm_fresh` marks the first emitted block after a reset
-//! so the harness can segment them by restart.
+//! [`FaultCounters`] events are recorded on [`MetricsState`] (a specs
+//! Resource — statics-review M3; the writer systems carry
+//! `Write<MetricsState>`). Counters are cumulative per ENVIRONMENT
+//! lifetime: they reset when the world is rebuilt (VM restart or a
+//! deliberate `reset.environment`) — the same lifetime as `vm_starts`
+//! bumping, so the harness segments them by restart exactly as before.
+//! `vm_fresh` marks the first emitted block after a reset.
 //!
 //! ## Bucket window
 //!
@@ -33,70 +35,17 @@ use screeps::*;
 use screeps_ibex_metrics::*;
 use specs::prelude::*;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Rolling bucket-sample window (one sample per tick). 100 ticks reacts
 /// to a drain within a respawn-survivable horizon while smoothing the
 /// per-tick sawtooth.
 pub const BUCKET_WINDOW: usize = 100;
 
-static DESER_FAILURES: AtomicU32 = AtomicU32::new(0);
-static PANICS_CAUGHT: AtomicU32 = AtomicU32::new(0);
-static SERIALIZE_SKIPPED_SHED: AtomicU32 = AtomicU32::new(0);
-static SERIALIZE_SKIPPED_ABORTED: AtomicU32 = AtomicU32::new(0);
-static SEGMENT_CHUNKS_USED: AtomicU32 = AtomicU32::new(0);
-static MOVEMENT_OPS_CAP: AtomicU32 = AtomicU32::new(0);
-static MOVEMENT_OPS_CONSUMED: AtomicU32 = AtomicU32::new(0);
-static MOVEMENT_REPATHS: AtomicU32 = AtomicU32::new(0);
-static MOVEMENT_FAILURES: AtomicU32 = AtomicU32::new(0);
-
-/// Per-tick movement telemetry (P1.B2): recorded by the movement
-/// system after `process()`, emitted in the block's `pathing` section.
-pub fn record_movement_stats(stats: screeps_rover::MovementTickStats) {
-    MOVEMENT_OPS_CAP.store(stats.ops_budget_cap, Ordering::Relaxed);
-    MOVEMENT_OPS_CONSUMED.store(stats.ops_consumed, Ordering::Relaxed);
-    MOVEMENT_REPATHS.store(stats.repaths, Ordering::Relaxed);
-}
-
-/// Movement results the rover gave up on this tick (P1.D6 / IBEX-015:
-/// the previously-dead detection signal, surfaced; recovery = Inc 6).
-pub fn record_movement_failures(count: u32) {
-    MOVEMENT_FAILURES.store(count, Ordering::Relaxed);
-}
-
-/// A component-pipeline deserialization failure, INCLUDING the
-/// base64/decompress decode path (previously silent: decode→empty).
-pub fn record_deser_failure() {
-    DESER_FAILURES.fetch_add(1, Ordering::Relaxed);
-}
-
-// NOTE: panics_caught / serialize_skipped_aborted have NO Rust-side
-// record fns by design — the containment boundary is the JS loader
-// (P1.C1 decision); their values are seeded from
-// `Memory._metrics.aborted_ticks` in [`tick_start`]. A shed-skip of
-// serialize is unreachable by construction (never-shed set, ADR 0004);
-// the counter exists so the schema can prove it stays zero.
-
-/// The 0002 chunk watermark, routed into the metrics block (Inc-2
-/// rescope): how many component segments the last serialize consumed.
-pub fn record_segment_chunks(used: u32) {
-    SEGMENT_CHUNKS_USED.store(used, Ordering::Relaxed);
-}
-
-fn fault_counters() -> FaultCounters {
-    FaultCounters {
-        deser_failures: DESER_FAILURES.load(Ordering::Relaxed),
-        panics_caught: PANICS_CAUGHT.load(Ordering::Relaxed),
-        serialize_skipped_shed: SERIALIZE_SKIPPED_SHED.load(Ordering::Relaxed),
-        serialize_skipped_aborted: SERIALIZE_SKIPPED_ABORTED.load(Ordering::Relaxed),
-        segment_chunks_used: SEGMENT_CHUNKS_USED.load(Ordering::Relaxed),
-        segment_chunk_budget: COMPONENT_SEGMENTS.len() as u32,
-    }
-}
-
 /// Heap-resident emitter state: the bucket window, the fresh-VM flag,
-/// and the Memory-persisted VM-start counter. Default (= post-reset)
-/// state starts fresh with an empty window.
+/// the Memory-persisted VM-start counter, and the fault/movement
+/// telemetry counters (statics-review M3 — formerly module atomics).
+/// Default (= post-reset) state starts fresh with an empty window and
+/// zeroed counters; everything here has environment lifetime.
 pub struct MetricsState {
     bucket_window: VecDeque<i32>,
     fresh: bool,
@@ -104,6 +53,25 @@ pub struct MetricsState {
     /// (Memory survives resets; the heap doesn't) — the restart
     /// counter samplers can't miss, unlike the one-tick `vm_fresh`.
     vm_starts: u32,
+    /// Cumulative (per environment) deserialization failures.
+    deser_failures: u32,
+    /// Seeded from `Memory._metrics.aborted_ticks` — the JS loader is
+    /// the containment boundary (P1.C1); there is no Rust-side
+    /// recorder by design. An aborted tick is both a caught panic and
+    /// a lost serialize.
+    panics_caught: u32,
+    /// A shed-skip of serialize is unreachable by construction
+    /// (never-shed set, ADR 0004); the counter exists so the schema
+    /// can prove it stays zero.
+    serialize_skipped_shed: u32,
+    serialize_skipped_aborted: u32,
+    /// The 0002 chunk watermark (last serialize's segment use).
+    segment_chunks_used: u32,
+    // Per-tick movement telemetry (P1.B2), last-write-wins.
+    movement_ops_cap: u32,
+    movement_ops_consumed: u32,
+    movement_repaths: u32,
+    movement_failures: u32,
 }
 
 impl Default for MetricsState {
@@ -112,6 +80,15 @@ impl Default for MetricsState {
             bucket_window: VecDeque::with_capacity(BUCKET_WINDOW),
             fresh: true,
             vm_starts: 0,
+            deser_failures: 0,
+            panics_caught: 0,
+            serialize_skipped_shed: 0,
+            serialize_skipped_aborted: 0,
+            segment_chunks_used: 0,
+            movement_ops_cap: 0,
+            movement_ops_consumed: 0,
+            movement_repaths: 0,
+            movement_failures: 0,
         }
     }
 }
@@ -125,6 +102,43 @@ fn bump_vm_starts() -> u32 {
 }
 
 impl MetricsState {
+    /// Per-tick movement telemetry (P1.B2): recorded by the movement
+    /// system after `process()`, emitted in the block's `pathing` section.
+    pub fn record_movement_stats(&mut self, stats: screeps_rover::MovementTickStats) {
+        self.movement_ops_cap = stats.ops_budget_cap;
+        self.movement_ops_consumed = stats.ops_consumed;
+        self.movement_repaths = stats.repaths;
+    }
+
+    /// Movement results the rover gave up on this tick (P1.D6 / IBEX-015:
+    /// the previously-dead detection signal, surfaced; recovery = Inc 6).
+    pub fn record_movement_failures(&mut self, count: u32) {
+        self.movement_failures = count;
+    }
+
+    /// A component-pipeline deserialization failure, INCLUDING the
+    /// base64/decompress decode path (previously silent: decode→empty).
+    pub fn record_deser_failure(&mut self) {
+        self.deser_failures += 1;
+    }
+
+    /// The 0002 chunk watermark, routed into the metrics block (Inc-2
+    /// rescope): how many component segments the last serialize consumed.
+    pub fn record_segment_chunks(&mut self, used: u32) {
+        self.segment_chunks_used = used;
+    }
+
+    fn fault_counters(&self) -> FaultCounters {
+        FaultCounters {
+            deser_failures: self.deser_failures,
+            panics_caught: self.panics_caught,
+            serialize_skipped_shed: self.serialize_skipped_shed,
+            serialize_skipped_aborted: self.serialize_skipped_aborted,
+            segment_chunks_used: self.segment_chunks_used,
+            segment_chunk_budget: COMPONENT_SEGMENTS.len() as u32,
+        }
+    }
+
     pub fn push_bucket_sample(&mut self, bucket: i32) {
         if self.bucket_window.len() == BUCKET_WINDOW {
             self.bucket_window.pop_front();
@@ -157,8 +171,8 @@ pub fn tick_start(world: &mut World) {
             // aborts in Memory (the heap dies with the halt). An aborted
             // tick is both a caught panic and a lost serialize.
             let aborted = crate::memory_helper::path_f64("_metrics.aborted_ticks").unwrap_or(0.0) as u32;
-            PANICS_CAUGHT.store(aborted, Ordering::Relaxed);
-            SERIALIZE_SKIPPED_ABORTED.store(aborted, Ordering::Relaxed);
+            state.panics_caught = aborted;
+            state.serialize_skipped_aborted = aborted;
         }
         let bucket = game::cpu::bucket();
         state.push_bucket_sample(bucket);
@@ -257,17 +271,17 @@ impl MetricsSystem {
             missions: data.mission_data.join().count() as u32,
             operations: data.operation_data.join().count() as u32,
             rooms: Self::room_metrics(data),
-            faults: fault_counters(),
+            faults: data.state.fault_counters(),
             governor: Some(GovernorMetrics {
                 tier: data.governor.tier.as_str().to_string(),
             }),
             pathing: Some({
                 let (mission_pool, mission_used) = data.pathfinder.snapshot();
                 PathingMetrics {
-                    ops_used: MOVEMENT_OPS_CONSUMED.load(Ordering::Relaxed),
-                    ops_pool: MOVEMENT_OPS_CAP.load(Ordering::Relaxed),
-                    repath_count: MOVEMENT_REPATHS.load(Ordering::Relaxed),
-                    move_failures: MOVEMENT_FAILURES.load(Ordering::Relaxed),
+                    ops_used: data.state.movement_ops_consumed,
+                    ops_pool: data.state.movement_ops_cap,
+                    repath_count: data.state.movement_repaths,
+                    move_failures: data.state.movement_failures,
                     mission_ops_pool: mission_pool,
                     mission_ops_used: mission_used,
                 }
@@ -330,17 +344,19 @@ mod tests {
         assert!((trend + 4.0).abs() < 1e-6, "expected -4/tick, got {trend}");
     }
 
-    /// Fault counters round-trip through the atomics into the block shape.
+    /// Fault counters round-trip through the state into the block
+    /// shape. Per-instance (M3) — no process-global baseline dance.
     #[test]
     fn fault_counters_capture_recorded_events() {
-        // Atomics are process-global: read the baseline first so this
-        // test composes with any other test that records events.
-        let before = fault_counters();
-        record_deser_failure();
-        record_segment_chunks(3);
-        let after = fault_counters();
-        assert_eq!(after.deser_failures, before.deser_failures + 1);
-        assert_eq!(after.segment_chunks_used, 3);
-        assert_eq!(after.segment_chunk_budget, COMPONENT_SEGMENTS.len() as u32);
+        let mut state = MetricsState::default();
+        state.record_deser_failure();
+        state.record_segment_chunks(3);
+        let counters = state.fault_counters();
+        assert_eq!(counters.deser_failures, 1);
+        assert_eq!(counters.segment_chunks_used, 3);
+        assert_eq!(counters.panics_caught, 0);
+        assert_eq!(counters.segment_chunk_budget, COMPONENT_SEGMENTS.len() as u32);
+        // A second instance is unaffected.
+        assert_eq!(MetricsState::default().fault_counters().deser_failures, 0);
     }
 }

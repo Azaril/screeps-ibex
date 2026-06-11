@@ -421,6 +421,7 @@ fn serialize_world(world: &World, segments: &[u32]) {
     #[derive(SystemData)]
     struct SerializeSystemData<'a> {
         memory_arbiter: WriteExpect<'a, MemoryArbiter>,
+        metrics: Write<'a, crate::metrics::MetricsState>,
         entities: Entities<'a>,
         marker_allocator: Write<'a, SerializeMarkerAllocator>,
         markers: ReadStorage<'a, SerializeMarker>,
@@ -480,7 +481,7 @@ fn serialize_world(world: &World, segments: &[u32]) {
             // 50..=54 shrink stays demonstrably safe as the empire grows.
             // Also routed into the seg-57 metrics block (Inc-2 rescope).
             let chunk_count = encoded_data.len().div_ceil(1024 * 50).max(1);
-            crate::metrics::record_segment_chunks(chunk_count as u32);
+            data.metrics.record_segment_chunks(chunk_count as u32);
             if chunk_count + 1 >= self.segments.len() {
                 warn!(
                     "Serialized world state near segment capacity: {} of {} chunk(s) used ({} encoded bytes)",
@@ -538,6 +539,7 @@ fn deserialize_world(world: &World, segments: &[u32]) {
     #[derive(SystemData)]
     struct DeserializeSystemData<'a> {
         memory_arbiter: WriteExpect<'a, MemoryArbiter>,
+        metrics: Write<'a, crate::metrics::MetricsState>,
         entities: Entities<'a>,
         marker_alloc: Write<'a, SerializeMarkerAllocator>,
         markers: WriteStorage<'a, SerializeMarker>,
@@ -577,7 +579,7 @@ fn deserialize_world(world: &World, segments: &[u32]) {
                 // payload is the reset itself — sanctioned, with a cause.
                 let decoded_data = decode_buffer_from_string(&encoded_data).unwrap_or_else(|e| {
                     error!("Failed deserialization: segment decode failed, resetting world state: {}", e);
-                    crate::metrics::record_deser_failure();
+                    data.metrics.record_deser_failure();
                     Vec::new()
                 });
 
@@ -606,7 +608,7 @@ fn deserialize_world(world: &World, segments: &[u32]) {
                 .map_err(|e| e.to_string())
                 .unwrap_or_else(|e| {
                     error!("Failed deserialization: {}", e);
-                    crate::metrics::record_deser_failure();
+                    data.metrics.record_deser_failure();
                 });
             }
         }
@@ -679,6 +681,10 @@ fn create_environment() -> GameEnvironment {
     world.insert(EconomySnapshot::default());
     world.insert(SpawnQueueSnapshot::default());
     world.insert(crate::pathing::pathfinderservice::PathfinderService::default());
+    // Explicit (not just setup-derived): the metrics state must exist
+    // before deserialize_world's run_now, whose SystemData is never
+    // setup() (M3 — deser failures count into it).
+    world.insert(crate::metrics::MetricsState::default());
     world.insert(RoomStatusCache::new());
     world.register::<SquadContext>();
 

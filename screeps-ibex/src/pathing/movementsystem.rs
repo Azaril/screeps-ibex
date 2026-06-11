@@ -29,6 +29,7 @@ pub struct MovementUpdateSystemData<'a> {
     room_status_cache: ReadExpect<'a, RoomStatusCache>,
     visualizer: Option<Write<'a, Visualizer>>,
     governor: Read<'a, crate::cpugovernor::GovernorSnapshot>,
+    metrics: Write<'a, crate::metrics::MetricsState>,
 }
 
 /// Movement visualizer that pushes intents to the screeps-ibex room
@@ -312,7 +313,7 @@ impl<'a> System<'a> for MovementUpdateSystem {
         let results = system.process(&mut external, movement_data);
 
         // P1.B2: per-tick pathfinding telemetry into the seg-57 block.
-        crate::metrics::record_movement_stats(system.tick_stats());
+        data.metrics.record_movement_stats(system.tick_stats());
 
         // P1.D6 / IBEX-015: surface the give-up results the jobs used
         // to silently ignore (recovery wiring = Inc 6, ADR 0003 A6).
@@ -327,7 +328,7 @@ impl<'a> System<'a> for MovementUpdateSystem {
                 _ => false,
             })
             .count() as u32;
-        crate::metrics::record_movement_failures(move_failures);
+        data.metrics.record_movement_failures(move_failures);
 
         let movement_cpu_used = get_cpu() - movement_start_cpu;
         if movement_cpu_used > 80.0 {
