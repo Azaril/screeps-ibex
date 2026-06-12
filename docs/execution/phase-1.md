@@ -4,7 +4,7 @@
 >
 > **Living document.** §1 (Design) describes the long-term end state and changes only when a design decision changes. §2 (Execution) is the work tracker: statuses, decisions, baselines, and resume notes are updated as work lands — task IDs (`P1.*`) appear in commit messages exactly like Phase 0's `P0.*`. If you are resuming cold: read §2.0 status log first, then the task tables.
 >
-> **Status: SUBSTANTIALLY COMPLETE** (started 2026-06-10, exit audit recorded 2026-06-11). All 26 tasks done or explicitly dispositioned — D1/D2 (0007 TransferSnapshot + re-match) **deferred to Phase 2** by phase-close decision, D7 stretch unstarted. Exit audit: §2.7. **Open: criterion-10 operator sign-off.**
+> **Status: COMPLETE** (started 2026-06-10, exit audit recorded 2026-06-11, operator sign-off 2026-06-12). All 26 tasks done or explicitly dispositioned — D1/D2 (0007 TransferSnapshot + re-match) **deferred to Phase 2** by phase-close decision, D7 stretch unstarted. Exit audit: §2.7.
 
 ---
 
@@ -168,4 +168,4 @@ Workstreams A/B/C/D interleave freely except where the Depends-on column says ot
 | 7 | Shadow-dispatch parity clean before shedding enabled; intent differ operational; combat intents through the sink | 0005/0003/0015 | **MET (parity by construction)** — the seam preserves declaration order exactly; differ live (order-sensitive digest in every block); all 23 combat sites through the guarded sink. Digest-diff across configurations awaits seeded determinism (#3) — creep-name randomness makes cross-run digests incomparable by design |
 | 8 | All new seams have draft contract files; host + wasm lanes green; kernel count recorded | 0015 | **MET-with-note** — seam contracts documented at the seams themselves (metrics schema crate doc, gameview growth rule, intents pipeline rules, StageClass); a separate S-registry file was NOT created (the in-code doc IS the draft contract; formalize with the Inc-2 testkit). Host+wasm green throughout; **kernel count 51 (from 33)** |
 | 9 | Rewrite-plan §3 Status cells + §7 changelog updated; Phase 2 (Inc 2) entry confirmed unblocked | process | **MET** — see the (j) status entry; Inc 2's rescoped remainder is small and unblocked (F3 double landed; loud-reset semantics already live) |
-| 10 | Operator sign-off | operator | **pending — the operator's call** |
+| 10 | Operator sign-off | operator | **Done** (operator, 2026-06-12) |
