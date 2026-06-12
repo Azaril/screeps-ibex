@@ -111,7 +111,7 @@ impl RoomStaticVisibilityData {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RoomDisposition {
     #[serde(rename = "n")]
     Neutral,
@@ -189,14 +189,28 @@ pub struct RoomDynamicVisibilityData {
     /// Tower DPS at room edge (hostile towers only). Set when we have visibility; used to size drain bodies.
     #[serde(default, rename = "td")]
     tower_dps_at_edge: Option<f32>,
-    /// Non-my spawns present (derelict classification input: a spawn means the
-    /// owner can produce defenders).
+    /// Non-my ACTIVE spawns present (derelict classification input: a working
+    /// spawn means the owner can produce defenders). Inactive spawns — RCL
+    /// decayed below their tier, or the room lost its owner entirely — are
+    /// harmless husks and deliberately excluded so neutral ruins stay
+    /// salvageable.
     #[serde(default, rename = "hsp")]
     hostile_spawns: bool,
-    /// Non-my towers with enough energy to fire (derelict classification
-    /// input). An empty tower in a spawn-less room has no way to be refilled.
+    /// Non-my ACTIVE towers with enough energy to fire (derelict
+    /// classification input). Energy is checked at observation time only — a
+    /// dead-room tower can in principle be refilled by foreign haulers
+    /// between sightings, which is why any threat-capable hostile creep
+    /// sighting also resets the derelict clock (`hostile_threat_creeps`).
     #[serde(default, rename = "ht")]
     hostile_towers: bool,
+    /// Hostile creeps with ANY part beyond Move/Tough (haulers, claimers,
+    /// healers, workers — anything that could refill towers, attack the
+    /// controller, or sustain a fight). Wider than `hostile_creeps` (combat
+    /// parts only) so that an owner quietly servicing a "dead" room resets
+    /// the derelict confirmation clock; pure-Move scouts wandering through do
+    /// not.
+    #[serde(default, rename = "htc")]
+    hostile_threat_creeps: bool,
     /// Absolute tick at which the controller's safe mode ends, if it was
     /// active when last observed. Safe mode blocks all our offensive actions
     /// (withdraw/dismantle/attack) inside the room.
@@ -271,6 +285,10 @@ impl RoomDynamicVisibilityData {
         self.hostile_towers
     }
 
+    pub fn hostile_threat_creeps(&self) -> bool {
+        self.hostile_threat_creeps
+    }
+
     /// Safe mode active as of the current tick. Extrapolated from the last
     /// observation — safe mode runs on a fixed timer, so this stays accurate
     /// without fresh visibility.
@@ -294,31 +312,45 @@ impl RoomDynamicVisibilityData {
     }
 
     /// Any observed military capability: combat-capable creeps (attack /
-    /// ranged / work parts), spawns (defender production), or energised
-    /// towers.
+    /// ranged / work parts), active spawns (defender production), or armed
+    /// active towers.
     pub fn militarily_active(&self) -> bool {
         self.hostile_creeps || self.hostile_spawns || self.hostile_towers
     }
 
-    /// Claimed by another player but militarily dead. Raw single-observation
+    /// Claimed by another player but dead: no military capability AND no
+    /// threat-capable creeps (haulers/claimers/healers count — an owner
+    /// quietly servicing the room is not derelict). Raw single-observation
     /// classification — use [`Self::confirmed_derelict`] before treating the
     /// room as safe to path through or act in.
     pub fn derelict(&self) -> bool {
-        self.owner.hostile() && !self.militarily_active()
+        self.owner.hostile() && !self.militarily_active() && !self.hostile_threat_creeps
     }
 
-    /// Ticks the room has been continuously observed derelict (None = not
-    /// currently derelict).
+    /// Observed-span the derelict classification has held: ticks between the
+    /// FIRST derelict sighting and the LATEST sighting (None = not currently
+    /// derelict). Deliberately not wall-clock — a single snapshot plus
+    /// elapsed blind time proves nothing; confirmation requires two sightings
+    /// at least the confirm window apart with no threat sighting between.
     pub fn derelict_for(&self) -> Option<u32> {
-        self.derelict_since.map(|since| game::time().saturating_sub(since))
+        self.derelict_since.map(|since| self.update_tick.saturating_sub(since))
     }
 
-    /// Derelict, held continuously for at least `confirm_ticks` (no
-    /// militarised sighting in between), with intel no older than `max_age`.
-    /// Consumers pick `max_age` per use: looser for pathing, tighter for
-    /// committing creeps to work inside the room (`features.derelict.*`).
+    /// Derelict, observed so over a span of at least `confirm_ticks` (no
+    /// militarised/threat sighting in between), with intel no older than
+    /// `max_age`. Consumers pick `max_age` per use: looser for pathing,
+    /// tighter for committing creeps to work inside the room
+    /// (`features.derelict.*`).
     pub fn confirmed_derelict(&self, confirm_ticks: u32, max_age: u32) -> bool {
-        self.derelict() && self.updated_within(max_age) && self.derelict_for().map(|held| held >= confirm_ticks).unwrap_or(false)
+        self.confirmed_derelict_at(game::time(), confirm_ticks, max_age)
+    }
+
+    /// Pure kernel of [`Self::confirmed_derelict`] (host-tested): `now` is
+    /// passed in rather than read ambiently.
+    pub fn confirmed_derelict_at(&self, now: u32, confirm_ticks: u32, max_age: u32) -> bool {
+        self.derelict()
+            && now.saturating_sub(self.update_tick) <= max_age
+            && self.derelict_for().map(|held| held >= confirm_ticks).unwrap_or(false)
     }
 }
 
@@ -516,9 +548,11 @@ impl RoomData {
             crate::military::damage::tower_dps_at_room_edge(self.name, &positions)
         });
 
+        // is_active() filters out RCL-decayed / ownerless husks: a spawn that
+        // cannot spawn and a tower that cannot fire are loot, not threats.
         let hostile_spawns = structures
             .as_ref()
-            .map(|s| s.spawns().iter().any(|spawn| !spawn.my()))
+            .map(|s| s.spawns().iter().any(|spawn| !spawn.my() && spawn.is_active()))
             .unwrap_or(false);
 
         let hostile_towers = structures
@@ -526,9 +560,16 @@ impl RoomData {
             .map(|s| {
                 s.towers()
                     .iter()
-                    .any(|t| !t.my() && t.store().get_used_capacity(Some(ResourceType::Energy)) >= TOWER_ENERGY_COST)
+                    .any(|t| !t.my() && t.is_active() && t.store().get_used_capacity(Some(ResourceType::Energy)) >= TOWER_ENERGY_COST)
             })
             .unwrap_or(false);
+
+        let hostile_threat_creeps = self
+            .get_creeps()
+            .iter()
+            .flat_map(|c| c.hostile())
+            .flat_map(|c| c.body())
+            .any(|p| !matches!(p.part(), Part::Move | Part::Tough));
 
         let safe_mode_end = controller
             .as_ref()
@@ -538,19 +579,15 @@ impl RoomData {
         let controller_level = controller.as_ref().map(|c| c.level());
         let controller_ticks_to_downgrade = controller.as_ref().and_then(|c| c.ticks_to_downgrade());
 
-        // Carry the derelict-since mark forward while the classification
-        // holds; any militarised sighting (or ownership change) resets the
-        // confirmation clock. A passing enemy worker resets it too — that is
-        // deliberately conservative (fail closed).
-        let derelict = controller_owner_disposition.hostile() && !(hostile_creeps || hostile_spawns || hostile_towers);
-        let derelict_since = if derelict {
-            self.dynamic_visibility_data
-                .as_ref()
-                .and_then(|previous| previous.derelict_since)
-                .or_else(|| Some(game::time()))
-        } else {
-            None
-        };
+        let derelict =
+            controller_owner_disposition.hostile() && !(hostile_creeps || hostile_spawns || hostile_towers || hostile_threat_creeps);
+        let derelict_since = Self::next_derelict_since(
+            derelict,
+            &controller_owner_disposition,
+            self.dynamic_visibility_data.as_ref().map(|previous| &previous.owner),
+            self.dynamic_visibility_data.as_ref().and_then(|previous| previous.derelict_since),
+            game::time(),
+        );
 
         RoomDynamicVisibilityData {
             update_tick: game::time(),
@@ -563,10 +600,37 @@ impl RoomData {
             tower_dps_at_edge,
             hostile_spawns,
             hostile_towers,
+            hostile_threat_creeps,
             safe_mode_end,
             controller_level,
             controller_ticks_to_downgrade,
             derelict_since,
+        }
+    }
+
+    /// Carry-forward rule for the derelict-since mark (pure; host-tested):
+    /// keep the existing mark only while the room stays derelict under the
+    /// SAME hostile owner. Any threat/militarised sighting clears it (the
+    /// `derelict_now` input is already false then), and an ownership change —
+    /// a different player claiming the husk — restarts the confirmation clock
+    /// from this sighting.
+    fn next_derelict_since(
+        derelict_now: bool,
+        owner_now: &RoomDisposition,
+        previous_owner: Option<&RoomDisposition>,
+        previous_since: Option<u32>,
+        now: u32,
+    ) -> Option<u32> {
+        if !derelict_now {
+            return None;
+        }
+
+        let same_owner = previous_owner.map(|previous| previous == owner_now).unwrap_or(false);
+
+        if same_owner {
+            previous_since.or(Some(now))
+        } else {
+            Some(now)
         }
     }
 
@@ -1011,5 +1075,115 @@ impl NukeData {
 
     pub fn has_incoming(&self) -> bool {
         !self.nukes.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hostile() -> RoomDisposition {
+        RoomDisposition::Hostile("enemy".to_string())
+    }
+
+    fn dvd(update_tick: u32, owner: RoomDisposition, derelict_since: Option<u32>) -> RoomDynamicVisibilityData {
+        RoomDynamicVisibilityData {
+            update_tick,
+            owner,
+            reservation: RoomDisposition::Neutral,
+            source_keeper: false,
+            sign: None,
+            hostile_creeps: false,
+            hostile_structures: false,
+            tower_dps_at_edge: None,
+            hostile_spawns: false,
+            hostile_towers: false,
+            hostile_threat_creeps: false,
+            safe_mode_end: None,
+            controller_level: Some(3),
+            controller_ticks_to_downgrade: Some(10_000),
+            derelict_since,
+        }
+    }
+
+    #[test]
+    fn militarily_active_requires_capability() {
+        let quiet = dvd(100, hostile(), Some(100));
+        assert!(!quiet.militarily_active());
+
+        for flag in ["creeps", "spawns", "towers"] {
+            let mut armed = dvd(100, hostile(), None);
+            match flag {
+                "creeps" => armed.hostile_creeps = true,
+                "spawns" => armed.hostile_spawns = true,
+                _ => armed.hostile_towers = true,
+            }
+            assert!(armed.militarily_active(), "{} should militarise", flag);
+            assert!(!armed.derelict(), "{} should break derelict", flag);
+        }
+    }
+
+    #[test]
+    fn threat_creeps_break_derelict_without_militarising() {
+        // A hauler/claimer/healer sighting (no combat parts) must reset the
+        // derelict clock even though it does not count as militarily active —
+        // it could be refilling towers or maintaining the controller.
+        let mut serviced = dvd(100, hostile(), Some(100));
+        serviced.hostile_threat_creeps = true;
+
+        assert!(!serviced.militarily_active());
+        assert!(!serviced.derelict());
+    }
+
+    #[test]
+    fn derelict_requires_hostile_owner() {
+        assert!(!dvd(100, RoomDisposition::Neutral, None).derelict());
+        assert!(!dvd(100, RoomDisposition::Mine, None).derelict());
+        assert!(dvd(100, hostile(), Some(100)).derelict());
+    }
+
+    #[test]
+    fn confirmation_requires_observed_span_not_wall_clock() {
+        // One sighting at tick 100: zero observed span. Elapsed blind time
+        // proves nothing - never confirmed, no matter how long we wait.
+        let single = dvd(100, hostile(), Some(100));
+        assert!(!single.confirmed_derelict_at(5_000, 2_000, 10_000));
+
+        // Second sighting at 2_500 with the mark carried from 100: the span
+        // (2_400) clears a 2_000-tick confirm window.
+        let confirmed = dvd(2_500, hostile(), Some(100));
+        assert!(confirmed.confirmed_derelict_at(2_600, 2_000, 10_000));
+
+        // Same sightings, tighter window: not confirmed.
+        assert!(!confirmed.confirmed_derelict_at(2_600, 3_000, 10_000));
+    }
+
+    #[test]
+    fn stale_intel_falls_back_to_hostile() {
+        let confirmed = dvd(2_500, hostile(), Some(100));
+
+        assert!(confirmed.confirmed_derelict_at(12_500, 2_000, 10_000));
+        assert!(!confirmed.confirmed_derelict_at(12_501, 2_000, 10_000));
+    }
+
+    #[test]
+    fn derelict_since_carries_only_under_same_owner() {
+        let enemy = hostile();
+        let other = RoomDisposition::Hostile("other".to_string());
+
+        // Same owner, still derelict: mark carried.
+        assert_eq!(
+            RoomData::next_derelict_since(true, &enemy, Some(&enemy), Some(100), 2_500),
+            Some(100)
+        );
+        // Ownership changed hands: confirmation clock restarts.
+        assert_eq!(
+            RoomData::next_derelict_since(true, &other, Some(&enemy), Some(100), 2_500),
+            Some(2_500)
+        );
+        // First derelict sighting ever: clock starts now.
+        assert_eq!(RoomData::next_derelict_since(true, &enemy, None, None, 2_500), Some(2_500));
+        // Not derelict: no mark, regardless of history.
+        assert_eq!(RoomData::next_derelict_since(false, &enemy, Some(&enemy), Some(100), 2_500), None);
     }
 }
