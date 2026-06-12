@@ -283,6 +283,13 @@ impl MineralMiningMission {
     }
 }
 
+/// Decide whether a mineral-mining mission should tear down (IBEX-048): the
+/// mineral is *visibly* exhausted and the last miner is gone. `None` for
+/// `mineral_amount` means no room visibility — unknown, never depletion.
+fn should_teardown(mineral_amount: Option<u32>, live_miner_count: usize) -> bool {
+    mineral_amount == Some(0) && live_miner_count == 0
+}
+
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Mission for MineralMiningMission {
     fn get_owner(&self) -> &Option<Entity> {
@@ -311,10 +318,38 @@ impl Mission for MineralMiningMission {
     }
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
+        // Idle-suspend rather than linger forever (IBEX-048): once the
+        // mineral is visibly exhausted and the last miner has died off, the
+        // mission completes through the normal cleanup cascade. The parent's
+        // `ensure_children` recreates it when the mineral regenerates.
+        let mineral_amount = self.mineral.resolve().map(|m| m.mineral_amount());
+        if should_teardown(mineral_amount, self.container_miners.len()) {
+            log::info!("Mineral mining mission complete - mineral exhausted: {}", self.room_name);
+            return Ok(MissionResult::Success);
+        }
+
         if self.allow_spawning {
             self.spawn_creeps(system_data, mission_entity)?;
         }
 
         Ok(MissionResult::Running)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_teardown;
+
+    #[test]
+    fn teardown_requires_visible_exhaustion_and_empty_roster() {
+        // Visibly exhausted with no miners left -> tear down.
+        assert!(should_teardown(Some(0), 0));
+        // Miners still winding down -> keep running.
+        assert!(!should_teardown(Some(0), 2));
+        // Mineral has resources -> keep running.
+        assert!(!should_teardown(Some(12_000), 0));
+        // No visibility is unknown, never depletion -> keep running.
+        assert!(!should_teardown(None, 0));
+        assert!(!should_teardown(None, 1));
     }
 }

@@ -208,6 +208,17 @@ impl LocalSupplyMission {
 
         // Ensure one MineralMiningMission per mineral/extractor pair.
         for (mineral_id, extractor_id) in mineral_extractor_pairs {
+            // The recreate half of idle-suspend/recreate (IBEX-048): a
+            // visibly exhausted mineral gets no mission until it regenerates.
+            // The pair key persists in the cached structure data while
+            // depleted, so without this gate the child torn down by
+            // MineralMiningMission's depletion check would be recreated the
+            // very next tick.
+            let depleted = mineral_id.resolve().map(|m| m.mineral_amount() == 0).unwrap_or(false);
+            if depleted {
+                continue;
+            }
+
             let already_exists = self.mineral_mining_missions.iter().any(|&mission_e| {
                 system_data
                     .missions
