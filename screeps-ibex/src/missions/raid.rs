@@ -103,11 +103,17 @@ impl RaidMission {
             .map(|s| s.sources().as_slice())
             .unwrap_or(&[]);
 
+        let hostile_ramparts = hostile_rampart_positions(structures.all());
+
         // Loot scope: foreign structures and non-mining containers only.
         // Without this, a raid in a room we also mine would register our own
         // mining containers for withdrawal and the mission could never
         // complete (miners keep refilling them).
-        for structure in structures.all().iter().filter(|s| is_salvage_loot_target(*s, sources)) {
+        for structure in structures
+            .all()
+            .iter()
+            .filter(|s| is_salvage_loot_target(*s, sources, &hostile_ramparts))
+        {
             if let Some(store) = structure.as_has_store() {
                 for resource in store.store().store_types() {
                     let resource_amount = store.store().get_used_capacity(Some(resource));
@@ -193,6 +199,12 @@ impl Mission for RaidMission {
     }
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
+        // Kill switch, not a pause: with the flag off an admitted mission
+        // could never finish its work, pinning its owner's slot forever.
+        if !system_data.features.raid {
+            return Err("Raiding disabled (features.raid)".to_string());
+        }
+
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility data")?;
 
@@ -208,12 +220,14 @@ impl Mission for RaidMission {
                 .map(|s| s.sources().as_slice())
                 .unwrap_or(&[]);
 
-            if !structures.all().iter().any(|s| is_salvage_loot_target(s, sources)) {
+            let hostile_ramparts = hostile_rampart_positions(structures.all());
+
+            if !structures.all().iter().any(|s| is_salvage_loot_target(s, sources, &hostile_ramparts)) {
                 return Ok(MissionResult::Success);
             }
         }
 
-        let can_spawn = system_data.features.raid && system_data.governor.can_execute_cpu(CpuBar::LowPriority) && self.allow_spawning;
+        let can_spawn = system_data.governor.can_execute_cpu(CpuBar::LowPriority) && self.allow_spawning;
 
         if !can_spawn {
             return Ok(MissionResult::Running);

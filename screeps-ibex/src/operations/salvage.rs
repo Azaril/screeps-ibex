@@ -16,10 +16,12 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 
-/// Linear room range within which a salvage target with sources counts as
+/// Route-hop distance within which a salvage target with sources counts as
 /// "strategic": clearing it enables a future mining outpost, so the energy EV
-/// margin is bypassed (matches `MiningOutpostOperation`'s max search distance).
-const STRATEGIC_OUTPOST_RANGE: u32 = 1;
+/// margin is bypassed. Matches `MiningOutpostOperation`'s exit-BFS search
+/// depth (gather max_distance 1) — measured in route hops rather than linear
+/// distance because a diagonal neighbour is 2 exits away and NOT outpostable.
+const STRATEGIC_OUTPOST_HOPS: u32 = 1;
 
 /// EV cost-model assumptions, deliberately coarse (EP-4.6: named, reviewable).
 /// Raider: ~10×[Carry, Move] → 500 capacity for ~1000 energy.
@@ -57,11 +59,13 @@ fn assess_salvage_work(
     sources: &[RemoteObjectId<Source>],
     max_structure_hits: u32,
     lead_ticks: u32,
+    room_owned: bool,
 ) -> SalvageWork {
     let mut work = SalvageWork::default();
+    let hostile_ramparts = hostile_rampart_positions(structures);
 
     for structure in structures.iter() {
-        if is_salvage_loot_target(structure, sources) {
+        if is_salvage_loot_target(structure, sources, &hostile_ramparts) {
             if let Some(store) = structure.as_has_store() {
                 for resource in store.store().store_types() {
                     let amount = store.store().get_used_capacity(Some(resource));
@@ -77,12 +81,16 @@ fn assess_salvage_work(
         let dismantlable = structure.structure_type() != StructureType::Road
             && !ignore_for_dismantle(structure, sources)
             && can_dismantle(structure)
-            && within_dismantle_hits_horizon(structure, max_structure_hits);
+            && within_dismantle_hits_horizon(structure, max_structure_hits)
+            && !blocked_by_hostile_rampart(structure, &hostile_ramparts);
 
         if dismantlable {
             if let Some(attackable) = structure.as_attackable() {
                 let decay_per_tick = match structure {
                     StructureObject::StructureRampart(_) => RAMPART_DECAY_AMOUNT / RAMPART_DECAY_TIME,
+                    // Containers decay 5x slower in owned rooms — and a
+                    // derelict room is still owned until its controller drops.
+                    StructureObject::StructureContainer(_) if room_owned => CONTAINER_DECAY / CONTAINER_DECAY_TIME_OWNED,
                     StructureObject::StructureContainer(_) => CONTAINER_DECAY / CONTAINER_DECAY_TIME,
                     _ => 0,
                 };
@@ -162,6 +170,12 @@ pub struct SalvageOperation {
     owner: EntityOption<Entity>,
     salvage_missions: EntityVec<Entity>,
     rejected: Vec<SalvageRejection>,
+    /// Rooms with a currently-running salvage mission. When the mission ends
+    /// — success OR abort — the room moves onto the rejection memo for a
+    /// cooldown: completed rooms have nothing worth re-evaluating soon, and
+    /// abort conditions (re-armed, safe mode) need time to change. Bounded
+    /// retry with backoff per EP-4.5; prevents create/abort churn.
+    admitted: Vec<RoomName>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -180,10 +194,14 @@ impl SalvageOperation {
             owner: owner.into(),
             salvage_missions: EntityVec::new(),
             rejected: Vec::new(),
+            admitted: Vec::new(),
         }
     }
 
     /// Home rooms able to spawn salvage creeps (own spawn, RCL >= 2).
+    /// Mirrors `ScoutOperation::gather_home_rooms` rather than reusing
+    /// `room::gather::gather_home_rooms`, which requires a full
+    /// `GatherSystemData` this operation otherwise has no use for.
     fn gather_home_rooms(system_data: &OperationExecutionSystemData) -> Vec<(Entity, RoomName)> {
         let mut result = Vec::new();
 
@@ -265,16 +283,6 @@ impl Operation for SalvageOperation {
 
         self.rejected.retain(|r| r.until_tick > game::time());
 
-        if self.salvage_missions.len() >= features.derelict.salvage_max_missions as usize {
-            return Ok(OperationResult::Running);
-        }
-
-        let home_rooms = Self::gather_home_rooms(system_data);
-
-        if home_rooms.is_empty() {
-            return Ok(OperationResult::Running);
-        }
-
         // Rooms that already have an active salvage mission.
         let mut rooms_with_missions: std::collections::HashSet<RoomName> = std::collections::HashSet::new();
         for mission_entity in self.salvage_missions.iter() {
@@ -286,8 +294,36 @@ impl Operation for SalvageOperation {
             }
         }
 
+        // Missions that ended since the last scan (success or abort) put
+        // their room on cooldown so persistent abort conditions cannot churn
+        // a create/abort cycle every scan.
+        let rejected = &mut self.rejected;
+        let reject_cooldown = features.derelict.reject_cooldown;
+        self.admitted.retain(|room_name| {
+            if rooms_with_missions.contains(room_name) {
+                true
+            } else {
+                info!("Salvage mission for room {} ended - cooling down for {} ticks", room_name, reject_cooldown);
+                rejected.push(SalvageRejection {
+                    room_name: *room_name,
+                    until_tick: game::time() + reject_cooldown,
+                });
+                false
+            }
+        });
+
+        if self.salvage_missions.len() >= features.derelict.salvage_max_missions as usize {
+            return Ok(OperationResult::Running);
+        }
+
+        let home_rooms = Self::gather_home_rooms(system_data);
+
+        if home_rooms.is_empty() {
+            return Ok(OperationResult::Running);
+        }
+
         // Pass 1: classify candidates from intel (immutable scan).
-        let mut candidates: Vec<(Entity, RoomName, u32)> = Vec::new();
+        let mut candidates: Vec<(Entity, RoomName)> = Vec::new();
 
         for (entity, room_data) in (system_data.entities, &*system_data.room_data).join() {
             if rooms_with_missions.contains(&room_data.name) {
@@ -318,10 +354,15 @@ impl Operation for SalvageOperation {
 
             // Hostile-owned rooms must be confirmed derelict; neutral rooms
             // qualify when militarily quiet with foreign remnants observed.
+            // Reserved neutral rooms are excluded: a hostile reservation means
+            // invader cores or a defended enemy remote, a friendly one is not
+            // ours to strip.
             let eligible = if dynamic_visibility_data.owner().hostile() {
                 dynamic_visibility_data.confirmed_derelict(features.derelict.confirm_ticks, features.derelict.action_max_age)
             } else if dynamic_visibility_data.owner().neutral() {
-                !dynamic_visibility_data.militarily_active()
+                !dynamic_visibility_data.reservation().hostile()
+                    && !dynamic_visibility_data.reservation().friendly()
+                    && !dynamic_visibility_data.militarily_active()
                     && dynamic_visibility_data.updated_within(features.derelict.action_max_age)
                     && dynamic_visibility_data.hostile_structures()
             } else {
@@ -329,14 +370,14 @@ impl Operation for SalvageOperation {
             };
 
             if eligible {
-                candidates.push((entity, room_data.name, min_range));
+                candidates.push((entity, room_data.name));
             }
         }
 
         // Pass 2: evaluate work + EV; admit up to the mission cap.
         let mut slots = (features.derelict.salvage_max_missions as usize).saturating_sub(self.salvage_missions.len());
 
-        for (room_entity, room_name, min_range) in candidates {
+        for (room_entity, room_name) in candidates {
             if slots == 0 {
                 break;
             }
@@ -371,9 +412,20 @@ impl Operation for SalvageOperation {
                             .map(|s| s.sources().as_slice())
                             .unwrap_or(&[]);
 
+                        let room_owned = room_data
+                            .get_dynamic_visibility_data()
+                            .map(|d| d.owner().hostile())
+                            .unwrap_or(false);
+
                         let lead_ticks = travel_ticks + ASSUMED_SPAWN_LEAD_TICKS;
-                        let work = assess_salvage_work(structures.all(), sources, features.derelict.max_structure_hits, lead_ticks);
-                        let strategic = !sources.is_empty() && min_range <= STRATEGIC_OUTPOST_RANGE;
+                        let work = assess_salvage_work(
+                            structures.all(),
+                            sources,
+                            features.derelict.max_structure_hits,
+                            lead_ticks,
+                            room_owned,
+                        );
+                        let strategic = !sources.is_empty() && travel_ticks <= 50 * STRATEGIC_OUTPOST_HOPS;
 
                         Some((work, strategic))
                     }
@@ -423,6 +475,7 @@ impl Operation for SalvageOperation {
             .build();
 
             self.salvage_missions.push(mission_entity);
+            self.admitted.push(room_name);
 
             if let Some(room_data) = system_data.room_data.get_mut(room_entity) {
                 room_data.add_mission(mission_entity);
@@ -482,8 +535,8 @@ mod tests {
 
     #[test]
     fn dismantle_energy_scales_with_hits() {
-        // 2M hits -> ~10k energy refund vs ~4 dismantler lifetimes (~12.4k):
-        // fails a 2.0 margin...
+        // 2M hits -> ~10k energy refund vs 3 dismantler lifetimes (~9.3k
+        // body cost): fails a 2.0 margin...
         assert!(!salvage_worthwhile(&work(0, 0, 2_000_000), 50, false, 2.0, true, true));
         // ...but the same hits WITH substantial loot in the same trip passes.
         assert!(salvage_worthwhile(&work(60_000, 0, 2_000_000), 50, false, 2.0, true, true));

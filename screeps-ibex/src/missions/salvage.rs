@@ -142,6 +142,13 @@ impl Mission for SalvageMission {
                 if dynamic_visibility_data.militarily_active() {
                     return Err("Salvage target re-armed (spawn/tower/combat creeps) - aborting".to_string());
                 }
+
+                // For hostile-owned targets, any threat-capable creep sighting
+                // (haulers refilling towers, claimers, healers) breaks the
+                // derelict classification even though it is not "militarised".
+                if dynamic_visibility_data.owner().hostile() && !dynamic_visibility_data.derelict() {
+                    return Err("Salvage target no longer derelict (hostile activity sighted) - aborting".to_string());
+                }
             } else if !dynamic_visibility_data.updated_within(derelict_features.action_max_age) {
                 return Err("Salvage intel too stale - aborting".to_string());
             }
@@ -153,15 +160,24 @@ impl Mission for SalvageMission {
             }
 
             // Work detection needs live structure data; keep eyes on the room.
+            // Disabled feature flags zero out the corresponding work so the
+            // mission completes (or never starts children) instead of
+            // creating children that would instantly abort.
             let work = room_data.get_structures().map(|structures| {
                 let sources = room_data
                     .get_static_visibility_data()
                     .map(|s| s.sources().as_slice())
                     .unwrap_or(&[]);
 
-                let needs_raiding = structures.all().iter().any(|s| is_salvage_loot_target(s, sources));
-                let needs_dismantling =
-                    DismantleMission::requires_dismantling(structures.all(), sources, derelict_features.max_structure_hits);
+                let hostile_ramparts = hostile_rampart_positions(structures.all());
+
+                let needs_raiding = system_data.features.raid
+                    && structures
+                        .all()
+                        .iter()
+                        .any(|s| is_salvage_loot_target(s, sources, &hostile_ramparts));
+                let needs_dismantling = system_data.features.dismantle
+                    && DismantleMission::requires_dismantling(structures.all(), sources, derelict_features.max_structure_hits);
 
                 (needs_raiding, needs_dismantling)
             });

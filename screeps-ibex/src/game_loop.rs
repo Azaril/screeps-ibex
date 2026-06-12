@@ -442,6 +442,7 @@ fn serialize_world(world: &World, segments: &[u32]) {
 
         fn run(&mut self, mut data: Self::SystemData) {
             let mut serialized_data = Vec::<u8>::with_capacity(1024 * 50);
+            serialized_data.extend_from_slice(&WORLD_FORMAT_VERSION.to_le_bytes());
 
             let mut serializer = Serializer::new(&mut serialized_data, DefaultOptions::new());
 
@@ -527,8 +528,22 @@ fn serialize_world(world: &World, segments: &[u32]) {
     sys.run_now(world);
 }
 
-/// Loads world state from RawMemory segments. On deserialization failure we log and continue;
-/// the only supported recovery is a full reset (environment and optionally memory via reset flags).
+/// Wire-format fingerprint prepended to the serialized world payload. The
+/// component stream is bincode — enum variants are encoded by ORDINAL — so
+/// any shape change to a serialized component (variants added, removed or
+/// reordered; fields changed) makes old payloads decode as misaligned
+/// garbage rather than fail. Every such change MUST bump this constant;
+/// a mismatch is rejected wholesale with one loud error and a clean empty
+/// world (EP-5.1 reset-anytime, EP-3.1 loudness).
+///
+/// History: 2 = derelict-rooms M1-M5 (RoomDynamicVisibilityData intel fields,
+/// MiningOutpostState::Cleanup removed, Salvage operation/mission added).
+const WORLD_FORMAT_VERSION: u32 = 2;
+
+/// Loads world state from RawMemory segments. Old/foreign payloads are
+/// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode
+/// failure clears all partially loaded component storages — either way the
+/// outcome is a loud, clean reset, never a silent partial world.
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 fn deserialize_world(world: &World, segments: &[u32]) {
     struct Deserialize<'a> {
@@ -582,33 +597,71 @@ fn deserialize_world(world: &World, segments: &[u32]) {
                     Vec::new()
                 });
 
-                let mut deserializer = Deserializer::from_slice(&decoded_data, DefaultOptions::new());
-
-                DeserializeComponents::<std::convert::Infallible, SerializeMarker>::deserialize(
-                    &mut (
-                        &mut data.creep_spawnings,
-                        &mut data.creep_owners,
-                        &mut data.creep_movement_data,
-                        &mut data.room_data,
-                        &mut data.room_plan_data,
-                        &mut data.job_data,
-                        &mut data.operation_data,
-                        &mut data.mission_data,
-                        &mut data.squad_context,
-                        &mut data.visibility_queue_data,
-                        &mut data.room_threat_data,
-                    ),
-                    &data.entities,
-                    &mut data.markers,
-                    &mut data.marker_alloc,
-                    &mut deserializer,
-                )
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-                .unwrap_or_else(|e| {
-                    error!("Failed deserialization: {}", e);
+                // Fingerprint check: an old-format payload must be rejected
+                // wholesale — bincode would otherwise decode reshaped enums
+                // as misaligned garbage instead of failing.
+                let payload: &[u8] = if decoded_data.is_empty() {
+                    &[]
+                } else if decoded_data.len() >= 4 && decoded_data[..4] == WORLD_FORMAT_VERSION.to_le_bytes() {
+                    &decoded_data[4..]
+                } else {
+                    error!(
+                        "Failed deserialization: world format fingerprint mismatch (expected version {}), resetting world state",
+                        WORLD_FORMAT_VERSION
+                    );
                     data.metrics.record_deser_failure();
-                });
+                    &[]
+                };
+
+                if !payload.is_empty() {
+                    let mut deserializer = Deserializer::from_slice(payload, DefaultOptions::new());
+
+                    let result = DeserializeComponents::<std::convert::Infallible, SerializeMarker>::deserialize(
+                        &mut (
+                            &mut data.creep_spawnings,
+                            &mut data.creep_owners,
+                            &mut data.creep_movement_data,
+                            &mut data.room_data,
+                            &mut data.room_plan_data,
+                            &mut data.job_data,
+                            &mut data.operation_data,
+                            &mut data.mission_data,
+                            &mut data.squad_context,
+                            &mut data.visibility_queue_data,
+                            &mut data.room_threat_data,
+                        ),
+                        &data.entities,
+                        &mut data.markers,
+                        &mut data.marker_alloc,
+                        &mut deserializer,
+                    )
+                    .map(|_| ())
+                    .map_err(|e| e.to_string());
+
+                    if let Err(e) = result {
+                        // A mid-stream failure leaves a partially loaded
+                        // world — clear it so the documented contract (the
+                        // only supported recovery is a full reset) actually
+                        // holds rather than leaning on orphan repair to
+                        // converge from an arbitrary prefix.
+                        error!("Failed deserialization: {} - clearing partially loaded world state", e);
+                        data.metrics.record_deser_failure();
+
+                        data.creep_spawnings.clear();
+                        data.creep_owners.clear();
+                        data.creep_movement_data.clear();
+                        data.room_data.clear();
+                        data.room_plan_data.clear();
+                        data.job_data.clear();
+                        data.operation_data.clear();
+                        data.mission_data.clear();
+                        data.squad_context.clear();
+                        data.visibility_queue_data.clear();
+                        data.room_threat_data.clear();
+                        data.markers.clear();
+                        *data.marker_alloc = Default::default();
+                    }
+                }
             }
         }
     }

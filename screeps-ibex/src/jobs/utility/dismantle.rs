@@ -1,6 +1,7 @@
 use crate::remoteobjectid::*;
 use screeps::*;
 use std::borrow::*;
+use std::collections::HashSet;
 
 pub fn ignore_for_dismantle<T>(structure: T, sources: &[RemoteObjectId<Source>]) -> bool
 where
@@ -20,11 +21,46 @@ pub fn can_dismantle<T>(structure: T) -> bool
 where
     T: Borrow<StructureObject>,
 {
-    structure
-        .borrow()
-        .as_attackable()
-        .map(|a| a.hits() > 0 && a.hits_max() > 0)
-        .unwrap_or(false)
+    let structure = structure.borrow();
+
+    // Engine-dismantlable (constructible) types only: invader cores, keeper
+    // lairs, portals and controllers pass an hits>0 check but
+    // creep.dismantle() can never damage them — selecting one would wedge
+    // target selection and mission completion forever.
+    structure.as_dismantleable().is_some()
+        && structure
+            .as_attackable()
+            .map(|a| a.hits() > 0 && a.hits_max() > 0)
+            .unwrap_or(false)
+}
+
+/// Tiles covered by a hostile non-public rampart: the structure beneath can
+/// be neither withdrawn from nor dismantled until the rampart falls, so it
+/// must stay out of loot/dismantle scope (and out of EV value) while the
+/// rampart stands.
+pub fn hostile_rampart_positions(structures: &[StructureObject]) -> HashSet<Position> {
+    structures
+        .iter()
+        .filter_map(|s| match s {
+            StructureObject::StructureRampart(rampart) if !rampart.my() && !rampart.is_public() => Some(rampart.pos()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// True if this structure sits under a hostile rampart (and is not itself a
+/// rampart — ramparts are always directly attackable).
+pub fn blocked_by_hostile_rampart<T>(structure: T, hostile_ramparts: &HashSet<Position>) -> bool
+where
+    T: Borrow<StructureObject>,
+{
+    let structure = structure.borrow();
+
+    if matches!(structure, StructureObject::StructureRampart(_)) {
+        return false;
+    }
+
+    hostile_ramparts.contains(&structure.pos())
 }
 
 pub fn has_empty_storage<T>(structure: T) -> bool
@@ -65,14 +101,19 @@ where
 /// owned by another player, or unowned store structures (containers) that are
 /// not our mining infrastructure (source-adjacent — same exclusion as
 /// [`ignore_for_dismantle`]). Own/ownerless-controller structures are never
-/// loot targets.
-pub fn is_salvage_loot_target<T>(structure: T, sources: &[RemoteObjectId<Source>]) -> bool
+/// loot targets, and anything under a hostile rampart is unreachable until
+/// the rampart falls.
+pub fn is_salvage_loot_target<T>(structure: T, sources: &[RemoteObjectId<Source>], hostile_ramparts: &HashSet<Position>) -> bool
 where
     T: Borrow<StructureObject>,
 {
     let structure = structure.borrow();
 
     if has_empty_storage(structure) {
+        return false;
+    }
+
+    if blocked_by_hostile_rampart(structure, hostile_ramparts) {
         return false;
     }
 

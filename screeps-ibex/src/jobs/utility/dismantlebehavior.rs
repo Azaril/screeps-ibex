@@ -27,6 +27,8 @@ where
         let static_visibility_data = dismantle_room.get_static_visibility_data()?;
         let sources = static_visibility_data.sources();
 
+        let hostile_ramparts = hostile_rampart_positions(structures.all());
+
         //TODO: Don't collect here when range check is fixed.
         let dismantle_structures = structures
             .all()
@@ -34,6 +36,7 @@ where
             .filter(|s| !ignore_for_dismantle(*s, sources))
             .filter(|s| can_dismantle(*s))
             .filter(|s| within_dismantle_hits_horizon(*s, max_structure_hits))
+            .filter(|s| !blocked_by_hostile_rampart(*s, &hostile_ramparts))
             .filter(|s| ignore_storage || has_empty_storage(*s))
             .collect::<Vec<_>>();
 

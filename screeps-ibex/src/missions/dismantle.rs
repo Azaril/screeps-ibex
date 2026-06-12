@@ -86,15 +86,18 @@ impl DismantleMission {
     }
 
     /// `max_structure_hits` must match what the dismantler jobs were spawned
-    /// with — completion and target selection share the horizon filter or the
-    /// mission never ends.
+    /// with — completion and target selection share the horizon filter (and
+    /// the rampart-protection filter) or the mission never ends.
     pub fn requires_dismantling(structures: &[StructureObject], sources: &[RemoteObjectId<Source>], max_structure_hits: u32) -> bool {
+        let hostile_ramparts = hostile_rampart_positions(structures);
+
         structures
             .iter()
             .filter(|s| s.structure_type() != StructureType::Road)
             .filter(|s| !ignore_for_dismantle(*s, sources))
             .filter(|s| can_dismantle(*s))
             .filter(|s| within_dismantle_hits_horizon(*s, max_structure_hits))
+            .filter(|s| !blocked_by_hostile_rampart(*s, &hostile_ramparts))
             .find(|s| has_empty_storage(*s))
             .is_some()
     }
@@ -144,6 +147,12 @@ impl Mission for DismantleMission {
     }
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
+        // Kill switch, not a pause: with the flag off an admitted mission
+        // could never finish its work, pinning its owner's slot forever.
+        if !system_data.features.dismantle {
+            return Err("Dismantling disabled (features.dismantle)".to_string());
+        }
+
         let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
         let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility data")?;
 
@@ -166,7 +175,7 @@ impl Mission for DismantleMission {
         }
 
         //TODO: Add better dynamic cpu adaptation.
-        let can_spawn = system_data.features.dismantle && self.allow_spawning && system_data.governor.can_execute_cpu(CpuBar::LowPriority);
+        let can_spawn = self.allow_spawning && system_data.governor.can_execute_cpu(CpuBar::LowPriority);
 
         if !can_spawn {
             return Ok(MissionResult::Running);
