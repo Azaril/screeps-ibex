@@ -123,8 +123,15 @@ impl ClaimOperation {
             .map(|plan| plan.valid())
             .unwrap_or(true);
 
+        // A confirmed-derelict room is not claimable (the controller is still
+        // owned) but it is traversable, so expansion may search through it —
+        // otherwise a single dead claimed room can wall off an entire frontier.
+        let derelict_features = gather_system_data.derelict_features;
+        let confirmed_derelict = derelict_features.on
+            && dynamic_visibility_data.confirmed_derelict(derelict_features.confirm_ticks, derelict_features.path_max_age);
+
         let viable = has_controller && has_sources && can_claim && can_plan;
-        let can_expand = !hostile;
+        let can_expand = !hostile || confirmed_derelict;
 
         let candidate_room_data = CandidateRoomData::new(search_room_entity, viable, can_expand);
 
@@ -245,6 +252,7 @@ impl ClaimOperation {
             room_data: system_data.room_data,
             room_plan_data: system_data.room_plan_data,
             room_status_cache: system_data.room_status_cache,
+            derelict_features: system_data.features.derelict,
         };
 
         // Use min_rcl=2 so the BFS only seeds from rooms that can spawn scouts.

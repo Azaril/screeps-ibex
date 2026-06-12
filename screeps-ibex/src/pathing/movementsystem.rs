@@ -122,6 +122,7 @@ struct MovementSystemExternalProvider<'a, 'b> {
     room_data: &'b ReadStorage<'a, RoomData>,
     mapping: &'b Read<'a, EntityMappingData>,
     room_status_cache: &'b RoomStatusCache,
+    derelict_features: crate::features::DerelictFeatures,
 }
 
 impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'a, 'b> {
@@ -159,11 +160,23 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
             .and_then(|target_room_data| target_room_data.get_dynamic_visibility_data());
 
         if let Some(dynamic_visibility_data) = dynamic_visibility_data {
+            // A confirmed-derelict room (hostile-owned but militarily dead,
+            // held long enough and recently observed) is traversable: the
+            // owner name alone can't hurt a creep. Anything armed — towers
+            // with energy, combat creeps — stays hostile regardless of the
+            // derelict flag. Leftover unarmed structures (extensions, husks)
+            // deliberately do NOT make a room hostile; hostile_structures is
+            // not consulted because owner().hostile() covers every armed case
+            // once derelict rooms are carved out.
+            let derelict_features = &self.derelict_features;
+            let confirmed_derelict = derelict_features.on
+                && dynamic_visibility_data.confirmed_derelict(derelict_features.confirm_ticks, derelict_features.path_max_age);
+
             let is_hostile = dynamic_visibility_data.source_keeper()
-                || dynamic_visibility_data.owner().hostile()
                 || dynamic_visibility_data.reservation().hostile()
                 || dynamic_visibility_data.hostile_creeps()
-                || dynamic_visibility_data.hostile_structures();
+                || dynamic_visibility_data.hostile_towers()
+                || (dynamic_visibility_data.owner().hostile() && !confirmed_derelict);
 
             if is_hostile {
                 match room_options.hostile_behavior() {
@@ -179,6 +192,9 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
                 || dynamic_visibility_data.reservation().friendly()
             {
                 return Some(1.0);
+            } else if confirmed_derelict {
+                // Passable, but prefer truly neutral routes on ties.
+                return Some(2.5);
             } else {
                 return Some(2.0);
             }
@@ -210,6 +226,7 @@ impl<'a> System<'a> for MovementUpdateSystem {
             room_data: &data.room_data,
             mapping: &data.mapping,
             room_status_cache: &data.room_status_cache,
+            derelict_features: data.features.derelict,
         };
 
         let mut pathfinder = ScreepsPathfinder;

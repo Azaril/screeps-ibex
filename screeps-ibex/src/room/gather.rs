@@ -94,6 +94,9 @@ pub struct GatherSystemData<'a, 'b> {
     pub room_data: &'b mut WriteStorage<'a, RoomData>,
     pub room_plan_data: &'b ReadStorage<'a, RoomPlanData>,
     pub room_status_cache: &'b RoomStatusCache,
+    /// Derelict-room treatment knobs, consumed by candidate generators to
+    /// decide whether the BFS may expand through a hostile-owned-but-dead room.
+    pub derelict_features: crate::features::DerelictFeatures,
 }
 
 pub fn gather_home_rooms(system_data: &GatherSystemData, min_rcl: u32) -> Vec<Entity> {
