@@ -54,12 +54,15 @@ impl MiningOutpostOperation {
         let hostile = dynamic_visibility_data.owner().hostile() || dynamic_visibility_data.source_keeper();
 
         // Confirmed-derelict rooms are traversable for the outpost search just
-        // like for claim expansion (see ClaimOperation::gather_candidate_room_data).
+        // like for claim expansion (see ClaimOperation::gather_candidate_room_data),
+        // and they are viable outpost targets in their own right: the mission
+        // waits in Scout while the dead owner's controller decays (salvage
+        // strips the room in parallel), then proceeds to mining.
         let derelict_features = gather_system_data.derelict_features;
         let confirmed_derelict = derelict_features.on
             && dynamic_visibility_data.confirmed_derelict(derelict_features.confirm_ticks, derelict_features.path_max_age);
 
-        let viable = has_sources && can_reserve;
+        let viable = has_sources && (can_reserve || confirmed_derelict);
         let can_expand = !hostile || confirmed_derelict;
 
         let candidate_room_data = CandidateRoomData::new(search_room_entity, viable, can_expand);
@@ -126,8 +129,12 @@ impl Operation for MiningOutpostOperation {
             //
 
             if let Some(dynamic_visibility_data) = dynamic_visibility_data {
+                let derelict_features = system_data.features.derelict;
+                let confirmed_derelict = derelict_features.on
+                    && dynamic_visibility_data.confirmed_derelict(derelict_features.confirm_ticks, derelict_features.path_max_age);
+
                 if !dynamic_visibility_data.updated_within(1000)
-                    || !dynamic_visibility_data.owner().neutral()
+                    || !(dynamic_visibility_data.owner().neutral() || confirmed_derelict)
                     || dynamic_visibility_data.reservation().friendly()
                     || dynamic_visibility_data.reservation().hostile()
                     || dynamic_visibility_data.source_keeper()

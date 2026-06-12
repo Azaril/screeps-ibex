@@ -1,10 +1,8 @@
 use super::data::*;
 use super::defend::*;
-use super::dismantle::*;
 use super::haul::*;
 use super::localsupply::*;
 use super::missionsystem::*;
-use super::raid::*;
 use super::reserve::*;
 use super::utility::*;
 use crate::room::visibilitysystem::*;
@@ -28,11 +26,6 @@ machine!(
     enum MiningOutpostState {
         Scout {
             phantom: std::marker::PhantomData<Entity>
-        },
-        Cleanup {
-            raid_mission: EntityOption<Entity>,
-            dismantle_mission: EntityOption<Entity>,
-            defend_mission: EntityOption<Entity>
         },
         Mine {
             supply_mission: EntityOption<Entity>,
@@ -112,16 +105,12 @@ impl Scout {
     fn tick(
         &mut self,
         system_data: &mut MissionExecutionSystemData,
-        mission_entity: Entity,
+        _mission_entity: Entity,
         state_context: &mut MiningOutpostMissionContext,
     ) -> Result<Option<MiningOutpostState>, String> {
-        if !can_run_mission(system_data, mission_entity, state_context)? {
-            return Err("Mission cannot run in current room state".to_string());
-        }
-
         let outpost_room_data = system_data
             .room_data
-            .get_mut(state_context.outpost_room_data)
+            .get(state_context.outpost_room_data)
             .ok_or("Expected outpost room data")?;
 
         if let Some(static_visibility_data) = outpost_room_data.get_static_visibility_data() {
@@ -130,325 +119,52 @@ impl Scout {
             }
         }
 
-        if outpost_room_data
-            .get_dynamic_visibility_data()
-            .map(|v| !v.visible())
-            .unwrap_or(true)
-        {
+        let dynamic_visibility_data = outpost_room_data.get_dynamic_visibility_data();
+
+        // Keep intel fresh while evaluating — or while waiting out a derelict
+        // owner's controller decay below.
+        if dynamic_visibility_data.map(|v| !v.updated_within(1000)).unwrap_or(true) {
             system_data.visibility.request(VisibilityRequest::new(
                 outpost_room_data.name,
                 VISIBILITY_PRIORITY_MEDIUM,
                 VisibilityRequestFlags::ALL,
             ));
-
-            Ok(None)
-        } else {
-            if outpost_room_data
-                .get_dynamic_visibility_data()
-                .map(|v| v.owner().mine() || v.reservation().mine())
-                .unwrap_or(false)
-            {
-                info!("Completed scouting of room - room owned or reserved - transitioning to mining");
-
-                Ok(Some(MiningOutpostState::mine(None.into(), None.into(), None.into(), None.into())))
-            } else {
-                info!("Completed scouting of room - transitioning to cleanup");
-
-                Ok(Some(MiningOutpostState::cleanup(None.into(), None.into(), None.into())))
-            }
         }
-    }
-}
 
-impl Cleanup {
-    fn status_description(&self) -> String {
-        let mut parts = Vec::new();
-        if self.raid_mission.is_some() {
-            parts.push("raid");
-        }
-        if self.dismantle_mission.is_some() {
-            parts.push("dismantle");
-        }
-        if self.defend_mission.is_some() {
-            parts.push("defend");
-        }
-        if parts.is_empty() {
-            "Cleanup".to_string()
-        } else {
-            format!("Cleanup - {}", parts.join(", "))
-        }
-    }
+        let Some(dynamic_visibility_data) = dynamic_visibility_data else {
+            return Ok(None);
+        };
 
-    fn get_children_internal(&self) -> [&Option<Entity>; 3] {
-        [&self.raid_mission, &self.dismantle_mission, &self.defend_mission]
-    }
+        if !dynamic_visibility_data.updated_within(1000) {
+            return Ok(None);
+        }
 
-    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 3] {
-        [&mut self.raid_mission, &mut self.dismantle_mission, &mut self.defend_mission]
-    }
-
-    fn tick(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        mission_entity: Entity,
-        state_context: &mut MiningOutpostMissionContext,
-    ) -> Result<Option<MiningOutpostState>, String> {
-        if !can_run_mission(system_data, mission_entity, state_context)? {
+        if dynamic_visibility_data.reservation().hostile() || dynamic_visibility_data.reservation().friendly() {
             return Err("Mission cannot run in current room state".to_string());
         }
 
-        self.tick_scouting(system_data, mission_entity, state_context)?;
-        self.tick_raiding(system_data, mission_entity, state_context)?;
-        self.tick_dismantling(system_data, mission_entity, state_context)?;
-        self.tick_defend(system_data, mission_entity, state_context)?;
+        if dynamic_visibility_data.owner().neutral() {
+            info!("Completed scouting of room - transitioning to mining");
 
-        let room_is_safe = self
-            .defend_mission
-            .and_then(|e| system_data.missions.get(e))
-            .as_mission_type::<DefendMission>()
-            .map(|d| d.is_room_safe())
-            .unwrap_or(true);
-
-        if let Some(mut raid_mission) = self
-            .raid_mission
-            .and_then(|e| system_data.missions.get(e))
-            .as_mission_type_mut::<RaidMission>()
-        {
-            raid_mission.allow_spawning(room_is_safe);
+            return Ok(Some(MiningOutpostState::mine(None.into(), None.into(), None.into(), None.into())));
         }
 
-        if let Some(mut dismantle_mission) = self
-            .dismantle_mission
-            .and_then(|e| system_data.missions.get(e))
-            .as_mission_type_mut::<DismantleMission>()
-        {
-            dismantle_mission.allow_spawning(room_is_safe);
+        if dynamic_visibility_data.owner().mine() || dynamic_visibility_data.owner().friendly() {
+            return Err("Mission cannot run in current room state".to_string());
         }
 
-        if self.raid_mission.is_none() && self.dismantle_mission.is_none() {
-            info!("No active raiding or dismantling - transitioning to mining");
+        // Hostile owner. A derelict one (no spawns / armed towers / combat
+        // creeps) is worth waiting out: the salvage operation strips the room
+        // in parallel and the controller's downgrade timer runs unopposed —
+        // the moment it drops to neutral this mission proceeds to mining.
+        // An armed owner aborts; the operation's gates decide if/when to retry.
+        let derelict_features = system_data.features.derelict;
 
-            Ok(Some(MiningOutpostState::mine(
-                None.into(),
-                None.into(),
-                None.into(),
-                self.defend_mission,
-            )))
-        } else {
+        if derelict_features.on && dynamic_visibility_data.derelict() {
             Ok(None)
+        } else {
+            Err("Mission cannot run in current room state".to_string())
         }
-    }
-
-    fn tick_scouting(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        mission_entity: Entity,
-        state_context: &mut MiningOutpostMissionContext,
-    ) -> Result<(), String> {
-        let needs_scout = self.requires_scouting(system_data, mission_entity, state_context)?;
-
-        if needs_scout {
-            let outpost_room_data = system_data
-                .room_data
-                .get(state_context.outpost_room_data)
-                .ok_or("Expected outpost room")?;
-
-            system_data.visibility.request(VisibilityRequest::new(
-                outpost_room_data.name,
-                VISIBILITY_PRIORITY_MEDIUM,
-                VisibilityRequestFlags::ALL,
-            ));
-        }
-
-        Ok(())
-    }
-
-    fn requires_scouting(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        _mission_entity: Entity,
-        state_context: &mut MiningOutpostMissionContext,
-    ) -> Result<bool, String> {
-        let outpost_room_data = system_data
-            .room_data
-            .get(state_context.outpost_room_data)
-            .ok_or("Expected outpost room")?;
-
-        let requires_scouting = outpost_room_data
-            .get_dynamic_visibility_data()
-            .map(|v| !v.updated_within(1000))
-            .unwrap_or(true);
-
-        Ok(requires_scouting)
-    }
-
-    fn tick_raiding(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        mission_entity: Entity,
-        state_context: &mut MiningOutpostMissionContext,
-    ) -> Result<(), String> {
-        if let Some(mut raid_mission) = self
-            .raid_mission
-            .and_then(|e| system_data.missions.get(e))
-            .as_mission_type_mut::<RaidMission>()
-        {
-            raid_mission.set_home_rooms(&state_context.home_room_datas);
-        } else if self.raid_mission.is_none() {
-            let needs_raiding = self.requires_raiding(system_data, mission_entity, state_context)?;
-
-            if needs_raiding.unwrap_or(false) {
-                let outpost_room_data = system_data
-                    .room_data
-                    .get_mut(state_context.outpost_room_data)
-                    .ok_or("Expected outpost room data")?;
-
-                let mission_entity = RaidMission::build(
-                    system_data.updater.create_entity(system_data.entities),
-                    Some(mission_entity),
-                    state_context.outpost_room_data,
-                    &state_context.home_room_datas,
-                )
-                .build();
-
-                outpost_room_data.add_mission(mission_entity);
-
-                self.raid_mission = Some(mission_entity).into();
-            }
-        }
-
-        Ok(())
-    }
-
-    fn requires_raiding(
-        &mut self,
-        system_data: &MissionExecutionSystemData,
-        _mission_entity: Entity,
-        state_context: &mut MiningOutpostMissionContext,
-    ) -> Result<Option<bool>, String> {
-        let outpost_room_data = system_data
-            .room_data
-            .get(state_context.outpost_room_data)
-            .ok_or("Expected outpost room")?;
-
-        if let Some(structures) = outpost_room_data.get_structures() {
-            let structures = structures.all();
-
-            let has_resources = structures.iter().any(|structure| {
-                if let Some(store) = structure.as_has_store() {
-                    let store_types = store.store().store_types();
-
-                    return store_types.iter().any(|t| store.store().get_used_capacity(Some(*t)) > 0);
-                }
-
-                false
-            });
-
-            return Ok(Some(has_resources));
-        }
-
-        Ok(None)
-    }
-
-    fn tick_dismantling(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        mission_entity: Entity,
-        state_context: &mut MiningOutpostMissionContext,
-    ) -> Result<(), String> {
-        if let Some(mut dismantle_mission) = self
-            .dismantle_mission
-            .and_then(|e| system_data.missions.get(e))
-            .as_mission_type_mut::<DismantleMission>()
-        {
-            dismantle_mission.set_home_rooms(&state_context.home_room_datas);
-        } else if self.dismantle_mission.is_none() {
-            let needs_dismantling = self.requires_dismantling(system_data, mission_entity, state_context)?;
-
-            if needs_dismantling.unwrap_or(false) {
-                let outpost_room_data = system_data
-                    .room_data
-                    .get_mut(state_context.outpost_room_data)
-                    .ok_or("Expected outpost room data")?;
-
-                let mission_entity = DismantleMission::build(
-                    system_data.updater.create_entity(system_data.entities),
-                    Some(mission_entity),
-                    state_context.outpost_room_data,
-                    &state_context.home_room_datas,
-                    false,
-                )
-                .build();
-
-                outpost_room_data.add_mission(mission_entity);
-
-                self.dismantle_mission = Some(mission_entity).into();
-            }
-        }
-
-        Ok(())
-    }
-
-    fn requires_dismantling(
-        &mut self,
-        system_data: &MissionExecutionSystemData,
-        _mission_entity: Entity,
-        state_context: &mut MiningOutpostMissionContext,
-    ) -> Result<Option<bool>, String> {
-        let outpost_room_data = system_data
-            .room_data
-            .get(state_context.outpost_room_data)
-            .ok_or("Expected outpost room")?;
-
-        let static_visibility_data = outpost_room_data
-            .get_static_visibility_data()
-            .ok_or("Expected static visibility data")?;
-
-        if let Some(structures) = outpost_room_data.get_structures() {
-            let requires_dismantling = DismantleMission::requires_dismantling(
-                structures.all(),
-                static_visibility_data.sources(),
-                system_data.features.derelict.max_structure_hits,
-            );
-
-            return Ok(Some(requires_dismantling));
-        }
-
-        Ok(None)
-    }
-
-    fn tick_defend(
-        &mut self,
-        system_data: &mut MissionExecutionSystemData,
-        mission_entity: Entity,
-        state_context: &mut MiningOutpostMissionContext,
-    ) -> Result<(), String> {
-        if let Some(mut defend_mission) = self
-            .defend_mission
-            .and_then(|e| system_data.missions.get(e))
-            .as_mission_type_mut::<DefendMission>()
-        {
-            defend_mission.set_home_rooms(&state_context.home_room_datas);
-        } else if self.defend_mission.is_none() {
-            let outpost_room_data = system_data
-                .room_data
-                .get_mut(state_context.outpost_room_data)
-                .ok_or("Expected outpost room data")?;
-
-            let mission_entity = DefendMission::build(
-                system_data.updater.create_entity(system_data.entities),
-                Some(mission_entity),
-                state_context.outpost_room_data,
-                &state_context.home_room_datas,
-            )
-            .build();
-
-            outpost_room_data.add_mission(mission_entity);
-
-            self.defend_mission = Some(mission_entity).into();
-        }
-
-        Ok(())
     }
 }
 
