@@ -415,6 +415,55 @@ impl Default for ClaimFeatures {
     }
 }
 
+/// Treatment of "derelict" rooms: claimed by another player but militarily
+/// dead — no spawns, no armed towers, no hostile combat creeps. Consumed by
+/// the movement cost callback, the claim / mining-outpost expansion BFS, and
+/// the mining-outpost salvage pipeline.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DerelictFeatures {
+    /// Master switch: when false, derelict rooms are treated exactly like any
+    /// other hostile-owned room (pathing avoids them, expansion stops at them,
+    /// no salvage).
+    pub on: bool,
+    /// A hostile-owned room must have been observed derelict, without an
+    /// intervening militarised sighting, for this many ticks before it is
+    /// treated as safe. Guards against trusting a single snapshot (e.g. the
+    /// owner's defenders were momentarily elsewhere). Default: 2000 (more than
+    /// one creep lifetime).
+    pub confirm_ticks: u32,
+    /// Maximum intel age (ticks since last visibility) for pathing and
+    /// expansion BFS to keep trusting a derelict classification; staler intel
+    /// falls back to hostile. Default: 10_000.
+    pub path_max_age: u32,
+    /// Maximum intel age for committing creeps to act inside the room
+    /// (raid/dismantle decisions). Tighter than `path_max_age` because the
+    /// creeps will dwell there. Default: 5_000.
+    pub action_max_age: u32,
+    /// EV margin for spawning dismantlers into a derelict room: estimated
+    /// recoverable energy must exceed margin × the energy cost of the
+    /// dismantler bodies expected to do the work. Default: 2.0.
+    pub dismantle_margin: f32,
+    /// Skip dismantle targets with more hits than this. Huge walls/ramparts
+    /// would otherwise pin the cleanup phase ~forever and block the
+    /// mining-outpost handoff. 0 = no limit. Default: 2_000_000
+    /// (~2000 ticks of work for a 20-WORK dismantler).
+    pub max_structure_hits: u32,
+}
+
+impl Default for DerelictFeatures {
+    fn default() -> Self {
+        Self {
+            on: true,
+            confirm_ticks: 2_000,
+            path_max_age: 10_000,
+            action_max_age: 5_000,
+            dismantle_margin: 2.0,
+            max_structure_hits: 2_000_000,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
@@ -462,6 +511,7 @@ pub struct Features {
     pub military: MilitaryFeatures,
     pub raid: bool,
     pub claim: ClaimFeatures,
+    pub derelict: DerelictFeatures,
     pub visibility: VisibilityFeatures,
     pub dismantle: bool,
     /// Log per-system CPU timing for each ECS system in the game loop.

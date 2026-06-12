@@ -189,6 +189,32 @@ pub struct RoomDynamicVisibilityData {
     /// Tower DPS at room edge (hostile towers only). Set when we have visibility; used to size drain bodies.
     #[serde(default, rename = "td")]
     tower_dps_at_edge: Option<f32>,
+    /// Non-my spawns present (derelict classification input: a spawn means the
+    /// owner can produce defenders).
+    #[serde(default, rename = "hsp")]
+    hostile_spawns: bool,
+    /// Non-my towers with enough energy to fire (derelict classification
+    /// input). An empty tower in a spawn-less room has no way to be refilled.
+    #[serde(default, rename = "ht")]
+    hostile_towers: bool,
+    /// Absolute tick at which the controller's safe mode ends, if it was
+    /// active when last observed. Safe mode blocks all our offensive actions
+    /// (withdraw/dismantle/attack) inside the room.
+    #[serde(default, rename = "sme")]
+    safe_mode_end: Option<u32>,
+    /// Controller level when last observed (0 = unowned).
+    #[serde(default, rename = "cl")]
+    controller_level: Option<u8>,
+    /// Controller downgrade timer when last observed. Counts down in real time
+    /// while the owner is not upgrading, so for an abandoned room
+    /// `update_tick + ttd` predicts the next level drop.
+    #[serde(default, rename = "ctd")]
+    controller_ticks_to_downgrade: Option<u32>,
+    /// Tick at which the room was first observed derelict (hostile-owned but
+    /// militarily dead), carried forward across visibility updates while the
+    /// classification holds. None = not currently derelict.
+    #[serde(default, rename = "dsi")]
+    derelict_since: Option<u32>,
 }
 
 impl RoomDynamicVisibilityData {
@@ -235,6 +261,64 @@ impl RoomDynamicVisibilityData {
 
     pub fn hostile_structures(&self) -> bool {
         self.hostile_structures
+    }
+
+    pub fn hostile_spawns(&self) -> bool {
+        self.hostile_spawns
+    }
+
+    pub fn hostile_towers(&self) -> bool {
+        self.hostile_towers
+    }
+
+    /// Safe mode active as of the current tick. Extrapolated from the last
+    /// observation — safe mode runs on a fixed timer, so this stays accurate
+    /// without fresh visibility.
+    pub fn safe_mode_active(&self) -> bool {
+        self.safe_mode_end.map(|end| game::time() < end).unwrap_or(false)
+    }
+
+    pub fn controller_level(&self) -> Option<u8> {
+        self.controller_level
+    }
+
+    pub fn controller_ticks_to_downgrade(&self) -> Option<u32> {
+        self.controller_ticks_to_downgrade
+    }
+
+    /// Earliest tick at which the controller could drop a level, extrapolated
+    /// from the last observed downgrade timer. Exact for an abandoned room
+    /// (nothing is feeding the timer); a lower bound for a maintained one.
+    pub fn predicted_downgrade_tick(&self) -> Option<u32> {
+        self.controller_ticks_to_downgrade.map(|ttd| self.update_tick.saturating_add(ttd))
+    }
+
+    /// Any observed military capability: combat-capable creeps (attack /
+    /// ranged / work parts), spawns (defender production), or energised
+    /// towers.
+    pub fn militarily_active(&self) -> bool {
+        self.hostile_creeps || self.hostile_spawns || self.hostile_towers
+    }
+
+    /// Claimed by another player but militarily dead. Raw single-observation
+    /// classification — use [`Self::confirmed_derelict`] before treating the
+    /// room as safe to path through or act in.
+    pub fn derelict(&self) -> bool {
+        self.owner.hostile() && !self.militarily_active()
+    }
+
+    /// Ticks the room has been continuously observed derelict (None = not
+    /// currently derelict).
+    pub fn derelict_for(&self) -> Option<u32> {
+        self.derelict_since.map(|since| game::time().saturating_sub(since))
+    }
+
+    /// Derelict, held continuously for at least `confirm_ticks` (no
+    /// militarised sighting in between), with intel no older than `max_age`.
+    /// Consumers pick `max_age` per use: looser for pathing, tighter for
+    /// committing creeps to work inside the room (`features.derelict.*`).
+    pub fn confirmed_derelict(&self, confirm_ticks: u32, max_age: u32) -> bool {
+        self.derelict() && self.updated_within(max_age) && self.derelict_for().map(|held| held >= confirm_ticks).unwrap_or(false)
     }
 }
 
@@ -432,6 +516,42 @@ impl RoomData {
             crate::military::damage::tower_dps_at_room_edge(self.name, &positions)
         });
 
+        let hostile_spawns = structures
+            .as_ref()
+            .map(|s| s.spawns().iter().any(|spawn| !spawn.my()))
+            .unwrap_or(false);
+
+        let hostile_towers = structures
+            .as_ref()
+            .map(|s| {
+                s.towers()
+                    .iter()
+                    .any(|t| !t.my() && t.store().get_used_capacity(Some(ResourceType::Energy)) >= TOWER_ENERGY_COST)
+            })
+            .unwrap_or(false);
+
+        let safe_mode_end = controller
+            .as_ref()
+            .and_then(|c| c.safe_mode())
+            .map(|remaining| game::time().saturating_add(remaining));
+
+        let controller_level = controller.as_ref().map(|c| c.level());
+        let controller_ticks_to_downgrade = controller.as_ref().and_then(|c| c.ticks_to_downgrade());
+
+        // Carry the derelict-since mark forward while the classification
+        // holds; any militarised sighting (or ownership change) resets the
+        // confirmation clock. A passing enemy worker resets it too — that is
+        // deliberately conservative (fail closed).
+        let derelict = controller_owner_disposition.hostile() && !(hostile_creeps || hostile_spawns || hostile_towers);
+        let derelict_since = if derelict {
+            self.dynamic_visibility_data
+                .as_ref()
+                .and_then(|previous| previous.derelict_since)
+                .or_else(|| Some(game::time()))
+        } else {
+            None
+        };
+
         RoomDynamicVisibilityData {
             update_tick: game::time(),
             owner: controller_owner_disposition,
@@ -441,6 +561,12 @@ impl RoomData {
             hostile_creeps,
             hostile_structures,
             tower_dps_at_edge,
+            hostile_spawns,
+            hostile_towers,
+            safe_mode_end,
+            controller_level,
+            controller_ticks_to_downgrade,
+            derelict_since,
         }
     }
 
