@@ -509,7 +509,7 @@ pub struct EvalFeatures {
 /// Reset flags are intentionally excluded — they live in a separate path
 /// ([`load_reset`] / [`clear_reset`]) because they are consumed before the
 /// feature cache is populated.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Features {
     pub visualize: VisualizeFeatures,
@@ -520,16 +520,41 @@ pub struct Features {
     pub pathing: PathingFeatures,
     pub room: RoomFeatures,
     pub military: MilitaryFeatures,
+    /// Allow raid (loot) missions to run. Kill switch, not a pause: turning
+    /// this off aborts in-flight raid missions loudly. Default: true.
     pub raid: bool,
     pub claim: ClaimFeatures,
     pub derelict: DerelictFeatures,
     pub visibility: VisibilityFeatures,
+    /// Allow dismantle missions to run. Kill switch like `raid`. Default: true.
     pub dismantle: bool,
     /// Log per-system CPU timing for each ECS system in the game loop.
     /// When enabled, each system's CPU cost is measured and logged at info level.
     pub system_timing: bool,
     /// Harness-only fault-injection knobs (P1.A5).
     pub eval: EvalFeatures,
+}
+
+impl Default for Features {
+    fn default() -> Self {
+        Self {
+            visualize: VisualizeFeatures::default(),
+            construction: ConstructionFeatures::default(),
+            market: MarketFeatures::default(),
+            transfer: TransferFeatures::default(),
+            remote_mine: RemoteMineFeatures::default(),
+            pathing: PathingFeatures::default(),
+            room: RoomFeatures::default(),
+            military: MilitaryFeatures::default(),
+            raid: true,
+            claim: ClaimFeatures::default(),
+            derelict: DerelictFeatures::default(),
+            visibility: VisibilityFeatures::default(),
+            dismantle: true,
+            system_timing: false,
+            eval: EvalFeatures::default(),
+        }
+    }
 }
 
 // ─── JS helpers (private) ──────────────────────────────────────────────────────
