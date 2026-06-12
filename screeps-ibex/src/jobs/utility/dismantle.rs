@@ -97,6 +97,25 @@ where
         .unwrap_or(false)
 }
 
+/// Any dismantle target READY to work on right now: in scope (not a road,
+/// not mining infrastructure, engine-dismantlable, within the hit-pool
+/// horizon, not under a hostile rampart) AND with an empty store (loot before
+/// wreck). `max_structure_hits` must match what the dismantler jobs were
+/// spawned with — work detection and job target selection share these
+/// filters or the work never ends.
+pub fn requires_dismantling(structures: &[StructureObject], sources: &[RemoteObjectId<Source>], max_structure_hits: u32) -> bool {
+    let hostile_ramparts = hostile_rampart_positions(structures);
+
+    structures
+        .iter()
+        .filter(|s| s.structure_type() != StructureType::Road)
+        .filter(|s| !ignore_for_dismantle(*s, sources))
+        .filter(|s| can_dismantle(*s))
+        .filter(|s| within_dismantle_hits_horizon(*s, max_structure_hits))
+        .filter(|s| !blocked_by_hostile_rampart(*s, &hostile_ramparts))
+        .any(has_empty_storage)
+}
+
 /// Structures whose stores may be looted by salvage/raid work: structures
 /// owned by another player, or unowned store structures (containers) that are
 /// not our mining infrastructure (source-adjacent — same exclusion as

@@ -1,0 +1,13 @@
+[package]
+name = "viz-repro"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+screeps-game-api = { path = "C:/code/screeps-game-api" }
+serde-wasm-bindgen = "0.6"
+wasm-bindgen = "0.2"
+js-sys = "0.3"

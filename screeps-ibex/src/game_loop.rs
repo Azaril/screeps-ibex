@@ -537,8 +537,10 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// world (EP-5.1 reset-anytime, EP-3.1 loudness).
 ///
 /// History: 2 = derelict-rooms M1-M5 (RoomDynamicVisibilityData intel fields,
-/// MiningOutpostState::Cleanup removed, Salvage operation/mission added).
-const WORLD_FORMAT_VERSION: u32 = 2;
+/// MiningOutpostState::Cleanup removed, Salvage operation/mission added);
+/// 3 = derelict-rooms M8 (MissionData::Raid/Dismantle variants removed —
+/// SalvageMission absorbed both as creep roles).
+const WORLD_FORMAT_VERSION: u32 = 3;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode

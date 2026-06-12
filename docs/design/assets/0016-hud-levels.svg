@@ -1,0 +1,119 @@
+<svg viewBox="0 0 1260 700" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, 'Cascadia Mono', Consolas, monospace">
+  <!-- ADR 0016 mockup: disclosure levels. Left = L1 Ambient, Right = L3 Debug (econ firehose). -->
+  <rect x="0" y="0" width="1260" height="700" fill="#0d1117"/>
+
+  <!-- ───────────────────────── L1 AMBIENT ───────────────────────── -->
+  <g transform="translate(20,40)">
+    <text x="0" y="-12" font-size="14" fill="#c9d1d9">L1 — Ambient (default on MMO): empire strip + safety-critical badges only, ≤28 primitives empire-wide</text>
+    <rect x="0" y="0" width="600" height="600" fill="#202020"/>
+    <g stroke="#ffffff" stroke-opacity="0.04" stroke-width="1">
+      <path d="M120 0V600 M240 0V600 M360 0V600 M480 0V600 M0 120H600 M0 240H600 M0 360H600 M0 480H600"/>
+    </g>
+    <!-- terrain -->
+    <path d="M0 0 H600 V26 Q480 56 380 32 Q240 12 100 44 Q50 56 0 38 Z" fill="#161616"/>
+    <path d="M0 600 V560 Q140 540 220 572 Q380 608 600 564 V600 Z" fill="#161616"/>
+    <ellipse cx="150" cy="430" rx="72" ry="42" fill="#2c3018" fill-opacity="0.8"/>
+    <!-- structures, unobscured -->
+    <rect x="104" y="188" width="18" height="18" rx="3" fill="#f6e07b"/>
+    <circle cx="258" cy="300" r="14" fill="#3b3b3b" stroke="#aef0ff" stroke-width="2"/>
+    <rect x="300" y="292" width="16" height="20" rx="4" fill="#3b3b3b" stroke="#f0c040" stroke-width="1.5"/>
+    <circle cx="492" cy="462" r="10" fill="#3b3b3b" stroke="#9aa7ff" stroke-width="2"/>
+    <g fill="#7fb1f4">
+      <circle cx="144" cy="228" r="5"/><circle cx="214" cy="307" r="5"/><circle cx="336" cy="372" r="5"/><circle cx="452" cy="438" r="5"/>
+    </g>
+    <!-- empire strip -->
+    <g>
+      <rect x="12" y="2" width="576" height="15" rx="2" fill="#0d1117" fill-opacity="0.55"/>
+      <rect x="18" y="5.5" width="72" height="8" rx="1.5" fill="#21262d"/>
+      <rect x="18" y="5.5" width="43" height="8" rx="1.5" fill="#3fb950"/>
+      <text x="95" y="13" font-size="9" fill="#c9d1d9">47/80</text>
+      <text x="132" y="13" font-size="9" fill="#8b949e">B 9.8k</text>
+      <text x="172" y="13" font-size="9" fill="#8b949e">C 84</text>
+      <text x="202" y="13" font-size="9" fill="#8b949e">G14 62%</text>
+      <text x="252" y="13" font-size="9" fill="#8b949e">R 3/4</text>
+      <text x="288" y="13" font-size="9" fill="#8b949e">OPS 5</text>
+      <rect x="524" y="4" width="24" height="11" rx="2" fill="#f85149" fill-opacity="0.25" stroke="#f85149" stroke-width="0.8"/>
+      <text x="536" y="12.5" font-size="8" fill="#f85149" text-anchor="middle">NUKE</text>
+      <rect x="552" y="4" width="22" height="11" rx="2" fill="#d29922" fill-opacity="0.25" stroke="#d29922" stroke-width="0.8"/>
+      <text x="563" y="12.5" font-size="8" fill="#d29922" text-anchor="middle">SPN</text>
+    </g>
+    <!-- safety-critical world badge: nuke impact (L1 contract) -->
+    <g>
+      <circle cx="380" cy="250" r="34" fill="#f85149" fill-opacity="0.12" stroke="#f85149" stroke-width="2" stroke-dasharray="8 5"/>
+      <circle cx="380" cy="250" r="4" fill="#f85149"/>
+      <text x="380" y="232" font-size="11" fill="#f85149" text-anchor="middle">NUKE 4.2k</text>
+    </g>
+    <text x="12" y="622" font-size="11" fill="#8b949e">Everything else is OFF. The room is the view; alerts are the contract.</text>
+  </g>
+
+  <!-- ───────────────────────── L3 DEBUG (econ) ───────────────────────── -->
+  <g transform="translate(640,40)">
+    <text x="0" y="-12" font-size="14" fill="#c9d1d9">L3 — Debug firehose (econ domain): full census + numeric tables; enabled deliberately, one domain at a time</text>
+    <rect x="0" y="0" width="600" height="600" fill="#202020"/>
+    <g stroke="#ffffff" stroke-opacity="0.04" stroke-width="1">
+      <path d="M120 0V600 M240 0V600 M360 0V600 M480 0V600 M0 120H600 M0 240H600 M0 360H600 M0 480H600"/>
+    </g>
+    <path d="M0 0 H600 V26 Q480 56 380 32 Q240 12 100 44 Q50 56 0 38 Z" fill="#161616"/>
+    <rect x="104" y="188" width="18" height="18" rx="3" fill="#f6e07b"/>
+    <circle cx="258" cy="300" r="14" fill="#3b3b3b" stroke="#aef0ff" stroke-width="2"/>
+    <rect x="300" y="292" width="16" height="20" rx="4" fill="#3b3b3b" stroke="#f0c040" stroke-width="1.5"/>
+    <g fill="#7fb1f4"><circle cx="144" cy="228" r="5"/><circle cx="214" cy="307" r="5"/><circle cx="336" cy="372" r="5"/></g>
+
+    <!-- empire + header strips (compressed) -->
+    <rect x="12" y="2" width="576" height="15" rx="2" fill="#0d1117" fill-opacity="0.55"/>
+    <text x="18" y="13" font-size="9" fill="#8b949e">CPU 47/80  B 9.8k  C 84  G14 62%  R 3/4  OPS 5</text>
+    <rect x="12" y="20" width="576" height="15" rx="2" fill="#0d1117" fill-opacity="0.55"/>
+    <text x="18" y="31" font-size="9" fill="#c9d1d9">W7N3 RCL7   E 312k ▲+12k   H0</text>
+
+    <!-- full census, paginated (left rail, full height) -->
+    <g font-size="9.5">
+      <rect x="6" y="44" width="150" height="420" rx="2" fill="#0d1117" fill-opacity="0.6"/>
+      <text x="14" y="58" fill="#58a6ff">JOBS p1/2 (27)</text>
+      <g fill="#c9d1d9">
+        <circle cx="16" cy="72" r="3" fill="#3fb950"/><text x="24" y="75">M crp_4f2 harvest</text>
+        <circle cx="16" cy="88" r="3" fill="#3fb950"/><text x="24" y="91">M crp_a01 harvest</text>
+        <circle cx="16" cy="104" r="3" fill="#d29922"/><text x="24" y="107">L crp_b44 wait 213t</text>
+        <circle cx="16" cy="120" r="3" fill="#3fb950"/><text x="24" y="123">L crp_c19 deliver</text>
+        <circle cx="16" cy="136" r="3" fill="#3fb950"/><text x="24" y="139">L crp_d72 pickup</text>
+        <circle cx="16" cy="152" r="3" fill="#f85149"/><text x="24" y="155">U crp_e03 wait 412t</text>
+        <circle cx="16" cy="168" r="3" fill="#3fb950"/><text x="24" y="171">U crp_f88 upgrade</text>
+        <circle cx="16" cy="184" r="3" fill="#3fb950"/><text x="24" y="187">B crp_09a build</text>
+        <circle cx="16" cy="200" r="3" fill="#8b949e"/><text x="24" y="203">B crp_1bc idle</text>
+        <circle cx="16" cy="216" r="3" fill="#3fb950"/><text x="24" y="219">S crp_2de move W8N3</text>
+        <text x="24" y="237" fill="#8b949e">… 17 more rows …</text>
+      </g>
+      <text x="14" y="456" fill="#8b949e">page rotates /50t</text>
+    </g>
+
+    <!-- expanded bottom region: full numeric tables (L3 may intrude past y=40) -->
+    <g font-size="9.5">
+      <rect x="170" y="380" width="418" height="208" rx="2" fill="#0d1117" fill-opacity="0.65"/>
+      <text x="180" y="396" fill="#58a6ff">SPAWN QUEUE (8)</text>
+      <g fill="#c9d1d9">
+        <text x="180" y="412">p140 750  hauler        W7N3</text>
+        <text x="180" y="426">p120 1300 upgrader      W7N3</text>
+        <text x="180" y="440">p95  1800 miner src2    W7N3</text>
+        <text x="180" y="454">p80  650  builder       W7N3</text>
+        <text x="180" y="468" fill="#8b949e">+4 more…</text>
+      </g>
+      <text x="390" y="396" fill="#58a6ff">TRANSFER (all resources)</text>
+      <g fill="#c9d1d9">
+        <text x="390" y="412">E   sup 68k  pnd 16k  dem 30k</text>
+        <text x="390" y="426">O   sup 28k  pnd 0    dem 56k</text>
+        <text x="390" y="440">K   sup 12k  pnd 2k   dem 12k</text>
+        <text x="390" y="454">UH  sup 3k   pnd 0    dem 9k</text>
+        <text x="390" y="468">X   sup 0    pnd 0    dem 4.5k</text>
+        <text x="390" y="482">Any dem 8k   pnd 1.2k</text>
+      </g>
+      <!-- haul flow lines note -->
+      <text x="180" y="510" fill="#58a6ff">HAUL FLOWS</text>
+      <g fill="#8b949e"><text x="180" y="524">pickup→delivery lines, cap 20 (drawn in-world)</text></g>
+      <text x="180" y="556" fill="#8b949e">CPU ▁▂▂▃▂▅▇▅▃▂▂▁  hist 48t</text>
+      <text x="180" y="576" fill="#8b949e">L3 may intrude into the center — it is the firehose you turned on.</text>
+    </g>
+    <!-- haul flow example in-world -->
+    <line x1="113" y1="197" x2="300" y2="302" stroke="#f0c040" stroke-width="1.5" stroke-dasharray="5 4" opacity="0.6"/>
+  </g>
+
+  <text x="20" y="688" font-size="12" fill="#8b949e">ADR 0016 — disclosure levels replace interactivity: flags select L0 Off / L1 Ambient / L2 Panels / L3 Debug per domain {econ, military, intel, infra, pathing}.</text>
+</svg>

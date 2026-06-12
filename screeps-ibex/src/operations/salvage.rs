@@ -1,10 +1,8 @@
 use super::data::*;
 use super::operationsystem::*;
-use crate::jobs::utility::dismantle::*;
 use crate::missions::constants::*;
 use crate::missions::salvage::*;
 use crate::missions::utility::*;
-use crate::remoteobjectid::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use crate::visualization::SummaryContent;
@@ -27,81 +25,13 @@ const STRATEGIC_OUTPOST_HOPS: u32 = 1;
 /// Raider: ~10×[Carry, Move] → 500 capacity for ~1000 energy.
 const ASSUMED_RAIDER_CAPACITY: u32 = 500;
 const ASSUMED_RAIDER_BODY_COST: u32 = 1_000;
-/// Dismantler: ~10 Work plus carry/move support per the DismantleMission
+/// Dismantler: ~10 Work plus carry/move support per the salvage dismantler
 /// body definition (~310 energy per Work part all-in).
 const ASSUMED_DISMANTLER_WORK_PARTS: u32 = 10;
 const ASSUMED_DISMANTLER_BODY_COST: u32 = 3_100;
 /// Spawn lead applied on top of travel when estimating how much decaying
 /// value will still exist by the time creeps arrive.
 const ASSUMED_SPAWN_LEAD_TICKS: u32 = 150;
-
-/// Salvage work observed in a room. `dismantle_hits` is decay-adjusted and
-/// horizon-filtered; loot quantities are raw store contents in scope.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct SalvageWork {
-    pub loot_energy: u32,
-    pub loot_other: u32,
-    pub dismantle_hits: u32,
-}
-
-impl SalvageWork {
-    pub fn is_empty(&self) -> bool {
-        self.loot_energy == 0 && self.loot_other == 0 && self.dismantle_hits == 0
-    }
-}
-
-/// Survey a visible room for salvageable value. `lead_ticks` (travel + spawn
-/// lead) discounts decaying structures — value that will rot away before our
-/// creeps arrive is not value (ramparts bleed 3 hits/tick, unowned containers
-/// 50 hits/tick).
-fn assess_salvage_work(
-    structures: &[StructureObject],
-    sources: &[RemoteObjectId<Source>],
-    max_structure_hits: u32,
-    lead_ticks: u32,
-    room_owned: bool,
-) -> SalvageWork {
-    let mut work = SalvageWork::default();
-    let hostile_ramparts = hostile_rampart_positions(structures);
-
-    for structure in structures.iter() {
-        if is_salvage_loot_target(structure, sources, &hostile_ramparts) {
-            if let Some(store) = structure.as_has_store() {
-                for resource in store.store().store_types() {
-                    let amount = store.store().get_used_capacity(Some(resource));
-                    if resource == ResourceType::Energy {
-                        work.loot_energy += amount;
-                    } else {
-                        work.loot_other += amount;
-                    }
-                }
-            }
-        }
-
-        let dismantlable = structure.structure_type() != StructureType::Road
-            && !ignore_for_dismantle(structure, sources)
-            && can_dismantle(structure)
-            && within_dismantle_hits_horizon(structure, max_structure_hits)
-            && !blocked_by_hostile_rampart(structure, &hostile_ramparts);
-
-        if dismantlable {
-            if let Some(attackable) = structure.as_attackable() {
-                let decay_per_tick = match structure {
-                    StructureObject::StructureRampart(_) => RAMPART_DECAY_AMOUNT / RAMPART_DECAY_TIME,
-                    // Containers decay 5x slower in owned rooms — and a
-                    // derelict room is still owned until its controller drops.
-                    StructureObject::StructureContainer(_) if room_owned => CONTAINER_DECAY / CONTAINER_DECAY_TIME_OWNED,
-                    StructureObject::StructureContainer(_) => CONTAINER_DECAY / CONTAINER_DECAY_TIME,
-                    _ => 0,
-                };
-
-                work.dismantle_hits += attackable.hits().saturating_sub(decay_per_tick * lead_ticks);
-            }
-        }
-    }
-
-    work
-}
 
 /// Pure EV gate (host-tested): is the recoverable value worth the creep
 /// spawn energy, given travel distance? Strategic rooms (future mining
@@ -115,7 +45,7 @@ pub(crate) fn salvage_worthwhile(
     raid_enabled: bool,
     dismantle_enabled: bool,
 ) -> bool {
-    let loot_total = work.loot_energy.saturating_add(work.loot_other);
+    let loot_total = work.loot_total();
     let lootable = raid_enabled && loot_total > 0;
     let dismantlable = dismantle_enabled && work.dismantle_hits > 0;
 

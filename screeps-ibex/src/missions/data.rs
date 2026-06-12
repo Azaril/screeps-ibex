@@ -23,8 +23,6 @@ pub enum MissionData {
     Haul(EntityRefCell<super::haul::HaulMission>),
     Terminal(EntityRefCell<super::terminal::TerminalMission>),
     MiningOutpost(EntityRefCell<super::miningoutpost::MiningOutpostMission>),
-    Raid(EntityRefCell<super::raid::RaidMission>),
-    Dismantle(EntityRefCell<super::dismantle::DismantleMission>),
     Colony(EntityRefCell<super::colony::ColonyMission>),
     Defend(EntityRefCell<super::defend::DefendMission>),
     PowerSpawn(EntityRefCell<super::powerspawn::PowerSpawnMission>),
@@ -55,8 +53,6 @@ impl MissionData {
             MissionData::Haul(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::Terminal(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::MiningOutpost(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
-            MissionData::Raid(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
-            MissionData::Dismantle(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::Colony(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::Defend(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::PowerSpawn(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
@@ -92,8 +88,6 @@ impl MissionData {
             MissionData::Haul(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::Terminal(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::MiningOutpost(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
-            MissionData::Raid(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
-            MissionData::Dismantle(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::Colony(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::Defend(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::PowerSpawn(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
@@ -247,8 +241,6 @@ mission_type!(super::remotebuild::RemoteBuildMission, MissionData::RemoteBuild);
 mission_type!(super::haul::HaulMission, MissionData::Haul);
 mission_type!(super::terminal::TerminalMission, MissionData::Terminal);
 mission_type!(super::miningoutpost::MiningOutpostMission, MissionData::MiningOutpost);
-mission_type!(super::raid::RaidMission, MissionData::Raid);
-mission_type!(super::dismantle::DismantleMission, MissionData::Dismantle);
 mission_type!(super::colony::ColonyMission, MissionData::Colony);
 mission_type!(super::defend::DefendMission, MissionData::Defend);
 mission_type!(super::powerspawn::PowerSpawnMission, MissionData::PowerSpawn);

@@ -520,13 +520,15 @@ pub struct Features {
     pub pathing: PathingFeatures,
     pub room: RoomFeatures,
     pub military: MilitaryFeatures,
-    /// Allow raid (loot) missions to run. Kill switch, not a pause: turning
-    /// this off aborts in-flight raid missions loudly. Default: true.
+    /// Allow the raider (loot) role in salvage missions. Turning this off
+    /// zeroes the role: no new raiders spawn, live ones finish naturally, and
+    /// missions complete once no enabled work remains. Default: true.
     pub raid: bool,
     pub claim: ClaimFeatures,
     pub derelict: DerelictFeatures,
     pub visibility: VisibilityFeatures,
-    /// Allow dismantle missions to run. Kill switch like `raid`. Default: true.
+    /// Allow the dismantler role in salvage missions; semantics as `raid`.
+    /// Default: true.
     pub dismantle: bool,
     /// Log per-system CPU timing for each ECS system in the game loop.
     /// When enabled, each system's CPU cost is measured and logged at info level.
