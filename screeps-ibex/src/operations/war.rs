@@ -709,12 +709,15 @@ impl WarOperation {
                 continue;
             }
 
-            // Check for invader cores in the room.
+            // Check for invader cores in the room. `None` = no core present;
+            // `Some(0)` is a level-0 "reserver" core NPC-reserving the room.
+            // Presence must stay distinguishable from absence: collapsing
+            // both to 0 made reserver cores untargetable, so they squatted
+            // our remote-mining rooms until their collapse timer expired.
             let invader_core_level = room_entity
                 .and_then(|e| system_data.room_data.get(e))
                 .and_then(|rd| rd.get_structures())
-                .map(|structures| structures.invader_cores().iter().map(|core| core.level()).max().unwrap_or(0))
-                .unwrap_or(0);
+                .and_then(|structures| structures.invader_cores().iter().map(|core| core.level()).max());
 
             // Check for power banks.
             let power_bank_info = room_entity
@@ -738,44 +741,38 @@ impl WarOperation {
                     "[War]   Evaluating {} (dist={}, threat={:?}, dps={:.0}, heal={:.0}, towers={}, core_lvl={}, power_bank={}, hostile_owner={}, safe_mode={})",
                     room_name, min_distance, threat_data.threat_level,
                     threat_data.estimated_dps, threat_data.estimated_heal,
-                    tower_count, invader_core_level,
+                    tower_count,
+                    invader_core_level.map(|l| l.to_string()).unwrap_or_else(|| "none".to_string()),
                     power_bank_info.map(|(p, d)| format!("{}pw/{}t", p, d)).unwrap_or_else(|| "none".to_string()),
                     room_owner_hostile, has_safe_mode
                 );
             }
 
             // ── Invader core targeting ────────────────────────────────────
-            if invader_core_level > 0 && features.military.attack_invaders {
-                // Only attack cores we can handle. Level 0 = reserver (easy),
-                // levels 1-5 = stronghold (increasingly hard).
-                let max_affordable_level = if system_data.economy.total_stored_energy > 200_000 {
-                    5
-                } else if system_data.economy.total_stored_energy > 100_000 {
-                    3
-                } else if system_data.economy.total_stored_energy > 30_000 {
-                    1
-                } else {
-                    0
-                };
-
-                if invader_core_level <= max_affordable_level {
-                    // Score: higher for lower levels (easier), closer rooms, and
-                    // rooms we have interest in (reserved by us).
+            if let Some(core_level) = invader_core_level {
+                if features.military.attack_invaders {
                     let is_our_remote = room_entity
                         .and_then(|e| system_data.room_data.get(e))
                         .and_then(|rd| rd.get_dynamic_visibility_data())
                         .map(|d| d.reservation().mine())
                         .unwrap_or(false);
 
-                    let base_score = if is_our_remote { 60.0 } else { 30.0 };
-                    let level_penalty = invader_core_level as f32 * 5.0;
-                    let distance_penalty = min_distance as f32 * 3.0;
-                    let score = base_score - level_penalty - distance_penalty;
+                    let has_sources = room_entity
+                        .and_then(|e| system_data.room_data.get(e))
+                        .and_then(|rd| rd.get_static_visibility_data())
+                        .map(|s| !s.sources().is_empty())
+                        .unwrap_or(false);
 
-                    if score > 0.0 {
+                    if let Some(score) = invader_core_attack_score(
+                        core_level,
+                        min_distance,
+                        system_data.economy.total_stored_energy,
+                        is_our_remote,
+                        has_sources,
+                    ) {
                         candidates.push(AttackCandidate {
                             room: room_name,
-                            source: TargetSource::InvaderCore { level: invader_core_level },
+                            source: TargetSource::InvaderCore { level: core_level },
                             score,
                             tower_count,
                             estimated_enemy_dps: threat_data.estimated_dps,
@@ -839,11 +836,14 @@ impl WarOperation {
                 .map(|d| d.reservation().mine())
                 .unwrap_or(false);
 
+            // A present core (any level, including a level-0 reserver) routes
+            // through the InvaderCore candidate above instead -- killing the
+            // core is what actually clears the room.
             if has_invader_creeps
                 && all_npc
                 && features.military.attack_invaders
                 && is_our_remote
-                && invader_core_level == 0
+                && invader_core_level.is_none()
                 && power_bank_info.is_none()
             {
                 let distance_penalty = min_distance as f32 * 2.0;
@@ -1358,6 +1358,68 @@ fn count_power_bank_attacks(attacks: &[ActiveAttack]) -> u32 {
         .count() as u32
 }
 
+/// Score an invader core as an attack candidate; `None` = don't attack.
+///
+/// `core_level` is the strongest core *present* in the room -- absence is the
+/// caller's `Option`, never level 0. Level 0 is the "reserver" core that
+/// NPC-reserves remote rooms (engine: cores collapse after 75k ±10% ticks).
+/// Collapsing absence and level 0 to the same value previously made reserver
+/// cores untargetable, so they sat NPC-reserving our remote-mining rooms
+/// (which also aborts `MiningOutpostMission` via its hostile-reservation
+/// gate) until the collapse timer expired.
+///
+/// Reserver cores carry no loot, so one is only worth killing when it blocks
+/// a room we want to reserve/mine: a room whose reservation is ours, or a
+/// source room within remote-mining range. The source-room fallback is
+/// load-bearing -- the core *evicts* our reservation, so `is_our_remote` is
+/// false in exactly the rooms it blocks. Strongholds (level 1+) carry loot
+/// and are worth attacking anywhere in range, economy permitting. Cores must
+/// be killed with ATTACK parts -- the engine rejects `dismantle` on them.
+fn invader_core_attack_score(
+    core_level: u8,
+    min_distance: u32,
+    total_stored_energy: u32,
+    is_our_remote: bool,
+    has_sources: bool,
+) -> Option<f32> {
+    // Only attack cores we can handle. Level 0 = reserver (easy),
+    // levels 1-5 = stronghold (increasingly hard).
+    let max_affordable_level = if total_stored_energy > 200_000 {
+        5
+    } else if total_stored_energy > 100_000 {
+        3
+    } else if total_stored_energy > 30_000 {
+        1
+    } else {
+        0
+    };
+
+    if core_level > max_affordable_level {
+        return None;
+    }
+
+    /// `MiningOutpostOperation::run_operation` gathers outpost candidates at
+    /// BFS distance 1 from home rooms; keep in sync.
+    const REMOTE_MINE_RANGE: u32 = 1;
+
+    let wanted_remote = is_our_remote || (has_sources && min_distance <= REMOTE_MINE_RANGE);
+
+    if core_level == 0 && !wanted_remote {
+        // Deliberate exclusion: a reserver core in a room we don't mine
+        // costs us nothing and pays no loot -- let it expire on its own.
+        return None;
+    }
+
+    // Score: higher for lower levels (easier), closer rooms, and rooms we
+    // have interest in.
+    let base_score = if wanted_remote { 60.0 } else { 30.0 };
+    let level_penalty = core_level as f32 * 5.0;
+    let distance_penalty = min_distance as f32 * 3.0;
+    let score = base_score - level_penalty - distance_penalty;
+
+    (score > 0.0).then_some(score)
+}
+
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl Operation for WarOperation {
     fn get_owner(&self) -> &Option<Entity> {
@@ -1599,6 +1661,74 @@ mod tests {
                 "power-bank count mismatch for reason {:?}",
                 reason
             );
+        }
+    }
+
+    // Pin: a level-0 "reserver" invader core must be a valid attack target
+    // in rooms we want to reserve/mine. The old gate (`invader_core_level >
+    // 0`, with absence collapsed to 0) made level 0 indistinguishable from
+    // "no core", so reserver cores squatted our remote-mining rooms --
+    // blocking our reservation AND aborting MiningOutpostMission via its
+    // hostile-reservation gate -- until their ~75k-tick collapse timer
+    // expired. The eviction also flips `reservation().mine()` to false, so
+    // the source-room fallback (not the reservation check) is what makes
+    // the blocked room recognizable as ours.
+
+    #[test]
+    fn reserver_core_in_blocked_remote_is_targeted() {
+        // The incident shape: core stole the reservation (is_our_remote =
+        // false), source room adjacent to home, empty war chest -- level 0
+        // is always affordable.
+        let score = invader_core_attack_score(0, 1, 0, false, true);
+        assert_eq!(score, Some(57.0), "{score:?}");
+
+        // Reservation still ours (core seen before the eviction lands):
+        // targeted even without the source-room fallback.
+        assert!(invader_core_attack_score(0, 1, 0, true, false).is_some());
+    }
+
+    #[test]
+    fn reserver_core_outside_our_interest_is_left_to_expire() {
+        // No sources: nothing to mine, no loot to win.
+        assert_eq!(invader_core_attack_score(0, 1, 500_000, false, false), None);
+        // Sources, but beyond remote-mining range (MiningOutpostOperation
+        // gathers at BFS distance 1).
+        assert_eq!(invader_core_attack_score(0, 2, 500_000, false, true), None);
+    }
+
+    #[test]
+    fn stronghold_affordability_tiers() {
+        // Strongholds gate on the war chest: >30k affords L1, >100k L3,
+        // >200k L5.
+        assert_eq!(invader_core_attack_score(1, 1, 30_000, false, false), None);
+        assert!(invader_core_attack_score(1, 1, 30_001, false, false).is_some());
+        assert_eq!(invader_core_attack_score(2, 1, 100_000, false, false), None);
+        assert!(invader_core_attack_score(3, 1, 100_001, false, false).is_some());
+        assert_eq!(invader_core_attack_score(4, 1, 200_000, false, false), None);
+        assert!(invader_core_attack_score(5, 1, 200_001, false, false).is_some());
+        // Level 0 is affordable even with an empty war chest.
+        assert!(invader_core_attack_score(0, 1, 0, true, false).is_some());
+    }
+
+    /// Relation: among targetable cores, score strictly decreases with
+    /// distance and with level -- closer and easier always sorts first.
+    #[test]
+    fn core_score_monotonic_in_distance_and_level() {
+        for level in 0..=5u8 {
+            for dist in 0..6u32 {
+                let near = invader_core_attack_score(level, dist, 500_000, true, true);
+                let far = invader_core_attack_score(level, dist + 1, 500_000, true, true);
+                if let (Some(near), Some(far)) = (near, far) {
+                    assert!(near > far, "level {level} dist {dist}: {near} <= {far}");
+                }
+            }
+        }
+        for level in 0..5u8 {
+            let easy = invader_core_attack_score(level, 1, 500_000, true, true);
+            let hard = invader_core_attack_score(level + 1, 1, 500_000, true, true);
+            if let (Some(easy), Some(hard)) = (easy, hard) {
+                assert!(easy > hard, "level {level}: {easy} <= {hard}");
+            }
         }
     }
 }
