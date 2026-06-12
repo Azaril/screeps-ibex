@@ -13,6 +13,7 @@ pub fn get_new_dismantle_state<F, R>(
     creep: &Creep,
     dismantle_room: &RoomData,
     ignore_storage: bool,
+    max_structure_hits: u32,
     pathfinder: &mut PathfinderService,
     state_map: F,
 ) -> Option<R>
@@ -32,6 +33,7 @@ where
             .iter()
             .filter(|s| !ignore_for_dismantle(*s, sources))
             .filter(|s| can_dismantle(*s))
+            .filter(|s| within_dismantle_hits_horizon(*s, max_structure_hits))
             .filter(|s| ignore_storage || has_empty_storage(*s))
             .collect::<Vec<_>>();
 

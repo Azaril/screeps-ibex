@@ -18,6 +18,7 @@ pub mod raid;
 pub mod remotebuild;
 pub mod reserve;
 pub mod safe_mode;
+pub mod salvage;
 pub mod scout;
 pub mod squad_defense;
 pub mod terminal;

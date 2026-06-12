@@ -14,6 +14,7 @@ pub enum OperationData {
     Attack(super::attack::AttackOperation),
     Scout(super::scout::ScoutOperation),
     War(super::war::WarOperation),
+    Salvage(super::salvage::SalvageOperation),
 }
 
 impl OperationData {
@@ -25,6 +26,7 @@ impl OperationData {
             OperationData::Attack(ref mut data) => data,
             OperationData::Scout(ref mut data) => data,
             OperationData::War(ref mut data) => data,
+            OperationData::Salvage(ref mut data) => data,
         }
     }
 
@@ -37,6 +39,7 @@ impl OperationData {
             OperationData::Attack(ref data) => data.describe_operation(ctx),
             OperationData::Scout(ref data) => data.describe_operation(ctx),
             OperationData::War(ref data) => data.describe_operation(ctx),
+            OperationData::Salvage(ref data) => data.describe_operation(ctx),
         }
     }
 }

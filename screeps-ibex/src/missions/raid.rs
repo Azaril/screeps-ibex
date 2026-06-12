@@ -98,7 +98,16 @@ impl RaidMission {
             None => return Ok(()),
         };
 
-        for structure in structures.all().iter() {
+        let sources = room_data
+            .get_static_visibility_data()
+            .map(|s| s.sources().as_slice())
+            .unwrap_or(&[]);
+
+        // Loot scope: foreign structures and non-mining containers only.
+        // Without this, a raid in a room we also mine would register our own
+        // mining containers for withdrawal and the mission could never
+        // complete (miners keep refilling them).
+        for structure in structures.all().iter().filter(|s| is_salvage_loot_target(*s, sources)) {
             if let Some(store) = structure.as_has_store() {
                 for resource in store.store().store_types() {
                     let resource_amount = store.store().get_used_capacity(Some(resource));
@@ -194,12 +203,17 @@ impl Mission for RaidMission {
         }
 
         if let Some(structures) = room_data.get_structures() {
-            if structures.all().iter().all(has_empty_storage) {
+            let sources = room_data
+                .get_static_visibility_data()
+                .map(|s| s.sources().as_slice())
+                .unwrap_or(&[]);
+
+            if !structures.all().iter().any(|s| is_salvage_loot_target(s, sources)) {
                 return Ok(MissionResult::Success);
             }
         }
 
-        let can_spawn = system_data.governor.can_execute_cpu(CpuBar::LowPriority) && self.allow_spawning;
+        let can_spawn = system_data.features.raid && system_data.governor.can_execute_cpu(CpuBar::LowPriority) && self.allow_spawning;
 
         if !can_spawn {
             return Ok(MissionResult::Running);

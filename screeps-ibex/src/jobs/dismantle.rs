@@ -21,6 +21,9 @@ pub struct DismantleJobContext {
     dismantle_room: Entity,
     delivery_room: Entity,
     ignore_storage: bool,
+    /// Hit-pool horizon captured at spawn time (jobs have no Features access);
+    /// 0 = no limit. See `within_dismantle_hits_horizon`.
+    max_structure_hits: u32,
 }
 
 machine!(
@@ -64,6 +67,7 @@ impl Idle {
                 creep,
                 dismantle_room_data,
                 state_context.ignore_storage,
+                state_context.max_structure_hits,
                 tick_context.runtime_data.pathfinder,
                 DismantleState::dismantle,
             ) {
@@ -111,6 +115,7 @@ impl FinishedDismantle {
             tick_context.runtime_data.owner,
             dismantle_room_data,
             state_context.ignore_storage,
+            state_context.max_structure_hits,
             tick_context.runtime_data.pathfinder,
             DismantleState::dismantle,
         )
@@ -188,12 +193,13 @@ pub struct DismantleJob {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl DismantleJob {
-    pub fn new(dismantle_room: Entity, delivery_room: Entity, ignore_storage: bool) -> DismantleJob {
+    pub fn new(dismantle_room: Entity, delivery_room: Entity, ignore_storage: bool, max_structure_hits: u32) -> DismantleJob {
         DismantleJob {
             context: DismantleJobContext {
                 dismantle_room,
                 delivery_room,
                 ignore_storage,
+                max_structure_hits,
             },
             state: DismantleState::idle(),
         }

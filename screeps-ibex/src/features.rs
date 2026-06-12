@@ -449,6 +449,14 @@ pub struct DerelictFeatures {
     /// mining-outpost handoff. 0 = no limit. Default: 2_000_000
     /// (~2000 ticks of work for a 20-WORK dismantler).
     pub max_structure_hits: u32,
+    /// Maximum linear room distance from a home room for salvage targets.
+    /// Default: 2.
+    pub salvage_max_range: u32,
+    /// Maximum concurrent salvage missions. Default: 1.
+    pub salvage_max_missions: u32,
+    /// Ticks before a room that failed the salvage EV gate is re-evaluated
+    /// (bounds scout/EV churn on stripped or worthless rooms). Default: 10_000.
+    pub reject_cooldown: u32,
 }
 
 impl Default for DerelictFeatures {
@@ -460,6 +468,9 @@ impl Default for DerelictFeatures {
             action_max_age: 5_000,
             dismantle_margin: 2.0,
             max_structure_hits: 2_000_000,
+            salvage_max_range: 2,
+            salvage_max_missions: 1,
+            reject_cooldown: 10_000,
         }
     }
 }

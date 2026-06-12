@@ -64,12 +64,13 @@ impl DismantleMission {
         dismantle_room: Entity,
         delivery_room: Entity,
         ignore_storage: bool,
+        max_structure_hits: u32,
     ) -> crate::spawnsystem::SpawnQueueCallback {
         Box::new(move |spawn_system_data, name| {
             let name = name.to_string();
 
             spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Dismantle(DismantleJob::new(dismantle_room, delivery_room, ignore_storage));
+                let creep_job = JobData::Dismantle(DismantleJob::new(dismantle_room, delivery_room, ignore_storage, max_structure_hits));
 
                 let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
 
@@ -84,12 +85,16 @@ impl DismantleMission {
         })
     }
 
-    pub fn requires_dismantling(structures: &[StructureObject], sources: &[RemoteObjectId<Source>]) -> bool {
+    /// `max_structure_hits` must match what the dismantler jobs were spawned
+    /// with — completion and target selection share the horizon filter or the
+    /// mission never ends.
+    pub fn requires_dismantling(structures: &[StructureObject], sources: &[RemoteObjectId<Source>], max_structure_hits: u32) -> bool {
         structures
             .iter()
             .filter(|s| s.structure_type() != StructureType::Road)
             .filter(|s| !ignore_for_dismantle(*s, sources))
             .filter(|s| can_dismantle(*s))
+            .filter(|s| within_dismantle_hits_horizon(*s, max_structure_hits))
             .find(|s| has_empty_storage(*s))
             .is_some()
     }
@@ -148,10 +153,12 @@ impl Mission for DismantleMission {
             return Err("Room is owned by ourselves or a friendly".to_string());
         }
 
+        let max_structure_hits = system_data.features.derelict.max_structure_hits;
+
         if let Some(structures) = room_data.get_structures() {
             let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
 
-            if !Self::requires_dismantling(structures.all(), static_visibility_data.sources()) {
+            if !Self::requires_dismantling(structures.all(), static_visibility_data.sources(), max_structure_hits) {
                 //TODO: Clean up dismantlers - recyle them?
 
                 return Ok(MissionResult::Success);
@@ -213,7 +220,13 @@ impl Mission for DismantleMission {
                         &body,
                         SPAWN_PRIORITY_LOW,
                         Some(token),
-                        Self::create_handle_dismantler_spawn(mission_entity, self.room_data, *home_room_data_entity, self.ignore_storage),
+                        Self::create_handle_dismantler_spawn(
+                            mission_entity,
+                            self.room_data,
+                            *home_room_data_entity,
+                            self.ignore_storage,
+                            max_structure_hits,
+                        ),
                     );
 
                     system_data.spawn_queue.request(*home_room_data_entity, spawn_request);
