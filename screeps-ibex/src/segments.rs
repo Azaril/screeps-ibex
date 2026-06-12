@@ -17,7 +17,7 @@
 //! | 55    | cost-matrix cache (`COST_MATRIX_SEGMENT`)                   |
 //! | 56    | stats history (`STATS_HISTORY_SEGMENT`)                     |
 //! | 57    | metrics block (`METRICS_SEGMENT`, ADR 0006 / P1.A1)         |
-//! | 58    | *reserved:* market risk ledger + TradeGovernor (ADR 0012)   |
+//! | 58    | market memory: history cache + exposure ledger (`MARKET_SEGMENT`, ADR 0012) |
 //! | 60    | room-planner resume state (`PLANNER_MEMORY_SEGMENT`)        |
 //! | 61    | *reserved:* RoomGraph + inter-room road sets (ADR 0009)     |
 //! | 99    | live stats, legacy JSON (`LIVE_STATS_SEGMENT`)              |
@@ -48,6 +48,16 @@ pub const STATS_HISTORY_SEGMENT: u32 = 56;
 /// eval harness reader).
 pub const METRICS_SEGMENT: u32 = 57;
 
+/// Market memory: per-resource history-day cache + exposure ledger
+/// (`transfer::fairvalue` data, `transfer::ordersystem` glue — the interim
+/// form of ADR 0012 M3's risk-ledger segment). Deliberately self-contained:
+/// it carries its own version field and decodes independently of
+/// `WORLD_FORMAT_VERSION`, so reshaping the component segments can never
+/// cost the market state. NOT in the always-active set (which is 10 of 10
+/// in steady state): read once per VM lifetime via request-until-loaded;
+/// writes land through the arbiter's queued-write slot reservation.
+pub const MARKET_SEGMENT: u32 = 58;
+
 /// Room-planner resume state (`room::roomplansystem`).
 pub const PLANNER_MEMORY_SEGMENT: u32 = 60;
 
@@ -61,7 +71,7 @@ const OTHER_SEGMENT_IDS: &[u32] = &[
     COST_MATRIX_SEGMENT,
     STATS_HISTORY_SEGMENT,
     METRICS_SEGMENT,
-    58, // reserved: market risk ledger + TradeGovernor state (ADR 0012 M3)
+    MARKET_SEGMENT,
     PLANNER_MEMORY_SEGMENT,
     61, // reserved: RoomGraph + inter-room road sets (ADR 0009)
     LIVE_STATS_SEGMENT,

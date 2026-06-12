@@ -54,6 +54,10 @@ pub struct MemoryArbiter {
     active: Option<HashSet<u32>>,
     /// Segments that will be requested from the runtime at end-of-tick.
     requests: HashSet<u32>,
+    /// Queued segment writes awaiting a slot in the shared 10-touch budget
+    /// (see `queue_write`). Keyed by segment; a newer payload replaces an
+    /// older pending one.
+    pending_writes: std::collections::HashMap<u32, String>,
     /// Declared segment requirements (registered during environment creation).
     requirements: Vec<SegmentRequirement>,
     /// In-memory segment backing for host tests (P1.A7 / ADR 0015 F3):
@@ -70,6 +74,7 @@ impl MemoryArbiter {
         MemoryArbiter {
             active: None,
             requests: HashSet::new(),
+            pending_writes: std::collections::HashMap::new(),
             requirements: Vec::new(),
             #[cfg(test)]
             fake_segments: None,
@@ -84,6 +89,7 @@ impl MemoryArbiter {
         MemoryArbiter {
             active: Some((0..100).collect()),
             requests: HashSet::new(),
+            pending_writes: std::collections::HashMap::new(),
             requirements: Vec::new(),
             fake_segments: Some(std::collections::HashMap::new()),
         }
@@ -157,6 +163,46 @@ impl MemoryArbiter {
         }
     }
 
+    /// Queue a segment write that lands as soon as the engine's shared
+    /// 10-segments-touched budget allows — required for any writer whose
+    /// segment is NOT in the always-active set (which is 10 of 10 in steady
+    /// state, so an immediate write would never fit). Loaded-active segments
+    /// and writes share ONE per-tick cap: the runtime save loop counts every
+    /// key in `RawMemory.segments` and an 11th key THROWS, discarding the
+    /// whole end-of-tick save (`driver/runtime/runtime.js:250-268`;
+    /// engine-mechanics §9.1).
+    ///
+    /// Mechanics: `flush` first tries to land queued writes against the
+    /// tick's final key set; anything that does not fit gets a next-tick
+    /// active-slot reservation that displaces the highest-id request for one
+    /// tick (every ad-hoc requester gates its read AND write on `is_active`,
+    /// so the displaced segment simply skips a tick). A newer payload queued
+    /// for the same segment replaces the older pending one. Caveat: the
+    /// ascending-id priority means a queued write can only displace ids
+    /// HIGHER than its own.
+    pub fn queue_write(&mut self, segment: u32, data: String) {
+        self.pending_writes.insert(segment, data);
+    }
+
+    /// Write a segment if it fits the touch budget this tick: the key
+    /// already exists (loaded-active or already written), or there is a free
+    /// slot. Returns `false` when the write does not fit.
+    fn try_set(&mut self, segment: u32, data: &str) -> bool {
+        #[cfg(test)]
+        if self.fake_segments.is_some() {
+            self.set(segment, data);
+            return true;
+        }
+
+        let keys: Vec<u32> = raw_memory::segments().keys().map(|k| k as u32).collect();
+        if !keys.contains(&segment) && keys.len() >= 10 {
+            return false;
+        }
+
+        self.set(segment, data);
+        true
+    }
+
     // ── Pre-pass helpers (called by game loop) ───────────────────────────
 
     /// Add all registered segments to the request set for this tick.
@@ -197,7 +243,38 @@ impl MemoryArbiter {
     // ── End-of-tick flush ────────────────────────────────────────────────
 
     fn flush(&mut self) {
-        let segments: Vec<u8> = self.requests.iter().map(|&s| s as u8).collect();
+        // Land queued writes that fit the tick's FINAL key set (every system
+        // has run by now). A write to an existing key never grows the set.
+        let pending: Vec<u32> = self.pending_writes.keys().copied().collect();
+        for segment in pending {
+            if let Some(data) = self.pending_writes.remove(&segment) {
+                if !self.try_set(segment, &data) {
+                    self.pending_writes.insert(segment, data);
+                }
+            }
+        }
+
+        let pending_ids: Vec<u32> = self.pending_writes.keys().copied().collect();
+        let (segments, displaced) = plan_active_set(&self.requests, &pending_ids);
+
+        if self.requests.len() > 10 {
+            // Genuine over-cap of read requests — `setActiveSegments` throws
+            // outright on an 11-id list (`driver/runtime/runtime.js:134-136`),
+            // which would trap the tick. Clamped to the lowest ids: core
+            // world state (50-54) outranks caches, which outrank telemetry.
+            warn!(
+                "Active-segment requests exceed the engine cap of 10 - deferring segments {:?} to a later tick",
+                displaced
+            );
+        } else if !displaced.is_empty() {
+            // Designed one-tick displacement reserving key slots for queued
+            // writes (the displaced owners gate on is_active and skip a tick).
+            debug!(
+                "Reserving active-segment slot(s) for queued write(s) {:?} - displacing {:?} for one tick",
+                pending_ids, displaced
+            );
+        }
+
         raw_memory::set_active_segments(&segments);
         self.requests.clear();
         self.active = None;
@@ -253,6 +330,30 @@ pub fn run_pending_segment_loads(world: &mut World) {
     world.insert(arbiter);
 }
 
+/// Plan the next tick's active-segment list: every requested id, plus a
+/// reserved slot for each queued-write segment (its key must exist next tick
+/// for the write to fit the engine's shared 10-touch budget), clamped to the
+/// engine cap of 10 by dropping the HIGHEST ids first — the registry is
+/// ordered so lower ids matter more (world state 50-54 < caches < planner <
+/// telemetry 99). Returns `(active list, displaced ids)`.
+///
+/// Pure so the reservation arithmetic is host-testable. Limitation, by the
+/// same ascending-id rule: a queued write can only displace ids higher than
+/// its own.
+fn plan_active_set(requests: &HashSet<u32>, pending_writes: &[u32]) -> (Vec<u8>, Vec<u32>) {
+    let mut ids: Vec<u32> = requests.iter().copied().collect();
+    for &segment in pending_writes {
+        if !requests.contains(&segment) {
+            ids.push(segment);
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+
+    let displaced = if ids.len() > 10 { ids.split_off(10) } else { Vec::new() };
+    (ids.into_iter().map(|id| id as u8).collect(), displaced)
+}
+
 // ─── System ──────────────────────────────────────────────────────────────────
 
 #[derive(SystemData)]
@@ -292,5 +393,62 @@ mod arbiter_double_tests {
         for (i, seg) in crate::segments::COMPONENT_SEGMENTS.iter().enumerate() {
             assert_eq!(arbiter.get(*seg).as_deref(), Some(format!("chunk-{i}").as_str()));
         }
+    }
+
+    /// The steady-state active set is 10 of 10 — a queued write for the
+    /// market segment must reserve its slot by displacing the highest id
+    /// (live stats), never a lower one.
+    #[test]
+    fn plan_active_set_reserves_a_slot_for_a_queued_write() {
+        let steady: HashSet<u32> = [50, 51, 52, 53, 54, 55, 56, 57, 60, 99].into_iter().collect();
+
+        let (active, displaced) = plan_active_set(&steady, &[crate::segments::MARKET_SEGMENT]);
+        assert!(active.contains(&(crate::segments::MARKET_SEGMENT as u8)));
+        assert_eq!(displaced, vec![99]);
+        assert_eq!(active.len(), 10);
+    }
+
+    #[test]
+    fn plan_active_set_without_pressure_changes_nothing() {
+        let requests: HashSet<u32> = [50, 51, 52, 53, 54, 55, 56].into_iter().collect();
+
+        // Room to spare: pending write fits without displacement.
+        let (active, displaced) = plan_active_set(&requests, &[58]);
+        assert!(active.contains(&58));
+        assert!(displaced.is_empty());
+
+        // No pending writes: the request set passes through unclamped.
+        let (active, displaced) = plan_active_set(&requests, &[]);
+        assert_eq!(active.len(), 7);
+        assert!(displaced.is_empty());
+    }
+
+    #[test]
+    fn plan_active_set_clamps_genuine_overflow_to_the_lowest_ids() {
+        let over: HashSet<u32> = [50, 51, 52, 53, 54, 55, 56, 57, 58, 60, 99].into_iter().collect();
+
+        let (active, displaced) = plan_active_set(&over, &[]);
+        assert_eq!(active.len(), 10);
+        assert_eq!(displaced, vec![99]);
+    }
+
+    #[test]
+    fn plan_active_set_does_not_double_count_a_pending_segment_already_requested() {
+        let requests: HashSet<u32> = [50, 51, 52, 53, 54, 55, 56, 57, 58, 60].into_iter().collect();
+
+        let (active, displaced) = plan_active_set(&requests, &[58]);
+        assert_eq!(active.len(), 10);
+        assert!(displaced.is_empty());
+    }
+
+    /// Queued writes land through the double immediately at flush time; a
+    /// newer payload replaces an older pending one.
+    #[test]
+    fn queue_write_buffers_and_replaces() {
+        let mut arbiter = MemoryArbiter::test_double();
+        arbiter.queue_write(58, "old".to_string());
+        arbiter.queue_write(58, "new".to_string());
+        assert_eq!(arbiter.pending_writes.len(), 1);
+        assert_eq!(arbiter.pending_writes.get(&58).map(String::as_str), Some("new"));
     }
 }

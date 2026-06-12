@@ -231,8 +231,9 @@ impl TransferTarget {
             TransferTarget::Factory(id) => Self::withdraw_resource_amount_from_id(id, creep, resource, amount),
             //TODO: Split pickup and deposit targets.
             TransferTarget::Nuker(_id) => {
-                // A nuker cannot be a withdraw source (see the raid.rs
-                // structure registration). Return an error instead of
+                // A nuker cannot be a withdraw source (see the salvage-loot
+                // structure registration, missions/salvage.rs). Return an
+                // error instead of
                 // panicking -- under panic="abort" a panic here aborts the
                 // whole tick and skips serialize_world (IBEX-010).
                 Self::warn_once_nuker_withdraw();
@@ -2114,6 +2115,15 @@ impl TransferQueue {
             .iter()
             .flat_map(|room| {
                 let cost_per_unit = super::utility::calc_transaction_cost_fractional(anchor_location, *room);
+
+                // Hard ceiling on intra-empire send cost (ADR 0012 §3 /
+                // IBEX-018): the `resources/cost` ranking below has no floor,
+                // so a far room could win with an arbitrarily bad ratio when
+                // it was the only candidate. Long-haul energy belongs to
+                // battery compression (ADR 0010), not raw terminal sends.
+                if cost_per_unit > crate::transfer::fairvalue::MAX_INTRA_EMPIRE_COST_PER_UNIT {
+                    return Vec::new();
+                }
 
                 let max_resources = (available_transfer_energy as f64 / cost_per_unit).floor() as u32;
 
