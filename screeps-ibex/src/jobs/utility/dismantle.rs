@@ -154,7 +154,6 @@ pub enum BreachBlocker {
     Impassable,
 }
 
-const ROOM_DIM: usize = 50;
 /// Cost of stepping onto any passable tile. Swamps are deliberately not
 /// surcharged: the corridor optimizes dismantle work, not travel time.
 const BREACH_STEP_COST: u64 = 1;
@@ -191,31 +190,25 @@ pub fn blocker_fingerprint(blockers: &std::collections::HashMap<(u8, u8), Breach
     hash
 }
 
-/// Plan the cheapest "breach corridor" from `start` to within range 1 of
-/// `goal` (the controller): an 8-directional Dijkstra over the room where
-/// entering a tile costs [`BREACH_STEP_COST`] plus [`BREACH_HIT_WEIGHT`] per
-/// hit of dismantlable blocker standing on it. Returns the blocker tiles
-/// along that corridor in walk order — empty when the goal is already
-/// reachable without dismantling — or `None` when no corridor exists even
-/// through dismantlable blockers (sealed by terrain or by structures past the
-/// hit-pool horizon).
+/// Breach-corridor PRICING POLICY over the pathfinding system's
+/// [`room_grid_dijkstra`](crate::pathing::gridsearch::room_grid_dijkstra)
+/// mechanism: plan the cheapest corridor from `start` to within range 1 of
+/// `goal` (the controller), where entering a tile costs [`BREACH_STEP_COST`]
+/// plus [`BREACH_HIT_WEIGHT`] per hit of dismantlable blocker standing on
+/// it. Returns the blocker tiles along that corridor in walk order — empty
+/// when the goal is already reachable without dismantling — or `None` when
+/// no corridor exists even through dismantlable blockers (sealed by terrain
+/// or by structures past the hit-pool horizon).
 ///
-/// Pure kernel (host-tested): terrain arrives as a closure, blockers as plain
-/// tile coordinates. Deterministic per EP-6.13 — the heap orders by
-/// (cost, tile index), so equal-cost corridors always resolve the same way.
+/// Pure (host-tested): terrain arrives as a closure, blockers as plain tile
+/// coordinates. The search algorithm itself lives in `pathing::gridsearch` —
+/// pathfinding algorithms are never implemented in feature modules.
 pub fn breach_path_blockers(
     is_wall: &dyn Fn(u8, u8) -> bool,
     blockers: &std::collections::HashMap<(u8, u8), BreachBlocker>,
     start: (u8, u8),
     goal: (u8, u8),
 ) -> Option<Vec<(u8, u8)>> {
-    use std::cmp::Reverse;
-    use std::collections::BinaryHeap;
-
-    let index = |x: u8, y: u8| y as usize * ROOM_DIM + x as usize;
-    let coords = |i: usize| ((i % ROOM_DIM) as u8, (i / ROOM_DIM) as u8);
-    let adjacent_to_goal = |x: u8, y: u8| x.abs_diff(goal.0) <= 1 && y.abs_diff(goal.1) <= 1;
-
     let enter_cost = |x: u8, y: u8| -> Option<u64> {
         if is_wall(x, y) {
             return None;
@@ -228,79 +221,13 @@ pub fn breach_path_blockers(
         }
     };
 
-    if adjacent_to_goal(start.0, start.1) {
-        return Some(Vec::new());
-    }
+    let path = crate::pathing::gridsearch::room_grid_dijkstra(&enter_cost, start, goal, 1)?;
 
-    let mut dist = vec![u64::MAX; ROOM_DIM * ROOM_DIM];
-    let mut prev = vec![usize::MAX; ROOM_DIM * ROOM_DIM];
-    let mut heap: BinaryHeap<Reverse<(u64, usize)>> = BinaryHeap::new();
-
-    let start_index = index(start.0, start.1);
-    dist[start_index] = 0;
-    heap.push(Reverse((0, start_index)));
-
-    let mut found: Option<usize> = None;
-
-    while let Some(Reverse((cost, node))) = heap.pop() {
-        if cost > dist[node] {
-            continue;
-        }
-
-        let (x, y) = coords(node);
-
-        if adjacent_to_goal(x, y) {
-            found = Some(node);
-            break;
-        }
-
-        for dx in -1i32..=1 {
-            for dy in -1i32..=1 {
-                if dx == 0 && dy == 0 {
-                    continue;
-                }
-
-                let nx = x as i32 + dx;
-                let ny = y as i32 + dy;
-
-                if !(0..ROOM_DIM as i32).contains(&nx) || !(0..ROOM_DIM as i32).contains(&ny) {
-                    continue;
-                }
-
-                let (nx, ny) = (nx as u8, ny as u8);
-
-                let Some(step) = enter_cost(nx, ny) else {
-                    continue;
-                };
-
-                let neighbor = index(nx, ny);
-                let next_cost = cost.saturating_add(step);
-
-                if next_cost < dist[neighbor] {
-                    dist[neighbor] = next_cost;
-                    prev[neighbor] = node;
-                    heap.push(Reverse((next_cost, neighbor)));
-                }
-            }
-        }
-    }
-
-    let mut node = found?;
-    let mut breach_tiles = Vec::new();
-
-    while node != start_index {
-        let tile = coords(node);
-
-        if matches!(blockers.get(&tile), Some(BreachBlocker::Dismantlable(_))) {
-            breach_tiles.push(tile);
-        }
-
-        node = prev[node];
-    }
-
-    breach_tiles.reverse();
-
-    Some(breach_tiles)
+    Some(
+        path.into_iter()
+            .filter(|tile| matches!(blockers.get(tile), Some(BreachBlocker::Dismantlable(_))))
+            .collect(),
+    )
 }
 
 #[cfg(test)]
