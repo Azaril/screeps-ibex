@@ -8,6 +8,7 @@ use crate::jobs::declaim::*;
 use crate::jobs::dismantle::*;
 use crate::jobs::haul::*;
 use crate::jobs::utility::dismantle::*;
+use crate::jobs::utility::dismantlebehavior::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use crate::room::visibilitysystem::*;
@@ -485,7 +486,7 @@ impl Mission for SalvageMission {
         }
 
         // Phase 1: gates and work survey against an immutable room borrow.
-        let (room_name, work, dismantle_ready, declaim_target) = {
+        let (room_name, work, dismantle_ready, declaim_target, declaim_access) = {
             let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
             let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility data")?;
 
@@ -551,11 +552,23 @@ impl Mission for SalvageMission {
                 // store-full structures become ready as raiders drain them.
                 let dismantle_ready = requires_dismantling(structures.all(), sources, derelict_features.max_structure_hits);
 
-                (work, dismantle_ready)
+                // Can a de-claimer actually reach the controller? Gates CLAIM
+                // spawning so we don't burn CLAIM bodies that die against a
+                // walled-in controller before dismantlers breach the path.
+                let declaim_access = declaim_target.map(|controller_id| {
+                    controller_access(
+                        room_data.name,
+                        structures.all(),
+                        controller_id.pos(),
+                        derelict_features.max_structure_hits,
+                    )
+                });
+
+                (work, dismantle_ready, declaim_access)
             });
 
             match survey {
-                Some((work, dismantle_ready)) => (room_data.name, work, dismantle_ready, declaim_target),
+                Some((work, dismantle_ready, declaim_access)) => (room_data.name, work, dismantle_ready, declaim_target, declaim_access),
                 None => {
                     system_data.visibility.request(VisibilityRequest::new(
                         room_data.name,
@@ -589,8 +602,21 @@ impl Mission for SalvageMission {
         // One de-claimer at a time: only one attackController strike lands per
         // 1000 ticks anyway (engine-mechanics §2.12), so a second would idle.
         // `declaim_target` is already gated on declaim enabled + hostile-owned
-        // + sources present.
-        let desired_declaimers = if declaim_target.is_some() { 1 } else { 0 };
+        // + sources present; `declaim_access` gates on whether the controller
+        // can be reached:
+        //   - ReachableNow → desire 1 and SPAWN (path is clear);
+        //   - Breachable (and dismantlers can clear it) → desire 1 but DON'T
+        //     spawn yet — keeps the mission alive so dismantlers open the path
+        //     (M10 prioritizes the controller corridor) without wasting CLAIM
+        //     bodies that would die en route;
+        //   - Sealed, or Breachable with dismantle disabled → desire 0 (can't
+        //     get there; let the mission complete once loot/dismantle are done).
+        let declaim_spawnable = matches!(declaim_access, Some(ControllerAccess::ReachableNow));
+        let desired_declaimers = match declaim_access {
+            Some(ControllerAccess::ReachableNow) => 1,
+            Some(ControllerAccess::Breachable) if features.dismantle => 1,
+            _ => 0,
+        };
 
         if desired_raiders == 0 && desired_dismantlers == 0 && desired_declaimers == 0 {
             info!("Salvage of room {} complete - no enabled work remains", room_name);
@@ -610,7 +636,7 @@ impl Mission for SalvageMission {
             self.spawn_dismantlers(system_data, mission_entity, derelict_features.max_structure_hits)?;
         }
 
-        if self.declaimers.len() < desired_declaimers {
+        if declaim_spawnable && self.declaimers.len() < desired_declaimers {
             if let Some(controller_id) = declaim_target {
                 self.spawn_declaimers(system_data, mission_entity, controller_id)?;
             }

@@ -2,6 +2,7 @@ use super::dismantle::*;
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
 use crate::jobs::utility::movebehavior::mark_working;
+use crate::pathing::gridsearch::reaches_room_edge;
 use crate::pathing::pathfinderservice::PathfinderService;
 use crate::room::data::*;
 use crate::structureidentifier::*;
@@ -53,6 +54,76 @@ fn breach_blockers(structures: &[StructureObject], max_structure_hits: u32) -> H
     }
 
     result
+}
+
+/// Whether the room's controller can be physically reached, and if not,
+/// whether dismantling could open a path. Drives the salvage de-claim gate:
+/// CLAIM creeps are only worth spawning once a creep can actually walk to the
+/// controller — otherwise they die en route while the path is still walled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControllerAccess {
+    /// A creep can walk from a room edge to range 1 of the controller right
+    /// now — no dismantling required.
+    ReachableNow,
+    /// Blocked today, but every blocker sealing it off is dismantlable within
+    /// the hit horizon — dismantlers can open a corridor (M10 prioritizes the
+    /// controller path), so de-claim is worth keeping alive (just not spawning
+    /// yet).
+    Breachable,
+    /// No path even through dismantlable blockers (sealed by terrain or by
+    /// structures past the hit horizon) — de-claim is impossible here.
+    Sealed,
+}
+
+/// Classify how reachable a room's controller is for de-claim, using the
+/// pathfinding system's flood-to-edge primitive twice: once treating ALL
+/// non-walkable structures as blocking (reachable now?), once treating only
+/// the un-clearable ones (terrain walls + engine-undismantlable + over-horizon)
+/// as blocking (breachable?). Needs live terrain; returns `Breachable` (the
+/// safe "wait, don't give up" verdict) if the room is not visible.
+pub fn controller_access(
+    room: RoomName,
+    structures: &[StructureObject],
+    controller_pos: Position,
+    max_structure_hits: u32,
+) -> ControllerAccess {
+    let Some(room_obj) = game::rooms().get(room) else {
+        return ControllerAccess::Breachable;
+    };
+
+    let terrain = FastRoomTerrain::new(room_obj.get_terrain().get_raw_buffer().to_vec());
+
+    let mut blocked_now: HashSet<(u8, u8)> = HashSet::new();
+    let mut blocked_unclearable: HashSet<(u8, u8)> = HashSet::new();
+
+    for structure in structures {
+        if structure_is_walkable(structure) {
+            continue;
+        }
+
+        let pos = structure.pos();
+        let tile = (pos.x().u8(), pos.y().u8());
+        blocked_now.insert(tile);
+
+        let clearable = can_dismantle(structure) && within_dismantle_hits_horizon(structure, max_structure_hits);
+        if !clearable {
+            blocked_unclearable.insert(tile);
+        }
+    }
+
+    let start = (controller_pos.x().u8(), controller_pos.y().u8());
+
+    let passable_now = |x: u8, y: u8| !terrain.is_wall(x, y) && !blocked_now.contains(&(x, y));
+    if reaches_room_edge(&passable_now, start) {
+        return ControllerAccess::ReachableNow;
+    }
+
+    let passable_breach = |x: u8, y: u8| !terrain.is_wall(x, y) && !blocked_unclearable.contains(&(x, y));
+    if reaches_room_edge(&passable_breach, start) {
+        ControllerAccess::Breachable
+    } else {
+        ControllerAccess::Sealed
+    }
 }
 
 /// Rooms the breach-plan cache retains; least-recently-used entries are

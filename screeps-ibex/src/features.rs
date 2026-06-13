@@ -465,6 +465,12 @@ pub struct DerelictFeatures {
     /// de-claimers finish naturally. Only acts on hostile-owned derelict rooms
     /// that have sources (worth taking over). Default: true.
     pub declaim: bool,
+    /// Emit per-room salvage-candidacy diagnostics to the log each scan: for
+    /// every hostile/neutral room within `salvage_max_range`, why it is or is
+    /// not an admitted salvage target (derelict? confirmed? intel age?
+    /// rejected-cooldown?). Off by default — flip on to debug "why isn't this
+    /// derelict room being salvaged". Default: false.
+    pub diagnostics: bool,
 }
 
 impl Default for DerelictFeatures {
@@ -480,6 +486,7 @@ impl Default for DerelictFeatures {
             salvage_max_missions: 1,
             reject_cooldown: 10_000,
             declaim: true,
+            diagnostics: false,
         }
     }
 }

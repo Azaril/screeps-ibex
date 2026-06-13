@@ -3,6 +3,7 @@ use super::operationsystem::*;
 use crate::missions::constants::*;
 use crate::missions::salvage::*;
 use crate::missions::utility::*;
+use crate::room::data::RoomDisposition;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use crate::visualization::SummaryContent;
@@ -217,6 +218,83 @@ impl SalvageOperation {
         }
     }
 
+    /// Log, for every hostile/neutral room within salvage range, exactly why
+    /// it is or isn't an admitted salvage target — the answer to "why isn't
+    /// this derelict room being salvaged". Gated behind
+    /// `features.derelict.diagnostics`; runs on the scan cadence.
+    fn log_diagnostics(
+        &self,
+        system_data: &OperationExecutionSystemData,
+        home_rooms: &[(Entity, RoomName)],
+        rooms_with_missions: &std::collections::HashSet<RoomName>,
+    ) {
+        let df = system_data.features.derelict;
+        let now = game::time();
+
+        fn disposition(d: &RoomDisposition) -> &'static str {
+            if d.mine() {
+                "mine"
+            } else if d.friendly() {
+                "friendly"
+            } else if d.hostile() {
+                "hostile"
+            } else {
+                "neutral"
+            }
+        }
+
+        info!(
+            "[salvage-diag] scan @{} home_rooms={} missions={}/{} rejected={} raid={} dismantle={} declaim={}",
+            now,
+            home_rooms.len(),
+            self.salvage_missions.len(),
+            df.salvage_max_missions,
+            self.rejected.len(),
+            system_data.features.raid,
+            system_data.features.dismantle,
+            df.declaim,
+        );
+
+        for (_, room_data) in (system_data.entities, &*system_data.room_data).join() {
+            let Some(dvd) = room_data.get_dynamic_visibility_data() else {
+                continue;
+            };
+
+            if !(dvd.owner().hostile() || dvd.owner().neutral()) {
+                continue;
+            }
+
+            let min_range = home_rooms
+                .iter()
+                .map(|(_, home_name)| game::map::get_room_linear_distance(*home_name, room_data.name, false))
+                .min()
+                .unwrap_or(u32::MAX);
+
+            if min_range > df.salvage_max_range {
+                continue;
+            }
+
+            let sources = room_data.get_static_visibility_data().map(|s| s.sources().len()).unwrap_or(0);
+            let rejected_until = self.rejected.iter().find(|r| r.room_name == room_data.name).map(|r| r.until_tick);
+
+            info!(
+                "[salvage-diag] {} owner={} range={} sources={} derelict={} confirmed={} held={:?} age={} sk={} safe={} mission={} rejected_until={:?}",
+                room_data.name,
+                disposition(dvd.owner()),
+                min_range,
+                sources,
+                dvd.derelict(),
+                dvd.confirmed_derelict(df.confirm_ticks, df.action_max_age),
+                dvd.derelict_for(),
+                dvd.age(),
+                dvd.source_keeper(),
+                dvd.safe_mode_active(),
+                rooms_with_missions.contains(&room_data.name),
+                rejected_until,
+            );
+        }
+    }
+
     /// Home rooms able to spawn salvage creeps (own spawn, RCL >= 2).
     /// Mirrors `ScoutOperation::gather_home_rooms` rather than reusing
     /// `room::gather::gather_home_rooms`, which requires a full
@@ -339,6 +417,10 @@ impl Operation for SalvageOperation {
 
         if home_rooms.is_empty() {
             return Ok(OperationResult::Running);
+        }
+
+        if features.derelict.diagnostics {
+            self.log_diagnostics(system_data, &home_rooms, &rooms_with_missions);
         }
 
         // Pass 0 runs even at the mission cap so the next target's
