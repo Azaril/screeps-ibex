@@ -432,14 +432,16 @@ impl Operation for SalvageOperation {
         }
 
         // Pass 1: classify candidates from intel (immutable scan).
+        let diagnostics = features.derelict.diagnostics;
         let mut candidates: Vec<(Entity, RoomName)> = Vec::new();
+        // Takeover-worthy rooms found on the rejection cooldown: cleared after
+        // the scan. The cooldown damps churn on low-value/transiently-bad
+        // rooms — it must NOT strand a room we actively mean to de-claim and
+        // take (a single stale reject would otherwise sideline it ~10k ticks).
+        let mut clear_cooldown: Vec<RoomName> = Vec::new();
 
         for (entity, room_data) in (system_data.entities, &*system_data.room_data).join() {
             if rooms_with_missions.contains(&room_data.name) {
-                continue;
-            }
-
-            if self.rejected.iter().any(|r| r.room_name == room_data.name) {
                 continue;
             }
 
@@ -461,6 +463,11 @@ impl Operation for SalvageOperation {
                 continue;
             }
 
+            let sources_present = room_data
+                .get_static_visibility_data()
+                .map(|s| !s.sources().is_empty())
+                .unwrap_or(false);
+
             // Hostile-owned rooms must be confirmed derelict; neutral rooms
             // qualify when militarily quiet with foreign remnants observed.
             // Reserved neutral rooms are excluded: a hostile reservation means
@@ -478,9 +485,28 @@ impl Operation for SalvageOperation {
                 false
             };
 
+            // A confirmed-derelict room with sources we can act on is a
+            // takeover target (clear → de-claim → mine), not churn.
+            let takeover_worthy = eligible && dynamic_visibility_data.owner().hostile() && sources_present && features.derelict.declaim;
+
+            if self.rejected.iter().any(|r| r.room_name == room_data.name) {
+                if takeover_worthy {
+                    clear_cooldown.push(room_data.name);
+                    if diagnostics {
+                        info!("[salvage-diag] {} clearing stale cooldown (takeover-worthy)", room_data.name);
+                    }
+                } else {
+                    continue;
+                }
+            }
+
             if eligible {
                 candidates.push((entity, room_data.name));
             }
+        }
+
+        for room_name in &clear_cooldown {
+            self.rejected.retain(|r| r.room_name != *room_name);
         }
 
         // Pass 2: evaluate work + EV; admit up to the mission cap.
@@ -491,16 +517,24 @@ impl Operation for SalvageOperation {
                 break;
             }
 
-            let Some((home_entity, home_name)) = home_rooms
-                .iter()
-                .min_by_key(|(_, home_name)| game::map::get_room_linear_distance(*home_name, room_name, false))
-                .copied()
-            else {
-                continue;
-            };
+            // Nearest home by ACTUAL route distance, not Chebyshev: a diagonal
+            // neighbour is 1 by linear distance but 2 route hops, which would
+            // wrongly read as non-strategic and over-cost the EV. Pick the home
+            // that minimizes travel.
+            let mut best_home: Option<(Entity, u32)> = None;
+            for (home_entity, home_name) in &home_rooms {
+                if let Some(travel) = system_data.pathfinder.travel_ticks(*home_name, room_name, game::time()) {
+                    if best_home.map(|(_, best)| travel < best).unwrap_or(true) {
+                        best_home = Some((*home_entity, travel));
+                    }
+                }
+            }
 
-            let Some(travel_ticks) = system_data.pathfinder.travel_ticks(home_name, room_name, game::time()) else {
-                // Unreachable from the nearest home room; check back later.
+            let Some((home_entity, travel_ticks)) = best_home else {
+                // Unreachable from every home room; check back later.
+                if diagnostics {
+                    info!("[salvage-diag] {} rejected: unreachable from all home rooms", room_name);
+                }
                 self.rejected.push(SalvageRejection {
                     room_name,
                     until_tick: game::time() + features.derelict.reject_cooldown,
@@ -508,16 +542,27 @@ impl Operation for SalvageOperation {
                 continue;
             };
 
-            // `strategic` (sources present + adjacent future outpost) is known
-            // from PERSISTED intel alone — sources are static visibility data,
-            // travel is the cached route — so it needs no live structures.
+            // All from PERSISTED intel (sources are static, travel is cached) —
+            // no live structures needed.
             let sources_present = system_data
                 .room_data
                 .get(room_entity)
                 .and_then(|rd| rd.get_static_visibility_data())
                 .map(|s| !s.sources().is_empty())
                 .unwrap_or(false);
+
+            // `strategic`: a sources-bearing room one ORTHOGONAL hop away — a
+            // future mining outpost (matches the outpost gather's BFS depth).
+            // Bypasses the loot EV margin.
             let strategic = sources_present && travel_ticks <= 50 * STRATEGIC_OUTPOST_HOPS;
+
+            // `declaim_takeover`: any sources-bearing confirmed-derelict room in
+            // range we mean to de-claim and take. Wider than `strategic` — it
+            // does NOT require a single orthogonal hop, because the operator
+            // surrounds rooms further than one step and still wants them.
+            // Admitting just starts the mission; the de-claim role is itself
+            // reachability-gated, so this never wastes CLAIM creeps.
+            let declaim_takeover = sources_present && features.derelict.declaim;
 
             // The work/EV survey needs LIVE structure data (only present when
             // the room is in `game.rooms()` this tick). Unlike the mining
@@ -571,12 +616,21 @@ impl Operation for SalvageOperation {
                         features.dismantle,
                     );
 
-                    // A strategic room is worth admitting for de-claim alone:
-                    // neutralizing the controller is what unblocks the waiting
-                    // mining outpost, even when no loot/dismantle work remains.
-                    let declaim_takeover = strategic && features.derelict.declaim;
-
+                    // Admit if the loot/dismantle EV clears, OR this is a
+                    // takeover target (clearing + de-claiming the controller is
+                    // the value even with no recoverable loot).
                     if !worthwhile && !declaim_takeover {
+                        if diagnostics {
+                            info!(
+                                "[salvage-diag] {} rejected: EV not worthwhile (loot={} hits={} travel={} strategic={} declaim_takeover={})",
+                                room_name,
+                                work.loot_total(),
+                                work.dismantle_hits,
+                                travel_ticks,
+                                strategic,
+                                declaim_takeover
+                            );
+                        }
                         self.rejected.push(SalvageRejection {
                             room_name,
                             until_tick: game::time() + features.derelict.reject_cooldown,
@@ -585,8 +639,8 @@ impl Operation for SalvageOperation {
                     }
 
                     info!(
-                        "Starting salvage mission for room {} (loot energy: {}, loot other: {}, dismantle hits: {}, travel: {}, strategic: {})",
-                        room_name, work.loot_energy, work.loot_other, work.dismantle_hits, travel_ticks, strategic
+                        "Starting salvage mission for room {} (loot energy: {}, loot other: {}, dismantle hits: {}, travel: {}, strategic: {}, takeover: {})",
+                        room_name, work.loot_energy, work.loot_other, work.dismantle_hits, travel_ticks, strategic, declaim_takeover
                     );
                 }
                 None => {
@@ -597,13 +651,23 @@ impl Operation for SalvageOperation {
                         VisibilityRequestFlags::ALL,
                     ));
 
-                    if !strategic {
+                    // Admit on intel only when no live work survey is needed:
+                    // strategic (loot EV bypassed) or a de-claim takeover (the
+                    // mission re-surveys every tick and self-sizes). Otherwise
+                    // wait for eyes so the EV can be evaluated honestly.
+                    if !strategic && !declaim_takeover {
+                        if diagnostics {
+                            info!(
+                                "[salvage-diag] {} not visible, not strategic/takeover — waiting for eyes",
+                                room_name
+                            );
+                        }
                         continue;
                     }
 
                     info!(
-                        "Starting salvage mission for room {} on intel (strategic, room not visible this tick; travel: {})",
-                        room_name, travel_ticks
+                        "Starting salvage mission for room {} on intel (room not visible this tick; travel: {}, strategic: {}, takeover: {})",
+                        room_name, travel_ticks, strategic, declaim_takeover
                     );
                 }
             }
