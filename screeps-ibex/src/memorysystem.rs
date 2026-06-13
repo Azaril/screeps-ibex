@@ -395,15 +395,17 @@ mod arbiter_double_tests {
         }
     }
 
-    /// The steady-state active set is 10 of 10 — a queued write for the
-    /// market segment must reserve its slot by displacing the highest id
-    /// (live stats), never a lower one.
+    /// With a full 10-of-10 active set, a queued write for a non-active
+    /// segment must reserve its slot by displacing the highest id (live
+    /// stats), never a lower one. (The market segment is always-active
+    /// since 2026-06-12; this pins the mechanism for future non-active
+    /// writers and the planned periodic-segment rotation.)
     #[test]
     fn plan_active_set_reserves_a_slot_for_a_queued_write() {
-        let steady: HashSet<u32> = [50, 51, 52, 53, 54, 55, 56, 57, 60, 99].into_iter().collect();
+        let full: HashSet<u32> = [50, 51, 52, 53, 54, 55, 56, 57, 60, 99].into_iter().collect();
 
-        let (active, displaced) = plan_active_set(&steady, &[crate::segments::MARKET_SEGMENT]);
-        assert!(active.contains(&(crate::segments::MARKET_SEGMENT as u8)));
+        let (active, displaced) = plan_active_set(&full, &[58]);
+        assert!(active.contains(&58));
         assert_eq!(displaced, vec![99]);
         assert_eq!(active.len(), 10);
     }

@@ -100,13 +100,18 @@ pub struct OrderQueueSystemData<'a> {
     memory_arbiter: WriteExpect<'a, MemoryArbiter>,
 }
 
-/// Decode the market segment into a [`MarketMemory`], loudly starting fresh
-/// on an empty segment, a version mismatch, or a decode failure. The block
-/// carries its own version precisely so it never depends on (or risks) the
-/// component segments' `WORLD_FORMAT_VERSION`.
-fn load_market_memory(arbiter: &MemoryArbiter) -> MarketMemory {
-    let mut memory = arbiter
-        .get(MARKET_SEGMENT)
+/// Decode the market segment into the world's [`MarketMemory`] resource,
+/// loudly starting fresh on an empty segment, a version mismatch, or a
+/// decode failure. The block carries its own version precisely so it never
+/// depends on (or risks) the component segments' `WORLD_FORMAT_VERSION`.
+///
+/// Called by the `MemoryArbiter` `on_load` callback the first time the
+/// (always-active) market segment becomes available — the arbiter is
+/// temporarily removed from the world during callbacks, so the segment is
+/// read directly via `raw_memory`.
+pub fn load_market_memory(world: &mut World) {
+    let mut memory = screeps::raw_memory::segments()
+        .get(MARKET_SEGMENT as u8)
         .filter(|raw| !raw.is_empty())
         .and_then(|raw| match crate::serialize::decode_from_string::<MarketMemory>(&raw) {
             Ok(decoded) if decoded.version == MARKET_MEMORY_VERSION => Some(decoded),
@@ -125,17 +130,17 @@ fn load_market_memory(arbiter: &MemoryArbiter) -> MarketMemory {
         .unwrap_or_default();
 
     memory.loaded = true;
-    memory
+    world.insert(memory);
 }
 
 fn save_market_memory(arbiter: &mut MemoryArbiter, memory: &MarketMemory) {
     match crate::serialize::encode_to_string(memory) {
         Ok(encoded) => {
-            // The market segment is not in the always-active set (which is
-            // 10 of 10 in steady state), so the write goes through the
-            // arbiter's queued-write path: it lands as soon as the shared
-            // touch budget allows — usually the next tick, via a one-tick
-            // reservation that displaces the lowest-priority active id.
+            // The market segment is always-active, so its key exists and
+            // the queued write lands at this tick's flush; queue_write
+            // (rather than a bare set) keeps the write safe against the
+            // 10-touch budget even if the segment ever leaves the active
+            // set again.
             arbiter.queue_write(MARKET_SEGMENT, encoded);
         }
         Err(err) => warn!("Failed to encode market memory segment: {}", err),
@@ -457,18 +462,10 @@ impl<'a> System<'a> for OrderQueueSystem {
         let can_buy = features.market.buy && game::market::credits() > features.market.credit_reserve;
         let can_sell = features.market.sell;
 
-        // One-shot market-memory load from the dedicated segment: request
-        // until active, read once, then go write-only (the segment leaves
-        // the active set, staying clear of the 10-active-segment budget).
-        // Trading gates on `loaded` so exposure commitments made before the
-        // read could never be overwritten by it.
-        if (can_buy || can_sell) && !data.market_memory.loaded {
-            data.memory_arbiter.request(MARKET_SEGMENT);
-            if data.memory_arbiter.is_active(MARKET_SEGMENT) {
-                *data.market_memory = load_market_memory(&data.memory_arbiter);
-            }
-        }
-
+        // The market segment is always-active; its `on_load` callback fills
+        // the MarketMemory resource on the first available tick. Gating
+        // trading on `loaded` ensures exposure commitments can never precede
+        // (and so be overwritten by) the load.
         let can_run = game::time().is_multiple_of(20)
             && data.governor.can_execute_cpu(CpuBar::HighPriority)
             && (can_buy || can_sell)

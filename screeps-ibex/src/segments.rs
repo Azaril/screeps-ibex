@@ -13,11 +13,12 @@
 //!
 //! | Seg   | Owner / contents                                            |
 //! |-------|-------------------------------------------------------------|
-//! | 50–54 | ECS component payload (`COMPONENT_SEGMENTS`)                |
+//! | 50–53 | ECS component payload (`COMPONENT_SEGMENTS`)                |
+//! | 54    | *freed 2026-06-12* (former 5th component chunk — shrunk to fund the always-active market segment; stale chunk data may linger server-side until reused) |
 //! | 55    | cost-matrix cache (`COST_MATRIX_SEGMENT`)                   |
 //! | 56    | stats history (`STATS_HISTORY_SEGMENT`)                     |
 //! | 57    | metrics block (`METRICS_SEGMENT`, ADR 0006 / P1.A1)         |
-//! | 58    | market memory: history cache + exposure ledger (`MARKET_SEGMENT`, ADR 0012) |
+//! | 58    | market memory: history cache + exposure ledger (`MARKET_SEGMENT`, ADR 0012; always-active) |
 //! | 60    | room-planner resume state (`PLANNER_MEMORY_SEGMENT`)        |
 //! | 61    | *reserved:* RoomGraph + inter-room road sets (ADR 0009)     |
 //! | 99    | live stats, legacy JSON (`LIVE_STATS_SEGMENT`)              |
@@ -31,9 +32,15 @@
 /// and blanks every id in the list not consumed by a chunk — which is why
 /// this list must never contain a segment owned by another subsystem
 /// (IBEX-013). The chunk-count watermark log in `serialize_world` monitors
-/// how close the payload gets to this budget; the dedicated cost-matrix
-/// segment move (ADR 0002 Increment 2) is the long-term fix.
-pub const COMPONENT_SEGMENTS: &[u32] = &[50, 51, 52, 53, 54];
+/// how close the payload gets to this budget.
+///
+/// Shrunk 5 → 4 (seg 54 freed) on 2026-06-12 to fund the always-active
+/// market segment within the engine's 10-touch budget — gated on watermark
+/// evidence (BASELINE-2 scale used 1 of 5 chunks; the watermark warns at
+/// budget − 1). If a future empire approaches 4 chunks, reclaim a slot via
+/// the periodic-segment rotation planned for lazily-used ids (60 et al.)
+/// rather than re-growing this list.
+pub const COMPONENT_SEGMENTS: &[u32] = &[50, 51, 52, 53];
 
 /// Cost-matrix cache (`pathing::costmatrixsystem`). Formerly collided with
 /// the component range (IBEX-013); the registry check below keeps it
@@ -53,9 +60,13 @@ pub const METRICS_SEGMENT: u32 = 57;
 /// form of ADR 0012 M3's risk-ledger segment). Deliberately self-contained:
 /// it carries its own version field and decodes independently of
 /// `WORLD_FORMAT_VERSION`, so reshaping the component segments can never
-/// cost the market state. NOT in the always-active set (which is 10 of 10
-/// in steady state): read once per VM lifetime via request-until-loaded;
-/// writes land through the arbiter's queued-write slot reservation.
+/// cost the market state.
+///
+/// ALWAYS-ACTIVE (registered `SegmentRequirement`, loaded via `on_load`) —
+/// risk data wants zero save gaps, so its slot is funded by the component
+/// shrink above rather than the queued-write displacement dance. The
+/// arbiter's `queue_write` path remains the mechanism for future segments
+/// that stay outside the active set.
 pub const MARKET_SEGMENT: u32 = 58;
 
 /// Room-planner resume state (`room::roomplansystem`).
@@ -68,6 +79,7 @@ pub const LIVE_STATS_SEGMENT: u32 = 99;
 /// ones, so the uniqueness check covers the WHOLE ADR 0002 table. When a
 /// reserved id gets implemented, replace the literal with its new constant.
 const OTHER_SEGMENT_IDS: &[u32] = &[
+    54, // freed: former 5th component chunk (shrunk 2026-06-12); reusable by a future allocation
     COST_MATRIX_SEGMENT,
     STATS_HISTORY_SEGMENT,
     METRICS_SEGMENT,

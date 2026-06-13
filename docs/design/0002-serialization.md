@@ -36,16 +36,17 @@ The disjointness assert is only as good as the map it checks. This table is the 
 
 | Seg | Owner / contents | Post-reset |
 |---|---|---|
-| **50–54** | ECS component payload (`COMPONENT_SEGMENTS`, post-shrink per the disjointness fix) | **must-load** (tick 1) |
+| **50–53** | ECS component payload (`COMPONENT_SEGMENTS`; shrunk 50–55 → 50–54 by the disjointness fix, → 50–53 on 2026-06-12 to fund the always-active market segment — watermark-gated: BASELINE-2 scale used 1 chunk; the watermark warns at budget − 1) | **must-load** (tick 1) |
+| **54** | *freed 2026-06-12* (former 5th component chunk; stale data may linger server-side until reused) | — |
 | **55** | cost matrix **only** (dedicated after the disjointness fix — the former IBEX-013 collision) | **must-load** (the warm cache averts the post-reset route storm, [0004](0004-cpu-governance-and-load-shedding.md)) |
 | **56** | stats history (unversioned JSON today — version header per [0006](0006-eval-and-iteration-harness.md)) | lazy |
 | **57** | metrics block ([0006](0006-eval-and-iteration-harness.md), versioned, always-on) | lazy (write-mostly) |
-| **58** | market memory (`MARKET_SEGMENT`): per-resource history-day cache + exposure ledger — the interim form of [0012](0012-market-and-risk.md) M3's risk ledger, **landed 2026-06-12** with its own `MARKET_MEMORY_VERSION` field, decoupled from `WORLD_FORMAT_VERSION` by design; M3's `TradeGovernor` state joins it here | lazy (read once per VM lifetime via request-until-loaded; trading gates on `loaded`; writes land via the arbiter's queued-write slot reservation — the steady-state active set is 10 of 10, so a queued write displaces the lowest-priority id for one tick) |
+| **58** | market memory (`MARKET_SEGMENT`): per-resource history-day cache + exposure ledger — the interim form of [0012](0012-market-and-risk.md) M3's risk ledger, **landed 2026-06-12** with its own `MARKET_MEMORY_VERSION` field, decoupled from `WORLD_FORMAT_VERSION` by design; M3's `TradeGovernor` state joins it here | **always-active** (operator decision 2026-06-12: risk data wants zero save gaps — slot funded by the component shrink; `on_load` callback fills the resource, trading gates on `loaded`, saves land same-tick). The arbiter's queued-write reservation remains the path for future NON-active segments, and a rotating slot for periodic systems (e.g. planner seg 60) is planned to reclaim headroom |
 | **60** | room-planner resume state (`PLANNER_MEMORY_SEGMENT`, [0009](0009-room-planning-and-multiroom-layout.md)) | lazy (planning resumes next budget slice) |
 | **61** | `RoomGraph` + inter-room road sets ([0009](0009-room-planning-and-multiroom-layout.md) left "labelled addition to 60 or a dedicated free id" open — **pinned to 61 here**, keeping 60 resume-only) | lazy (warm before route planning resumes) |
 | **99** | live stats (legacy JSON — version header per [0006](0006-eval-and-iteration-harness.md)) | lazy |
 
-Must-load today = 50–54 + 55 (**6 of 10**) — comfortably inside the cap; any future must-load addition must re-check that sum in this table.
+Must-load today = 50–53 + 55 (**5 of 10**) — comfortably inside the cap; any future must-load addition must re-check that sum in this table. The full steady-state ACTIVE set (must-load + 56/57/58 + ad-hoc 60/99) sits at exactly **10 of 10** — adding any always-active segment requires freeing a slot first (the planned periodic-rotation mechanism for lazily-used ids like 60 is the intended source of headroom).
 
 Per §8 Sequencing, this is **Increment 2** (gate: round-trip/old-snapshot/fuzz green), after Increment 1's CPU governor + panic containment (ADR 0004/0005 — the latter ensures `serialize_world` always runs even if a system aborts, so a panic can no longer skip persistence and present as a reset). Stage 2 is **Increment 5** (gate: ADR 0001 stable-ID store landed).
 

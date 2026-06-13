@@ -718,6 +718,16 @@ fn create_environment() -> GameEnvironment {
     // can read/write via raw_memory directly. Not gating.
     arbiter.register(SegmentRequirement::new("cost_matrix", vec![COST_MATRIX_SEGMENT]));
 
+    // Market memory (ADR 0012): history cache + exposure ledger. Always
+    // active so saves never wait on a slot — risk data wants zero gaps; the
+    // slot is funded by the component-segment shrink (segments.rs). Not
+    // gating: trading itself gates on the loaded flag.
+    arbiter.register(
+        SegmentRequirement::new("market", vec![MARKET_SEGMENT]).on_load(Box::new(|world: &mut World| {
+            crate::transfer::ordersystem::load_market_memory(world);
+        })),
+    );
+
     // Stats history (visualization): persisted across VM restarts. Load
     // callback deserializes the data into a world resource on first use.
     arbiter.register(
