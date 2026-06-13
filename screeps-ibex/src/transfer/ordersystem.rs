@@ -399,7 +399,15 @@ impl OrderQueueSystem {
                     })
                     .collect::<Vec<_>>()
             })
-            .max_by(|a, b| a.4.partial_cmp(&b.4).unwrap_or(std::cmp::Ordering::Equal));
+            // Objective: maximize total proceeds (units x net price after
+            // transfer energy), not transfer cost — ranking by cost picked
+            // the deal that burned the most energy. Stopgap until the ADR
+            // 0012 M2 TradePlanner replaces this path.
+            .max_by(|a, b| {
+                let proceeds_a = a.3 as f64 * a.5;
+                let proceeds_b = b.3 as f64 * b.5;
+                proceeds_a.partial_cmp(&proceeds_b).unwrap_or(std::cmp::Ordering::Equal)
+            });
 
         if let Some((order_id, order_price, resource, transferable_units, transfer_cost, effective_price_per_unit)) = best_deal {
             match deal(&order_id, transferable_units, Some(source_room_name)) {
