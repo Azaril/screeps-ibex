@@ -191,7 +191,8 @@ impl Mission for ScoutMission {
             ));
         }
 
-        let should_spawn = system_data.governor.can_execute_cpu(CpuBar::LowPriority) && self.next_spawn.map(|t| game::time() >= t).unwrap_or(true);
+        let should_spawn =
+            system_data.governor.can_execute_cpu(CpuBar::LowPriority) && self.next_spawn.map(|t| game::time() >= t).unwrap_or(true);
 
         let token = system_data.spawn_queue.token();
 

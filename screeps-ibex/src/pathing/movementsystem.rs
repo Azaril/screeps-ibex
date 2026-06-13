@@ -340,9 +340,7 @@ impl<'a> System<'a> for MovementUpdateSystem {
             .values()
             .filter(|result| match result {
                 MovementResult::Failed(_) => true,
-                MovementResult::Stuck { ticks } => {
-                    *ticks >= crate::jobs::utility::movebehavior::STUCK_REPORT_THRESHOLD
-                }
+                MovementResult::Stuck { ticks } => *ticks >= crate::jobs::utility::movebehavior::STUCK_REPORT_THRESHOLD,
                 _ => false,
             })
             .count() as u32;

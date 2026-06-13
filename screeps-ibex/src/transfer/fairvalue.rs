@@ -96,10 +96,7 @@ pub const MAX_INTRA_EMPIRE_COST_PER_UNIT: f64 = 0.5;
 pub fn fair_value(days: &[HistoryDay], intended_daily_trade: f64) -> Option<FairValue> {
     // Chronological order; the engine returns it sorted but nothing here
     // relies on that (the old code's "relies on sequential date order" NOTE).
-    let mut window: Vec<&HistoryDay> = days
-        .iter()
-        .filter(|d| d.avg_price.is_finite() && d.avg_price > 0.0)
-        .collect();
+    let mut window: Vec<&HistoryDay> = days.iter().filter(|d| d.avg_price.is_finite() && d.avg_price > 0.0).collect();
     window.sort_by(|a, b| a.date.cmp(&b.date));
 
     let median_volume = median(window.iter().map(|d| d.volume as f64))?;
@@ -486,11 +483,7 @@ mod tests {
 
         // Fetched updates an existing date (backend day aggregate grew) and
         // adds a new one, arriving unsorted.
-        merge_days(
-            &mut stored,
-            &[day("2026-06-03", 11.0, 300), day("2026-06-02", 10.5, 200)],
-            14,
-        );
+        merge_days(&mut stored, &[day("2026-06-03", 11.0, 300), day("2026-06-02", 10.5, 200)], 14);
 
         let dates: Vec<&str> = stored.iter().map(|d| d.date.as_str()).collect();
         assert_eq!(dates, ["2026-06-01", "2026-06-02", "2026-06-03"]);
@@ -543,7 +536,9 @@ mod tests {
         assert_eq!(decoded.history.len(), 1);
         assert_eq!(decoded.history[0].days.len(), 13);
         // The ledger's committed volume survived the round trip...
-        assert!(!decoded.exposure.volume_within_cap(ResourceType::Hydrogen, MAX_RESOURCE_UNITS_PER_WINDOW));
+        assert!(!decoded
+            .exposure
+            .volume_within_cap(ResourceType::Hydrogen, MAX_RESOURCE_UNITS_PER_WINDOW));
         // ...and the in-memory `loaded` flag deliberately did not.
         assert!(!decoded.loaded);
     }

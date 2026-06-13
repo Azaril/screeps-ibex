@@ -226,7 +226,9 @@ impl Mission for TerminalMission {
                     let transfer_amount = transfer_amount.min(terminal_free_amount);
 
                     if transfer_amount > 0 {
-                        if Self::can_purchase_resource(resource_type, &system_data.features.market) && current_total_amount < total_reserve_amount / 2 {
+                        if Self::can_purchase_resource(resource_type, &system_data.features.market)
+                            && current_total_amount < total_reserve_amount / 2
+                        {
                             //TODO: Only purchase when transfer is not available.
                             //TODO: Need to correctly figure out how much
                             let purchase_amount = transfer_amount / 4;

@@ -4,6 +4,7 @@ use crate::entitymappingsystem::*;
 use crate::jobs::data::*;
 use crate::jobs::jobsystem::*;
 use crate::memorysystem::*;
+use crate::metrics::MetricsSystem;
 use crate::military::boostqueue::*;
 use crate::military::economy::*;
 use crate::military::squad::*;
@@ -23,7 +24,6 @@ use crate::room::roomplansystem::*;
 use crate::room::roomplanvisualizesystem::*;
 use crate::room::updateroomsystem::*;
 use crate::room::visibilitysystem::*;
-use crate::metrics::MetricsSystem;
 use crate::segments::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
@@ -101,12 +101,24 @@ macro_rules! for_each_system {
         // === Main-pass: Observer (intel — shed-first class, ADR 0004) ===
         $op!(ObserverSystem, "observer", StageClass::SkipUnderCritical);
         // === Main-pass: Summarization (feeds visualization only) ===
-        $op!(SummarizeOperationSystem, "summarize_operations", StageClass::SkipUnderCritical);
+        $op!(
+            SummarizeOperationSystem,
+            "summarize_operations",
+            StageClass::SkipUnderCritical
+        );
         $op!(SummarizeMissionSystem, "summarize_missions", StageClass::SkipUnderCritical);
         $op!(SummarizeJobSystem, "summarize_jobs", StageClass::SkipUnderCritical);
-        $op!(SummarizeRoomVisibilitySystem, "summarize_room_visibility", StageClass::SkipUnderCritical);
+        $op!(
+            SummarizeRoomVisibilitySystem,
+            "summarize_room_visibility",
+            StageClass::SkipUnderCritical
+        );
         $op!(VisibilityVisualizationSystem, "visibility_viz", StageClass::SkipUnderCritical);
-        $op!(TransferStatsSnapshotSystem, "transfer_stats_snapshot", StageClass::SkipUnderCritical);
+        $op!(
+            TransferStatsSnapshotSystem,
+            "transfer_stats_snapshot",
+            StageClass::SkipUnderCritical
+        );
         $op!(AggregateSummarySystem, "aggregate_summary", StageClass::SkipUnderCritical);
         // === Main-pass: Queues (spawn/haul — never shed) ===
         $op!(SpawnQueueSystem, "spawn_queue", StageClass::Always);

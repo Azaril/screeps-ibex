@@ -27,11 +27,7 @@ where
     // lairs, portals and controllers pass an hits>0 check but
     // creep.dismantle() can never damage them — selecting one would wedge
     // target selection and mission completion forever.
-    structure.as_dismantleable().is_some()
-        && structure
-            .as_attackable()
-            .map(|a| a.hits() > 0 && a.hits_max() > 0)
-            .unwrap_or(false)
+    structure.as_dismantleable().is_some() && structure.as_attackable().map(|a| a.hits() > 0 && a.hits_max() > 0).unwrap_or(false)
 }
 
 /// Tiles covered by a hostile non-public rampart: the structure beneath can
@@ -90,11 +86,7 @@ where
         return true;
     }
 
-    structure
-        .borrow()
-        .as_attackable()
-        .map(|a| a.hits() <= max_hits)
-        .unwrap_or(false)
+    structure.borrow().as_attackable().map(|a| a.hits() <= max_hits).unwrap_or(false)
 }
 
 /// Any dismantle target READY to work on right now: in scope (not a road,

@@ -26,9 +26,9 @@
 
 use crate::cpugovernor::GovernorSnapshot;
 use crate::memorysystem::*;
-use crate::pathing::pathfinderservice::PathfinderService;
 use crate::missions::data::MissionData;
 use crate::operations::data::OperationData;
+use crate::pathing::pathfinderservice::PathfinderService;
 use crate::room::data::*;
 use crate::segments::{COMPONENT_SEGMENTS, METRICS_SEGMENT};
 use screeps::*;

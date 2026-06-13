@@ -1,10 +1,10 @@
 use super::data::*;
 use super::localsupply::structure_data::SupplyStructureCache;
 use crate::cleanup::*;
+use crate::cpugovernor::GovernorSnapshot;
 use crate::creep::*;
 use crate::entitymappingsystem::EntityMappingData;
 use crate::jobs::data::*;
-use crate::cpugovernor::GovernorSnapshot;
 use crate::military::boostqueue::*;
 use crate::military::economy::*;
 use crate::military::squad::SquadContext;

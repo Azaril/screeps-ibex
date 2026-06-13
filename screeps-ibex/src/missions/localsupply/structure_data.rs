@@ -244,10 +244,7 @@ fn compute_nearest_spawn_distances(
                 if ops == 0 {
                     return u32::MAX;
                 }
-                let options = pathfinder::SearchOptions::default()
-                    .plain_cost(2)
-                    .swamp_cost(10)
-                    .max_ops(ops);
+                let options = pathfinder::SearchOptions::default().plain_cost(2).swamp_cost(10).max_ops(ops);
                 let result = pathfinder::search(spawn_id.pos(), target_pos, 1, Some(options));
                 if result.incomplete() {
                     u32::MAX

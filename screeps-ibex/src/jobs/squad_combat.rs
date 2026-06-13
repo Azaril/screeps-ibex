@@ -192,7 +192,13 @@ impl CombatResponse {
                     .min_by_key(|c| c.hits())
             };
             if let Some(target) = target {
-                crate::intents::attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,target, target.pos());
+                crate::intents::attack(
+                    creep,
+                    &mut tick_context.action_flags,
+                    tick_context.runtime_data.intent_recorder,
+                    target,
+                    target.pos(),
+                );
             }
         }
 
@@ -220,7 +226,13 @@ impl CombatResponse {
                         .min_by_key(|c| c.hits())
                 };
                 if let Some(target) = target {
-                    crate::intents::ranged_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,target, target.pos());
+                    crate::intents::ranged_attack(
+                        creep,
+                        &mut tick_context.action_flags,
+                        tick_context.runtime_data.intent_recorder,
+                        target,
+                        target.pos(),
+                    );
                 }
             }
         }
@@ -231,9 +243,21 @@ impl CombatResponse {
             if let Some(target) = heal_target {
                 let range = creep_pos.get_range_to(target.pos());
                 if range <= 1 {
-                    crate::intents::heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,&target, target.pos());
+                    crate::intents::heal(
+                        creep,
+                        &mut tick_context.action_flags,
+                        tick_context.runtime_data.intent_recorder,
+                        &target,
+                        target.pos(),
+                    );
                 } else if range <= 3 {
-                    crate::intents::ranged_heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,&target, target.pos());
+                    crate::intents::ranged_heal(
+                        creep,
+                        &mut tick_context.action_flags,
+                        tick_context.runtime_data.intent_recorder,
+                        &target,
+                        target.pos(),
+                    );
                 } else {
                     heal_best_nearby(creep, tick_context);
                 }
@@ -376,7 +400,13 @@ impl Engaged {
                     .min_by_key(|c| c.hits())
             };
             if let Some(target) = target {
-                crate::intents::attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,target, target.pos());
+                crate::intents::attack(
+                    creep,
+                    &mut tick_context.action_flags,
+                    tick_context.runtime_data.intent_recorder,
+                    target,
+                    target.pos(),
+                );
             }
         }
 
@@ -407,7 +437,13 @@ impl Engaged {
                             .min_by_key(|c| c.hits())
                     };
                     if let Some(target) = target {
-                        crate::intents::ranged_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,target, target.pos());
+                        crate::intents::ranged_attack(
+                            creep,
+                            &mut tick_context.action_flags,
+                            tick_context.runtime_data.intent_recorder,
+                            target,
+                            target.pos(),
+                        );
                     }
                 }
             } else {
@@ -424,7 +460,13 @@ impl Engaged {
                     });
                 if let Some(target) = target {
                     if let Some(attackable) = target.as_attackable() {
-                        crate::intents::ranged_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,attackable, target.pos());
+                        crate::intents::ranged_attack(
+                            creep,
+                            &mut tick_context.action_flags,
+                            tick_context.runtime_data.intent_recorder,
+                            attackable,
+                            target.pos(),
+                        );
                     }
                 }
             }
@@ -442,9 +484,21 @@ impl Engaged {
         if let Some(target) = orders.heal_target.and_then(|id| id.resolve()) {
             let range = creep_pos.get_range_to(target.pos());
             if range <= 1 {
-                crate::intents::heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,&target, target.pos());
+                crate::intents::heal(
+                    creep,
+                    &mut tick_context.action_flags,
+                    tick_context.runtime_data.intent_recorder,
+                    &target,
+                    target.pos(),
+                );
             } else if range <= 3 {
-                crate::intents::ranged_heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,&target, target.pos());
+                crate::intents::ranged_heal(
+                    creep,
+                    &mut tick_context.action_flags,
+                    tick_context.runtime_data.intent_recorder,
+                    &target,
+                    target.pos(),
+                );
             } else {
                 // Assigned target out of range -- heal best nearby instead.
                 heal_best_nearby(creep, tick_context);
@@ -475,7 +529,13 @@ impl Engaged {
                     });
                 if let Some(target) = target {
                     if let Some(attackable) = target.as_attackable() {
-                        crate::intents::ranged_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,attackable, target.pos());
+                        crate::intents::ranged_attack(
+                            creep,
+                            &mut tick_context.action_flags,
+                            tick_context.runtime_data.intent_recorder,
+                            attackable,
+                            target.pos(),
+                        );
                     }
                 }
             }
@@ -492,7 +552,13 @@ impl Engaged {
                     });
                 if let Some(target) = target {
                     if let Some(attackable) = target.as_attackable() {
-                        crate::intents::attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,attackable, target.pos());
+                        crate::intents::attack(
+                            creep,
+                            &mut tick_context.action_flags,
+                            tick_context.runtime_data.intent_recorder,
+                            attackable,
+                            target.pos(),
+                        );
                     }
                 }
             }
@@ -506,7 +572,13 @@ impl Engaged {
                 .filter(|c| creep_pos.get_range_to(c.pos()) <= 1)
                 .min_by_key(|c| c.hits())
             {
-                crate::intents::attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,target, target.pos());
+                crate::intents::attack(
+                    creep,
+                    &mut tick_context.action_flags,
+                    tick_context.runtime_data.intent_recorder,
+                    target,
+                    target.pos(),
+                );
             }
         }
 
@@ -523,7 +595,13 @@ impl Engaged {
                     .min_by_key(|c| c.hits());
 
                 if let Some(target) = target {
-                    crate::intents::ranged_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,target, target.pos());
+                    crate::intents::ranged_attack(
+                        creep,
+                        &mut tick_context.action_flags,
+                        tick_context.runtime_data.intent_recorder,
+                        target,
+                        target.pos(),
+                    );
                 }
             }
         }
@@ -644,7 +722,13 @@ impl Retreating {
         if has_active_part(creep, Part::Attack) {
             let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
             if let Some(target) = hostiles.iter().find(|c| creep_pos.get_range_to(c.pos()) <= 1) {
-                crate::intents::attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,target, target.pos());
+                crate::intents::attack(
+                    creep,
+                    &mut tick_context.action_flags,
+                    tick_context.runtime_data.intent_recorder,
+                    target,
+                    target.pos(),
+                );
             }
         }
 
@@ -654,9 +738,21 @@ impl Retreating {
             if let Some(target) = heal_target {
                 let range = creep_pos.get_range_to(target.pos());
                 if range <= 1 {
-                    crate::intents::heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,&target, target.pos());
+                    crate::intents::heal(
+                        creep,
+                        &mut tick_context.action_flags,
+                        tick_context.runtime_data.intent_recorder,
+                        &target,
+                        target.pos(),
+                    );
                 } else if range <= 3 {
-                    crate::intents::ranged_heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,&target, target.pos());
+                    crate::intents::ranged_heal(
+                        creep,
+                        &mut tick_context.action_flags,
+                        tick_context.runtime_data.intent_recorder,
+                        &target,
+                        target.pos(),
+                    );
                 } else {
                     heal_best_nearby(creep, tick_context);
                 }
@@ -706,14 +802,26 @@ fn heal_best_nearby(creep: &Creep, tick_context: &mut JobTickContext) {
         .min_by_key(|c| c.hits());
 
     if let Some(target) = adjacent_damaged {
-        crate::intents::heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,target, target.pos());
+        crate::intents::heal(
+            creep,
+            &mut tick_context.action_flags,
+            tick_context.runtime_data.intent_recorder,
+            target,
+            target.pos(),
+        );
         return;
     }
 
     // Self-heal if damaged.
     if creep.hits() < creep.hits_max() {
         let creep_pos = creep.pos();
-        crate::intents::heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,creep, creep_pos);
+        crate::intents::heal(
+            creep,
+            &mut tick_context.action_flags,
+            tick_context.runtime_data.intent_recorder,
+            creep,
+            creep_pos,
+        );
         return;
     }
 
@@ -727,7 +835,13 @@ fn heal_best_nearby(creep: &Creep, tick_context: &mut JobTickContext) {
         .min_by_key(|c| c.hits());
 
     if let Some(target) = ranged_damaged {
-        crate::intents::ranged_heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder,target, target.pos());
+        crate::intents::ranged_heal(
+            creep,
+            &mut tick_context.action_flags,
+            tick_context.runtime_data.intent_recorder,
+            target,
+            target.pos(),
+        );
     }
 }
 

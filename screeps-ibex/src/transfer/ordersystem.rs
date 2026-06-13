@@ -333,7 +333,8 @@ impl OrderQueueSystem {
         let best_deal = active_orders
             .iter()
             .flat_map(move |params| {
-                order_cache.get_orders(MarketResourceType::Resource(params.resource))
+                order_cache
+                    .get_orders(MarketResourceType::Resource(params.resource))
                     .iter()
                     .filter(|o| o.order_type() == OrderType::Buy)
                     .filter(|o| o.remaining_amount() > params.minimum_sale_amount && o.price() >= params.minimum_price)
@@ -381,7 +382,14 @@ impl OrderQueueSystem {
                                         // transfer_amount made the engine reject the whole deal
                                         // whenever terminal energy < transfer cost (ADR 0012
                                         // M1(c) / IBEX-018).
-                                        return Some((o.id(), o.price(), params.resource, transferable_units, transfer_cost, effective_price_per_unit));
+                                        return Some((
+                                            o.id(),
+                                            o.price(),
+                                            params.resource,
+                                            transferable_units,
+                                            transfer_cost,
+                                            effective_price_per_unit,
+                                        ));
                                     }
                                 }
                             }
@@ -399,13 +407,7 @@ impl OrderQueueSystem {
                     exposure.commit_volume(resource, transferable_units);
                     info!(
                         "Completed deal! Room: {} Resource: {:?} Amount: {} Transfer Cost: {} Price: {} Effective Price: {} Id: {}",
-                        source_room_name,
-                        resource,
-                        transferable_units,
-                        transfer_cost,
-                        order_price,
-                        effective_price_per_unit,
-                        order_id
+                        source_room_name, resource, transferable_units, transfer_cost, order_price, effective_price_per_unit, order_id
                     );
                 }
                 Err(err) => {

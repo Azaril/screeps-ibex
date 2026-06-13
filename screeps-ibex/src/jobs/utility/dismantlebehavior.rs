@@ -156,7 +156,11 @@ fn controller_breach_tiles<'a>(
 }
 
 /// Nearest workable target from a candidate set.
-fn pick_dismantle_target(candidates: &[&StructureObject], creep_pos: Position, pathfinder: &mut PathfinderService) -> Option<StructureObject> {
+fn pick_dismantle_target(
+    candidates: &[&StructureObject],
+    creep_pos: Position,
+    pathfinder: &mut PathfinderService,
+) -> Option<StructureObject> {
     //TODO: Fix this hack which is a workaround for range of 1 pathfinding returning empty path.
     candidates
         .iter()

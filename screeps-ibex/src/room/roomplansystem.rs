@@ -363,7 +363,10 @@ impl<'a> System<'a> for RoomPlanSystem {
                         match crate::serialize::decode_from_string(&planner_data) {
                             Ok(state) => state,
                             Err(err) => {
-                                log::warn!("Planner resume-state decode failed (seg 60), restarting planning from scratch: {}", err);
+                                log::warn!(
+                                    "Planner resume-state decode failed (seg 60), restarting planning from scratch: {}",
+                                    err
+                                );
                                 RoomPlannerData::default()
                             }
                         }
@@ -434,7 +437,10 @@ impl<'a> System<'a> for RoomPlanSystem {
                                         if let Err(err) = Self::attach_plan_state(
                                             &mut data.room_plan_data,
                                             room_entity,
-                                            RoomPlanState::Failed { time: game::time(), attempts },
+                                            RoomPlanState::Failed {
+                                                time: game::time(),
+                                                attempts,
+                                            },
                                         ) {
                                             info!("Failed to attach plan to room! Room: {} - Error: {}", room_data.name, err);
                                         }
@@ -448,7 +454,10 @@ impl<'a> System<'a> for RoomPlanSystem {
                                         if let Err(err) = Self::attach_plan_state(
                                             &mut data.room_plan_data,
                                             room_entity,
-                                            RoomPlanState::Failed { time: game::time(), attempts },
+                                            RoomPlanState::Failed {
+                                                time: game::time(),
+                                                attempts,
+                                            },
                                         ) {
                                             info!("Failed to attach plan to room! Room: {} - Error: {}", room_data.name, err);
                                         }
@@ -482,7 +491,10 @@ impl<'a> System<'a> for RoomPlanSystem {
                         // dropped write here silently restarts multi-tick
                         // planning from scratch next tick.
                         Err(err) => {
-                            log::error!("Planner resume-state encode failed (seg 60); in-progress planning will restart: {}", err);
+                            log::error!(
+                                "Planner resume-state encode failed (seg 60); in-progress planning will restart: {}",
+                                err
+                            );
                         }
                     }
                 }

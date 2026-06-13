@@ -245,7 +245,12 @@ impl SalvageMission {
         Ok(())
     }
 
-    fn spawn_raiders(&self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity, room_name: RoomName) -> Result<(), String> {
+    fn spawn_raiders(
+        &self,
+        system_data: &mut MissionExecutionSystemData,
+        mission_entity: Entity,
+        room_name: RoomName,
+    ) -> Result<(), String> {
         let token = system_data.spawn_queue.token();
 
         for home_room_entity in self.home_room_datas.iter() {

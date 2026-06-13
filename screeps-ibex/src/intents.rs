@@ -106,7 +106,13 @@ impl IntentRecorder {
 /// when another A-pipeline intent already fired this tick. The
 /// explicit `target_pos` keeps the helpers `?Sized`-friendly (call
 /// sites pass `target.pos()`; `as_attackable()` trait objects work).
-pub fn attack<T>(creep: &Creep, flags: &mut SimultaneousActionFlags, recorder: &mut IntentRecorder, target: &T, target_pos: Position) -> bool
+pub fn attack<T>(
+    creep: &Creep,
+    flags: &mut SimultaneousActionFlags,
+    recorder: &mut IntentRecorder,
+    target: &T,
+    target_pos: Position,
+) -> bool
 where
     T: ?Sized + Attackable,
 {

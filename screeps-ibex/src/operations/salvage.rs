@@ -322,7 +322,10 @@ impl Operation for SalvageOperation {
             if rooms_with_missions.contains(room_name) {
                 true
             } else {
-                info!("Salvage mission for room {} ended - cooling down for {} ticks", room_name, reject_cooldown);
+                info!(
+                    "Salvage mission for room {} ended - cooling down for {} ticks",
+                    room_name, reject_cooldown
+                );
                 rejected.push(SalvageRejection {
                     room_name: *room_name,
                     until_tick: game::time() + reject_cooldown,
