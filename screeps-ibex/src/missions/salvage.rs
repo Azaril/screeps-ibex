@@ -314,6 +314,7 @@ impl SalvageMission {
         system_data: &mut MissionExecutionSystemData,
         mission_entity: Entity,
         max_structure_hits: u32,
+        priority: f32,
     ) -> Result<(), String> {
         let token = system_data.spawn_queue.token();
 
@@ -358,7 +359,7 @@ impl SalvageMission {
                 let spawn_request = SpawnRequest::new(
                     "Dismantler".to_string(),
                     &body,
-                    SPAWN_PRIORITY_LOW,
+                    priority,
                     Some(token),
                     Self::create_handle_dismantler_spawn(mission_entity, self.room_data, *home_room_entity, max_structure_hits),
                 );
@@ -486,7 +487,7 @@ impl Mission for SalvageMission {
         }
 
         // Phase 1: gates and work survey against an immutable room borrow.
-        let (room_name, work, dismantle_ready, declaim_target, declaim_access) = {
+        let (room_name, work, dismantle_ready, declaim_target, declaim_access, breach_possible) = {
             let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
             let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility data")?;
 
@@ -564,11 +565,29 @@ impl Mission for SalvageMission {
                     )
                 });
 
-                (work, dismantle_ready, declaim_access)
+                // If the controller is Sealed at the normal horizon, is it
+                // reachable when we IGNORE the horizon (max hits 0)? If so the
+                // seal is over-horizon walls we COULD chew (breach), not a
+                // terrain lock. Only computed when Sealed (a second flood).
+                let breach_possible = matches!(declaim_access, Some(ControllerAccess::Sealed))
+                    && declaim_target
+                        .map(|controller_id| {
+                            controller_access(room_data.name, structures.all(), controller_id.pos(), 0) != ControllerAccess::Sealed
+                        })
+                        .unwrap_or(false);
+
+                (work, dismantle_ready, declaim_access, breach_possible)
             });
 
             match survey {
-                Some((work, dismantle_ready, declaim_access)) => (room_data.name, work, dismantle_ready, declaim_target, declaim_access),
+                Some((work, dismantle_ready, declaim_access, breach_possible)) => (
+                    room_data.name,
+                    work,
+                    dismantle_ready,
+                    declaim_target,
+                    declaim_access,
+                    breach_possible,
+                ),
                 None => {
                     system_data.visibility.request(VisibilityRequest::new(
                         room_data.name,
@@ -589,28 +608,48 @@ impl Mission for SalvageMission {
             0
         };
 
-        let desired_dismantlers = if features.dismantle && dismantle_ready {
-            if work.dismantle_hits > SECOND_DISMANTLER_HITS {
-                2
-            } else {
-                1
-            }
+        // Breach: when the controller is Sealed at the normal dismantle horizon
+        // but reachable if we IGNORE it (`breach_possible`), the seal is
+        // over-horizon walls we could chew. For a strategic takeover room we
+        // breach them — but only on SURPLUS (excess home energy + an idle
+        // spawn), at the lowest priority, because the wall energy is a net loss
+        // (per the EV analysis) and this must consume spare capacity only.
+        let breach_needed = derelict_features.breach_sealed
+            && features.dismantle
+            && declaim_target.is_some()
+            && matches!(declaim_access, Some(ControllerAccess::Sealed))
+            && breach_possible;
+
+        let breach_surplus = breach_needed
+            && self
+                .home_room_datas
+                .first()
+                .and_then(|home| system_data.economy.rooms.get(home))
+                .map(|econ| econ.stored_energy >= derelict_features.breach_min_home_energy && econ.free_spawns > 0)
+                .unwrap_or(false);
+
+        // Dismantler roster. Breach mode (unbounded hit ceiling — chew the
+        // sealing walls) takes precedence when the controller is Sealed, since
+        // in-horizon dismantle cannot reach it anyway. Otherwise the normal
+        // within-horizon roster sized by the ready dismantle work.
+        let (desired_dismantlers, breach_mode) = if breach_needed {
+            (1, true)
+        } else if features.dismantle && dismantle_ready {
+            let count = if work.dismantle_hits > SECOND_DISMANTLER_HITS { 2 } else { 1 };
+            (count, false)
         } else {
-            0
+            (0, false)
         };
 
         // One de-claimer at a time: only one attackController strike lands per
         // 1000 ticks anyway (engine-mechanics §2.12), so a second would idle.
-        // `declaim_target` is already gated on declaim enabled + hostile-owned
-        // + sources present; `declaim_access` gates on whether the controller
-        // can be reached:
+        // `declaim_target` is gated on declaim enabled + hostile-owned + sources;
+        // `declaim_access` gates reachability:
         //   - ReachableNow → desire 1 and SPAWN (path is clear);
-        //   - Breachable (and dismantlers can clear it) → desire 1 but DON'T
-        //     spawn yet — keeps the mission alive so dismantlers open the path
-        //     (M10 prioritizes the controller corridor) without wasting CLAIM
-        //     bodies that would die en route;
-        //   - Sealed, or Breachable with dismantle disabled → desire 0 (can't
-        //     get there; let the mission complete once loot/dismantle are done).
+        //   - Breachable (dismantlers can clear it) → desire 1 but DON'T spawn
+        //     yet — dismantlers open the path first (M10 corridor);
+        //   - Sealed → desire 0 (breach dismantlers run first; the de-claimer
+        //     spawns once the corridor opens and access becomes Reachable).
         let declaim_spawnable = matches!(declaim_access, Some(ControllerAccess::ReachableNow));
         let desired_declaimers = match declaim_access {
             Some(ControllerAccess::ReachableNow) => 1,
@@ -620,7 +659,7 @@ impl Mission for SalvageMission {
 
         if derelict_features.diagnostics {
             info!(
-                "[salvage-mission-diag] {} loot(e={},o={}) dismantle_hits={} dismantle_ready={} declaim_target={} declaim_access={:?} -> desired raiders={} dismantlers={} declaimers={} (spawnable={}) alive r={} d={} dc={}",
+                "[salvage-mission-diag] {} loot(e={},o={}) dismantle_hits={} dismantle_ready={} declaim_target={} declaim_access={:?} breach_possible={} breach_needed={} breach_surplus={} -> desired raiders={} dismantlers={}{} declaimers={} (spawnable={}) alive r={} d={} dc={}",
                 room_name,
                 work.loot_energy,
                 work.loot_other,
@@ -628,8 +667,12 @@ impl Mission for SalvageMission {
                 dismantle_ready,
                 declaim_target.is_some(),
                 declaim_access,
+                breach_possible,
+                breach_needed,
+                breach_surplus,
                 desired_raiders,
                 desired_dismantlers,
+                if breach_mode { " (breach)" } else { "" },
                 desired_declaimers,
                 declaim_spawnable,
                 self.raiders.len(),
@@ -638,16 +681,18 @@ impl Mission for SalvageMission {
             );
         }
 
+        // Complete only when there is genuinely nothing to do. A breach-needed
+        // room never reaches here (desired_dismantlers == 1), so it holds the
+        // slot and chews the seal whenever surplus allows instead of
+        // completing-and-cooling in a loop.
         if desired_raiders == 0 && desired_dismantlers == 0 && desired_declaimers == 0 {
-            // Loud about WHY we are giving up — the usual culprit is a
-            // controller sealed behind structures past `max_structure_hits`
-            // (excluded from dismantle), so there is nothing actionable.
             info!(
-                "Salvage of room {} complete - no enabled work remains (loot={}, within-horizon dismantle hits={}, declaim_access={:?})",
+                "Salvage of room {} complete - no enabled work remains (loot={}, within-horizon dismantle hits={}, declaim_access={:?}, breach_possible={})",
                 room_name,
                 work.loot_total(),
                 work.dismantle_hits,
-                declaim_access
+                declaim_access,
+                breach_possible
             );
 
             return Ok(MissionResult::Success);
@@ -662,7 +707,23 @@ impl Mission for SalvageMission {
         }
 
         if self.dismantlers.len() < desired_dismantlers {
-            self.spawn_dismantlers(system_data, mission_entity, derelict_features.max_structure_hits)?;
+            if breach_mode {
+                // Over-horizon wall-chewing: unbounded hit ceiling, lowest
+                // priority, and only when the home has spare energy + an idle
+                // spawn. M10 corridor prioritization keeps it on the controller
+                // path; once a sealing wall decays below the normal horizon the
+                // room flips to Breachable and the normal roster finishes it.
+                if breach_surplus {
+                    self.spawn_dismantlers(system_data, mission_entity, 0, SPAWN_PRIORITY_NONE)?;
+                }
+            } else {
+                self.spawn_dismantlers(
+                    system_data,
+                    mission_entity,
+                    derelict_features.max_structure_hits,
+                    SPAWN_PRIORITY_LOW,
+                )?;
+            }
         }
 
         if declaim_spawnable && self.declaimers.len() < desired_declaimers {

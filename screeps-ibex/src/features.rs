@@ -471,6 +471,18 @@ pub struct DerelictFeatures {
     /// rejected-cooldown?). Off by default — flip on to debug "why isn't this
     /// derelict room being salvaged". Default: false.
     pub diagnostics: bool,
+    /// Allow breaching a strategic takeover room's controller even when the
+    /// sealing walls/ramparts exceed `max_structure_hits` (the normal dismantle
+    /// horizon excludes them, which would otherwise leave the controller
+    /// permanently unreachable and the room un-takeable). Breach dismantlers
+    /// run at the LOWEST spawn priority and only when the home has surplus
+    /// energy and an idle spawn, so the (energy-negative) wall-chewing consumes
+    /// only spare capacity. Default: true.
+    pub breach_sealed: bool,
+    /// Minimum home stored energy (storage+terminal+containers) before breach
+    /// dismantlers may spawn — the "excess energy" gate for the breach
+    /// campaign. Default: 100_000.
+    pub breach_min_home_energy: u32,
 }
 
 impl Default for DerelictFeatures {
@@ -487,6 +499,8 @@ impl Default for DerelictFeatures {
             reject_cooldown: 10_000,
             declaim: true,
             diagnostics: false,
+            breach_sealed: true,
+            breach_min_home_energy: 100_000,
         }
     }
 }

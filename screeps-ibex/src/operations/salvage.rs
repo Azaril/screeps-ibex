@@ -486,8 +486,16 @@ impl Operation for SalvageOperation {
             };
 
             // A confirmed-derelict room with sources we can act on is a
-            // takeover target (clear → de-claim → mine), not churn.
-            let takeover_worthy = eligible && dynamic_visibility_data.owner().hostile() && sources_present && features.derelict.declaim;
+            // takeover target (clear → de-claim → mine), not churn — pull it
+            // off the cooldown so a stale reject can't strand it. Gated on
+            // `breach_sealed` too: a room sealed behind over-horizon walls is
+            // only progressable when breaching is enabled; with breach off it
+            // would just re-complete "no work", so leave it cooled (no churn).
+            let takeover_worthy = eligible
+                && dynamic_visibility_data.owner().hostile()
+                && sources_present
+                && features.derelict.declaim
+                && features.derelict.breach_sealed;
 
             if self.rejected.iter().any(|r| r.room_name == room_data.name) {
                 if takeover_worthy {
