@@ -141,3 +141,231 @@ where
         None => !ignore_for_dismantle(structure, sources),
     }
 }
+
+/// Movement-blocking content of one tile for the breach search
+/// ([`breach_path_blockers`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BreachBlocker {
+    /// Total hits of dismantlable blockers on the tile; the corridor may pass
+    /// through at that cost.
+    Dismantlable(u32),
+    /// At least one blocker we will never clear (engine-undismantlable, or
+    /// over the hit-pool horizon): the corridor must route around.
+    Impassable,
+}
+
+const ROOM_DIM: usize = 50;
+/// Cost of stepping onto any passable tile. Swamps are deliberately not
+/// surcharged: the corridor optimizes dismantle work, not travel time.
+const BREACH_STEP_COST: u64 = 1;
+/// Cost per blocker hit, chosen larger than the maximum possible step count
+/// (50×50 = 2_500) so the search strictly minimizes total hits to clear and
+/// breaks ties by path length.
+const BREACH_HIT_WEIGHT: u64 = 4_096;
+
+/// Plan the cheapest "breach corridor" from `start` to within range 1 of
+/// `goal` (the controller): an 8-directional Dijkstra over the room where
+/// entering a tile costs [`BREACH_STEP_COST`] plus [`BREACH_HIT_WEIGHT`] per
+/// hit of dismantlable blocker standing on it. Returns the blocker tiles
+/// along that corridor in walk order — empty when the goal is already
+/// reachable without dismantling — or `None` when no corridor exists even
+/// through dismantlable blockers (sealed by terrain or by structures past the
+/// hit-pool horizon).
+///
+/// Pure kernel (host-tested): terrain arrives as a closure, blockers as plain
+/// tile coordinates. Deterministic per EP-6.13 — the heap orders by
+/// (cost, tile index), so equal-cost corridors always resolve the same way.
+pub fn breach_path_blockers(
+    is_wall: &dyn Fn(u8, u8) -> bool,
+    blockers: &std::collections::HashMap<(u8, u8), BreachBlocker>,
+    start: (u8, u8),
+    goal: (u8, u8),
+) -> Option<Vec<(u8, u8)>> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    let index = |x: u8, y: u8| y as usize * ROOM_DIM + x as usize;
+    let coords = |i: usize| ((i % ROOM_DIM) as u8, (i / ROOM_DIM) as u8);
+    let adjacent_to_goal = |x: u8, y: u8| x.abs_diff(goal.0) <= 1 && y.abs_diff(goal.1) <= 1;
+
+    let enter_cost = |x: u8, y: u8| -> Option<u64> {
+        if is_wall(x, y) {
+            return None;
+        }
+
+        match blockers.get(&(x, y)) {
+            Some(BreachBlocker::Impassable) => None,
+            Some(BreachBlocker::Dismantlable(hits)) => Some(BREACH_STEP_COST + *hits as u64 * BREACH_HIT_WEIGHT),
+            None => Some(BREACH_STEP_COST),
+        }
+    };
+
+    if adjacent_to_goal(start.0, start.1) {
+        return Some(Vec::new());
+    }
+
+    let mut dist = vec![u64::MAX; ROOM_DIM * ROOM_DIM];
+    let mut prev = vec![usize::MAX; ROOM_DIM * ROOM_DIM];
+    let mut heap: BinaryHeap<Reverse<(u64, usize)>> = BinaryHeap::new();
+
+    let start_index = index(start.0, start.1);
+    dist[start_index] = 0;
+    heap.push(Reverse((0, start_index)));
+
+    let mut found: Option<usize> = None;
+
+    while let Some(Reverse((cost, node))) = heap.pop() {
+        if cost > dist[node] {
+            continue;
+        }
+
+        let (x, y) = coords(node);
+
+        if adjacent_to_goal(x, y) {
+            found = Some(node);
+            break;
+        }
+
+        for dx in -1i32..=1 {
+            for dy in -1i32..=1 {
+                if dx == 0 && dy == 0 {
+                    continue;
+                }
+
+                let nx = x as i32 + dx;
+                let ny = y as i32 + dy;
+
+                if !(0..ROOM_DIM as i32).contains(&nx) || !(0..ROOM_DIM as i32).contains(&ny) {
+                    continue;
+                }
+
+                let (nx, ny) = (nx as u8, ny as u8);
+
+                let Some(step) = enter_cost(nx, ny) else {
+                    continue;
+                };
+
+                let neighbor = index(nx, ny);
+                let next_cost = cost.saturating_add(step);
+
+                if next_cost < dist[neighbor] {
+                    dist[neighbor] = next_cost;
+                    prev[neighbor] = node;
+                    heap.push(Reverse((next_cost, neighbor)));
+                }
+            }
+        }
+    }
+
+    let mut node = found?;
+    let mut breach_tiles = Vec::new();
+
+    while node != start_index {
+        let tile = coords(node);
+
+        if matches!(blockers.get(&tile), Some(BreachBlocker::Dismantlable(_))) {
+            breach_tiles.push(tile);
+        }
+
+        node = prev[node];
+    }
+
+    breach_tiles.reverse();
+
+    Some(breach_tiles)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    const NO_WALLS: fn(u8, u8) -> bool = |_, _| false;
+
+    fn wall_line_with_gaps(x: u8, gaps: &[(u8, u32)]) -> HashMap<(u8, u8), BreachBlocker> {
+        // A constructed-wall line across column `x`; `gaps` are (y, hits)
+        // tiles that are dismantlable instead of impassable.
+        let mut blockers = HashMap::new();
+        for y in 0..50u8 {
+            blockers.insert((x, y), BreachBlocker::Impassable);
+        }
+        for (y, hits) in gaps {
+            blockers.insert((x, *y), BreachBlocker::Dismantlable(*hits));
+        }
+        blockers
+    }
+
+    #[test]
+    fn open_room_needs_no_breach() {
+        let result = breach_path_blockers(&NO_WALLS, &HashMap::new(), (5, 25), (45, 25));
+        assert_eq!(result, Some(Vec::new()));
+    }
+
+    #[test]
+    fn start_adjacent_to_goal_needs_no_breach() {
+        let blockers = wall_line_with_gaps(25, &[]);
+        let result = breach_path_blockers(&NO_WALLS, &blockers, (44, 25), (45, 25));
+        assert_eq!(result, Some(Vec::new()));
+    }
+
+    #[test]
+    fn corridor_picks_the_cheapest_gap_not_the_shortest_path() {
+        // Straight-line gap costs 100_000 hits; a distant gap costs 100.
+        // Hits dominate steps, so the corridor detours.
+        let blockers = wall_line_with_gaps(25, &[(25, 100_000), (5, 100)]);
+        let result = breach_path_blockers(&NO_WALLS, &blockers, (5, 25), (45, 25)).expect("corridor should exist");
+        assert_eq!(result, vec![(25, 5)]);
+    }
+
+    #[test]
+    fn sealed_room_returns_none() {
+        // No dismantlable gap at all: impassable wall line, no corridor.
+        let blockers = wall_line_with_gaps(25, &[]);
+        assert_eq!(breach_path_blockers(&NO_WALLS, &blockers, (5, 25), (45, 25)), None);
+    }
+
+    #[test]
+    fn terrain_walls_seal_like_impassable_structures() {
+        // Terrain wall line with a single non-wall tile that carries a
+        // dismantlable structure: the corridor must use exactly that tile.
+        let is_wall = |x: u8, y: u8| x == 25 && y != 30;
+        let mut blockers = HashMap::new();
+        blockers.insert((25u8, 30u8), BreachBlocker::Dismantlable(500));
+
+        let result = breach_path_blockers(&is_wall, &blockers, (5, 25), (45, 25)).expect("corridor should exist");
+        assert_eq!(result, vec![(25, 30)]);
+
+        // Same terrain, gap blocked by something undismantlable: sealed.
+        blockers.insert((25u8, 30u8), BreachBlocker::Impassable);
+        assert_eq!(breach_path_blockers(&is_wall, &blockers, (5, 25), (45, 25)), None);
+    }
+
+    #[test]
+    fn multi_layer_walls_report_every_layer_in_walk_order() {
+        let mut blockers = wall_line_with_gaps(20, &[(25, 1_000)]);
+        for (tile, blocker) in wall_line_with_gaps(30, &[(25, 1_000)]) {
+            blockers.insert(tile, blocker);
+        }
+
+        let result = breach_path_blockers(&NO_WALLS, &blockers, (5, 25), (45, 25)).expect("corridor should exist");
+        assert_eq!(result, vec![(20, 25), (30, 25)]);
+    }
+
+    /// Relation pin: the corridor's total hits never exceed any single
+    /// alternative gap — the search minimizes hits first, distance second
+    /// (BREACH_HIT_WEIGHT > maximum step count).
+    #[test]
+    fn corridor_hits_are_minimal_across_gap_choices() {
+        for (cheap_hits, far_y) in [(1u32, 0u8), (500, 5), (99_999, 49)] {
+            let blockers = wall_line_with_gaps(25, &[(25, 100_000), (far_y, cheap_hits)]);
+            let result = breach_path_blockers(&NO_WALLS, &blockers, (5, 25), (45, 25)).expect("corridor should exist");
+            assert_eq!(
+                result,
+                vec![(25, far_y)],
+                "cheapest gap ({} hits at y {}) must win",
+                cheap_hits,
+                far_y
+            );
+        }
+    }
+}
