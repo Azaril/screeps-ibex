@@ -1,4 +1,5 @@
 use super::data::JobData;
+use super::utility::dismantlebehavior::BreachPlanCache;
 use crate::creep::CreepOwner;
 use crate::entitymappingsystem::*;
 use crate::intents::IntentRecorder;
@@ -29,6 +30,7 @@ pub struct JobSystemData<'a> {
     visibility_queue: Write<'a, VisibilityQueue>,
     pathfinder: Write<'a, PathfinderService>,
     intent_recorder: Write<'a, IntentRecorder>,
+    breach_cache: Write<'a, BreachPlanCache>,
 }
 
 pub struct JobExecutionSystemData<'a> {
@@ -49,6 +51,7 @@ pub struct JobExecutionRuntimeData<'a> {
     pub visibility_queue: &'a mut VisibilityQueue,
     pub pathfinder: &'a mut PathfinderService,
     pub intent_recorder: &'a mut IntentRecorder,
+    pub breach_cache: &'a mut BreachPlanCache,
 }
 
 pub struct JobDescribeData<'a> {
@@ -97,6 +100,7 @@ impl<'a> System<'a> for PreRunJobSystem {
                     visibility_queue: &mut data.visibility_queue,
                     pathfinder: &mut data.pathfinder,
                     intent_recorder: &mut data.intent_recorder,
+                    breach_cache: &mut data.breach_cache,
                 };
 
                 job_data.as_job().pre_run_job(&system_data, &mut runtime_data);
@@ -132,6 +136,7 @@ impl<'a> System<'a> for RunJobSystem {
                     visibility_queue: &mut data.visibility_queue,
                     pathfinder: &mut data.pathfinder,
                     intent_recorder: &mut data.intent_recorder,
+                    breach_cache: &mut data.breach_cache,
                 };
 
                 job_data.as_job().run_job(&system_data, &mut runtime_data);

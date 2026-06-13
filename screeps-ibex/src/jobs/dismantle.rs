@@ -69,6 +69,7 @@ impl Idle {
                 state_context.ignore_storage,
                 state_context.max_structure_hits,
                 tick_context.runtime_data.pathfinder,
+                tick_context.runtime_data.breach_cache,
                 DismantleState::dismantle,
             ) {
                 return Some(state);
@@ -117,6 +118,7 @@ impl FinishedDismantle {
             state_context.ignore_storage,
             state_context.max_structure_hits,
             tick_context.runtime_data.pathfinder,
+            tick_context.runtime_data.breach_cache,
             DismantleState::dismantle,
         )
         .or_else(|| Some(DismantleState::idle()))

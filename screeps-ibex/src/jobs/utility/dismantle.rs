@@ -163,6 +163,34 @@ const BREACH_STEP_COST: u64 = 1;
 /// breaks ties by path length.
 const BREACH_HIT_WEIGHT: u64 = 4_096;
 
+/// Fingerprint of the blocker SET for breach-corridor cache invalidation:
+/// FNV-1a over the sorted tile coordinates and their passability class. Hits
+/// are deliberately excluded — they drift every tick under dismantling and
+/// decay, and re-planning on drift would flap the corridor mid-chew (EP-4.4:
+/// shed re-decision, never committed work). The corridor re-plans exactly
+/// when a blocker appears, disappears, or crosses the dismantlable/impassable
+/// line.
+pub fn blocker_fingerprint(blockers: &std::collections::HashMap<(u8, u8), BreachBlocker>) -> u64 {
+    let mut tiles: Vec<(u8, u8, u8)> = blockers
+        .iter()
+        .map(|((x, y), blocker)| (*x, *y, matches!(blocker, BreachBlocker::Impassable) as u8))
+        .collect();
+
+    tiles.sort_unstable();
+
+    // FNV-1a (inline: 4 lines of arithmetic, not an encoding — EP-9.1 scope
+    // is wire formats).
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for (x, y, impassable) in tiles {
+        for byte in [x, y, impassable] {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    hash
+}
+
 /// Plan the cheapest "breach corridor" from `start` to within range 1 of
 /// `goal` (the controller): an 8-directional Dijkstra over the room where
 /// entering a tile costs [`BREACH_STEP_COST`] plus [`BREACH_HIT_WEIGHT`] per
@@ -349,6 +377,25 @@ mod tests {
 
         let result = breach_path_blockers(&NO_WALLS, &blockers, (5, 25), (45, 25)).expect("corridor should exist");
         assert_eq!(result, vec![(20, 25), (30, 25)]);
+    }
+
+    #[test]
+    fn fingerprint_tracks_the_tile_set_not_the_hits() {
+        let a = wall_line_with_gaps(25, &[(25, 100_000)]);
+
+        // Same tiles, different hits: hits drift under dismantling/decay and
+        // must NOT re-plan the corridor.
+        let chewed = wall_line_with_gaps(25, &[(25, 50)]);
+        assert_eq!(blocker_fingerprint(&a), blocker_fingerprint(&chewed));
+
+        // A blocker crossing the dismantlable/impassable line re-plans.
+        let sealed = wall_line_with_gaps(25, &[]);
+        assert_ne!(blocker_fingerprint(&a), blocker_fingerprint(&sealed));
+
+        // A structure death (tile freed) re-plans.
+        let mut breached = wall_line_with_gaps(25, &[]);
+        breached.remove(&(25, 25));
+        assert_ne!(blocker_fingerprint(&sealed), blocker_fingerprint(&breached));
     }
 
     /// Relation pin: the corridor's total hits never exceed any single

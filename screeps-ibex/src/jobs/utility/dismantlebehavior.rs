@@ -55,37 +55,104 @@ fn breach_blockers(structures: &[StructureObject], max_structure_hits: u32) -> H
     result
 }
 
+/// Rooms the breach-plan cache retains; least-recently-used entries are
+/// evicted beyond this. Generously above `salvage_max_missions` (default 1) —
+/// entries are a handful of tiles each.
+const MAX_BREACH_PLAN_ROOMS: usize = 8;
+
+struct BreachPlanEntry {
+    blocker_fingerprint: u64,
+    breach_tiles: HashSet<(u8, u8)>,
+    last_used: u32,
+}
+
+/// Per-room cache of the controller breach corridor. The corridor only
+/// changes when the blocker SET changes — a structure dies, appears, or
+/// crosses the hit-pool horizon — never as hits drift under dismantling, so
+/// the terrain fetch + Dijkstra run once per structural change instead of
+/// once per dismantler retarget ([`blocker_fingerprint`] is the invalidation
+/// key; one-off pathfinding per operator directive). Shared across creeps:
+/// both dismantlers of a mission work the same corridor.
+#[derive(Default)]
+pub struct BreachPlanCache {
+    entries: HashMap<RoomName, BreachPlanEntry>,
+}
+
+impl BreachPlanCache {
+    fn corridor(&mut self, room_name: RoomName, fingerprint: u64, compute: impl FnOnce() -> HashSet<(u8, u8)>) -> &HashSet<(u8, u8)> {
+        if self.entries.len() > MAX_BREACH_PLAN_ROOMS {
+            if let Some(oldest) = self
+                .entries
+                .iter()
+                .filter(|(name, _)| **name != room_name)
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(name, _)| *name)
+            {
+                self.entries.remove(&oldest);
+            }
+        }
+
+        use std::collections::hash_map::Entry;
+
+        let entry = match self.entries.entry(room_name) {
+            Entry::Occupied(mut occupied) => {
+                if occupied.get().blocker_fingerprint != fingerprint {
+                    let breach_tiles = compute();
+                    let entry = occupied.get_mut();
+                    entry.blocker_fingerprint = fingerprint;
+                    entry.breach_tiles = breach_tiles;
+                }
+                occupied.into_mut()
+            }
+            Entry::Vacant(vacant) => vacant.insert(BreachPlanEntry {
+                blocker_fingerprint: fingerprint,
+                breach_tiles: compute(),
+                last_used: 0,
+            }),
+        };
+
+        entry.last_used = game::time();
+
+        &entry.breach_tiles
+    }
+}
+
 /// Tiles on the cheapest dismantle corridor from the creep to the room's
-/// controller. Empty when the controller is already reachable, the room has
-/// no controller, terrain is unavailable, or the room is sealed past the
-/// hit-pool horizon (callers fall back to nearest-target selection).
-fn controller_breach_tiles(
+/// controller, served from [`BreachPlanCache`] and re-planned only on
+/// blocker-set change. `None`/empty when the room has no controller, the
+/// controller is already reachable, terrain is unavailable, or the room is
+/// sealed past the hit-pool horizon (callers fall back to nearest-target
+/// selection).
+fn controller_breach_tiles<'a>(
+    cache: &'a mut BreachPlanCache,
     creep_pos: Position,
     dismantle_room: &RoomData,
     structures: &[StructureObject],
     max_structure_hits: u32,
-) -> HashSet<(u8, u8)> {
-    let Some(controller_pos) = dismantle_room
+) -> Option<&'a HashSet<(u8, u8)>> {
+    let controller_pos = dismantle_room
         .get_static_visibility_data()
-        .and_then(|static_data| static_data.controller().map(|c| c.pos()))
-    else {
-        return HashSet::new();
-    };
-
-    let Some(room) = game::rooms().get(dismantle_room.name) else {
-        return HashSet::new();
-    };
-
-    let terrain = FastRoomTerrain::new(room.get_terrain().get_raw_buffer().to_vec());
+        .and_then(|static_data| static_data.controller().map(|c| c.pos()))?;
 
     let blockers = breach_blockers(structures, max_structure_hits);
+    let fingerprint = blocker_fingerprint(&blockers);
+
+    let room_name = dismantle_room.name;
     let start = (creep_pos.x().u8(), creep_pos.y().u8());
     let goal = (controller_pos.x().u8(), controller_pos.y().u8());
 
-    breach_path_blockers(&|x, y| terrain.is_wall(x, y), &blockers, start, goal)
-        .unwrap_or_default()
-        .into_iter()
-        .collect()
+    Some(cache.corridor(room_name, fingerprint, move || {
+        let Some(room) = game::rooms().get(room_name) else {
+            return HashSet::new();
+        };
+
+        let terrain = FastRoomTerrain::new(room.get_terrain().get_raw_buffer().to_vec());
+
+        breach_path_blockers(&|x, y| terrain.is_wall(x, y), &blockers, start, goal)
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    }))
 }
 
 /// Nearest workable target from a candidate set.
@@ -105,6 +172,7 @@ pub fn get_new_dismantle_state<F, R>(
     ignore_storage: bool,
     max_structure_hits: u32,
     pathfinder: &mut PathfinderService,
+    breach_cache: &mut BreachPlanCache,
     state_map: F,
 ) -> Option<R>
 where
@@ -138,13 +206,15 @@ where
         // the whole room to be flattened in nearest-first order. Falls back
         // to nearest-target when the corridor is open, unknown, or its
         // structures are not yet workable (e.g. store not emptied by raiders).
-        let breach_tiles = controller_breach_tiles(creep_pos, dismantle_room, structures.all(), max_structure_hits);
-
-        let breach_structures = dismantle_structures
-            .iter()
-            .copied()
-            .filter(|s| breach_tiles.contains(&(s.pos().x().u8(), s.pos().y().u8())))
-            .collect::<Vec<_>>();
+        let breach_structures = match controller_breach_tiles(breach_cache, creep_pos, dismantle_room, structures.all(), max_structure_hits)
+        {
+            Some(breach_tiles) if !breach_tiles.is_empty() => dismantle_structures
+                .iter()
+                .copied()
+                .filter(|s| breach_tiles.contains(&(s.pos().x().u8(), s.pos().y().u8())))
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        };
 
         let best_structure = pick_dismantle_target(&breach_structures, creep_pos, pathfinder)
             .or_else(|| pick_dismantle_target(&dismantle_structures, creep_pos, pathfinder));
