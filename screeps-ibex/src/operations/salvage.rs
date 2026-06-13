@@ -425,72 +425,98 @@ impl Operation for SalvageOperation {
                 continue;
             };
 
-            // Work assessment needs live structure data.
-            let work = {
+            // `strategic` (sources present + adjacent future outpost) is known
+            // from PERSISTED intel alone — sources are static visibility data,
+            // travel is the cached route — so it needs no live structures.
+            let sources_present = system_data
+                .room_data
+                .get(room_entity)
+                .and_then(|rd| rd.get_static_visibility_data())
+                .map(|s| !s.sources().is_empty())
+                .unwrap_or(false);
+            let strategic = sources_present && travel_ticks <= 50 * STRATEGIC_OUTPOST_HOPS;
+
+            // The work/EV survey needs LIVE structure data (only present when
+            // the room is in `game.rooms()` this tick). Unlike the mining
+            // outpost operation — which admits from intel alone — this
+            // operation scans only every 50 ticks, and a transient scout
+            // almost never lands the room visible on that exact tick. So the
+            // survey is best-effort, not a gate:
+            //   - visible now  → full EV/work survey (rejects zero-work or
+            //     sub-margin rooms outright);
+            //   - not visible  → ask for eyes, and admit STRATEGIC rooms on
+            //     intel anyway. The mission re-surveys EVERY tick, sizes its
+            //     roster the first visible tick (its own spawned creeps then
+            //     keep the room visible), and completes harmlessly if no work
+            //     remains. Non-strategic rooms wait for real numbers — their
+            //     EV margin can't be evaluated blind.
+            let survey = {
                 let Some(room_data) = system_data.room_data.get(room_entity) else {
                     continue;
                 };
 
-                match room_data.get_structures() {
-                    Some(structures) => {
-                        let sources = room_data
-                            .get_static_visibility_data()
-                            .map(|s| s.sources().as_slice())
-                            .unwrap_or(&[]);
+                room_data.get_structures().map(|structures| {
+                    let sources = room_data
+                        .get_static_visibility_data()
+                        .map(|s| s.sources().as_slice())
+                        .unwrap_or(&[]);
 
-                        let room_owned = room_data
-                            .get_dynamic_visibility_data()
-                            .map(|d| d.owner().hostile())
-                            .unwrap_or(false);
+                    let room_owned = room_data
+                        .get_dynamic_visibility_data()
+                        .map(|d| d.owner().hostile())
+                        .unwrap_or(false);
 
-                        let lead_ticks = travel_ticks + ASSUMED_SPAWN_LEAD_TICKS;
-                        let work = assess_salvage_work(
-                            structures.all(),
-                            sources,
-                            features.derelict.max_structure_hits,
-                            lead_ticks,
-                            room_owned,
-                        );
-                        let strategic = !sources.is_empty() && travel_ticks <= 50 * STRATEGIC_OUTPOST_HOPS;
+                    let lead_ticks = travel_ticks + ASSUMED_SPAWN_LEAD_TICKS;
+                    assess_salvage_work(
+                        structures.all(),
+                        sources,
+                        features.derelict.max_structure_hits,
+                        lead_ticks,
+                        room_owned,
+                    )
+                })
+            };
 
-                        Some((work, strategic))
-                    }
-                    None => {
-                        // Ask for eyes; a later pass evaluates while visible.
-                        system_data.visibility.request(VisibilityRequest::new(
+            match survey {
+                Some(work) => {
+                    if !salvage_worthwhile(
+                        &work,
+                        travel_ticks,
+                        strategic,
+                        features.derelict.dismantle_margin,
+                        features.raid,
+                        features.dismantle,
+                    ) {
+                        self.rejected.push(SalvageRejection {
                             room_name,
-                            VISIBILITY_PRIORITY_LOW,
-                            VisibilityRequestFlags::ALL,
-                        ));
-
-                        None
+                            until_tick: game::time() + features.derelict.reject_cooldown,
+                        });
+                        continue;
                     }
+
+                    info!(
+                        "Starting salvage mission for room {} (loot energy: {}, loot other: {}, dismantle hits: {}, travel: {}, strategic: {})",
+                        room_name, work.loot_energy, work.loot_other, work.dismantle_hits, travel_ticks, strategic
+                    );
                 }
-            };
+                None => {
+                    // No live structures this tick — ask for eyes.
+                    system_data.visibility.request(VisibilityRequest::new(
+                        room_name,
+                        VISIBILITY_PRIORITY_LOW,
+                        VisibilityRequestFlags::ALL,
+                    ));
 
-            let Some((work, strategic)) = work else {
-                continue;
-            };
+                    if !strategic {
+                        continue;
+                    }
 
-            if !salvage_worthwhile(
-                &work,
-                travel_ticks,
-                strategic,
-                features.derelict.dismantle_margin,
-                features.raid,
-                features.dismantle,
-            ) {
-                self.rejected.push(SalvageRejection {
-                    room_name,
-                    until_tick: game::time() + features.derelict.reject_cooldown,
-                });
-                continue;
+                    info!(
+                        "Starting salvage mission for room {} on intel (strategic, room not visible this tick; travel: {})",
+                        room_name, travel_ticks
+                    );
+                }
             }
-
-            info!(
-                "Starting salvage mission for room {} (loot energy: {}, loot other: {}, dismantle hits: {}, travel: {}, strategic: {})",
-                room_name, work.loot_energy, work.loot_other, work.dismantle_hits, travel_ticks, strategic
-            );
 
             let mission_entity = SalvageMission::build(
                 system_data.updater.create_entity(system_data.entities),
