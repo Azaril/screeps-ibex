@@ -8,7 +8,7 @@ use log::*;
 use screeps::game::market::*;
 use screeps::*;
 use specs::prelude::{Entities, LazyUpdate, Read, ResourceId, System, SystemData, World, Write, WriteExpect, WriteStorage};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Passive orders are placed (and active deals sized) in blocks of this many
 /// units — the per-order damage cap that predates ADR 0012 and survives it.
@@ -45,7 +45,10 @@ impl OrderQueueRoomData {
 
 #[derive(Default)]
 pub struct OrderQueue {
-    rooms: HashMap<RoomName, OrderQueueRoomData>,
+    // BTreeMap, not HashMap: iteration order arbitrates shared finite
+    // resources (credits, the external order book, exposure window caps),
+    // so it must be deterministic (EP-6.13).
+    rooms: BTreeMap<RoomName, OrderQueueRoomData>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
