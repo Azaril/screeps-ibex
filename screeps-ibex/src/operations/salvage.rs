@@ -33,6 +33,14 @@ const ASSUMED_DISMANTLER_BODY_COST: u32 = 3_100;
 /// value will still exist by the time creeps arrive.
 const ASSUMED_SPAWN_LEAD_TICKS: u32 = 150;
 
+/// Recheck cadence for salvage-range hostile rooms whose last sighting was
+/// NOT derelict (armed, or serviced by threat-capable creeps): the owner may
+/// have abandoned the room since. One 50-energy scout per room per window —
+/// the cheap "keep an eye on the neighbours" the operator asked for —
+/// without it a room last seen alive is never observed dying. Derelict-seen
+/// rooms use the tighter `derelict_sighting_due_at` schedule instead.
+const HOSTILE_INTEL_RECHECK_TICKS: u32 = 10_000;
+
 /// Pure EV gate (host-tested): is the recoverable value worth the creep
 /// spawn energy, given travel distance? Strategic rooms (future mining
 /// outposts) bypass the margin — clearing them has value beyond the energy
@@ -125,6 +133,87 @@ impl SalvageOperation {
             salvage_missions: EntityVec::new(),
             rejected: Vec::new(),
             admitted: Vec::new(),
+        }
+    }
+
+    /// Pass 0: deliberate intel scouting for salvage-range rooms — the
+    /// confirmation bootstrap. The outpost/claim gathers re-scout rooms only
+    /// as a side effect of their own staleness rules (orthogonal exits,
+    /// expansion-reachable BFS), which leaves diagonal neighbours permanently
+    /// unobserved and makes derelict discovery incidental. This pass requests
+    /// exactly the sightings the pipeline needs:
+    /// - derelict-seen rooms when the NEXT sighting would tip
+    ///   [`RoomDynamicVisibilityData::derelict_sighting_due_at`] over the
+    ///   confirm threshold (never earlier — earlier sightings can't confirm);
+    /// - hostile rooms last seen alive, on the slow
+    ///   [`HOSTILE_INTEL_RECHECK_TICKS`] cadence (owners leave);
+    /// - neutral rooms with foreign remnants whose intel has aged out of the
+    ///   action window.
+    ///
+    /// Rooms on the rejection memo or with a running mission are skipped (the
+    /// memo exists to stop re-evaluation; missions keep their own eyes).
+    fn request_intel(
+        &self,
+        system_data: &mut OperationExecutionSystemData,
+        home_rooms: &[(Entity, RoomName)],
+        rooms_with_missions: &std::collections::HashSet<RoomName>,
+    ) {
+        let derelict_features = system_data.features.derelict;
+        let now = game::time();
+
+        let mut due_rooms: Vec<RoomName> = Vec::new();
+
+        for (_, room_data) in (system_data.entities, &*system_data.room_data).join() {
+            if rooms_with_missions.contains(&room_data.name) {
+                continue;
+            }
+
+            if self.rejected.iter().any(|r| r.room_name == room_data.name) {
+                continue;
+            }
+
+            let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() else {
+                continue;
+            };
+
+            if dynamic_visibility_data.source_keeper() {
+                continue;
+            }
+
+            let min_range = home_rooms
+                .iter()
+                .map(|(_, home_name)| game::map::get_room_linear_distance(*home_name, room_data.name, false))
+                .min()
+                .unwrap_or(u32::MAX);
+
+            if min_range > derelict_features.salvage_max_range {
+                continue;
+            }
+
+            let sighting_due = if dynamic_visibility_data.owner().hostile() {
+                dynamic_visibility_data.derelict_sighting_due_at(now, derelict_features.confirm_ticks, derelict_features.action_max_age)
+                    || (!dynamic_visibility_data.derelict() && !dynamic_visibility_data.updated_within(HOSTILE_INTEL_RECHECK_TICKS))
+            } else if dynamic_visibility_data.owner().neutral() {
+                !dynamic_visibility_data.reservation().hostile()
+                    && !dynamic_visibility_data.reservation().friendly()
+                    && !dynamic_visibility_data.militarily_active()
+                    && dynamic_visibility_data.hostile_structures()
+                    && !dynamic_visibility_data.updated_within(derelict_features.action_max_age)
+            } else {
+                false
+            };
+
+            if sighting_due {
+                due_rooms.push(room_data.name);
+            }
+        }
+
+        for room_name in due_rooms {
+            system_data.visibility.request(VisibilityRequest::new(
+                room_name,
+                VISIBILITY_PRIORITY_MEDIUM,
+                VisibilityRequestFlags::ALL,
+            ));
         }
     }
 
@@ -242,13 +331,17 @@ impl Operation for SalvageOperation {
             }
         });
 
-        if self.salvage_missions.len() >= features.derelict.salvage_max_missions as usize {
-            return Ok(OperationResult::Running);
-        }
-
         let home_rooms = Self::gather_home_rooms(system_data);
 
         if home_rooms.is_empty() {
+            return Ok(OperationResult::Running);
+        }
+
+        // Pass 0 runs even at the mission cap so the next target's
+        // confirmation is already warm when a slot opens.
+        self.request_intel(system_data, &home_rooms, &rooms_with_missions);
+
+        if self.salvage_missions.len() >= features.derelict.salvage_max_missions as usize {
             return Ok(OperationResult::Running);
         }
 

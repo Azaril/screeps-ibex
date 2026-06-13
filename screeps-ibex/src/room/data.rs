@@ -352,6 +352,24 @@ impl RoomDynamicVisibilityData {
             && now.saturating_sub(self.update_tick) <= max_age
             && self.derelict_for().map(|held| held >= confirm_ticks).unwrap_or(false)
     }
+
+    /// A sighting NOW would tip the derelict pipeline over a threshold it
+    /// cannot cross on its own: the room was derelict at last sighting, the
+    /// confirm window has elapsed since the first derelict sighting (so a
+    /// fresh observation extends the observed span past `confirm_ticks`),
+    /// and the classification is not already confirmed with actionable-age
+    /// intel. Drives deliberate intel scouting (`SalvageOperation`) —
+    /// confirmation otherwise waits on incidental re-scouts from the
+    /// outpost/claim gathers, which only reach orthogonal distance-1 rooms
+    /// and never refresh a diagonal neighbour at all.
+    pub fn derelict_sighting_due_at(&self, now: u32, confirm_ticks: u32, max_age: u32) -> bool {
+        self.derelict()
+            && self
+                .derelict_since
+                .map(|since| now.saturating_sub(since) >= confirm_ticks)
+                .unwrap_or(false)
+            && !self.confirmed_derelict_at(now, confirm_ticks, max_age)
+    }
 }
 
 #[derive(Component)]
@@ -1164,6 +1182,84 @@ mod tests {
 
         assert!(confirmed.confirmed_derelict_at(12_500, 2_000, 10_000));
         assert!(!confirmed.confirmed_derelict_at(12_501, 2_000, 10_000));
+    }
+
+    #[test]
+    fn sighting_due_waits_for_the_confirm_window() {
+        // Sighting #1 at tick 100. A second sighting before 100 + confirm
+        // (2_000) cannot confirm, so it is not requested; from 2_100 on it
+        // can, so it is due.
+        let single = dvd(100, hostile(), Some(100));
+        assert!(!single.derelict_sighting_due_at(2_099, 2_000, 5_000));
+        assert!(single.derelict_sighting_due_at(2_100, 2_000, 5_000));
+    }
+
+    #[test]
+    fn sighting_not_due_while_confirmed_and_fresh() {
+        // Confirmed (span 2_400) with intel well inside the action window:
+        // no scouting needed, admission can act on what we have.
+        let confirmed = dvd(2_500, hostile(), Some(100));
+        assert!(!confirmed.derelict_sighting_due_at(2_600, 2_000, 5_000));
+
+        // Same room once the intel ages out of the action window: the
+        // confirmation has lapsed and a sighting would restore it.
+        assert!(confirmed.derelict_sighting_due_at(7_501, 2_000, 5_000));
+    }
+
+    #[test]
+    fn sighting_never_due_without_derelict_classification() {
+        // Militarily active or threat-serviced rooms are not part of the
+        // confirmation pipeline (their recheck runs on a slow cadence at the
+        // call site instead).
+        let mut armed = dvd(100, hostile(), None);
+        armed.hostile_towers = true;
+        assert!(!armed.derelict_sighting_due_at(50_000, 2_000, 5_000));
+
+        assert!(!dvd(100, RoomDisposition::Neutral, None).derelict_sighting_due_at(50_000, 2_000, 5_000));
+    }
+
+    /// Relation pin: whenever a sighting is due, a sighting at `now` (same
+    /// derelict owner, mark carried forward) yields a confirmed
+    /// classification — the request is never wasted. And the two predicates
+    /// are mutually exclusive: confirmed intel never asks for more eyes.
+    #[test]
+    fn sighting_due_implies_a_sighting_now_confirms() {
+        let confirm_ticks = 2_000;
+        let max_age = 5_000;
+
+        for since in [100u32, 1_000, 4_000] {
+            for update_tick in [100u32, 2_500, 4_000] {
+                if update_tick < since {
+                    continue;
+                }
+                for now in [update_tick, update_tick + 1_999, update_tick + 2_000, update_tick + 10_000] {
+                    let state = dvd(update_tick, hostile(), Some(since));
+
+                    assert!(
+                        !(state.derelict_sighting_due_at(now, confirm_ticks, max_age)
+                            && state.confirmed_derelict_at(now, confirm_ticks, max_age)),
+                        "due and confirmed must be mutually exclusive (since {}, seen {}, now {})",
+                        since,
+                        update_tick,
+                        now
+                    );
+
+                    if state.derelict_sighting_due_at(now, confirm_ticks, max_age) {
+                        // Simulate the requested sighting: update_tick moves to
+                        // `now`, the derelict-since mark carries (same owner,
+                        // still derelict).
+                        let after_sighting = dvd(now, hostile(), Some(since));
+                        assert!(
+                            after_sighting.confirmed_derelict_at(now, confirm_ticks, max_age),
+                            "a due sighting must confirm (since {}, seen {}, now {})",
+                            since,
+                            update_tick,
+                            now
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -211,14 +211,16 @@ impl Mission for ScoutMission {
                 };
 
                 if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
+                    // Floored at MEDIUM: a scout is a single MOVE part (50
+                    // energy), and anything below MEDIUM starves behind
+                    // steady-state economy spawning — the visibility entry
+                    // that wanted it expires unserviced. The salvage
+                    // confirmation pipeline stalled exactly this way
+                    // (LOW-priority requests mapped to SPAWN_PRIORITY_NONE).
                     let priority = if self.priority >= VISIBILITY_PRIORITY_CRITICAL {
                         SPAWN_PRIORITY_HIGH
-                    } else if self.priority >= VISIBILITY_PRIORITY_HIGH {
-                        SPAWN_PRIORITY_MEDIUM
-                    } else if self.priority >= VISIBILITY_PRIORITY_MEDIUM {
-                        SPAWN_PRIORITY_LOW
                     } else {
-                        SPAWN_PRIORITY_NONE
+                        SPAWN_PRIORITY_MEDIUM
                     };
 
                     let spawn_request = SpawnRequest::new(
