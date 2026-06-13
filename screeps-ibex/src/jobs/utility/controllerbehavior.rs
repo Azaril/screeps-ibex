@@ -4,6 +4,7 @@ use crate::jobs::utility::movebehavior::mark_working;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use screeps::*;
+use screeps_rover::*;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_upgrade_state<F, R>(creep: &Creep, upgrade_room: &RoomData, state_map: F, max_rcl: Option<u32>) -> Option<R>
@@ -173,6 +174,69 @@ where
             Ok(()) => None,
             Err(_) => Some(next_state()),
         }
+    } else {
+        Some(next_state())
+    }
+}
+
+/// De-claim a hostile-owned controller: move to range 1 and `attackController`
+/// to knock down its downgrade clock (−300/CLAIM part per strike, one strike
+/// per 1000 ticks; engine-mechanics §2.12). Used by salvage de-claimers to
+/// neutralize a derelict room's controller so the waiting mining outpost can
+/// take it over. Routes through the (confirmed-derelict, hence passable)
+/// target room with `HighCost` like the dismantler.
+///
+/// Yields `next_state` (a short wait) after a strike, when the controller is
+/// upgrade-blocked by a recent strike, or once it is no longer owned/reserved
+/// (de-claim achieved — the mission then retires the role); returns `None`
+/// while still travelling.
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn tick_attack_controller<F, R>(
+    tick_context: &mut JobTickContext,
+    controller_id: RemoteObjectId<StructureController>,
+    next_state: F,
+) -> Option<R>
+where
+    F: Fn() -> R,
+{
+    let creep = tick_context.runtime_data.owner;
+
+    let creep_pos = creep.pos();
+    let target_position = controller_id.pos();
+
+    if !creep_pos.is_near_to(target_position) {
+        if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
+            tick_context
+                .runtime_data
+                .movement
+                .move_to(tick_context.runtime_data.creep_entity, target_position)
+                .range(1)
+                .room_options(RoomOptions::new(HostileBehavior::HighCost));
+        }
+
+        return None;
+    }
+
+    // In range — mark as working within range 1 of the controller.
+    mark_working(tick_context, target_position, 1);
+
+    if let Some(controller) = controller_id.resolve() {
+        // Nothing left to do if the controller is already neutral (de-claim
+        // achieved), or upgrade-blocked by a strike within the last 1000 ticks
+        // (a further attackController would just be rejected — don't spend the
+        // intent).
+        let owned_or_reserved = controller.owner().is_some() || controller.reservation().is_some();
+        let upgrade_blocked = controller.upgrade_blocked().unwrap_or(0) > 0;
+
+        if !owned_or_reserved || upgrade_blocked {
+            return Some(next_state());
+        }
+
+        if tick_context.action_flags.consume(SimultaneousActionFlags::ATTACK_CONTROLLER) {
+            let _ = creep.attack_controller(&controller);
+        }
+
+        Some(next_state())
     } else {
         Some(next_state())
     }

@@ -3,6 +3,7 @@ pub mod build;
 pub mod claim;
 pub mod context;
 pub mod data;
+pub mod declaim;
 pub mod dismantle;
 pub mod harvest;
 pub mod haul;

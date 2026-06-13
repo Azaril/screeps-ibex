@@ -287,8 +287,9 @@ impl Operation for SalvageOperation {
             return Ok(OperationResult::Running);
         }
 
-        // Neither child mission could spawn a creep — don't scan for work.
-        if !features.raid && !features.dismantle {
+        // No enabled salvage role (raid / dismantle / de-claim) — nothing a
+        // mission could do, so don't scan for work.
+        if !features.raid && !features.dismantle && !features.derelict.declaim {
             return Ok(OperationResult::Running);
         }
 
@@ -479,14 +480,21 @@ impl Operation for SalvageOperation {
 
             match survey {
                 Some(work) => {
-                    if !salvage_worthwhile(
+                    let worthwhile = salvage_worthwhile(
                         &work,
                         travel_ticks,
                         strategic,
                         features.derelict.dismantle_margin,
                         features.raid,
                         features.dismantle,
-                    ) {
+                    );
+
+                    // A strategic room is worth admitting for de-claim alone:
+                    // neutralizing the controller is what unblocks the waiting
+                    // mining outpost, even when no loot/dismantle work remains.
+                    let declaim_takeover = strategic && features.derelict.declaim;
+
+                    if !worthwhile && !declaim_takeover {
                         self.rejected.push(SalvageRejection {
                             room_name,
                             until_tick: game::time() + features.derelict.reject_cooldown,

@@ -457,6 +457,14 @@ pub struct DerelictFeatures {
     /// Ticks before a room that failed the salvage EV gate is re-evaluated
     /// (bounds scout/EV churn on stripped or worthless rooms). Default: 10_000.
     pub reject_cooldown: u32,
+    /// Allow the de-claimer role in salvage missions: CLAIM creeps that
+    /// `attackController` a strategic derelict room's controller to drive it
+    /// to neutral, so the waiting mining outpost can take it over (the
+    /// controller does not free on its own except by slow natural downgrade).
+    /// Kill-switch like `raid`/`dismantle`: off zeroes the role; live
+    /// de-claimers finish naturally. Only acts on hostile-owned derelict rooms
+    /// that have sources (worth taking over). Default: true.
+    pub declaim: bool,
 }
 
 impl Default for DerelictFeatures {
@@ -471,6 +479,7 @@ impl Default for DerelictFeatures {
             salvage_max_range: 2,
             salvage_max_missions: 1,
             reject_cooldown: 10_000,
+            declaim: true,
         }
     }
 }

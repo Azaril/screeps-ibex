@@ -4,6 +4,7 @@ use super::missionsystem::*;
 use super::utility::*;
 use crate::creep::*;
 use crate::jobs::data::*;
+use crate::jobs::declaim::*;
 use crate::jobs::dismantle::*;
 use crate::jobs::haul::*;
 use crate::jobs::utility::dismantle::*;
@@ -119,6 +120,7 @@ pub struct SalvageMission {
     home_room_datas: EntityVec<Entity>,
     raiders: EntityVec<Entity>,
     dismantlers: EntityVec<Entity>,
+    declaimers: EntityVec<Entity>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -141,6 +143,7 @@ impl SalvageMission {
             home_room_datas: home_room_datas.to_owned().into(),
             raiders: EntityVec::new(),
             dismantlers: EntityVec::new(),
+            declaimers: EntityVec::new(),
         }
     }
 
@@ -191,6 +194,29 @@ impl SalvageMission {
                     .as_mission_type_mut::<SalvageMission>()
                 {
                     mission_data.dismantlers.push(creep_entity);
+                }
+            });
+        })
+    }
+
+    fn create_handle_declaimer_spawn(
+        mission_entity: Entity,
+        controller_id: RemoteObjectId<StructureController>,
+    ) -> crate::spawnsystem::SpawnQueueCallback {
+        Box::new(move |spawn_system_data, name| {
+            let name = name.to_string();
+
+            spawn_system_data.updater.exec_mut(move |world| {
+                let creep_job = JobData::Declaim(DeclaimJob::new(controller_id));
+
+                let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
+
+                if let Some(mut mission_data) = world
+                    .write_storage::<MissionData>()
+                    .get_mut(mission_entity)
+                    .as_mission_type_mut::<SalvageMission>()
+                {
+                    mission_data.declaimers.push(creep_entity);
                 }
             });
         })
@@ -342,6 +368,46 @@ impl SalvageMission {
 
         Ok(())
     }
+
+    fn spawn_declaimers(
+        &self,
+        system_data: &mut MissionExecutionSystemData,
+        mission_entity: Entity,
+        controller_id: RemoteObjectId<StructureController>,
+    ) -> Result<(), String> {
+        let token = system_data.spawn_queue.token();
+
+        for home_room_entity in self.home_room_datas.iter() {
+            let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
+            let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
+
+            // CLAIM is heavy (600 energy/part); each body lands ~one strike
+            // before it dies (600t life vs 1000t upgrade-block), so size for a
+            // meaningful single strike (−300 ttd/CLAIM) without runaway cost.
+            let body_definition = SpawnBodyDefinition {
+                maximum_energy: home_room.energy_capacity_available(),
+                minimum_repeat: Some(1),
+                maximum_repeat: Some(4),
+                pre_body: &[],
+                repeat_body: &[Part::Claim, Part::Move],
+                post_body: &[],
+            };
+
+            if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
+                let spawn_request = SpawnRequest::new(
+                    "Declaimer".to_string(),
+                    &body,
+                    SPAWN_PRIORITY_LOW,
+                    Some(token),
+                    Self::create_handle_declaimer_spawn(mission_entity, controller_id),
+                );
+
+                system_data.spawn_queue.request(*home_room_entity, spawn_request);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -363,17 +429,24 @@ impl Mission for SalvageMission {
     fn remove_creep(&mut self, entity: Entity) {
         self.raiders.retain(|e| *e != entity);
         self.dismantlers.retain(|e| *e != entity);
+        self.declaimers.retain(|e| *e != entity);
     }
 
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
-        format!("Salvage - Raiders: {} Dismantlers: {}", self.raiders.len(), self.dismantlers.len())
+        format!(
+            "Salvage - Raiders: {} Dismantlers: {} Declaimers: {}",
+            self.raiders.len(),
+            self.dismantlers.len(),
+            self.declaimers.len()
+        )
     }
 
     fn summarize(&self) -> crate::visualization::SummaryContent {
         crate::visualization::SummaryContent::Text(format!(
-            "Salvage - Raiders: {} Dismantlers: {}",
+            "Salvage - Raiders: {} Dismantlers: {} Declaimers: {}",
             self.raiders.len(),
-            self.dismantlers.len()
+            self.dismantlers.len(),
+            self.declaimers.len()
         ))
     }
 
@@ -412,7 +485,7 @@ impl Mission for SalvageMission {
         }
 
         // Phase 1: gates and work survey against an immutable room borrow.
-        let (room_name, work, dismantle_ready) = {
+        let (room_name, work, dismantle_ready, declaim_target) = {
             let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
             let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility data")?;
 
@@ -442,6 +515,23 @@ impl Mission for SalvageMission {
                 return Err("Salvage target under safe mode - aborting".to_string());
             }
 
+            // De-claim target (from PERSISTED intel — no live structures
+            // needed): a still-hostile-owned derelict room WITH sources is
+            // worth taking over, so neutralize its controller for the waiting
+            // mining outpost. Skipped once the controller goes neutral (owner
+            // no longer hostile) or for sourceless rooms (nothing to mine).
+            let declaim_target = if derelict_features.declaim
+                && dynamic_visibility_data.owner().hostile()
+                && room_data
+                    .get_static_visibility_data()
+                    .map(|s| !s.sources().is_empty())
+                    .unwrap_or(false)
+            {
+                room_data.get_static_visibility_data().and_then(|s| s.controller().copied())
+            } else {
+                None
+            };
+
             // Work survey needs live structure data; keep eyes on the room.
             let survey = room_data.get_structures().map(|structures| {
                 let sources = room_data
@@ -465,7 +555,7 @@ impl Mission for SalvageMission {
             });
 
             match survey {
-                Some((work, dismantle_ready)) => (room_data.name, work, dismantle_ready),
+                Some((work, dismantle_ready)) => (room_data.name, work, dismantle_ready, declaim_target),
                 None => {
                     system_data.visibility.request(VisibilityRequest::new(
                         room_data.name,
@@ -496,7 +586,13 @@ impl Mission for SalvageMission {
             0
         };
 
-        if desired_raiders == 0 && desired_dismantlers == 0 {
+        // One de-claimer at a time: only one attackController strike lands per
+        // 1000 ticks anyway (engine-mechanics §2.12), so a second would idle.
+        // `declaim_target` is already gated on declaim enabled + hostile-owned
+        // + sources present.
+        let desired_declaimers = if declaim_target.is_some() { 1 } else { 0 };
+
+        if desired_raiders == 0 && desired_dismantlers == 0 && desired_declaimers == 0 {
             info!("Salvage of room {} complete - no enabled work remains", room_name);
 
             return Ok(MissionResult::Success);
@@ -512,6 +608,12 @@ impl Mission for SalvageMission {
 
         if self.dismantlers.len() < desired_dismantlers {
             self.spawn_dismantlers(system_data, mission_entity, derelict_features.max_structure_hits)?;
+        }
+
+        if self.declaimers.len() < desired_declaimers {
+            if let Some(controller_id) = declaim_target {
+                self.spawn_declaimers(system_data, mission_entity, controller_id)?;
+            }
         }
 
         Ok(MissionResult::Running)

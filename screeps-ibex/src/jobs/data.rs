@@ -18,6 +18,7 @@ pub enum JobData {
     Reserve(super::reserve::ReserveJob),
     Claim(super::claim::ClaimJob),
     Dismantle(super::dismantle::DismantleJob),
+    Declaim(super::declaim::DeclaimJob),
     SquadCombat(super::squad_combat::SquadCombatJob),
 }
 
@@ -35,6 +36,7 @@ impl JobData {
             JobData::Reserve(ref data) => data.summarize(),
             JobData::Claim(ref data) => data.summarize(),
             JobData::Dismantle(ref data) => data.summarize(),
+            JobData::Declaim(ref data) => data.summarize(),
             JobData::SquadCombat(ref data) => data.summarize(),
         }
     }
@@ -60,6 +62,7 @@ impl JobData {
             JobData::Reserve(ref mut data) => data,
             JobData::Claim(ref mut data) => data,
             JobData::Dismantle(ref mut data) => data,
+            JobData::Declaim(ref mut data) => data,
             JobData::SquadCombat(ref mut data) => data,
         }
     }
