@@ -618,8 +618,37 @@ impl Mission for SalvageMission {
             _ => 0,
         };
 
+        if derelict_features.diagnostics {
+            info!(
+                "[salvage-mission-diag] {} loot(e={},o={}) dismantle_hits={} dismantle_ready={} declaim_target={} declaim_access={:?} -> desired raiders={} dismantlers={} declaimers={} (spawnable={}) alive r={} d={} dc={}",
+                room_name,
+                work.loot_energy,
+                work.loot_other,
+                work.dismantle_hits,
+                dismantle_ready,
+                declaim_target.is_some(),
+                declaim_access,
+                desired_raiders,
+                desired_dismantlers,
+                desired_declaimers,
+                declaim_spawnable,
+                self.raiders.len(),
+                self.dismantlers.len(),
+                self.declaimers.len(),
+            );
+        }
+
         if desired_raiders == 0 && desired_dismantlers == 0 && desired_declaimers == 0 {
-            info!("Salvage of room {} complete - no enabled work remains", room_name);
+            // Loud about WHY we are giving up — the usual culprit is a
+            // controller sealed behind structures past `max_structure_hits`
+            // (excluded from dismantle), so there is nothing actionable.
+            info!(
+                "Salvage of room {} complete - no enabled work remains (loot={}, within-horizon dismantle hits={}, declaim_access={:?})",
+                room_name,
+                work.loot_total(),
+                work.dismantle_hits,
+                declaim_access
+            );
 
             return Ok(MissionResult::Success);
         }
