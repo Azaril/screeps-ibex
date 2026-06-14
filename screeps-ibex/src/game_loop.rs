@@ -553,8 +553,12 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// 3 = derelict-rooms M8 (MissionData::Raid/Dismantle variants removed —
 /// SalvageMission absorbed both as creep roles);
 /// 4 = derelict-rooms M12 (JobData::Declaim variant + SalvageMission.declaimers
-/// field — de-claim role).
-const WORLD_FORMAT_VERSION: u32 = 4;
+/// field — de-claim role);
+/// 5 = tower-drain detection rework (DrainTracker reshaped: heal-while-away
+/// detection + bounded re-engagement probe; drops exit_count, adds last_hits,
+/// hits_on_exit, drain_cycles, confirmation_logged, engaging,
+/// engage_baseline_hits, probe_fired, probe_strikes, probe_cooldown_until).
+const WORLD_FORMAT_VERSION: u32 = 5;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode
