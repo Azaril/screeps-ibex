@@ -174,6 +174,81 @@ Each increment is shippable and warning-free; all behavior gated by `features.cl
 - **One-time reset re-runs every colony's `Incubate`.** The 6→7 bump resets every serialized `ColonyMission` to fresh `Incubate`, transiently re-running all child-mission creation. Standard per policy, but **Q: confirm deploy window / operator sign-off (Phase-1 process).**
 - **Avoid-cooldown lockout.** A camped-then-departed room stays avoided until the cooldown decays; mis-tuned decay starves expansion of a good room. Bounded by pruning; decay value is a tuning question.
 
+## 13. Defense staleness — defense is subordinate to ownership
+
+A separate but adjacent failure the operator hit live: a `SquadDefenseMission`
+stuck holding a room that had already been **manually de-claimed** while losing
+— it kept respawning defenders (and other home rooms kept sourcing creeps into
+it) because its only exit (`Defending → Cleanup`) fires on *no-hostiles AND
+all-members-dead*; a de-claimed room with a hostile still inside never reaches
+it. The war/squad system needs a broader overhaul (out of scope here), but the
+anti-stuck invariant is cheap and lands now:
+
+- **A `SquadDefenseMission` self-terminates the moment fresh intel shows the
+  defended room is not `owner().mine()`** (`missions/squad_defense.rs`,
+  `run_mission` guard, `DEFENSE_OWNERSHIP_STALE_TICKS = 100`). Defense exists to
+  protect an *owned* room; a de-claimed / lost / abandoned room is not ours to
+  defend, so we stop spawning into it and other homes stop sourcing creeps.
+- **This is also the abort cascade.** The colony no-win abort (§7) just calls
+  `controller.unclaim()`; the room flips to neutral, and *every* defense mission
+  for it (war-reactive or future-escort) self-terminates on the next tick via
+  the same ownership guard — no cross-operation teardown signal needed. Defense
+  is strictly subordinate to ownership, which is the clean integration with
+  overall base protection: `WarOperation::run_defense_scan` only *creates*
+  `SquadDefenseMission` for `owner().mine() && visible()` rooms, and the mission
+  now also *destroys* itself the moment that stops holding.
+- A room under active defense has our creeps in it, so it is seen every few
+  ticks; the 100-tick freshness window only avoids reacting to a one-off stale
+  read (not a permanent grace).
+
+## 14. Implementation status & deviations (shipped 2026-06-14)
+
+Shipped M1–M7 **except the escort/Securing layer**, with these grounded
+simplifications vs. §3–§9 (all verified in-tree, all builds warning-free, world
+fingerprint bumped 6 → 7 by the concurrent planner-spawn change so this rides
+one reset):
+
+- **No new `ColonyState` variants.** The `Contested`/`Abandoning` behavior is
+  folded into the existing `Incubate` state: it gains a single `contested_since:
+  Option<u32>` field and, at the top of its tick, evaluates the no-win abort
+  (`should_abandon_claim`, `missions/utility.rs`, host-tested) and, on a verdict,
+  calls `controller.unclaim()` + tags avoid-cooldown + returns `Err` (top-down
+  teardown of children via the standard mission-failure path). This is strictly
+  smaller than adding machine states and needs no `get_children_internal` change
+  (the new field is not an entity ref).
+- **Defense is delegated to war, not self-sourced.** `WarOperation`'s reactive
+  `run_defense_scan` already creates `SquadDefenseMission` for any owned + visible
+  + player-hostile room **including a spawnless nascent colony** (no spawn
+  requirement on the scan), so the colony does not own a proactive SquadDefense
+  child. Combined with §13's ownership-subordinate self-termination, defense
+  ramps up and winds down automatically around the claim's lifetime.
+- **The SafeMode `home_set` fix was dropped as moot.** A nascent colony has
+  `safeModeAvailable == 0` and no ghodium to `generateSafeMode`, so SafeMode
+  cannot fire regardless of the `home_set` membership; including the spawnless
+  colony buys nothing. `DefenseEscalation::from_threat` was still made `pub`
+  for the future escort.
+- **Avoid-cooldown is an ephemeral `ExpansionAvoidance` Resource** (`expansion.rs`),
+  not a serialized field on `ClaimOperation` — written by the claimer abort and
+  the colony abort, read by the pre-claim gate. It only needs to prevent
+  re-claim thrash within a VM lifetime; after a reset the safety gate re-vetoes
+  a still-contested room anyway.
+- **Claimer hardening shipped (anti-stuck), escort deferred.** The
+  death-counter + exponential respawn backoff + abort-on-budget
+  (`max_claimer_deaths`) shipped because it has no squad dependency and is the
+  user's "don't get stuck." The **Securing escort / pre-clear** (a proactive
+  `SquadDefenseMission` gating the claimer) is **DEFERRED to the squad/combat
+  overhaul** — see ADR 0008. Until then a *marginal* room is conservatively
+  treated as unsafe (rejected), not escorted.
+
+**Updated M-plan status:** M1 (safety gate) ✅ · M2 (reservation reject +
+builder threat guard) ✅ · M3 (`from_threat` pub; war already covers spawnless,
+SafeMode fix dropped) ✅ · M4 (`threat_data` + `ExpansionAvoidance` on the
+mission/op execution data) ✅ · M5a (avoid-cooldown + claimer abort/backoff) ✅ ·
+**M5b (escort/Securing) DEFERRED → ADR 0008 overhaul** · M6+M7 (folded into
+`Incubate`: no-win abort + `unclaim()` + avoid tag) ✅ · defense-staleness
+self-termination (§13) ✅. Everything is gated by `features.claim.safety_gate`
+and `features.claim.abort_on_contest` (both default TRUE).
+
 ## 12. References
 
 Bot/community: Overmind ExpansionEvaluator/Planner (economy-only scoring, adjacency-only `avoid`) — https://github.com/bencbartlett/Overmind/blob/master/src/strategy/ExpansionEvaluator.ts , https://github.com/bencbartlett/Overmind/blob/master/src/strategy/ExpansionPlanner.ts ; colonize directive (claim+pioneer, no threat-abort, no safe mode) — https://github.com/bencbartlett/Overmind/blob/master/src/directives/colony/colonize.ts ; claimer/pioneer overlords (zero combat/escort) — https://github.com/bencbartlett/Overmind/blob/master/src/overlords/colonization/claimer.ts , .../pioneer.ts ; Overseer auto-safe-mode (structurally can't fire for a nascent colony) — https://github.com/bencbartlett/Overmind/blob/master/src/Overseer.ts ; incubate directive — https://github.com/bencbartlett/Overmind/blob/master/src/directives/colony/incubate.ts ; clearRoom (claim→demolish→**unclaim** as a normal transition) — https://github.com/bencbartlett/Overmind/blob/master/src/directives/colony/clearRoom.ts ; lifecycle-hang cautionary tale — https://github.com/bencbartlett/Overmind/issues/107 ; TooAngel "new rooms should auto-safe-mode" — https://github.com/TooAngel/screeps/issues/131 ; KasamiBot (self-renew expansion workers, support-to-RCL3) — https://kasami.github.io/kasamibot/features.html ; community defend-or-unclaim rule + pre-claim safety heuristics — https://github.com/NobodysNightmare/screeps-ai , https://wiki.screepspl.us/Claiming_new_room/ , https://wiki.screepspl.us/index.php/Great_Filters , https://screeps.com/forum/topic/1942 .

@@ -4,10 +4,12 @@ use crate::cleanup::*;
 use crate::cpugovernor::GovernorSnapshot;
 use crate::creep::*;
 use crate::entitymappingsystem::EntityMappingData;
+use crate::expansion::ExpansionAvoidance;
 use crate::jobs::data::*;
 use crate::military::boostqueue::*;
 use crate::military::economy::*;
 use crate::military::squad::SquadContext;
+use crate::military::threatmap::RoomThreatData;
 use crate::pathing::pathfinderservice::PathfinderService;
 use crate::repairqueue::*;
 use crate::room::data::*;
@@ -45,6 +47,8 @@ pub struct MissionSystemData<'a> {
     features: Read<'a, crate::features::Features>,
     squad_contexts: WriteStorage<'a, SquadContext>,
     mapping: Read<'a, EntityMappingData>,
+    threat_data: ReadStorage<'a, RoomThreatData>,
+    expansion_avoidance: Write<'a, ExpansionAvoidance>,
 }
 
 pub struct MissionExecutionSystemData<'a, 'b> {
@@ -73,6 +77,11 @@ pub struct MissionExecutionSystemData<'a, 'b> {
     pub features: crate::features::Features,
     pub squad_contexts: &'b mut WriteStorage<'a, SquadContext>,
     pub mapping: &'b Read<'a, EntityMappingData>,
+    /// Per-room threat intelligence (`military::threatmap`). Used by the colony
+    /// lifecycle's no-win abort predicate (ADR 0017).
+    pub threat_data: &'b ReadStorage<'a, RoomThreatData>,
+    /// Avoid-cooldown map for abandoned/failed claim targets (ADR 0017).
+    pub expansion_avoidance: &'b mut ExpansionAvoidance,
 }
 
 /// Queue a mission for cleanup via the `EntityCleanupQueue`.
@@ -205,6 +214,8 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 features: *data.features,
                 squad_contexts: &mut data.squad_contexts,
                 mapping: &data.mapping,
+                threat_data: &data.threat_data,
+                expansion_avoidance: &mut data.expansion_avoidance,
             };
 
             if let Some(mission_data) = data.missions.get(entity) {
@@ -262,6 +273,8 @@ impl<'a> System<'a> for RunMissionSystem {
                 features: *data.features,
                 squad_contexts: &mut data.squad_contexts,
                 mapping: &data.mapping,
+                threat_data: &data.threat_data,
+                expansion_avoidance: &mut data.expansion_avoidance,
             };
 
             if let Some(mission_data) = data.missions.get(entity) {

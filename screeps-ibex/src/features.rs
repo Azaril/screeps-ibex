@@ -437,6 +437,27 @@ pub struct ClaimFeatures {
     /// score — a sourced room one hop away is one an existing room could
     /// remote-mine, so claiming it cannibalizes. Default: 0.3.
     pub adjacent_claim_penalty: f32,
+
+    // ── Threat-aware expansion lifecycle (ADR 0017) ─────────────────────
+    /// Master kill-switch for the pre-claim safety gate, the builder threat
+    /// guard, and the claimer death-abort. Default: TRUE.
+    pub safety_gate: bool,
+    /// How recent (ticks) a clean intel read must be to commit a claimer —
+    /// "absence of fresh intel is not safety". Default: 250 (> scouting_window
+    /// so a candidate scouted during the window passes).
+    pub intel_freshness_ticks: u32,
+    /// Claimers lost reaching a target before the claim mission aborts it as a
+    /// losing battle. Default: 2.
+    pub max_claimer_deaths: u32,
+    /// Master kill-switch for the colony no-win abort (un-claim of a losing
+    /// contested claim). Default: TRUE.
+    pub abort_on_contest: bool,
+    /// How long (ticks) a sustained player-hostile presence must hold on a
+    /// spawnless colony before it is abandoned (anti-flap). Default: 50.
+    pub abort_persistence_ticks: u32,
+    /// How long (ticks) an abandoned/failed claim target is avoided before it
+    /// may be re-selected. Default: 5000.
+    pub avoid_cooldown_ticks: u32,
 }
 
 impl Default for ClaimFeatures {
@@ -458,6 +479,12 @@ impl Default for ClaimFeatures {
             min_search_radius: 4,
             distance_score_weight: 2.0,
             adjacent_claim_penalty: 0.3,
+            safety_gate: true,
+            intel_freshness_ticks: 250,
+            max_claimer_deaths: 2,
+            abort_on_contest: true,
+            abort_persistence_ticks: 50,
+            avoid_cooldown_ticks: 5000,
         }
     }
 }

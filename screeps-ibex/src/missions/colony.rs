@@ -42,6 +42,9 @@ machine!(
             power_spawn_mission: EntityOption<Entity>,
             labs_mission: EntityOption<Entity>,
             defend_mission: EntityOption<Entity>,
+            /// First tick of an unbroken sustained-hostile span on this room
+            /// (None when clear). Drives the contested-claim abort (ADR 0017).
+            contested_since: Option<u32>,
         }
     }
 
@@ -140,6 +143,83 @@ impl Incubate {
         state_context: &mut ColonyMissionContext,
     ) -> Result<Option<ColonyState>, String> {
         self.clear_stale_children(system_data);
+
+        // ── Expansion no-win abort (ADR 0017) ──────────────────────────────
+        // Before doing establishment work, decide whether this nascent colony
+        // is a losing contested claim to abandon, so we stop sinking builders /
+        // haulers / defenders into a room we can't hold. Un-claim is free and
+        // instant; SquadDefense self-terminates once the room is no longer
+        // ours, and the child missions tear down via this mission's failure.
+        if system_data.features.claim.abort_on_contest {
+            let now = game::time();
+
+            // Count owned, spawn-bearing colonies — for the only-colony guard.
+            let owned_spawn_colonies = (system_data.entities, &*system_data.room_data)
+                .join()
+                .filter(|(_, rd)| {
+                    rd.get_dynamic_visibility_data().map(|d| d.owner().mine()).unwrap_or(false)
+                        && rd.get_structures().map(|s| s.spawns().iter().any(|sp| sp.my())).unwrap_or(false)
+                })
+                .count();
+
+            let (room_name, spawnless) = {
+                let rd = system_data.room_data.get(state_context.room_data);
+                let name = rd.map(|r| r.name);
+                let spawnless = rd
+                    .map(|r| !r.get_structures().map(|s| s.spawns().iter().any(|sp| sp.my())).unwrap_or(false))
+                    .unwrap_or(true);
+                (name, spawnless)
+            };
+
+            let contested = system_data
+                .threat_data
+                .get(state_context.room_data)
+                .map(|t| t.threat_level >= crate::military::threatmap::ThreatLevel::PlayerRaid)
+                .unwrap_or(false);
+
+            // Track the unbroken sustained-hostile span (anti-flap).
+            if contested {
+                if self.contested_since.is_none() {
+                    self.contested_since = Some(now);
+                }
+            } else {
+                self.contested_since = None;
+            }
+            let contested_persist = self.contested_since.map(|since| now.saturating_sub(since)).unwrap_or(0);
+
+            let upgrade_blocked = room_name
+                .and_then(|n| game::rooms().get(n))
+                .and_then(|r| r.controller())
+                .and_then(|c| c.upgrade_blocked())
+                .map(|t| t > 0)
+                .unwrap_or(false);
+
+            // "Only colony" = we have no spawn-bearing production base at all
+            // (this spawnless room is all we have) — a true last stand, never
+            // abandon. A normal home base elsewhere makes this expansion
+            // freely abandonable.
+            let is_only_colony = owned_spawn_colonies == 0;
+
+            if crate::missions::utility::should_abandon_claim(
+                spawnless,
+                is_only_colony,
+                contested_persist,
+                upgrade_blocked,
+                system_data.features.claim.abort_persistence_ticks,
+            ) {
+                if let Some(name) = room_name {
+                    if let Some(controller) = game::rooms().get(name).and_then(|r| r.controller()) {
+                        match controller.unclaim() {
+                            Ok(()) => info!("Colony: abandoning contested claim {} via unclaim()", name),
+                            Err(e) => warn!("Colony: unclaim() of {} failed: {:?}", name, e),
+                        }
+                    }
+                    let until = now.saturating_add(system_data.features.claim.avoid_cooldown_ticks);
+                    system_data.expansion_avoidance.avoid(name, until);
+                    return Err(format!("Colony abandoned contested claim {} (no-win)", name));
+                }
+            }
+        }
 
         let room_data = system_data
             .room_data
@@ -322,6 +402,7 @@ impl ColonyMission {
                 None.into(),
                 None.into(),
                 None.into(),
+                None,
             ),
         }
     }

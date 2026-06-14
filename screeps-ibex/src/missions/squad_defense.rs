@@ -14,6 +14,11 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 
+/// How recent the defended-room ownership intel must be to act on it. A room
+/// under active defense has our creeps in it, so it is seen every few ticks;
+/// this window only avoids reacting to a one-off stale read.
+const DEFENSE_OWNERSHIP_STALE_TICKS: u32 = 100;
+
 /// Desired squad composition for this defense mission.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DefenseSquadSize {
@@ -518,6 +523,25 @@ impl Mission for SquadDefenseMission {
     }
 
     fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> Result<MissionResult, String> {
+        // Defense is strictly subordinate to room ownership. If fresh intel
+        // shows the defended room is no longer ours (manually de-claimed, lost,
+        // or — once expansion abort lands — abandoned mid-fight), terminate the
+        // mission so we stop respawning defenders into a room we don't control
+        // and other home rooms stop sourcing creeps into it. The
+        // expansion-abort path (`ColonyState` unclaim) relies on this cascade.
+        if let Some(room_data) = system_data.room_data.get(self.context.defend_room_data) {
+            if let Some(dynamic) = room_data.get_dynamic_visibility_data() {
+                if dynamic.updated_within(DEFENSE_OWNERSHIP_STALE_TICKS) && !dynamic.owner().mine() {
+                    log::info!(
+                        "SquadDefense: defended room {} is no longer ours (owner {}), terminating defense",
+                        room_data.name,
+                        dynamic.owner()
+                    );
+                    return Ok(MissionResult::Success);
+                }
+            }
+        }
+
         crate::machine_tick::run_state_machine_result(&mut self.state, "SquadDefenseMission", |state| {
             state.tick(system_data, mission_entity, &mut self.context)
         })?;

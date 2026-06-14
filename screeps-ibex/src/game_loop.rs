@@ -561,7 +561,9 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// 6 = self-tuning/reachability-aware expansion (ClaimOperation gains
 /// current_search_radius + frontier_truncated; VisibilityQueueData gains the
 /// unreachable scout-backoff set).
-/// 7 = planner-driven spawn directions (Plan gains spawn_approaches: Vec<Location>).
+/// 7 = planner-driven spawn directions (Plan gains spawn_approaches: Vec<Location>)
+/// and the threat-aware expansion lifecycle (ADR 0017: ClaimMission gains
+/// claimer_deaths and last_spawn_tick; ColonyState::Incubate gains contested_since).
 /// NOTE: bincode is positional and never signals early end-of-sequence, so a
 /// trailing #[serde(default)] field does NOT make old payloads decode safely --
 /// the version fingerprint is the only real gate, hence this bump.

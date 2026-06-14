@@ -7,7 +7,6 @@ use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use itertools::*;
-use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 #[allow(deprecated)]
@@ -15,12 +14,23 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 
+/// Base respawn backoff (ticks) after the first lost claimer; doubles per death.
+const CLAIMER_RESPAWN_BACKOFF_BASE: u32 = 300;
+/// Cap on the respawn backoff.
+const CLAIMER_RESPAWN_BACKOFF_MAX: u32 = 3000;
+
 #[derive(ConvertSaveload)]
 pub struct ClaimMission {
     owner: EntityOption<Entity>,
     room_data: Entity,
     home_room_datas: EntityVec<Entity>,
     claimers: EntityVec<Entity>,
+    /// Claimers lost (killed / aged out) before claiming. Drives the respawn
+    /// backoff and the abort-on-budget (ADR 0017): a claimer repeatedly killed
+    /// en route means the target is contested — stop feeding the meat grinder.
+    claimer_deaths: u32,
+    /// Tick of the last claimer spawn request, for the exponential backoff.
+    last_spawn_tick: Option<u32>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -42,6 +52,8 @@ impl ClaimMission {
             room_data,
             home_room_datas: home_room_datas.into(),
             claimers: EntityVec::new(),
+            claimer_deaths: 0,
+            last_spawn_tick: None,
         }
     }
 
@@ -87,7 +99,14 @@ impl Mission for ClaimMission {
     }
 
     fn remove_creep(&mut self, entity: Entity) {
+        let before = self.claimers.len();
         self.claimers.retain(|e| *e != entity);
+        // A tracked claimer that disappeared before the room was claimed (the
+        // mission would have ended with Success on a claim) was lost — count it
+        // toward the abort budget.
+        if self.claimers.len() < before {
+            self.claimer_deaths = self.claimer_deaths.saturating_add(1);
+        }
     }
 
     fn repair_entity_refs(&mut self, is_valid: &dyn Fn(Entity) -> bool) {
@@ -132,19 +151,45 @@ impl Mission for ClaimMission {
                 RoomDisposition::Neutral => {}
             }
 
-            // A reservation does not prevent claimController() from
-            // succeeding — claiming overrides any active reservation.
-            // Log but do not abort.
+            // A FOREIGN reservation DOES block claimController (the engine
+            // returns ERR_INVALID_TARGET, ADR 0017) — the previous
+            // "proceeding anyway" was wrong. Abort so the room is re-evaluated;
+            // clearing a foreign reservation is an offensive (attackController)
+            // decision, not part of the claim path.
             match dynamic_visibility_data.reservation() {
                 RoomDisposition::Mine | RoomDisposition::Neutral => {}
                 RoomDisposition::Friendly(ref name) | RoomDisposition::Hostile(ref name) => {
-                    info!("Claim target has reservation by {}, proceeding anyway", name);
+                    return Err(format!("Claim target reserved by {} — claimController would fail", name));
                 }
             }
         }
 
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility data")?;
         let controller = static_visibility_data.controller().ok_or("Expected target controller")?;
+
+        // Abort if too many claimers were lost reaching this target — it is a
+        // losing battle. Tag the room in the avoid-cooldown map so the claim
+        // operation does not immediately re-select it (ADR 0017).
+        if system_data.features.claim.safety_gate && self.claimer_deaths >= system_data.features.claim.max_claimer_deaths {
+            let until = game::time().saturating_add(system_data.features.claim.avoid_cooldown_ticks);
+            system_data.expansion_avoidance.avoid(room_data.name, until);
+            return Err(format!(
+                "Claim aborted: {} claimer(s) lost reaching {} — avoiding for {} ticks",
+                self.claimer_deaths, room_data.name, system_data.features.claim.avoid_cooldown_ticks
+            ));
+        }
+
+        // Exponential respawn backoff after losses, so we don't re-feed a
+        // claimer every tick into a contested approach.
+        let now = game::time();
+        let backoff = if self.claimer_deaths == 0 {
+            0
+        } else {
+            CLAIMER_RESPAWN_BACKOFF_BASE
+                .saturating_mul(1u32 << (self.claimer_deaths - 1).min(8))
+                .min(CLAIMER_RESPAWN_BACKOFF_MAX)
+        };
+        let ready_to_spawn = self.last_spawn_tick.map(|t| now >= t.saturating_add(backoff)).unwrap_or(true);
 
         let token = system_data.spawn_queue.token();
 
@@ -154,7 +199,7 @@ impl Mission for ClaimMission {
             let home_room_data = system_data.room_data.get(*home_room_data_entity).ok_or("Expected home room data")?;
             let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
 
-            if self.claimers.is_empty() {
+            if self.claimers.is_empty() && ready_to_spawn {
                 let body_definition = crate::creep::SpawnBodyDefinition {
                     maximum_energy: home_room.energy_capacity_available(),
                     minimum_repeat: None,
@@ -179,11 +224,16 @@ impl Mission for ClaimMission {
             }
         }
 
-        // If we have no claimer and not one home could afford the body, the
-        // mission is a silent zombie (a [Claim, Move] claimer needs ~650 energy
-        // capacity ≈ RCL 3). Fail loudly so it is cleaned up; the claim
-        // operation only re-creates it once an affordable home is in reach.
-        if self.claimers.is_empty() && !requested {
+        if requested {
+            self.last_spawn_tick = Some(now);
+        }
+
+        // If we TRIED to spawn (not just holding for backoff) but no home could
+        // afford the body, the mission is a silent zombie (a [Claim, Move]
+        // claimer needs ~650 energy capacity ≈ RCL 3). Fail loudly so it is
+        // cleaned up; the claim operation only re-creates it once an affordable
+        // home is in reach.
+        if self.claimers.is_empty() && !requested && ready_to_spawn {
             return Err(format!(
                 "No home room can afford a claimer (need {} energy capacity) for target {}",
                 Part::Claim.cost() + Part::Move.cost(),

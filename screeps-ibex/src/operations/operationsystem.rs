@@ -2,6 +2,7 @@ use super::data::*;
 use crate::cleanup::*;
 use crate::cpugovernor::GovernorSnapshot;
 use crate::entitymappingsystem::EntityMappingData;
+use crate::expansion::ExpansionAvoidance;
 use crate::metrics::CpuBudget;
 use crate::military::economy::*;
 use crate::military::threatmap::RoomThreatData;
@@ -35,6 +36,7 @@ pub struct OperationSystemData<'a> {
     features: Read<'a, crate::features::Features>,
     room_status_cache: Write<'a, RoomStatusCache>,
     threat_data: ReadStorage<'a, RoomThreatData>,
+    expansion_avoidance: Write<'a, ExpansionAvoidance>,
 }
 
 pub struct OperationExecutionSystemData<'a, 'b> {
@@ -58,6 +60,8 @@ pub struct OperationExecutionSystemData<'a, 'b> {
     pub features: crate::features::Features,
     pub room_status_cache: &'b RoomStatusCache,
     pub threat_data: &'b ReadStorage<'a, RoomThreatData>,
+    /// Avoid-cooldown map for abandoned/failed claim targets (ADR 0017).
+    pub expansion_avoidance: &'b mut ExpansionAvoidance,
 }
 
 pub struct OperationExecutionRuntimeData {
@@ -134,6 +138,7 @@ impl<'a> System<'a> for PreRunOperationSystem {
             features: *data.features,
             room_status_cache: &data.room_status_cache,
             threat_data: &data.threat_data,
+            expansion_avoidance: &mut data.expansion_avoidance,
         };
 
         for (entity, operation_data) in (&data.entities, &mut data.operations).join() {
@@ -172,6 +177,7 @@ impl<'a> System<'a> for RunOperationSystem {
             features: *data.features,
             room_status_cache: &data.room_status_cache,
             threat_data: &data.threat_data,
+            expansion_avoidance: &mut data.expansion_avoidance,
         };
 
         for (entity, operation_data) in (&data.entities, &mut data.operations).join() {

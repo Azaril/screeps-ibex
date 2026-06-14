@@ -161,6 +161,27 @@ impl Mission for RemoteBuildMission {
 
         let target_name = room_data.name;
 
+        // Don't feed builders into a contested room (ADR 0017): they die for
+        // nothing and deepen the sunk cost. Hold spawning while a hostile combat
+        // creep / player raid is present; the colony lifecycle (war defense +
+        // abort/unclaim) owns the room's fate. Keep the mission Running so it
+        // resumes once the room is clear (or is torn down top-down on abandon).
+        if system_data.features.claim.safety_gate {
+            let contested = room_data
+                .get_dynamic_visibility_data()
+                .map(|d| d.hostile_creeps())
+                .unwrap_or(false)
+                || system_data
+                    .threat_data
+                    .get(self.room_data)
+                    .map(|t| t.threat_level >= crate::military::threatmap::ThreatLevel::PlayerRaid)
+                    .unwrap_or(false);
+
+            if contested {
+                return Ok(MissionResult::Running);
+            }
+        }
+
         let desired_builders = 4;
 
         if self.builders.len() < desired_builders {

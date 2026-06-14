@@ -11,6 +11,7 @@ mod constants;
 mod cpugovernor;
 mod creep;
 mod entitymappingsystem;
+mod expansion;
 mod features;
 mod findnearest;
 mod game_loop;

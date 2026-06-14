@@ -86,8 +86,10 @@ pub enum DefenseEscalation {
 }
 
 impl DefenseEscalation {
-    /// Determine escalation level from threat analysis.
-    fn from_threat(estimated_dps: f32, estimated_heal: f32, hostile_count: usize, any_boosted: bool) -> Self {
+    /// Determine escalation level from threat analysis. `pub` so the expansion
+    /// escort (ADR 0017, deferred) can size its pre-clear squad with the same
+    /// policy war uses for reactive defense.
+    pub fn from_threat(estimated_dps: f32, estimated_heal: f32, hostile_count: usize, any_boosted: bool) -> Self {
         if (any_boosted && estimated_dps > 200.0) || (estimated_heal > 100.0 && estimated_dps > 150.0) || hostile_count >= 4 {
             DefenseEscalation::Quad
         } else if estimated_dps > 60.0 || estimated_heal > 20.0 || hostile_count >= 2 || any_boosted {

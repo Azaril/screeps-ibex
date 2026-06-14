@@ -398,23 +398,45 @@ impl ClaimOperation {
                 None => continue,
             };
 
-            // Check if the room is still viable (not hostile/owned).
+            // Viability + pre-claim safety gate (ADR 0017). A rejected room is
+            // marked with a negative score so it is pruned in run_select and a
+            // claimer is never dispatched into a contested room or a room we
+            // recently abandoned.
+            let mut reject = false;
             if let Some(room_data) = system_data.room_data.get(room_entity) {
                 if let Some(dynamic) = room_data.get_dynamic_visibility_data() {
+                    // Always reject a room owned by another player (claim impossible).
                     if dynamic.owner().hostile() {
-                        // Mark as unscoreable by setting a negative score.
-                        candidate.score = Some((
-                            -1.0,
-                            CandidateSubScores {
-                                source: 0.0,
-                                walkability: 0.0,
-                                distance: 0.0,
-                                plan: None,
-                            },
-                        ));
-                        continue;
+                        reject = true;
+                    } else if features.safety_gate {
+                        let now = game::time();
+                        let avoided = system_data.expansion_avoidance.is_avoided(candidate.room_name, now);
+                        let threat = system_data.threat_data.get(room_entity);
+                        // Reject only on an ACTIVE threat (or avoid-cooldown)
+                        // here — NOT on staleness (u32::MAX skips the freshness
+                        // check). A stale-but-clean candidate must stay scoreable
+                        // so it isn't permanently rejected before re-scouting; the
+                        // freshness requirement is enforced live at commit time
+                        // in run_select.
+                        if avoided || !crate::missions::utility::is_claim_target_safe(threat, dynamic, u32::MAX) {
+                            reject = true;
+                        }
                     }
                 }
+            }
+
+            if reject {
+                // Mark as unscoreable by setting a negative score.
+                candidate.score = Some((
+                    -1.0,
+                    CandidateSubScores {
+                        source: 0.0,
+                        walkability: 0.0,
+                        distance: 0.0,
+                        plan: None,
+                    },
+                ));
+                continue;
             }
 
             // Attempt scoring.
@@ -529,6 +551,10 @@ impl ClaimOperation {
         currently_owned_rooms: u32,
         features: &crate::features::ClaimFeatures,
     ) {
+        // Drop elapsed avoid-cooldown entries so abandoned rooms become
+        // re-claimable once their cooldown passes (ADR 0017).
+        system_data.expansion_avoidance.prune(game::time());
+
         // Final scoring pass for any candidates still unscored.
         self.try_score_candidates(system_data, features);
 
@@ -709,6 +735,36 @@ impl ClaimOperation {
                         candidate.room_name, candidate.distance, min_claim_distance
                     );
                     continue;
+                }
+
+                // Commit-time safety re-validation (ADR 0017): intel can change
+                // during the scouting window, and "absence of fresh intel is not
+                // safety". Skip (do not claim) a candidate that is now contested,
+                // in avoid-cooldown, or whose intel is stale — keep scouting it.
+                if features.safety_gate {
+                    let now = game::time();
+                    let safe = match system_data.mapping.get_room(&candidate.room_name) {
+                        Some(e) if !system_data.expansion_avoidance.is_avoided(candidate.room_name, now) => system_data
+                            .room_data
+                            .get(e)
+                            .and_then(|rd| rd.get_dynamic_visibility_data())
+                            .map(|dynamic| {
+                                crate::missions::utility::is_claim_target_safe(
+                                    system_data.threat_data.get(e),
+                                    dynamic,
+                                    features.intel_freshness_ticks,
+                                )
+                            })
+                            .unwrap_or(false),
+                        _ => false,
+                    };
+                    if !safe {
+                        info!(
+                            "ClaimOp [Select]: candidate {} failed commit-time safety re-check, skipping",
+                            candidate.room_name
+                        );
+                        continue;
+                    }
                 }
 
                 let candidate_entity = match system_data.mapping.get_room(&candidate.room_name) {

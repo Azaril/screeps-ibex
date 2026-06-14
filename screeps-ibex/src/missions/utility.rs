@@ -1,6 +1,54 @@
+use crate::military::threatmap::{RoomThreatData, ThreatLevel};
 use crate::pathing::pathfinderservice::PathfinderService;
 use crate::room::data::*;
 use screeps::*;
+
+// ── Pre-claim safety gate (ADR 0017) ────────────────────────────────────────
+
+/// Whether a claim target is safe to commit a claimer into. Consumes the cheap
+/// always-cached dynamic-visibility signals plus the richer `RoomThreatData`.
+///
+/// Principle (ADR 0017): *absence of fresh intel is NOT safety.* Stale/missing
+/// visibility reads as unsafe so we re-scout rather than commit a claimer
+/// blind into a room that looked clean on a single old scout. The escort/
+/// pre-clear path for *marginal* rooms is deferred (squad-system overhaul), so
+/// until then ANY live threat signal → unsafe (reject), which is the
+/// conservative choice.
+pub fn is_claim_target_safe(
+    threat: Option<&RoomThreatData>,
+    dynamic: &RoomDynamicVisibilityData,
+    intel_freshness_ticks: u32,
+) -> bool {
+    // Fresh intel required — a clean read older than the window is not trusted.
+    if !dynamic.updated_within(intel_freshness_ticks) {
+        return false;
+    }
+    // A foreign owner or reservation blocks claimController outright
+    // (ERR_INVALID_TARGET), and any militarised presence means the room is
+    // contested. `militarily_active` covers hostile combat creeps, active
+    // hostile spawns, and armed hostile towers.
+    if dynamic.owner().hostile() || dynamic.owner().friendly() {
+        return false;
+    }
+    if dynamic.reservation().hostile() || dynamic.reservation().friendly() {
+        return false;
+    }
+    if dynamic.militarily_active() || dynamic.tower_dps_at_edge().is_some() {
+        return false;
+    }
+    // Rich threat signal when a component is present (a parked enemy combat
+    // creep classifies as at least PlayerRaid).
+    if let Some(t) = threat {
+        if t.threat_level >= ThreatLevel::PlayerRaid
+            || t.estimated_dps > 0.0
+            || !t.hostile_tower_positions.is_empty()
+            || !t.incoming_nukes.is_empty()
+        {
+            return false;
+        }
+    }
+    true
+}
 
 // ── Expansion feasibility (dynamic build/claim range) ───────────────────────
 //
@@ -58,6 +106,30 @@ pub fn max_claim_radius_hops() -> u32 {
     CREEP_CLAIM_LIFE_TIME.saturating_sub(CLAIM_ARRIVAL_MARGIN) / TICKS_PER_HOP
 }
 
+/// Whether to abandon (un-claim) a nascent colony that is losing a contested
+/// claim (ADR 0017). The robust, un-gameable rule: a **spawnless** owned room
+/// (it never built its spawn / can't defend itself — no towers until RCL3)
+/// under **sustained player-hostile presence**, or being actively
+/// `attackController`-ed (`upgrade_blocked`, which also freezes our upgrade so
+/// we can never earn a safe-mode charge → unwinnable). Never abandons a room
+/// that has its own spawn or is our only colony. Pure, host-testable.
+pub fn should_abandon_claim(
+    spawnless: bool,
+    is_only_colony: bool,
+    contested_persist_ticks: u32,
+    upgrade_blocked: bool,
+    abort_persistence_ticks: u32,
+) -> bool {
+    // Established (has a spawn) or last-stand (only colony) rooms are never
+    // abandoned — defend them instead.
+    if !spawnless || is_only_colony {
+        return false;
+    }
+    // Decisive: an enemy is neutralizing the controller. Otherwise: a hostile
+    // that has held past the anti-flap window.
+    upgrade_blocked || contested_persist_ticks >= abort_persistence_ticks
+}
+
 pub fn is_valid_home_room(room_data: &RoomData) -> bool {
     if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
         if dynamic_visibility_data.visible() {
@@ -89,5 +161,34 @@ mod tests {
     fn max_claim_radius_is_derived_from_claim_creep_reach() {
         assert_eq!(max_claim_radius_hops(), (CREEP_CLAIM_LIFE_TIME - CLAIM_ARRIVAL_MARGIN) / TICKS_PER_HOP);
         assert_eq!(max_claim_radius_hops(), 11);
+    }
+
+    // ── Contested-claim abort predicate (ADR 0017) ──────────────────────────
+
+    const PERSIST: u32 = 50;
+
+    #[test]
+    fn abort_never_for_spawned_or_only_colony() {
+        // Has its own spawn → defend, never abandon (even if hammered).
+        assert!(!should_abandon_claim(false, false, 10_000, true, PERSIST));
+        // Spawnless but our only colony → last stand, never abandon.
+        assert!(!should_abandon_claim(true, true, 10_000, true, PERSIST));
+    }
+
+    #[test]
+    fn abort_on_sustained_hostile_past_window() {
+        // Spawnless expansion, not the only colony, hostile held past the window.
+        assert!(should_abandon_claim(true, false, PERSIST, false, PERSIST));
+        // Within the anti-flap window → hold (don't abandon yet).
+        assert!(!should_abandon_claim(true, false, PERSIST - 1, false, PERSIST));
+        // No hostile, no attackController → never abandon a merely-slow room.
+        assert!(!should_abandon_claim(true, false, 0, false, PERSIST));
+    }
+
+    #[test]
+    fn abort_immediately_when_controller_attacked() {
+        // upgrade_blocked (enemy attackController) is decisive, even with no
+        // sustained-hostile persistence yet — it freezes our upgrade, unwinnable.
+        assert!(should_abandon_claim(true, false, 0, true, PERSIST));
     }
 }

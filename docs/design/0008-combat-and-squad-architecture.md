@@ -173,3 +173,26 @@ Slots **at/after Increment 4** (squad cohesion + lifecycle), depending on **ADR 
 5. **Step 4 (optional) — Boost pipeline through the manager (IBEX-027). Breaking: None or drop boosted compositions.** Declare `boosts` from `composition.required_boosts()` on the manager's demands (the spawn orchestrator emits the `BoostQueue` reservation at schedule time — ADR 0011 D9 / ADR 0010 §4) and gate deploy on `is_ready`; or delete the boosted compositions. One-site wire-or-delete decision.
 
 **Breaking-change summary:** Step 0 = Memory/format (variant removal, one labelled low-stakes reset, co-staged with Increment 4/5 shape changes); Steps 1–4 = Behavioral (no serialized-shape change beyond Step 0 — `SquadContext` already serializes its roster/formation, and the `SquadId` field is introduced by ADR 0001 A2's cutover, not here). Never break the running bot mid-increment: the manager serves the already-correct offense path first, then defense, then supervision.
+
+### Pulls from the expansion lifecycle (ADR 0017)
+
+ADR 0017 (threat-aware expansion) shipped the safe-claim / abort half but
+**deferred two squad-dependent pieces to this overhaul**:
+
+1. **Expansion escort / pre-clear — a new SquadManager objective.** When a claim
+   target is *marginal* (a transient/weak threat, economically worth taking),
+   the claim pipeline should be able to declare an `escort/secure room Z` squad
+   objective — pre-clear the room (the salvage `DismantleJob` for a remnant
+   spawn/tower, a `SquadDefenseMission`-class squad for a weak combat creep) and
+   hold it clear while the `[Claim,Move]` claimer commits. `DefenseEscalation::from_threat`
+   is already `pub` for sizing it. Until this lands, ADR 0017 conservatively
+   treats marginal rooms as unsafe (reject, never escort), so expansion is
+   correct-but-timid against contested targets.
+2. **The defense-staleness retirement (Step 2's "retired within the deadline")
+   already has an interim fix.** ADR 0017 §13 made `SquadDefenseMission`
+   self-terminate the moment its room stops being `owner().mine()` (de-claimed /
+   lost / abandoned). Step 2 must preserve this *ownership-subordinate* invariant
+   when defense moves onto the manager: a defend-objective for a room we no
+   longer own is retired immediately, not just when "threat clears + members
+   dead". This is also the teardown cascade for ADR 0017's `unclaim()` abort —
+   keep it.
