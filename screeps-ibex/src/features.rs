@@ -89,6 +89,11 @@ impl ConstructionVisualizeFeatures {
 pub struct ConstructionFeatures {
     pub plan: bool,
     pub force_plan: bool,
+    /// Reserved kill-switch for discretionary re-planning of rooms that already
+    /// have a valid plan. Recovery of a plan-less room is NOT gated by this (S3):
+    /// a room with no usable plan always re-plans (subject to backoff) so it
+    /// regains construction and authoritative spawn approaches. Today only
+    /// `force_plan` triggers re-planning of an already-valid room.
     pub allow_replan: bool,
     pub execute: bool,
     pub cleanup: bool,

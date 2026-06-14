@@ -90,6 +90,14 @@ impl Mission for ClaimMission {
         self.claimers.retain(|e| *e != entity);
     }
 
+    fn repair_entity_refs(&mut self, is_valid: &dyn Fn(Entity) -> bool) {
+        // Without this, a dangling claimer entity (one removed outside the
+        // creep-death path) would keep `claimers` non-empty forever, silently
+        // suppressing claimer respawns. Drop any reference that is no longer a
+        // live, serializable entity.
+        self.claimers.retain(|e| is_valid(*e));
+    }
+
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         let home_room_names = self
             .home_room_datas
@@ -140,6 +148,8 @@ impl Mission for ClaimMission {
 
         let token = system_data.spawn_queue.token();
 
+        let mut requested = false;
+
         for home_room_data_entity in self.home_room_datas.iter() {
             let home_room_data = system_data.room_data.get(*home_room_data_entity).ok_or("Expected home room data")?;
             let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
@@ -164,8 +174,21 @@ impl Mission for ClaimMission {
                     );
 
                     system_data.spawn_queue.request(*home_room_data_entity, spawn_request);
+                    requested = true;
                 }
             }
+        }
+
+        // If we have no claimer and not one home could afford the body, the
+        // mission is a silent zombie (a [Claim, Move] claimer needs ~650 energy
+        // capacity ≈ RCL 3). Fail loudly so it is cleaned up; the claim
+        // operation only re-creates it once an affordable home is in reach.
+        if self.claimers.is_empty() && !requested {
+            return Err(format!(
+                "No home room can afford a claimer (need {} energy capacity) for target {}",
+                Part::Claim.cost() + Part::Move.cost(),
+                room_data.name
+            ));
         }
 
         Ok(MissionResult::Running)

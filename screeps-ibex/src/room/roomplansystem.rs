@@ -183,18 +183,31 @@ impl PlannerRoomDataSource for RoomDataPlannerDataSource {
 pub struct RoomPlannerRunningData {
     room_name: RoomName,
     planner_state: PlanningState,
+    /// Index into `ESCALATION_BEAMS`: the anchor beam width this run is using.
+    /// On a `Failed` result we bump this and restart at the next (wider) beam,
+    /// the last being unbounded -- so a plannable room is never lost to the beam
+    /// heuristic. `serde(default)` => 0 for state serialized before this field.
+    #[serde(default)]
+    beam_level: usize,
 }
 
 impl RoomPlannerRunningData {
+    /// The anchor beam for the current escalation level (clamped to the last).
+    fn current_beam(&self) -> usize {
+        let last = ESCALATION_BEAMS.len() - 1;
+        ESCALATION_BEAMS[self.beam_level.min(last)]
+    }
+
     fn start(room_data: &RoomData) -> Result<Self, String> {
         let static_visibility_data = room_data.get_static_visibility_data().ok_or("Expected static visibility")?;
         let _data_source = RoomDataPlannerDataSource::new(room_data.name, static_visibility_data);
 
-        let state = PlannerBuilder::default().build();
+        let state = PlannerBuilder::with_beam(ESCALATION_BEAMS[0]).build();
 
         Ok(RoomPlannerRunningData {
             room_name: room_data.name,
             planner_state: state,
+            beam_level: 0,
         })
     }
 
@@ -211,14 +224,16 @@ impl RoomPlannerRunningData {
 
         let old_state = std::mem::replace(&mut self.planner_state, PlanningState::Failed("replaced".to_string()));
 
-        // Re-inject layers via PlannerBuilder::resume() each tick.
-        // If fingerprint mismatches (layer config changed), restart planning.
-        let builder = PlannerBuilder::default();
-        let resumed_state = match builder.resume(old_state) {
+        // Re-inject layers via PlannerBuilder::resume() each tick, at the
+        // current escalation beam (layer names are identical across beam widths,
+        // so the resume fingerprint matches). If the fingerprint mismatches
+        // (layer config changed), restart planning.
+        let current_beam = self.current_beam();
+        let resumed_state = match PlannerBuilder::with_beam(current_beam).resume(old_state) {
             Ok(state) => state,
             Err(_) => {
                 info!("Layer fingerprint mismatch, restarting planning for {}", room_data.name);
-                PlannerBuilder::default().build()
+                PlannerBuilder::with_beam(current_beam).build()
             }
         };
 
@@ -230,8 +245,22 @@ impl RoomPlannerRunningData {
                 Ok(PlanTickResult::Complete(Some(plan)))
             }
             PlanningState::Failed(msg) => {
-                self.planner_state = PlanningState::Failed(msg.clone());
-                Ok(PlanTickResult::Failed(msg))
+                // No-plan-loss fallback: before giving up, escalate the anchor
+                // beam and restart at the wider level. Only report Failed once
+                // the unbounded level (last in ESCALATION_BEAMS) has failed.
+                if self.beam_level + 1 < ESCALATION_BEAMS.len() {
+                    self.beam_level += 1;
+                    let wider = self.current_beam();
+                    info!(
+                        "Planning failed at beam {} for {}; escalating to beam {}",
+                        current_beam, room_data.name, wider
+                    );
+                    self.planner_state = PlannerBuilder::with_beam(wider).build();
+                    Ok(PlanTickResult::Running)
+                } else {
+                    self.planner_state = PlanningState::Failed(msg.clone());
+                    Ok(PlanTickResult::Failed(msg))
+                }
             }
             other => {
                 self.planner_state = other;
@@ -336,6 +365,31 @@ impl RoomPlanSystem {
 
         Ok(())
     }
+
+    /// Record a planning failure WITHOUT discarding a usable plan (O2). A
+    /// re-plan that yields no viable layout must not strand a room that already
+    /// has a `Valid` plan: the last-known-good layout is the safest guidance for
+    /// both construction (build/cleanup) and spawning (spawn approaches), so it
+    /// is kept and the failure ignored. Only a room that has never produced a
+    /// plan transitions to `Failed` (arming the backoff for an eventual retry).
+    fn attach_failure_state(room_plan_data_storage: &mut WriteStorage<RoomPlanData>, room: Entity, room_name: RoomName) {
+        if room_plan_data_storage.get(room).map(|d| d.valid()).unwrap_or(false) {
+            info!("Re-plan failed; keeping last-known-good plan. Room: {}", room_name);
+            return;
+        }
+
+        let attempts = Self::next_failure_attempts(room_plan_data_storage, room);
+        if let Err(err) = Self::attach_plan_state(
+            room_plan_data_storage,
+            room,
+            RoomPlanState::Failed {
+                time: game::time(),
+                attempts,
+            },
+        ) {
+            info!("Failed to attach plan to room! Room: {} - Error: {}", room_name, err);
+        }
+    }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -379,8 +433,14 @@ impl<'a> System<'a> for RoomPlanSystem {
                             if let Some(plan_data) = data.room_plan_data.get(room) {
                                 match plan_data.state {
                                     RoomPlanState::Valid(_) => construction.force_plan,
+                                    // S3: a `Failed` room has NO usable plan (O2 keeps any
+                                    // last-known-good as `Valid`), so recovery must not be
+                                    // blocked by the `allow_replan` kill-switch -- retry once
+                                    // the backoff elapses regardless. `allow_replan` is reserved
+                                    // for discretionary re-planning of rooms that already have a
+                                    // plan (today only `force_plan` triggers that).
                                     RoomPlanState::Failed { time, attempts } => {
-                                        game::time() >= time.saturating_add(replan_backoff_ticks(attempts)) && construction.allow_replan
+                                        game::time() >= time.saturating_add(replan_backoff_ticks(attempts))
                                     }
                                 }
                             } else {
@@ -432,36 +492,12 @@ impl<'a> System<'a> for RoomPlanSystem {
                                     }
                                     Ok(PlanTickResult::Complete(None)) => {
                                         info!("Planning complete but no viable plan found. Room: {}", room_data.name);
-
-                                        let attempts = Self::next_failure_attempts(&data.room_plan_data, room_entity);
-                                        if let Err(err) = Self::attach_plan_state(
-                                            &mut data.room_plan_data,
-                                            room_entity,
-                                            RoomPlanState::Failed {
-                                                time: game::time(),
-                                                attempts,
-                                            },
-                                        ) {
-                                            info!("Failed to attach plan to room! Room: {} - Error: {}", room_data.name, err);
-                                        }
-
+                                        Self::attach_failure_state(&mut data.room_plan_data, room_entity, room_data.name);
                                         true
                                     }
                                     Ok(PlanTickResult::Failed(msg)) => {
                                         info!("Planning failed! Room: {} - Error: {}", room_data.name, msg);
-
-                                        let attempts = Self::next_failure_attempts(&data.room_plan_data, room_entity);
-                                        if let Err(err) = Self::attach_plan_state(
-                                            &mut data.room_plan_data,
-                                            room_entity,
-                                            RoomPlanState::Failed {
-                                                time: game::time(),
-                                                attempts,
-                                            },
-                                        ) {
-                                            info!("Failed to attach plan to room! Room: {} - Error: {}", room_data.name, err);
-                                        }
-
+                                        Self::attach_failure_state(&mut data.room_plan_data, room_entity, room_data.name);
                                         true
                                     }
                                     Err(err) => {

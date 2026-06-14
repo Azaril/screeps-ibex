@@ -1,9 +1,15 @@
 use crate::creep::CreepOwner;
 use crate::military::economy::{EconomySnapshot, SpawnQueueSnapshot};
 use crate::room::data::*;
+use crate::room::roomplansystem::RoomPlanData;
+// The unsigned 0..49 room-tile type the planner stores in `Plan::spawn_approaches`.
+// Aliased away from the bare name to avoid confusion with the distinct signed
+// `screeps_common::PlanLocation` (i8, supports negative stamp offsets).
+use screeps_common::Location as PlanTileLocation;
 use log::*;
 use screeps::action_error_codes::SpawnCreepErrorCode;
 use screeps::*;
+use screeps_foreman::terrain::FastRoomTerrain;
 use specs::prelude::*;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -18,6 +24,95 @@ pub const SPAWN_PRIORITY_HIGH: f32 = 75.0;
 pub const SPAWN_PRIORITY_MEDIUM: f32 = 50.0;
 pub const SPAWN_PRIORITY_LOW: f32 = 25.0;
 pub const SPAWN_PRIORITY_NONE: f32 = 0.0;
+
+/// Exclusive upper bound on a room tile coordinate (rooms are 50x50, 0..=49).
+const ROOM_COORD_MAX: i32 = 50;
+/// 8-directional neighbour offsets, ordered to match [`SpawnQueueSystem::delta_to_direction`].
+const NEIGHBOR_DELTAS: [(i32, i32); 8] = [
+    (0, -1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
+    (0, 1),
+    (-1, 1),
+    (-1, 0),
+    (-1, -1),
+];
+
+/// Whether a structure blocks a creep from being spawned onto its tile. Mirrors
+/// the dismantle behaviour's standability rule: roads, containers, extractors
+/// and own/public ramparts are standable; every other structure blocks.
+fn structure_blocks_spawn(structure: &StructureObject) -> bool {
+    match structure {
+        StructureObject::StructureRoad(_)
+        | StructureObject::StructureContainer(_)
+        | StructureObject::StructureExtractor(_) => false,
+        StructureObject::StructureRampart(rampart) => !(rampart.my() || rampart.is_public()),
+        _ => true,
+    }
+}
+
+/// Live room facts used to choose a safe spawn-out direction when the plan's
+/// approaches are unavailable or all blocked. Built lazily, at most once per
+/// room per tick (only when a spawn actually fires), so the `find`/terrain cost
+/// is paid only by rooms that spawn.
+struct LiveSpawnContext {
+    terrain: FastRoomTerrain,
+    creep_tiles: HashSet<(u8, u8)>,
+    blocked_tiles: HashSet<(u8, u8)>,
+}
+
+impl LiveSpawnContext {
+    fn build(room: &Room, structures: &RoomStructureData) -> LiveSpawnContext {
+        let terrain = FastRoomTerrain::new(room.get_terrain().get_raw_buffer().to_vec());
+        let creep_tiles = room
+            .find(find::CREEPS, None)
+            .iter()
+            .map(|c| {
+                let p = c.pos();
+                (p.x().u8(), p.y().u8())
+            })
+            .collect();
+        let blocked_tiles = structures
+            .all()
+            .iter()
+            .filter(|s| structure_blocks_spawn(s))
+            .map(|s| {
+                let p = s.pos();
+                (p.x().u8(), p.y().u8())
+            })
+            .collect();
+        LiveSpawnContext {
+            terrain,
+            creep_tiles,
+            blocked_tiles,
+        }
+    }
+
+    /// A tile a creep can stand on (terrain + structures), ignoring creeps.
+    fn walkable(&self, x: u8, y: u8) -> bool {
+        !self.terrain.is_wall(x, y) && !self.blocked_tiles.contains(&(x, y))
+    }
+
+    /// A tile currently free for a creep to be placed on (walkable + uncrowded).
+    fn free(&self, x: u8, y: u8) -> bool {
+        self.walkable(x, y) && !self.creep_tiles.contains(&(x, y))
+    }
+
+    /// In-bounds walkable neighbours of (x,y); <2 means a dead-end pocket.
+    fn walkable_neighbor_count(&self, x: u8, y: u8) -> usize {
+        NEIGHBOR_DELTAS
+            .iter()
+            .filter(|(dx, dy)| {
+                let nx = x as i32 + dx;
+                let ny = y as i32 + dy;
+                (0..ROOM_COORD_MAX).contains(&nx)
+                    && (0..ROOM_COORD_MAX).contains(&ny)
+                    && self.walkable(nx as u8, ny as u8)
+            })
+            .count()
+    }
+}
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct SpawnToken(u32);
@@ -125,6 +220,7 @@ pub struct SpawnQueueSystemData<'a> {
     updater: Read<'a, LazyUpdate>,
     entities: Entities<'a>,
     room_data: WriteStorage<'a, RoomData>,
+    room_plan_data: ReadStorage<'a, RoomPlanData>,
     creep_owner: ReadStorage<'a, CreepOwner>,
     economy: Read<'a, EconomySnapshot>,
 }
@@ -140,12 +236,31 @@ pub struct SpawnQueueSystem;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl SpawnQueueSystem {
-    fn spawn_creep(spawn: &StructureSpawn, parts: &[Part]) -> Result<String, SpawnCreepErrorCode> {
+    fn spawn_creep(
+        spawn: &StructureSpawn,
+        parts: &[Part],
+        directions: &[Direction],
+    ) -> Result<String, SpawnCreepErrorCode> {
         let time = screeps::game::time();
         let mut additional = 0;
         loop {
             let name = format!("{}-{}", time, additional);
-            match spawn.spawn_creep(parts, &name) {
+            // When the planner leaves a dead-end pocket adjacent to a spawn,
+            // letting the engine place the creep there traps it. Constrain the
+            // spawn to face the base interior (`directions`) so the creep always
+            // lands on a hub-connected tile. (The room planner relies on this:
+            // its ReachabilityLayer no longer requires *every* spawn-adjacent
+            // tile to be reachable, only that an approach exists.)
+            let result = if directions.is_empty() {
+                spawn.spawn_creep(parts, &name)
+            } else {
+                spawn.spawn_creep_with_options(
+                    parts,
+                    &name,
+                    &SpawnOptions::new().directions(directions),
+                )
+            };
+            match result {
                 Ok(()) => return Ok(name),
                 Err(e) => {
                     if e == SpawnCreepErrorCode::NameExists {
@@ -156,6 +271,81 @@ impl SpawnQueueSystem {
                 }
             }
         }
+    }
+
+    /// Directions to constrain `spawnCreep` to, degrading monotonically so a
+    /// creep is never orphaned in a pocket and a spawn is never wedged shut:
+    ///
+    /// 1. **Planner-approved approaches** (`Plan::spawn_approaches`, adjacent to
+    ///    this spawn) that are *currently free*. These come from the planner's
+    ///    own hub flood-fill, so they are the authoritative "hub-connected" set
+    ///    -- not a runtime "toward storage" guess that could point at a walled
+    ///    tile. Filtering to free ones means a single camped approach can't wedge
+    ///    the spawn (the engine would otherwise hold the half-spawned creep until
+    ///    an allowed tile clears).
+    /// 2. **Live-safe interior tiles** when (1) is empty -- no plan yet, an
+    ///    off-plan / relocated spawn (no approach is adjacent), or every approach
+    ///    is blocked. A neighbour qualifies if it is in-bounds, not a room-border
+    ///    (exit) tile, currently free, and not a dead-end pocket (>=2 walkable
+    ///    neighbours). This is a local heuristic, weaker than (1)'s authoritative
+    ///    reachability, but only reached in the rare no-authoritative-data case.
+    /// 3. **Empty** when even (2) finds nothing (a truly boxed-in spawn): the
+    ///    caller then spawns unconstrained, letting the engine try every tile --
+    ///    the last resort, strictly better than refusing to spawn.
+    fn safe_spawn_directions(
+        spawn_pos: Position,
+        approaches: &[PlanTileLocation],
+        live: &LiveSpawnContext,
+    ) -> Vec<Direction> {
+        let sx = spawn_pos.x().u8() as i32;
+        let sy = spawn_pos.y().u8() as i32;
+
+        // Tier 1: planner-approved approaches that are free right now.
+        let planned: Vec<Direction> = approaches
+            .iter()
+            .filter(|loc| live.free(loc.x(), loc.y()))
+            .filter_map(|loc| Self::delta_to_direction(loc.x() as i32 - sx, loc.y() as i32 - sy))
+            .collect();
+        if !planned.is_empty() {
+            return planned;
+        }
+
+        // Tier 2: live-safe interior neighbours (off-plan / no plan / all
+        // approaches blocked). Skip borders and dead-end pockets.
+        let mut safe: Vec<Direction> = Vec::new();
+        for (dx, dy) in NEIGHBOR_DELTAS {
+            let nx = sx + dx;
+            let ny = sy + dy;
+            if !(0..ROOM_COORD_MAX).contains(&nx) || !(0..ROOM_COORD_MAX).contains(&ny) {
+                continue;
+            }
+            let (ux, uy) = (nx as u8, ny as u8);
+            let is_border = nx == 0 || ny == 0 || nx == ROOM_COORD_MAX - 1 || ny == ROOM_COORD_MAX - 1;
+            if is_border || !live.free(ux, uy) || live.walkable_neighbor_count(ux, uy) < 2 {
+                continue;
+            }
+            if let Some(d) = Self::delta_to_direction(dx, dy) {
+                safe.push(d);
+            }
+        }
+        safe
+    }
+
+    /// Map an adjacent (dx, dy) offset to a `Direction`; `None` if the tiles are
+    /// not 8-adjacent (so non-adjacent approaches are filtered out).
+    fn delta_to_direction(dx: i32, dy: i32) -> Option<Direction> {
+        use Direction::*;
+        Some(match (dx, dy) {
+            (0, -1) => Top,
+            (1, -1) => TopRight,
+            (1, 0) => Right,
+            (1, 1) => BottomRight,
+            (0, 1) => Bottom,
+            (-1, 1) => BottomLeft,
+            (-1, 0) => Left,
+            (-1, -1) => TopLeft,
+            _ => return None,
+        })
     }
 
     /// Compute spawn duration in ticks for the next spawn request (body parts * CREEP_SPAWN_TIME).
@@ -184,6 +374,14 @@ impl SpawnQueueSystem {
         })?;
 
         let mut spawns: Vec<StructureSpawn> = structures.spawns().to_vec();
+        // Planner-approved spawn approach tiles (hub-reachable, never pockets).
+        // Empty if no plan yet, or an old plan from before the field existed.
+        let spawn_approaches: Vec<PlanTileLocation> = data
+            .room_plan_data
+            .get(room_entity)
+            .and_then(|d| d.plan())
+            .map(|p| p.spawn_approaches.clone())
+            .unwrap_or_default();
         let mut available_energy = room.energy_available();
         let energy_capacity = room.energy_capacity_available();
 
@@ -198,6 +396,10 @@ impl SpawnQueueSystem {
         let renew_ttl_threshold = next_spawn_ticks.saturating_add(50);
 
         let system_data = SpawnQueueExecutionSystemData { updater: &data.updater };
+
+        // Live room facts for safe spawn directions, built at most once per room
+        // per tick on first actual spawn (skipped entirely if nothing spawns).
+        let mut live_ctx: Option<LiveSpawnContext> = None;
 
         for request in requests {
             if request.token.map(|t| !spawned_tokens.contains(&t)).unwrap_or(true) {
@@ -214,7 +416,10 @@ impl SpawnQueueSystem {
                         break;
                     }
 
-                    match Self::spawn_creep(spawn, &request.body) {
+                    let live = live_ctx.get_or_insert_with(|| LiveSpawnContext::build(&room, &structures));
+                    let directions = Self::safe_spawn_directions(spawn.pos(), &spawn_approaches, live);
+
+                    match Self::spawn_creep(spawn, &request.body, &directions) {
                         Ok(name) => {
                             (*request.callback)(&system_data, &name);
 

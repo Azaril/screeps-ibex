@@ -561,7 +561,11 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// 6 = self-tuning/reachability-aware expansion (ClaimOperation gains
 /// current_search_radius + frontier_truncated; VisibilityQueueData gains the
 /// unreachable scout-backoff set).
-const WORLD_FORMAT_VERSION: u32 = 6;
+/// 7 = planner-driven spawn directions (Plan gains spawn_approaches: Vec<Location>).
+/// NOTE: bincode is positional and never signals early end-of-sequence, so a
+/// trailing #[serde(default)] field does NOT make old payloads decode safely --
+/// the version fingerprint is the only real gate, hence this bump.
+const WORLD_FORMAT_VERSION: u32 = 7;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode

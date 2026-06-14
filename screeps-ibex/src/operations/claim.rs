@@ -458,12 +458,13 @@ impl ClaimOperation {
 
         let estimate_cap = ((cpu_limit * features.cpu_headroom_factor as f64) / est_room_cpu).floor().max(0.0) as u32;
 
-        // Probe one more room when the bucket is strongly healthy and flat-or-
-        // rising: try growth, then back off (next claim vetoed, cap shrinks) if
-        // the new room actually pushes us over budget.
-        let bucket_healthy = governor.tier == crate::cpugovernor::Tier::Normal
-            && governor.bucket >= features.healthy_bucket_floor
-            && governor.trend >= 0.0;
+        // Probe one more room when the bucket is comfortably healthy: try
+        // growth, then back off (next claim vetoed, cap shrinks) if the new
+        // room actually pushes us over budget. Gated on tier + a high bucket,
+        // not a raw `trend >= 0` (a near-full bucket sawtooths slightly
+        // negative and would otherwise never probe).
+        let bucket_healthy =
+            governor.tier == crate::cpugovernor::Tier::Normal && governor.bucket >= features.healthy_bucket_floor;
 
         let structural = if bucket_healthy {
             estimate_cap.max(currently_owned_rooms + 1)
@@ -598,11 +599,12 @@ impl ClaimOperation {
         let allow_penalized = self.current_search_radius >= max_radius && nearest_good.is_none();
 
         // Live affordability veto: don't START a new claim while CPU is
-        // stressed, even if structurally under the cap. The cap's
-        // probe-one-more already leans on bucket health; this guards against
-        // committing during a transient drain.
-        let cpu_healthy =
-            system_data.governor.tier == crate::cpugovernor::Tier::Normal && system_data.governor.trend >= 0.0;
+        // genuinely stressed (Conserve/Critical). Use the governor tier — which
+        // already protects against a death-spiral drain (trend < -5) — rather
+        // than a raw `trend >= 0`: a healthy empire at a near-full bucket has a
+        // slightly-negative sawtooth trend most ticks, and gating on it would
+        // veto claims for whole discovery cycles.
+        let cpu_healthy = system_data.governor.tier == crate::cpugovernor::Tier::Normal;
 
         let active_rooms = (currently_owned_rooms as usize + self.claim_missions.len()) as u32;
         let available_rooms = maximum_rooms.saturating_sub(active_rooms);
@@ -634,7 +636,10 @@ impl ClaimOperation {
         );
 
         let max_new_missions = if at_capacity {
-            info!("ClaimOp [Select]: at capacity, no new missions");
+            info!(
+                "ClaimOp [Select]: no new missions (active={} max_rooms={} cpu_healthy={} features.on={})",
+                active_rooms, maximum_rooms, cpu_healthy, features.on
+            );
             0
         } else {
             // Cap by both room headroom and mission concurrency limit.
@@ -745,13 +750,23 @@ impl ClaimOperation {
                 if has_claim_mission {
                     info!("ClaimOp [Select]: top candidate {} already has a claim mission", room_data.name);
                 } else {
-                    // Eligible homes: RCL >= 2, not already committed, and within
-                    // CLAIM-creep reach (travel-time feasibility, dynamic — claim
+                    // Eligible homes: not already committed, able to AFFORD a
+                    // claimer ([Claim, Move] = 650 energy ⇒ ~RCL 3 capacity —
+                    // an RCL 2 home would silently fail create_body), and within
+                    // CLAIM-creep reach (travel-time feasibility; claim
                     // feasibility implies the colony is also build-feasible).
                     let candidate_name = candidate.room_name;
+                    let claimer_cost = Part::Claim.cost() + Part::Move.cost();
                     let mut home_room_entities: Vec<Entity> = Vec::new();
-                    for (entity, home_room_name, max_level) in home_room_data.iter() {
-                        if *max_level < 2 || used_home_rooms.contains(entity) {
+                    for (entity, home_room_name, _max_level) in home_room_data.iter() {
+                        if used_home_rooms.contains(entity) {
+                            continue;
+                        }
+                        let energy_capacity = game::rooms()
+                            .get(*home_room_name)
+                            .map(|r| r.energy_capacity_available())
+                            .unwrap_or(0);
+                        if energy_capacity < claimer_cost {
                             continue;
                         }
                         if crate::missions::utility::is_claim_feasible(system_data.pathfinder, *home_room_name, candidate_name) {
@@ -761,7 +776,7 @@ impl ClaimOperation {
 
                     if home_room_entities.is_empty() {
                         info!(
-                            "ClaimOp [Select]: top candidate {} has no eligible home rooms (all used or not claim-reachable)",
+                            "ClaimOp [Select]: top candidate {} has no eligible home rooms (all used, can't afford a claimer, or not claim-reachable)",
                             room_data.name
                         );
                     } else {
@@ -1225,6 +1240,23 @@ mod tests {
         // Same numbers but healthy → probe one more: max(8, 10) = 10.
         let cap_healthy = ClaimOperation::compute_maximum_rooms(&f, budget, healthy_governor(), 9, 20);
         assert_eq!(cap_healthy, 10);
+    }
+
+    #[test]
+    fn max_rooms_probes_with_mildly_negative_trend_at_full_bucket() {
+        // A healthy empire at a near-full bucket sawtooths slightly negative;
+        // the probe must still fire (regression: the old `trend >= 0` gate
+        // would have blocked it, silently capping expansion).
+        let f = ClaimFeatures::default();
+        let budget = CpuBudget {
+            cpu_used_estimate: Some(90.0),
+            cpu_limit: 100.0,
+        };
+        // tier Normal (bucket 9000 ≥ 4000, trend −1 ≥ −5), bucket ≥ 8000 floor.
+        let mildly_draining_but_full = GovernorSnapshot::compute(9_000, -1.0, 500.0);
+        // est_room_cpu = 90/9 = 10 → estimate_cap = 8; probe → max(8, 10) = 10.
+        let cap = ClaimOperation::compute_maximum_rooms(&f, budget, mildly_draining_but_full, 9, 20);
+        assert_eq!(cap, 10);
     }
 
     #[test]

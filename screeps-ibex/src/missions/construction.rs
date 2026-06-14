@@ -268,7 +268,12 @@ impl Mission for ConstructionMission {
 
                 false
             } else {
-                system_data.features.construction.allow_replan
+                // No usable plan (Failed with no last-known-good). Recovery is
+                // unconditional (S3) -- a plan-less owned room must re-plan so it
+                // regains construction + authoritative spawn approaches; this is
+                // deliberately NOT gated by `allow_replan` (the backoff in
+                // roomplansystem still prevents thrashing).
+                true
             }
         } else {
             true

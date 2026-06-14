@@ -52,3 +52,7 @@ nbproject
 # Eval harness run artifacts #
 ##############################
 runs/
+
+# Bench / planner output (PNGs, plan JSON, score reports) #
+###########################################################
+output/
