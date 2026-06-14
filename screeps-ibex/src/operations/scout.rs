@@ -160,11 +160,13 @@ impl Operation for ScoutOperation {
         // Gather eligible entries sorted by priority descending.
         // Opportunistic entries (created by idle scouts for proactive
         // exploration) are excluded — they should not trigger new missions.
+        let now = game::time();
         let mut eligible_entries: Vec<_> = system_data
             .visibility
             .entries
             .iter()
             .filter(|e| e.allowed_types.contains(VisibilityRequestFlags::SCOUT) && !e.opportunistic)
+            .filter(|e| !system_data.visibility.is_unreachable_now(e.room_name, now))
             .filter(|e| {
                 let rt = system_data.visibility.runtime.get(&e.room_name);
                 let claimed = rt.map(|r| r.claimed_by.is_some()).unwrap_or(false);

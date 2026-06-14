@@ -159,6 +159,8 @@ impl Mission for RemoteBuildMission {
             return Ok(MissionResult::Success);
         }
 
+        let target_name = room_data.name;
+
         let desired_builders = 4;
 
         if self.builders.len() < desired_builders {
@@ -169,8 +171,17 @@ impl Mission for RemoteBuildMission {
             let token = system_data.spawn_queue.token();
 
             for home_room_entity in self.home_room_datas.iter() {
-                let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
-                let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
+                let home_name = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?.name;
+
+                // Don't spawn a builder that can't reach the target with enough
+                // life left to gather + build — it would waste spawn capacity.
+                // (The home set is feasibility-filtered at creation; this is
+                // defensive against RCL/position drift.)
+                if !crate::missions::utility::is_build_feasible(system_data.pathfinder, home_name, target_name) {
+                    continue;
+                }
+
+                let home_room = game::rooms().get(home_name).ok_or("Expected home room")?;
 
                 let body_definition = SpawnBodyDefinition {
                     maximum_energy: home_room.energy_capacity_available(),

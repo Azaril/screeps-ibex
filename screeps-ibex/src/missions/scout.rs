@@ -181,10 +181,21 @@ impl Mission for ScoutMission {
                 self.scouts.len()
             );
 
+            // The room is reachable after all — clear any give-up backoff so it
+            // is no longer suppressed.
+            system_data.visibility.clear_unreachable(room_data.name);
+
             return Ok(MissionResult::Success);
         }
 
         if self.spawned_scouts >= 4 && self.scouts.is_empty() {
+            // Record the give-up so the visibility queue stops dispatching
+            // scouts here (exponential backoff) and the claim pipeline can
+            // treat the room as covered-unreachable rather than blocking on it.
+            // Observers are not suppressed — a room one can still observe
+            // recovers on its own (the backoff clears on fresh visibility).
+            system_data.visibility.mark_unreachable(room_data.name, game::time());
+
             return Err(format!(
                 "Failed scout mission - unable to scout room after {} attempts",
                 self.spawned_scouts

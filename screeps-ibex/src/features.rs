@@ -398,6 +398,40 @@ pub struct ClaimFeatures {
     /// Ticks between spawn_remote_build checks. Independent of the claim
     /// pipeline. Default: 50.
     pub remote_build_interval: u32,
+
+    // ── Self-tuning CPU room cap (Workstream A) ─────────────────────────
+    /// Fraction of the sustainable CPU limit the empire may project itself
+    /// to (incl. one more room) before the dynamic cap stops growth. Leaves
+    /// headroom for per-tick fluctuation. Default: 0.85.
+    pub cpu_headroom_factor: f32,
+    /// Per-room CPU cost assumed before the measured model is warm (or while
+    /// the empire is too small for `used / rooms` to be meaningful).
+    /// Default: 10.0 (the legacy `ESTIMATED_ROOM_CPU_COST`).
+    pub fallback_room_cpu_cost: f32,
+    /// Bucket level above which (with `tier==Normal` and a non-negative
+    /// trend) the cap allows "probe one more room" beyond the static
+    /// estimate — the expand-when-affordable signal. Default: 8000.
+    pub healthy_bucket_floor: i32,
+    /// Hard floor on the room cap (safety). Default: 1.
+    pub min_room_cap: u32,
+    /// Hard ceiling on the room cap (safety, independent of GCL/CPU).
+    /// Default: 50.
+    pub max_room_cap: u32,
+
+    // ── Adaptive radius + cannibalization scoring (Workstream B) ────────
+    /// Tightest claim search radius (BFS room-hops) and the policy floor on
+    /// claim distance. Derived, not arbitrary: remote mining is radius 1, so
+    /// two colonies need ~`2*1 + 2 = 4` hops to avoid overlapping remote
+    /// rings. Default: 4. (No max — the upper bound is dynamic via build
+    /// feasibility.)
+    pub min_search_radius: u32,
+    /// Weight of the distance sub-score in candidate scoring. Higher = the
+    /// frontier stays tighter. Default: 2.0 (up from the old 0.5).
+    pub distance_score_weight: f32,
+    /// Multiplicative penalty applied to a distance-1 candidate's total
+    /// score — a sourced room one hop away is one an existing room could
+    /// remote-mine, so claiming it cannibalizes. Default: 0.3.
+    pub adjacent_claim_penalty: f32,
 }
 
 impl Default for ClaimFeatures {
@@ -411,6 +445,14 @@ impl Default for ClaimFeatures {
             discover_interval: 500,
             scouting_window: 200,
             remote_build_interval: 50,
+            cpu_headroom_factor: 0.85,
+            fallback_room_cpu_cost: 10.0,
+            healthy_bucket_floor: 8000,
+            min_room_cap: 1,
+            max_room_cap: 50,
+            min_search_radius: 4,
+            distance_score_weight: 2.0,
+            adjacent_claim_penalty: 0.3,
         }
     }
 }

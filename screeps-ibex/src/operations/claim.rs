@@ -61,6 +61,16 @@ pub struct ClaimOperation {
     home_rooms: Vec<RoomName>,
     /// Unknown rooms (no entity/visibility) from the last Discover pass.
     unknown_rooms: Vec<RoomName>,
+    /// Adaptive BFS search radius (room-hops). Starts tight at
+    /// `min_search_radius`, widens only when the ring is fully scouted, there
+    /// is capacity, more reachable map exists, and nothing good was found —
+    /// then re-tightens (hugs the nearest good candidate). The upper bound is
+    /// dynamic (claim-creep reach), so there is no static max config.
+    current_search_radius: u32,
+    /// Whether the last Discover BFS stopped at the radius cap with a live
+    /// expandable frontier (more reachable map exists) vs. exhausting it
+    /// (boxed in by hostiles/closed rooms). Gates widening.
+    frontier_truncated: bool,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -83,6 +93,10 @@ impl ClaimOperation {
             candidates: Vec::new(),
             home_rooms: Vec::new(),
             unknown_rooms: Vec::new(),
+            // Default to the policy floor; clamped to configured min on first
+            // discover and adjusted by the ratchet thereafter.
+            current_search_radius: 4,
+            frontier_truncated: false,
         }
     }
 
@@ -171,17 +185,23 @@ impl ClaimOperation {
         Some((plains_ratio, 1.0))
     }
 
-    fn distance_score(distance: u32) -> Option<(f32, f32)> {
-        let score = match distance {
+    /// Raw distance preference (0–1), peaking at the own-remote-ring band
+    /// (~4–5) and disfavouring closer rooms (which would share/cannibalize an
+    /// existing room's remotes). Never zero ≥ distance 1, so a far room stays
+    /// selectable as a last resort — tight but not stuck. `None` for distance 0
+    /// (the home room itself).
+    fn distance_score(distance: u32) -> Option<f32> {
+        match distance {
             0 => None,
-            1 => Some(0.5),
-            2 => Some(0.75),
-            3 => Some(1.0),
+            1 => Some(0.05),
+            2 => Some(0.2),
+            3 => Some(0.45),
             4 => Some(1.0),
-            _ => Some(0.5),
-        }?;
-
-        Some((score, 0.5))
+            5 => Some(0.9),
+            6 => Some(0.7),
+            7 => Some(0.5),
+            _ => Some(0.35),
+        }
     }
 
     /// Return a plan quality score (0–1) for a room that has a valid plan.
@@ -200,17 +220,18 @@ impl ClaimOperation {
         system_data: &mut OperationExecutionSystemData,
         room_entity: Entity,
         distance: u32,
-        plan_score_weight: f32,
+        features: &crate::features::ClaimFeatures,
     ) -> Option<(f32, CandidateSubScores)> {
         let (source_raw, source_w) = Self::source_score(system_data, room_entity)?;
         let (walk_raw, walk_w) = Self::walkability_score(system_data, room_entity)?;
-        let (dist_raw, dist_w) = Self::distance_score(distance)?;
+        let dist_raw = Self::distance_score(distance)?;
+        let dist_w = features.distance_score_weight;
 
         // Plan score is optional — rooms without a plan yet are scored without
         // this component (weight excluded from total).
         let plan_raw = Self::plan_score(system_data, room_entity);
         let (plan_contribution, plan_w) = match plan_raw {
-            Some(raw) => (raw * plan_score_weight, plan_score_weight),
+            Some(raw) => (raw * features.plan_score_weight, features.plan_score_weight),
             None => (0.0, 0.0),
         };
 
@@ -219,7 +240,15 @@ impl ClaimOperation {
             return None;
         }
 
-        let total = (source_raw * source_w + walk_raw * walk_w + dist_raw * dist_w + plan_contribution) / total_weight;
+        let mut total = (source_raw * source_w + walk_raw * walk_w + dist_raw * dist_w + plan_contribution) / total_weight;
+
+        // Heavy cannibalization penalty: a sourced room one hop from an owned
+        // room is one that room could remote-mine, so claiming it splits the
+        // franchise. Multiplicative so it dominates without distorting the
+        // moderate 4-vs-5-vs-6 preference.
+        if distance == 1 {
+            total *= features.adjacent_claim_penalty;
+        }
 
         Some((
             total,
@@ -246,6 +275,13 @@ impl ClaimOperation {
             return;
         }
 
+        // Adaptive search radius, clamped to [min_search_radius, dynamic claim
+        // reach]. The ratchet in run_select moves it between cycles.
+        let min_radius = system_data.features.claim.min_search_radius;
+        let max_radius = crate::missions::utility::max_claim_radius_hops().max(min_radius);
+        let radius = self.current_search_radius.clamp(min_radius, max_radius);
+        self.current_search_radius = radius;
+
         let gather_system_data = GatherSystemData {
             entities: system_data.entities,
             mapping: system_data.mapping,
@@ -258,7 +294,11 @@ impl ClaimOperation {
         // Use min_rcl=2 so the BFS only seeds from rooms that can spawn scouts.
         let home_rooms = gather_home_rooms(&gather_system_data, 2);
 
-        let gathered_data = gather_candidate_rooms(&gather_system_data, &home_rooms, 4, Self::gather_candidate_room_data);
+        let gathered_data = gather_candidate_rooms(&gather_system_data, &home_rooms, radius, Self::gather_candidate_room_data);
+
+        // Cache whether there is more reachable map beyond the current radius
+        // (feeds the widen decision in run_select).
+        self.frontier_truncated = gathered_data.frontier_truncated();
 
         // Build cached candidates from BFS results.
         self.candidates = gathered_data
@@ -347,7 +387,7 @@ impl ClaimOperation {
 
     /// Attempt to score any candidates that now have fresh visibility data.
     /// Pure ECS lookups, no JS API calls.
-    fn try_score_candidates(&mut self, system_data: &mut OperationExecutionSystemData, plan_score_weight: f32) {
+    fn try_score_candidates(&mut self, system_data: &mut OperationExecutionSystemData, features: &crate::features::ClaimFeatures) {
         for candidate in self.candidates.iter_mut() {
             if candidate.score.is_some() {
                 continue;
@@ -378,10 +418,97 @@ impl ClaimOperation {
             }
 
             // Attempt scoring.
-            if let Some(result) = Self::score_candidate(system_data, room_entity, candidate.distance, plan_score_weight) {
+            if let Some(result) = Self::score_candidate(system_data, room_entity, candidate.distance, features) {
                 candidate.score = Some(result);
+                // We have fresh visibility for this room — it is reachable, so
+                // drop any stale scout give-up backoff.
+                system_data.visibility.clear_unreachable(candidate.room_name);
             }
         }
+    }
+
+    // ── Capacity: dynamic CPU room cap ──────────────────────────────────────
+
+    /// Dynamic expansion room cap, replacing the old `cpu_limit / 10` guess.
+    /// Leads with the measured per-room CPU cost (config fallback while the
+    /// model is cold), lets a CPU-healthy empire probe one room beyond the
+    /// static estimate, and clamps to GCL (hard game limit) and the safety
+    /// caps.
+    fn compute_maximum_rooms(
+        features: &crate::features::ClaimFeatures,
+        cpu_budget: crate::metrics::CpuBudget,
+        governor: crate::cpugovernor::GovernorSnapshot,
+        currently_owned_rooms: u32,
+        current_gcl: u32,
+    ) -> u32 {
+        let cpu_limit = if cpu_budget.cpu_limit > 0.0 {
+            cpu_budget.cpu_limit
+        } else {
+            game::cpu::limit() as f64
+        };
+
+        // Per-room cost: measured (used / rooms) once the model is warm and the
+        // empire is large enough for the average to mean something; else the
+        // configured fallback. Average over-estimates marginal cost (overhead
+        // is folded in) — conservative, which is the headroom we want.
+        let est_room_cpu = match cpu_budget.cpu_used_estimate {
+            Some(used) if currently_owned_rooms >= 2 => (used / currently_owned_rooms as f64).max(1.0),
+            _ => (features.fallback_room_cpu_cost as f64).max(1.0),
+        };
+
+        let estimate_cap = ((cpu_limit * features.cpu_headroom_factor as f64) / est_room_cpu).floor().max(0.0) as u32;
+
+        // Probe one more room when the bucket is strongly healthy and flat-or-
+        // rising: try growth, then back off (next claim vetoed, cap shrinks) if
+        // the new room actually pushes us over budget.
+        let bucket_healthy = governor.tier == crate::cpugovernor::Tier::Normal
+            && governor.bucket >= features.healthy_bucket_floor
+            && governor.trend >= 0.0;
+
+        let structural = if bucket_healthy {
+            estimate_cap.max(currently_owned_rooms + 1)
+        } else {
+            estimate_cap
+        };
+
+        // Safety caps bound the CPU-derived number; GCL is the hard ceiling.
+        structural
+            .max(features.min_room_cap)
+            .min(features.max_room_cap)
+            .min(current_gcl)
+    }
+
+    /// Whether the reachable ring at the current radius is fully covered:
+    /// every viable candidate scored, and every unknown frontier room either
+    /// resolved (now has visibility) or given up on (scout-unreachable
+    /// backoff). Lets Select fire as soon as coverage lands instead of always
+    /// waiting out the full scouting window — and prevents a hostile-walled,
+    /// never-scoutable room from blocking selection forever.
+    fn scouting_coverage_complete(&self, system_data: &OperationExecutionSystemData) -> bool {
+        let now = game::time();
+
+        if self.candidates.iter().any(|c| c.score.is_none()) {
+            return false;
+        }
+
+        for room_name in &self.unknown_rooms {
+            if system_data.visibility.is_unreachable_now(*room_name, now) {
+                continue;
+            }
+
+            let has_visibility = system_data
+                .mapping
+                .get_room(room_name)
+                .and_then(|e| system_data.room_data.get(e))
+                .and_then(|rd| rd.get_dynamic_visibility_data().map(|d| d.updated_within(Self::VISIBILITY_TIMEOUT)))
+                .unwrap_or(false);
+
+            if !has_visibility {
+                return false;
+            }
+        }
+
+        true
     }
 
     // ── Phase: Select ───────────────────────────────────────────────────────
@@ -402,7 +529,11 @@ impl ClaimOperation {
         features: &crate::features::ClaimFeatures,
     ) {
         // Final scoring pass for any candidates still unscored.
-        self.try_score_candidates(system_data, features.plan_score_weight);
+        self.try_score_candidates(system_data, features);
+
+        // Coverage snapshot BEFORE pruning (prune drops unscored, which would
+        // otherwise make coverage trivially "complete"). Gates the widen step.
+        let covered = self.scouting_coverage_complete(system_data);
 
         let total_before_prune = self.candidates.len();
         let unscored = self.candidates.iter().filter(|c| c.score.is_none()).count();
@@ -450,9 +581,32 @@ impl ClaimOperation {
             }
         }
 
+        // Adaptive-radius inputs (used by the distance gate below and the
+        // ratchet at the end). A "good" candidate sits in the own-remote-ring
+        // band (distance >= the policy floor); closer rooms cannibalize an
+        // existing room's remotes.
+        let min_claim_distance = features.min_search_radius;
+        let max_radius = crate::missions::utility::max_claim_radius_hops().max(min_claim_distance);
+        let nearest_good = self
+            .candidates
+            .iter()
+            .filter(|c| c.distance >= min_claim_distance)
+            .map(|c| c.distance)
+            .min();
+        // Last resort: only claim a below-floor (cannibalizing) room when boxed
+        // in at the max radius with no good candidate anywhere.
+        let allow_penalized = self.current_search_radius >= max_radius && nearest_good.is_none();
+
+        // Live affordability veto: don't START a new claim while CPU is
+        // stressed, even if structurally under the cap. The cap's
+        // probe-one-more already leans on bucket health; this guards against
+        // committing during a transient drain.
+        let cpu_healthy =
+            system_data.governor.tier == crate::cpugovernor::Tier::Normal && system_data.governor.trend >= 0.0;
+
         let active_rooms = (currently_owned_rooms as usize + self.claim_missions.len()) as u32;
         let available_rooms = maximum_rooms.saturating_sub(active_rooms);
-        let at_capacity = active_rooms >= maximum_rooms || !features.on;
+        let at_capacity = active_rooms >= maximum_rooms || !features.on || !cpu_healthy;
 
         // Determine how many missions we can still create this cycle.
         // max_concurrent_missions caps total active missions (0 = unlimited).
@@ -463,7 +617,7 @@ impl ClaimOperation {
         };
 
         info!(
-            "ClaimOp [Select]: owned={} active_missions={} max_rooms={} available={} mission_cap={} at_capacity={} features.on={}",
+            "ClaimOp [Select]: owned={} active_missions={} max_rooms={} available={} mission_cap={} at_capacity={} features.on={} cpu_healthy={} est_room_cpu={:.1}",
             currently_owned_rooms,
             self.claim_missions.len(),
             maximum_rooms,
@@ -471,6 +625,12 @@ impl ClaimOperation {
             features.max_concurrent_missions,
             at_capacity,
             features.on,
+            cpu_healthy,
+            system_data
+                .cpu_budget
+                .cpu_used_estimate
+                .map(|u| if currently_owned_rooms >= 2 { u / currently_owned_rooms as f64 } else { features.fallback_room_cpu_cost as f64 })
+                .unwrap_or(features.fallback_room_cpu_cost as f64),
         );
 
         let max_new_missions = if at_capacity {
@@ -535,6 +695,17 @@ impl ClaimOperation {
                     break;
                 }
 
+                // Own-remote-ring floor: skip a too-close room (it would share
+                // an existing room's remote franchise) unless we are boxed in at
+                // the max radius with nothing better.
+                if candidate.distance < min_claim_distance && !allow_penalized {
+                    info!(
+                        "ClaimOp [Select]: candidate {} at distance {} below min claim distance {}, skipping (would cannibalize remotes)",
+                        candidate.room_name, candidate.distance, min_claim_distance
+                    );
+                    continue;
+                }
+
                 let candidate_entity = match system_data.mapping.get_room(&candidate.room_name) {
                     Some(e) => e,
                     None => {
@@ -574,22 +745,23 @@ impl ClaimOperation {
                 if has_claim_mission {
                     info!("ClaimOp [Select]: top candidate {} already has a claim mission", room_data.name);
                 } else {
-                    let home_room_entities: Vec<_> = home_room_data
-                        .iter()
-                        .map(|(entity, home_room_name, max_level)| {
-                            let delta = room_data.name - *home_room_name;
-                            let range = delta.0.unsigned_abs() + delta.1.unsigned_abs();
-                            (entity, home_room_name, max_level, range)
-                        })
-                        .filter(|(_, _, max_level, _)| **max_level >= 2)
-                        .filter(|(_, _, _, range)| *range <= 5)
-                        .filter(|(entity, _, _, _)| !used_home_rooms.contains(entity))
-                        .map(|(entity, _, _, _)| *entity)
-                        .collect();
+                    // Eligible homes: RCL >= 2, not already committed, and within
+                    // CLAIM-creep reach (travel-time feasibility, dynamic — claim
+                    // feasibility implies the colony is also build-feasible).
+                    let candidate_name = candidate.room_name;
+                    let mut home_room_entities: Vec<Entity> = Vec::new();
+                    for (entity, home_room_name, max_level) in home_room_data.iter() {
+                        if *max_level < 2 || used_home_rooms.contains(entity) {
+                            continue;
+                        }
+                        if crate::missions::utility::is_claim_feasible(system_data.pathfinder, *home_room_name, candidate_name) {
+                            home_room_entities.push(*entity);
+                        }
+                    }
 
                     if home_room_entities.is_empty() {
                         info!(
-                            "ClaimOp [Select]: top candidate {} has no eligible home rooms (all used or out of range)",
+                            "ClaimOp [Select]: top candidate {} has no eligible home rooms (all used or not claim-reachable)",
                             room_data.name
                         );
                     } else {
@@ -626,6 +798,30 @@ impl ClaimOperation {
                 );
             }
         }
+
+        // ── Adaptive radius ratchet ──────────────────────────────────────
+        // Hug just out to the nearest good candidate (re-tighten); if none and
+        // the ring is fully covered with capacity and more reachable map beyond
+        // it, widen by one; otherwise hold (boxed in / no capacity / still
+        // scouting).
+        let new_radius = match nearest_good {
+            Some(d) => d.clamp(min_claim_distance, max_radius),
+            None => {
+                if available_rooms > 0 && covered && self.frontier_truncated {
+                    (self.current_search_radius + 1).min(max_radius)
+                } else {
+                    self.current_search_radius.clamp(min_claim_distance, max_radius)
+                }
+            }
+        };
+
+        if new_radius != self.current_search_radius {
+            info!(
+                "ClaimOp [Select]: search radius {} -> {} (nearest_good={:?} covered={} truncated={} avail={})",
+                self.current_search_radius, new_radius, nearest_good, covered, self.frontier_truncated, available_rooms,
+            );
+        }
+        self.current_search_radius = new_radius.clamp(min_claim_distance, max_radius);
 
         // Transition back to Idle, recording the current tick for the
         // re-discover interval.
@@ -690,7 +886,7 @@ impl ClaimOperation {
         }
     }
 
-    // ── spawn_remote_build (unchanged logic) ────────────────────────────────
+    // ── spawn_remote_build ──────────────────────────────────────────────────
 
     fn spawn_remote_build(system_data: &mut OperationExecutionSystemData, runtime_data: &mut OperationExecutionRuntimeData) {
         //
@@ -750,19 +946,19 @@ impl ClaimOperation {
 
             for room_entity in needs_remote_build {
                 if let Some(room_data) = system_data.room_data.get_mut(room_entity) {
-                    //TODO: Use path distance instead of linear distance.
-                    let home_room_entities: Vec<_> = home_room_data
-                        .iter()
-                        .map(|(entity, home_room_name, max_level)| {
-                            let delta = room_data.name - *home_room_name;
-                            let range = delta.0.unsigned_abs() + delta.1.unsigned_abs();
-
-                            (entity, home_room_name, max_level, range)
-                        })
-                        .filter(|(_, _, max_level, _)| **max_level >= 2)
-                        .filter(|(_, _, _, range)| *range <= 5)
-                        .map(|(entity, _, _, _)| *entity)
-                        .collect();
+                    // Eligible build homes: RCL >= 2 and within build-feasible
+                    // travel reach (a builder must arrive with enough life to
+                    // harvest + build) — dynamic, replaces the old linear ≤5.
+                    let target_name = room_data.name;
+                    let mut home_room_entities: Vec<Entity> = Vec::new();
+                    for (entity, home_room_name, max_level) in home_room_data.iter() {
+                        if *max_level < 2 {
+                            continue;
+                        }
+                        if crate::missions::utility::is_build_feasible(system_data.pathfinder, *home_room_name, target_name) {
+                            home_room_entities.push(*entity);
+                        }
+                    }
 
                     if !home_room_entities.is_empty() {
                         info!("Starting remote build mission for room: {}", room_data.name);
@@ -889,10 +1085,14 @@ impl Operation for ClaimOperation {
             min_rcl = u32::MAX;
         }
 
-        const ESTIMATED_ROOM_CPU_COST: u32 = 10;
-        let cpu_limit = game::cpu::limit();
         let current_gcl = game::gcl::level();
-        let maximum_rooms = (cpu_limit / ESTIMATED_ROOM_CPU_COST).min(current_gcl);
+        let maximum_rooms = Self::compute_maximum_rooms(
+            &features.claim,
+            system_data.cpu_budget,
+            system_data.governor,
+            currently_owned_rooms,
+            current_gcl,
+        );
 
         // ── 2. Populate visualization from cache (cheap, every tick) ────
 
@@ -918,12 +1118,20 @@ impl Operation for ClaimOperation {
                 }
             }
             ClaimPhase::Scouting => {
-                self.try_score_candidates(system_data, features.claim.plan_score_weight);
+                self.try_score_candidates(system_data, &features.claim);
                 self.refresh_visibility_requests(system_data);
 
                 let elapsed = self.phase_tick.map(|t| game::time().saturating_sub(t)).unwrap_or(0);
 
-                if elapsed >= features.claim.scouting_window {
+                // Select as soon as the reachable ring is covered (every
+                // candidate scored, every unknown resolved or given up), or when
+                // the scouting window caps out — whichever comes first.
+                let covered = self.scouting_coverage_complete(system_data);
+
+                if covered || elapsed >= features.claim.scouting_window {
+                    if covered {
+                        info!("ClaimOp [Scouting]: reachable ring covered after {} ticks, selecting", elapsed);
+                    }
                     self.phase = ClaimPhase::Select;
                 }
             }
@@ -933,5 +1141,102 @@ impl Operation for ClaimOperation {
         }
 
         Ok(OperationResult::Running)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cpugovernor::GovernorSnapshot;
+    use crate::features::ClaimFeatures;
+    use crate::metrics::CpuBudget;
+
+    fn healthy_governor() -> GovernorSnapshot {
+        // Full bucket, flat trend → Normal tier, comfortably above the
+        // healthy-bucket floor.
+        GovernorSnapshot::compute(10_000, 0.0, 500.0)
+    }
+
+    // ── distance_score: own-remote-ring band, never-zero falloff ────────────
+
+    #[test]
+    fn distance_score_peaks_at_four_and_disfavours_close() {
+        assert_eq!(ClaimOperation::distance_score(0), None);
+        // Peak at 4.
+        assert_eq!(ClaimOperation::distance_score(4), Some(1.0));
+        // Strictly increasing up to the peak (close rooms disfavoured).
+        let d1 = ClaimOperation::distance_score(1).unwrap();
+        let d2 = ClaimOperation::distance_score(2).unwrap();
+        let d3 = ClaimOperation::distance_score(3).unwrap();
+        let d4 = ClaimOperation::distance_score(4).unwrap();
+        assert!(d1 < d2 && d2 < d3 && d3 < d4, "{d1} {d2} {d3} {d4}");
+        // Distance 1 is heavily disfavoured.
+        assert!(d1 <= 0.1);
+        // Declining but never zero beyond the peak (selectable as last resort).
+        let d5 = ClaimOperation::distance_score(5).unwrap();
+        let d6 = ClaimOperation::distance_score(6).unwrap();
+        let d7 = ClaimOperation::distance_score(7).unwrap();
+        let d20 = ClaimOperation::distance_score(20).unwrap();
+        assert!(d4 > d5 && d5 > d6 && d6 > d7, "{d4} {d5} {d6} {d7}");
+        assert!(d20 > 0.0);
+    }
+
+    // ── compute_maximum_rooms: dynamic, self-tuning cap ─────────────────────
+
+    #[test]
+    fn max_rooms_cold_model_uses_fallback_and_probes_when_healthy() {
+        let f = ClaimFeatures::default(); // headroom 0.85, fallback 10, caps [1,50]
+        let budget = CpuBudget {
+            cpu_used_estimate: None,
+            cpu_limit: 100.0,
+        };
+        // est_room_cpu = fallback 10 → estimate_cap = floor(100*0.85/10) = 8.
+        // owned 3, healthy → structural = max(8, 4) = 8, min gcl 10 = 8.
+        let cap = ClaimOperation::compute_maximum_rooms(&f, budget, healthy_governor(), 3, 10);
+        assert_eq!(cap, 8);
+    }
+
+    #[test]
+    fn max_rooms_warm_model_divides_by_owned_rooms() {
+        let f = ClaimFeatures::default();
+        let budget = CpuBudget {
+            cpu_used_estimate: Some(60.0),
+            cpu_limit: 100.0,
+        };
+        // est_room_cpu = 60/3 = 20 → estimate_cap = floor(100*0.85/20) = 4.
+        let cap = ClaimOperation::compute_maximum_rooms(&f, budget, healthy_governor(), 3, 10);
+        assert_eq!(cap, 4);
+    }
+
+    #[test]
+    fn max_rooms_probe_only_when_healthy() {
+        let f = ClaimFeatures::default();
+        let budget = CpuBudget {
+            cpu_used_estimate: Some(90.0),
+            cpu_limit: 100.0,
+        };
+        // est_room_cpu = 90/9 = 10 → estimate_cap = floor(85/10) = 8.
+        // Draining/low bucket → Conserve tier → no probe. owned 9 → cap stays 8
+        // (so owned >= cap blocks growth; the live veto also fires).
+        let draining = GovernorSnapshot::compute(2_000, -8.0, 500.0);
+        let cap = ClaimOperation::compute_maximum_rooms(&f, budget, draining, 9, 20);
+        assert_eq!(cap, 8);
+
+        // Same numbers but healthy → probe one more: max(8, 10) = 10.
+        let cap_healthy = ClaimOperation::compute_maximum_rooms(&f, budget, healthy_governor(), 9, 20);
+        assert_eq!(cap_healthy, 10);
+    }
+
+    #[test]
+    fn max_rooms_clamped_by_gcl_and_safety_cap() {
+        let f = ClaimFeatures::default();
+        let budget = CpuBudget {
+            cpu_used_estimate: None,
+            cpu_limit: 10_000.0, // estimate_cap would be huge
+        };
+        // GCL is the hard ceiling.
+        assert_eq!(ClaimOperation::compute_maximum_rooms(&f, budget, healthy_governor(), 2, 5), 5);
+        // With abundant GCL, the max_room_cap safety bound (50) applies.
+        assert_eq!(ClaimOperation::compute_maximum_rooms(&f, budget, healthy_governor(), 2, 100), 50);
     }
 }

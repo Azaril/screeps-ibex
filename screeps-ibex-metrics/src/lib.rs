@@ -68,6 +68,25 @@ pub struct MetricsBlock {
     /// grows as more pipelines route through the sink.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intents: Option<IntentMetrics>,
+    /// Self-tuning CPU cost model (expansion capacity input). Persisted so
+    /// the per-room estimate survives VM resets — the writer seeds its heap
+    /// EMA from this block on load. Absent until the model has samples.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_model: Option<CpuModelMetrics>,
+}
+
+/// Persisted CPU cost model: an exponential moving average of per-tick CPU
+/// used, with the sample count so a reader can tell a warm model from a cold
+/// one. The claim pipeline divides `ema_used` by the owned-room count to
+/// estimate marginal per-room CPU and size the dynamic room cap.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct CpuModelMetrics {
+    /// EMA of `game::cpu::get_used()` per tick.
+    #[serde(default)]
+    pub ema_used: f64,
+    /// Samples folded into the EMA since it was first seeded.
+    #[serde(default)]
+    pub samples: u32,
 }
 
 /// Per-tick guarded-intent counts + the order-sensitive stream digest
@@ -271,6 +290,10 @@ mod tests {
             governor: Some(GovernorMetrics { tier: "normal".into() }),
             pathing: None,
             intents: None,
+            cpu_model: Some(CpuModelMetrics {
+                ema_used: 12.5,
+                samples: 100,
+            }),
         }
     }
 

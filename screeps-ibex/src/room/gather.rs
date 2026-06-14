@@ -68,6 +68,7 @@ impl UnknownRoom {
 pub struct GatherRoomData {
     candidate_rooms: Vec<CandidateRoom>,
     unknown_rooms: Vec<UnknownRoom>,
+    frontier_truncated: bool,
 }
 
 impl GatherRoomData {
@@ -77,6 +78,15 @@ impl GatherRoomData {
 
     pub fn unknown_rooms(&self) -> &Vec<UnknownRoom> {
         &self.unknown_rooms
+    }
+
+    /// Whether the BFS stopped at the distance cap with a live expandable
+    /// frontier still pending (i.e. there is more reachable map beyond
+    /// `max_distance`), as opposed to exhausting the frontier (boxed in by
+    /// hostile/closed rooms). Lets a caller decide whether widening the radius
+    /// could find anything new.
+    pub fn frontier_truncated(&self) -> bool {
+        self.frontier_truncated
     }
 }
 
@@ -222,6 +232,11 @@ where
         distance += 1;
     }
 
+    // If the expansion frontier is non-empty after the loop, the BFS stopped at
+    // the distance cap (or the visited-room budget) with more reachable map
+    // pending — not because it ran out of frontier (boxed in).
+    let frontier_truncated = !expansion_rooms.is_empty();
+
     let candidate_rooms = visited_rooms
         .values()
         .filter(|v| v.viable)
@@ -244,5 +259,6 @@ where
     GatherRoomData {
         candidate_rooms,
         unknown_rooms: returned_unknown_rooms,
+        frontier_truncated,
     }
 }

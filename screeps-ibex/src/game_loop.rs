@@ -557,8 +557,11 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// 5 = tower-drain detection rework (DrainTracker reshaped: heal-while-away
 /// detection + bounded re-engagement probe; drops exit_count, adds last_hits,
 /// hits_on_exit, drain_cycles, confirmation_logged, engaging,
-/// engage_baseline_hits, probe_fired, probe_strikes, probe_cooldown_until).
-const WORLD_FORMAT_VERSION: u32 = 5;
+/// engage_baseline_hits, probe_fired, probe_strikes, probe_cooldown_until);
+/// 6 = self-tuning/reachability-aware expansion (ClaimOperation gains
+/// current_search_radius + frontier_truncated; VisibilityQueueData gains the
+/// unreachable scout-backoff set).
+const WORLD_FORMAT_VERSION: u32 = 6;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode
@@ -739,6 +742,15 @@ fn create_environment() -> GameEnvironment {
     arbiter.register(
         SegmentRequirement::new("stats_history", vec![STATS_HISTORY_SEGMENT]).on_load(Box::new(|world: &mut World| {
             crate::stats_history::load_stats_history(world);
+        })),
+    );
+
+    // Metrics block (ADR 0006): the self-tuning CPU cost model rides in this
+    // block; the load callback re-seeds the per-room cost EMA on VM start so
+    // the dynamic expansion cap survives resets. Not gating — telemetry.
+    arbiter.register(
+        SegmentRequirement::new("metrics", vec![METRICS_SEGMENT]).on_load(Box::new(|world: &mut World| {
+            crate::metrics::load_cpu_model(world);
         })),
     );
 

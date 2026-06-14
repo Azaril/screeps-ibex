@@ -88,6 +88,31 @@ impl Default for VisibilityEntry {
     }
 }
 
+/// A room a scout repeatedly failed to reach, with an exponential retry
+/// backoff. Persisted (world state) so a hostile-walled room is not
+/// re-scouted forever and does not block the claim pipeline's "ring fully
+/// scouted" gate. Observers are NOT suppressed — only scout servicing — so a
+/// room an observer can still see recovers on its own.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UnreachableRoom {
+    pub room_name: RoomName,
+    /// Earliest tick a scout may be dispatched here again.
+    pub retry_after: u32,
+    /// Consecutive scout-mission give-ups (drives the backoff).
+    pub attempts: u32,
+}
+
+impl Default for UnreachableRoom {
+    fn default() -> Self {
+        Self {
+            room_name: RoomName::new("E0N0").unwrap(),
+            retry_after: 0,
+            attempts: 0,
+        }
+    }
+}
+
 /// Persistent visibility queue. Serialized as a component on a singleton entity.
 ///
 /// Contains only data that is meaningful across ticks and safe to serialize.
@@ -97,6 +122,10 @@ impl Default for VisibilityEntry {
 #[serde(default)]
 pub struct VisibilityQueueData {
     pub entries: Vec<VisibilityEntry>,
+    /// Rooms scouts gave up on, with retry backoff. Distinct from `entries`
+    /// (which TTL-expire) so the give-up memory survives across discovery
+    /// cycles and VM resets.
+    pub unreachable: Vec<UnreachableRoom>,
 }
 
 // ─── Runtime layer: VisibilityQueue (ephemeral resource) ─────────────────────
@@ -138,9 +167,18 @@ pub struct VisibilityQueue {
     /// `VisibilityQueueSyncSystem`.
     pub entries: Vec<VisibilityEntry>,
 
+    /// Working copy of the persisted scout give-up backoffs.
+    pub unreachable: Vec<UnreachableRoom>,
+
     /// Per-tick runtime state, keyed by room name.
     pub runtime: HashMap<RoomName, VisibilityRuntimeEntry>,
 }
+
+/// Base backoff (ticks) after the first scout give-up; doubles per repeat.
+const UNREACHABLE_BACKOFF_BASE: u32 = 2000;
+/// Cap on the scout give-up backoff (one creep lifetime ≈ 1500; a derelict
+/// owner / dead blocker changes the picture on a longer horizon).
+const UNREACHABLE_BACKOFF_MAX: u32 = 20000;
 
 impl VisibilityQueue {
     /// Upsert a visibility request. If an entry for the room already exists,
@@ -197,6 +235,36 @@ impl VisibilityQueue {
         self.runtime.entry(room_name).or_default().observer_serviced = true;
     }
 
+    /// Record a scout give-up for `room_name`: increment the attempt count and
+    /// set an exponential retry backoff. Called by the scout mission when it
+    /// exhausts its spawn attempts. Suppresses scout servicing (not observers)
+    /// until `retry_after`.
+    pub fn mark_unreachable(&mut self, room_name: RoomName, now: u32) {
+        if let Some(existing) = self.unreachable.iter_mut().find(|u| u.room_name == room_name) {
+            existing.attempts = existing.attempts.saturating_add(1);
+            let shift = existing.attempts.saturating_sub(1).min(31);
+            let backoff = UNREACHABLE_BACKOFF_BASE.saturating_mul(1u32 << shift).min(UNREACHABLE_BACKOFF_MAX);
+            existing.retry_after = now.saturating_add(backoff);
+        } else {
+            self.unreachable.push(UnreachableRoom {
+                room_name,
+                retry_after: now.saturating_add(UNREACHABLE_BACKOFF_BASE),
+                attempts: 1,
+            });
+        }
+    }
+
+    /// Whether `room_name` is currently in scout-give-up backoff.
+    pub fn is_unreachable_now(&self, room_name: RoomName, now: u32) -> bool {
+        self.unreachable.iter().any(|u| u.room_name == room_name && u.retry_after > now)
+    }
+
+    /// Clear any give-up record for `room_name` — call when fresh visibility
+    /// arrives, so a room that became reachable again is not suppressed.
+    pub fn clear_unreachable(&mut self, room_name: RoomName) {
+        self.unreachable.retain(|u| u.room_name != room_name);
+    }
+
     /// Remove entries that have expired.
     pub fn expire(&mut self, current_tick: u32) {
         self.entries.retain(|e| e.expires_at > current_tick);
@@ -232,10 +300,12 @@ impl VisibilityQueue {
     /// preferring highest priority then closest distance to `creep_pos`.
     pub fn best_unclaimed_for(&self, creep_pos: Position) -> Option<RoomName> {
         let creep_room = creep_pos.room_name();
+        let now = game::time();
 
         self.entries
             .iter()
             .filter(|e| e.allowed_types.contains(VisibilityRequestFlags::SCOUT))
+            .filter(|e| !self.is_unreachable_now(e.room_name, now))
             .filter(|e| {
                 let rt = self.runtime.get(&e.room_name);
                 let claimed = rt.map(|r| r.claimed_by.is_some()).unwrap_or(false);
@@ -258,18 +328,23 @@ impl VisibilityQueue {
     /// Opportunistic entries (created by idle scouts for proactive exploration)
     /// are excluded — they should not trigger new scout mission spawns.
     pub fn has_unclaimed_scout_eligible(&self) -> bool {
+        let now = game::time();
         self.entries.iter().any(|e| {
-            e.allowed_types.contains(VisibilityRequestFlags::SCOUT) && !e.opportunistic && {
-                let rt = self.runtime.get(&e.room_name);
-                let claimed = rt.map(|r| r.claimed_by.is_some()).unwrap_or(false);
-                !claimed
-            }
+            e.allowed_types.contains(VisibilityRequestFlags::SCOUT)
+                && !e.opportunistic
+                && !self.is_unreachable_now(e.room_name, now)
+                && {
+                    let rt = self.runtime.get(&e.room_name);
+                    let claimed = rt.map(|r| r.claimed_by.is_some()).unwrap_or(false);
+                    !claimed
+                }
         })
     }
 
     /// Load entries from the persistent component into the working copy.
     fn load_from(&mut self, data: &VisibilityQueueData) {
         self.entries = data.entries.clone();
+        self.unreachable = data.unreachable.clone();
         // Ensure runtime entries exist for all persistent entries.
         for entry in &self.entries {
             self.runtime.entry(entry.room_name).or_default();
@@ -279,6 +354,7 @@ impl VisibilityQueue {
     /// Write the working copy back to the persistent component.
     fn save_to(&self, data: &mut VisibilityQueueData) {
         data.entries = self.entries.clone();
+        data.unreachable = self.unreachable.clone();
     }
 }
 
@@ -349,6 +425,48 @@ mod tests {
     fn opportunistic_visibility_request_rejects_non_finite_priority_in_debug() {
         let room: RoomName = "E0N0".parse().expect("valid room name");
         let _ = VisibilityRequest::new_opportunistic(room, f32::INFINITY, VisibilityRequestFlags::SCOUT);
+    }
+
+    // ── Scout give-up backoff (reachability) ────────────────────────────────
+
+    #[test]
+    fn mark_unreachable_sets_exponential_backoff() {
+        let room: RoomName = "E5N5".parse().unwrap();
+        let mut q = VisibilityQueue::default();
+
+        // First give-up: base backoff, blocked now, free after it elapses.
+        q.mark_unreachable(room, 1000);
+        assert!(q.is_unreachable_now(room, 1000));
+        assert!(q.is_unreachable_now(room, 1000 + UNREACHABLE_BACKOFF_BASE - 1));
+        assert!(!q.is_unreachable_now(room, 1000 + UNREACHABLE_BACKOFF_BASE));
+
+        // Second give-up doubles the backoff.
+        q.mark_unreachable(room, 5000);
+        assert!(q.is_unreachable_now(room, 5000 + UNREACHABLE_BACKOFF_BASE)); // > base now
+        assert!(q.is_unreachable_now(room, 5000 + 2 * UNREACHABLE_BACKOFF_BASE - 1));
+        assert!(!q.is_unreachable_now(room, 5000 + 2 * UNREACHABLE_BACKOFF_BASE));
+    }
+
+    #[test]
+    fn unreachable_backoff_is_capped() {
+        let room: RoomName = "E5N5".parse().unwrap();
+        let mut q = VisibilityQueue::default();
+        for _ in 0..20 {
+            q.mark_unreachable(room, 0);
+        }
+        // Never exceeds the cap, no matter how many give-ups.
+        assert!(q.is_unreachable_now(room, UNREACHABLE_BACKOFF_MAX - 1));
+        assert!(!q.is_unreachable_now(room, UNREACHABLE_BACKOFF_MAX));
+    }
+
+    #[test]
+    fn clear_unreachable_lifts_suppression() {
+        let room: RoomName = "E5N5".parse().unwrap();
+        let mut q = VisibilityQueue::default();
+        q.mark_unreachable(room, 0);
+        assert!(q.is_unreachable_now(room, 0));
+        q.clear_unreachable(room);
+        assert!(!q.is_unreachable_now(room, 0));
     }
 }
 

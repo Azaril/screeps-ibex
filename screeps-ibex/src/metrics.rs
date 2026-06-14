@@ -41,6 +41,15 @@ use std::collections::VecDeque;
 /// per-tick sawtooth.
 pub const BUCKET_WINDOW: usize = 100;
 
+/// EMA smoothing factor for the per-tick CPU-used model (≈100-tick
+/// effective window: `2/(N+1)` with N≈100). Slow on purpose — the
+/// expansion cap should track sustained cost, not per-tick spikes.
+const CPU_EMA_ALPHA: f64 = 0.02;
+
+/// Samples required before the CPU model is trusted for the room cap.
+/// Below this the claim pipeline falls back to its configured constant.
+const MIN_CPU_SAMPLES: u32 = 20;
+
 /// Heap-resident emitter state: the bucket window, the fresh-VM flag,
 /// the Memory-persisted VM-start counter, and the fault/movement
 /// telemetry counters (statics-review M3 — formerly module atomics).
@@ -72,6 +81,12 @@ pub struct MetricsState {
     movement_ops_consumed: u32,
     movement_repaths: u32,
     movement_failures: u32,
+    /// Self-tuning CPU cost model: EMA of per-tick `game::cpu::get_used()`
+    /// (None until the first sample / load-seed) and the fold count. Drives
+    /// the dynamic expansion room cap; persisted in the seg-57 block and
+    /// re-seeded on VM start via [`load_cpu_model`].
+    cpu_used_ema: Option<f64>,
+    cpu_samples: u32,
 }
 
 impl Default for MetricsState {
@@ -89,6 +104,8 @@ impl Default for MetricsState {
             movement_ops_consumed: 0,
             movement_repaths: 0,
             movement_failures: 0,
+            cpu_used_ema: None,
+            cpu_samples: 0,
         }
     }
 }
@@ -151,6 +168,87 @@ impl MetricsState {
         let samples: Vec<i32> = self.bucket_window.iter().copied().collect();
         bucket_trend(&samples)
     }
+
+    /// Fold one tick's CPU-used sample into the EMA.
+    pub fn push_cpu_used(&mut self, used: f64) {
+        if !used.is_finite() || used < 0.0 {
+            return;
+        }
+        self.cpu_used_ema = Some(match self.cpu_used_ema {
+            Some(ema) => CPU_EMA_ALPHA * used + (1.0 - CPU_EMA_ALPHA) * ema,
+            None => used,
+        });
+        self.cpu_samples = self.cpu_samples.saturating_add(1);
+    }
+
+    /// The CPU-used EMA once enough samples have accumulated to trust it;
+    /// `None` while still warming up (the claim cap falls back to config).
+    pub fn cpu_used_estimate(&self) -> Option<f64> {
+        match self.cpu_used_ema {
+            Some(ema) if self.cpu_samples >= MIN_CPU_SAMPLES => Some(ema),
+            _ => None,
+        }
+    }
+
+    /// Re-seed the CPU model from a persisted block on VM start, so the
+    /// estimate survives resets instead of warming from cold.
+    pub fn seed_cpu_model(&mut self, ema_used: f64, samples: u32) {
+        if ema_used.is_finite() && ema_used >= 0.0 && samples > 0 {
+            self.cpu_used_ema = Some(ema_used);
+            self.cpu_samples = samples;
+        }
+    }
+
+    /// Snapshot of the CPU model for persistence in the metrics block.
+    pub fn cpu_model_metrics(&self) -> Option<screeps_ibex_metrics::CpuModelMetrics> {
+        self.cpu_used_ema.map(|ema_used| screeps_ibex_metrics::CpuModelMetrics {
+            ema_used,
+            samples: self.cpu_samples,
+        })
+    }
+}
+
+/// The tick's expansion CPU budget, derived at `tick_start` from the CPU
+/// model and the per-tick limit. Room-count-independent (the claim op
+/// divides by its own owned-room count), so it is safe to compute before
+/// dispatch. A specs `Resource`, read like [`GovernorSnapshot`].
+#[derive(Debug, Clone, Copy)]
+pub struct CpuBudget {
+    /// EMA of per-tick CPU used, once warm (`None` while warming up).
+    pub cpu_used_estimate: Option<f64>,
+    /// `game::cpu::limit()` — the sustainable per-tick budget (NOT
+    /// `tick_limit`, which folds in the burst bucket).
+    pub cpu_limit: f64,
+}
+
+impl Default for CpuBudget {
+    fn default() -> Self {
+        CpuBudget {
+            cpu_used_estimate: None,
+            cpu_limit: 0.0,
+        }
+    }
+}
+
+/// Load callback (registered on `METRICS_SEGMENT`): re-seed the CPU cost
+/// model from the last persisted block so the dynamic room cap survives VM
+/// resets. `MemoryArbiter` is out of the world during callbacks, so read the
+/// segment directly via `raw_memory` (mirrors `stats_history::load_stats_history`).
+pub fn load_cpu_model(world: &mut World) {
+    let model = screeps::raw_memory::segments().get(METRICS_SEGMENT as u8).and_then(|raw| {
+        if raw.is_empty() {
+            None
+        } else {
+            MetricsBlock::from_json(&raw).ok().and_then(|block| block.cpu_model)
+        }
+    });
+
+    if let Some(model) = model {
+        world
+            .entry::<MetricsState>()
+            .or_insert_with(MetricsState::default)
+            .seed_cpu_model(model.ema_used, model.samples);
+    }
 }
 
 /// Tick-start hook (game_loop): sample the bucket, then insert the
@@ -184,6 +282,18 @@ pub fn tick_start(world: &mut World) {
         .entry::<PathfinderService>()
         .or_insert_with(PathfinderService::default)
         .begin_tick(snapshot.tier);
+
+    // Publish the expansion CPU budget for the claim pipeline (P-expansion):
+    // the warm CPU-used EMA + the sustainable per-tick limit. Read like the
+    // governor snapshot.
+    let cpu_used_estimate = world
+        .entry::<MetricsState>()
+        .or_insert_with(MetricsState::default)
+        .cpu_used_estimate();
+    world.insert(CpuBudget {
+        cpu_used_estimate,
+        cpu_limit: game::cpu::limit() as f64,
+    });
 }
 
 #[derive(SystemData)]
@@ -297,6 +407,7 @@ impl MetricsSystem {
                     digest: format!("{digest:016x}"),
                 }
             }),
+            cpu_model: data.state.cpu_model_metrics(),
         }
     }
 }
@@ -306,6 +417,14 @@ impl<'a> System<'a> for MetricsSystem {
     type SystemData = MetricsSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
+        // Sample per-tick CPU UNCONDITIONALLY (before the segment gate), so the
+        // cost model accrues every tick regardless of whether the block is
+        // written. The metrics system runs near the end of the list, so this
+        // captures near-total tick CPU (excludes only render/persist/serialize
+        // after it) — a consistent, slightly-optimistic sample the headroom
+        // factor absorbs.
+        data.state.push_cpu_used(game::cpu::get_used());
+
         data.memory_arbiter.request(METRICS_SEGMENT);
 
         if data.memory_arbiter.is_active(METRICS_SEGMENT) {
@@ -342,6 +461,47 @@ mod tests {
         assert_eq!(state.bucket_window.len(), BUCKET_WINDOW);
         let trend = state.trend();
         assert!((trend + 4.0).abs() < 1e-6, "expected -4/tick, got {trend}");
+    }
+
+    /// CPU model: warms up after enough samples, converges to a steady load,
+    /// and stays cold (no estimate) until the sample floor is reached.
+    #[test]
+    fn cpu_model_warms_up_and_estimates() {
+        let mut state = MetricsState::default();
+        assert_eq!(state.cpu_used_estimate(), None);
+
+        // One sample seeds the EMA but the estimate stays cold.
+        state.push_cpu_used(10.0);
+        assert_eq!(state.cpu_used_estimate(), None);
+
+        // Constant load: EMA stays at the load value; estimate appears once the
+        // sample floor is crossed.
+        for _ in 0..MIN_CPU_SAMPLES {
+            state.push_cpu_used(10.0);
+        }
+        let est = state.cpu_used_estimate().expect("warm");
+        assert!((est - 10.0).abs() < 1e-6, "{est}");
+
+        // Garbage samples are ignored (no NaN poisoning).
+        state.push_cpu_used(f64::NAN);
+        state.push_cpu_used(-5.0);
+        assert!((state.cpu_used_estimate().unwrap() - 10.0).abs() < 1e-6);
+    }
+
+    /// The model seeds from a persisted block so the cap survives VM resets.
+    #[test]
+    fn cpu_model_seeds_from_persisted_values() {
+        let mut state = MetricsState::default();
+        state.seed_cpu_model(42.0, 100);
+        assert_eq!(state.cpu_used_estimate(), Some(42.0));
+        let persisted = state.cpu_model_metrics().expect("present");
+        assert_eq!(persisted.ema_used, 42.0);
+        assert_eq!(persisted.samples, 100);
+
+        // A zero-sample seed is rejected (nothing to trust).
+        let mut empty = MetricsState::default();
+        empty.seed_cpu_model(42.0, 0);
+        assert_eq!(empty.cpu_used_estimate(), None);
     }
 
     /// Fault counters round-trip through the state into the block
