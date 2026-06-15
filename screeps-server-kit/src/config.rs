@@ -50,6 +50,39 @@ pub const TICK_MS_SMOKE: u64 = 100;
 /// Default tick rate when a human is watching.
 pub const TICK_MS_WATCH: u64 = 1000;
 
+/// Default GCL **level** granted to each bot during `bootstrap`. Screeps
+/// caps the number of rooms a player may own at their GCL level, so a
+/// fresh private-server bot is stuck at one room until it grinds ~1M
+/// control points for GCL 2 — its expansion logic never gets to run.
+/// `bootstrap` raises each bot to this level (raise-only, never lowers)
+/// so the bot can actually scale. Set `gcl: 1` in config/local.yml to
+/// disable (level 1 is the natural fresh state). Operator directive.
+pub const DEFAULT_BOOTSTRAP_GCL: u32 = 10;
+
+/// Screeps GCL curve constants (engine defaults; this stack applies NO
+/// override — see config/server.yml). Control points to reach level L:
+/// `GCL_MULTIPLY * (L-1)^GCL_POW`, and the engine derives
+/// `level = floor((points / GCL_MULTIPLY)^(1/GCL_POW)) + 1`.
+pub const GCL_MULTIPLY: f64 = 1_000_000.0;
+/// GCL exponent (see [`GCL_MULTIPLY`]).
+pub const GCL_POW: f64 = 2.4;
+
+/// Control points needed to reach GCL `level`. Level ≤ 1 needs 0 points.
+/// `ceil` guarantees the result derives back to exactly `level` (it sits
+/// at or just above the threshold, and far below the next one).
+pub fn gcl_points_for_level(level: u32) -> u64 {
+    if level <= 1 {
+        return 0;
+    }
+    (GCL_MULTIPLY * ((level - 1) as f64).powf(GCL_POW)).ceil() as u64
+}
+
+/// The GCL level the engine derives from `points` (inverse of
+/// [`gcl_points_for_level`]).
+pub fn gcl_level_for_points(points: u64) -> u32 {
+    ((points as f64 / GCL_MULTIPLY).powf(1.0 / GCL_POW)).floor() as u32 + 1
+}
+
 /// Default published game/API port (screeps-launcher `env.backend.GAME_PORT`).
 pub const DEFAULT_GAME_PORT: u16 = 21025;
 /// Default published server-CLI port (screeps-launcher `env.backend.CLI_PORT`).
@@ -125,6 +158,10 @@ pub struct StackSettings {
     /// (screepsmod-admin-utils). Default 100; clamped to the 50 ms
     /// floor (plan D-2).
     pub tick_ms: u64,
+    /// Target GCL **level** each bot is raised to during `bootstrap` so
+    /// it can own more than one room (raise-only). Default
+    /// [`DEFAULT_BOOTSTRAP_GCL`]; `gcl: 1` disables the boost.
+    pub gcl: u32,
     /// Spawn-placement preference for `bootstrap` (P0.A3), applied to
     /// the FIRST `bots:` entry only (later bots auto-pick a distinct
     /// room). All fields optional: room alone = auto-pick a tile in
@@ -215,6 +252,7 @@ impl Default for StackSettings {
             game_port: DEFAULT_GAME_PORT,
             cli_port: DEFAULT_CLI_PORT,
             tick_ms: TICK_MS_SMOKE,
+            gcl: DEFAULT_BOOTSTRAP_GCL,
             spawn: SpawnPreference::default(),
             spawn_placement: SpawnPlacement::default(),
             bots: vec![DEFAULT_SERVER_NAME.to_string()],
@@ -291,6 +329,7 @@ struct RawLocal {
     #[serde(default)]
     ports: RawLocalPorts,
     tick_ms: Option<u64>,
+    gcl: Option<u32>,
     #[serde(default)]
     spawn: RawLocalSpawn,
     /// `spawnPlacement: kit | prospector` (P0.P4 follow-on).
@@ -340,6 +379,7 @@ impl From<RawLocal> for StackSettings {
             // than erroring: the config is long-lived, and a too-low
             // value is a tuning mistake, not a corruption.
             tick_ms: tick_ms.max(TICK_MS_FLOOR),
+            gcl: raw.gcl.unwrap_or(defaults.gcl),
             spawn: SpawnPreference {
                 room: raw.spawn.room,
                 x: raw.spawn.x,
@@ -525,6 +565,7 @@ ports:
   game: 31025
   cli: 31026
 tickMs: 250
+gcl: 7
 spawn:
   room: W5N3
   x: 18
@@ -578,6 +619,7 @@ image:
         assert_eq!(eval.game_port, 31025);
         assert_eq!(eval.cli_port, 31026);
         assert_eq!(eval.tick_ms, 250);
+        assert_eq!(eval.gcl, 7);
         assert_eq!(eval.spawn.room.as_deref(), Some("W5N3"));
         assert_eq!(eval.spawn.x, Some(18));
         assert_eq!(eval.spawn.y, Some(14));
@@ -603,6 +645,7 @@ image:
             assert_eq!(eval.game_port, DEFAULT_GAME_PORT);
             assert_eq!(eval.cli_port, DEFAULT_CLI_PORT);
             assert_eq!(eval.tick_ms, TICK_MS_SMOKE);
+            assert_eq!(eval.gcl, DEFAULT_BOOTSTRAP_GCL);
             assert!(eval.spawn.room.is_none());
             // P0.P4 follow-on: the kit picker stays the default.
             assert_eq!(eval.spawn_placement, SpawnPlacement::Kit);
@@ -799,6 +842,29 @@ eval:
             msg.contains("private-server"),
             "should list known servers: {msg}"
         );
+    }
+
+    /// GCL math: level 1 = 0 points, level 2 = the canonical 1,000,000,
+    /// and every level round-trips through the engine's derive formula
+    /// (so a bot raised to level N reads back as exactly level N).
+    #[test]
+    fn gcl_points_round_trip_through_the_engine_formula() {
+        assert_eq!(gcl_points_for_level(0), 0);
+        assert_eq!(gcl_points_for_level(1), 0);
+        assert_eq!(gcl_points_for_level(2), 1_000_000);
+        for level in 2..=20 {
+            let points = gcl_points_for_level(level);
+            assert_eq!(
+                gcl_level_for_points(points),
+                level,
+                "level {level} -> {points} points did not derive back to {level}"
+            );
+            // And one point short must be strictly below (the threshold
+            // is the exact boundary).
+            assert!(gcl_level_for_points(points.saturating_sub(1)) < level);
+        }
+        // The shipped default is a meaningful, multi-room level.
+        assert!(DEFAULT_BOOTSTRAP_GCL >= 2);
     }
 
     #[test]

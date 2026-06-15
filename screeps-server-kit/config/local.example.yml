@@ -26,6 +26,14 @@
 # plan D-2); use 1000 for comfortable watching.
 #tickMs: 100
 
+# Target GCL *level* each bot is raised to during `bootstrap` (raise-only;
+# never lowers a bot that grew past it). Screeps caps owned rooms at the
+# GCL level, so a fresh bot is stuck at one room until it grinds ~1M
+# control points for GCL 2 — this lifts that cap so the bot's expansion
+# logic can actually scale. Default 10. Set `gcl: 1` to disable the boost
+# (level 1 is the natural fresh state — e.g. for a pristine GCL-1 baseline).
+#gcl: 10
+
 # First-spawn placement preference for `bootstrap`, applied to the FIRST
 # entry of `bots:` (later bots always auto-pick a distinct room).
 # room alone = auto-pick a tile in that room; room+x+y = exact placement

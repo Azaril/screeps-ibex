@@ -108,7 +108,12 @@ cargo run -- bootstrap --reset    # factory-fresh world first (system.resetAllDa
      of `lost` triggers `utils.respawnUser` first) in a room **no
      earlier bot claimed this run** — every bot gets a distinct room;
      the spawn is named after the bot entry (`ibex`, `ibex-2`, ...),
-   - verifies that bot's world status is `normal`.
+   - verifies that bot's world status is `normal`,
+   - raises that bot's GCL to the configured `gcl:` level (default 10,
+     **raise-only**) so it can own more than one room. Screeps caps owned
+     rooms at the GCL level, so without this a fresh bot is stuck at a
+     single room until it grinds ~1M control points for GCL 2 and its
+     expansion logic never runs. `gcl: 1` disables the boost.
 
 Example output (fresh world, two bots):
 
@@ -296,6 +301,8 @@ ports:
   game: 21025   # game/API port (published host-side and bound in-container)
   cli: 21026    # server CLI port (likewise)
 tickMs: 100     # written to serverConfig.tickRate; floor 50
+gcl: 10         # GCL level each bot is raised to in bootstrap (raise-only;
+                # 1 disables — lifts the owned-room cap so bots can expand)
 spawn:          # first bot's spawn preference (optional; see Bootstrap)
   room: W5N3
 bots:           # bot identities to bootstrap; each is a servers: entry

@@ -18,6 +18,7 @@ Architecture Decision Records (ADRs) for the rewrite's pillars, plus design note
 | [0008](0008-combat-and-squad-architecture.md) | Combat & squad architecture (objective-driven missions + generic Squad Manager) | Field Reports A/B, IBEX-001/002/026/027/028/043 | Proposed |
 | [0009](0009-room-planning-and-multiroom-layout.md) | Room planning & multi-room layout (foreman) | IBEX-032/036/037 | Proposed |
 | [0009a](0009a-room-planner-performance.md) | Room-planner performance: diagnosis & redesign (candidate-explosion → defendable-by-construction footprint) | operator "very slow"; overturns 0009's "no rewrite" premise | Proposed |
+| [0009b](0009b-room-planner-scoring-and-evaluation.md) | Room-planner scoring, evaluation & RCL revamp (tower coverage, source-proximate early extensions, storage→refill hauling; independent bench evaluator) | operator: tower coverage 0.302 over 5123 rooms; scoring discrimination collapse | Proposed |
 | [0010](0010-boost-lab-factory-pipeline.md) | Boost, lab & factory resource pipeline | IBEX-027 (wire), gap-analysis G-7 | Proposed |
 | [0011](0011-spawn-orchestration.md) | Spawn orchestration & group spawning | review §6.11(b), gap G4 wishlist | Proposed |
 | [0012](0012-market-and-risk.md) | Market & trade risk management | IBEX-018 | Proposed |

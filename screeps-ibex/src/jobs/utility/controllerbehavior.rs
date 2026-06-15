@@ -45,8 +45,33 @@ where
     None
 }
 
+/// True when this tick's upgrade will exhaust the creep's energy, so without a
+/// parallel refill the creep would spend next tick idle and empty before it
+/// could withdraw. Energy/free are the start-of-tick snapshot, unaffected by
+/// the upgrade intent already issued this tick.
+fn upgrade_about_to_run_dry(creep: &Creep) -> bool {
+    let energy = creep.store().get_used_capacity(Some(ResourceType::Energy));
+    // Safe on general stores (engine-mechanics folklore row 26).
+    let free = creep.store().get_free_capacity(Some(ResourceType::Energy)).max(0) as u32;
+
+    // Empty already takes the Err path below; a full creep has nothing to refill into.
+    if energy == 0 || free == 0 {
+        return false;
+    }
+
+    let work_parts = creep.body().iter().filter(|p| p.part() == Part::Work).count() as u32;
+    let per_tick = work_parts.saturating_mul(UPGRADE_CONTROLLER_POWER).max(1);
+
+    energy <= per_tick
+}
+
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn tick_upgrade<F, R>(tick_context: &mut JobTickContext, controller_id: RemoteObjectId<StructureController>, next_state: F) -> Option<R>
+pub fn tick_upgrade<F, R>(
+    tick_context: &mut JobTickContext,
+    controller_id: RemoteObjectId<StructureController>,
+    refill_when_draining: bool,
+    next_state: F,
+) -> Option<R>
 where
     F: Fn() -> R,
 {
@@ -76,7 +101,21 @@ where
     if tick_context.action_flags.consume(SimultaneousActionFlags::UPGRADE_CONTROLLER) {
         if let Some(controller) = controller_id.resolve() {
             match creep.upgrade_controller(&controller) {
-                Ok(()) => None,
+                // The upgrade intent (pipeline E) succeeded this tick. If the creep
+                // is about to run dry, keep the state-machine cascade going so the
+                // refill pickup's withdraw (pipeline D) is issued THIS tick rather
+                // than next tick — eliminating the idle tick the creep would
+                // otherwise spend empty before refilling. When a withdrawable
+                // source is adjacent (the common stationary case) the withdraw
+                // rides along with no move; otherwise this just starts the refill
+                // trip one tick early, exactly as the dry-tick path did before.
+                Ok(()) => {
+                    if refill_when_draining && upgrade_about_to_run_dry(creep) {
+                        Some(next_state())
+                    } else {
+                        None
+                    }
+                }
                 Err(_) => Some(next_state()),
             }
         } else {

@@ -80,6 +80,21 @@ enum Command {
     Open,
     /// Show the resolved configuration (secrets redacted by construction)
     Config,
+    /// Live-tail a bot's console output over the websocket (operator view;
+    /// no artifacts — see `screeps-ibex-eval run` for recorded capture)
+    Console {
+        /// Bot identity whose console to tail: a .screeps.yaml servers:
+        /// entry (default: --server-name, else the first bots: entry)
+        #[arg(long)]
+        user: Option<String>,
+        /// Stop after this many seconds (default: stream until Ctrl-C)
+        #[arg(long)]
+        seconds: Option<u64>,
+        /// Only print lines containing this substring (case-insensitive),
+        /// e.g. --grep ClaimOp
+        #[arg(long)]
+        grep: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -260,6 +275,17 @@ async fn main() -> Result<()> {
             let report = screeps_server_kit::deploy::deploy(&cfg, entry, debug).await?;
             println!("{report}");
             Ok(())
+        }
+        Command::Console {
+            user,
+            seconds,
+            grep,
+        } => {
+            // --user picks the identity to tail; otherwise the global
+            // --server-name (falling back to the first bots: entry).
+            let name = user.as_deref().or(cli.server_name.as_deref());
+            let cfg = KitConfig::load(cli.config.as_deref(), name)?;
+            screeps_server_kit::console::tail(&cfg, seconds, grep.as_deref()).await
         }
     }
 }

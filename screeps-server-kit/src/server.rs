@@ -220,6 +220,22 @@ pub fn cmd_count_creeps(user_id: &str) -> String {
     )
 }
 
+/// Raise a user's GCL control points to `points` IFF they currently have
+/// fewer — never lowers an empire that has grown past it. `user.gcl`
+/// stores cumulative control points; the engine derives `Game.gcl.level`
+/// from it, so this lifts the owned-room cap. Returns `'set <n>'`,
+/// `'kept <n>'`, or `'no-user'`.
+pub fn cmd_set_gcl(username: &str, points: u64) -> String {
+    let u = js_str(username);
+    format!(
+        "storage.db['users'].findOne({{username: {u}}}).then(o => {{ \
+         if (!o) return 'no-user'; \
+         var cur = o.gcl || 0, tgt = {points}; \
+         return cur >= tgt ? ('kept ' + cur) \
+         : storage.db['users'].update({{username: {u}}}, {{$set: {{gcl: tgt}}}}).then(() => 'set ' + tgt); }})"
+    )
+}
+
 /// Rooms a first spawn can go in: status `normal`, exactly one
 /// controller that is unowned/unreserved/unbound, and ≥ 2 sources.
 /// Returns a JSON array of room names.
@@ -529,6 +545,38 @@ pub async fn resume(cli: &CliClient) -> Result<()> {
 }
 
 // ===================================================================
+// GCL grant (raise the owned-room cap so bots can expand)
+// ===================================================================
+
+/// Raise `username` to GCL `level` (raise-only). Level ≤ 1 is a no-op
+/// (the natural fresh state) and skips the CLI round-trip. The user must
+/// already exist — bootstrap calls this only after sign-in + world-status
+/// verification, so a `no-user` reply is a hard error.
+pub async fn set_bot_gcl(cli: &CliClient, username: &str, level: u32) -> Result<GclOutcome> {
+    let points = crate::config::gcl_points_for_level(level);
+    if level <= 1 {
+        return Ok(GclOutcome {
+            level,
+            points,
+            raised: false,
+        });
+    }
+    let body = cli.send(&cmd_set_gcl(username, points)).await?;
+    let trimmed = body.trim();
+    if trimmed == "no-user" {
+        bail!(
+            "GCL grant for '{username}' found no such user (unexpected — bootstrap \
+             just verified it signed in)"
+        );
+    }
+    Ok(GclOutcome {
+        level,
+        points,
+        raised: trimmed.starts_with("set "),
+    })
+}
+
+// ===================================================================
 // bootstrap (P0.A3)
 // ===================================================================
 //
@@ -547,6 +595,18 @@ pub enum SpawnOutcome {
     },
 }
 
+/// Result of the per-bot GCL grant (raise-only).
+#[derive(Debug)]
+pub struct GclOutcome {
+    /// Target GCL level requested (config `gcl:`).
+    pub level: u32,
+    /// Control-point threshold for that level (0 for level ≤ 1).
+    pub points: u64,
+    /// True when bootstrap actually raised the points; false when the
+    /// user already had at least that many, or level ≤ 1 (a no-op).
+    pub raised: bool,
+}
+
 /// Per-bot bootstrap result (P0.A10: one per `bots:` entry).
 #[derive(Debug)]
 pub struct BotBootstrapOutcome {
@@ -556,6 +616,8 @@ pub struct BotBootstrapOutcome {
     pub user_created: bool,
     pub spawn: SpawnOutcome,
     pub world_status: String,
+    /// GCL grant applied after the world status was verified.
+    pub gcl: GclOutcome,
 }
 
 #[derive(Debug)]
@@ -599,6 +661,21 @@ impl std::fmt::Display for BootstrapOutcome {
                     "[{}] spawn:  '{name}' placed @ {room} ({x},{y})",
                     bot.name
                 )?,
+            }
+            if bot.gcl.level <= 1 {
+                writeln!(f, "[{}] gcl:    level {} (no boost)", bot.name, bot.gcl.level)?;
+            } else if bot.gcl.raised {
+                writeln!(
+                    f,
+                    "[{}] gcl:    level {} ({} control points set)",
+                    bot.name, bot.gcl.level, bot.gcl.points
+                )?;
+            } else {
+                writeln!(
+                    f,
+                    "[{}] gcl:    level {} (already ≥ {} control points)",
+                    bot.name, bot.gcl.level, bot.gcl.points
+                )?;
             }
             write!(f, "[{}] status: {}", bot.name, bot.world_status)?;
         }
@@ -645,7 +722,7 @@ pub async fn bootstrap(cfg: &KitConfig, reset: bool) -> Result<BootstrapOutcome>
         } else {
             SpawnPreference::default()
         };
-        let outcome = bootstrap_bot(&cli, bot, &pref, cfg.stack.spawn_placement, &claimed).await?;
+        let outcome = bootstrap_bot(&cli, bot, &pref, cfg.stack.spawn_placement, cfg.stack.gcl, &claimed).await?;
         if let SpawnOutcome::Placed { room, .. } = &outcome.spawn {
             claimed.insert(room.clone());
         }
@@ -665,6 +742,7 @@ async fn bootstrap_bot(
     bot: &BotEndpoint,
     pref: &SpawnPreference,
     placement: SpawnPlacement,
+    gcl_level: u32,
     exclude: &HashSet<String>,
 ) -> Result<BotBootstrapOutcome> {
     let api = crate::api::client(&bot.endpoint)?;
@@ -739,12 +817,23 @@ async fn bootstrap_bot(
             bot.name
         );
     }
+
+    // Lift the GCL owned-room cap so the bot's expansion logic can run
+    // (raise-only; level ≤ 1 is a no-op).
+    let gcl = set_bot_gcl(cli, username, gcl_level).await?;
+    if gcl.raised {
+        tracing::info!(bot = %bot.name, user = %username, level = gcl.level, points = gcl.points, "GCL raised");
+    } else if gcl.level > 1 {
+        tracing::info!(bot = %bot.name, user = %username, level = gcl.level, "GCL already at/above target");
+    }
+
     Ok(BotBootstrapOutcome {
         name: bot.name.clone(),
         username: username.clone(),
         user_created,
         spawn,
         world_status,
+        gcl,
     })
 }
 
@@ -1041,6 +1130,21 @@ mod tests {
             cmd_count_creeps("6a28d4d7d9592a0060be10ef"),
             r#"storage.db['rooms.objects'].count({type: 'creep', user: "6a28d4d7d9592a0060be10ef"})"#
         );
+    }
+
+    /// The GCL grant is raise-only (a `cur >= tgt` guard), escapes the
+    /// username as a JS string, and addresses the user by name in both
+    /// the read and the write.
+    #[test]
+    fn set_gcl_builder_is_raise_only_and_escapes() {
+        let cmd = cmd_set_gcl("ibex-2", 1_200_000);
+        assert!(cmd.contains(r#"findOne({username: "ibex-2"})"#), "{cmd}");
+        assert!(cmd.contains("cur >= tgt"), "must not lower an empire: {cmd}");
+        assert!(cmd.contains("tgt = 1200000"), "{cmd}");
+        assert!(cmd.contains(r#"update({username: "ibex-2"}, {$set: {gcl: tgt}})"#), "{cmd}");
+        // A hostile username is JS-escaped, not interpolated raw.
+        let cmd = cmd_set_gcl(r#"a"b"#, 5);
+        assert!(cmd.contains(r#""a\"b""#), "{cmd}");
     }
 
     // ---------------- response parsing ----------------

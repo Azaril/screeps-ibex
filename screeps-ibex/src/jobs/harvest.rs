@@ -309,7 +309,7 @@ impl FinishedRepair {
 
 impl Upgrade {
     fn tick(&mut self, _state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
-        tick_upgrade(tick_context, self.target, HarvestState::idle)
+        tick_upgrade(tick_context, self.target, false, HarvestState::idle)
     }
 }
 

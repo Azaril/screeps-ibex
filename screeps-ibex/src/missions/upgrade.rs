@@ -73,19 +73,20 @@ impl UpgradeMission {
     /// restore the controller's downgrade timer from `current_ttd` back to
     /// the safe threshold (`max_ticks / 2`) within one creep lifetime.
     ///
-    /// Assumes the creep has a container of energy adjacent to the controller
-    /// so pickup costs only 1 tick per refill. The body format at RCL > 3 is
-    /// `[WORK, CARRY, MOVE, MOVE] + (W-1)*[WORK]`, giving 1 CARRY (50 cap),
+    /// Assumes the creep has a container of energy adjacent to the controller,
+    /// so the refill withdraw rides along with the final upgrade tick as a
+    /// parallel intent (pipeline D + E) and costs no dedicated tick — see
+    /// `tick_upgrade`'s `refill_when_draining` path. The body format at RCL > 3
+    /// is `[WORK, CARRY, MOVE, MOVE] + (W-1)*[WORK]`, giving 1 CARRY (50 cap),
     /// 2 MOVE, and W total WORK parts.
     ///
     /// Model per refill cycle (W work parts, 1 carry = 50 energy):
     ///   - upgrade_ticks = floor(50 / W)
-    ///   - pickup_ticks  = 1 (withdraw from adjacent container)
-    ///   - cycle_ticks   = upgrade_ticks + pickup_ticks
+    ///   - cycle_ticks   = upgrade_ticks (the refill withdraw is parallel, so it
+    ///     adds no idle tick — the creep upgrades every tick of its life)
     ///   - Each upgrade tick restores CONTROLLER_DOWNGRADE_RESTORE (100) ticks
     ///     but the timer also decays by 1, so net = 99 per upgrade tick.
-    ///   - The pickup tick contributes 0 restore but still decays by 1.
-    ///   - net_per_cycle = upgrade_ticks * 99 - 1
+    ///   - net_per_cycle = upgrade_ticks * 99
     ///
     /// Available lifetime ticks = CREEP_LIFE_TIME - spawn_ticks, where
     /// spawn_ticks = body_part_count * CREEP_SPAWN_TIME.
@@ -110,8 +111,8 @@ impl UpgradeMission {
             if upgrade_ticks_per_cycle < 1.0 {
                 continue;
             }
-            let cycle_ticks = upgrade_ticks_per_cycle + 1.0; // +1 for pickup
-            let net_per_cycle = upgrade_ticks_per_cycle * net_restore_per_upgrade_tick - 1.0;
+            let cycle_ticks = upgrade_ticks_per_cycle; // refill rides along with the final upgrade tick (parallel intent)
+            let net_per_cycle = upgrade_ticks_per_cycle * net_restore_per_upgrade_tick;
             if net_per_cycle <= 0.0 {
                 continue;
             }

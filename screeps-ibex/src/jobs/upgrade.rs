@@ -191,7 +191,7 @@ impl Sign {
 
 impl Upgrade {
     pub fn tick(&mut self, _state_context: &UpgradeJobContext, tick_context: &mut JobTickContext) -> Option<UpgradeState> {
-        tick_upgrade(tick_context, self.target, UpgradeState::idle)
+        tick_upgrade(tick_context, self.target, true, UpgradeState::idle)
     }
 }
 
