@@ -19,6 +19,14 @@ use specs::*;
 /// this window only avoids reacting to a one-off stale read.
 const DEFENSE_OWNERSHIP_STALE_TICKS: u32 = 100;
 
+/// Outer bound (linear room distance) for sourcing a defender. A creep spawned
+/// farther than this arrives too late and with too little life left to matter.
+/// Within the bound, EVERY home room is offered the spawn (via a shared token)
+/// so the queue can fulfil it from whichever in-range base is free first —
+/// response speed matters more than picking a single "best" source, so the pool
+/// is intentionally not count-limited.
+const MAX_DEFENSE_SOURCE_DISTANCE: u32 = 10;
+
 /// Desired squad composition for this defense mission.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DefenseSquadSize {
@@ -115,43 +123,52 @@ impl Spawning {
             .map(|rd| rd.name)
             .ok_or("Expected defend room data")?;
 
-        // How many attackers and healers the squad needs in total.
-        let (needed_attackers, needed_healers) = match state_context.squad_size {
+        // How many of each role still need to spawn (roster shortfall).
+        let (needed_attackers, needed_healers): (usize, usize) = match state_context.squad_size {
             DefenseSquadSize::Solo => (1, 0),
             DefenseSquadSize::Duo => (1, 1),
             DefenseSquadSize::Quad => (2, 2),
         };
+        let attackers_to_spawn = needed_attackers.saturating_sub(state_context.defenders.len());
+        let healers_to_spawn = needed_healers.saturating_sub(state_context.healers.len());
 
-        // Track the roster INCLUDING requests queued earlier in this same loop.
-        // The spawn callbacks that push into `defenders`/`healers` only fire on
-        // a later tick, so without counting in-flight requests every home room
-        // would each queue a full defender against a single threat — N home
-        // rooms => N redundant defenders. Stop requesting once the roster
-        // (existing + queued) is filled.
-        let mut attackers_queued = state_context.defenders.len();
-        let mut healers_queued = state_context.healers.len();
+        if attackers_to_spawn > 0 || healers_to_spawn > 0 {
+            let squad_size = state_context.squad_size;
 
-        for home_room_entity in state_context.home_room_datas.iter() {
-            if attackers_queued >= needed_attackers && healers_queued >= needed_healers {
-                break;
-            }
+            // Every home room within defense range, paired with its live energy
+            // capacity. Not count-limited (response speed is the priority): the
+            // more in-range bases offered the spawn, the sooner the queue can
+            // fulfil it from one that is free this tick.
+            let candidates: Vec<(Entity, u32)> = state_context
+                .home_room_datas
+                .iter()
+                .filter_map(|&e| {
+                    let name = system_data.room_data.get(e)?.name;
+                    if game::map::get_room_linear_distance(name, defend_room_name, false) > MAX_DEFENSE_SOURCE_DISTANCE {
+                        return None;
+                    }
+                    let capacity = game::rooms().get(name)?.energy_capacity_available();
+                    Some((e, capacity))
+                })
+                .collect();
 
-            let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
-
-            if let Some(room) = game::rooms().get(home_room_data.name) {
-                let energy_capacity = room.energy_capacity_available();
-
-                // Spawn attackers if needed.
-                if attackers_queued < needed_attackers {
-                    let body_def = match state_context.squad_size {
-                        DefenseSquadSize::Solo => bodies::solo_defender_body(energy_capacity),
-                        DefenseSquadSize::Duo => bodies::duo_ranged_attacker_body(energy_capacity),
-                        DefenseSquadSize::Quad => bodies::quad_member_body(energy_capacity),
+            // Submit ONE token per still-needed creep, broadcast to every
+            // in-range candidate room. The spawn queue fulfils a token AT MOST
+            // ONCE across all rooms (`spawned_tokens` is shared in
+            // SpawnQueueSystem) and leaves it pending if the room it visits
+            // first can't afford it. So we neither over-spawn (one creep per
+            // token, not one per home room — the previous bug) nor under-spawn
+            // (a queued request is not a guaranteed spawn, so a single broke
+            // room must not drop it).
+            for _ in 0..attackers_to_spawn {
+                let token = system_data.spawn_queue.token();
+                for &(room_entity, capacity) in &candidates {
+                    let body_def = match squad_size {
+                        DefenseSquadSize::Solo => bodies::solo_defender_body(capacity),
+                        DefenseSquadSize::Duo => bodies::duo_ranged_attacker_body(capacity),
+                        DefenseSquadSize::Quad => bodies::quad_member_body(capacity),
                     };
-
                     if let Ok(body) = spawning::create_body(&body_def) {
-                        let token = system_data.spawn_queue.token();
-
                         let spawn_request = SpawnRequest::new(
                             format!("Defender - {}", defend_room_name),
                             &body,
@@ -159,22 +176,19 @@ impl Spawning {
                             Some(token),
                             Self::create_attacker_callback(mission_entity, defend_room_name),
                         );
-
-                        system_data.spawn_queue.request(*home_room_entity, spawn_request);
-                        attackers_queued += 1;
+                        system_data.spawn_queue.request(room_entity, spawn_request);
                     }
                 }
+            }
 
-                // Spawn healers if needed (duo and quad).
-                if needed_healers > 0 && healers_queued < needed_healers {
-                    let body_def = match state_context.squad_size {
-                        DefenseSquadSize::Quad => bodies::quad_member_body(energy_capacity),
-                        _ => bodies::duo_healer_body(energy_capacity),
+            for _ in 0..healers_to_spawn {
+                let token = system_data.spawn_queue.token();
+                for &(room_entity, capacity) in &candidates {
+                    let body_def = match squad_size {
+                        DefenseSquadSize::Quad => bodies::quad_member_body(capacity),
+                        _ => bodies::duo_healer_body(capacity),
                     };
-
                     if let Ok(body) = spawning::create_body(&body_def) {
-                        let token = system_data.spawn_queue.token();
-
                         let spawn_request = SpawnRequest::new(
                             format!("DefHealer - {}", defend_room_name),
                             &body,
@@ -182,9 +196,7 @@ impl Spawning {
                             Some(token),
                             Self::create_healer_callback(mission_entity, defend_room_name),
                         );
-
-                        system_data.spawn_queue.request(*home_room_entity, spawn_request);
-                        healers_queued += 1;
+                        system_data.spawn_queue.request(room_entity, spawn_request);
                     }
                 }
             }
