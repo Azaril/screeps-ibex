@@ -115,22 +115,34 @@ impl Spawning {
             .map(|rd| rd.name)
             .ok_or("Expected defend room data")?;
 
-        // Try to spawn from each home room.
+        // How many attackers and healers the squad needs in total.
+        let (needed_attackers, needed_healers) = match state_context.squad_size {
+            DefenseSquadSize::Solo => (1, 0),
+            DefenseSquadSize::Duo => (1, 1),
+            DefenseSquadSize::Quad => (2, 2),
+        };
+
+        // Track the roster INCLUDING requests queued earlier in this same loop.
+        // The spawn callbacks that push into `defenders`/`healers` only fire on
+        // a later tick, so without counting in-flight requests every home room
+        // would each queue a full defender against a single threat — N home
+        // rooms => N redundant defenders. Stop requesting once the roster
+        // (existing + queued) is filled.
+        let mut attackers_queued = state_context.defenders.len();
+        let mut healers_queued = state_context.healers.len();
+
         for home_room_entity in state_context.home_room_datas.iter() {
+            if attackers_queued >= needed_attackers && healers_queued >= needed_healers {
+                break;
+            }
+
             let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
 
             if let Some(room) = game::rooms().get(home_room_data.name) {
                 let energy_capacity = room.energy_capacity_available();
 
-                // Determine how many attackers and healers we need.
-                let (needed_attackers, needed_healers) = match state_context.squad_size {
-                    DefenseSquadSize::Solo => (1, 0),
-                    DefenseSquadSize::Duo => (1, 1),
-                    DefenseSquadSize::Quad => (2, 2),
-                };
-
                 // Spawn attackers if needed.
-                if state_context.defenders.len() < needed_attackers {
+                if attackers_queued < needed_attackers {
                     let body_def = match state_context.squad_size {
                         DefenseSquadSize::Solo => bodies::solo_defender_body(energy_capacity),
                         DefenseSquadSize::Duo => bodies::duo_ranged_attacker_body(energy_capacity),
@@ -149,11 +161,12 @@ impl Spawning {
                         );
 
                         system_data.spawn_queue.request(*home_room_entity, spawn_request);
+                        attackers_queued += 1;
                     }
                 }
 
                 // Spawn healers if needed (duo and quad).
-                if needed_healers > 0 && state_context.healers.len() < needed_healers {
+                if needed_healers > 0 && healers_queued < needed_healers {
                     let body_def = match state_context.squad_size {
                         DefenseSquadSize::Quad => bodies::quad_member_body(energy_capacity),
                         _ => bodies::duo_healer_body(energy_capacity),
@@ -171,6 +184,7 @@ impl Spawning {
                         );
 
                         system_data.spawn_queue.request(*home_room_entity, spawn_request);
+                        healers_queued += 1;
                     }
                 }
             }

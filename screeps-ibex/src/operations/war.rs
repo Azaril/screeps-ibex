@@ -304,10 +304,16 @@ impl WarOperation {
                 }
 
                 let creeps = room_data.get_creeps()?;
+                // Defend an OWNED room against players AND NPC invaders — an
+                // invader assault wrecks a towerless young colony just as a
+                // player raid does, and the separate invader path below only
+                // covers RESERVED remote rooms, never owned ones. Source
+                // Keepers are excluded (permanent residents that never leave
+                // their lair to attack a colony).
                 let hostiles: Vec<_> = creeps
                     .hostile()
                     .iter()
-                    .filter(|c| !crate::military::is_npc_owner(&c.owner().username()))
+                    .filter(|c| !crate::military::is_source_keeper_owner(&c.owner().username()))
                     .collect();
 
                 if hostiles.is_empty() {
