@@ -100,6 +100,23 @@ impl DefenseEscalation {
     }
 }
 
+/// Whether a hostile creep in an owned room warrants dispatching a defender.
+///
+/// `RoomDynamicVisibilityData::hostile_creeps()` only flags Attack /
+/// RangedAttack / Work parts, so an enemy **CLAIM creep attacking the
+/// controller** — which carries neither — slips through it entirely. In a
+/// towerless RCL1-2 room nothing else engages such a creep, so it silently
+/// declaims the room. This keys on body parts instead: armed creeps
+/// (Attack/RangedAttack), dismantlers (Work), controller-attackers (Claim),
+/// and healers sustaining them (Heal) are all worth a defender; pure
+/// scouts/haulers (only Move/Carry/Tough) are not — they can't hurt us and
+/// don't warrant a spawn. Pure and host-tested.
+pub fn hostile_warrants_defender(parts: &[Part]) -> bool {
+    parts
+        .iter()
+        .any(|p| matches!(p, Part::Attack | Part::RangedAttack | Part::Work | Part::Claim | Part::Heal))
+}
+
 // ---------------------------------------------------------------------------
 // WarOperation
 // ---------------------------------------------------------------------------
@@ -250,6 +267,15 @@ impl WarOperation {
                 }
 
                 let has_hostiles = dynamic_vis.hostile_creeps();
+                // `hostile_creeps()` only flags Attack/RangedAttack/Work, so an
+                // enemy CLAIM creep neutralising the controller (or a lone
+                // dismantler/healer) is invisible to it. In a towerless RCL1-2
+                // room that creep declaims us with no response. `hostile_threat_creeps()`
+                // flags any hostile with a non-Move/Tough part — a safe superset
+                // pre-filter that catches the controller-attacker; the precise
+                // "worth a defender" call is made on body parts below. Safe-mode /
+                // wall-repair (room_states) stay keyed on a real armed assault.
+                let has_threat = has_hostiles || dynamic_vis.hostile_threat_creeps();
 
                 let has_nukes = room_data.get_nukes().map(|n| n.has_incoming()).unwrap_or(false);
 
@@ -273,7 +299,7 @@ impl WarOperation {
                     has_wall_repair_mission,
                 });
 
-                if !has_hostiles {
+                if !has_threat {
                     return None;
                 }
 
@@ -285,6 +311,19 @@ impl WarOperation {
                     .collect();
 
                 if hostiles.is_empty() {
+                    return None;
+                }
+
+                // Commit a defender only to hostiles that actually threaten the
+                // room — armed creeps, dismantlers, controller-attackers (CLAIM),
+                // or their healers. Ignore transient unarmed scouts/haulers so we
+                // don't burn a spawn on a creep just passing through.
+                let worth_defending = hostiles.iter().any(|c| {
+                    let parts: Vec<Part> = c.body().iter().filter(|p| p.hits() > 0).map(|p| p.part()).collect();
+                    hostile_warrants_defender(&parts)
+                });
+
+                if !worth_defending {
                     return None;
                 }
 
@@ -1560,6 +1599,36 @@ mod tests {
         assert_eq!(DEFENSE_CADENCE, 2);
         assert_eq!(OFFENSE_CADENCE, 10);
         assert_eq!(RECOMPUTE_CADENCE, 50);
+    }
+
+    /// Regression: an enemy CLAIM creep attacking the controller of a
+    /// towerless room must trigger a defender. `hostile_creeps()` (the old
+    /// gate) only saw Attack/RangedAttack/Work, so this creep declaimed us
+    /// unopposed. `hostile_warrants_defender` keys on body parts and catches it.
+    #[test]
+    fn unarmed_controller_attacker_warrants_a_defender() {
+        // The bug: a CLAIM creep (the thing that declaims a room) was ignored.
+        assert!(hostile_warrants_defender(&[Part::Claim, Part::Move]));
+        // Dismantlers (Work) and lone healers (Heal) are threats too.
+        assert!(hostile_warrants_defender(&[Part::Work, Part::Move]));
+        assert!(hostile_warrants_defender(&[Part::Heal, Part::Move]));
+        // Armed creeps are of course still defended.
+        assert!(hostile_warrants_defender(&[Part::Attack, Part::Move]));
+        assert!(hostile_warrants_defender(&[Part::RangedAttack, Part::Move]));
+    }
+
+    /// Transient unarmed creeps (scouts, haulers) must NOT burn a defender
+    /// spawn — they can't hurt an owned room.
+    #[test]
+    fn unarmed_transient_creeps_do_not_warrant_a_defender() {
+        // Pure scout.
+        assert!(!hostile_warrants_defender(&[Part::Move, Part::Move]));
+        // Hauler.
+        assert!(!hostile_warrants_defender(&[Part::Carry, Part::Move]));
+        // Tanky-but-toothless (Tough + Move only).
+        assert!(!hostile_warrants_defender(&[Part::Tough, Part::Move]));
+        // Empty body.
+        assert!(!hostile_warrants_defender(&[]));
     }
 
     /// P1.D5 / ADR 0013 D1.2: the feasibility window must include kill
