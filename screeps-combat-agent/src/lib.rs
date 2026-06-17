@@ -19,10 +19,10 @@ pub mod pathing;
 
 use screeps::{Position, RawObjectId, RoomName, StructureType};
 use screeps_combat_decision::{
-    decide_combat, select_focus_target, CombatBodyPart, CombatCreepDto, CombatIntent, CombatStructureDto, CombatView,
-    CreepOrders, FocusTarget, Ownership, SquadStateDto, TacticalAgent,
+    decide_combat, decide_movement, select_focus_target, CombatBodyPart, CombatCreepDto, CombatIntent,
+    CombatStructureDto, CombatView, CreepOrders, FocusTarget, Ownership, SquadStateDto, TacticalAgent,
 };
-use screeps_combat_engine::{CombatAction, CombatWorld, CreepId, PlayerId, SimCreep, StructureKind};
+use screeps_combat_engine::{CombatAction, CombatWorld, CreepId, Intents, PlayerId, SimCreep, StructureKind};
 use std::collections::HashMap;
 
 /// Mint a stable, host-constructible `RawObjectId` for a sim creep from its `CreepId`. Sim creeps
@@ -190,8 +190,38 @@ pub struct IbexAgent;
 
 impl TacticalAgent for IbexAgent {
     fn decide(&mut self, view: &CombatView) -> Vec<CombatIntent> {
-        decide_combat(view)
+        // The full per-tick decision: combat (attack + heal) plus the per-creep tactical movement
+        // goal (kite/engage/flee/heal-follow). Both are the bot's real, shared decisions.
+        let mut intents = decide_combat(view);
+        intents.extend(decide_movement(view));
+        intents
     }
+}
+
+/// Build the engine [`Intents`] for one side by running `agent` over each of its creeps and
+/// translating the emitted [`CombatIntent`]s: combat intents → engine [`CombatAction`]s
+/// ([`to_engine_action`]), movement intents → a step [`screeps::Direction`] planned through rover
+/// ([`pathing::resolve_move_direction`]) and applied via `set_move`. This is the sim's per-tick
+/// step: hand the result to `resolve_tick` (the engine — the authoritative "server").
+pub fn agent_intents<A: TacticalAgent>(world: &CombatWorld, sim: &SimView, agent: &mut A) -> Intents {
+    let mut intents = Intents::new();
+    for i in 0..sim.friends().len() {
+        let view = sim.view_for(i);
+        let me_pos = sim.friends()[i].pos;
+        let creep_id = sim.friend_id(i);
+        let mut actions = Vec::new();
+        for intent in agent.decide(&view) {
+            if let Some(action) = to_engine_action(&intent, sim) {
+                actions.push(action);
+            } else if let Some(dir) = pathing::resolve_move_direction(world, me_pos, &intent) {
+                intents.set_move(creep_id, dir);
+            }
+        }
+        if !actions.is_empty() {
+            intents.set(creep_id, actions);
+        }
+    }
+    intents
 }
 
 /// A trivial scripted opponent — always holds. Proves the [`TacticalAgent`] trait is swappable for
@@ -209,7 +239,7 @@ impl TacticalAgent for HoldAgent {
 mod tests {
     use super::*;
     use screeps::{Part, RoomCoordinate};
-    use screeps_combat_engine::{resolve_tick, Intents, SimBody};
+    use screeps_combat_engine::{resolve_tick, SimBody};
 
     fn room() -> RoomName {
         "W1N1".parse().unwrap()
@@ -222,18 +252,10 @@ mod tests {
         SimCreep { id, owner, pos: pos(x, y), body: SimBody::unboosted(&body), fatigue: 0 }
     }
 
-    /// Run `IbexAgent` for every friendly creep and collect the engine intents it produces.
+    /// Run `IbexAgent` for every friendly creep and collect the engine intents (combat + movement).
     fn ibex_intents(world: &CombatWorld, me_owner: PlayerId) -> Intents {
         let sv = SimView::from_world(world, me_owner, pos(25, 25), room());
-        let mut intents = Intents::new();
-        let mut agent = IbexAgent;
-        for i in 0..sv.friends().len() {
-            let actions: Vec<_> = agent.decide(&sv.view_for(i)).iter().filter_map(|x| to_engine_action(x, &sv)).collect();
-            if !actions.is_empty() {
-                intents.set(sv.friend_id(i), actions);
-            }
-        }
-        intents
+        agent_intents(world, &sv, &mut IbexAgent)
     }
 
     #[test]
@@ -277,6 +299,38 @@ mod tests {
             }
         }
         assert!(died, "the bot's focus-fire kills the healer (210 dps vs 500 hits → 3 ticks)");
+    }
+
+    #[test]
+    fn ibex_agent_kites_a_melee_chaser_taking_no_damage() {
+        // EXP-KITE-1, now driven by the SEAM (not hand-set moves): a ranged kiter (7 RANGED + 7
+        // MOVE) vs a melee chaser (10 ATTACK + 10 MOVE, MOVE parity), self-play through the engine.
+        // decide_movement keeps the kiter out of melee range, so it takes 0 damage (melee never
+        // connects; ranged fire has no attack-back) while chipping the chaser.
+        let mut world = CombatWorld {
+            creeps: vec![
+                creep(1, 0, 30, 25, &[(Part::RangedAttack, 7), (Part::Move, 7)]), // kiter
+                creep(2, 1, 27, 25, &[(Part::Attack, 10), (Part::Move, 10)]),     // melee chaser, range 3
+            ],
+            ..Default::default()
+        };
+        let kiter_max = world.creeps[0].body.hits_max();
+        let chaser_max = world.creeps[1].body.hits_max();
+        for _ in 0..10 {
+            // Self-play: both sides decide via IbexAgent; merge (disjoint creep ids) and resolve.
+            let sv0 = SimView::from_world(&world, 0, pos(30, 25), room());
+            let mut intents = agent_intents(&world, &sv0, &mut IbexAgent);
+            let sv1 = SimView::from_world(&world, 1, pos(27, 25), room());
+            let i1 = agent_intents(&world, &sv1, &mut IbexAgent);
+            intents.creeps.extend(i1.creeps);
+            intents.moves.extend(i1.moves);
+            resolve_tick(&mut world, &intents);
+        }
+        let kiter = world.creeps.iter().find(|c| c.id == 1).expect("kiter survives");
+        let chaser = world.creeps.iter().find(|c| c.id == 2).expect("chaser still up");
+        assert_eq!(kiter.body.hits, kiter_max, "kiter never let the melee chaser connect → 0 damage");
+        assert!(chaser.body.hits < chaser_max, "kiter chipped the chaser with ranged fire");
+        assert!(kiter.pos.get_range_to(chaser.pos) >= 2, "stayed out of melee range");
     }
 
     #[test]

@@ -360,6 +360,69 @@ fn heal_best_nearby(view: &CombatView, out: &mut Vec<CombatIntent>) {
     }
 }
 
+/// A working-melee creep with no working ranged — the thing a kiter must keep its distance from.
+fn is_melee_only(c: &CombatCreepDto) -> bool {
+    c.has_working(Part::Attack) && !c.has_working(Part::RangedAttack)
+}
+
+/// **The per-creep tactical movement decision** (ADR 0006 Inc B / P2.M): one creep's movement
+/// *goal* for the tick — `MoveTo`/`Flee` (the executor, live or sim, turns it into a path step via
+/// rover). A faithful port of `squad_combat`'s body-part-aware `fallback_movement`/kiting:
+/// - **ranged** (± melee): kite — `Flee` from a melee-only hostile within range 2 (to keep out of
+///   melee while staying in shooting range), else close to range 3 of the target, else hold;
+/// - **pure melee**: close to range 1 of the target;
+/// - **pure healer**: follow the nearest damaged ally to range 1.
+///
+/// "Target" is the shared focus creep when set, else the nearest hostile. Returns 0 or 1 intents
+/// (empty = hold this tick). This is the **per-creep** layer; the squad anchor advance is P2.M2.
+pub fn decide_movement(view: &CombatView) -> Vec<CombatIntent> {
+    let me = view.me;
+    let has_attack = me.has_working(Part::Attack);
+    let has_ranged = me.has_working(Part::RangedAttack);
+    let has_heal = me.has_working(Part::Heal);
+
+    // What we are fighting: the squad's shared focus creep if any, else the nearest hostile.
+    let nearest = view.hostiles.iter().min_by_key(|c| me.pos.get_range_to(c.pos));
+    let target_pos = view
+        .orders
+        .and_then(|o| o.focus)
+        .map(|f| f.pos)
+        .or_else(|| nearest.map(|c| c.pos));
+
+    let mv = if has_ranged {
+        // Kite: break contact with any adjacent melee-only threat; else hold shooting range 3.
+        let melee_threats: Vec<Position> = view
+            .hostiles
+            .iter()
+            .filter(|c| is_melee_only(c) && me.pos.get_range_to(c.pos) <= 2)
+            .map(|c| c.pos)
+            .collect();
+        if !melee_threats.is_empty() {
+            Some(CombatIntent::Flee { from: melee_threats, range: 3 })
+        } else {
+            target_pos
+                .filter(|tp| me.pos.get_range_to(*tp) > 3)
+                .map(|tp| CombatIntent::MoveTo { target: tp, range: 3 })
+        }
+    } else if has_attack {
+        // Pure melee: close to range 1.
+        target_pos
+            .filter(|tp| me.pos.get_range_to(*tp) > 1)
+            .map(|tp| CombatIntent::MoveTo { target: tp, range: 1 })
+    } else if has_heal {
+        // Pure healer: follow the nearest damaged ally (excluding self) to range 1.
+        view.friends
+            .iter()
+            .filter(|c| c.is_damaged() && c.pos != me.pos)
+            .min_by_key(|c| me.pos.get_range_to(c.pos))
+            .filter(|c| me.pos.get_range_to(c.pos) > 1)
+            .map(|c| CombatIntent::MoveTo { target: c.pos, range: 1 })
+    } else {
+        None
+    };
+    mv.into_iter().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,6 +625,66 @@ mod tests {
         assert_eq!(
             decide_combat(&s3.view(&full_me, None)),
             vec![CombatIntent::RangedHeal { target: pos(25, 28), id: healthy_far.id }]
+        );
+    }
+
+    // ── decide_movement (per-creep tactical movement) ───────────────────
+    #[test]
+    fn melee_closes_to_range_1() {
+        let s = Scene { squad: squad(), friends: vec![], hostiles: vec![creep(9, 30, 25, 300, &[(Part::Move, 3)])], structures: vec![] };
+        let me = creep(1, 25, 25, 600, &[(Part::Attack, 6)]);
+        assert_eq!(
+            decide_movement(&s.view(&me, None)),
+            vec![CombatIntent::MoveTo { target: pos(30, 25), range: 1 }]
+        );
+    }
+
+    #[test]
+    fn melee_adjacent_holds() {
+        let s = Scene { squad: squad(), friends: vec![], hostiles: vec![creep(9, 26, 25, 300, &[(Part::Move, 3)])], structures: vec![] };
+        let me = creep(1, 25, 25, 600, &[(Part::Attack, 6)]);
+        assert!(decide_movement(&s.view(&me, None)).is_empty(), "already adjacent → hold");
+    }
+
+    #[test]
+    fn ranged_kiter_flees_an_adjacent_melee_threat() {
+        // A melee-only hostile at range 2 → flee from it to keep out of melee.
+        let chaser = creep(9, 27, 25, 600, &[(Part::Attack, 6), (Part::Move, 6)]);
+        let s = Scene { squad: squad(), friends: vec![], hostiles: vec![chaser], structures: vec![] };
+        let me = creep(1, 25, 25, 700, &[(Part::RangedAttack, 7)]);
+        assert_eq!(
+            decide_movement(&s.view(&me, None)),
+            vec![CombatIntent::Flee { from: vec![pos(27, 25)], range: 3 }]
+        );
+    }
+
+    #[test]
+    fn ranged_closes_to_shooting_range_when_far() {
+        // Target at range 5, no melee threat near → close to range 3.
+        let s = Scene { squad: squad(), friends: vec![], hostiles: vec![creep(9, 30, 25, 600, &[(Part::RangedAttack, 6)])], structures: vec![] };
+        let me = creep(1, 25, 25, 700, &[(Part::RangedAttack, 7)]);
+        assert_eq!(
+            decide_movement(&s.view(&me, None)),
+            vec![CombatIntent::MoveTo { target: pos(30, 25), range: 3 }]
+        );
+    }
+
+    #[test]
+    fn ranged_at_shooting_range_holds() {
+        // Target at range 3, no melee threat → hold (shoot in place).
+        let s = Scene { squad: squad(), friends: vec![], hostiles: vec![creep(9, 28, 25, 600, &[(Part::RangedAttack, 6)])], structures: vec![] };
+        let me = creep(1, 25, 25, 700, &[(Part::RangedAttack, 7)]);
+        assert!(decide_movement(&s.view(&me, None)).is_empty(), "range 3 → hold and shoot");
+    }
+
+    #[test]
+    fn healer_follows_the_nearest_wounded_ally() {
+        let wounded = creep(2, 28, 25, 100, &[(Part::Move, 5)]); // range 3, damaged
+        let s = Scene { squad: squad(), friends: vec![wounded.clone()], hostiles: vec![], structures: vec![] };
+        let me = creep(1, 25, 25, 600, &[(Part::Heal, 6)]);
+        assert_eq!(
+            decide_movement(&s.view(&me, None)),
+            vec![CombatIntent::MoveTo { target: pos(28, 25), range: 1 }]
         );
     }
 }
