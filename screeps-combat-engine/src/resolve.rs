@@ -69,6 +69,9 @@ pub struct Intents {
     /// Per-creep move direction this tick (resolved in phase C). The *decision* (which way) is the
     /// agent's job (H2 / the rover pathfinder); this resolver only executes a given direction.
     pub moves: HashMap<CreepId, Direction>,
+    /// Optional per-creep "why" tag for introspection — ignored by the resolver, captured by
+    /// [`crate::record::CombatRecording`]. The agent (H2) populates it (e.g. "kite: hold range 3").
+    pub reasons: HashMap<CreepId, String>,
 }
 
 impl Intents {
@@ -87,6 +90,11 @@ impl Intents {
     /// Set a creep's move direction for the tick.
     pub fn set_move(&mut self, creep: CreepId, dir: Direction) -> &mut Self {
         self.moves.insert(creep, dir);
+        self
+    }
+    /// Attach a "why" tag to a creep's actions this tick (introspection only; see [`Intents::reasons`]).
+    pub fn set_reason(&mut self, creep: CreepId, reason: impl Into<String>) -> &mut Self {
+        self.reasons.insert(creep, reason.into());
         self
     }
 }

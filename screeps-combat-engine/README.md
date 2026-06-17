@@ -38,13 +38,16 @@ first thing to read before changing any formula here.
   (`resolve`: combat accumulate → movement → apply + damage-then-heal netting + deaths);
   **movement-conflict resolution** (`movement`: eligibility/fatigue, swap + moves/weight tiebreak,
   obstacle + chain-block); and **structures** (`state`: ramparts/walls/spawn as attack/dismantle
-  targets with rampart RMA-shielding; towers heal/repair). **30 host conformance tests** — kill
+  targets with rampart RMA-shielding; towers heal/repair); and **`CombatRecording`** (`record`:
+  the per-tick replay artifact — state + intents + reason tags + outcomes — for the "see WHY"
+  introspection, with a deterministic text scrubber). **32 host conformance tests** — kill
   inequality, focus-fire, tower drain, safe mode, attack-back (EXP-FOUND-1/EXP-FOCUS-1); range-3
   kiting at MOVE parity (EXP-KITE-1); wall-breach, spawn-kill, rampart-shield, tower-heal,
-  tower-repair-vs-dismantle (EXP-BREACH/EXP-DEF). Host + wasm32 compile; clippy-clean.
-- **Next:** `CombatRecording` (per-tick replay artifact for the "see WHY" introspection),
-  pull-based movement (rate2/rate3), tower-as-target, and the **server-captured golden vectors**
-  that mark P2.H1 *done* (byte-exact vs the live engine).
+  tower-repair-vs-dismantle (EXP-BREACH/EXP-DEF); recording capture/replay. Host + wasm32 compile;
+  clippy-clean.
+- **Next:** pull-based movement (rate2/rate3), tower-as-target, and the **server-captured golden
+  vectors** that mark P2.H1 *done* (byte-exact vs the live engine). Then P2.H2 — the `CombatView`/
+  `CombatIntent` trait seam so the bot's real decision code drives the sim (self-play).
 
 ## Quick start
 

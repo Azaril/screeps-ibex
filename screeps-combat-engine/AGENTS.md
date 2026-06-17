@@ -57,6 +57,7 @@ table IS the reconciliation checklist: when the engine updates, diff exactly the
 | `resolve` rampart RMA-shield | RMA skips a non-rampart target on a rampart tile (can hit ramparts directly); single-target attacks still hit a creep on a rampart | `src/processor/intents/creeps/rangedMassAttack.js:38` + `_damage.js:16-21` | `resolve::tests::rampart_shields_creep_from_rma_but_not_single_target` |
 | `resolve` attack-back rampart-exempt | a melee attacker standing on a rampart deals no attack-back | `src/processor/intents/_damage.js:17` | `resolve::tests::rampart_suppresses_attack_back` |
 | `resolve` tower heal/repair | tower heals a creep / repairs a structure (same range falloff), costs `TOWER_ENERGY_COST` | `src/processor/intents/towers/heal.js`, `repair.js` | `resolve::tests::{tower_heal_keeps_a_defender_alive, tower_repair_outpaces_dismantle}` |
+| `record::record_tick` / `CombatRecording` | per-tick replay artifact (pre-tick state + intents + reason tags + outcomes); deterministic id-sorted text dump | *not an engine port* — an introspection harness over `resolve_tick` | `record::tests::*` |
 
 ## Reconciliation procedure (when the engine updates)
 
@@ -123,8 +124,8 @@ Add these in the documented next slices; until then they are absent, not broken:
 - **Towers as damage targets** (a tower can fire + be attacked in the engine; here `SimTower`
   fires but isn't yet a dismantle/attack target — ramparts/walls/spawns are). FORTIFY/INVULNERABILITY
   rampart effects, power-bank hit-back.
-- **`CombatRecording`** (the per-tick replay/introspection artifact) and **NPC AI** (Source Keepers,
-  invaders, invader cores), power creeps/effects, multi-room.
+- **NPC AI** (Source Keepers, invaders, invader cores), power creeps/effects, multi-room. (The
+  `CombatRecording` replay artifact *is* modelled — see `record.rs`.)
 When you add one, extend the source map table, add conformance tests, and update the README status.
 
 ## How to extend
@@ -159,3 +160,7 @@ seam; do not duplicate tactics here (this crate has no tactics — it only resol
   RMA-shield + attack-back rampart-exemption; tower Heal/Repair actions. 30 host tests (added
   dismantle-breach, spawn-kill, rampart-shield, attack-back-suppression, tower-heal, tower-repair-
   vs-dismantle). Same pinned versions.
+- **2026-06-17** — Recording slice: `record.rs` (`CombatRecording` / `record_tick`) — per-tick
+  replay capture (pre-tick state + intents + optional reason tags + outcomes) with a deterministic
+  text dump; `reasons` field added to `Intents` (resolver-ignored introspection metadata). 32 host
+  tests. Same pinned versions.
