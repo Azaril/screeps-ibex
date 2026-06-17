@@ -74,7 +74,14 @@ impl Idle {
         let in_delivery_room = creep_room_name.map(|name| name == delivery_room_data.name).unwrap_or(false);
         let in_harvest_room = creep_room_name.map(|name| name == harvest_room_name).unwrap_or(false);
 
-        if in_delivery_room && state_context.allow_haul {
+        // A harvester whose source is in its OWN delivery room may double as a
+        // home hauler; a REMOTE harvester (e.g. an outpost / derelict-room
+        // miner) must travel to its source instead of getting stuck
+        // opportunistically hauling at home — otherwise, with any haul demand
+        // at home, it never leaves to mine.
+        let harvest_is_local = harvest_room_name == delivery_room_data.name;
+
+        if in_delivery_room && state_context.allow_haul && harvest_is_local {
             let transfer_queue_data = TransferQueueGeneratorData {
                 cause: "Harvest Idle",
                 room_data: tick_context.system_data.room_data,
@@ -108,7 +115,7 @@ impl Idle {
         }
 
         if in_delivery_room {
-            if state_context.allow_haul {
+            if state_context.allow_haul && harvest_is_local {
                 let transfer_queue_data = TransferQueueGeneratorData {
                     cause: "Harvest Idle",
                     room_data: tick_context.system_data.room_data,
