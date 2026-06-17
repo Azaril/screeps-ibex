@@ -126,6 +126,33 @@ pub fn controller_access(
     }
 }
 
+/// Whether a creep can walk from a room edge to within range 1 of `pos`
+/// RIGHT NOW (no dismantling) given current structures — the same "reachable
+/// now" test [`controller_access`] applies to the controller, exposed for any
+/// position (e.g. a source). Used for diagnostics and for gating remote
+/// mining on whether the source is actually reachable. `false` if the room is
+/// not visible.
+pub fn position_reachable_now(room: RoomName, structures: &[StructureObject], pos: Position) -> bool {
+    let Some(room_obj) = game::rooms().get(room) else {
+        return false;
+    };
+
+    let terrain = FastRoomTerrain::new(room_obj.get_terrain().get_raw_buffer().to_vec());
+
+    let blocked: HashSet<(u8, u8)> = structures
+        .iter()
+        .filter(|s| !structure_is_walkable(s))
+        .map(|s| {
+            let p = s.pos();
+            (p.x().u8(), p.y().u8())
+        })
+        .collect();
+
+    let start = (pos.x().u8(), pos.y().u8());
+    let passable = |x: u8, y: u8| !terrain.is_wall(x, y) && !blocked.contains(&(x, y));
+    reaches_room_edge(&passable, start)
+}
+
 /// Rooms the breach-plan cache retains; least-recently-used entries are
 /// evicted beyond this. Generously above `salvage_max_missions` (default 1) —
 /// entries are a handful of tiles each.

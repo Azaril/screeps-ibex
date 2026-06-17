@@ -71,14 +71,21 @@ fn can_run_mission(
     _mission_entity: Entity,
     state_context: &mut MiningOutpostMissionContext,
 ) -> Result<bool, String> {
+    let derelict_features = system_data.features.derelict;
     let outpost_room_data = system_data
         .room_data
         .get(state_context.outpost_room_data)
         .ok_or("Expected outpost room data")?;
 
     if let Some(dynamic_visibility_data) = outpost_room_data.get_dynamic_visibility_data() {
+        // A confirmed-derelict (hostile-owned but dead) room is minable
+        // pre-neutral: harvesting needs no ownership. The Mine phase defers
+        // reservation/containers until the controller is neutralized.
+        let confirmed_derelict = derelict_features.on
+            && dynamic_visibility_data.confirmed_derelict(derelict_features.confirm_ticks, derelict_features.path_max_age);
+
         if dynamic_visibility_data.updated_within(1000)
-            && (!dynamic_visibility_data.owner().neutral()
+            && (!(dynamic_visibility_data.owner().neutral() || confirmed_derelict)
                 || dynamic_visibility_data.reservation().hostile()
                 || dynamic_visibility_data.reservation().friendly())
         {
@@ -153,15 +160,24 @@ impl Scout {
             return Err("Mission cannot run in current room state".to_string());
         }
 
-        // Hostile owner. A derelict one (no spawns / armed towers / combat
-        // creeps) is worth waiting out: the salvage operation strips the room
-        // in parallel and the controller's downgrade timer runs unopposed —
-        // the moment it drops to neutral this mission proceeds to mining.
-        // An armed owner aborts; the operation's gates decide if/when to retry.
+        // Hostile owner. A CONFIRMED-derelict one (dead: no spawns / armed
+        // towers / threat creeps, held long enough) is minable RIGHT NOW —
+        // harvesting needs no ownership. Proceed to Mine for pre-neutral
+        // mining; the Mine phase harvests reachable sources and defers
+        // reservation + containers until the controller is neutralized (by the
+        // salvage de-claim role / natural decay), then upgrades automatically.
+        // An armed owner aborts; the operation decides if/when to retry.
         let derelict_features = system_data.features.derelict;
 
-        if derelict_features.on && dynamic_visibility_data.derelict() {
-            Ok(None)
+        if derelict_features.on
+            && dynamic_visibility_data.confirmed_derelict(derelict_features.confirm_ticks, derelict_features.path_max_age)
+        {
+            info!(
+                "Derelict outpost {} - starting pre-neutral mining (reserve deferred until controller is neutral)",
+                outpost_room_data.name
+            );
+
+            Ok(Some(MiningOutpostState::mine(None.into(), None.into(), None.into(), None.into())))
         } else {
             Err("Mission cannot run in current room state".to_string())
         }
@@ -217,6 +233,19 @@ impl Mine {
         if !can_run_mission(system_data, mission_entity, state_context)? {
             return Err("Mission cannot run in current room state".to_string());
         }
+
+        // Reservation requires a NEUTRAL controller (engine: reserveController
+        // is rejected on owned controllers). While the room is still
+        // hostile-owned-but-derelict we mine pre-neutral (harvesters/haul; no
+        // container construction is possible either) and defer the reserver
+        // until de-claim/decay neutralizes it — then it is created on a later
+        // tick automatically.
+        let is_neutral = system_data
+            .room_data
+            .get(state_context.outpost_room_data)
+            .and_then(|rd| rd.get_dynamic_visibility_data())
+            .map(|dvd| dvd.owner().neutral())
+            .unwrap_or(false);
 
         if let Some(mut supply_mission) = self
             .supply_mission
@@ -274,7 +303,7 @@ impl Mine {
             .as_mission_type_mut::<ReserveMission>()
         {
             reserve_mission.set_home_rooms(&state_context.home_room_datas);
-        } else if self.reserve_mission.is_none() {
+        } else if is_neutral && self.reserve_mission.is_none() {
             let outpost_room_data = system_data
                 .room_data
                 .get_mut(state_context.outpost_room_data)

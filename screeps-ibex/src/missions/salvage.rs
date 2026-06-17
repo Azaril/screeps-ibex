@@ -658,8 +658,30 @@ impl Mission for SalvageMission {
         };
 
         if derelict_features.diagnostics {
+            // Source reachability — answers "do leftover walls block mining".
+            // Only when diagnosing (re-fetches terrain per source).
+            let (reachable_sources, total_sources) = system_data
+                .room_data
+                .get(self.room_data)
+                .map(|rd| {
+                    let total = rd.get_static_visibility_data().map(|s| s.sources().len()).unwrap_or(0);
+                    let reachable = rd
+                        .get_structures()
+                        .and_then(|structures| {
+                            rd.get_static_visibility_data().map(|svd| {
+                                svd.sources()
+                                    .iter()
+                                    .filter(|s| position_reachable_now(rd.name, structures.all(), s.pos()))
+                                    .count()
+                            })
+                        })
+                        .unwrap_or(0);
+                    (reachable, total)
+                })
+                .unwrap_or((0, 0));
+
             info!(
-                "[salvage-mission-diag] {} loot(e={},o={}) dismantle_hits={} dismantle_ready={} declaim_target={} declaim_access={:?} breach_possible={} breach_needed={} breach_surplus={} -> desired raiders={} dismantlers={}{} declaimers={} (spawnable={}) alive r={} d={} dc={}",
+                "[salvage-mission-diag] {} loot(e={},o={}) dismantle_hits={} dismantle_ready={} declaim_target={} declaim_access={:?} breach_possible={} breach_needed={} breach_surplus={} sources_reachable={}/{} -> desired raiders={} dismantlers={}{} declaimers={} (spawnable={}) alive r={} d={} dc={}",
                 room_name,
                 work.loot_energy,
                 work.loot_other,
@@ -670,6 +692,8 @@ impl Mission for SalvageMission {
                 breach_possible,
                 breach_needed,
                 breach_surplus,
+                reachable_sources,
+                total_sources,
                 desired_raiders,
                 desired_dismantlers,
                 if breach_mode { " (breach)" } else { "" },
