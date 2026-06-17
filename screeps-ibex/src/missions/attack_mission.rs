@@ -1043,9 +1043,7 @@ impl Engaging {
         squad_center: Option<Position>,
         system_data: &MissionExecutionSystemData,
     ) -> Option<(Position, Option<RawObjectId>)> {
-        use crate::combat::{
-            select_focus_target, CombatBodyPart, CombatCreepDto, CombatStructureDto, CombatView, Ownership, SquadStateDto,
-        };
+        use crate::combat::{select_focus_target, CombatBodyPart, CombatCreepDto, CombatStructureDto, Ownership};
 
         let squad_center = squad_center?;
 
@@ -1106,16 +1104,7 @@ impl Engaging {
             })
             .unwrap_or_default();
 
-        let squad = SquadStateDto { center: squad_center, room: target_room };
-        let view = CombatView {
-            tick: game::time(),
-            squad: &squad,
-            friends: &[],
-            hostiles: &hostiles,
-            structures: &structures,
-        };
-
-        select_focus_target(&view).map(|t| (t.pos, t.id))
+        select_focus_target(&hostiles, &structures).map(|t| (t.pos, t.id))
     }
 
     /// Check if the primary attackable structure in the target room has dropped

@@ -2,22 +2,23 @@
 //!
 //! It bridges the two halves of the harness: a [`SimView`] builds the bot's JS-free
 //! [`screeps_ibex::combat::CombatView`] from a [`screeps_combat_engine::CombatWorld`], and
-//! [`IbexAgent`] runs the bot's **real** decision code over that view. There is then exactly one
-//! implementation of the tactics (the bot's), so self-play is `IbexAgent` vs `IbexAgent` (or vs a
-//! scripted opponent) with no fork to drift or overfit — the whole point of the trait seam
-//! (ADR 0006 §B.2).
+//! [`IbexAgent`] runs the bot's **real** decision code ([`decide_combat`]) over that view. There is
+//! then exactly one implementation of the tactics (the bot's), so self-play is `IbexAgent` vs
+//! `IbexAgent` (or vs a scripted opponent) with no fork to drift or overfit — the whole point of
+//! the trait seam (ADR 0006 §B.2).
 //!
 //! Sim creeps have no game `ObjectId`, so [`SimView`] mints a stable synthetic [`RawObjectId`] per
 //! creep (from its [`CreepId`]) and keeps the reverse map, so an emitted [`CombatIntent`]'s target
 //! id resolves back to a `CombatWorld` creep ([`SimView::creep_for`]) when the sim applies it.
+//! [`to_engine_action`] performs that translation for the creep-targeted combat intents.
 //!
 //! Host-only (workspace-excluded): it depends on the full bot crate at the host target.
 
 use screeps::{Position, RawObjectId, RoomName, StructureType};
-use screeps_combat_engine::{CombatWorld, CreepId, PlayerId, SimCreep, StructureKind};
+use screeps_combat_engine::{CombatAction, CombatWorld, CreepId, PlayerId, SimCreep, StructureKind};
 use screeps_ibex::combat::{
-    select_focus_target, CombatBodyPart, CombatCreepDto, CombatIntent, CombatStructureDto, CombatView, Ownership,
-    SquadStateDto, TacticalAgent,
+    decide_combat, select_focus_target, CombatBodyPart, CombatCreepDto, CombatIntent, CombatStructureDto, CombatView,
+    CreepOrders, FocusTarget, Ownership, SquadStateDto, TacticalAgent,
 };
 use std::collections::HashMap;
 
@@ -27,7 +28,6 @@ fn synthetic_id(creep: CreepId) -> RawObjectId {
     format!("{:024x}", creep).parse().expect("a 24-hex string is a valid RawObjectId")
 }
 
-/// Map an engine structure kind to the game-api `StructureType` the decision reasons about.
 fn structure_type(kind: StructureKind) -> StructureType {
     match kind {
         StructureKind::Spawn => StructureType::Spawn,
@@ -61,15 +61,20 @@ fn creep_dto(c: &SimCreep, raw: RawObjectId) -> CombatCreepDto {
     }
 }
 
-/// Owned DTO backing storage for one side's view of a `CombatWorld` for one tick. Borrow it as a
-/// [`CombatView`] with [`SimView::view`]; resolve a returned intent's target id back to its engine
-/// creep with [`SimView::creep_for`].
+/// Owned DTO backing storage for one side's view of a `CombatWorld` for one tick. The shared squad
+/// focus is computed once (`select_focus_target`); per-creep views come from [`SimView::view_for`].
 pub struct SimView {
     tick: u32,
     squad: SquadStateDto,
+    /// The deciding side's living creeps, in `CombatWorld::creeps` order.
     friends: Vec<CombatCreepDto>,
+    /// Parallel to `friends`: the engine `CreepId` of each (for keying engine intents).
+    friend_ids: Vec<CreepId>,
     hostiles: Vec<CombatCreepDto>,
     structures: Vec<CombatStructureDto>,
+    /// The shared focus **creep** for the tick (creep-only; structures are scanned per-creep),
+    /// mirroring the live `TickOrders.attack_target` broadcast.
+    focus: Option<FocusTarget>,
     /// synthetic `RawObjectId` → the engine `CreepId` it stands for (both sides).
     id_to_creep: HashMap<RawObjectId, CreepId>,
 }
@@ -81,6 +86,7 @@ impl SimView {
     pub fn from_world(world: &CombatWorld, me_owner: PlayerId, center: Position, room: RoomName) -> Self {
         let mut id_to_creep = HashMap::new();
         let mut friends = Vec::new();
+        let mut friend_ids = Vec::new();
         let mut hostiles = Vec::new();
         for c in world.creeps.iter().filter(|c| c.is_alive()) {
             let raw = synthetic_id(c.id);
@@ -88,6 +94,7 @@ impl SimView {
             let dto = creep_dto(c, raw);
             if c.owner == me_owner {
                 friends.push(dto);
+                friend_ids.push(c.id);
             } else {
                 hostiles.push(dto);
             }
@@ -114,52 +121,73 @@ impl SimView {
             ownership: ownership(Some(t.owner), me_owner),
         }));
 
+        // The shared focus is creep-only (structures are scanned per-creep by `decide_combat`).
+        let focus = select_focus_target(&hostiles, &structures).filter(|f| f.id.is_some());
+
         Self {
             tick: world.tick,
             squad: SquadStateDto { center, room },
             friends,
+            friend_ids,
             hostiles,
             structures,
+            focus,
             id_to_creep,
         }
     }
 
-    /// Borrow the backing storage as the bot's JS-free read seam.
-    pub fn view(&self) -> CombatView<'_> {
+    /// The deciding side's creeps (parallel to [`SimView::friend_id`]).
+    pub fn friends(&self) -> &[CombatCreepDto] {
+        &self.friends
+    }
+
+    /// The engine `CreepId` of friend `i` (for keying its engine intents).
+    pub fn friend_id(&self, i: usize) -> CreepId {
+        self.friend_ids[i]
+    }
+
+    /// A per-creep read seam for friend `i`, carrying the shared squad focus as its orders.
+    pub fn view_for(&self, i: usize) -> CombatView<'_> {
         CombatView {
             tick: self.tick,
+            me: &self.friends[i],
             squad: &self.squad,
+            orders: Some(CreepOrders { focus: self.focus, heal_target: None }),
             friends: &self.friends,
             hostiles: &self.hostiles,
             structures: &self.structures,
         }
     }
 
-    /// Resolve an emitted intent's target id back to its engine `CreepId` (for applying the intent
-    /// to the `CombatWorld`).
+    /// Resolve an emitted intent's target id back to its engine `CreepId`.
     pub fn creep_for(&self, id: RawObjectId) -> Option<CreepId> {
         self.id_to_creep.get(&id).copied()
     }
 }
 
-/// The bot's real tactical brain, driven over the seam. For P2.H2's first decision it wraps
-/// [`select_focus_target`] (the squad's shared focus, mirroring the live `TickOrders.attack_target`
-/// broadcast). Later H2 slices grow `decide` toward the full per-tick orders (kite/heal/engage).
+/// Translate a creep-targeted [`CombatIntent`] into a [`CombatAction`] the engine resolver accepts
+/// (resolving the target id back to a `CreepId`). Returns `None` for movement intents and
+/// structure-targeted intents (the latter need structure-id resolution — a follow-on with the
+/// scenario/apply layer, P2.H4).
+pub fn to_engine_action(intent: &CombatIntent, view: &SimView) -> Option<CombatAction> {
+    match intent {
+        CombatIntent::Attack { id: Some(raw), .. } => view.creep_for(*raw).map(CombatAction::Attack),
+        CombatIntent::RangedAttack { id: Some(raw), .. } => view.creep_for(*raw).map(CombatAction::RangedAttack),
+        CombatIntent::RangedMassAttack => Some(CombatAction::RangedMassAttack),
+        CombatIntent::Heal { id: Some(raw), .. } => view.creep_for(*raw).map(CombatAction::Heal),
+        CombatIntent::RangedHeal { id: Some(raw), .. } => view.creep_for(*raw).map(CombatAction::RangedHeal),
+        _ => None,
+    }
+}
+
+/// The bot's real tactical brain, driven over the seam. Wraps [`decide_combat`] (the extracted
+/// per-tick attack + heal decision). Per-creep: call once per friendly creep with its `view_for`.
 #[derive(Default)]
 pub struct IbexAgent;
 
 impl TacticalAgent for IbexAgent {
     fn decide(&mut self, view: &CombatView) -> Vec<CombatIntent> {
-        match select_focus_target(view) {
-            Some(t) => {
-                let mut intents = vec![CombatIntent::MoveTo { target: t.pos, range: 1 }];
-                if let Some(id) = t.id {
-                    intents.push(CombatIntent::Attack(id));
-                }
-                intents
-            }
-            None => vec![CombatIntent::Idle],
-        }
+        decide_combat(view)
     }
 }
 
@@ -178,7 +206,7 @@ impl TacticalAgent for HoldAgent {
 mod tests {
     use super::*;
     use screeps::{Part, RoomCoordinate};
-    use screeps_combat_engine::SimBody;
+    use screeps_combat_engine::{resolve_tick, Intents, SimBody};
 
     fn room() -> RoomName {
         "W1N1".parse().unwrap()
@@ -188,93 +216,106 @@ mod tests {
     }
     fn creep(id: CreepId, owner: PlayerId, x: u8, y: u8, parts: &[(Part, usize)]) -> SimCreep {
         let body: Vec<Part> = parts.iter().flat_map(|&(p, n)| std::iter::repeat_n(p, n)).collect();
-        SimCreep {
-            id,
-            owner,
-            pos: pos(x, y),
-            body: SimBody::unboosted(&body),
-            fatigue: 0,
+        SimCreep { id, owner, pos: pos(x, y), body: SimBody::unboosted(&body), fatigue: 0 }
+    }
+
+    /// Run `IbexAgent` for every friendly creep and collect the engine intents it produces.
+    fn ibex_intents(world: &CombatWorld, me_owner: PlayerId) -> Intents {
+        let sv = SimView::from_world(world, me_owner, pos(25, 25), room());
+        let mut intents = Intents::new();
+        let mut agent = IbexAgent;
+        for i in 0..sv.friends().len() {
+            let actions: Vec<_> = agent.decide(&sv.view_for(i)).iter().filter_map(|x| to_engine_action(x, &sv)).collect();
+            if !actions.is_empty() {
+                intents.set(sv.friend_id(i), actions);
+            }
         }
+        intents
     }
 
     #[test]
-    fn ibex_agent_targets_the_healer_over_the_sim_world() {
-        // The bot's REAL select_focus_target, run over a CombatWorld via the sim adapter, must pick
-        // the hostile healer (creep 3) even though it has more hits than the weakling (creep 2).
+    fn ibex_agent_focus_fires_the_healer() {
+        // The bot's real decision, over the sim: a ranged attacker focus-fires the hostile healer
+        // (the squad focus) even though a non-healer is weaker.
         let world = CombatWorld {
             creeps: vec![
-                creep(1, 0, 25, 25, &[(Part::Attack, 5)]), // me
-                creep(2, 1, 20, 20, &[(Part::Attack, 1)]), // hostile weakling (100 hits)
-                creep(3, 1, 30, 30, &[(Part::Heal, 5)]),   // hostile healer (500 hits)
+                creep(1, 0, 24, 25, &[(Part::RangedAttack, 7)]), // me
+                creep(2, 1, 23, 25, &[(Part::Move, 1)]),         // hostile weakling (low hits)
+                creep(3, 1, 26, 25, &[(Part::Heal, 5)]),         // hostile healer
             ],
             ..Default::default()
         };
         let sv = SimView::from_world(&world, 0, pos(25, 25), room());
-        let mut agent = IbexAgent;
-        let intents = agent.decide(&sv.view());
-
-        let attacked = intents
-            .iter()
-            .find_map(|i| match i {
-                CombatIntent::Attack(id) => Some(*id),
-                _ => None,
-            })
-            .expect("the agent emits an attack");
-        assert_eq!(
-            sv.creep_for(attacked),
-            Some(3),
-            "the bot's real logic, driven over the sim, picks the healer"
-        );
-        assert!(
-            intents.contains(&CombatIntent::MoveTo { target: pos(30, 30), range: 1 }),
-            "and closes on it"
-        );
+        let intents = decide_combat(&sv.view_for(0));
+        // Healer (creep 3) is within range 3 → RangedAttack it, not the weaker non-focus.
+        let raw = synthetic_id(3);
+        assert_eq!(intents, vec![CombatIntent::RangedAttack { target: pos(26, 25), id: Some(raw) }]);
     }
 
     #[test]
-    fn ibex_agent_falls_to_structures_then_idle() {
-        // No hostile creeps, one hostile spawn → target the spawn by position (id None). With
-        // nothing at all → Idle.
-        use screeps_combat_engine::{SimStructure, StructureId};
-        let spawn = SimStructure {
-            id: 100 as StructureId,
-            kind: StructureKind::Spawn,
-            owner: Some(1),
-            pos: pos(40, 40),
-            hits: 1000,
-            hits_max: 1000,
+    fn ibex_agent_focus_fires_a_healer_to_death_through_the_engine() {
+        // End-to-end: 3 ranged attackers (owner 0) whose REAL decision picks the hostile healer;
+        // fed to the engine resolver, they kill it (no self-heal — the healer takes no action).
+        let mut world = CombatWorld {
+            creeps: vec![
+                creep(10, 1, 25, 25, &[(Part::Heal, 5)]), // 500-hit hostile healer
+                creep(1, 0, 24, 25, &[(Part::RangedAttack, 7)]),
+                creep(2, 0, 26, 25, &[(Part::RangedAttack, 7)]),
+                creep(3, 0, 25, 24, &[(Part::RangedAttack, 7)]),
+            ],
+            ..Default::default()
         };
+        let mut died = false;
+        for _ in 0..10 {
+            let intents = ibex_intents(&world, 0);
+            if resolve_tick(&mut world, &intents).deaths.contains(&10) {
+                died = true;
+                break;
+            }
+        }
+        assert!(died, "the bot's focus-fire kills the healer (210 dps vs 500 hits → 3 ticks)");
+    }
+
+    #[test]
+    fn ibex_agent_mass_attacks_when_surrounded() {
+        // One ranged creep with 3 hostiles adjacent → RMA (the stacked case), not single-target.
         let world = CombatWorld {
-            creeps: vec![creep(1, 0, 25, 25, &[(Part::Attack, 5)])],
-            structures: vec![spawn],
+            creeps: vec![
+                creep(1, 0, 25, 25, &[(Part::RangedAttack, 7)]),
+                creep(2, 1, 24, 25, &[(Part::Move, 1)]),
+                creep(3, 1, 26, 25, &[(Part::Move, 1)]),
+                creep(4, 1, 25, 24, &[(Part::Move, 1)]),
+            ],
             ..Default::default()
         };
         let sv = SimView::from_world(&world, 0, pos(25, 25), room());
-        let intents = IbexAgent.decide(&sv.view());
-        assert!(
-            intents.contains(&CombatIntent::MoveTo { target: pos(40, 40), range: 1 }),
-            "moves on the hostile spawn"
-        );
-        assert!(
-            !intents.iter().any(|i| matches!(i, CombatIntent::Attack(_))),
-            "no creep-id attack for a structure target"
-        );
+        assert_eq!(decide_combat(&sv.view_for(0)), vec![CombatIntent::RangedMassAttack]);
+    }
 
-        let empty = CombatWorld {
-            creeps: vec![creep(1, 0, 25, 25, &[(Part::Attack, 5)])],
+    #[test]
+    fn ibex_agent_heals_a_wounded_ally() {
+        // A healer with a wounded adjacent ally heals it (heal-best-nearby, no orders.heal_target).
+        let mut wounded = creep(2, 0, 25, 26, &[(Part::Move, 5)]);
+        wounded.body.hits = 100; // damaged (max 500)
+        let world = CombatWorld {
+            creeps: vec![creep(1, 0, 25, 25, &[(Part::Heal, 5)]), wounded, creep(9, 1, 40, 40, &[(Part::Attack, 1)])],
             ..Default::default()
         };
-        let sv = SimView::from_world(&empty, 0, pos(25, 25), room());
-        assert_eq!(IbexAgent.decide(&sv.view()), vec![CombatIntent::Idle]);
+        let sv = SimView::from_world(&world, 0, pos(25, 25), room());
+        // friend index of the healer (creep 1) is 0.
+        assert_eq!(
+            decide_combat(&sv.view_for(0)),
+            vec![CombatIntent::Heal { target: pos(25, 26), id: Some(synthetic_id(2)) }]
+        );
     }
 
     #[test]
     fn hold_agent_always_idles() {
         let world = CombatWorld {
-            creeps: vec![creep(2, 1, 30, 30, &[(Part::Heal, 5)])],
+            creeps: vec![creep(1, 0, 25, 25, &[(Part::Heal, 5)]), creep(2, 1, 30, 30, &[(Part::Heal, 5)])],
             ..Default::default()
         };
         let sv = SimView::from_world(&world, 0, pos(25, 25), room());
-        assert_eq!(HoldAgent.decide(&sv.view()), vec![CombatIntent::Idle]);
+        assert_eq!(HoldAgent.decide(&sv.view_for(0)), vec![CombatIntent::Idle]);
     }
 }
