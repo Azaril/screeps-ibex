@@ -160,23 +160,28 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
             .and_then(|target_room_data| target_room_data.get_dynamic_visibility_data());
 
         if let Some(dynamic_visibility_data) = dynamic_visibility_data {
-            // A confirmed-derelict room (hostile-owned but militarily dead,
-            // held long enough and recently observed) is traversable: the
-            // owner name alone can't hurt a creep. Anything armed — towers
-            // with energy, combat creeps — stays hostile regardless of the
-            // derelict flag. Leftover unarmed structures (extensions, husks)
-            // deliberately do NOT make a room hostile; hostile_structures is
-            // not consulted because owner().hostile() covers every armed case
-            // once derelict rooms are carved out.
+            // A derelict room — hostile-owned but militarily dead at the last
+            // sighting (no spawns, armed towers, or combat/threat creeps) — is
+            // simply NOT hostile for pathing: it has no defenders, so the owner
+            // name alone can't hurt a creep. Uses the raw `derelict()`
+            // classification (last sighting), NOT the stricter
+            // `confirmed_derelict`: pathing into a defenseless room is safe on
+            // older intel too, and gating it on fresh intel deadlocked outpost
+            // economy creeps — the default `HostileBehavior::Deny` blocked them
+            // the moment the confirmation lapsed, and they could never enter to
+            // refresh the very intel the gate required. Anything armed at the
+            // last sighting — towers with energy, combat creeps, a hostile
+            // reservation, source keepers — still reads hostile. (Action
+            // decisions — salvage / de-claim / outpost admission — keep the
+            // stricter `confirmed_derelict`; only pathing is loosened here.)
             let derelict_features = &self.derelict_features;
-            let confirmed_derelict = derelict_features.on
-                && dynamic_visibility_data.confirmed_derelict(derelict_features.confirm_ticks, derelict_features.path_max_age);
+            let derelict = derelict_features.on && dynamic_visibility_data.derelict();
 
             let is_hostile = dynamic_visibility_data.source_keeper()
                 || dynamic_visibility_data.reservation().hostile()
                 || dynamic_visibility_data.hostile_creeps()
                 || dynamic_visibility_data.hostile_towers()
-                || (dynamic_visibility_data.owner().hostile() && !confirmed_derelict);
+                || (dynamic_visibility_data.owner().hostile() && !derelict);
 
             if is_hostile {
                 match room_options.hostile_behavior() {
@@ -192,7 +197,7 @@ impl<'a, 'b> MovementSystemExternal<Entity> for MovementSystemExternalProvider<'
                 || dynamic_visibility_data.reservation().friendly()
             {
                 return Some(1.0);
-            } else if confirmed_derelict {
+            } else if derelict {
                 // Passable, but prefer truly neutral routes on ties.
                 return Some(2.5);
             } else {

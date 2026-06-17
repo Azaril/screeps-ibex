@@ -322,11 +322,7 @@ impl Upgrade {
 
 impl MoveToRoom {
     fn tick(&mut self, _state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
-        // Derelict-aware: a hostile-owned-but-dead outpost room is enterable at
-        // HighCost rather than blocked by the default Deny (see
-        // `derelict_aware_room_options`).
-        let room_options = derelict_aware_room_options(tick_context, self.room_name);
-        tick_move_to_room(tick_context, self.room_name, room_options, HarvestState::idle)
+        tick_move_to_room(tick_context, self.room_name, None, HarvestState::idle)
     }
 }
 

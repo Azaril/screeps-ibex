@@ -227,10 +227,7 @@ impl MoveToRoom {
             tick_opportunistic_repair(tick_context, Some(RepairPriority::Low));
         }
 
-        // Derelict-aware: raiders/outpost haulers can path INTO a hostile-owned
-        // derelict room at HighCost instead of being blocked by the default Deny.
-        let room_options = derelict_aware_room_options(tick_context, self.room_name);
-        tick_move_to_room(tick_context, self.room_name, room_options, HaulState::idle)
+        tick_move_to_room(tick_context, self.room_name, None, HaulState::idle)
     }
 }
 
