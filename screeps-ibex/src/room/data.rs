@@ -561,9 +561,19 @@ impl RoomData {
             .filter_map(|s| s.as_owned())
             .any(|s| s.owner().is_some() && !s.my());
 
-        let tower_dps_at_edge = structures.as_ref().map(|s| {
+        let tower_dps_at_edge = structures.as_ref().and_then(|s| {
             let positions: Vec<Position> = s.towers().iter().filter(|t| !t.my()).map(|t| t.pos()).collect();
-            crate::military::damage::tower_dps_at_room_edge(self.name, &positions)
+            // None when there are NO hostile towers — NOT Some(0.0). With
+            // `.map()` this was Some(0.0) for any room we had structure
+            // visibility of, and `.is_some()` consumers (notably
+            // is_claim_target_safe) read that as "hostile towers present",
+            // vetoing the claim of every scouted neutral room — so no bot
+            // could ever expand. Some(dps) iff there is real tower DPS.
+            if positions.is_empty() {
+                None
+            } else {
+                Some(crate::military::damage::tower_dps_at_room_edge(self.name, &positions))
+            }
         });
 
         // is_active() filters out RCL-decayed / ownerless husks: a spawn that

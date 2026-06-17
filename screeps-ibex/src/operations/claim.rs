@@ -373,9 +373,25 @@ impl ClaimOperation {
             ));
         }
 
-        // Unscored candidates need high-priority visibility.
+        // Candidates need high-priority visibility while they are unscored OR
+        // while their dynamic intel is too stale to pass the commit-time safety
+        // re-check (`intel_freshness_ticks`). Without the staleness clause a
+        // candidate scored from never-stale STATIC data (sources/terrain/
+        // distance/plan) is treated as "done" and dropped from the scout queue,
+        // so its DYNAMIC intel never refreshes — it then fails the commit-time
+        // freshness check every cycle and is never claimed (the "scouts never
+        // refresh the claim frontier in time" bug). The refresh must key off
+        // "is my safety intel fresh", not "do I have a score".
+        let freshness = system_data.features.claim.intel_freshness_ticks;
         for candidate in &self.candidates {
-            if candidate.score.is_none() {
+            let stale = system_data
+                .mapping
+                .get_room(&candidate.room_name)
+                .and_then(|e| system_data.room_data.get(e))
+                .and_then(|rd| rd.get_dynamic_visibility_data())
+                .map(|d| !d.updated_within(freshness))
+                .unwrap_or(true);
+            if candidate.score.is_none() || stale {
                 system_data.visibility.request(VisibilityRequest::new(
                     candidate.room_name,
                     VISIBILITY_PRIORITY_HIGH,
@@ -485,8 +501,7 @@ impl ClaimOperation {
         // room actually pushes us over budget. Gated on tier + a high bucket,
         // not a raw `trend >= 0` (a near-full bucket sawtooths slightly
         // negative and would otherwise never probe).
-        let bucket_healthy =
-            governor.tier == crate::cpugovernor::Tier::Normal && governor.bucket >= features.healthy_bucket_floor;
+        let bucket_healthy = governor.tier == crate::cpugovernor::Tier::Normal && governor.bucket >= features.healthy_bucket_floor;
 
         let structural = if bucket_healthy {
             estimate_cap.max(currently_owned_rooms + 1)
@@ -495,10 +510,7 @@ impl ClaimOperation {
         };
 
         // Safety caps bound the CPU-derived number; GCL is the hard ceiling.
-        structural
-            .max(features.min_room_cap)
-            .min(features.max_room_cap)
-            .min(current_gcl)
+        structural.max(features.min_room_cap).min(features.max_room_cap).min(current_gcl)
     }
 
     /// Whether the reachable ring at the current radius is fully covered:
@@ -512,6 +524,34 @@ impl ClaimOperation {
 
         if self.candidates.iter().any(|c| c.score.is_none()) {
             return false;
+        }
+
+        // A candidate that could actually be committed (viable + at/above the
+        // min claim distance) must also have DYNAMIC intel fresh enough to pass
+        // the commit-time safety re-check — otherwise "covered" fires in a tick
+        // (candidates score instantly from static data), Select runs while the
+        // intel is stale, and the claim is rejected on staleness before any
+        // scout could refresh it. Holding coverage here lets the scout queue
+        // (kept alive in refresh_visibility_requests) bring the intel current;
+        // the scouting-window timeout in run_operation bounds the wait, so an
+        // unreachable room can't stall selection forever.
+        let freshness = system_data.features.claim.intel_freshness_ticks;
+        let min_claim_distance = system_data.features.claim.min_search_radius;
+        for candidate in &self.candidates {
+            let viable = candidate.score.map(|(s, _)| s >= 0.0).unwrap_or(false);
+            if !viable || candidate.distance < min_claim_distance {
+                continue;
+            }
+            let fresh = system_data
+                .mapping
+                .get_room(&candidate.room_name)
+                .and_then(|e| system_data.room_data.get(e))
+                .and_then(|rd| rd.get_dynamic_visibility_data())
+                .map(|d| d.updated_within(freshness))
+                .unwrap_or(false);
+            if !fresh {
+                return false;
+            }
         }
 
         for room_name in &self.unknown_rooms {
