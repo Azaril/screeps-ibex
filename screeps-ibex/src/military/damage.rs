@@ -129,3 +129,156 @@ pub fn estimated_ticks_to_kill(
 pub fn range_between(a: Position, b: Position) -> u32 {
     a.get_range_to(b)
 }
+
+// ── Defender sizing model ───────────────────────────────────────────────────
+//
+// Pure, host-tested helpers that turn a room's threat picture (from
+// `military::threatmap::RoomThreatData`) plus its energy state into a sized
+// defender body. See docs/plans — threat-matched defensive creep sizing.
+
+/// Ticks within which a single defender should kill its worst target. Sizes the
+/// offense floor: enough damage/tick to clear the target's effective HP AND
+/// out-pace the heal the enemy can focus on it within this window.
+pub const KILL_WINDOW_TICKS: u32 = 25;
+
+/// Fraction of a room's MAX spawn energy that must currently be AVAILABLE before
+/// we size a defender to full capacity (rather than holding for refill). Keeps a
+/// capable room on a momentary energy dip from emitting an under-strength creep.
+/// Overridden by the urgent branch when nothing is holding the line.
+pub const WAIT_REFILL_FRACTION: f32 = 0.85;
+
+/// Cap on offense parts a SINGLE defender is sized to. Beyond this the model
+/// escalates squad COUNT (Duo/Quad — multiple defenders focus-fire) rather than
+/// building an ever-larger solo that still can't out-damage the enemy heal.
+pub const MAX_OFFENSE_PARTS: u32 = 25;
+
+/// HEAL parts needed to sustain `incoming_dps` of damage (adjacent self/ally
+/// heal). Returns 0 at zero DPS — unlike [`drain_heal_parts_for_dps`], which
+/// floors at 1 — so a defender facing an unarmed threat (CLAIM creep, scout)
+/// is never given a wasted HEAL part. `boosted` ⇒ 48 HP/part (T3 XLHO2, ×4).
+pub fn defender_heal_parts_for_dps(incoming_dps: f32, boosted: bool) -> u32 {
+    if incoming_dps <= 0.0 {
+        return 0;
+    }
+    let per = if boosted { HEAL_PER_PART_ADJACENT * 4.0 } else { HEAL_PER_PART_ADJACENT };
+    (incoming_dps / per).ceil().max(1.0) as u32
+}
+
+/// Offense parts for ONE defender to kill a hostile of `target_hp` effective HP
+/// within `window_ticks`, net of `enemy_focus_heal` — the AGGREGATE enemy HEAL
+/// output, because hostiles heal each other and concentrate all healers on the
+/// creep under fire. So a defender must out-damage the whole enemy heal stack,
+/// not just the target's self-heal.
+///
+/// `dmg_per_part` = 10 (RANGED_ATTACK) or 30 (ATTACK), ×4 if our creep is
+/// boosted. Returns `None` when the kill needs more than [`MAX_OFFENSE_PARTS`] —
+/// the caller then escalates squad COUNT so multiple defenders stack DPS and
+/// focus-fire one target (the existing Solo→Duo→Quad path).
+pub fn attack_parts_to_kill(target_hp: f32, enemy_focus_heal: f32, window_ticks: u32, dmg_per_part: f32) -> Option<u32> {
+    if window_ticks == 0 || dmg_per_part <= 0.0 {
+        return None;
+    }
+    // Total damage to land = the target's effective HP plus all the heal it
+    // soaks over the window.
+    let total = target_hp.max(0.0) + enemy_focus_heal.max(0.0) * window_ticks as f32;
+    let dps_needed = total / window_ticks as f32;
+    let parts = (dps_needed / dmg_per_part).ceil().max(1.0) as u32;
+    if parts <= MAX_OFFENSE_PARTS {
+        Some(parts)
+    } else {
+        None
+    }
+}
+
+/// Outcome of the spawn-now-vs-wait decision. `SpawnNow(budget)` carries the
+/// energy budget to size the body against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpawnReadiness {
+    SpawnNow(u32),
+    Wait,
+}
+
+/// Decide whether to spawn a defender NOW and at what energy budget. Pure — the
+/// caller passes `has_friendly_tower` and `defender_alive` so this stays
+/// game-call-free and host-testable.
+///
+/// - **Urgent** (under attack, nothing holding the line, no tower buying time):
+///   spawn immediately from CURRENT energy — a smaller defender now beats a
+///   perfect one too late.
+/// - **Refilled enough** (`available ≥ WAIT_REFILL_FRACTION × capacity`): spawn
+///   a full-strength body sized to capacity.
+/// - **Otherwise** (a capable room on a momentary dip, or a tower is covering):
+///   wait for refill rather than emit a runt.
+pub fn defender_spawn_readiness(
+    available: u32,
+    capacity: u32,
+    incoming_dps: f32,
+    has_friendly_tower: bool,
+    defender_alive: bool,
+) -> SpawnReadiness {
+    let urgent = incoming_dps > 0.0 && !defender_alive && !has_friendly_tower;
+    if urgent {
+        SpawnReadiness::SpawnNow(available)
+    } else if available as f32 >= WAIT_REFILL_FRACTION * capacity.max(1) as f32 {
+        SpawnReadiness::SpawnNow(capacity)
+    } else {
+        SpawnReadiness::Wait
+    }
+}
+
+#[cfg(test)]
+mod sizing_tests {
+    use super::*;
+
+    #[test]
+    fn heal_parts_zero_at_zero_dps() {
+        // The CLAIM-creep / scout case: no incoming damage ⇒ no wasted HEAL.
+        assert_eq!(defender_heal_parts_for_dps(0.0, false), 0);
+        assert_eq!(defender_heal_parts_for_dps(-5.0, false), 0);
+    }
+
+    #[test]
+    fn heal_parts_scale_with_dps_and_boost() {
+        assert_eq!(defender_heal_parts_for_dps(90.0, false), 8); // ceil(90/12)
+        assert_eq!(defender_heal_parts_for_dps(900.0, true), 19); // ceil(900/48)
+    }
+
+    #[test]
+    fn attack_parts_basic_and_focus_heal() {
+        // 600 HP, no heal, 25-tick window, 10 dmg/part: 600/25=24 dps ⇒ 3 RA.
+        assert_eq!(attack_parts_to_kill(600.0, 0.0, 25, 10.0), Some(3));
+        // Focused enemy heal raises the requirement.
+        let with_heal = attack_parts_to_kill(600.0, 120.0, 25, 10.0).unwrap();
+        assert!(with_heal > 3, "focus heal must raise parts: {with_heal}");
+        // Beyond MAX_OFFENSE_PARTS for one defender ⇒ None ⇒ caller escalates count.
+        assert_eq!(attack_parts_to_kill(600.0, 480.0, 25, 10.0), None);
+        // Boosted ranged (×4 ⇒ 40/part) needs fewer parts.
+        assert_eq!(attack_parts_to_kill(600.0, 0.0, 25, 40.0), Some(1));
+    }
+
+    #[test]
+    fn readiness_urgent_uses_available() {
+        // Towerless, nothing holding the line, under attack ⇒ spawn now from the bank.
+        assert_eq!(
+            defender_spawn_readiness(250, 5600, 120.0, false, false),
+            SpawnReadiness::SpawnNow(250)
+        );
+    }
+
+    #[test]
+    fn readiness_capable_room_on_a_dip_waits() {
+        // RCL7, a defender already holding, 900/5600 (<85%) ⇒ wait, don't emit a runt.
+        assert_eq!(defender_spawn_readiness(900, 5600, 120.0, false, true), SpawnReadiness::Wait);
+        // A tower buying time also means we wait even with no defender yet.
+        assert_eq!(defender_spawn_readiness(900, 5600, 120.0, true, false), SpawnReadiness::Wait);
+    }
+
+    #[test]
+    fn readiness_refilled_uses_capacity() {
+        // ≥85% available ⇒ full-strength body sized to capacity.
+        assert_eq!(
+            defender_spawn_readiness(5040, 5600, 120.0, false, true),
+            SpawnReadiness::SpawnNow(5600)
+        );
+    }
+}

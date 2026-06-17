@@ -24,6 +24,96 @@ pub fn solo_defender_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
     }
 }
 
+// ── Threat-matched sized defender bodies ────────────────────────────────────
+//
+// Unlike the repeat-template bodies above (which `create_body` expands to fit
+// `energy_capacity`), these build the FINAL `Vec<Part>` directly from the
+// threat picture — so the part counts are exact and there is no `&'static`
+// slice constraint. The spawn path passes the result straight to
+// `SpawnRequest::new(.., &body, ..)`.
+
+/// Maximum body parts on a creep (Screeps engine limit).
+const MAX_CREEP_SIZE: usize = 50;
+
+/// Assemble the final body for a defender/healer from desired offense + HEAL
+/// counts within an energy `budget`. Adds MOVE (~1 per 2 other parts) and a
+/// small TOUGH front when HEAL is present and it fits. Degrades to fit the
+/// budget and the 50-part cap in priority order — drop TOUGH, then HEAL, then
+/// trim offense — but never below the role floor (at least 1 offense for an
+/// attacker, at least 1 HEAL for a pure healer), so it always returns a usable
+/// body once the room can afford it. Parts are ordered TOUGH, offense, HEAL,
+/// MOVE so TOUGH soaks damage first.
+fn assemble_combat_body(budget: u32, offense_parts: u32, offense_kind: Part, heal_parts: u32) -> Vec<Part> {
+    let off_floor: u32 = if offense_parts > 0 { 1 } else { 0 };
+    let heal_floor: u32 = if offense_parts == 0 { 1 } else { 0 };
+
+    let mut off = offense_parts.max(off_floor).min(MAX_CREEP_SIZE as u32);
+    let mut heal = heal_parts.max(heal_floor).min(MAX_CREEP_SIZE as u32);
+    let mut tough: u32 = if heal > 0 { 2 } else { 0 };
+
+    let cfg = |off: u32, heal: u32, tough: u32| -> (u32, u32) {
+        let work = off + heal + tough;
+        let moves = work.div_ceil(2).max(1); // ~1 MOVE per 2 other parts, at least 1
+        let parts = work + moves;
+        let cost = off * offense_kind.cost() + heal * Part::Heal.cost() + tough * Part::Tough.cost() + moves * Part::Move.cost();
+        (cost, parts)
+    };
+
+    loop {
+        let (cost, parts) = cfg(off, heal, tough);
+        if cost <= budget && parts as usize <= MAX_CREEP_SIZE {
+            break;
+        }
+        if tough > 0 {
+            tough -= 1;
+        } else if heal > heal_floor {
+            heal -= 1;
+        } else if off > off_floor {
+            off -= 1;
+        } else {
+            // At the role floor and still over budget: emit the floor body. The
+            // spawn queue won't fire it until the room can afford it (body_cost
+            // > available ⇒ the request waits), so this never panics or returns
+            // an empty body.
+            break;
+        }
+    }
+
+    let moves = (off + heal + tough).div_ceil(2).max(1);
+    let mut body = Vec::with_capacity((off + heal + tough + moves) as usize);
+    body.extend(std::iter::repeat_n(Part::Tough, tough as usize));
+    body.extend(std::iter::repeat_n(offense_kind, off as usize));
+    body.extend(std::iter::repeat_n(Part::Heal, heal as usize));
+    body.extend(std::iter::repeat_n(Part::Move, moves as usize));
+    body
+}
+
+/// Threat-matched defender body sized to an energy `budget`. Offense
+/// (RANGED_ATTACK) is sized to kill the worst target within
+/// [`damage::KILL_WINDOW_TICKS`] net of the enemy's focused heal; HEAL is sized
+/// to survive `incoming_dps` (0 against a zero-DPS threat such as a CLAIM creep)
+/// and included only when it fits. Always returns at least `[RangedAttack, Move]`
+/// (200e) so a bare RCL2 towerless room still gets an armed defender. `boosted` =
+/// whether OUR creep is boosted (the enemy's boosts are already folded into the
+/// threat figures by `threatmap`).
+pub fn sized_defender_body(budget: u32, incoming_dps: f32, target_hp: f32, enemy_focus_heal: f32, boosted: bool) -> Vec<Part> {
+    let ra_dmg = if boosted { 10.0 * 4.0 } else { 10.0 };
+    let want_off = damage::attack_parts_to_kill(target_hp, enemy_focus_heal, damage::KILL_WINDOW_TICKS, ra_dmg)
+        .unwrap_or(damage::MAX_OFFENSE_PARTS)
+        .max(1);
+    let want_heal = damage::defender_heal_parts_for_dps(incoming_dps, boosted);
+    assemble_combat_body(budget, want_off, Part::RangedAttack, want_heal)
+}
+
+/// Threat-matched defender HEALER body (HEAL + MOVE, TOUGH front when it fits)
+/// sized to sustain `incoming_dps`. Spawns even at RCL2 by dropping the TOUGH
+/// front — fixing the old `duo_healer_body` 660e floor that produced no healer
+/// below RCL3.
+pub fn sized_healer_body(budget: u32, incoming_dps: f32, boosted: bool) -> Vec<Part> {
+    let want_heal = damage::defender_heal_parts_for_dps(incoming_dps, boosted).max(1);
+    assemble_combat_body(budget, 0, Part::RangedAttack, want_heal)
+}
+
 /// Duo attacker body (ranged variant).
 /// TOUGH front for damage absorption, RANGED_ATTACK + MOVE repeat.
 /// Enough MOVE so creep keeps full speed in formation.
@@ -556,6 +646,62 @@ mod tests {
                 .count()
         };
         assert!(ranged_at(800) > ranged_at(300), "solo defender should scale up with energy");
+    }
+
+    // ── Threat-matched sized bodies ─────────────────────────────────────────
+
+    fn cost(body: &[Part]) -> u32 {
+        body.iter().map(|p| p.cost()).sum()
+    }
+
+    /// Bare RCL2 vs an unarmed CLAIM creep (zero DPS): armed defender, NO HEAL
+    /// forced, fits the budget. Preserves the live W11N57 fix.
+    #[test]
+    fn sized_defender_rcl2_vs_claim_is_armed_with_no_heal() {
+        let body = sized_defender_body(300, 0.0, 700.0, 0.0, false);
+        assert!(!body.is_empty());
+        assert!(body.iter().any(|&p| p == Part::RangedAttack), "must be armed");
+        assert!(body.iter().any(|&p| p == Part::Move), "must move");
+        assert!(!body.iter().any(|&p| p == Part::Heal), "no HEAL vs a zero-DPS threat");
+        assert!(cost(&body) <= 300, "cost {} > 300", cost(&body));
+    }
+
+    /// HEAL is dropped (not forced) when it doesn't fit a tight budget, but the
+    /// defender is still armed.
+    #[test]
+    fn sized_defender_drops_heal_when_unaffordable() {
+        let body = sized_defender_body(400, 90.0, 600.0, 0.0, false);
+        assert!(body.iter().any(|&p| p == Part::RangedAttack));
+        assert!(cost(&body) <= 400, "cost {} > 400", cost(&body));
+    }
+
+    /// A capable budget vs a real attacker ⇒ defender carries HEAL.
+    #[test]
+    fn sized_defender_carries_heal_when_affordable() {
+        let body = sized_defender_body(2000, 120.0, 1000.0, 0.0, false);
+        assert!(body.iter().any(|&p| p == Part::Heal), "should carry HEAL when affordable");
+        assert!(body.iter().any(|&p| p == Part::RangedAttack));
+        assert!(cost(&body) <= 2000);
+    }
+
+    /// Regression for the duo_healer 660e floor: a healer MUST build at RCL2
+    /// (drops the TOUGH front).
+    #[test]
+    fn sized_healer_builds_at_rcl2() {
+        let body = sized_healer_body(550, 90.0, false);
+        assert!(!body.is_empty());
+        assert!(body.iter().any(|&p| p == Part::Heal));
+        assert!(body.iter().any(|&p| p == Part::Move));
+        assert!(cost(&body) <= 550, "cost {} > 550", cost(&body));
+    }
+
+    /// Never exceed the 50-part engine cap, however large the budget/threat.
+    #[test]
+    fn sized_bodies_respect_part_cap() {
+        let d = sized_defender_body(50_000, 5000.0, 1_000_000.0, 5000.0, false);
+        assert!(d.len() <= 50, "defender len {}", d.len());
+        let h = sized_healer_body(50_000, 5000.0, false);
+        assert!(h.len() <= 50, "healer len {}", h.len());
     }
 }
 
