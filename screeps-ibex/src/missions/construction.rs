@@ -26,8 +26,6 @@ struct ConstructionFilter<'a> {
     room: &'a Room,
     room_level: u8,
     min_rcl_for_walls: u8,
-    /// Number of construction sites remaining before hitting the cap.
-    remaining_sites: i32,
     /// Locations approved for placement earlier in this batch. Used so
     /// that road adjacency checks can see sites we have already decided
     /// to place (but that don't exist in the game world yet).
@@ -35,12 +33,11 @@ struct ConstructionFilter<'a> {
 }
 
 impl<'a> ConstructionFilter<'a> {
-    fn new(room: &'a Room, room_level: u8, current_sites: usize, max_sites: i32) -> Self {
+    fn new(room: &'a Room, room_level: u8) -> Self {
         ConstructionFilter {
             room,
             room_level,
             min_rcl_for_walls: 4,
-            remaining_sites: max_sites - current_sites as i32,
             placed_this_batch: Vec::new(),
         }
     }
@@ -49,13 +46,14 @@ impl<'a> ConstructionFilter<'a> {
 impl<'a> ExecutionFilter for ConstructionFilter<'a> {
     fn should_place(&self, step: &BuildStep) -> bool {
         // Skip if the structure already exists or already has a construction
-        // site at this location — placing would be a no-op but would consume
-        // a slot in the remaining_sites budget.
+        // site at this location.
+        //
+        // NOTE: the in-flight site CAP is enforced at execution time
+        // (`execute_operations(.., max_creates)`), charged on SUCCESS — NOT
+        // here at queue time. A queue-time cap let failing ops (RCL gate,
+        // InvalidTarget) burn the budget before they failed, starving the
+        // valid ops behind them and stalling construction entirely.
         if structure_or_site_exists(step.location, step.structure_type, self.room) {
-            return false;
-        }
-
-        if self.remaining_sites <= 0 {
             return false;
         }
 
@@ -79,7 +77,6 @@ impl<'a> ExecutionFilter for ConstructionFilter<'a> {
     }
 
     fn added_placement(&mut self, step: &BuildStep) {
-        self.remaining_sites -= 1;
         self.placed_this_batch.push(step.location);
     }
 }
@@ -243,14 +240,30 @@ impl Mission for ConstructionMission {
                 if game::time().is_multiple_of(50) {
                     if system_data.features.construction.execute {
                         let construction_sites = room_data.get_construction_sites().ok_or("Expected construction sites")?;
-                        let mut filter = ConstructionFilter::new(
-                            &room,
-                            room_level,
-                            construction_sites.len(),
-                            system_data.features.construction.max_construction_sites,
-                        );
+                        let existing_sites = construction_sites.len();
+                        // Success-charged budget: place up to (cap - current) NEW
+                        // sites this cycle, skipping (not counting) failures.
+                        let max_new = (system_data.features.construction.max_construction_sites - existing_sites as i32).max(0) as u32;
+                        let mut filter = ConstructionFilter::new(&room, room_level);
                         let ops = plan.get_build_operations(room_level, &mut filter);
-                        screeps_foreman::plan::execute_operations(&room, &ops);
+                        let create_ops = ops
+                            .iter()
+                            .filter(|o| matches!(o, screeps_foreman::plan::PlanOperation::CreateSite { .. }))
+                            .count();
+                        let created = screeps_foreman::plan::execute_operations(&room, &ops, Some(max_new));
+                        // Diagnostic: distinguishes "no build ops generated"
+                        // (no plan / everything filtered: RCL gate, site cap,
+                        // already-built) from "ops generated but placement
+                        // failed" (see the per-failure warn in execute_operations).
+                        log::info!(
+                            "Construction {} (RCL {}): {} create-ops, {} sites created, {} sites already in room (cap {})",
+                            room_data.name,
+                            room_level,
+                            create_ops,
+                            created,
+                            existing_sites,
+                            system_data.features.construction.max_construction_sites
+                        );
                     }
 
                     if system_data.features.construction.cleanup {
@@ -262,7 +275,7 @@ impl Mission for ConstructionMission {
                         let snapshot = screeps_foreman::plan::snapshot_structures(structures.all());
                         let mut removal_filter = RemovalFilter::new(&room);
                         let ops = plan.get_cleanup_operations(&snapshot, room_level, &mut removal_filter);
-                        screeps_foreman::plan::execute_operations(&room, &ops);
+                        screeps_foreman::plan::execute_operations(&room, &ops, None);
                     }
                 }
 
@@ -273,6 +286,12 @@ impl Mission for ConstructionMission {
                 // regains construction + authoritative spawn approaches; this is
                 // deliberately NOT gated by `allow_replan` (the backoff in
                 // roomplansystem still prevents thrashing).
+                if game::time().is_multiple_of(50) {
+                    log::info!(
+                        "Construction {}: no usable plan yet — requesting (re)plan, placing nothing this cycle",
+                        room_data.name
+                    );
+                }
                 true
             }
         } else {

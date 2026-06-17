@@ -104,7 +104,9 @@ pub struct ConstructionFeatures {
     #[serde(default = "default_room_plan_cpu_budget")]
     pub room_plan_cpu_budget: f64,
     /// Minimum bucket level for room planning to run. Planning is a burst activity; set to 0 to
-    /// always allow (old behavior). Default: 9000.
+    /// always allow. Kept low (1000) so a plan-less room can always recover a plan and resume
+    /// construction — a high gate strands rooms with no plan (e.g. after a `reset.room_plans`)
+    /// whenever the bucket can't climb back to the gate. Default: 1000.
     #[serde(default = "default_bucket_threshold")]
     pub bucket_threshold: i32,
 }
@@ -114,7 +116,7 @@ fn default_room_plan_cpu_budget() -> f64 {
 }
 
 fn default_bucket_threshold() -> i32 {
-    9000
+    1000
 }
 
 impl Default for ConstructionFeatures {
@@ -128,7 +130,7 @@ impl Default for ConstructionFeatures {
             max_construction_sites: 10,
             visualize: ConstructionVisualizeFeatures::default(),
             room_plan_cpu_budget: 20.0,
-            bucket_threshold: 9000,
+            bucket_threshold: 1000,
         }
     }
 }
