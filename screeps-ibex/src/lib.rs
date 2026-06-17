@@ -7,6 +7,10 @@
 static ALLOC: talc::TalckWasm = unsafe { talc::TalckWasm::new_global() };
 
 mod cleanup;
+/// The JS-free tactical seam (ADR 0006 §B.2 / S17) — the crate's only intentionally-public surface
+/// beyond the wasm exports, so the host-side combat sim (`screeps-combat-agent`) can drive the
+/// bot's real decision code.
+pub mod combat;
 mod constants;
 mod cpugovernor;
 mod creep;

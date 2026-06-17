@@ -1043,6 +1043,10 @@ impl Engaging {
         squad_center: Option<Position>,
         system_data: &MissionExecutionSystemData,
     ) -> Option<(Position, Option<RawObjectId>)> {
+        use crate::combat::{
+            select_focus_target, CombatBodyPart, CombatCreepDto, CombatStructureDto, CombatView, Ownership, SquadStateDto,
+        };
+
         let squad_center = squad_center?;
 
         // Only target things in the room we can see.
@@ -1050,59 +1054,68 @@ impl Engaging {
             return None;
         }
 
-        // Check hostile creeps via room data cache.
-        let room_entity = system_data.mapping.get_room(&target_room);
+        let room_entity = system_data.mapping.get_room(&target_room)?;
+        let room_data = system_data.room_data.get(room_entity)?;
 
-        if let Some(room_entity) = room_entity {
-            if let Some(room_data) = system_data.room_data.get(room_entity) {
-                if let Some(creep_data) = room_data.get_creeps() {
-                    let hostiles = creep_data.hostile();
-
-                    if !hostiles.is_empty() {
-                        // Priority 1: hostiles with HEAL parts.
-                        let healer = hostiles
+        // ── Live adapter (the tactical seam's `game::*` leaf): read the room into JS-free DTOs,
+        // preserving hostile/structure order so the extracted decision's tie-breaks match. The
+        // *decision* itself is `combat::select_focus_target` — shared with the sim (ADR 0006 §B.2).
+        let hostiles: Vec<CombatCreepDto> = room_data
+            .get_creeps()
+            .map(|creep_data| {
+                creep_data
+                    .hostile()
+                    .iter()
+                    .map(|c| CombatCreepDto {
+                        id: c.try_raw_id(),
+                        pos: c.pos(),
+                        hits: c.hits(),
+                        hits_max: c.hits_max(),
+                        body: c
+                            .body()
                             .iter()
-                            .filter(|c| c.body().iter().any(|p| p.part() == Part::Heal && p.hits() > 0))
-                            .min_by_key(|c| c.hits());
+                            .map(|p| CombatBodyPart { part: p.part(), hits: p.hits() })
+                            .collect(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
-                        if let Some(target) = healer {
-                            return Some((target.pos(), target.try_raw_id()));
+        let structures: Vec<CombatStructureDto> = room_data
+            .get_structures()
+            .map(|structure_data| {
+                structure_data
+                    .all()
+                    .iter()
+                    .map(|s| {
+                        let ownership = match s.as_owned() {
+                            Some(o) if o.my() => Ownership::Mine,
+                            Some(_) => Ownership::Hostile,
+                            None => Ownership::Neutral,
+                        };
+                        let (hits, hits_max) = s.as_attackable().map(|a| (a.hits(), a.hits_max())).unwrap_or((0, 0));
+                        CombatStructureDto {
+                            pos: s.pos(),
+                            structure_type: s.structure_type(),
+                            hits,
+                            hits_max,
+                            ownership,
                         }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
-                        // Priority 2: lowest HP hostile (focus fire).
-                        if let Some(target) = hostiles.iter().min_by_key(|c| c.hits()) {
-                            return Some((target.pos(), target.try_raw_id()));
-                        }
-                    }
-                }
+        let squad = SquadStateDto { center: squad_center, room: target_room };
+        let view = CombatView {
+            tick: game::time(),
+            squad: &squad,
+            friends: &[],
+            hostiles: &hostiles,
+            structures: &structures,
+        };
 
-                // Priority 3: hostile structures (no object ID -- structures
-                // don't move so position is sufficient for targeting).
-                if let Some(structures) = room_data.get_structures() {
-                    let hostile_structures: Vec<_> = structures
-                        .all()
-                        .iter()
-                        .filter(|s| s.as_owned().map(|o| !o.my()).unwrap_or(false))
-                        .collect();
-
-                    if !hostile_structures.is_empty() {
-                        // Prioritize: invader cores > spawns > towers > other.
-                        let best = hostile_structures.iter().min_by_key(|s| match s.structure_type() {
-                            StructureType::InvaderCore => 0u32,
-                            StructureType::Spawn => 1,
-                            StructureType::Tower => 2,
-                            _ => 10,
-                        });
-
-                        if let Some(target) = best {
-                            return Some((target.pos(), None));
-                        }
-                    }
-                }
-            }
-        }
-
-        None
+        select_focus_target(&view).map(|t| (t.pos, t.id))
     }
 
     /// Check if the primary attackable structure in the target room has dropped
