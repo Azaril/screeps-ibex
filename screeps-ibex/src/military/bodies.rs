@@ -2,15 +2,24 @@ use crate::creep::SpawnBodyDefinition;
 use crate::military::damage;
 use screeps::Part;
 
-/// Solo defender body (unboosted, emergency response).
-/// Balanced ranged attack + heal + move.
+/// Solo defender body (unboosted, emergency response): RANGED_ATTACK + MOVE,
+/// scaling with available energy.
+///
+/// Floors at one RANGED_ATTACK + MOVE (200e) so it spawns even in a bare RCL2
+/// room. The previous body forced a HEAL into the minimum repeat unit
+/// (`[RangedAttack, Move, Heal, Move]` = 500e, `minimum_repeat: 1`), which a
+/// young or contested RCL2 room — capacity below 500 until all 5 extensions are
+/// built — could never afford, so `create_body` returned `Err` and NO solo
+/// defender ever spawned (e.g. against an unarmed controller-attacker in a
+/// towerless room). Solo is the lowest escalation for weak single threats;
+/// HEAL support arrives with the Duo/Quad escalations.
 pub fn solo_defender_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
     SpawnBodyDefinition {
         maximum_energy: max_energy,
         minimum_repeat: Some(1),
         maximum_repeat: None,
         pre_body: &[],
-        repeat_body: &[Part::RangedAttack, Part::Move, Part::Heal, Part::Move],
+        repeat_body: &[Part::RangedAttack, Part::Move],
         post_body: &[],
     }
 }
@@ -510,6 +519,43 @@ pub fn hauler_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
         pre_body: &[],
         repeat_body: &[Part::Carry, Part::Move],
         post_body: &[],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::creep::spawning::create_body;
+
+    /// Regression (W11N57, live): a solo defender MUST build at RCL1/RCL2
+    /// energy levels. The old body forced HEAL into a 500e minimum repeat unit,
+    /// so a room with capacity < 500 (a bare/contested RCL2 room) produced
+    /// `Err(())` and no defender ever spawned against an unarmed
+    /// controller-attacker — the room got declaimed undefended.
+    #[test]
+    fn solo_defender_builds_at_low_rcl() {
+        // 300 = bare RCL2 spawn; 350/550 = partial/full RCL2 extensions.
+        for capacity in [300u32, 350, 550, 800] {
+            let body = create_body(&solo_defender_body(capacity))
+                .unwrap_or_else(|_| panic!("solo defender must build at {capacity}e"));
+            assert!(body.iter().any(|&p| p == Part::RangedAttack), "needs RANGED_ATTACK at {capacity}e");
+            assert!(body.iter().any(|&p| p == Part::Move), "needs MOVE at {capacity}e");
+            let cost: u32 = body.iter().map(|p| p.cost()).sum();
+            assert!(cost <= capacity, "body cost {cost} exceeds capacity {capacity}");
+        }
+    }
+
+    /// More energy yields a larger (more ranged) solo defender.
+    #[test]
+    fn solo_defender_scales_with_energy() {
+        let ranged_at = |cap| {
+            create_body(&solo_defender_body(cap))
+                .unwrap()
+                .iter()
+                .filter(|&&p| p == Part::RangedAttack)
+                .count()
+        };
+        assert!(ranged_at(800) > ranged_at(300), "solo defender should scale up with energy");
     }
 }
 
