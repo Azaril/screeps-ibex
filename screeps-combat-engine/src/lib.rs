@@ -18,14 +18,15 @@
 //! [`state`] value types ([`CombatWorld`]). All host-tested against hand-computed engine values
 //! (the EXP-FOUND-2 degradation/TOUGH conformance checks).
 //!
-//! **Landed:** [`resolve`] — the two-phase accumulate-then-apply tick (intent priority/exclusion
-//! table, per-target damage/heal pooling, damage-then-heal netting, deaths, fatigue regen) for the
-//! *stationary* engagement (drives EXP-FOUND-1 / EXP-FOCUS-1: the kill inequality, focus-fire,
-//! tower drain, safe mode, melee attack-back are all tested).
+//! **Landed:** [`resolve`] — the full two-phase tick (combat accumulate → movement → apply +
+//! netting + deaths) and [`movement`] — same-tile conflict resolution (eligibility/fatigue, swap +
+//! moves/weight tiebreak, obstacle + chain-block). 24 host tests: the kill inequality, focus-fire,
+//! tower drain, safe mode, melee attack-back (EXP-FOUND-1/EXP-FOCUS-1) and range-3 kiting at MOVE
+//! parity (EXP-KITE-1).
 //!
-//! **Next slice:** same-tile movement-conflict resolution (`rate1..rate4`, pull/swap — where the
-//! kiting/cohesion bugs live), structures as damage targets (ramparts/walls/spawn) + dismantle +
-//! tower heal/repair, then `CombatRecording` and the server-captured conformance vectors.
+//! **Next slice:** structures as damage targets (ramparts/walls/spawn) + dismantle + tower
+//! heal/repair, pull-based movement (rate2/rate3), then `CombatRecording` (replay artifact) and the
+//! server-captured conformance vectors (P2.H1 *done* = byte-exact on those).
 //!
 //! Provenance + the engine→code source map + the reconciliation procedure live in `AGENTS.md`;
 //! user-facing overview in `README.md`. Read `AGENTS.md` before changing any formula.
@@ -33,9 +34,12 @@
 pub mod body;
 pub mod constants;
 pub mod damage;
+pub mod movement;
 pub mod resolve;
 pub mod state;
 
 pub use body::{BodyPartDef, BoostTier, SimBody};
+pub use movement::resolve_moves;
 pub use resolve::{resolve_tick, CombatAction, Intents, TickReport, TowerAction};
+pub use state::CombatTerrain;
 pub use state::{CombatWorld, CreepId, PlayerId, SimCreep, SimTower};

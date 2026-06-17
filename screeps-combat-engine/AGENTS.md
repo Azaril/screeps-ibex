@@ -49,6 +49,10 @@ table IS the reconciliation checklist: when the engine updates, diff exactly the
 | `resolve` melee attack-back | target's ATTACK parts hit a melee attacker (rampart-exempt — ramparts not yet modelled) | `src/processor/intents/_damage.js:14-19,86-91` | `resolve::tests::melee_attack_back_hits_the_attacker` |
 | `resolve` safe-mode gate | a hostile's combat vs the safe-mode owner's objects is zeroed | per-intent guard in `creeps/*.js`; `src/processor/intents/controllers/tick.js` (activation) | `resolve::tests::safe_mode_zeroes_hostile_combat` |
 | `resolve` tower fire + energy | tower fires once for `TOWER_ENERGY_COST` energy, range falloff | `src/processor/intents/towers/attack.js` | `resolve::tests::tower_drain_self_heal_survives_and_burns_energy` |
+| `movement::resolve_moves` (phase C) | eligibility (`canMove`), same-tile contention (`rate1` swap / `rate4` moves÷weight), obstacle + recursive chain-block (`removeFromMatrix`) | `src/processor/intents/movement.js:11-187` | `movement::tests::*` (contention, swap, chain-block, wall, fatigue) |
+| `movement::step` / `dir_delta` / `is_edge` | direction deltas (y down), edge-tile detection | `src/processor/intents/movement.js` (`add`, `isAtEdge`) | `movement::tests::simple_move_to_empty_tile` |
+| `resolve` phase D movement+fatigue | apply move, add move fatigue `weight × terrain_rate` (0 on edge), regen `-2 × MOVE` | `src/processor/intents/creeps/tick.js:50,105-108`; `movement.js:235-252` | `resolve::tests::kiting_at_move_parity_takes_zero_melee` |
+| can't-dodge-by-moving | attacks resolve on tick-START positions (phase B), before movement | `src/processor.js` (attack intents precede `movement.check`) | `resolve::tests::kiting_at_move_parity_takes_zero_melee` |
 
 ## Reconciliation procedure (when the engine updates)
 
@@ -109,9 +113,9 @@ breaks the whole point of the sim.
 ## What is NOT modelled yet (do not assume it works)
 
 Add these in the documented next slices; until then they are absent, not broken:
-- **Movement** of any kind — same-tile conflict resolution (`movement.js` `rate1..rate4`), pull,
-  fatigue *accumulation*, room-edge crossing. (Creeps hold position; `fatigue` regen runs but
-  nothing adds fatigue.) This is the next slice and where kiting/cohesion fidelity comes from.
+- **Pull** (`movement.js` rate2/rate3 — for no-MOVE/under-MOVE comps) and **room-edge crossing**
+  (a step off the room is currently blocked, not a transition) and **roads** (fatigue stays
+  plain/swamp). Same-tile conflict resolution + fatigue accumulation/regen *are* modelled.
 - **Structures as damage targets** — ramparts, walls, spawns; **dismantle**; tower **heal/repair**;
   the rampart exemption for melee attack-back.
 - **NPC AI** (Source Keepers, invaders, invader cores), power creeps/effects, multi-room.
@@ -140,3 +144,7 @@ seam; do not duplicate tactics here (this crate has no tactics — it only resol
 - **2026-06-17** — Initial port (P2.H1): constants + body + damage + state + the two-phase
   stationary-combat resolver. Pinned engine `8097782` (v4.3.2), common `2fb779b`,
   screeps-game-api `0.23.1`.
+- **2026-06-17** — Movement slice: same-tile conflict resolution (`movement.rs`: eligibility/
+  fatigue, swap + moves/weight tiebreak, obstacle + chain-block) wired into `resolve_tick` as
+  phase C + phase-D move/fatigue application; terrain (walls/swamp) on `CombatWorld`. 24 host tests
+  (added kiting + 7 movement-resolution). Same pinned versions.

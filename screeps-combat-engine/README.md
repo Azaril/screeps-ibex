@@ -35,13 +35,14 @@ first thing to read before changing any formula here.
 ## Status (P2.H1, in progress)
 
 - **Done:** the combat-math kernel (`constants`, `body`, `damage`) + value types (`state`) + the
-  **two-phase stationary-combat resolver** (`resolve`): creep actions + tower fire accumulate into
-  per-target damage/heal pools, then net **damage-then-heal** with the death check. 16 host
-  conformance tests; host + wasm32 compile; clippy-clean.
-- **Next:** same-tile **movement-conflict resolution** (`rate1..rate4` / pull — where kiting and
-  cohesion bugs live), structures as damage targets (ramparts/walls/spawn) + dismantle + tower
-  heal/repair, `CombatRecording` (per-tick replay artifact), and the **server-captured golden
-  vectors** that mark P2.H1 *done* (byte-exact vs the live engine).
+  full **two-phase tick** (`resolve`: combat accumulate → movement → apply + damage-then-heal
+  netting + deaths) + **same-tile movement-conflict resolution** (`movement`: eligibility/fatigue,
+  swap + moves/weight tiebreak, obstacle + chain-block). **24 host conformance tests** (kill
+  inequality, focus-fire, tower drain, safe mode, attack-back — EXP-FOUND-1/EXP-FOCUS-1 — plus
+  range-3 kiting at MOVE parity — EXP-KITE-1); host + wasm32 compile; clippy-clean.
+- **Next:** structures as damage targets (ramparts/walls/spawn) + dismantle + tower heal/repair,
+  pull-based movement (rate2/rate3), `CombatRecording` (per-tick replay artifact), and the
+  **server-captured golden vectors** that mark P2.H1 *done* (byte-exact vs the live engine).
 
 ## Quick start
 

@@ -138,6 +138,32 @@ impl SimBody {
         self.effective_power(Part::Work, DISMANTLE_POWER)
     }
 
+    /// `calcBodyEffectiveness(body, MOVE, 'fatigue', 1)` — the boost-weighted count of alive MOVE
+    /// parts (the movement tiebreak's numerator, `movement.js:118`).
+    pub fn move_rate(&self) -> u32 {
+        self.effective_power(Part::Move, 1)
+    }
+
+    /// Count of alive non-MOVE/non-CARRY parts — the fatigue *weight* (`movement.js:120,237`):
+    /// the multiplier on terrain rate when a move adds fatigue, and (min 1) the tiebreak denominator.
+    pub fn fatigue_weight(&self) -> u32 {
+        let mut n = 0;
+        for (i, p) in self.parts.iter().enumerate() {
+            if p.part != Part::Move && p.part != Part::Carry && self.part_hits(i) > 0 {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// True if the creep has at least one working MOVE part (engine `canMove`).
+    pub fn can_move(&self) -> bool {
+        self.parts
+            .iter()
+            .enumerate()
+            .any(|(i, p)| p.part == Part::Move && self.part_hits(i) > 0)
+    }
+
     /// Fatigue cleared per tick: `2 × Σ alive MOVE parts` (boost-weighted), per `creeps/tick.js:107`.
     pub fn fatigue_clear(&self) -> u32 {
         let mut mult = 0.0;

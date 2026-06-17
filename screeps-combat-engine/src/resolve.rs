@@ -1,8 +1,10 @@
 //! The deterministic combat tick — the **two-phase accumulate-then-apply** resolution that is the
-//! heart of the engine port (`processor.js`). This slice resolves a **stationary** engagement
-//! (no movement): creep combat actions + tower fire accumulate into per-target damage/heal pools,
-//! then each object nets **damage-then-heal** and the death check fires. This is what makes the
-//! kill inequality (`D > Hb`) real and drives EXP-FOUND-1 / EXP-FOCUS-1.
+//! heart of the engine port (`processor.js`). One `resolve_tick` runs: **Phase B** — creep combat
+//! actions + tower fire accumulate into per-target damage/heal pools (from tick-START positions);
+//! **Phase C** — same-tile movement resolution (the [`crate::movement`] module); **Phase D** —
+//! apply movement + fatigue, then net **damage-then-heal** per object and run the death check.
+//! Attacks use start positions, so a creep cannot dodge a hit by moving. Drives EXP-FOUND-1 /
+//! EXP-FOCUS-1 (kill inequality, focus-fire) and EXP-KITE-1 (range-3 kiting at MOVE parity).
 //!
 //! Engine fidelity (ground truth `C:\code\screeps-engine`):
 //! - **Two phases:** all damage/heal accumulate (engine "intent phase", `processor.js:227-322`)
@@ -17,14 +19,13 @@
 //! - **Safe mode** (`*.js` per-intent guard): a hostile's combat against the safe-mode owner's
 //!   objects is zeroed (the owner's own combat is not).
 //!
-//! **Not yet modelled (next slices):** same-tile movement-conflict resolution (`movement.js`
-//! rate1..rate4 / pull — where kiting/cohesion bugs live), structures as damage targets
-//! (ramparts/walls/spawn), dismantle, tower heal/repair, NPC AI. Tracked in lib.rs.
+//! **Not yet modelled (next slices):** structures as damage targets (ramparts/walls/spawn),
+//! dismantle, tower heal/repair, pull-based movement (rate2/rate3), NPC AI. Tracked in `AGENTS.md`.
 
 use crate::constants::TOWER_ENERGY_COST;
 use crate::damage::{ranged_mass_attack_damage, tower_attack_damage_at_range};
 use crate::state::*;
-use screeps::Position;
+use screeps::{Direction, Position};
 use std::collections::HashMap;
 
 /// A creep combat action for one tick (one entry of its intent set). Movement is separate
@@ -52,19 +53,27 @@ pub enum TowerAction {
 pub struct Intents {
     pub creeps: HashMap<CreepId, Vec<CombatAction>>,
     pub towers: HashMap<usize, TowerAction>,
+    /// Per-creep move direction this tick (resolved in phase C). The *decision* (which way) is the
+    /// agent's job (H2 / the rover pathfinder); this resolver only executes a given direction.
+    pub moves: HashMap<CreepId, Direction>,
 }
 
 impl Intents {
     pub fn new() -> Self {
         Self::default()
     }
-    /// Set a creep's actions for the tick.
+    /// Set a creep's combat actions for the tick.
     pub fn set(&mut self, creep: CreepId, actions: Vec<CombatAction>) -> &mut Self {
         self.creeps.insert(creep, actions);
         self
     }
     pub fn set_tower(&mut self, tower_idx: usize, action: TowerAction) -> &mut Self {
         self.towers.insert(tower_idx, action);
+        self
+    }
+    /// Set a creep's move direction for the tick.
+    pub fn set_move(&mut self, creep: CreepId, dir: Direction) -> &mut Self {
+        self.moves.insert(creep, dir);
         self
     }
 }
@@ -236,12 +245,31 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
         }
     }
 
-    // ── Phase D: net damage-then-heal, deaths, fatigue regen ─────────────────
+    // ── Phase C: resolve movement (engine movement.check), using tick-START positions ────────
+    // Attacks above were pooled from start positions, so a creep cannot dodge a hit by moving.
+    let new_positions = crate::movement::resolve_moves(world, &intents.moves);
+
+    // ── Phase D: apply movement + fatigue, then net damage-then-heal, deaths ─────────────────
     let mut report = TickReport {
         tick: world.tick,
         ..Default::default()
     };
+    let terrain = &world.terrain;
     for c in world.creeps.iter_mut() {
+        // Movement application (engine movement.execute, before damage): move, then add move
+        // fatigue (0 on a room-edge tile), then regen (-2 × MOVE parts).
+        if let Some(&np) = new_positions.get(&c.id) {
+            c.pos = np;
+            let (x, y) = (np.x().u8(), np.y().u8());
+            let move_fatigue = if crate::movement::is_edge(x, y) {
+                0
+            } else {
+                c.body.fatigue_weight() * terrain.fatigue_rate(x, y)
+            };
+            c.fatigue += move_fatigue;
+        }
+        c.fatigue = c.fatigue.saturating_sub(c.body.fatigue_clear());
+
         let raw = dmg.get(&c.id).copied().unwrap_or(0);
         let healed = heal.get(&c.id).copied().unwrap_or(0);
         let effective = c.body.damage_after_tough(raw);
@@ -260,8 +288,6 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
         } else {
             c.body.hits = (net as u32).min(c.body.hits_max());
         }
-        // Fatigue regen (no movement this slice adds fatigue, but keep the engine behavior).
-        c.fatigue = c.fatigue.saturating_sub(c.body.fatigue_clear());
         report.outcomes.insert(c.id, outcome);
     }
 
@@ -274,7 +300,7 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
 mod tests {
     use super::*;
     use crate::body::{BodyPartDef, SimBody};
-    use screeps::{Part, Position, RoomCoordinate, RoomName};
+    use screeps::{Direction, Part, Position, RoomCoordinate, RoomName};
 
     fn pos(x: u8, y: u8) -> Position {
         let room: RoomName = "W1N1".parse().unwrap();
@@ -475,5 +501,47 @@ mod tests {
         // Target took A's 300; attacker took the 300 attack-back.
         assert_eq!(report.outcomes[&2].effective_damage, 300);
         assert_eq!(report.outcomes[&1].effective_damage, 300);
+    }
+
+    #[test]
+    fn kiting_at_move_parity_takes_zero_melee() {
+        // EXP-KITE-1 (scripted moves; the agent that *chooses* them is H2). A ranged kiter
+        // (7 RANGED + 7 MOVE, parity on plain) holds range 3 from a melee chaser (10 ATTACK +
+        // 10 MOVE, parity) by stepping away in lockstep. Because attacks use tick-START positions,
+        // the chaser's range-1 melee never connects while range stays 3 — the kiter takes 0 melee
+        // and chips the chaser down.
+        let mut world = CombatWorld {
+            creeps: vec![
+                creep(1, 0, 30, 25, &[(Part::RangedAttack, 7), (Part::Move, 7)]), // kiter
+                creep(2, 1, 27, 25, &[(Part::Attack, 10), (Part::Move, 10)]), // chaser, range 3 behind
+            ],
+            ..Default::default()
+        };
+        let kiter_max = world.creeps[0].body.hits_max();
+        for _ in 0..10 {
+            let mut i = Intents::new();
+            i.set(1, vec![CombatAction::RangedAttack(2)]); // kiter shoots
+            i.set_move(1, Direction::Right); // and steps away
+            i.set(2, vec![CombatAction::Attack(1)]); // chaser swings (out of range)
+            i.set_move(2, Direction::Right); // and chases
+            resolve_tick(&mut world, &i);
+        }
+        let kiter = world
+            .creeps
+            .iter()
+            .find(|c| c.id == 1)
+            .expect("kiter alive");
+        let chaser = world
+            .creeps
+            .iter()
+            .find(|c| c.id == 2)
+            .expect("chaser alive");
+        assert_eq!(kiter.body.hits, kiter_max, "kiter at range 3 takes 0 melee");
+        assert!(
+            chaser.body.hits < chaser.body.hits_max(),
+            "chaser is chipped by ranged fire"
+        );
+        // Range held at 3 (both advanced 10 tiles in lockstep).
+        assert_eq!(kiter.pos.get_range_to(chaser.pos), 3);
     }
 }

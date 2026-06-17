@@ -1,9 +1,33 @@
 //! Combat world state — JS-free value types over `screeps::Position`. The deterministic tick
-//! (`resolve.rs`, next slice) operates on a `CombatWorld`. Scope: a single 50×50 room (ADR 0006
-//! Part B); ramparts/walls/safe-mode-per-room and terrain are added with the resolve slice.
+//! (`resolve.rs`) operates on a `CombatWorld`. Scope: a single 50×50 room (ADR 0006 Part B).
+//! Structures-as-targets (ramparts/walls/spawn) arrive with a later slice.
 
 use crate::body::SimBody;
+use crate::constants::{FATIGUE_RATE_PLAIN, FATIGUE_RATE_SWAMP};
 use screeps::Position;
+use std::collections::HashSet;
+
+/// Room terrain — defaults to all-plain. Walls block movement; swamp raises move fatigue.
+/// (Roads, which lower fatigue, are structures and arrive with the structures slice.)
+#[derive(Clone, Debug, Default)]
+pub struct CombatTerrain {
+    pub walls: HashSet<(u8, u8)>,
+    pub swamps: HashSet<(u8, u8)>,
+}
+
+impl CombatTerrain {
+    pub fn is_wall(&self, x: u8, y: u8) -> bool {
+        self.walls.contains(&(x, y))
+    }
+    /// Fatigue added per non-MOVE/non-CARRY part for a step onto this tile.
+    pub fn fatigue_rate(&self, x: u8, y: u8) -> u32 {
+        if self.swamps.contains(&(x, y)) {
+            FATIGUE_RATE_SWAMP
+        } else {
+            FATIGUE_RATE_PLAIN
+        }
+    }
+}
 
 /// A combatant identity (self-play: side 0 vs side 1; NPCs get their own ids later).
 pub type PlayerId = u8;
@@ -41,6 +65,7 @@ pub struct SimTower {
 #[derive(Clone, Debug, Default)]
 pub struct CombatWorld {
     pub tick: u32,
+    pub terrain: CombatTerrain,
     pub creeps: Vec<SimCreep>,
     pub towers: Vec<SimTower>,
     /// Owner whose controller is in safe mode this tick (all *hostile* combat zeroed), if any.
