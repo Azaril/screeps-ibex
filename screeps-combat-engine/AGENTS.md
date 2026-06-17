@@ -49,6 +49,7 @@ table IS the reconciliation checklist: when the engine updates, diff exactly the
 | `resolve` melee attack-back | target's ATTACK parts hit a melee attacker (rampart-exempt — ramparts not yet modelled) | `src/processor/intents/_damage.js:14-19,86-91` | `resolve::tests::melee_attack_back_hits_the_attacker` |
 | `resolve` safe-mode gate | a hostile's combat vs the safe-mode owner's objects is zeroed | per-intent guard in `creeps/*.js`; `src/processor/intents/controllers/tick.js` (activation) | `resolve::tests::safe_mode_zeroes_hostile_combat` |
 | `resolve` tower fire + energy | tower fires once for `TOWER_ENERGY_COST` energy, range falloff | `src/processor/intents/towers/attack.js` | `resolve::tests::tower_drain_self_heal_survives_and_burns_energy` |
+| `resolve` tower-as-target | a `SimTower` is a structure target too (kind `Tower`): takes dismantle/attack/RMA, is repairable, shares `struct_dmg`/`struct_heal` pools by `id`; still fires the same tick it dies (two-phase) | `src/processor/intents/_damage.js` (a tower is a destructible structure) | `resolve::tests::{tower_destroyed_by_melee_attack, rma_chips_a_tower, a_dying_tower_still_fires_then_is_destroyed, a_tower_repairs_a_friendly_tower}` |
 | `movement::resolve_moves` (phase C) | eligibility (`canMove`), same-tile contention (`rate1` swap / `rate4` moves÷weight), obstacle + recursive chain-block (`removeFromMatrix`) | `src/processor/intents/movement.js:11-187` | `movement::tests::*` (contention, swap, chain-block, wall, fatigue) |
 | `movement::resolve_moves_with_pulls` (pull) | a creep dragged by an adjacent, moving puller follows into its vacated tile; eligible with **no MOVE / nonzero fatigue** (`canMove` `_pulled` branch); contention tiebreak `rate2` (pulled) then `rate3` (pulling) before `rate4` | `src/processor/intents/movement.js` (`canMove` `_pulled`; rate2/rate3 in `check`) | `movement::tests::{pull_drags_a_zero_move_creep, zero_move_creep_cannot_move_unpulled, pulled_creep_moves_despite_fatigue, pull_does_nothing_when_puller_is_blocked}` |
 | `movement::step` / `dir_delta` / `is_edge` | direction deltas (y down), edge-tile detection | `src/processor/intents/movement.js` (`add`, `isAtEdge`) | `movement::tests::simple_move_to_empty_tile` |
@@ -122,9 +123,8 @@ Add these in the documented next slices; until then they are absent, not broken:
 - **Room-edge crossing** (a step off the room is currently blocked, not a transition) and **roads**
   (fatigue stays plain/swamp). Same-tile conflict resolution, fatigue accumulation/regen, and **pull**
   (rate2/rate3, no-MOVE/under-MOVE comps) *are* modelled.
-- **Towers as damage targets** (a tower can fire + be attacked in the engine; here `SimTower`
-  fires but isn't yet a dismantle/attack target — ramparts/walls/spawns are). FORTIFY/INVULNERABILITY
-  rampart effects, power-bank hit-back.
+- **FORTIFY/INVULNERABILITY** rampart effects and **power-bank hit-back**. (Towers *are* now both
+  firers and damage targets — kind `Tower`, sharing the structure pools.)
 - **NPC AI** (Source Keepers, invaders, invader cores), power creeps/effects, multi-room. (The
   `CombatRecording` replay artifact *is* modelled — see `record.rs`.)
 When you add one, extend the source map table, add conformance tests, and update the README status.
@@ -170,3 +170,8 @@ seam; do not duplicate tactics here (this crate has no tactics — it only resol
   nonzero fatigue (`canMove` `_pulled`); contention tiebreak extended `rate1 → rate2 (pulled) →
   rate3 (pulling) → rate4`. `resolve_tick` phase C now calls the pull-aware resolver. 36 host tests
   (added 4 pull). Same pinned versions.
+- **2026-06-17** — Tower-as-target slice: `SimTower` gains `id` + `hits_max` + `is_alive`; a tower
+  joins the targetable-structure snapshot as kind `Tower` and shares the structure damage/repair
+  pools (dismantle/attack/RMA/repair), netted + destroyed in phase D alongside `structures`. A
+  tower still fires the tick it dies (two-phase). 40 host tests (added 4 tower-target). Same pinned
+  versions.

@@ -19,9 +19,10 @@
 //! - **Safe mode** (`*.js` per-intent guard): a hostile's combat against the safe-mode owner's
 //!   objects is zeroed (the owner's own combat is not).
 //!
-//! Structures (ramparts/walls/spawn) are attack/dismantle targets with rampart RMA-shielding;
-//! towers heal/repair. **Not yet modelled:** pull-based movement (rate2/rate3), tower-as-target,
-//! `CombatRecording`, NPC AI, power creeps, multi-room. Tracked in `AGENTS.md`.
+//! Structures (ramparts/walls/spawn/towers) are attack/dismantle/RMA targets with rampart
+//! RMA-shielding; towers fire (heal/repair/attack) and are themselves targetable + repairable;
+//! pull-based movement (rate2/rate3) is modelled. **Not yet modelled:** NPC AI, power creeps,
+//! multi-room, room-edge crossing. Tracked in `AGENTS.md`.
 
 use crate::constants::TOWER_ENERGY_COST;
 use crate::damage::{
@@ -197,7 +198,8 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
     let snap = |id: CreepId| by_id.get(&id).map(|&i| &snaps[i]);
 
     // Living-structure snapshot for target lookups, and the set of rampart tiles (RMA skip +
-    // attack-back suppression).
+    // attack-back suppression). Towers are included as targetable structures (kind `Tower`); they
+    // also fire (below) and so live in their own Vec, but share the damage/repair pools by `id`.
     let struct_snap: Vec<StructSnap> = world
         .structures
         .iter()
@@ -208,6 +210,18 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
             owner: s.owner,
             pos: s.pos,
         })
+        .chain(
+            world
+                .towers
+                .iter()
+                .filter(|t| t.is_alive())
+                .map(|t| StructSnap {
+                    id: t.id,
+                    kind: StructureKind::Tower,
+                    owner: Some(t.owner),
+                    pos: t.pos,
+                }),
+        )
         .collect();
     let struct_by_id: HashMap<StructureId, usize> = struct_snap
         .iter()
@@ -458,6 +472,21 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
     }
     world.structures.retain(|s| s.is_alive());
 
+    // Towers as targets: same netting as structures (no TOUGH/boost). A tower that fired this tick
+    // still applies its shot — pools were complete before any application (two-phase).
+    for t in world.towers.iter_mut() {
+        let d = struct_dmg.get(&t.id).copied().unwrap_or(0);
+        let h = struct_heal.get(&t.id).copied().unwrap_or(0);
+        let net = t.hits as i64 - d as i64 + h as i64;
+        if net <= 0 {
+            t.hits = 0;
+            report.destroyed_structures.push(t.id);
+        } else {
+            t.hits = (net as u32).min(t.hits_max);
+        }
+    }
+    world.towers.retain(|t| t.is_alive());
+
     world.tick += 1;
     report
 }
@@ -608,10 +637,12 @@ mod tests {
         let mut world = CombatWorld {
             creeps: vec![creep(1, 0, 25, 1, &[(Part::Heal, 13)])], // near the N edge
             towers: vec![SimTower {
+                id: 200,
                 owner: 1,
                 pos: pos(25, 22),
                 energy: 100,
                 hits: 3000,
+                hits_max: 3000,
             }],
             ..Default::default()
         };
@@ -845,10 +876,12 @@ mod tests {
                 creep(2, 0, 25, 28, &[(Part::Move, 5)]),          // our defender
             ],
             towers: vec![SimTower {
+                id: 200,
                 owner: 0,
                 pos: pos(25, 26),
                 energy: 1000,
                 hits: 3000,
+                hits_max: 3000,
             }],
             ..Default::default()
         };
@@ -878,10 +911,12 @@ mod tests {
                 5000,
             )],
             towers: vec![SimTower {
+                id: 200,
                 owner: 0,
                 pos: pos(25, 28),
                 energy: 1000,
                 hits: 3000,
+                hits_max: 3000,
             }],
             ..Default::default()
         };
@@ -900,5 +935,101 @@ mod tests {
             r.hits, r.hits_max,
             "repair 800 > dismantle 500 ⇒ rampart stays capped"
         );
+    }
+
+    fn tower(id: StructureId, owner: PlayerId, x: u8, y: u8, energy: u32, hits: u32) -> SimTower {
+        SimTower {
+            id,
+            owner,
+            pos: pos(x, y),
+            energy,
+            hits,
+            hits_max: hits,
+        }
+    }
+
+    #[test]
+    fn tower_destroyed_by_melee_attack() {
+        // A 20-ATTACK creep (600/tick) destroys a hostile 1000-hit tower on the 2nd hit.
+        let mut world = CombatWorld {
+            creeps: vec![creep(1, 0, 25, 25, &[(Part::Attack, 20)])],
+            towers: vec![tower(200, 1, 25, 26, 0, 1000)],
+            ..Default::default()
+        };
+        let mut i = Intents::new();
+        i.set(1, vec![CombatAction::AttackStructure(200)]);
+        assert!(resolve_tick(&mut world, &i).destroyed_structures.is_empty());
+        let mut i = Intents::new();
+        i.set(1, vec![CombatAction::AttackStructure(200)]);
+        assert!(resolve_tick(&mut world, &i)
+            .destroyed_structures
+            .contains(&200));
+        assert!(world.towers.is_empty(), "destroyed tower is removed");
+    }
+
+    #[test]
+    fn rma_chips_a_tower() {
+        // RMA at range 1 deals full ranged power (10 parts → 100) to a hostile tower.
+        let mut world = CombatWorld {
+            creeps: vec![creep(1, 0, 25, 25, &[(Part::RangedAttack, 10)])],
+            towers: vec![tower(200, 1, 25, 26, 0, 3000)],
+            ..Default::default()
+        };
+        let mut i = Intents::new();
+        i.set(1, vec![CombatAction::RangedMassAttack]);
+        resolve_tick(&mut world, &i);
+        let t = world.towers.iter().find(|t| t.id == 200).expect("alive");
+        assert_eq!(t.hits, 2900, "RMA chips the tower for 100");
+    }
+
+    #[test]
+    fn a_dying_tower_still_fires_then_is_destroyed() {
+        // Two-phase: a tower with one shot left fires (the attacker is hurt) AND is destroyed the
+        // same tick by a co-resolving dismantle that exceeds its hits.
+        let mut world = CombatWorld {
+            creeps: vec![
+                creep(1, 0, 25, 25, &[(Part::Work, 20)]), // dismantler, 1000/tick > tower hits
+                creep(2, 0, 25, 24, &[(Part::Move, 5)]),  // the tower's victim
+            ],
+            towers: vec![tower(200, 1, 25, 26, 10, 800)],
+            ..Default::default()
+        };
+        let mut i = Intents::new();
+        i.set(1, vec![CombatAction::Dismantle(200)]);
+        i.set_tower(0, TowerAction::Attack(2));
+        let r = resolve_tick(&mut world, &i);
+        assert!(
+            r.destroyed_structures.contains(&200),
+            "tower destroyed this tick"
+        );
+        assert!(
+            r.outcomes[&2].effective_damage > 0,
+            "but it still got its shot off (two-phase)"
+        );
+        assert!(world.towers.is_empty());
+    }
+
+    #[test]
+    fn a_tower_repairs_a_friendly_tower() {
+        // A friendly tower repairs a damaged sister tower (range 2 → 800/tick).
+        let mut world = CombatWorld {
+            towers: vec![
+                tower(200, 0, 25, 25, 1000, 3000), // repairer
+                SimTower {
+                    id: 201,
+                    owner: 0,
+                    pos: pos(25, 27),
+                    energy: 0,
+                    hits: 1000,
+                    hits_max: 3000,
+                }, // damaged
+            ],
+            ..Default::default()
+        };
+        let mut i = Intents::new();
+        i.set_tower(0, TowerAction::Repair(201));
+        resolve_tick(&mut world, &i);
+        let b = world.towers.iter().find(|t| t.id == 201).expect("alive");
+        assert_eq!(b.hits, 1800, "friendly tower repaired by 800");
     }
 }

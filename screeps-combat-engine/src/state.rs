@@ -35,13 +35,15 @@ pub type CreepId = u32;
 /// Stable per-engagement structure id.
 pub type StructureId = u32;
 
-/// Attackable/dismantlable structure kinds modelled so far. (Roads/containers/etc. and tower-as-
-/// target are follow-ups; towers fire via [`SimTower`].)
+/// Attackable/dismantlable structure kinds modelled so far. (Roads/containers/etc. are follow-ups.)
+/// `Tower` tags a [`SimTower`] when it appears as a *damage target*; towers still live in their own
+/// [`CombatWorld::towers`] Vec (they also *fire*), but share the structure damage/repair pools.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StructureKind {
     Spawn,
     Rampart,
     Wall,
+    Tower,
 }
 
 /// A passive (non-firing) structure that can be attacked/dismantled/repaired. Ramparts shield
@@ -83,13 +85,24 @@ impl SimCreep {
 }
 
 /// A tower in the sim. Towers fire once per tick for [`crate::constants::TOWER_ENERGY_COST`]
-/// energy and resolve in the same two-phase step as creep combat (the drain math).
+/// energy and resolve in the same two-phase step as creep combat (the drain math). A tower is also
+/// a **damage target**: it shares the structure damage/repair pools (keyed by `id`, which must be
+/// unique across `structures` *and* `towers`), takes dismantle/attack/RMA, and is repairable.
 #[derive(Clone, Debug)]
 pub struct SimTower {
+    /// Unique across both `structures` and `towers` (it participates in the structure pools).
+    pub id: StructureId,
     pub owner: PlayerId,
     pub pos: Position,
     pub energy: u32,
     pub hits: u32,
+    pub hits_max: u32,
+}
+
+impl SimTower {
+    pub fn is_alive(&self) -> bool {
+        self.hits > 0
+    }
 }
 
 /// One room's combat state for a tick.

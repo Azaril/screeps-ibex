@@ -289,9 +289,7 @@ mod tests {
     fn creep(id: CreepId, x: u8, y: u8, parts: &[(Part, u32)], fatigue: u32) -> SimCreep {
         let body: Vec<_> = parts
             .iter()
-            .flat_map(|&(p, n)| {
-                std::iter::repeat_n(crate::body::BodyPartDef::new(p), n as usize)
-            })
+            .flat_map(|&(p, n)| std::iter::repeat_n(crate::body::BodyPartDef::new(p), n as usize))
             .collect();
         SimCreep {
             id,
