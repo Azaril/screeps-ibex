@@ -60,6 +60,43 @@ fn has_active_part(creep: &Creep, part: Part) -> bool {
     creep.body().iter().any(|p| p.part() == part && p.hits() > 0)
 }
 
+// ─── Tactical-seam adapters (game::* → JS-free DTOs) ─────────────────────────
+//
+// The single place the live combat path reads a `Creep` / `StructureObject` into the seam DTOs
+// (`combat::*`); shared by the `squad_combat` per-creep decision and the `attack_mission` focus
+// selection so both build the view identically. No `game::*` lives below this seam (ADR 0006 §B.2).
+
+pub(crate) fn creep_to_dto(c: &Creep) -> crate::combat::CombatCreepDto {
+    crate::combat::CombatCreepDto {
+        id: c.try_raw_id(),
+        pos: c.pos(),
+        hits: c.hits(),
+        hits_max: c.hits_max(),
+        body: c
+            .body()
+            .iter()
+            .map(|p| crate::combat::CombatBodyPart { part: p.part(), hits: p.hits() })
+            .collect(),
+    }
+}
+
+pub(crate) fn structure_to_dto(s: &StructureObject) -> crate::combat::CombatStructureDto {
+    use crate::combat::Ownership;
+    let ownership = match s.as_owned() {
+        Some(o) if o.my() => Ownership::Mine,
+        Some(_) => Ownership::Hostile,
+        None => Ownership::Neutral,
+    };
+    let (hits, hits_max) = s.as_attackable().map(|a| (a.hits(), a.hits_max())).unwrap_or((0, 0));
+    crate::combat::CombatStructureDto {
+        pos: s.pos(),
+        structure_type: s.structure_type(),
+        hits,
+        hits_max,
+        ownership,
+    }
+}
+
 // ─── MoveToRoom ─────────────────────────────────────────────────────────────
 
 impl MoveToRoom {
@@ -337,15 +374,10 @@ impl Engaged {
 
         // ── Execute actions (all pipelines fire independently) ──
 
-        if let Some(ref orders) = tick_orders {
-            // With tick orders: use ordered targets.
-            Self::execute_attack_with_orders(creep, creep_pos, orders, tick_context);
-            Self::execute_heal_with_orders(creep, creep_pos, orders, tick_context);
-        } else {
-            // No tick orders: body-part-aware fallback.
-            Self::fallback_attack(creep, creep_pos, tick_context);
-            Self::fallback_heal(creep, tick_context);
-        }
+        // Attack + heal through the tactical seam (`combat::decide_combat`) — the single shared
+        // implementation that also drives the sim, so live and sim cannot diverge (ADR 0006 §B.2,
+        // P2.H2). Movement stays below (it rides P2.M2).
+        Self::execute_combat_via_seam(creep, creep_pos, tick_orders.as_ref(), tick_context);
 
         // ── Movement ──
 
@@ -374,246 +406,102 @@ impl Engaged {
         None
     }
 
-    // ── Ordered attack ──
+    // ── Combat via the tactical seam (P2.H2, ADR 0006 §B.2) ──
+    //
+    // Build the per-creep `CombatView` from `game::*` (the live adapter leaf — the only place this
+    // path touches the game), run the shared decision `combat::decide_combat` (the SAME code the
+    // sim runs — no fork), then translate the returned intents back through the guarded sink. This
+    // replaces the old inline `execute_*_with_orders` / `fallback_*` (attack + heal). Movement is
+    // handled separately below and rides P2.M2.
+    fn execute_combat_via_seam(creep: &Creep, creep_pos: Position, tick_orders: Option<&TickOrders>, tick_context: &mut JobTickContext) {
+        use crate::combat::{decide_combat, CombatView, CreepOrders, FocusTarget, SquadStateDto};
 
-    fn execute_attack_with_orders(creep: &Creep, creep_pos: Position, orders: &TickOrders, tick_context: &mut JobTickContext) {
-        let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
+        let room = creep_pos.room_name();
+        let hostiles_raw = get_hostile_creeps(room, tick_context);
+        let friends_raw = get_friendly_creeps(room, tick_context);
+        let structures_raw = get_hostile_structures(room, tick_context);
 
-        // Resolve the focus target from the AttackTarget enum.
-        let focus_creep: Option<Creep> = orders.attack_target.as_ref().and_then(|t| t.resolve_creep());
+        let me_dto = creep_to_dto(creep);
+        let hostiles: Vec<_> = hostiles_raw.iter().map(creep_to_dto).collect();
+        let friends: Vec<_> = friends_raw.iter().map(creep_to_dto).collect();
+        let structures: Vec<_> = structures_raw.iter().map(structure_to_dto).collect();
 
-        // Pipeline A: Melee attack adjacent hostile -- prefer focus target.
-        if has_active_part(creep, Part::Attack) {
-            let target = if let Some(ref focus) = focus_creep {
-                if creep_pos.get_range_to(focus.pos()) <= 1 {
-                    Some(focus)
-                } else {
-                    hostiles
-                        .iter()
-                        .filter(|c| creep_pos.get_range_to(c.pos()) <= 1)
-                        .min_by_key(|c| c.hits())
-                }
-            } else {
-                hostiles
-                    .iter()
-                    .filter(|c| creep_pos.get_range_to(c.pos()) <= 1)
-                    .min_by_key(|c| c.hits())
+        let orders = tick_orders.map(|o| CreepOrders {
+            // The resolved focus *creep* (`resolve_creep()` is `None` for structure targets, which
+            // are scanned per-creep) and the resolved heal target — mirroring the prior logic.
+            focus: o.attack_target.and_then(|t| t.resolve_creep()).map(|c| FocusTarget { pos: c.pos(), id: c.try_raw_id() }),
+            heal_target: o.heal_target.and_then(|id| id.resolve()).map(|c| FocusTarget { pos: c.pos(), id: c.try_raw_id() }),
+        });
+
+        let squad = SquadStateDto { center: creep_pos, room };
+        let intents = {
+            let view = CombatView {
+                tick: game::time(),
+                me: &me_dto,
+                squad: &squad,
+                orders,
+                friends: &friends,
+                hostiles: &hostiles,
+                structures: &structures,
             };
-            if let Some(target) = target {
-                crate::intents::attack(
-                    creep,
-                    &mut tick_context.action_flags,
-                    tick_context.runtime_data.intent_recorder,
-                    target,
-                    target.pos(),
-                );
-            }
-        }
+            decide_combat(&view)
+        };
 
-        // Pipeline B: Ranged attack -- focus fire the squad's designated target.
-        if has_active_part(creep, Part::RangedAttack) {
-            let in_range_3_count = hostiles.iter().filter(|c| creep_pos.get_range_to(c.pos()) <= 3).count();
-            let in_range_1_count = hostiles.iter().filter(|c| creep_pos.get_range_to(c.pos()) <= 1).count();
+        Self::translate_intents(creep, &intents, &structures_raw, tick_context);
+    }
 
-            if in_range_3_count > 0 {
-                // Mass attack when multiple hostiles are stacked on us.
-                if in_range_1_count >= 3 || (in_range_3_count >= 3 && in_range_1_count >= 1) {
-                    crate::intents::ranged_mass_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder);
-                } else {
-                    // Focus fire: prefer the exact focus target by ID.
-                    let target = if let Some(ref focus) = focus_creep {
-                        if creep_pos.get_range_to(focus.pos()) <= 3 {
-                            Some(focus)
-                        } else {
-                            hostiles
-                                .iter()
-                                .filter(|c| creep_pos.get_range_to(c.pos()) <= 3)
-                                .min_by_key(|c| c.hits())
+    /// Re-emit the seam's combat intents through the guarded sink, in their emitted (pipeline)
+    /// order, so the `IntentRecorder` digest is identical to the prior inline logic. Creep targets
+    /// resolve by id (the live `resolve()`); structure targets resolve by position within the
+    /// hostile-structure list. Movement / `Idle` / `Dismantle` intents are no-ops here.
+    fn translate_intents(
+        creep: &Creep,
+        intents: &[crate::combat::CombatIntent],
+        structures: &[StructureObject],
+        tick_context: &mut JobTickContext,
+    ) {
+        use crate::combat::CombatIntent;
+        let struct_at = |pos: Position| structures.iter().find(|s| s.pos() == pos);
+        for intent in intents {
+            match intent {
+                CombatIntent::Attack { target, id } => {
+                    if let Some(raw) = id {
+                        if let Some(c) = ObjectId::<Creep>::from(*raw).resolve() {
+                            crate::intents::attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, &c, *target);
                         }
-                    } else {
-                        hostiles
-                            .iter()
-                            .filter(|c| creep_pos.get_range_to(c.pos()) <= 3)
-                            .min_by_key(|c| c.hits())
-                    };
-                    if let Some(target) = target {
-                        crate::intents::ranged_attack(
-                            creep,
-                            &mut tick_context.action_flags,
-                            tick_context.runtime_data.intent_recorder,
-                            target,
-                            target.pos(),
-                        );
+                    } else if let Some(a) = struct_at(*target).and_then(|s| s.as_attackable()) {
+                        crate::intents::attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, a, *target);
                     }
                 }
-            } else {
-                // No hostiles in range -- try structures.
-                let structures = get_hostile_structures(creep_pos.room_name(), tick_context);
-                let target = structures
-                    .iter()
-                    .filter(|s| creep_pos.get_range_to(s.pos()) <= 3)
-                    .min_by_key(|s| match s.structure_type() {
-                        StructureType::InvaderCore => 0u32,
-                        StructureType::Spawn => 1,
-                        StructureType::Tower => 2,
-                        _ => 10,
-                    });
-                if let Some(target) = target {
-                    if let Some(attackable) = target.as_attackable() {
-                        crate::intents::ranged_attack(
-                            creep,
-                            &mut tick_context.action_flags,
-                            tick_context.runtime_data.intent_recorder,
-                            attackable,
-                            target.pos(),
-                        );
+                CombatIntent::RangedAttack { target, id } => {
+                    if let Some(raw) = id {
+                        if let Some(c) = ObjectId::<Creep>::from(*raw).resolve() {
+                            crate::intents::ranged_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, &c, *target);
+                        }
+                    } else if let Some(a) = struct_at(*target).and_then(|s| s.as_attackable()) {
+                        crate::intents::ranged_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, a, *target);
                     }
                 }
-            }
-        }
-    }
-
-    // ── Ordered heal ──
-
-    fn execute_heal_with_orders(creep: &Creep, creep_pos: Position, orders: &TickOrders, tick_context: &mut JobTickContext) {
-        if !has_active_part(creep, Part::Heal) {
-            return;
-        }
-
-        // Resolve the heal target directly by ObjectId.
-        if let Some(target) = orders.heal_target.and_then(|id| id.resolve()) {
-            let range = creep_pos.get_range_to(target.pos());
-            if range <= 1 {
-                crate::intents::heal(
-                    creep,
-                    &mut tick_context.action_flags,
-                    tick_context.runtime_data.intent_recorder,
-                    &target,
-                    target.pos(),
-                );
-            } else if range <= 3 {
-                crate::intents::ranged_heal(
-                    creep,
-                    &mut tick_context.action_flags,
-                    tick_context.runtime_data.intent_recorder,
-                    &target,
-                    target.pos(),
-                );
-            } else {
-                // Assigned target out of range -- heal best nearby instead.
-                heal_best_nearby(creep, tick_context);
-            }
-        } else {
-            // No target or target died -- heal best nearby.
-            heal_best_nearby(creep, tick_context);
-        }
-    }
-
-    // ── Fallback attack (no tick orders, body-part-aware) ──
-
-    fn fallback_attack(creep: &Creep, creep_pos: Position, tick_context: &mut JobTickContext) {
-        let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
-
-        if hostiles.is_empty() {
-            // Attack structures: prioritize invader cores > spawns > towers.
-            if has_active_part(creep, Part::RangedAttack) {
-                let structures = get_hostile_structures(creep_pos.room_name(), tick_context);
-                let target = structures
-                    .iter()
-                    .filter(|s| creep_pos.get_range_to(s.pos()) <= 3)
-                    .min_by_key(|s| match s.structure_type() {
-                        StructureType::InvaderCore => 0u32,
-                        StructureType::Spawn => 1,
-                        StructureType::Tower => 2,
-                        _ => 10,
-                    });
-                if let Some(target) = target {
-                    if let Some(attackable) = target.as_attackable() {
-                        crate::intents::ranged_attack(
-                            creep,
-                            &mut tick_context.action_flags,
-                            tick_context.runtime_data.intent_recorder,
-                            attackable,
-                            target.pos(),
-                        );
+                CombatIntent::RangedMassAttack => {
+                    crate::intents::ranged_mass_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder);
+                }
+                CombatIntent::Heal { target, id } => {
+                    if let Some(raw) = id {
+                        if let Some(c) = ObjectId::<Creep>::from(*raw).resolve() {
+                            crate::intents::heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, &c, *target);
+                        }
                     }
                 }
-            }
-            if has_active_part(creep, Part::Attack) {
-                let structures = get_hostile_structures(creep_pos.room_name(), tick_context);
-                let target = structures
-                    .iter()
-                    .filter(|s| creep_pos.get_range_to(s.pos()) <= 1)
-                    .min_by_key(|s| match s.structure_type() {
-                        StructureType::InvaderCore => 0u32,
-                        StructureType::Spawn => 1,
-                        StructureType::Tower => 2,
-                        _ => 10,
-                    });
-                if let Some(target) = target {
-                    if let Some(attackable) = target.as_attackable() {
-                        crate::intents::attack(
-                            creep,
-                            &mut tick_context.action_flags,
-                            tick_context.runtime_data.intent_recorder,
-                            attackable,
-                            target.pos(),
-                        );
+                CombatIntent::RangedHeal { target, id } => {
+                    if let Some(raw) = id {
+                        if let Some(c) = ObjectId::<Creep>::from(*raw).resolve() {
+                            crate::intents::ranged_heal(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, &c, *target);
+                        }
                     }
                 }
-            }
-            return;
-        }
-
-        // Pipeline A: Melee attack adjacent hostile.
-        if has_active_part(creep, Part::Attack) {
-            if let Some(target) = hostiles
-                .iter()
-                .filter(|c| creep_pos.get_range_to(c.pos()) <= 1)
-                .min_by_key(|c| c.hits())
-            {
-                crate::intents::attack(
-                    creep,
-                    &mut tick_context.action_flags,
-                    tick_context.runtime_data.intent_recorder,
-                    target,
-                    target.pos(),
-                );
+                CombatIntent::Dismantle { .. } | CombatIntent::MoveTo { .. } | CombatIntent::Flee { .. } | CombatIntent::Idle => {}
             }
         }
-
-        // Pipeline B: Ranged attack.
-        if has_active_part(creep, Part::RangedAttack) {
-            let in_range_1: usize = hostiles.iter().filter(|c| creep_pos.get_range_to(c.pos()) <= 1).count();
-
-            if in_range_1 >= 3 {
-                crate::intents::ranged_mass_attack(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder);
-            } else {
-                let target = hostiles
-                    .iter()
-                    .filter(|c| creep_pos.get_range_to(c.pos()) <= 3)
-                    .min_by_key(|c| c.hits());
-
-                if let Some(target) = target {
-                    crate::intents::ranged_attack(
-                        creep,
-                        &mut tick_context.action_flags,
-                        tick_context.runtime_data.intent_recorder,
-                        target,
-                        target.pos(),
-                    );
-                }
-            }
-        }
-    }
-
-    // ── Fallback heal (no tick orders) ──
-
-    fn fallback_heal(creep: &Creep, tick_context: &mut JobTickContext) {
-        if !has_active_part(creep, Part::Heal) {
-            return;
-        }
-        heal_best_nearby(creep, tick_context);
     }
 
     // ── Fallback movement (no tick orders, body-part-aware) ──

@@ -1043,7 +1043,8 @@ impl Engaging {
         squad_center: Option<Position>,
         system_data: &MissionExecutionSystemData,
     ) -> Option<(Position, Option<RawObjectId>)> {
-        use crate::combat::{select_focus_target, CombatBodyPart, CombatCreepDto, CombatStructureDto, Ownership};
+        use crate::combat::{select_focus_target, CombatCreepDto, CombatStructureDto};
+        use crate::jobs::squad_combat::{creep_to_dto, structure_to_dto};
 
         let squad_center = squad_center?;
 
@@ -1055,28 +1056,12 @@ impl Engaging {
         let room_entity = system_data.mapping.get_room(&target_room)?;
         let room_data = system_data.room_data.get(room_entity)?;
 
-        // ── Live adapter (the tactical seam's `game::*` leaf): read the room into JS-free DTOs,
-        // preserving hostile/structure order so the extracted decision's tie-breaks match. The
-        // *decision* itself is `combat::select_focus_target` — shared with the sim (ADR 0006 §B.2).
+        // ── Live adapter (the tactical seam's `game::*` leaf): read the room into JS-free DTOs via
+        // the shared `squad_combat` adapters, preserving hostile/structure order so the extracted
+        // decision's tie-breaks match. The *decision* is `combat::select_focus_target` (ADR 0006).
         let hostiles: Vec<CombatCreepDto> = room_data
             .get_creeps()
-            .map(|creep_data| {
-                creep_data
-                    .hostile()
-                    .iter()
-                    .map(|c| CombatCreepDto {
-                        id: c.try_raw_id(),
-                        pos: c.pos(),
-                        hits: c.hits(),
-                        hits_max: c.hits_max(),
-                        body: c
-                            .body()
-                            .iter()
-                            .map(|p| CombatBodyPart { part: p.part(), hits: p.hits() })
-                            .collect(),
-                    })
-                    .collect()
-            })
+            .map(|creep_data| creep_data.hostile().iter().map(creep_to_dto).collect())
             .unwrap_or_default();
 
         let structures: Vec<CombatStructureDto> = room_data
@@ -1085,21 +1070,7 @@ impl Engaging {
                 structure_data
                     .all()
                     .iter()
-                    .map(|s| {
-                        let ownership = match s.as_owned() {
-                            Some(o) if o.my() => Ownership::Mine,
-                            Some(_) => Ownership::Hostile,
-                            None => Ownership::Neutral,
-                        };
-                        let (hits, hits_max) = s.as_attackable().map(|a| (a.hits(), a.hits_max())).unwrap_or((0, 0));
-                        CombatStructureDto {
-                            pos: s.pos(),
-                            structure_type: s.structure_type(),
-                            hits,
-                            hits_max,
-                            ownership,
-                        }
-                    })
+                    .map(structure_to_dto)
                     .collect()
             })
             .unwrap_or_default();
