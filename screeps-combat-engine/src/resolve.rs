@@ -69,6 +69,9 @@ pub struct Intents {
     /// Per-creep move direction this tick (resolved in phase C). The *decision* (which way) is the
     /// agent's job (H2 / the rover pathfinder); this resolver only executes a given direction.
     pub moves: HashMap<CreepId, Direction>,
+    /// Pull relationships this tick: puller id → the creep it drags. The puller also needs a `moves`
+    /// entry; the dragged creep follows into the puller's vacated tile (no MOVE/fatigue needed).
+    pub pulls: HashMap<CreepId, CreepId>,
     /// Optional per-creep "why" tag for introspection — ignored by the resolver, captured by
     /// [`crate::record::CombatRecording`]. The agent (H2) populates it (e.g. "kite: hold range 3").
     pub reasons: HashMap<CreepId, String>,
@@ -95,6 +98,11 @@ impl Intents {
     /// Attach a "why" tag to a creep's actions this tick (introspection only; see [`Intents::reasons`]).
     pub fn set_reason(&mut self, creep: CreepId, reason: impl Into<String>) -> &mut Self {
         self.reasons.insert(creep, reason.into());
+        self
+    }
+    /// `puller` drags `target` this tick (puller also needs a `set_move`).
+    pub fn set_pull(&mut self, puller: CreepId, target: CreepId) -> &mut Self {
+        self.pulls.insert(puller, target);
         self
     }
 }
@@ -389,7 +397,8 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
 
     // ── Phase C: resolve movement (engine movement.check), using tick-START positions ────────
     // Attacks above were pooled from start positions, so a creep cannot dodge a hit by moving.
-    let new_positions = crate::movement::resolve_moves(world, &intents.moves);
+    let new_positions =
+        crate::movement::resolve_moves_with_pulls(world, &intents.moves, &intents.pulls);
 
     // ── Phase D: apply movement + fatigue, then net damage-then-heal, deaths ─────────────────
     let mut report = TickReport {
@@ -471,7 +480,7 @@ mod tests {
     fn creep(id: CreepId, owner: PlayerId, x: u8, y: u8, parts: &[(Part, u32)]) -> SimCreep {
         let body: Vec<BodyPartDef> = parts
             .iter()
-            .flat_map(|&(p, n)| std::iter::repeat(BodyPartDef::new(p)).take(n as usize))
+            .flat_map(|&(p, n)| std::iter::repeat_n(BodyPartDef::new(p), n as usize))
             .collect();
         SimCreep {
             id,

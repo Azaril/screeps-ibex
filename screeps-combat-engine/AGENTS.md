@@ -50,6 +50,7 @@ table IS the reconciliation checklist: when the engine updates, diff exactly the
 | `resolve` safe-mode gate | a hostile's combat vs the safe-mode owner's objects is zeroed | per-intent guard in `creeps/*.js`; `src/processor/intents/controllers/tick.js` (activation) | `resolve::tests::safe_mode_zeroes_hostile_combat` |
 | `resolve` tower fire + energy | tower fires once for `TOWER_ENERGY_COST` energy, range falloff | `src/processor/intents/towers/attack.js` | `resolve::tests::tower_drain_self_heal_survives_and_burns_energy` |
 | `movement::resolve_moves` (phase C) | eligibility (`canMove`), same-tile contention (`rate1` swap / `rate4` moves÷weight), obstacle + recursive chain-block (`removeFromMatrix`) | `src/processor/intents/movement.js:11-187` | `movement::tests::*` (contention, swap, chain-block, wall, fatigue) |
+| `movement::resolve_moves_with_pulls` (pull) | a creep dragged by an adjacent, moving puller follows into its vacated tile; eligible with **no MOVE / nonzero fatigue** (`canMove` `_pulled` branch); contention tiebreak `rate2` (pulled) then `rate3` (pulling) before `rate4` | `src/processor/intents/movement.js` (`canMove` `_pulled`; rate2/rate3 in `check`) | `movement::tests::{pull_drags_a_zero_move_creep, zero_move_creep_cannot_move_unpulled, pulled_creep_moves_despite_fatigue, pull_does_nothing_when_puller_is_blocked}` |
 | `movement::step` / `dir_delta` / `is_edge` | direction deltas (y down), edge-tile detection | `src/processor/intents/movement.js` (`add`, `isAtEdge`) | `movement::tests::simple_move_to_empty_tile` |
 | `resolve` phase D movement+fatigue | apply move, add move fatigue `weight × terrain_rate` (0 on edge), regen `-2 × MOVE` | `src/processor/intents/creeps/tick.js:50,105-108`; `movement.js:235-252` | `resolve::tests::kiting_at_move_parity_takes_zero_melee` |
 | can't-dodge-by-moving | attacks resolve on tick-START positions (phase B), before movement | `src/processor.js` (attack intents precede `movement.check`) | `resolve::tests::kiting_at_move_parity_takes_zero_melee` |
@@ -118,9 +119,9 @@ breaks the whole point of the sim.
 ## What is NOT modelled yet (do not assume it works)
 
 Add these in the documented next slices; until then they are absent, not broken:
-- **Pull** (`movement.js` rate2/rate3 — for no-MOVE/under-MOVE comps) and **room-edge crossing**
-  (a step off the room is currently blocked, not a transition) and **roads** (fatigue stays
-  plain/swamp). Same-tile conflict resolution + fatigue accumulation/regen *are* modelled.
+- **Room-edge crossing** (a step off the room is currently blocked, not a transition) and **roads**
+  (fatigue stays plain/swamp). Same-tile conflict resolution, fatigue accumulation/regen, and **pull**
+  (rate2/rate3, no-MOVE/under-MOVE comps) *are* modelled.
 - **Towers as damage targets** (a tower can fire + be attacked in the engine; here `SimTower`
   fires but isn't yet a dismantle/attack target — ramparts/walls/spawns are). FORTIFY/INVULNERABILITY
   rampart effects, power-bank hit-back.
@@ -164,3 +165,8 @@ seam; do not duplicate tactics here (this crate has no tactics — it only resol
   replay capture (pre-tick state + intents + optional reason tags + outcomes) with a deterministic
   text dump; `reasons` field added to `Intents` (resolver-ignored introspection metadata). 32 host
   tests. Same pinned versions.
+- **2026-06-17** — Pull slice: `resolve_moves_with_pulls` + `Intents.pulls`/`set_pull` — a creep
+  dragged by an adjacent, moving puller follows into its vacated tile, eligible with no MOVE /
+  nonzero fatigue (`canMove` `_pulled`); contention tiebreak extended `rate1 → rate2 (pulled) →
+  rate3 (pulling) → rate4`. `resolve_tick` phase C now calls the pull-aware resolver. 36 host tests
+  (added 4 pull). Same pinned versions.

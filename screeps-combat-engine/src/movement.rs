@@ -8,19 +8,22 @@
 //!   its fatigue was 0 at tick start.
 //! - **Same-tile contention** (`check`, lines 104-150): when >1 creep targets a tile, the winner is
 //!   chosen by, in order, `rate1` (mutual-swap → 100, else how many movers want the creep's *current*
-//!   tile), `rate2`/`rate3` (pull — not modelled yet), `rate4 = move_rate / weight`; losers stay.
+//!   tile), `rate2` (being pulled), `rate3` (pulling), `rate4 = move_rate / weight`; losers stay.
+//! - **Pull** (`canMove`'s `_pulled` branch + rate2/rate3): a creep dragged by an adjacent, moving
+//!   puller follows into the puller's vacated tile and is eligible even with **no MOVE part / nonzero
+//!   fatigue** — how no-MOVE / under-MOVE compositions stay mobile. See [`resolve_moves_with_pulls`].
 //! - **Obstacle + chain-block** (`checkObstacleAtXY` line 16-39 + `removeFromMatrix` line 154-165):
 //!   a mover is stripped if its destination is a wall or holds a creep that is NOT itself moving
 //!   (engine `!objects[i._id]`, line 22); stripping a mover recursively strips any mover that wanted
 //!   the stripped creep's now-unvacated current tile — so a blocked front stops the whole column
 //!   (the cohesion mechanic).
 //!
-//! **Not modelled yet:** pull (rate2/rate3 — for no-MOVE/under-MOVE comps), room-edge crossing (a
-//! step off the room is blocked here), roads (fatigue stays plain/swamp). Tracked in `AGENTS.md`.
+//! **Not modelled yet:** room-edge crossing (a step off the room is blocked here), roads (fatigue
+//! stays plain/swamp). Tracked in `AGENTS.md`.
 
 use crate::state::*;
 use screeps::{Direction, Position, RoomCoordinate};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// (dx, dy) for a direction. Screeps y increases downward, so `Top` is `-y`.
 fn dir_delta(dir: Direction) -> (i32, i32) {
@@ -62,7 +65,13 @@ struct Mover {
     dest: (u8, u8),
     dest_pos: Position,
     move_rate: u32,
-    weight: u32, // min 1
+    weight: u32,   // min 1
+    pulled: bool, // being dragged (engine `_pulled`): eligible regardless of own MOVE/fatigue (rate2)
+    pulling: bool, // dragging another (engine `_pull`, rate3)
+}
+
+fn xy(p: Position) -> (u8, u8) {
+    (p.x().u8(), p.y().u8())
 }
 
 fn rate1(movers: &[Mover], want_count: &HashMap<(u8, u8), usize>, i: usize) -> u32 {
@@ -82,16 +91,46 @@ fn rate4(movers: &[Mover], i: usize) -> f64 {
     movers[i].move_rate as f64 / movers[i].weight as f64
 }
 
-/// Resolve all move intents for a tick. Returns the creeps that actually move → their new position.
-/// Reads the world immutably; the caller applies the moves + fatigue in phase D.
+/// Resolve move intents with no pulls (the common case). See [`resolve_moves_with_pulls`].
 pub fn resolve_moves(
     world: &CombatWorld,
     moves: &HashMap<CreepId, Direction>,
 ) -> HashMap<CreepId, Position> {
-    // Candidate movers: alive, eligible (fatigue 0 + working MOVE part), with an in-bounds dest.
+    resolve_moves_with_pulls(world, moves, &HashMap::new())
+}
+
+/// Resolve move + pull intents for a tick (engine `movement.js check`). `pulls` maps a puller to the
+/// creep it drags: a pulled creep follows the puller into its vacated tile and is eligible even with
+/// **no MOVE part / nonzero fatigue** (engine `canMove`'s `_pulled` branch) — this is how no-MOVE /
+/// under-MOVE combat compositions stay mobile. Returns movers → new position.
+pub fn resolve_moves_with_pulls(
+    world: &CombatWorld,
+    moves: &HashMap<CreepId, Direction>,
+    pulls: &HashMap<CreepId, CreepId>,
+) -> HashMap<CreepId, Position> {
+    let creep_by_id: HashMap<CreepId, &SimCreep> = world
+        .creeps
+        .iter()
+        .filter(|c| c.is_alive())
+        .map(|c| (c.id, c))
+        .collect();
+
+    // Valid pulls: puller + target alive, adjacent, puller has a move intent. `pulled_by` maps the
+    // dragged creep → its puller and overrides the dragged creep's own move intent.
+    let mut pulled_by: HashMap<CreepId, CreepId> = HashMap::new();
+    for (&puller, &target) in pulls {
+        if let (Some(p), Some(t)) = (creep_by_id.get(&puller), creep_by_id.get(&target)) {
+            if moves.contains_key(&puller) && p.pos.get_range_to(t.pos) <= 1 {
+                pulled_by.insert(target, puller);
+            }
+        }
+    }
+    let pullers: HashSet<CreepId> = pulled_by.values().copied().collect();
+
     let mut movers: Vec<Mover> = Vec::new();
+    // Self-propelled movers: alive, eligible (fatigue 0 + MOVE part), not currently being pulled.
     for c in &world.creeps {
-        if !c.is_alive() {
+        if !c.is_alive() || pulled_by.contains_key(&c.id) {
             continue;
         }
         let dir = match moves.get(&c.id) {
@@ -107,11 +146,32 @@ pub fn resolve_moves(
         };
         movers.push(Mover {
             id: c.id,
-            current: (c.pos.x().u8(), c.pos.y().u8()),
-            dest: (dest_pos.x().u8(), dest_pos.y().u8()),
+            current: xy(c.pos),
+            dest: xy(dest_pos),
             dest_pos,
             move_rate: c.body.move_rate(),
             weight: c.body.fatigue_weight().max(1),
+            pulled: false,
+            pulling: pullers.contains(&c.id),
+        });
+    }
+    // Pulled creeps follow their puller into its current tile (only if the puller is itself moving).
+    let self_mover_ids: HashSet<CreepId> = movers.iter().map(|m| m.id).collect();
+    for (&target, &puller) in &pulled_by {
+        if !self_mover_ids.contains(&puller) {
+            continue; // puller isn't moving → nothing to follow into
+        }
+        let t = creep_by_id[&target];
+        let p = creep_by_id[&puller];
+        movers.push(Mover {
+            id: target,
+            current: xy(t.pos),
+            dest: xy(p.pos), // into the puller's vacated tile
+            dest_pos: p.pos,
+            move_rate: t.body.move_rate(),
+            weight: t.body.fatigue_weight().max(1),
+            pulled: true,
+            pulling: false,
         });
     }
     if movers.is_empty() {
@@ -139,11 +199,16 @@ pub fn resolve_moves(
         }
         let mut best = contenders[0];
         for &i in contenders.iter().skip(1) {
-            let (r1, r1b) = (
-                rate1(&movers, &want_count, i),
-                rate1(&movers, &want_count, best),
-            );
-            let win = r1 > r1b || (r1 == r1b && rate4(&movers, i) > rate4(&movers, best));
+            // Engine order: rate1 (swap/affected), rate2 (being pulled), rate3 (pulling), rate4.
+            let key = |k: usize| {
+                (
+                    rate1(&movers, &want_count, k),
+                    movers[k].pulled as u32,
+                    movers[k].pulling as u32,
+                )
+            };
+            let (a, b) = (key(i), key(best));
+            let win = a > b || (a == b && rate4(&movers, i) > rate4(&movers, best));
             if win {
                 best = i;
             }
@@ -225,7 +290,7 @@ mod tests {
         let body: Vec<_> = parts
             .iter()
             .flat_map(|&(p, n)| {
-                std::iter::repeat(crate::body::BodyPartDef::new(p)).take(n as usize)
+                std::iter::repeat_n(crate::body::BodyPartDef::new(p), n as usize)
             })
             .collect();
         SimCreep {
@@ -352,5 +417,77 @@ mod tests {
         );
         assert_eq!(r.get(&1), Some(&pos(25, 25)));
         assert_eq!(r.get(&2), Some(&pos(24, 25)));
+    }
+
+    fn pulls(pairs: &[(CreepId, CreepId)]) -> HashMap<CreepId, CreepId> {
+        pairs.iter().copied().collect()
+    }
+
+    #[test]
+    fn pull_drags_a_zero_move_creep() {
+        // Puller (MOVE) at (25,25)→(26,25) drags a no-MOVE creep at (24,25) into its vacated tile.
+        let world = CombatWorld {
+            creeps: vec![
+                creep(1, 25, 25, &[(Part::Move, 1)], 0),
+                creep(2, 24, 25, &[(Part::Attack, 5)], 0), // no MOVE part
+            ],
+            ..Default::default()
+        };
+        let r =
+            resolve_moves_with_pulls(&world, &moves(&[(1, Direction::Right)]), &pulls(&[(1, 2)]));
+        assert_eq!(r.get(&1), Some(&pos(26, 25)), "puller advances");
+        assert_eq!(
+            r.get(&2),
+            Some(&pos(25, 25)),
+            "pulled creep follows into vacated tile"
+        );
+    }
+
+    #[test]
+    fn zero_move_creep_cannot_move_unpulled() {
+        // Same no-MOVE creep, given a direct move intent but NOT pulled → it cannot move.
+        let world = CombatWorld {
+            creeps: vec![creep(2, 24, 25, &[(Part::Attack, 5)], 0)],
+            ..Default::default()
+        };
+        let r = resolve_moves(&world, &moves(&[(2, Direction::Right)]));
+        assert!(r.is_empty(), "a no-MOVE creep is immobile without a pull");
+    }
+
+    #[test]
+    fn pulled_creep_moves_despite_fatigue() {
+        // The dragged creep has MOVE parts but nonzero fatigue (would normally be stuck). The
+        // engine `_pulled` branch bypasses both fatigue and the MOVE requirement → it still follows.
+        let world = CombatWorld {
+            creeps: vec![
+                creep(1, 25, 25, &[(Part::Move, 1)], 0),
+                creep(2, 24, 25, &[(Part::Move, 1), (Part::Attack, 4)], 8), // fatigued
+            ],
+            ..Default::default()
+        };
+        let r =
+            resolve_moves_with_pulls(&world, &moves(&[(1, Direction::Right)]), &pulls(&[(1, 2)]));
+        assert_eq!(r.get(&1), Some(&pos(26, 25)));
+        assert_eq!(
+            r.get(&2),
+            Some(&pos(25, 25)),
+            "fatigue does not stop a pulled creep"
+        );
+    }
+
+    #[test]
+    fn pull_does_nothing_when_puller_is_blocked() {
+        // Puller blocked by a wall → it stays, so the pulled creep has nothing to follow into.
+        let mut world = CombatWorld {
+            creeps: vec![
+                creep(1, 25, 25, &[(Part::Move, 1)], 0),
+                creep(2, 24, 25, &[(Part::Attack, 5)], 0),
+            ],
+            ..Default::default()
+        };
+        world.terrain.walls.insert((26, 25));
+        let r =
+            resolve_moves_with_pulls(&world, &moves(&[(1, Direction::Right)]), &pulls(&[(1, 2)]));
+        assert!(r.is_empty(), "a blocked puller drags no one");
     }
 }
