@@ -66,7 +66,13 @@ impl Idle {
             .get_dynamic_visibility_data()
             .ok_or("Expected dynamic visibility")?;
 
-        if dynamic_visibility_data.visible() && (dynamic_visibility_data.hostile_creeps() || dynamic_visibility_data.hostile_structures()) {
+        // Defend against ACTUAL threats — combat creeps or active towers/spawns
+        // (`militarily_active`) — not the mere presence of inert hostile
+        // structures. Leftover enemy walls/ramparts/husks in a neutral remote
+        // (e.g. a de-claimed derelict room) can't hurt a creep; treating them
+        // as an attack keeps `is_room_safe` false forever, which permanently
+        // gates off the mining outpost's reserver/miners/haulers for that room.
+        if dynamic_visibility_data.visible() && dynamic_visibility_data.militarily_active() {
             return Ok(Some(DefendState::active(EntityVec::new(), None)));
         }
 
@@ -119,7 +125,7 @@ impl Active {
             .ok_or("Expected dynamic visibility")?;
 
         if dynamic_visibility_data.visible() {
-            if dynamic_visibility_data.hostile_creeps() || dynamic_visibility_data.hostile_structures() {
+            if dynamic_visibility_data.militarily_active() {
                 self.last_hostiles = Some(game::time());
             } else if self
                 .last_hostiles
