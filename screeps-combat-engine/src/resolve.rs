@@ -19,17 +19,21 @@
 //! - **Safe mode** (`*.js` per-intent guard): a hostile's combat against the safe-mode owner's
 //!   objects is zeroed (the owner's own combat is not).
 //!
-//! **Not yet modelled (next slices):** structures as damage targets (ramparts/walls/spawn),
-//! dismantle, tower heal/repair, pull-based movement (rate2/rate3), NPC AI. Tracked in `AGENTS.md`.
+//! Structures (ramparts/walls/spawn) are attack/dismantle targets with rampart RMA-shielding;
+//! towers heal/repair. **Not yet modelled:** pull-based movement (rate2/rate3), tower-as-target,
+//! `CombatRecording`, NPC AI, power creeps, multi-room. Tracked in `AGENTS.md`.
 
 use crate::constants::TOWER_ENERGY_COST;
-use crate::damage::{ranged_mass_attack_damage, tower_attack_damage_at_range};
+use crate::damage::{
+    ranged_mass_attack_damage, tower_attack_damage_at_range, tower_heal_at_range,
+    tower_repair_at_range,
+};
 use crate::state::*;
 use screeps::{Direction, Position};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-/// A creep combat action for one tick (one entry of its intent set). Movement is separate
-/// (next slice); these are the offensive/heal actions that accumulate into the pools.
+/// A creep combat action for one tick. Movement is separate (the `moves` field on [`Intents`]);
+/// these are the offensive / heal / dismantle actions that accumulate into the pools.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CombatAction {
     Attack(CreepId),
@@ -37,13 +41,22 @@ pub enum CombatAction {
     RangedMassAttack,
     Heal(CreepId),
     RangedHeal(CreepId),
+    /// Dismantle a structure (WORK parts, range 1).
+    Dismantle(StructureId),
+    /// Melee-attack a structure (ATTACK parts, range 1).
+    AttackStructure(StructureId),
+    /// Ranged-attack a structure (RANGED_ATTACK parts, range 3).
+    RangedAttackStructure(StructureId),
 }
 
 /// A tower's action for one tick (towers fire once, costing [`TOWER_ENERGY_COST`] energy).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TowerAction {
     Attack(CreepId),
-    // Heal/Repair arrive with the structures slice.
+    /// Heal a friendly creep (range falloff 400→100).
+    Heal(CreepId),
+    /// Repair a friendly structure (range falloff 800→200).
+    Repair(StructureId),
 }
 
 /// All actors' intents for a tick. Creep actions are keyed by creep id; tower actions by the
@@ -93,6 +106,7 @@ pub struct TickReport {
     pub tick: u32,
     pub outcomes: HashMap<CreepId, CreepOutcome>,
     pub deaths: Vec<CreepId>,
+    pub destroyed_structures: Vec<StructureId>,
 }
 
 /// Apply the engine intent priority/exclusion table to a creep's raw action list
@@ -102,15 +116,21 @@ fn filtered_actions(actions: &[CombatAction]) -> Vec<CombatAction> {
     let has_rma = actions
         .iter()
         .any(|a| matches!(a, CombatAction::RangedMassAttack));
-    let has_heal = actions
-        .iter()
-        .any(|a| matches!(a, CombatAction::Heal(_) | CombatAction::RangedHeal(_)));
+    // The 'attack' intent (melee, creep or structure) is dropped when a heal or dismantle is queued.
+    let drops_attack = actions.iter().any(|a| {
+        matches!(
+            a,
+            CombatAction::Heal(_) | CombatAction::RangedHeal(_) | CombatAction::Dismantle(_)
+        )
+    });
     actions
         .iter()
         .copied()
         .filter(|a| match a {
-            CombatAction::RangedAttack(_) if has_rma => false,
-            CombatAction::Attack(_) if has_heal => false,
+            CombatAction::RangedAttack(_) | CombatAction::RangedAttackStructure(_) if has_rma => {
+                false
+            }
+            CombatAction::Attack(_) | CombatAction::AttackStructure(_) if drops_attack => false,
             _ => true,
         })
         .collect()
@@ -127,6 +147,16 @@ struct Snap {
     ranged: u32,
     heal: u32,
     ranged_heal: u32,
+    dismantle: u32,
+}
+
+/// Immutable per-structure snapshot for phase B target lookups (`world.structures` is mutated in
+/// phase D). Only living structures are included.
+struct StructSnap {
+    id: StructureId,
+    kind: StructureKind,
+    owner: Option<PlayerId>,
+    pos: Position,
 }
 
 /// Resolve one combat tick in place. Returns a [`TickReport`]. Dead creeps are removed from
@@ -144,20 +174,53 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
             ranged: c.body.ranged_attack_power(),
             heal: c.body.heal_power(),
             ranged_heal: c.body.ranged_heal_power(),
+            dismantle: c.body.dismantle_power(),
         })
         .collect();
     let by_id: HashMap<CreepId, usize> = snaps.iter().enumerate().map(|(i, s)| (s.id, i)).collect();
     let snap = |id: CreepId| by_id.get(&id).map(|&i| &snaps[i]);
+
+    // Living-structure snapshot for target lookups, and the set of rampart tiles (RMA skip +
+    // attack-back suppression).
+    let struct_snap: Vec<StructSnap> = world
+        .structures
+        .iter()
+        .filter(|s| s.is_alive())
+        .map(|s| StructSnap {
+            id: s.id,
+            kind: s.kind,
+            owner: s.owner,
+            pos: s.pos,
+        })
+        .collect();
+    let struct_by_id: HashMap<StructureId, usize> = struct_snap
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.id, i))
+        .collect();
+    let sstruct = |id: StructureId| struct_by_id.get(&id).map(|&i| &struct_snap[i]);
+    let rampart_tiles: HashSet<(u8, u8)> = struct_snap
+        .iter()
+        .filter(|s| s.kind == StructureKind::Rampart)
+        .map(|s| (s.pos.x().u8(), s.pos.y().u8()))
+        .collect();
 
     let safe_owner = world.safe_mode_owner;
     // A hostile's combat against the safe-mode owner's object is zeroed.
     let zeroed = |attacker_owner: PlayerId, target_owner: PlayerId| -> bool {
         matches!(safe_owner, Some(o) if attacker_owner != o && target_owner == o)
     };
+    // Structure variant: an unowned wall is never safe-mode-protected.
+    let zeroed_s = |attacker_owner: PlayerId, target_owner: Option<PlayerId>| -> bool {
+        matches!((safe_owner, target_owner), (Some(o), Some(t)) if attacker_owner != o && t == o)
+    };
+    let on_rampart = |p: Position| rampart_tiles.contains(&(p.x().u8(), p.y().u8()));
 
     let mut dmg: HashMap<CreepId, u32> = HashMap::new();
     let mut heal: HashMap<CreepId, u32> = HashMap::new();
-    let add = |map: &mut HashMap<CreepId, u32>, id: CreepId, amt: u32| {
+    let mut struct_dmg: HashMap<StructureId, u32> = HashMap::new();
+    let mut struct_heal: HashMap<StructureId, u32> = HashMap::new();
+    let add = |map: &mut HashMap<u32, u32>, id: u32, amt: u32| {
         if amt > 0 {
             *map.entry(id).or_insert(0) += amt;
         }
@@ -181,8 +244,9 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
                             && !zeroed(atk.owner, t.owner)
                         {
                             add(&mut dmg, tid, atk.attack);
-                            // Melee attack-back: the target's ATTACK parts hit the attacker.
-                            if t.attack > 0 && !zeroed(t.owner, atk.owner) {
+                            // Melee attack-back: the target's ATTACK parts hit the attacker —
+                            // unless the attacker stands on a rampart (engine `_damage.js:17`).
+                            if t.attack > 0 && !on_rampart(atk.pos) && !zeroed(t.owner, atk.owner) {
                                 add(&mut dmg, atk.id, t.attack);
                             }
                         }
@@ -199,12 +263,30 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
                     }
                 }
                 CombatAction::RangedMassAttack => {
+                    // Hostile creeps in range 3, skipping any standing on a rampart (engine
+                    // `rangedMassAttack.js:38`).
                     for t in &snaps {
                         if t.alive && t.owner != atk.owner && !zeroed(atk.owner, t.owner) {
                             let r = atk.pos.get_range_to(t.pos);
-                            if r <= 3 {
+                            if r <= 3 && !on_rampart(t.pos) {
                                 add(&mut dmg, t.id, ranged_mass_attack_damage(atk.ranged, r));
                             }
+                        }
+                    }
+                    // Hostile structures in range 3 (ramparts can be hit; other structures on a
+                    // rampart tile are skipped).
+                    for s in &struct_snap {
+                        if s.owner == Some(atk.owner) || zeroed_s(atk.owner, s.owner) {
+                            continue;
+                        }
+                        let r = atk.pos.get_range_to(s.pos);
+                        let shielded = s.kind != StructureKind::Rampart && on_rampart(s.pos);
+                        if r <= 3 && !shielded {
+                            add(
+                                &mut struct_dmg,
+                                s.id,
+                                ranged_mass_attack_damage(atk.ranged, r),
+                            );
                         }
                     }
                 }
@@ -222,13 +304,34 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
                         }
                     }
                 }
+                CombatAction::Dismantle(sid) => {
+                    if let Some(s) = sstruct(sid) {
+                        if atk.pos.get_range_to(s.pos) <= 1 && !zeroed_s(atk.owner, s.owner) {
+                            add(&mut struct_dmg, sid, atk.dismantle);
+                        }
+                    }
+                }
+                CombatAction::AttackStructure(sid) => {
+                    if let Some(s) = sstruct(sid) {
+                        if atk.pos.get_range_to(s.pos) <= 1 && !zeroed_s(atk.owner, s.owner) {
+                            add(&mut struct_dmg, sid, atk.attack);
+                        }
+                    }
+                }
+                CombatAction::RangedAttackStructure(sid) => {
+                    if let Some(s) = sstruct(sid) {
+                        if atk.pos.get_range_to(s.pos) <= 3 && !zeroed_s(atk.owner, s.owner) {
+                            add(&mut struct_dmg, sid, atk.ranged);
+                        }
+                    }
+                }
             }
         }
     }
 
-    // Towers fire (cost energy, range falloff). Owner's safe mode does not block its own towers.
+    // Towers act (cost energy, range falloff). A hostile tower's attack on the safe-mode owner is
+    // zeroed; heal/repair target friendlies.
     for (&idx, action) in &intents.towers {
-        let TowerAction::Attack(tid) = *action;
         let (tower_owner, tower_pos, can_fire) = match world.towers.get(idx) {
             Some(tw) => (tw.owner, tw.pos, tw.energy >= TOWER_ENERGY_COST),
             None => continue,
@@ -236,12 +339,43 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
         if !can_fire {
             continue;
         }
-        if let Some(t) = snap(tid) {
-            if t.alive && !zeroed(tower_owner, t.owner) {
-                let r = tower_pos.get_range_to(t.pos);
-                add(&mut dmg, tid, tower_attack_damage_at_range(r));
-                world.towers[idx].energy -= TOWER_ENERGY_COST;
-            }
+        let fired = match *action {
+            TowerAction::Attack(tid) => match snap(tid) {
+                Some(t) if t.alive && !zeroed(tower_owner, t.owner) => {
+                    add(
+                        &mut dmg,
+                        tid,
+                        tower_attack_damage_at_range(tower_pos.get_range_to(t.pos)),
+                    );
+                    true
+                }
+                _ => false,
+            },
+            TowerAction::Heal(tid) => match snap(tid) {
+                Some(t) if t.alive => {
+                    add(
+                        &mut heal,
+                        tid,
+                        tower_heal_at_range(tower_pos.get_range_to(t.pos)),
+                    );
+                    true
+                }
+                _ => false,
+            },
+            TowerAction::Repair(sid) => match sstruct(sid) {
+                Some(s) => {
+                    add(
+                        &mut struct_heal,
+                        sid,
+                        tower_repair_at_range(tower_pos.get_range_to(s.pos)),
+                    );
+                    true
+                }
+                None => false,
+            },
+        };
+        if fired {
+            world.towers[idx].energy -= TOWER_ENERGY_COST;
         }
     }
 
@@ -292,6 +426,21 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
     }
 
     world.creeps.retain(|c| c.is_alive());
+
+    // Structures: no TOUGH/boost; net dismantle/attack damage against tower repair, destroyed at 0.
+    for s in world.structures.iter_mut() {
+        let d = struct_dmg.get(&s.id).copied().unwrap_or(0);
+        let h = struct_heal.get(&s.id).copied().unwrap_or(0);
+        let net = s.hits as i64 - d as i64 + h as i64;
+        if net <= 0 {
+            s.hits = 0;
+            report.destroyed_structures.push(s.id);
+        } else {
+            s.hits = (net as u32).min(s.hits_max);
+        }
+    }
+    world.structures.retain(|s| s.is_alive());
+
     world.tick += 1;
     report
 }
@@ -543,5 +692,196 @@ mod tests {
         );
         // Range held at 3 (both advanced 10 tiles in lockstep).
         assert_eq!(kiter.pos.get_range_to(chaser.pos), 3);
+    }
+
+    fn structure(
+        id: StructureId,
+        kind: StructureKind,
+        owner: Option<PlayerId>,
+        x: u8,
+        y: u8,
+        hits: u32,
+    ) -> SimStructure {
+        SimStructure {
+            id,
+            kind,
+            owner,
+            pos: pos(x, y),
+            hits,
+            hits_max: hits,
+        }
+    }
+
+    #[test]
+    fn dismantle_breaches_a_wall() {
+        // A 10-WORK dismantler (500/tick) breaks a 1500-hit wall in 3 ticks (EXP-BREACH).
+        let mut world = CombatWorld {
+            creeps: vec![creep(1, 0, 25, 25, &[(Part::Work, 10)])],
+            structures: vec![structure(100, StructureKind::Wall, None, 25, 26, 1500)],
+            ..Default::default()
+        };
+        let mut destroyed = false;
+        for _ in 0..3 {
+            let mut i = Intents::new();
+            i.set(1, vec![CombatAction::Dismantle(100)]);
+            destroyed |= resolve_tick(&mut world, &i)
+                .destroyed_structures
+                .contains(&100);
+        }
+        assert!(
+            destroyed && world.structures.is_empty(),
+            "wall breached in 3 ticks"
+        );
+    }
+
+    #[test]
+    fn melee_destroys_a_spawn() {
+        // 20-ATTACK (600/tick) destroys a 1000-hit spawn on the 2nd hit (1200 ≥ 1000).
+        let mut world = CombatWorld {
+            creeps: vec![creep(1, 0, 25, 25, &[(Part::Attack, 20)])],
+            structures: vec![structure(100, StructureKind::Spawn, Some(1), 25, 26, 1000)],
+            ..Default::default()
+        };
+        let mut i = Intents::new();
+        i.set(1, vec![CombatAction::AttackStructure(100)]);
+        assert!(resolve_tick(&mut world, &i).destroyed_structures.is_empty());
+        let mut i = Intents::new();
+        i.set(1, vec![CombatAction::AttackStructure(100)]);
+        assert!(resolve_tick(&mut world, &i)
+            .destroyed_structures
+            .contains(&100));
+    }
+
+    #[test]
+    fn rampart_shields_creep_from_rma_but_not_single_target() {
+        // A defender stands on its rampart at range 2. RMA skips it (rampart-shielded); a single-
+        // target rangedAttack still hits it.
+        let make = || CombatWorld {
+            creeps: vec![
+                creep(1, 0, 25, 25, &[(Part::RangedAttack, 10)]),
+                creep(2, 1, 25, 27, &[(Part::Move, 5)]),
+            ],
+            structures: vec![structure(
+                100,
+                StructureKind::Rampart,
+                Some(1),
+                25,
+                27,
+                300_000,
+            )],
+            ..Default::default()
+        };
+        let mut w = make();
+        let mut i = Intents::new();
+        i.set(1, vec![CombatAction::RangedMassAttack]);
+        assert_eq!(
+            resolve_tick(&mut w, &i).outcomes[&2].raw_damage,
+            0,
+            "RMA skips a creep on a rampart"
+        );
+        let mut w = make();
+        let mut i = Intents::new();
+        i.set(1, vec![CombatAction::RangedAttack(2)]);
+        assert!(
+            resolve_tick(&mut w, &i).outcomes[&2].raw_damage > 0,
+            "single-target ranged hits it"
+        );
+    }
+
+    #[test]
+    fn rampart_suppresses_attack_back() {
+        // Attacker standing on a rampart melees a creep with ATTACK parts → target hit, no attack-back.
+        let mut world = CombatWorld {
+            creeps: vec![
+                creep(1, 0, 25, 25, &[(Part::Attack, 10)]),
+                creep(2, 1, 25, 26, &[(Part::Attack, 10)]),
+            ],
+            structures: vec![structure(
+                100,
+                StructureKind::Rampart,
+                Some(0),
+                25,
+                25,
+                1000,
+            )],
+            ..Default::default()
+        };
+        let mut i = Intents::new();
+        i.set(1, vec![CombatAction::Attack(2)]);
+        let r = resolve_tick(&mut world, &i);
+        assert_eq!(
+            r.outcomes[&2].effective_damage, 300,
+            "target still takes the hit"
+        );
+        assert_eq!(
+            r.outcomes[&1].effective_damage, 0,
+            "attacker on a rampart takes no attack-back"
+        );
+    }
+
+    #[test]
+    fn tower_heal_keeps_a_defender_alive() {
+        // Our defender (no self-heal) is shot for 150/tick; a friendly tower heals 400/tick → lives.
+        let mut world = CombatWorld {
+            creeps: vec![
+                creep(1, 1, 25, 25, &[(Part::RangedAttack, 15)]), // hostile, 150 @ range 3
+                creep(2, 0, 25, 28, &[(Part::Move, 5)]),          // our defender
+            ],
+            towers: vec![SimTower {
+                owner: 0,
+                pos: pos(25, 26),
+                energy: 1000,
+                hits: 3000,
+            }],
+            ..Default::default()
+        };
+        for _ in 0..5 {
+            let mut i = Intents::new();
+            i.set(1, vec![CombatAction::RangedAttack(2)]);
+            i.set_tower(0, TowerAction::Heal(2));
+            resolve_tick(&mut world, &i);
+        }
+        assert!(
+            world.creeps.iter().any(|c| c.id == 2 && c.is_alive()),
+            "tower heal sustains the defender"
+        );
+    }
+
+    #[test]
+    fn tower_repair_outpaces_dismantle() {
+        // Tower repair (800/tick at range ≤5) beats a 10-WORK dismantle (500/tick) → rampart holds.
+        let mut world = CombatWorld {
+            creeps: vec![creep(1, 1, 25, 25, &[(Part::Work, 10)])],
+            structures: vec![structure(
+                100,
+                StructureKind::Rampart,
+                Some(0),
+                25,
+                26,
+                5000,
+            )],
+            towers: vec![SimTower {
+                owner: 0,
+                pos: pos(25, 28),
+                energy: 1000,
+                hits: 3000,
+            }],
+            ..Default::default()
+        };
+        for _ in 0..5 {
+            let mut i = Intents::new();
+            i.set(1, vec![CombatAction::Dismantle(100)]);
+            i.set_tower(0, TowerAction::Repair(100));
+            resolve_tick(&mut world, &i);
+        }
+        let r = world
+            .structures
+            .iter()
+            .find(|s| s.id == 100)
+            .expect("rampart holds");
+        assert_eq!(
+            r.hits, r.hits_max,
+            "repair 800 > dismantle 500 ⇒ rampart stays capped"
+        );
     }
 }

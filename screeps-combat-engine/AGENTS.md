@@ -53,6 +53,10 @@ table IS the reconciliation checklist: when the engine updates, diff exactly the
 | `movement::step` / `dir_delta` / `is_edge` | direction deltas (y down), edge-tile detection | `src/processor/intents/movement.js` (`add`, `isAtEdge`) | `movement::tests::simple_move_to_empty_tile` |
 | `resolve` phase D movement+fatigue | apply move, add move fatigue `weight × terrain_rate` (0 on edge), regen `-2 × MOVE` | `src/processor/intents/creeps/tick.js:50,105-108`; `movement.js:235-252` | `resolve::tests::kiting_at_move_parity_takes_zero_melee` |
 | can't-dodge-by-moving | attacks resolve on tick-START positions (phase B), before movement | `src/processor.js` (attack intents precede `movement.check`) | `resolve::tests::kiting_at_move_parity_takes_zero_melee` |
+| `resolve` structure targets | Dismantle (WORK×50), AttackStructure (melee), RangedAttackStructure; structures take `hits -= damage`, destroyed at 0; **no** redirect of creep damage to a co-located rampart | `src/processor/intents/_damage.js:25-58`; `creeps/dismantle.js` | `resolve::tests::{dismantle_breaches_a_wall, melee_destroys_a_spawn}` |
+| `resolve` rampart RMA-shield | RMA skips a non-rampart target on a rampart tile (can hit ramparts directly); single-target attacks still hit a creep on a rampart | `src/processor/intents/creeps/rangedMassAttack.js:38` + `_damage.js:16-21` | `resolve::tests::rampart_shields_creep_from_rma_but_not_single_target` |
+| `resolve` attack-back rampart-exempt | a melee attacker standing on a rampart deals no attack-back | `src/processor/intents/_damage.js:17` | `resolve::tests::rampart_suppresses_attack_back` |
+| `resolve` tower heal/repair | tower heals a creep / repairs a structure (same range falloff), costs `TOWER_ENERGY_COST` | `src/processor/intents/towers/heal.js`, `repair.js` | `resolve::tests::{tower_heal_keeps_a_defender_alive, tower_repair_outpaces_dismantle}` |
 
 ## Reconciliation procedure (when the engine updates)
 
@@ -116,9 +120,11 @@ Add these in the documented next slices; until then they are absent, not broken:
 - **Pull** (`movement.js` rate2/rate3 — for no-MOVE/under-MOVE comps) and **room-edge crossing**
   (a step off the room is currently blocked, not a transition) and **roads** (fatigue stays
   plain/swamp). Same-tile conflict resolution + fatigue accumulation/regen *are* modelled.
-- **Structures as damage targets** — ramparts, walls, spawns; **dismantle**; tower **heal/repair**;
-  the rampart exemption for melee attack-back.
-- **NPC AI** (Source Keepers, invaders, invader cores), power creeps/effects, multi-room.
+- **Towers as damage targets** (a tower can fire + be attacked in the engine; here `SimTower`
+  fires but isn't yet a dismantle/attack target — ramparts/walls/spawns are). FORTIFY/INVULNERABILITY
+  rampart effects, power-bank hit-back.
+- **`CombatRecording`** (the per-tick replay/introspection artifact) and **NPC AI** (Source Keepers,
+  invaders, invader cores), power creeps/effects, multi-room.
 When you add one, extend the source map table, add conformance tests, and update the README status.
 
 ## How to extend
@@ -148,3 +154,8 @@ seam; do not duplicate tactics here (this crate has no tactics — it only resol
   fatigue, swap + moves/weight tiebreak, obstacle + chain-block) wired into `resolve_tick` as
   phase C + phase-D move/fatigue application; terrain (walls/swamp) on `CombatWorld`. 24 host tests
   (added kiting + 7 movement-resolution). Same pinned versions.
+- **2026-06-17** — Structures slice: `SimStructure` (Spawn/Rampart/Wall) on `CombatWorld`;
+  Dismantle/AttackStructure/RangedAttackStructure actions; RMA extended to structures + rampart
+  RMA-shield + attack-back rampart-exemption; tower Heal/Repair actions. 30 host tests (added
+  dismantle-breach, spawn-kill, rampart-shield, attack-back-suppression, tower-heal, tower-repair-
+  vs-dismantle). Same pinned versions.

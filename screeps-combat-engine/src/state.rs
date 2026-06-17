@@ -1,6 +1,5 @@
 //! Combat world state — JS-free value types over `screeps::Position`. The deterministic tick
 //! (`resolve.rs`) operates on a `CombatWorld`. Scope: a single 50×50 room (ADR 0006 Part B).
-//! Structures-as-targets (ramparts/walls/spawn) arrive with a later slice.
 
 use crate::body::SimBody;
 use crate::constants::{FATIGUE_RATE_PLAIN, FATIGUE_RATE_SWAMP};
@@ -33,6 +32,38 @@ impl CombatTerrain {
 pub type PlayerId = u8;
 /// Stable per-engagement creep id (minted by the scenario; NOT a game `ObjectId`).
 pub type CreepId = u32;
+/// Stable per-engagement structure id.
+pub type StructureId = u32;
+
+/// Attackable/dismantlable structure kinds modelled so far. (Roads/containers/etc. and tower-as-
+/// target are follow-ups; towers fire via [`SimTower`].)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StructureKind {
+    Spawn,
+    Rampart,
+    Wall,
+}
+
+/// A passive (non-firing) structure that can be attacked/dismantled/repaired. Ramparts shield
+/// co-located targets from rangedMassAttack (engine `rangedMassAttack.js:38`) and suppress melee
+/// attack-back for an attacker standing on one (`_damage.js:17`); single-target attacks still hit
+/// a creep on a rampart directly (the engine does NOT redirect creep damage to the rampart).
+#[derive(Clone, Debug)]
+pub struct SimStructure {
+    pub id: StructureId,
+    pub kind: StructureKind,
+    /// `None` for unowned constructed walls; `Some` for ramparts/spawns.
+    pub owner: Option<PlayerId>,
+    pub pos: Position,
+    pub hits: u32,
+    pub hits_max: u32,
+}
+
+impl SimStructure {
+    pub fn is_alive(&self) -> bool {
+        self.hits > 0
+    }
+}
 
 /// A creep in the sim.
 #[derive(Clone, Debug)]
@@ -68,6 +99,7 @@ pub struct CombatWorld {
     pub terrain: CombatTerrain,
     pub creeps: Vec<SimCreep>,
     pub towers: Vec<SimTower>,
+    pub structures: Vec<SimStructure>,
     /// Owner whose controller is in safe mode this tick (all *hostile* combat zeroed), if any.
     pub safe_mode_owner: Option<PlayerId>,
 }
@@ -75,5 +107,15 @@ pub struct CombatWorld {
 impl CombatWorld {
     pub fn living_creeps(&self) -> impl Iterator<Item = &SimCreep> {
         self.creeps.iter().filter(|c| c.is_alive())
+    }
+    /// Is there a living rampart on this tile? (rangedMassAttack skips non-rampart targets here,
+    /// and an attacker standing here deals no melee attack-back.)
+    pub fn rampart_at(&self, x: u8, y: u8) -> bool {
+        self.structures.iter().any(|s| {
+            s.is_alive()
+                && s.kind == StructureKind::Rampart
+                && s.pos.x().u8() == x
+                && s.pos.y().u8() == y
+        })
     }
 }

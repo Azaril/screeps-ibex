@@ -34,15 +34,17 @@ first thing to read before changing any formula here.
 
 ## Status (P2.H1, in progress)
 
-- **Done:** the combat-math kernel (`constants`, `body`, `damage`) + value types (`state`) + the
-  full **two-phase tick** (`resolve`: combat accumulate → movement → apply + damage-then-heal
-  netting + deaths) + **same-tile movement-conflict resolution** (`movement`: eligibility/fatigue,
-  swap + moves/weight tiebreak, obstacle + chain-block). **24 host conformance tests** (kill
-  inequality, focus-fire, tower drain, safe mode, attack-back — EXP-FOUND-1/EXP-FOCUS-1 — plus
-  range-3 kiting at MOVE parity — EXP-KITE-1); host + wasm32 compile; clippy-clean.
-- **Next:** structures as damage targets (ramparts/walls/spawn) + dismantle + tower heal/repair,
-  pull-based movement (rate2/rate3), `CombatRecording` (per-tick replay artifact), and the
-  **server-captured golden vectors** that mark P2.H1 *done* (byte-exact vs the live engine).
+- **Done:** the combat-math kernel (`constants`, `body`, `damage`); the full **two-phase tick**
+  (`resolve`: combat accumulate → movement → apply + damage-then-heal netting + deaths);
+  **movement-conflict resolution** (`movement`: eligibility/fatigue, swap + moves/weight tiebreak,
+  obstacle + chain-block); and **structures** (`state`: ramparts/walls/spawn as attack/dismantle
+  targets with rampart RMA-shielding; towers heal/repair). **30 host conformance tests** — kill
+  inequality, focus-fire, tower drain, safe mode, attack-back (EXP-FOUND-1/EXP-FOCUS-1); range-3
+  kiting at MOVE parity (EXP-KITE-1); wall-breach, spawn-kill, rampart-shield, tower-heal,
+  tower-repair-vs-dismantle (EXP-BREACH/EXP-DEF). Host + wasm32 compile; clippy-clean.
+- **Next:** `CombatRecording` (per-tick replay artifact for the "see WHY" introspection),
+  pull-based movement (rate2/rate3), tower-as-target, and the **server-captured golden vectors**
+  that mark P2.H1 *done* (byte-exact vs the live engine).
 
 ## Quick start
 
