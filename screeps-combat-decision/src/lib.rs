@@ -1,23 +1,27 @@
-//! The tactical seam (ADR [0006](../docs/design/0006-eval-and-iteration-harness.md) §B.2, seam
-//! **S17** / [ADR 0015](../docs/design/0015-testing-and-validation-strategy.md)).
+//! # screeps-combat-decision
 //!
-//! This is the JS-free boundary that lets the bot's **real** combat decision code run inside the
-//! in-process combat micro-sim (`screeps-combat-engine`) with no fork: the decision reads a
-//! [`CombatView`] (value-type DTOs, **no `game::*` below this seam**) and emits [`CombatIntent`]s.
-//! Two adapters build the view — a **live** one over `game::*` (the thin per-tick shim in
-//! `jobs::squad_combat` / `missions::attack_mission`, isolated like the `screeps-rover`
-//! `screeps_impl.rs`) and a **sim** one over `CombatWorld` (in `screeps-combat-agent`). There is
-//! then exactly one implementation of target-selection / focus-fire / heal, so self-play is
-//! `IbexAgent` vs `IbexAgent` with no tactics drift (ADR 0006 §B.2).
+//! The tactical seam + the bot's pure combat decisions (ADR 0006 §B.2, seam **S17** / ADR 0015).
 //!
-//! **No cargo feature** (operator preference 2026-06-16): the decision functions are pure and
-//! `screeps-ibex` host-links, so the sim crate depends on the bot at the host target and calls them
-//! directly. This module is the crate's only intentionally-`pub` surface beyond the wasm exports.
+//! This crate is the JS-free boundary that lets the bot's **real** combat decision code run both on
+//! the live server and inside the in-process combat micro-sim (`screeps-combat-engine`) with no
+//! fork: a decision reads a [`CombatView`] (value-type DTOs, **no `game::*` below this seam**) and
+//! emits [`CombatIntent`]s. Two adapters build the view — a **live** one over `game::*` (the thin
+//! per-tick shim in the bot's `jobs::squad_combat` / `missions::attack_mission`, isolated like the
+//! `screeps-rover` `screeps_impl.rs`) and a **sim** one over `CombatWorld` (in
+//! `screeps-combat-agent`). There is then exactly one implementation of target-selection /
+//! focus-fire / heal, so self-play is `IbexAgent` vs `IbexAgent` with no tactics drift.
+//!
+//! **Why a standalone crate** (not a module in the bot): the decisions are pure logic over
+//! `screeps-game-api` value types — the same profile as `screeps-combat-engine` / `screeps-foreman`
+//! — so the sim harness depends on *this* (a tiny crate) instead of the whole bot, and the crate
+//! boundary mechanically enforces the "no `game::*` below the seam" rule (this crate cannot even
+//! reach the live game). **No cargo feature** (operator decision 2026-06-16): the decisions stay
+//! pure and feature-free; the `game::*`-reading adapters live in the bot, never here.
 //!
 //! Extraction is **parity-first**: the live shim must emit byte-identical combat intents to the
-//! prior inline logic (the `intents::IntentRecorder` digest — which covers only the combat
+//! prior inline logic (the bot's `intents::IntentRecorder` digest — which covers only the combat
 //! categories Attack/RangedAttack/RangedMassAttack/Heal/RangedHeal, *not* movement). Two decisions
-//! are extracted here: [`select_focus_target`] (the squad's shared focus, was
+//! live here: [`select_focus_target`] (the squad's shared focus, was
 //! `attack_mission::compute_focus_target`) and [`decide_combat`] (a creep's per-tick attack + heal
 //! intents, was `squad_combat`'s `execute_*_with_orders` / `fallback_*`). **Movement (formation +
 //! kiting) is deferred to P2.M2** (the anchor-mover rework) and is not part of the digest gate.

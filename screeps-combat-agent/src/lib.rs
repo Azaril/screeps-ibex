@@ -1,7 +1,7 @@
 //! `screeps-combat-agent` — the tactical seam's **sim side** (ADR 0006 Part B, P2.H2).
 //!
-//! It bridges the two halves of the harness: a [`SimView`] builds the bot's JS-free
-//! [`screeps_ibex::combat::CombatView`] from a [`screeps_combat_engine::CombatWorld`], and
+//! It bridges the two halves of the harness: a [`SimView`] builds the JS-free
+//! [`screeps_combat_decision::CombatView`] from a [`screeps_combat_engine::CombatWorld`], and
 //! [`IbexAgent`] runs the bot's **real** decision code ([`decide_combat`]) over that view. There is
 //! then exactly one implementation of the tactics (the bot's), so self-play is `IbexAgent` vs
 //! `IbexAgent` (or vs a scripted opponent) with no fork to drift or overfit — the whole point of
@@ -12,14 +12,15 @@
 //! id resolves back to a `CombatWorld` creep ([`SimView::creep_for`]) when the sim applies it.
 //! [`to_engine_action`] performs that translation for the creep-targeted combat intents.
 //!
-//! Host-only (workspace-excluded): it depends on the full bot crate at the host target.
+//! Host-only (workspace-excluded): it depends only on the `screeps-combat-decision` (tactics) and
+//! `screeps-combat-engine` (mechanism) member crates — not the whole bot.
 
 use screeps::{Position, RawObjectId, RoomName, StructureType};
-use screeps_combat_engine::{CombatAction, CombatWorld, CreepId, PlayerId, SimCreep, StructureKind};
-use screeps_ibex::combat::{
+use screeps_combat_decision::{
     decide_combat, select_focus_target, CombatBodyPart, CombatCreepDto, CombatIntent, CombatStructureDto, CombatView,
     CreepOrders, FocusTarget, Ownership, SquadStateDto, TacticalAgent,
 };
+use screeps_combat_engine::{CombatAction, CombatWorld, CreepId, PlayerId, SimCreep, StructureKind};
 use std::collections::HashMap;
 
 /// Mint a stable, host-constructible `RawObjectId` for a sim creep from its `CreepId`. Sim creeps

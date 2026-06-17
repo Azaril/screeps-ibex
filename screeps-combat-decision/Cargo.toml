@@ -1,0 +1,17 @@
+[package]
+name = "screeps-combat-decision"
+version = "0.1.0"
+authors = ["William Archbell <william@archbell.com>"]
+edition = "2021"
+description = "The tactical seam + the bot's pure combat decisions (CombatView/CombatIntent/TacticalAgent, select_focus_target, decide_combat) — ADR 0006 §B.2 / S17. JS-free logic over screeps-game-api value types, shared by the live bot (screeps-ibex) and the sim (screeps-combat-agent) so there is one tactics implementation, no fork."
+
+# A workspace MEMBER (like screeps-combat-engine / screeps-foreman): pure logic over
+# screeps-game-api value types (Part/Position/RawObjectId/StructureType), no host-only deps and no
+# game::* calls (the "no game::* below the seam" rule, ADR 0006 §B.2). It MUST be a member, not
+# excluded: the live bot ships its code to wasm (the squad_combat / attack_mission shims call
+# decide_combat / select_focus_target on the live tick), so it is in the `build-wasm` set. Inherits
+# the workspace [patch] for screeps-game-api. No cargo feature (operator decision 2026-06-16): the
+# decisions stay pure and feature-free; the game::*-reading adapters live in the bot, not here.
+
+[dependencies]
+screeps-game-api = "0.23"

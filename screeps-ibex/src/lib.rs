@@ -7,10 +7,11 @@
 static ALLOC: talc::TalckWasm = unsafe { talc::TalckWasm::new_global() };
 
 mod cleanup;
-/// The JS-free tactical seam (ADR 0006 §B.2 / S17) — the crate's only intentionally-public surface
-/// beyond the wasm exports, so the host-side combat sim (`screeps-combat-agent`) can drive the
-/// bot's real decision code.
-pub mod combat;
+// The JS-free tactical seam + pure combat decisions (ADR 0006 §B.2 / S17) live in their own member
+// crate `screeps-combat-decision`, so the host-side sim (`screeps-combat-agent`) depends on that
+// tiny crate instead of the whole bot. Re-exported as `crate::combat` so the live adapters in
+// `jobs::squad_combat` / `missions::attack_mission` (the only `game::*` users) keep their paths.
+pub use screeps_combat_decision as combat;
 mod constants;
 mod cpugovernor;
 mod creep;
