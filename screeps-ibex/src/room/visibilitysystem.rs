@@ -330,14 +330,11 @@ impl VisibilityQueue {
     pub fn has_unclaimed_scout_eligible(&self) -> bool {
         let now = game::time();
         self.entries.iter().any(|e| {
-            e.allowed_types.contains(VisibilityRequestFlags::SCOUT)
-                && !e.opportunistic
-                && !self.is_unreachable_now(e.room_name, now)
-                && {
-                    let rt = self.runtime.get(&e.room_name);
-                    let claimed = rt.map(|r| r.claimed_by.is_some()).unwrap_or(false);
-                    !claimed
-                }
+            e.allowed_types.contains(VisibilityRequestFlags::SCOUT) && !e.opportunistic && !self.is_unreachable_now(e.room_name, now) && {
+                let rt = self.runtime.get(&e.room_name);
+                let claimed = rt.map(|r| r.claimed_by.is_some()).unwrap_or(false);
+                !claimed
+            }
         })
     }
 

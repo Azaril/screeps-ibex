@@ -626,8 +626,7 @@ mod tests {
     fn solo_defender_builds_at_low_rcl() {
         // 300 = bare RCL2 spawn; 350/550 = partial/full RCL2 extensions.
         for capacity in [300u32, 350, 550, 800] {
-            let body = create_body(&solo_defender_body(capacity))
-                .unwrap_or_else(|_| panic!("solo defender must build at {capacity}e"));
+            let body = create_body(&solo_defender_body(capacity)).unwrap_or_else(|_| panic!("solo defender must build at {capacity}e"));
             assert!(body.iter().any(|&p| p == Part::RangedAttack), "needs RANGED_ATTACK at {capacity}e");
             assert!(body.iter().any(|&p| p == Part::Move), "needs MOVE at {capacity}e");
             let cost: u32 = body.iter().map(|p| p.cost()).sum();

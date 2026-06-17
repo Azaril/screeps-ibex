@@ -5,10 +5,10 @@ use crate::room::roomplansystem::RoomPlanData;
 // The unsigned 0..49 room-tile type the planner stores in `Plan::spawn_approaches`.
 // Aliased away from the bare name to avoid confusion with the distinct signed
 // `screeps_common::PlanLocation` (i8, supports negative stamp offsets).
-use screeps_common::Location as PlanTileLocation;
 use log::*;
 use screeps::action_error_codes::SpawnCreepErrorCode;
 use screeps::*;
+use screeps_common::Location as PlanTileLocation;
 use screeps_foreman::terrain::FastRoomTerrain;
 use specs::prelude::*;
 use std::collections::HashMap;
@@ -28,25 +28,14 @@ pub const SPAWN_PRIORITY_NONE: f32 = 0.0;
 /// Exclusive upper bound on a room tile coordinate (rooms are 50x50, 0..=49).
 const ROOM_COORD_MAX: i32 = 50;
 /// 8-directional neighbour offsets, ordered to match [`SpawnQueueSystem::delta_to_direction`].
-const NEIGHBOR_DELTAS: [(i32, i32); 8] = [
-    (0, -1),
-    (1, -1),
-    (1, 0),
-    (1, 1),
-    (0, 1),
-    (-1, 1),
-    (-1, 0),
-    (-1, -1),
-];
+const NEIGHBOR_DELTAS: [(i32, i32); 8] = [(0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1)];
 
 /// Whether a structure blocks a creep from being spawned onto its tile. Mirrors
 /// the dismantle behaviour's standability rule: roads, containers, extractors
 /// and own/public ramparts are standable; every other structure blocks.
 fn structure_blocks_spawn(structure: &StructureObject) -> bool {
     match structure {
-        StructureObject::StructureRoad(_)
-        | StructureObject::StructureContainer(_)
-        | StructureObject::StructureExtractor(_) => false,
+        StructureObject::StructureRoad(_) | StructureObject::StructureContainer(_) | StructureObject::StructureExtractor(_) => false,
         StructureObject::StructureRampart(rampart) => !(rampart.my() || rampart.is_public()),
         _ => true,
     }
@@ -106,9 +95,7 @@ impl LiveSpawnContext {
             .filter(|(dx, dy)| {
                 let nx = x as i32 + dx;
                 let ny = y as i32 + dy;
-                (0..ROOM_COORD_MAX).contains(&nx)
-                    && (0..ROOM_COORD_MAX).contains(&ny)
-                    && self.walkable(nx as u8, ny as u8)
+                (0..ROOM_COORD_MAX).contains(&nx) && (0..ROOM_COORD_MAX).contains(&ny) && self.walkable(nx as u8, ny as u8)
             })
             .count()
     }
@@ -236,11 +223,7 @@ pub struct SpawnQueueSystem;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl SpawnQueueSystem {
-    fn spawn_creep(
-        spawn: &StructureSpawn,
-        parts: &[Part],
-        directions: &[Direction],
-    ) -> Result<String, SpawnCreepErrorCode> {
+    fn spawn_creep(spawn: &StructureSpawn, parts: &[Part], directions: &[Direction]) -> Result<String, SpawnCreepErrorCode> {
         let time = screeps::game::time();
         let mut additional = 0;
         loop {
@@ -254,11 +237,7 @@ impl SpawnQueueSystem {
             let result = if directions.is_empty() {
                 spawn.spawn_creep(parts, &name)
             } else {
-                spawn.spawn_creep_with_options(
-                    parts,
-                    &name,
-                    &SpawnOptions::new().directions(directions),
-                )
+                spawn.spawn_creep_with_options(parts, &name, &SpawnOptions::new().directions(directions))
             };
             match result {
                 Ok(()) => return Ok(name),
@@ -292,11 +271,7 @@ impl SpawnQueueSystem {
     /// 3. **Empty** when even (2) finds nothing (a truly boxed-in spawn): the
     ///    caller then spawns unconstrained, letting the engine try every tile --
     ///    the last resort, strictly better than refusing to spawn.
-    fn safe_spawn_directions(
-        spawn_pos: Position,
-        approaches: &[PlanTileLocation],
-        live: &LiveSpawnContext,
-    ) -> Vec<Direction> {
+    fn safe_spawn_directions(spawn_pos: Position, approaches: &[PlanTileLocation], live: &LiveSpawnContext) -> Vec<Direction> {
         let sx = spawn_pos.x().u8() as i32;
         let sy = spawn_pos.y().u8() as i32;
 

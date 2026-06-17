@@ -14,11 +14,7 @@ use screeps::*;
 /// pre-clear path for *marginal* rooms is deferred (squad-system overhaul), so
 /// until then ANY live threat signal → unsafe (reject), which is the
 /// conservative choice.
-pub fn is_claim_target_safe(
-    threat: Option<&RoomThreatData>,
-    dynamic: &RoomDynamicVisibilityData,
-    intel_freshness_ticks: u32,
-) -> bool {
+pub fn is_claim_target_safe(threat: Option<&RoomThreatData>, dynamic: &RoomDynamicVisibilityData, intel_freshness_ticks: u32) -> bool {
     // Fresh intel required — a clean read older than the window is not trusted.
     if !dynamic.updated_within(intel_freshness_ticks) {
         return false;
@@ -159,7 +155,10 @@ mod tests {
     /// change is a deliberate, reviewed edit.
     #[test]
     fn max_claim_radius_is_derived_from_claim_creep_reach() {
-        assert_eq!(max_claim_radius_hops(), (CREEP_CLAIM_LIFE_TIME - CLAIM_ARRIVAL_MARGIN) / TICKS_PER_HOP);
+        assert_eq!(
+            max_claim_radius_hops(),
+            (CREEP_CLAIM_LIFE_TIME - CLAIM_ARRIVAL_MARGIN) / TICKS_PER_HOP
+        );
         assert_eq!(max_claim_radius_hops(), 11);
     }
 

@@ -167,10 +167,7 @@ impl Mission for RemoteBuildMission {
         // abort/unclaim) owns the room's fate. Keep the mission Running so it
         // resumes once the room is clear (or is torn down top-down on abandon).
         if system_data.features.claim.safety_gate {
-            let contested = room_data
-                .get_dynamic_visibility_data()
-                .map(|d| d.hostile_creeps())
-                .unwrap_or(false)
+            let contested = room_data.get_dynamic_visibility_data().map(|d| d.hostile_creeps()).unwrap_or(false)
                 || system_data
                     .threat_data
                     .get(self.room_data)

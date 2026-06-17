@@ -160,7 +160,11 @@ pub fn defender_heal_parts_for_dps(incoming_dps: f32, boosted: bool) -> u32 {
     if incoming_dps <= 0.0 {
         return 0;
     }
-    let per = if boosted { HEAL_PER_PART_ADJACENT * 4.0 } else { HEAL_PER_PART_ADJACENT };
+    let per = if boosted {
+        HEAL_PER_PART_ADJACENT * 4.0
+    } else {
+        HEAL_PER_PART_ADJACENT
+    };
     (incoming_dps / per).ceil().max(1.0) as u32
 }
 
