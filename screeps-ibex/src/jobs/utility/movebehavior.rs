@@ -116,6 +116,31 @@ pub fn mark_working(tick_context: &mut JobTickContext, target_pos: Position, ran
         });
 }
 
+/// Room-travel options for entering `room_name`, derelict-aware. A
+/// hostile-owned but militarily-dead (`derelict`) room — e.g. a salvage /
+/// outpost target — returns `HighCost` so economy creeps (miners, haulers)
+/// can actually path INTO it: the default `Deny` blocks any hostile-owned
+/// room, and the moment a derelict room's intel goes stale its
+/// `confirmed_derelict` flag lapses and it reads as plain hostile, stranding
+/// creeps at the border (they then can't refresh the intel — a deadlock the
+/// scout/dismantler/de-claimer avoid by also using `HighCost`). `derelict()`
+/// is the LAST-sighting classification (no fresh-intel requirement), and it
+/// stays false for re-armed/invaded rooms, so this never marches economy
+/// creeps into a defended room. Returns `None` (caller's default) otherwise.
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn derelict_aware_room_options(tick_context: &JobTickContext, room_name: RoomName) -> Option<RoomOptions> {
+    let is_derelict = tick_context
+        .runtime_data
+        .mapping
+        .get_room(&room_name)
+        .and_then(|entity| tick_context.system_data.room_data.get(entity))
+        .and_then(|room_data| room_data.get_dynamic_visibility_data())
+        .map(|dynamic_visibility_data| dynamic_visibility_data.derelict())
+        .unwrap_or(false);
+
+    is_derelict.then(|| RoomOptions::new(HostileBehavior::HighCost))
+}
+
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_move_to_room_state<F, R>(creep: &Creep, room_name: RoomName, state_map: F) -> Option<R>
 where

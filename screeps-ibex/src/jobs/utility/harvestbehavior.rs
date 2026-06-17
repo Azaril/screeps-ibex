@@ -1,7 +1,7 @@
 use crate::findnearest::*;
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
-use crate::jobs::utility::movebehavior::mark_working;
+use crate::jobs::utility::movebehavior::{derelict_aware_room_options, mark_working};
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use screeps::*;
@@ -89,12 +89,25 @@ where
     let target_position = target_id.pos();
 
     if !creep.pos().is_near_to(target_position) {
+        // Derelict-aware: a hostile-owned-but-dead source room (outpost /
+        // salvage target) is enterable at HighCost rather than blocked by the
+        // default Deny — otherwise an outpost miner can never reach a derelict
+        // room's sources once its `confirmed_derelict` intel lapses. (This is
+        // the harvester's actual room-entry move; `MoveToRoom` is not on the
+        // miner's outbound path.)
+        let room_options = derelict_aware_room_options(tick_context, target_position.room_name());
+
         if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
-            tick_context
+            let mut builder = tick_context
                 .runtime_data
                 .movement
-                .move_to(tick_context.runtime_data.creep_entity, target_position)
-                .range(1);
+                .move_to(tick_context.runtime_data.creep_entity, target_position);
+
+            builder.range(1);
+
+            if let Some(room_options) = room_options {
+                builder.room_options(room_options);
+            }
         }
 
         return None;
