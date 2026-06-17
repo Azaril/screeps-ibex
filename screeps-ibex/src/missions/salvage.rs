@@ -557,7 +557,7 @@ impl Mission for SalvageMission {
                 // spawning so we don't burn CLAIM bodies that die against a
                 // walled-in controller before dismantlers breach the path.
                 let declaim_access = declaim_target.map(|controller_id| {
-                    controller_access(
+                    position_access(
                         room_data.name,
                         structures.all(),
                         controller_id.pos(),
@@ -565,16 +565,22 @@ impl Mission for SalvageMission {
                     )
                 });
 
-                // If the controller is Sealed at the normal horizon, is it
-                // reachable when we IGNORE the horizon (max hits 0)? If so the
-                // seal is over-horizon walls we COULD chew (breach), not a
-                // terrain lock. Only computed when Sealed (a second flood).
-                let breach_possible = matches!(declaim_access, Some(ControllerAccess::Sealed))
-                    && declaim_target
-                        .map(|controller_id| {
-                            controller_access(room_data.name, structures.all(), controller_id.pos(), 0) != ControllerAccess::Sealed
-                        })
-                        .unwrap_or(false);
+                // Breach wanted if ANY objective we must physically reach is
+                // sealed at the horizon but breachable if we ignore it (=
+                // over-horizon enemy walls/ramparts). Objectives: every SOURCE
+                // (so miners can reach them — the cost matrix marks enemy
+                // walls/ramparts impassable, so a walled source is unmineable),
+                // plus the CONTROLLER when we mean to de-claim it.
+                let mut breach_objectives: Vec<Position> = sources.iter().map(|s| s.pos()).collect();
+                if let Some(controller_id) = declaim_target {
+                    breach_objectives.push(controller_id.pos());
+                }
+                let breach_possible = objectives_need_breach(
+                    room_data.name,
+                    structures.all(),
+                    &breach_objectives,
+                    derelict_features.max_structure_hits,
+                );
 
                 (work, dismantle_ready, declaim_access, breach_possible)
             });
@@ -614,11 +620,11 @@ impl Mission for SalvageMission {
         // breach them — but only on SURPLUS (excess home energy + an idle
         // spawn), at the lowest priority, because the wall energy is a net loss
         // (per the EV analysis) and this must consume spare capacity only.
-        let breach_needed = derelict_features.breach_sealed
-            && features.dismantle
-            && declaim_target.is_some()
-            && matches!(declaim_access, Some(ControllerAccess::Sealed))
-            && breach_possible;
+        // Breach when an objective (source for mining, or the controller for
+        // de-claim) is sealed behind over-horizon walls. `breach_possible`
+        // already aggregates all objectives — so this also opens walled-off
+        // sources, not just the controller.
+        let breach_needed = derelict_features.breach_sealed && features.dismantle && breach_possible;
 
         let breach_surplus = breach_needed
             && self

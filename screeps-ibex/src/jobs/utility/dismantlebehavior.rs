@@ -75,18 +75,13 @@ pub enum ControllerAccess {
     Sealed,
 }
 
-/// Classify how reachable a room's controller is for de-claim, using the
+/// Classify how reachable a TILE (a controller, a source, …) is, using the
 /// pathfinding system's flood-to-edge primitive twice: once treating ALL
 /// non-walkable structures as blocking (reachable now?), once treating only
 /// the un-clearable ones (terrain walls + engine-undismantlable + over-horizon)
 /// as blocking (breachable?). Needs live terrain; returns `Breachable` (the
 /// safe "wait, don't give up" verdict) if the room is not visible.
-pub fn controller_access(
-    room: RoomName,
-    structures: &[StructureObject],
-    controller_pos: Position,
-    max_structure_hits: u32,
-) -> ControllerAccess {
+pub fn position_access(room: RoomName, structures: &[StructureObject], target_pos: Position, max_structure_hits: u32) -> ControllerAccess {
     let Some(room_obj) = game::rooms().get(room) else {
         return ControllerAccess::Breachable;
     };
@@ -111,7 +106,7 @@ pub fn controller_access(
         }
     }
 
-    let start = (controller_pos.x().u8(), controller_pos.y().u8());
+    let start = (target_pos.x().u8(), target_pos.y().u8());
 
     let passable_now = |x: u8, y: u8| !terrain.is_wall(x, y) && !blocked_now.contains(&(x, y));
     if reaches_room_edge(&passable_now, start) {
@@ -126,12 +121,53 @@ pub fn controller_access(
     }
 }
 
+/// True if ANY of `objectives` (controller, sources, …) is sealed at the
+/// normal dismantle horizon but reachable when it is ignored — i.e. blocked
+/// only by over-horizon enemy walls/ramparts we could chew to open access.
+/// One terrain fetch covers all objectives. Drives the salvage breach
+/// decision for both de-claim (controller) and mining (sources).
+pub fn objectives_need_breach(room: RoomName, structures: &[StructureObject], objectives: &[Position], max_structure_hits: u32) -> bool {
+    if objectives.is_empty() {
+        return false;
+    }
+
+    let Some(room_obj) = game::rooms().get(room) else {
+        return false;
+    };
+
+    let terrain = FastRoomTerrain::new(room_obj.get_terrain().get_raw_buffer().to_vec());
+
+    let mut blocked_now: HashSet<(u8, u8)> = HashSet::new();
+    let mut blocked_unclearable: HashSet<(u8, u8)> = HashSet::new();
+
+    for structure in structures {
+        if structure_is_walkable(structure) {
+            continue;
+        }
+        let pos = structure.pos();
+        let tile = (pos.x().u8(), pos.y().u8());
+        blocked_now.insert(tile);
+        if !(can_dismantle(structure) && within_dismantle_hits_horizon(structure, max_structure_hits)) {
+            blocked_unclearable.insert(tile);
+        }
+    }
+
+    let passable_now = |x: u8, y: u8| !terrain.is_wall(x, y) && !blocked_now.contains(&(x, y));
+    let passable_breach = |x: u8, y: u8| !terrain.is_wall(x, y) && !blocked_unclearable.contains(&(x, y));
+
+    objectives.iter().any(|obj| {
+        let start = (obj.x().u8(), obj.y().u8());
+        // Sealed now (can't walk to it) but breachable (reachable if the
+        // over-horizon walls in the way are treated as dismantlable).
+        !reaches_room_edge(&passable_now, start) && reaches_room_edge(&passable_breach, start)
+    })
+}
+
 /// Whether a creep can walk from a room edge to within range 1 of `pos`
 /// RIGHT NOW (no dismantling) given current structures — the same "reachable
-/// now" test [`controller_access`] applies to the controller, exposed for any
-/// position (e.g. a source). Used for diagnostics and for gating remote
-/// mining on whether the source is actually reachable. `false` if the room is
-/// not visible.
+/// now" test [`position_access`] applies, exposed for any position (e.g. a
+/// source). Used for diagnostics and for gating remote mining on whether the
+/// source is actually reachable. `false` if the room is not visible.
 pub fn position_reachable_now(room: RoomName, structures: &[StructureObject], pos: Position) -> bool {
     let Some(room_obj) = game::rooms().get(room) else {
         return false;
@@ -215,29 +251,43 @@ impl BreachPlanCache {
     }
 }
 
-/// Tiles on the cheapest dismantle corridor from the creep to the room's
-/// controller, served from [`BreachPlanCache`] and re-planned only on
-/// blocker-set change. `None`/empty when the room has no controller, the
-/// controller is already reachable, terrain is unavailable, or the room is
-/// sealed past the hit-pool horizon (callers fall back to nearest-target
-/// selection).
-fn controller_breach_tiles<'a>(
+/// Tiles on the cheapest dismantle corridors from the creep to the room's
+/// OBJECTIVES — the controller AND every source — unioned, served from
+/// [`BreachPlanCache`] and re-planned only on blocker-set change. Clearing
+/// these opens access for de-claimers/reservers (controller) AND miners
+/// (sources): a source walled off by leftover enemy ramparts/walls is
+/// otherwise unreachable, since the cost matrix marks those structures
+/// impassable. `None`/empty when there are no objectives, all are already
+/// reachable, terrain is unavailable, or they are sealed past the hit-pool
+/// horizon (callers fall back to nearest-target selection).
+fn objective_breach_tiles<'a>(
     cache: &'a mut BreachPlanCache,
     creep_pos: Position,
     dismantle_room: &RoomData,
     structures: &[StructureObject],
     max_structure_hits: u32,
 ) -> Option<&'a HashSet<(u8, u8)>> {
-    let controller_pos = dismantle_room
-        .get_static_visibility_data()
-        .and_then(|static_data| static_data.controller().map(|c| c.pos()))?;
+    let static_data = dismantle_room.get_static_visibility_data()?;
+
+    let mut goals: Vec<(u8, u8)> = Vec::new();
+    if let Some(controller) = static_data.controller() {
+        let p = controller.pos();
+        goals.push((p.x().u8(), p.y().u8()));
+    }
+    for source in static_data.sources() {
+        let p = source.pos();
+        goals.push((p.x().u8(), p.y().u8()));
+    }
+
+    if goals.is_empty() {
+        return None;
+    }
 
     let blockers = breach_blockers(structures, max_structure_hits);
     let fingerprint = blocker_fingerprint(&blockers);
 
     let room_name = dismantle_room.name;
     let start = (creep_pos.x().u8(), creep_pos.y().u8());
-    let goal = (controller_pos.x().u8(), controller_pos.y().u8());
 
     Some(cache.corridor(room_name, fingerprint, move || {
         let Some(room) = game::rooms().get(room_name) else {
@@ -245,11 +295,16 @@ fn controller_breach_tiles<'a>(
         };
 
         let terrain = FastRoomTerrain::new(room.get_terrain().get_raw_buffer().to_vec());
+        let is_wall = |x: u8, y: u8| terrain.is_wall(x, y);
 
-        breach_path_blockers(&|x, y| terrain.is_wall(x, y), &blockers, start, goal)
-            .unwrap_or_default()
-            .into_iter()
-            .collect()
+        // Union the breach corridor to each objective (controller + sources).
+        let mut tiles: HashSet<(u8, u8)> = HashSet::new();
+        for goal in &goals {
+            if let Some(corridor) = breach_path_blockers(&is_wall, &blockers, start, *goal) {
+                tiles.extend(corridor);
+            }
+        }
+        tiles
     }))
 }
 
@@ -302,13 +357,13 @@ where
 
         let creep_pos = creep.pos();
 
-        // Controller-access priority: structures on the cheapest corridor to
-        // the controller come first, so a reserver/claimer can reach it as
-        // soon as the dead owner's controller decays — instead of waiting for
-        // the whole room to be flattened in nearest-first order. Falls back
-        // to nearest-target when the corridor is open, unknown, or its
-        // structures are not yet workable (e.g. store not emptied by raiders).
-        let breach_structures = match controller_breach_tiles(breach_cache, creep_pos, dismantle_room, structures.all(), max_structure_hits)
+        // Objective-access priority: structures on the cheapest corridors to
+        // the controller AND the sources come first, so reservers/de-claimers
+        // (controller) and miners (sources) can reach their targets instead of
+        // waiting for the whole room to be flattened in nearest-first order.
+        // Falls back to nearest-target when the corridors are open, unknown, or
+        // their structures are not yet workable (e.g. store not emptied).
+        let breach_structures = match objective_breach_tiles(breach_cache, creep_pos, dismantle_room, structures.all(), max_structure_hits)
         {
             Some(breach_tiles) if !breach_tiles.is_empty() => dismantle_structures
                 .iter()
