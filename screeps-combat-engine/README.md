@@ -96,13 +96,17 @@ cargo check -p screeps-combat-engine --target wasm32-unknown-unknown   # dual-ta
 ## Where it fits
 
 ```
-screeps-combat-engine  (this crate — MECHANISM: the exact combat tick)
-        ▲ drives
-screeps-combat-agent   (P2.H2, planned — the CombatView/CombatIntent trait seam; adapts the bot's
-                        REAL decision code so the sim runs it with no tactics fork → self-play)
+screeps-combat-engine    (this crate — MECHANISM: the exact combat tick)
+screeps-combat-decision  (TACTICS/SEAM: CombatView/CombatIntent + the bot's REAL decisions —
+                          select_focus_target / decide_combat; a member crate the live bot AND the
+                          sim both depend on, so there is one implementation, no fork)
+        ▲ both used by
+screeps-combat-agent     (P2.H2 — sim glue: builds a CombatView from a CombatWorld and runs the
+                          bot's IbexAgent over it → self-play. Depends only on engine + decision,
+                          NOT the whole bot)
         ▲ used by
-screeps-combat-eval     (P2.H4, planned — POLICY: scenarios, cohesion metrics, scoring, sim-vs-server
-                        parity, replay)
+screeps-combat-eval      (P2.H4, planned — POLICY: scenarios, cohesion metrics, scoring,
+                          sim-vs-server parity, replay)
 ```
 
 - The bot kernel `military/damage.rs` is a *sizing heuristic*; this crate is *exact tick
