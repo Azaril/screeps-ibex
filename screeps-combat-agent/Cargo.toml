@@ -1,0 +1,41 @@
+[package]
+name = "screeps-combat-agent"
+version = "0.1.0"
+authors = ["William Archbell <william@archbell.com>"]
+edition = "2021"
+description = "The tactical seam's sim side (ADR 0006 Part B / P2.H2): builds a screeps_ibex::combat::CombatView from a screeps-combat-engine CombatWorld and runs the bot's REAL decision code (IbexAgent) over it — so self-play uses one implementation, no tactics fork."
+
+# Workspace-EXCLUDED, host-only. Unlike screeps-combat-engine (a member: pure value-type
+# logic that also builds wasm), this crate depends on the FULL bot crate at the host target
+# to invoke its real `decide` — so it must NOT be in the wasm `build-wasm`/`check-wasm` set,
+# and it owns its own build root. [patch] tables apply only from the build root, so the bot's
+# git-dep redirects (workspace root Cargo.toml) are repeated below (the screeps-ibex-eval /
+# screeps-server-kit precedent).
+
+[dependencies]
+screeps-game-api = "0.23"
+screeps-combat-engine = { path = "../screeps-combat-engine" }
+screeps-ibex = { path = "../screeps-ibex" }
+
+# screeps-game-api is cloned as a sibling of the repo root (C:\code\screeps-game-api), so from this
+# subdirectory it is two levels up (the root patch's "../screeps-game-api" is relative to the root).
+[patch.crates-io]
+screeps-game-api = { path = "../../screeps-game-api" }
+
+[patch.'https://github.com/Azaril/screeps-cache']
+screeps-cache = { path = "../screeps-cache" }
+
+[patch.'https://github.com/Azaril/screeps-common']
+screeps-common = { path = "../screeps-common" }
+
+[patch.'https://github.com/Azaril/screeps-machine']
+screeps-machine = { path = "../screeps-machine" }
+
+[patch.'https://github.com/Azaril/screeps-rover']
+screeps-rover = { path = "../screeps-rover" }
+
+[patch.'https://github.com/Azaril/screeps-foreman']
+screeps-foreman = { path = "../screeps-foreman" }
+
+[patch.'https://github.com/Azaril/screeps-visual']
+screeps-visual = { path = "../screeps-visual" }

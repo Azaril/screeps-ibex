@@ -18,19 +18,20 @@
 //! [`state`] value types ([`CombatWorld`]). All host-tested against hand-computed engine values
 //! (the EXP-FOUND-2 degradation/TOUGH conformance checks).
 //!
-//! **Landed:** the full two-phase tick ([`resolve`]: combat accumulate → movement → apply +
-//! netting + deaths), same-tile movement-conflict resolution ([`movement`]: eligibility/fatigue,
-//! swap + moves/weight tiebreak, obstacle + chain-block), structures ([`state`]: ramparts/walls/
-//! spawn as attack/dismantle targets with rampart RMA-shielding; towers heal/repair), and the
-//! [`record`] replay artifact (`CombatRecording`: per-tick state + intents + reason tags + outcomes
-//! → the "see WHY a squad did X" introspection). **32 host tests**: kill inequality, focus-fire,
-//! tower drain, safe mode, attack-back (EXP-FOUND-1/EXP-FOCUS-1), kiting at MOVE parity
-//! (EXP-KITE-1), wall-breach/spawn-kill/rampart-shield/tower-heal/repair-vs-dismantle
-//! (EXP-BREACH/EXP-DEF), and recording capture/replay.
+//! **Landed (P2.H1 — engine port closed):** the full two-phase tick ([`resolve`]: combat
+//! accumulate → movement → apply + netting + deaths), same-tile movement-conflict resolution
+//! ([`movement`]: eligibility/fatigue, swap + moves/weight tiebreak, obstacle + chain-block, **pull**
+//! rate2/rate3), structures ([`state`]: ramparts/walls/spawn **and towers** as attack/dismantle/RMA
+//! targets with rampart RMA-shielding; towers fire heal/repair/attack *and* are themselves
+//! targetable + repairable), and the [`record`] replay artifact (`CombatRecording`: per-tick state +
+//! intents + reason tags + outcomes → the "see WHY a squad did X" introspection). **40 host tests**:
+//! kill inequality, focus-fire, tower drain, safe mode, attack-back (EXP-FOUND-1/EXP-FOCUS-1),
+//! kiting at MOVE parity (EXP-KITE-1), wall-breach/spawn-kill/rampart-shield/tower-heal/
+//! repair-vs-dismantle/tower-as-target (EXP-BREACH/EXP-DEF), pull, and recording capture/replay.
 //!
-//! **Next slice:** pull-based movement (rate2/rate3), tower-as-target, then the server-captured
-//! conformance vectors (P2.H1 *done* = byte-exact on those). Then P2.H2 — the `CombatView`/
-//! `CombatIntent` trait seam so the bot's real decision code drives this (self-play).
+//! **Now (P2.H2):** the `CombatView`/`CombatIntent` trait seam lives in `screeps-ibex::combat`; the
+//! sim adapter + `IbexAgent` (this engine driving the bot's real decision code) live in
+//! `screeps-combat-agent`. The byte-exact server-captured conformance vectors moved to P2.H5.
 //!
 //! Provenance + the engine→code source map + the reconciliation procedure live in `AGENTS.md`;
 //! user-facing overview in `README.md`. Read `AGENTS.md` before changing any formula.
