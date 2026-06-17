@@ -12,6 +12,10 @@ members = [
     "screeps-visual",
     "screeps-combat-engine",
     "screeps-combat-decision",
+    # The sim glue. Now that it depends only on workspace members (decision + engine + rover),
+    # not the bot, it is a member too — so it inherits the workspace [patch] table + Cargo.lock
+    # (no replication) and builds host+wasm like the other pure crates (operator note 2026-06-17).
+    "screeps-combat-agent",
 ]
 exclude = [
     "screeps-foreman-bench",
@@ -20,9 +24,6 @@ exclude = [
     "screeps-prospector",
     "screeps-rest-api",
     "screeps-pack",
-    # Host-only: depends on the full bot crate at the host target to run its real `decide`
-    # over the sim, so it must stay out of the wasm member set (P2.H2, ADR 0006 Part B).
-    "screeps-combat-agent",
 ]
 
 [profile.release]

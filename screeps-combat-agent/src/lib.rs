@@ -15,6 +15,8 @@
 //! Host-only (workspace-excluded): it depends only on the `screeps-combat-decision` (tactics) and
 //! `screeps-combat-engine` (mechanism) member crates — not the whole bot.
 
+pub mod pathing;
+
 use screeps::{Position, RawObjectId, RoomName, StructureType};
 use screeps_combat_decision::{
     decide_combat, select_focus_target, CombatBodyPart, CombatCreepDto, CombatIntent, CombatStructureDto, CombatView,
