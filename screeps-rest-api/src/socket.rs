@@ -140,15 +140,71 @@ pub struct ConsolePayloadLine {
     pub line: String,
 }
 
+/// Decode the HTML entities the official server emits in console output.
+///
+/// `console.log` text is HTML-escaped for the web client, so e.g. `->` arrives
+/// over the wire as `-&#x3E;`, `<` as `&lt;`, `&` as `&amp;`. Consumers want the
+/// original text (matching what the in-game console renders), so decode the
+/// named entities the sanitizer emits plus decimal/hex numeric character
+/// references. A malformed/unknown `&...;` run is left verbatim, and a line
+/// with no `&` (the private-server case, never escaped) returns unchanged.
+fn decode_html_entities(input: &str) -> String {
+    if !input.contains('&') {
+        return input.to_string();
+    }
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let after = &rest[amp..]; // starts with '&'
+        // A valid entity is `&...;`; bound the body so stray '&' in prose
+        // (e.g. "a & b") doesn't swallow the rest of the line.
+        let semi = after[1..]
+            .find(';')
+            .map(|p| p + 1)
+            .filter(|&p| (2..=12).contains(&p));
+        if let Some(semi) = semi {
+            if let Some(ch) = decode_entity(&after[1..semi]) {
+                out.push(ch);
+                rest = &after[semi + 1..];
+                continue;
+            }
+        }
+        out.push('&');
+        rest = &after[1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Decode the body of one entity (the text between `&` and `;`).
+fn decode_entity(entity: &str) -> Option<char> {
+    match entity {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "apos" => Some('\''),
+        _ => {
+            let num = entity.strip_prefix('#')?;
+            let code = match num.strip_prefix(['x', 'X']) {
+                Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+                None => num.parse::<u32>().ok()?,
+            };
+            char::from_u32(code)
+        }
+    }
+}
+
 /// Flatten a console-channel payload (`{"messages": {"log": [...],
 /// "results": [...]}}` / `{"error": "..."}`) into individual lines.
 /// Shape source: `@screeps/driver lib/index.js:368/:409` (see the
-/// module docs).
+/// module docs). Log text is HTML-unescaped ([`decode_html_entities`]).
 pub fn console_lines(payload: &Value) -> Vec<ConsolePayloadLine> {
     let mut out = Vec::new();
     let mut push = |kind: ConsoleLineKind, v: &Value| {
         let line = match v {
-            Value::String(s) => s.clone(),
+            Value::String(s) => decode_html_entities(s),
             other => other.to_string(),
         };
         out.push(ConsolePayloadLine { kind, line });
@@ -354,6 +410,43 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].kind, ConsoleLineKind::Error);
         assert!(lines[0].line.starts_with("Error: wasm trap"));
+    }
+
+    /// The official server HTML-escapes console output; decoding restores
+    /// the original text. Named entities, decimal + hex numeric refs, and
+    /// the literal-`&` / unknown-entity pass-through cases.
+    #[test]
+    fn decodes_html_entities() {
+        // The live shape that motivated the fix: `->` arrives as `-&#x3E;`.
+        assert_eq!(
+            decode_html_entities("create_construction_site failed -&#x3E; RclNotEnough"),
+            "create_construction_site failed -> RclNotEnough"
+        );
+        assert_eq!(
+            decode_html_entities("&lt;tag&gt; &amp; &quot;q&quot; &apos;a&apos;"),
+            "<tag> & \"q\" 'a'"
+        );
+        // Decimal and hex numeric references.
+        assert_eq!(decode_html_entities("&#39;&#x41;&#65;"), "'AA");
+        // No entities (private-server lines): unchanged, allocation-light.
+        assert_eq!(decode_html_entities("(INFO) plain line"), "(INFO) plain line");
+        // Stray '&' in prose and unknown entities are left verbatim.
+        assert_eq!(decode_html_entities("a & b"), "a & b");
+        assert_eq!(decode_html_entities("&unknown; &;"), "&unknown; &;");
+        // `&amp;lt;` decodes once to `&lt;`, not to `<` (single pass).
+        assert_eq!(decode_html_entities("&amp;lt;"), "&lt;");
+    }
+
+    /// console_lines unescapes log/result text end-to-end.
+    #[test]
+    fn console_lines_unescape_log_text() {
+        let payload: Value = serde_json::from_str(
+            r#"{"messages":{"log":["(WARN) p: Spawn at (16,17) -&#x3E; RclNotEnough"],"results":["1 &lt; 2"]}}"#,
+        )
+        .unwrap();
+        let lines = console_lines(&payload);
+        assert_eq!(lines[0].line, "(WARN) p: Spawn at (16,17) -> RclNotEnough");
+        assert_eq!(lines[1].line, "1 < 2");
     }
 
     /// Consumers embed the kind in JSONL artifact records — pin the
