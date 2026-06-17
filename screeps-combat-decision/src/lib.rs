@@ -25,6 +25,13 @@
 //! `attack_mission::compute_focus_target`) and [`decide_combat`] (a creep's per-tick attack + heal
 //! intents, was `squad_combat`'s `execute_*_with_orders` / `fallback_*`). **Movement (formation +
 //! kiting) is deferred to P2.M2** (the anchor-mover rework) and is not part of the digest gate.
+//!
+//! [`cohesion`] holds the squad-cohesion *geometry* (spread / max-pairwise / in-formation-rate) —
+//! the movement-workstream validation instrument and the basis for H3's military score, shared by
+//! the sim and the live bot (the seg-57 wiring is H3).
+
+/// Squad-cohesion geometry (the movement validation instrument; see module docs).
+pub mod cohesion;
 
 use screeps::{Part, Position, RawObjectId, StructureType};
 
