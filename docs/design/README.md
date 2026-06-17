@@ -15,7 +15,8 @@ Architecture Decision Records (ADRs) for the rewrite's pillars, plus design note
 | [0005](0005-runtime-and-scheduling-model.md) | Runtime & scheduling model | — | Proposed |
 | [0006](0006-eval-and-iteration-harness.md) | Local-server eval & iteration harness | review §11/§12, plan Increment 0 | Proposed |
 | [0007](0007-hauling-logistics.md) | Hauling & logistics (algorithmic complexity) | IBEX-011/030/031/050, "Hauling is NP-hard" | Proposed |
-| [0008](0008-combat-and-squad-architecture.md) | Combat & squad architecture (objective-driven missions + generic Squad Manager) | Field Reports A/B, IBEX-001/002/026/027/028/043 | Proposed |
+| [0008](0008-combat-and-squad-architecture.md) | Combat & squad architecture (scout-style objective queue + generic Squad Manager + anchor mover) | Field Reports A/B, IBEX-001/002/026/027/028/043 | Proposed |
+| [0008a](0008a-combat-tactics.md) | Combat tactics & behavior catalog + experiment register (the concrete behaviors 0008's tactics model executes; iterated on the 0006 sim) | operator: ADR/plan underspecified on actual tactics | Proposed |
 | [0009](0009-room-planning-and-multiroom-layout.md) | Room planning & multi-room layout (foreman) | IBEX-032/036/037 | Proposed |
 | [0009a](0009a-room-planner-performance.md) | Room-planner performance: diagnosis & redesign (candidate-explosion → defendable-by-construction footprint) | operator "very slow"; overturns 0009's "no rewrite" premise | Proposed |
 | [0009b](0009b-room-planner-scoring-and-evaluation.md) | Room-planner scoring, evaluation & RCL revamp (tower coverage, source-proximate early extensions, storage→refill hauling; independent bench evaluator) | operator: tower coverage 0.302 over 5123 rooms; scoring discrimination collapse | Proposed |

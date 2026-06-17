@@ -21,6 +21,25 @@ Two seed concerns are **refuted** and must not be reintroduced as problems: IBEX
 
 This is an **identity** decision only. Whether `specs` remains the **dispatch** substrate is independent and is deferred to **ADR 0005** (runtime/scheduling); nothing here forces a runtime-model change, and a runtime-model change off `specs` would itself ride on this decision.
 
+### Why a minted `SquadId` and not a `specs::Entity` / saveload marker (the recurring question)
+
+A `specs::Entity` is `{ index, generation }`, **both assigned by the ECS allocator at world-build time** — it is a *runtime handle*, valid only within one VM lifetime, not a durable key. Screeps resets the VM frequently; on each rebuild the allocator hands out fresh indices/generations, so an `Entity` captured before a reset does not denote the same logical object after it. specs' answer is the **saveload marker machinery** (`SimpleMarker`/`SimpleMarkerAllocator`, `serialize.rs:10-14`; `Entity`-bearing components round-trip via `ConvertSaveload<M>`). That machinery works, but it is exactly what forces `repair_entity_integrity` (a `ConvertSaveload` panic on a dangling `Entity` would otherwise skip `serialize_world`) — the per-tick scan + no-op-default trap this ADR exists to delete (Field Report E). And the creep→squad link lives in `JobData`, which is **plain serde, not `ConvertSaveload`** — so it cannot use the marker remapper at all, which is precisely why today's code stores the bare `Entity::id()` u32 and silently aliases a recycled slot (IBEX-002b).
+
+**You do not lose ECS access by storing an id.** The pattern already in-tree is: persist a stable key, resolve the `Entity` each tick. Rooms are referenced by `RoomName` and the `Entity` is rebuilt every tick into `EntityMappingData` (`entitymappingsystem.rs:30-35`); creeps store `ObjectId<Creep>` (`CreepOwner`). Neither persists an `Entity`; neither needs the repair pass; a stale key resolves to a handled `None`, never a foreign object. `SquadId` extends this to the **one entity class with no engine-provided stable key** — a room has a `RoomName`, a creep has an `ObjectId<Creep>`, but a squad is ECS-only with no game object, so its stable key must be *minted*.
+
+Full-`Entity`-plus-markers vs. minted `SquadId`, honestly compared:
+
+| | full `Entity` + saveload markers | minted `SquadId` (chosen) |
+|---|---|---|
+| Survives reset | yes (marker re-maps on load) | yes (plain id, no remap) |
+| Stale/recycled ref | **panics `ConvertSaveload`** → requires `repair_entity_integrity` | handled **`None`** at a validate-on-access seam |
+| Per-tick cost | the seven-block repair scan | one `HashMap` rebuild (net-negative — replaces the scan) |
+| Usable in `JobData` (plain serde) | **no** — would require converting `JobData` to `ConvertSaveload` | yes, natively (a plain serde value) |
+| Type safety | an untyped u64 marker | a distinct type — cannot be confused with a creep/mission/room key |
+| Lets the repair pass be **deleted** | no (keeps the whole machinery) | **yes** (A3) |
+
+So `SquadId` is not "instead of the ECS" — it is the **serialization-stable name** for a squad, resolved to an `Entity` (or to `&SquadState` in the store, A2) every tick exactly as rooms already resolve from `RoomName`. Its one genuinely new cost is lifecycle: it must be minted from a monotonic counter persisted with the store and **never recycled** (a recycled id would reintroduce the very aliasing it removes — see Costs).
+
 Migrate squads first (smallest surface, most broken) in three confidence-driven steps:
 
 - **A1 — generation-carrying handle.** Replace the bare-u32 link with a `{ index, generation }` handle resolved through *one* validate-on-access helper, so a stale/recycled slot resolves to `None` instead of silently aliasing. **Breaking change: Behavioral** (interim — closes the aliasing without a full store).

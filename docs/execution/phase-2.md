@@ -1,0 +1,182 @@
+# Phase 2 Execution Plan — Combat-Effective: Harness, Identity, Movement, Goals, War
+
+> **Scope:** The combat-squad overhaul — harness-first, then behavior — spanning the combat micro-sim ([ADR 0006](../design/0006-eval-and-iteration-harness.md) Part B), squad identity ([ADR 0001](../design/0001-entity-model.md) Inc 3), group movement ([ADR 0003](../design/0003-behavior-modeling.md) §B), the objective-queue + Squad Manager + tactics ([ADR 0008](../design/0008-combat-and-squad-architecture.md)), war supervision + escort + a thin posture hook ([ADR 0014](../design/0014-empire-strategy-and-posture.md)), and synchronized spawning ([ADR 0011](../design/0011-spawn-orchestration.md) D3/D4/D9). The higher-level backlog/overview lives in [`../plans/combat-overhaul-plan.md`](../plans/combat-overhaul-plan.md); **this document is the authoritative execution tracker.** Rewrite-plan increment mapping: this phase covers the **combat-sim addition to Inc 0** + **Inc 3** (SquadStore) + **Inc 4** (cohesion/manager/tactics) + **Inc 5** (war supervisor). Exit at **M4 (Combat-Effective)**.
+>
+> **Why this phase, in one paragraph.** Combat squads are "very ineffective": null tactics ("just stand and ranged-mass-attack"), **orphaned → idle** when an objective completes, and **scatter** (cohesion/group-pathfinding). The fix copies the scouting pull model (a global objective queue), adds a lifecycle/tactics owner (the Squad Manager), and a proper anchor-based group mover — but **none of it is measurable today** (the harness scores `military: None`, no cohesion metrics), so the harness lands first.
+>
+> **Living document.** §1 (Design) is the end state and changes only when a design decision changes (ADRs are authoritative for rationale). §2 (Execution) is the work tracker: statuses, decisions (the *how/why*), baselines, and resume notes are updated **as work lands** — task IDs (`P2.*`) appear in commit messages exactly like Phase 0/1. **If you are resuming cold:** read §2.0 status log (newest first), then the checkpoint table §2.7 to see which checkpoint is next, then that checkpoint's workstream task table.
+>
+> **Status: NOT STARTED** (authored 2026-06-17). Design corpus settled (ADRs 0006/0008/0003/0011/0014/0015/0001 revised through 2026-06-17, incl. the anchor-primary movement correction). No production code yet.
+
+---
+
+## 1. Design — the end state
+
+Each subsystem sits behind a seam that outlives this phase. ADR references are authoritative for rationale; this section pins what Phase 2 builds toward so the executor never re-derives intent. The **operator-settled decisions** (2026-06-16/17) that constrain everything below: harness = hybrid combat micro-sim running the bot's *own* code; movement = **anchor-primary** (NOT lead-follower); corridors handled by **relaxing** the same mover (no separate follower mode); `Follow`/`pull` reserved for no-MOVE/under-MOVE bodies; squad-on-objective-complete = **retask-if-viable-else-recycle**; boosts = **wire** behind the kill-switch; common movement code goes in the **pathfinding/movement system**.
+
+### 1.1 Combat micro-sim harness (the harness-first prerequisite) — [ADR 0006](../design/0006-eval-and-iteration-harness.md) Part B
+
+A deterministic, in-process Rust combat simulator that drives the bot's **own** combat decision code, so iteration is fast (`cargo test-host`, no Docker), introspectable (per-tick state + reason tags + replay), and self-play-capable (the same code on both sides — no tactics fork to overfit). Three host-only, workspace-EXCLUDED crates: `screeps-combat-engine` (mechanism: the combat-tick port), `screeps-combat-agent` (the `CombatView`/`CombatIntent` trait seam + `IbexAgent` + scripted opponents), `screeps-combat-eval` (policy: scenarios, cohesion metrics, score, parity, replay). The Dockerized private server stays as the **fidelity oracle + acceptance gate**, not the per-change loop. Fidelity bounded three ways: per-change **byte-exact conformance vectors** captured from the live engine, a **nightly sim-vs-server parity budget**, and the **live seg-57 cohesion canary**. The combat mechanic surface is bounded (verified against `C:\code\screeps-engine`): two-phase accumulate-then-apply, the intent priority/exclusion table, per-part 100-hit pools + front-to-back destruction + `calcBodyEffectiveness`, all damage/heal/dismantle/tower-falloff formulas, TOUGH/boost rounding, fatigue + same-tile movement conflict, ramparts/safe-mode, single 50×50 room. Omits economy/market/power/spawn-logistics/inter-room/NPC-AI; pathfinding is reused from `screeps-rover`, not reimplemented.
+
+### 1.2 The tactical seam (trait-first) — [ADR 0006](../design/0006-eval-and-iteration-harness.md) §B.2, [ADR 0003](../design/0003-behavior-modeling.md), [ADR 0015](../design/0015-testing-and-validation-strategy.md) S17
+
+The combat decision is **generic over a JS-free `CombatView` trait** emitting `CombatIntent`s — no `game::*` below the seam. Two implementors: a live adapter (reads `game::*`, isolated in a leaf module — the `screeps-rover` `screeps_impl.rs` template) and a sim adapter (reads `CombatWorld`). **No cargo feature** (operator preference): the decision fn is pure and `screeps-ibex` already host-links ([ADR 0015](../design/0015-testing-and-validation-strategy.md) verified), so the sim depends on the bot at the host target and calls `decide()` directly. A `tactical` feature is the fallback only if host-compiling the bot proves too heavy. There is then exactly one implementation of target-selection/formation/kite/focus-fire; self-play is `IbexAgent` vs `IbexAgent`. Extraction is **parity-first**: the live shim and the extracted fn must emit byte-identical intents (the `IntentRecorder` digest) before any sim result is trusted.
+
+### 1.3 Squad identity — [ADR 0001](../design/0001-entity-model.md) Inc 3, [ADR 0015](../design/0015-testing-and-validation-strategy.md) S8
+
+`SquadStore` + `SquadId` (a stable id minted from a monotonic counter persisted with the store — **never** a recycled index) replaces the raw `squad_entity: Option<u32>` on `SquadCombatJob`. `resolve(id)` returns the same-logical-squad-or-`None`, **never a foreign squad** after a recycle/reset (the IBEX-002b aliasing). A **dangling-ref counter** emits to seg-57 on every miss. This is the hard gate for the Squad Manager (a lifecycle owner keyed on a recyclable index would resurrect the aliasing across the whole roster). `WORLD_FORMAT_VERSION` bumps when the `SquadId` field lands (one loud reset, sanctioned by the reset-anytime policy). **Why a minted id and not a `specs::Entity`/saveload marker** — an `Entity` is a runtime handle (index+generation reassigned every world-build), not a serialization-stable key; storing one keeps the `ConvertSaveload`/`repair_entity_integrity` machinery this rewrite deletes, and `JobData` is plain serde so it can't use markers anyway. Full rationale + comparison table: [ADR 0001 §"Why a minted `SquadId`…"](../design/0001-entity-model.md). (ADR 0001 A1 is an interim *generation-carrying handle*; A2's `SquadId` is the end state — don't conflate them.)
+
+### 1.4 Group movement: the anchor mover — [ADR 0003](../design/0003-behavior-modeling.md) §B.2 (corrected 2026-06-17), [ADR 0008](../design/0008-combat-and-squad-architecture.md) §5
+
+**One anchor mover on a continuum of tightness** (not two modes with a handoff). The anchor is the squad's shared coordinate frame (`virtual_pos` + orientation); each member targets `anchor + rotate(base_offset, orientation)`.
+- **Open terrain (N≤4):** rigid body — exact offsets, hard cohesion gate, a **cached footprint-aware tile-path** the anchor follows (pathfound once via the reusable "moving-maximum" cost transform `applyMovingMaximum(w,h)` — in the pathfinding/movement system, parameterized by W×H — cached on `SquadPath`, followed step-by-step, **re-pathed only on invalidation/stuck**, the rover `CreepPathData.path` discipline; NOT the current straight-line `signum` `advance_virtual_pos`), plus tower-avoidance pricing; **lockstep block advance** (one cached pathfind + N cheap direction-moves). Full **orientation/rotation** (the dormant `FormationLayout::{orient_toward,mirror_y,rotate_cw}` + `threat_direction` + `reassign_slots`/`threat_facing_slots`): face the threat, keep tanks/high-HP front + healers back, `mirror_y` on retreat to kite as a block, rotate-in-place (engine-confirmed 4-cycle) to present a fresh creep.
+- **Corridor / room-edge:** **relax the same mover** — width-1 footprint pathfind + travel-oriented `line`/loose tolerance; self-mobile members file through (terrain enforces single-file), the hard gate re-forms the box on the open side. No separate follower mode, no `pull`.
+- **Blob (N>4):** loose-centroid cohesion ("within K tiles of the centroid") or split into anchored sub-squads.
+- **`Follow`/`pull`** reserved for no-MOVE/under-MOVE'd compositions (pulled attacker / dedicated puller), an optional rover capability — not the corridor mechanism. Fatigue cohesion for normal squads = MOVE-balanced bodies + the aggregate-fatigue gate.
+
+The *current* anchor is broken only because `advance_virtual_pos` steps in a straight line (no pathfind) while members path independently and the mode ratchets into Loose — all fixable; ~90% of the proper machinery already exists, dormant.
+
+### 1.5 Global goal layer + lifecycle owner + tactics — [ADR 0008](../design/0008-combat-and-squad-architecture.md), [ADR 0015](../design/0015-testing-and-validation-strategy.md) S9/S14
+
+- **`CombatObjectiveQueue`** — modeled directly on the scout `VisibilityQueue` (`room/visibilitysystem.rs`): a global, persistent, priority/TTL request queue of *objectives* (`Secure`/`Defend`/`Dismantle`/`Harass`/`Farm`/`Escort`, per-room/target). Two-layer: persistent durable facts + `UnwinnableTarget` give-up backoff; **ephemeral assignment** (`claimed_by` — never serialized, self-heals on reset, cannot dangle). Idempotent upsert (priority max-merge, TTL extend). `SuccessPredicate` is an **observable world-state** predicate, decoupling objective lifetime from creep lifetime. Producers (war/defense-scan/claim/attack) upsert; the manager pulls.
+- **`SquadManager`** — a single perpetual ECS system (like `ScoutOperation`): claim/retask objectives for `SquadId`s; composition→roster via the threat-matched `damage.rs`/`sized_*_body` helpers; **pre-spawn replacement, never renew**; compute the per-tick tactical orders; enforce cohesion-as-invariant + per-state deadlines; retire/force-abort. On objective-complete-while-healthy: **retask** to the next viable objective (≥40% residual TTL), else recall-and-recycle. Orphan/idle GC at two levels (manager owns all squads; `SquadCombatJob` gains a `Recall` terminal state).
+- **Tactics** (computed once by the manager, executed by the FSM through the one guarded sink): authoritative focus-fire from the whole-squad centroid + a manager-supplied ranked fallback (out-DPS the *aggregate* enemy heal); kiting orders (`Engage`/`Kite`/`Hold`) in the ordered path; centralized boost-aware heal; engage/disengage with **coupled hysteresis** (no yo-yo). **The concrete behaviors live in [ADR 0008a](../design/0008a-combat-tactics.md)** (the tactics catalog + tunable-params table + experiment register, EXP-*). These are the experimental SHELL: we **iterate on the sim (per-change) and the private server (acceptance) to find effective tactics** — 0008a's experiment register IS the validation loop for workstream G3, run foundations-first (EXP-FOUND/KITE/FOCUS before TOWER/BREACH/COMP/DEF). G3's "done" = the relevant EXP-* gates pass, not a fixed parameter set.
+
+### 1.6 Defense, war supervision, escort, posture hook — [ADR 0008](../design/0008-combat-and-squad-architecture.md) Step 5, [ADR 0014](../design/0014-empire-strategy-and-posture.md), [ADR 0017](../design/0017-threat-aware-expansion-lifecycle.md)
+
+- **Defense converges onto the manager:** `SquadDefenseMission` becomes a `Defend` objective (the dominant cohesion fix — defense is squad-LESS by construction today). Keep the 2026-06-16 `hostile_warrants_defender` body-parts trigger + owned-room-invader rule; preserve the ADR 0017 §13 ownership-subordinate invariant (a `Defend` objective for a room we no longer own is withdrawn immediately).
+- **`WarOperation` becomes a supervisor:** withdraw low-value objectives when `max_concurrent_attacks` shrinks (IBEX-028); feed real per-squad spend so the economy-abort fires (IBEX-026); `UnwinnableTarget` backoff.
+- **Escort/pre-clear** (ADR 0017 deferred): the claim pipeline declares an `Escort{room}` objective for marginal targets (sizing via `DefenseEscalation::from_threat`).
+- **Thin posture hook** (ADR 0014, minimal): player-offense objectives are produced only under a `WarDecl`; NPC policing and reactive defense are posture-independent. The full posture engine is a later phase.
+
+### 1.7 Synchronized spawning — [ADR 0011](../design/0011-spawn-orchestration.md) D3/D4/D9
+
+The `SquadManager` is the **sole combat demand producer** (`GroupId = SquadId`). Align-finish group admission (all members emerge within window W at full TTL; until admitted the group consumes zero lanes — no half-spawned quads idling at rally) + pre-spawn replacement (no renew). Boost-on-spawn handoff (IBEX-027 → **wire** behind the kill-switch): declare boosts from `required_boosts()` → reserve at schedule time → gate deploy on `is_ready`.
+
+### 1.8 Explicitly OUT of Phase 2
+
+- The **full posture/allocator engine** (ADR 0014 §2–3 — CPU capacity model, marginal-surplus arbitration): only the thin `WarDecl` gate (§1.6) lands here.
+- The **data-driven FSM rewrite** (ADR 0003 §A, Inc 6) — the combat job stays `screeps-machine`; only the *tactical decision extraction* (§1.2) and the `Recall` state land. The combat sim recorder/replay is the combat-scoped early realization of the F4 recorder; the full GameView-real recorder stays on its Inc-6 schedule for the HaulJob pilot.
+- The **holistic serialization pass** (version headers / migration / fuzz, Inc 7): combat shape changes ride the reset-anytime policy (loud reset, `WORLD_FORMAT_VERSION` bump).
+- **Carried-but-separable from Phase 1** (non-combat; may ride opportunistically or slip without harm): D1/D2 (0007 `TransferSnapshot` + governor-gated re-match), B5 remainder (route-cache warm / cost-matrix TTL), Critical-tier shed validation (needs a harder burn calibration). The Inc-2 serialization-tail remnant (loud decode-reset, watermark→seg-57, IBEX-049) is small and already substantially live; IBEX-049 (`#[serde(skip)]` on regenerable `CreepPathData.path`) rides P2.I2.
+- **`pull`-based under-MOVE compositions** (P2.M4) are optional and only built if/when such bodies are fielded.
+
+---
+
+## 2. Execution — work tracking (living)
+
+### 2.0 Status log (newest first)
+
+- **2026-06-17 (d)** — **P2.H1 cont.: stationary two-phase resolver + crate provenance docs.** `resolve.rs` — the two-phase accumulate-then-apply tick: creep actions (Attack/RangedAttack/RangedMassAttack/Heal/RangedHeal) + tower fire accumulate into per-target damage/heal pools (with the `creeps/intents.js` priority/exclusion subset — RMA supersedes single rangedAttack, melee attack dropped when healing), then **damage-then-heal netting** (signed, so a same-tick heal can rescue) → deaths → fatigue regen. Melee **attack-back**, **safe-mode** gating, and tower **energy drain** modeled. **16 host tests** now (added: kill inequality both directions, focus-fire 1-vs-2-attackers, tower-drain self-heal + energy burn, safe-mode zeroing, melee attack-back) — these *are* EXP-FOUND-1 / EXP-FOCUS-1 against hand-computed engine values. Warning-free, host + wasm. Added **`README.md`** (users) + **`AGENTS.md`** (AI): the latter carries the **engine→code provenance map** (every formula → its engine `file:lines`), the **pinned engine commits** (engine `8097782`/v4.3.2, common `2fb779b`, game-api `0.23.1`), and the **reconciliation procedure** for engine updates (diff exactly the mapped files, update + re-test). Still **not committed** (operator hasn't asked). Next: same-tile movement-conflict resolution (`rate1..rate4`/pull) + structures/ramparts/dismantle/tower-heal + `CombatRecording` + server-captured golden vectors.
+- **2026-06-17 (c)** — **P2.H1 first slice landed: the combat-engine math kernel.** New workspace crate `screeps-combat-engine` — a workspace **MEMBER** (not EXCLUDED as ADR 0006 §B.1 wrote): it's pure logic over `screeps-game-api` value types (`Part`/`Position`), exactly the `screeps-rover`/`screeps-foreman` profile, with no tokio/bollard, so the exclusion rationale doesn't apply and it inherits the workspace `screeps-game-api` patch. Modules: `constants` (engine combat numbers), `body` (per-part 100-hit pools + back-to-front degradation from `_recalc-body`'s fill, boost-aware `calcBodyEffectiveness` power, and the TOUGH/boost `_applyDamage` reduction with the single end-round), `damage` (rangedMassAttack + tower falloff — tower formula kept identical to the bot's `military/damage.rs`), `state` (`CombatWorld`/`SimCreep`/`SimTower` value types). **10 host conformance tests pass** (5×ATTACK=150, boosted ×4, heal 12/48, part-hits fill back-to-front so `body[0]` dies first, power degrades as front parts die, TOUGH ×0.3 within-capacity + capacity-exceeded spill + dead-TOUGH-no-mitigation, RMA {1,0.4,0.1}, tower 600→450→150). **Host + wasm32 both compile** (dual-target rule); clippy clean. Created at the wrong path first (sibling of the repo) → moved into `screeps-ibex/screeps-combat-engine`. Engine re-read for fidelity: `creeps/tick.js` `_applyDamage`, `_recalc-body.js`, `utils.js:623` `calcBodyEffectiveness`. **Next:** `resolve.rs` two-phase tick (intent priority/exclusion + per-target damage/heal pooling + damage-then-heal netting + deaths + fatigue regen) for the *stationary* engagement (drives EXP-FOUND-1/EXP-FOCUS-1), then movement-conflict resolution, then `CombatRecording` + server-captured conformance vectors (P2.H1 done = byte-exact on those).
+- **2026-06-17 (b)** — **Tactics catalog authored + operator decisions.** [ADR 0008a](../design/0008a-combat-tactics.md) (Combat Tactics & Behavior Catalog + 17-step experiment register) landed — G3's definition of done is now "the EXP-* gates pass," not a fixed parameter set. **Operator decisions (2026-06-17):** (1) **quad composition** — *let EXP-COMP-1 decide* (build both the uniform RA+HEAL brick AND the 2+2 split, self-play, adopt the winner); (2) **marginal-claim escort (P2.W3)** — *build it* (confirmed in scope, no longer deferred); (3) **reserve denial (T-CTRL-3)** — build the *proactive* de-reservation capability but **gate it behind a feature flag defaulting OFF** (reactive denial stays always-on; proactive is operator-enabled, `features.rs` pattern); (4) **boost-commit** — *conservative floor* (gate boosted assaults behind a stored-mineral/lab-throughput floor; downgrade to unboosted or wait when short — never drain the economy). Other 5 catalog open-questions are sim-tunable (resolved by experiment sweeps).
+- **2026-06-17 (a)** — Document authored. Design corpus settled: ADR 0006 (combat micro-sim, Part B), 0008 (objective queue + manager + tactics + anchor movement), 0003 §B.2 (anchor-primary movement correction), 0011 (synchronized spawn — already aligned), 0014 (thin WarDecl hook), 0015 (S17 seam), 0001 (SquadStore). Operator decisions baked in (harness hybrid/trait-first; anchor-primary, relax-don't-switch for corridors; retask-else-recycle; wire boosts; common movement code in the pathfinding system). Prereqs in place: Phase-1 substrate complete (seg-57, colony-health score, governor, containment, intent sink/differ — M0+M1, sign-off 2026-06-12); the eval harness crates (`screeps-server-kit`/`screeps-ibex-eval`/`screeps-ibex-metrics`) exist and are economy-only (`military: None`). **First push (operator): P2.M0 quick-wins + P2.H1 in parallel.**
+
+### 2.1 Conventions
+
+- Task IDs `P2.<workstream><n>` (workstreams: **H** harness, **I** identity, **M** movement, **G** goals/manager, **W** war/defense, **S** spawn) in every commit touching the task; flip the Status column in the same commit (`unstarted → in-progress → done (commit)`).
+- **Leaf-first commits** for submodule work: the footprint-pathfind primitive and any `Follow`/`pull` fix land in `screeps-rover` / the pathfinding system **first**, then the consumer in `screeps-ibex`. The combat-sim crates are new workspace-EXCLUDED members (own `.cargo/config.toml`, host triple — the foreman-bench/server-kit precedent).
+- **Validate on the sim per-change; on the private server at checkpoint exits.** Sim conformance vectors gate as hard-exact; combat *outcomes* gate as N-seed paired-seed diffs (sim seeds are reproducible — the N=9 gate ADR 0015 mandates is buildable here). Runs land under `runs/` keyed (scenario, git SHA).
+- Every seam lands with its **draft contract** (0015 registry: S8 SquadStore, S9 objective, S14 SquadContext, S17 tactical). Host + wasm lanes both green before `done`.
+- **`WORLD_FORMAT_VERSION` (game_loop.rs) MUST bump** on any serialized-shape change (SquadId field, `CombatObjectiveData` persistent layer) — a loud reset per the reset-anytime policy.
+- **Anti-overfitting is a standing rule** (operator): no opponent-specific constants; threat measured at runtime; the sim runs the bot's real code; seed diversity + opponent roster (scripted/self-play/recorded); the live seg-57 cohesion canary is the final arbiter and tightens the parity budget when sim and MMO disagree.
+
+### 2.2 Workstream H — combat micro-sim harness (ADR 0006 Part B) — **lands first**
+
+| ID | Task | Depends on | Validation | Status |
+|---|---|---|---|---|
+| P2.H1 | `screeps-combat-engine` crate: `CombatWorld` (JS-free), two-phase resolve, per-part 100-hit pools + front-to-back destruction, all damage/heal/dismantle/tower formulas, TOUGH/boost rounding, fatigue + same-tile movement conflict, ramparts/safe-mode, single 50×50 room. Capture ~12 conformance golden vectors from the live private server | — | sim reproduces every conformance vector **byte-exact** under `cargo test-host` | **in-progress** — math kernel + stationary two-phase resolver done (constants/body/damage/state/resolve, 16 host tests incl. EXP-FOUND-1/EXP-FOCUS-1, host+wasm clean, README+AGENTS provenance docs; §2.0 (c)+(d)); remaining: movement-conflict (`rate1..rate4`/pull) → structures/dismantle → `CombatRecording` → server-captured golden vectors |
+| P2.H2 | Tactical seam: JS-free `CombatView` trait + `CombatIntent`; extract the first decision (target-selection + formation advance) generic over the trait (no cargo feature); live adapter (leaf) + sim adapter; `screeps-combat-agent::IbexAgent` wraps it. Register **S17** | P2.H1 | live-vs-extracted **intent byte-diff parity** (`IntentRecorder` digest) on a recorded tick | unstarted |
+| P2.H3 | Cohesion metrics (`cohesion.rs`) → seg-57 `CohesionMetrics` block (additive, version bump); unblock the colony-health **military term** (replace `score.rs` `military: None`) | P2.H1, P2.H2 | metrics round-trip pin; military-term kernel tests; a combat change moves `colony_health` | unstarted |
+| P2.H4 | Scenarios + opponents + self-play + replay viz: `CombatScenario` data, scripted opponents (rush/kite/turtle/drain), self-play runner, SVG/ASCII replay scrubber with reason tags | P2.H2, P2.H3 | full loop runs; scenario scores report-only, earning gate status per the flake policy | unstarted |
+| P2.H5 | Server parity harness + nightly acceptance + seeded **N=9** combat gates (folds the carried F5/F6 determinism for combat): `parity.rs` sim-vs-server divergence; wire named combat scenarios into the server acceptance gate | P2.H4 | parity within the tracked budget; nightly N-seed server gate live | unstarted |
+
+### 2.3 Workstream I — squad identity (ADR 0001 Inc 3)
+
+| ID | Task | Depends on | Validation | Status |
+|---|---|---|---|---|
+| P2.I1 | `SquadStore` + `SquadId` (minted, generation-carrying); kernel-level store with `resolve(id) → same-squad-or-None`. Register **S8** | — | host fixtures: recycle/stale-ref worlds resolve to `None`, **never a foreign squad**; ids stable across serialize/reset | unstarted |
+| P2.I2 | Re-key `SquadContext` + `SquadCombatJob` by `SquadId` (replace `squad_entity: Option<u32>`); dangling-ref counter → seg-57; `#[serde(skip)]` on `CreepPathData.path` (IBEX-049); bump `WORLD_FORMAT_VERSION` | P2.I1 | soak window: dangling-ref counter zero; loud one-time reset on deploy; combat still functions post-reset | unstarted |
+
+### 2.4 Workstream M — group movement: the anchor mover (ADR 0003 §B.2, 0008 §5)
+
+| ID | Task | Depends on | Validation | Status |
+|---|---|---|---|---|
+| P2.M0 | **Step-0 quick-wins (no new infra — start immediately):** whole-squad-centroid focus target; recompute `heal_power` each tick + boost-aware heal math; wire dead `check_movement_failure` (IBEX-015); add `Recall` terminal state to `SquadCombatJob` (orphaned creeps recover now) | — | sim cohesion-rate ↑ once P2.H3 lands; live console sanity; orphaned creep returns home instead of idling to TTL | unstarted |
+| P2.M1 | **Footprint-pathfind primitive in the pathfinding/movement system:** the "moving-maximum" cost transform `applyMovingMaximum(w,h)` (generalize/retire `apply_quad_cost_overlay`), reusable + parameterized by W×H; tower-avoidance pricing | — | kernel tests: footprint correctness for 1×2 / 2×2 / 3×N; a search never routes the block through a sub-footprint gap | unstarted |
+| P2.M2 | **The anchor mover:** replace straight-line `advance_virtual_pos` with a **cached footprint-aware anchor path** (pathfound once, cached on `SquadPath`, followed step-by-step, re-pathed only on invalidation/stuck) + lockstep block advance + hard cohesion gate; wire dormant orientation (`threat_direction`/`orient_toward`/`reassign_slots`/`mirror_y`/rotate). Register **S14** | P2.M1, P2.H3, (P2.I2 if keyed by SquadId) | sim: cohesion-rate ↑, member-spread ↓, no permanent-Loose ratchet; squad rotates to face the threat; tanks front / healers back | unstarted |
+| P2.M3 | **Relax-for-corridors + blobs:** width-1 footprint pathfind + travel-oriented `line`/loose tolerance through chokes/edges, re-form on open terrain; loose-centroid cohesion for N>4 | P2.M2 | sim: squad threads a 1-wide corridor single-file and re-forms the box on the far side; a 5+ blob stays within centroid tolerance | unstarted |
+| P2.M4 | *(optional)* `pull` for under-MOVE compositions — fix the rover line-510 fatigue short-circuit; pull-pair duo path | — (only if such bodies fielded) | a pulled under-MOVE attacker keeps formation across plains + room edges | unstarted (conditional) |
+
+### 2.5 Workstream G — goals + lifecycle owner + tactics (ADR 0008)
+
+| ID | Task | Depends on | Validation | Status |
+|---|---|---|---|---|
+| P2.G1 | `CombatObjectiveQueue` (scout `VisibilityQueue` pattern): persistent `CombatObjectiveData` + `UnwinnableTarget` backoff; ephemeral `claimed_by`; idempotent upsert; `best_unclaimed` selection; TTL / release / release_dead. Register **S9** | — | kernel tests: upsert max-merge, TTL expire, claim/release single-owner, exponential backoff + clear-on-winnable | unstarted |
+| P2.G2 | `SquadManager` skeleton behind the live offense path (parity mode): claim/retask, composition→roster (threat-matched `damage.rs`/`sized_*_body`), `SquadId` minting, retire/force-abort + per-state deadlines | P2.G1, P2.I2, P2.H2 | replay intent-diff parity vs legacy `AttackMission`; kill a member → successor pre-spawned; unreachable room → torn down within deadline | unstarted |
+| P2.G3 | **Tactics in the manager** — implement the [ADR 0008a](../design/0008a-combat-tactics.md) catalog (focus-fire T-FOCUS-*, kiting/positioning T-POS-*, heal T-HEAL-*, engage/retreat T-ENGAGE-*) and tune via its experiment register | P2.G2, P2.M2 | **the EXP-* gates** — EXP-FOUND-1/2 (kill inequality, degradation), EXP-KITE-1/2, EXP-FOCUS-1/2, EXP-ENGAGE-1 pass on the sim; foundations before composites | unstarted |
+| P2.G4 | Migrate `AttackMission` → objective producer; generalize `handle_wave_wipe` into the manager; **delete all combat `request_renew`** (pre-spawn replaces) | P2.G2, P2.G3 | sim parity on a recorded engagement; **zero** combat renew intents; objective-complete-while-healthy → retasks, never idles | unstarted |
+
+### 2.6 Workstream W — defense, war supervision, escort, posture hook (ADR 0008 Step 5, 0014, 0017)
+
+| ID | Task | Depends on | Validation | Status |
+|---|---|---|---|---|
+| P2.W1 | Migrate `SquadDefenseMission` → `Defend` objective on the queue/manager (the dominant cohesion fix); keep `hostile_warrants_defender` + owned-room-invader rule; preserve the ADR 0017 §13 ownership-subordinate withdrawal | P2.G2 | sim/server: defense quad **forms up** (cohesion-rate ↑ vs the squad-LESS baseline); threat clears → squad **retired within the deadline**; room lost → withdrawn immediately | unstarted |
+| P2.W2 | `WarOperation` as supervisor: withdraw low-value objectives on `max_concurrent_attacks` shrink (IBEX-028); feed real per-squad spend → economy-abort (IBEX-026); `UnwinnableTarget` backoff wired | P2.G2 | drop room_count → active attacks trimmed; launch at an unreachable/over-towered room → torn down + backed off | unstarted |
+| P2.W3 | Escort/pre-clear objective (ADR 0017 deferred): claim pipeline declares `Escort{room}` for marginal targets; sizing via `DefenseEscalation::from_threat` | P2.G2 | a marginal claim target is pre-cleared and held while the `[Claim,Move]` claimer commits | unstarted |
+| P2.W4 | Thin posture hook (ADR 0014): player-offense objectives produced only under a `WarDecl`; NPC policing + reactive defense posture-independent; manual attack/defend flags reinterpreted as operator declarations. Register **S11** (read-only draft). **Reserve denial (T-CTRL-3):** reactive (enemy reserves our target) always-on; build **proactive** de-reservation but **feature-flag it OFF by default** (operator decision 2026-06-17, `features.rs` pattern). | P2.G1 | no player-room offense without a `WarDecl`; flag-declared war launches; peace tears it down within the deadline; policing unchanged vs baseline; proactive de-reservation fires only when its flag is enabled | unstarted |
+
+### 2.7 Workstream S — synchronized spawning (ADR 0011 D3/D4/D9)
+
+| ID | Task | Depends on | Validation | Status |
+|---|---|---|---|---|
+| P2.S1 | `SquadManager` as sole combat demand producer (`GroupId = SquadId`); align-finish group admission (emerge within window W; zero lanes until admitted) + pre-spawn replacement | P2.G2 | sim/server: quad members emerge within W and rally cohesively (emergence-tick spread bounded); successor emerges before incumbent death − margin | unstarted |
+| P2.S2 | Boost-on-spawn handoff (IBEX-027 → **wire**, behind the kill-switch): declare boosts from `required_boosts()` → reserve at schedule time → gate deploy on `is_ready` | P2.S1, ADR 0010 lab pipeline | boosted compositions spawn boosted; kill-switch disables cleanly with no spawn starvation | unstarted (gated on 0010) |
+
+### 2.8 Sequencing
+
+```
+H1 → H2 → H3 → H4 → H5            (harness: trust → seam → metrics/score → scenarios → parity)
+M0 (quick-wins, immediate) ───────┐  M1 (footprint primitive, immediate) ─┐
+                                  │                                        │
+I1 → I2 (SquadStore)              │                                        │
+                                  ▼                                        ▼
+                         (CP-H + CP-I + M1 reached)            M2 (anchor mover) → M3 (relax)
+                                  │                                        │
+                                  └──────────────► G1 → G2 → G3 → G4 ◄─────┘   (queue → manager → tactics → migrate)
+                                                            │
+                                                   ┌────────┼────────┐
+                                                   ▼        ▼        ▼
+                                                 W1/W2/W3/W4        S1 → S2    (defense+war ; synchronized spawn)
+```
+
+Workstreams interleave except where Depends-on says otherwise. **P2.M0 and P2.M1 start immediately** (no harness/identity dependency); they're validated on the sim once P2.H3 lands. **H is the critical path** — everything downstream validates on it. **I (SquadStore) is the hard gate for G (manager)** and runs in parallel with H. Suggested first commit chain: **P2.M0** (visible improvement now) ∥ **P2.H1** (the trust foundation) → P2.H2 → P2.H3 (military score live) → then M2/G in earnest.
+
+### 2.9 Checkpoints (resume points)
+
+Each checkpoint is a **resumable boundary**: it has an entry gate (its dependencies) and an exit gate (a recorded validation). Resuming cold = find the last checkpoint marked reached in §2.0, then start the next checkpoint's first unstarted task. Milestones (M2–M4) are recorded against the rewrite-plan §4 sequence.
+
+| CP | Name | Entry gate | Exit gate (recorded under `runs/` or as kernel pins) | Milestone | Status |
+|---|---|---|---|---|---|
+| **CP-H** | Measurable combat | — | H1–H3 done: sim byte-exact on conformance vectors; tactical seam at parity; cohesion metrics in seg-57; **military score moves on a combat change** | **M2 (Measurable)** | not reached |
+| **CP-I** | Stable identity | — | I1–I2 done: recycle/stale-ref fixtures never resolve foreign; dangling-ref counter zero across a soak; loud reset clean | — | not reached |
+| **CP-M** | Cohesive movement | CP-H (H3), M1 | M2–M3 done: cohesion-rate ↑ + spread ↓ in the sim; squad rotates to face threat; threads a corridor and re-forms; no Loose ratchet | **M3 (Cohesive)** | not reached |
+| **CP-G** | Goal-managed + tactical | CP-H, CP-I, CP-M | G1–G4 done: offense on the queue+manager; focus-fire/kite/hysteresis effective in the sim; objective-complete → retask (never orphan/idle); unreachable → torn down; zero combat renew | — | not reached |
+| **CP-W** | Unified defense + bounded war | CP-G | W1–W4 done: defense forms up + retires on the manager; war trims/economy-aborts/backs-off; offense gated by `WarDecl`; escort available | — | not reached |
+| **CP-S** | Synchronized spawn | CP-G | S1 done (S2 if 0010 ready): quad emerges within W, no trickle scatter; pre-spawn before death; boosts (if wired) | **M4 (Combat-Effective)** | not reached |
+
+### 2.10 Exit criteria (the M4 audit — to be recorded at phase close)
+
+| # | Criterion | Source | Status |
+|---|---|---|---|
+| 1 | Combat is **measurable**: cohesion/orphan metrics in seg-57; colony-health military term live; a combat change moves the score and the differ catches it | M2 / 0006 | pending |
+| 2 | Combat is **introspectable**: deterministic sim replay + reason-tagged per-tick log answers "why did this creep do X"; self-play runs | M2 / 0006 | pending |
+| 3 | Sim **fidelity bounded**: conformance vectors byte-exact per-change; nightly sim-vs-server parity within budget; MMO seg-57 canary agrees | 0006 | pending |
+| 4 | Squad **identity** stable: no foreign-squad resolution across recycle/reset; dangling-ref counter zero across a soak | 0001 | pending |
+| 5 | Squads are **cohesive**: cohesion-rate materially up vs baseline; rotate-to-face-threat works; thread a corridor + re-form; defense (was squad-LESS) forms up | M3 / 0003/0008 | pending |
+| 6 | Squads are **goal-managed**: objective-complete → retask-or-retire (no orphan/idle); every objective reaches a terminator; unreachable/over-towered → torn down within deadline + backed off | M4 / 0008 | pending |
+| 7 | Tactics are **effective**: focus-fire kills through aggregate enemy heal; ranged squads kite instead of standing; retreat has no yo-yo | M4 / 0008 | pending |
+| 8 | **Synchronized spawn**: a squad emerges within window W (no trickle); pre-spawn-not-renew (zero combat renew intents); boosts wired-or-killswitched | M4 / 0011 | pending |
+| 9 | War is **bounded**: player-offense only under a `WarDecl`; cap-shrink trims; economy collapse aborts; peace tears down | 0008/0014 | pending |
+| 10 | New seams (S8/S9/S14/S17) have draft contracts; host + wasm lanes green; combat kernel count recorded; rewrite-plan §3/§4/§7 updated | 0015 / process | pending |
+| 11 | Operator sign-off | operator | pending |
