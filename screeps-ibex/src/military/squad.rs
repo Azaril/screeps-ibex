@@ -68,17 +68,17 @@ pub enum SquadTarget {
 
 /// Strategic path owned by the squad, not by any individual creep.
 /// Stored on SquadContext and survives individual creep deaths.
+///
+/// The anchor (the squad's shared coordinate frame) is a `rover::AnchorPath` — a cached,
+/// footprint-aware mover (P2.M2) that follows a real path instead of a straight line, holding +
+/// reporting `Blocked` when the squad's box can't route. `anchor.virtual_pos` / `.destination` /
+/// `.stuck_ticks` replace the former bare fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SquadPath {
-    /// The strategic destination the squad is moving toward.
-    pub destination: Position,
+    /// The footprint-aware anchor mover (virtual position, destination, cached path, stuck counter).
+    pub anchor: screeps_rover::AnchorPath,
     /// Room-level route to the destination (from find_route / RoomRouteCache).
     pub room_route: Vec<RoomName>,
-    /// The virtual position -- where the squad "is" on the strategic path.
-    /// Advanced each tick based on the actual movement of squad members.
-    pub virtual_pos: Position,
-    /// How many ticks the virtual position has not advanced.
-    pub stuck_ticks: u16,
 }
 
 // ─── Dynamic formation layout ───────────────────────────────────────────────

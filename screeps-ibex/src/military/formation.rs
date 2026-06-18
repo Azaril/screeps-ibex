@@ -171,7 +171,7 @@ pub fn issue_virtual_anchor_movement(squad: &mut SquadContext, destination: Posi
     advance_squad_virtual_position(squad, destination);
 
     // Read the resulting virtual position.
-    let virtual_pos = squad.squad_path.as_ref().map(|p| p.virtual_pos).unwrap_or(destination);
+    let virtual_pos = squad.squad_path.as_ref().map(|p| p.anchor.virtual_pos).unwrap_or(destination);
 
     let layout = squad.layout.clone();
 
@@ -218,12 +218,12 @@ pub fn advance_squad_virtual_position(squad: &mut SquadContext, destination: Pos
     // Initialize squad path if needed.
     init_squad_path_if_needed(squad, &living_members, destination);
 
-    // Update destination if changed.
+    // Update destination if changed (the anchor re-paths on a destination change).
     if let Some(path) = squad.squad_path.as_mut() {
-        path.destination = destination;
+        path.anchor.destination = destination;
     }
 
-    let virtual_pos = squad.squad_path.as_ref().map(|p| p.virtual_pos).unwrap_or(destination);
+    let virtual_pos = squad.squad_path.as_ref().map(|p| p.anchor.virtual_pos).unwrap_or(destination);
 
     // Check formation cohesion and decide whether to advance the virtual position.
     let living_count = living_members.len();
@@ -365,53 +365,72 @@ fn init_squad_path_if_needed(squad: &mut SquadContext, living_members: &[(usize,
         let start_pos = living_members.iter().find_map(|(_, pos)| *pos).unwrap_or(destination);
 
         squad.squad_path = Some(SquadPath {
-            destination,
+            anchor: AnchorPath::new(start_pos, destination),
             room_route: Vec::new(),
-            virtual_pos: start_pos,
-            stuck_ticks: 0,
         });
     }
 }
 
-/// Advance the virtual position one step toward the destination.
+/// The squad's bounding-box footprint `(w, h)` from its layout offsets — the size the anchor path
+/// must fit so the box routes as a unit. Defaults to 1×1 (no layout).
+fn squad_footprint(squad: &SquadContext) -> (u8, u8) {
+    let offsets: &[(i32, i32)] = match &squad.layout {
+        Some(l) => &l.offsets,
+        None => return (1, 1),
+    };
+    let (mut min_x, mut max_x, mut min_y, mut max_y) = (0i32, 0i32, 0i32, 0i32);
+    for &(dx, dy) in offsets {
+        min_x = min_x.min(dx);
+        max_x = max_x.max(dx);
+        min_y = min_y.min(dy);
+        max_y = max_y.max(dy);
+    }
+    (((max_x - min_x + 1).max(1)) as u8, ((max_y - min_y + 1).max(1)) as u8)
+}
+
+/// Advance the virtual anchor one step toward the destination along a **cached, footprint-aware
+/// path** (P2.M2) — the `rover::AnchorPath` mechanism, driven by the live server `PathFinder`
+/// (`ScreepsPathfinder`) over the room cost matrix. The anchor pathfinds once and follows the cache,
+/// re-pathing only on staleness; on a `Blocked` outcome it **holds** (anchor.stuck_ticks rises) for
+/// the manager to respond to — it never degrades to a straight-line step into the obstacle.
 ///
-/// Uses world coordinates so the virtual position correctly crosses room
-/// boundaries instead of getting stuck at room edges.
+/// The `room_callback` bakes **terrain walls** into the matrix so the footprint transform covers
+/// them (the server PathFinder applies terrain per-tile, which would otherwise dodge the
+/// footprint expansion). Cost-matrix/source/pathfinder are built ad-hoc (they read `game::*`
+/// lazily). Validate behavior on the private server before relying on it live.
 fn advance_virtual_pos(squad: &mut SquadContext, destination: Position) {
+    let footprint = squad_footprint(squad);
     let path = match squad.squad_path.as_mut() {
         Some(p) => p,
         None => return,
     };
 
-    let current = path.virtual_pos;
-
-    // If already at destination, nothing to do.
-    if current == destination {
-        path.stuck_ticks = 0;
-        return;
-    }
-
-    // Use world coordinates for correct cross-room movement.
-    let (cur_wx, cur_wy) = current.world_coords();
-    let (dst_wx, dst_wy) = destination.world_coords();
-
-    let dx = (dst_wx - cur_wx).signum();
-    let dy = (dst_wy - cur_wy).signum();
-
-    match Position::checked_from_world_coords(cur_wx + dx, cur_wy + dy) {
-        Ok(new_pos) => {
-            if new_pos == current {
-                path.stuck_ticks += 1;
-            } else {
-                path.virtual_pos = new_pos;
-                path.stuck_ticks = 0;
+    let mut cache = CostMatrixCache::default();
+    let mut cms = CostMatrixSystem::new(&mut cache, Box::new(screeps_rover::screeps_impl::ScreepsCostMatrixDataSource));
+    let opts = CostMatrixOptions::default();
+    let mut pf = screeps_rover::screeps_impl::ScreepsPathfinder;
+    let mut room_cb = |r: RoomName| {
+        let mut matrix = cms.build_local_cost_matrix(r, &opts).ok()?;
+        if let Some(terrain) = game::map::get_room_terrain(r) {
+            for x in 0..ROOM_SIZE {
+                for y in 0..ROOM_SIZE {
+                    if terrain.get(x, y) == Terrain::Wall {
+                        if let Ok(xy) = RoomXY::checked_new(x, y) {
+                            matrix.set(xy, u8::MAX);
+                        }
+                    }
+                }
             }
         }
-        Err(_) => {
-            path.stuck_ticks += 1;
-        }
-    }
+        Some(matrix)
+    };
+
+    let _outcome = path.anchor.advance(destination, footprint, &mut pf, &mut room_cb);
+    // `_outcome == Blocked` means no footprint path; the anchor held. Responding to it (relax the
+    // footprint for corridors, re-target, or abort) lands with P2.M3 / the squad manager.
 }
+
+const ROOM_SIZE: u8 = 50;
 
 /// Check if a position is near the room edge leading toward a destination in
 /// another room. "Near" means within 8 tiles of the relevant border.

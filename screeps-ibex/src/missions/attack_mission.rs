@@ -750,7 +750,7 @@ impl Rallying {
         }
 
         if let (Some(layout), Some(squad_path)) = (&squad_ctx.layout, &squad_ctx.squad_path) {
-            let virtual_pos = squad_path.virtual_pos;
+            let virtual_pos = squad_path.anchor.virtual_pos;
             let formation_tight = squad_ctx.members.iter().all(|m| {
                 if let (Some(pos), Some(target)) = (
                     m.position,

@@ -564,10 +564,13 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// 7 = planner-driven spawn directions (Plan gains spawn_approaches: Vec<Location>)
 /// and the threat-aware expansion lifecycle (ADR 0017: ClaimMission gains
 /// claimer_deaths and last_spawn_tick; ColonyState::Incubate gains contested_since).
+/// 8 = the squad anchor mover (P2.M2): SquadPath now embeds a rover::AnchorPath (cached
+/// footprint-aware path) in place of the bare virtual_pos/destination/stuck_ticks fields, so the
+/// serialized SquadPath shape changes — one loud reset on deploy.
 /// NOTE: bincode is positional and never signals early end-of-sequence, so a
 /// trailing #[serde(default)] field does NOT make old payloads decode safely --
 /// the version fingerprint is the only real gate, hence this bump.
-const WORLD_FORMAT_VERSION: u32 = 7;
+const WORLD_FORMAT_VERSION: u32 = 8;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode

@@ -797,7 +797,7 @@ fn get_formation_target(
     let entity = tick_context.system_data.entities.entity(id);
     let squad_ctx = tick_context.system_data.squad_contexts.get(entity)?;
     let member = squad_ctx.get_member(creep_entity)?;
-    let virtual_pos = squad_ctx.squad_path.as_ref().map(|p| p.virtual_pos)?;
+    let virtual_pos = squad_ctx.squad_path.as_ref().map(|p| p.anchor.virtual_pos)?;
     let layout = squad_ctx.layout.as_ref()?;
     let target = virtual_anchor_target(virtual_pos, layout, member.formation_slot)?;
 
