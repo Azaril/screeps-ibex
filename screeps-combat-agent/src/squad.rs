@@ -84,19 +84,18 @@ impl SimSquad {
         let n = positions.len().max(1) as f32;
 
         // Mode (P2.M3): a blob (N>4) is always **loose** (centroid cohesion, single-tile footprint).
-        // A small squad holds the **box** but, once a corridor forces a relax, *stays* loose
-        // (`self.loose`) — gated on centroid proximity, not box formation, since a strung-out
-        // single-file line is never "in box formation" — until the members re-gather into the box
-        // on open terrain (re-form below).
+        // A small squad tries to move as a **box**; if the box can't fit (a corridor) it relaxes to
+        // single-file (`self.loose`) and is gated on centroid proximity (a strung-out line is never
+        // "in box formation"). The instant the box footprint can advance again — group pathfinding
+        // works — it clears `self.loose`, transitioning back to a tight box as soon as possible; the
+        // members then re-gather into their slots.
         let blob = self.members.len() > 4;
         let box_rate = cohesion::measure(&positions, Some((anchor_pos, &self.layout)), COHESION_TOL).in_formation_rate;
-        // Re-form: leave corridor mode once the members are back in the box (open terrain).
-        if self.loose && !blob && box_rate >= ADVANCE_QUORUM {
-            self.loose = false;
-        }
         let near_anchor = positions.iter().filter(|p| p.get_range_to(anchor_pos) <= LOOSE_RADIUS).count() as f32 / n;
-        let mut loose = blob || self.loose;
-        let cohesive = if loose {
+
+        // Gate: a strung-out (loose) squad or a blob advances on centroid proximity (so it can keep
+        // threading / re-gathering); a formed box advances only when actually in box formation.
+        let cohesive = if blob || self.loose {
             near_anchor >= ADVANCE_QUORUM
         } else {
             box_rate >= ADVANCE_QUORUM
@@ -105,15 +104,21 @@ impl SimSquad {
         let mut pf = LocalPathfinder;
         let mut outcome = AnchorOutcome::Advanced;
         if cohesive {
-            let footprint = if loose { (1, 1) } else { self.footprint() };
-            outcome = self.anchor.advance(self.objective, footprint, &mut pf, &mut |r| build_combat_matrix(world, r, self.owner));
-            // Corridor relax: the box can't fit → enter loose mode and thread single-file (width-1).
-            if outcome == AnchorOutcome::Blocked && !loose {
-                self.loose = true;
-                loose = true;
+            if blob {
                 outcome = self.anchor.advance(self.objective, (1, 1), &mut pf, &mut |r| build_combat_matrix(world, r, self.owner));
+            } else {
+                // Always attempt to move as a box. Blocked ⇒ a corridor: relax to single-file and
+                // mark loose. Not blocked ⇒ the box fits (open terrain): clear loose to re-form.
+                outcome = self.anchor.advance(self.objective, self.footprint(), &mut pf, &mut |r| build_combat_matrix(world, r, self.owner));
+                if outcome == AnchorOutcome::Blocked {
+                    self.loose = true;
+                    outcome = self.anchor.advance(self.objective, (1, 1), &mut pf, &mut |r| build_combat_matrix(world, r, self.owner));
+                } else {
+                    self.loose = false;
+                }
             }
         }
+        let loose = blob || self.loose;
 
         // Move members: box → exact slot; loose (blob / corridor) → clump near the anchor (they
         // queue single-file through a 1-wide corridor). Fight via the seam regardless.
@@ -263,6 +268,42 @@ mod tests {
             }
         }
         assert!(squad.anchor.virtual_pos.x().u8() >= 33, "relaxed to single-file and threaded the 1-wide corridor");
+    }
+
+    #[test]
+    fn re_forms_a_tight_box_after_a_corridor() {
+        // Thread a 1-wide corridor (forces loose/single-file), then verify the squad transitions
+        // back to a TIGHT box as soon as the box footprint can path again on the open far side.
+        let mut world = CombatWorld {
+            creeps: vec![creep(1, 5, 25), creep(2, 6, 25), creep(3, 5, 26), creep(4, 6, 26)],
+            ..Default::default()
+        };
+        for y in 0..=49u8 {
+            if y != 25 {
+                world.terrain.walls.insert((20, y)); // single-tile gap at y=25
+            }
+        }
+        let mut squad = quad_squad(pos(15, 25), pos(45, 25));
+        let mut went_loose = false;
+        for _ in 0..300 {
+            let (intents, _) = squad.step(&world);
+            resolve_tick(&mut world, &intents);
+            went_loose |= squad.loose; // must have relaxed to pass the corridor
+            if squad.anchor.virtual_pos.x().u8() >= 40 {
+                break;
+            }
+        }
+        // Let the members finish re-gathering into the box on the open side.
+        for _ in 0..20 {
+            let (intents, _) = squad.step(&world);
+            resolve_tick(&mut world, &intents);
+        }
+        assert!(went_loose, "the squad relaxed to single-file in the corridor");
+        assert!(!squad.loose, "re-formed: back in tight box mode once group pathfinding worked again");
+        let sim = SimView::from_world(&world, 0, squad.anchor.virtual_pos, room());
+        let s = cohesion::measure(&squad.member_positions(&sim), Some((squad.anchor.virtual_pos, &QUAD)), 1);
+        assert!(s.in_formation_rate >= 0.75, "members re-gathered into the box (in-formation {})", s.in_formation_rate);
+        assert!(s.max_pairwise <= 3, "tight again (diameter {})", s.max_pairwise);
     }
 
     #[test]
