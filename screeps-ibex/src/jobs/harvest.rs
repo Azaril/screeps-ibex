@@ -42,6 +42,10 @@ machine!(
         Upgrade { target: RemoteObjectId<StructureController> },
         MoveToRoom { room_name: RoomName },
         Wait { ticks: u32 },
+        /// Fleeing a nearby invader / Source Keeper (P2.K0). Entered from any
+        /// state via `flee_if_threatened`; owns the move so it never competes
+        /// with work intents; returns to `Idle` once clear.
+        Flee,
     }
 
     impl {
@@ -51,16 +55,31 @@ machine!(
             std::any::type_name::<Self>().to_string()
         }
 
-        Idle, Harvest, FinishedDelivery, Build, FinishedBuild, Repair, FinishedRepair, Upgrade, MoveToRoom, Wait => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
+        Idle, Harvest, FinishedDelivery, Build, FinishedBuild, Repair, FinishedRepair, Upgrade, MoveToRoom, Wait, Flee => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
 
-        Idle, Harvest, FinishedDelivery, Build, FinishedBuild, Repair, FinishedRepair, Upgrade, MoveToRoom, Wait => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
+        Idle, Harvest, FinishedDelivery, Build, FinishedBuild, Repair, FinishedRepair, Upgrade, MoveToRoom, Wait, Flee => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
 
         _ => fn tick(&mut self, state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState>;
     }
 );
 
+impl Flee {
+    fn tick(&mut self, _state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
+        if issue_flee(tick_context) {
+            None
+        } else {
+            Some(HarvestState::idle())
+        }
+    }
+}
+
 impl Idle {
     fn tick(&mut self, state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
+        // P2.K0: a nearby invader/keeper (remote room) transitions us into Flee.
+        if is_threatened(tick_context) {
+            return Some(HarvestState::flee());
+        }
+
         let delivery_room_data = tick_context.system_data.room_data.get(state_context.delivery_room)?;
 
         let harvest_room_name = state_context.harvest_target.pos().room_name();
@@ -198,6 +217,11 @@ impl Idle {
 
 impl Harvest {
     fn tick(&mut self, state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
+        // P2.K0: a nearby invader/keeper (remote source) transitions us into Flee.
+        if is_threatened(tick_context) {
+            return Some(HarvestState::flee());
+        }
+
         tick_opportunistic_repair(tick_context, Some(RepairPriority::Medium));
 
         tick_harvest(tick_context, state_context.harvest_target, false, true, HarvestState::idle)
@@ -322,6 +346,11 @@ impl Upgrade {
 
 impl MoveToRoom {
     fn tick(&mut self, _state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
+        // P2.K0: a nearby invader/keeper (traveling through a remote room) transitions us into Flee.
+        if is_threatened(tick_context) {
+            return Some(HarvestState::flee());
+        }
+
         tick_move_to_room(tick_context, self.room_name, None, HarvestState::idle)
     }
 }
@@ -377,12 +406,6 @@ impl Job for HarvestJob {
             runtime_data,
             action_flags: SimultaneousActionFlags::UNSET,
         };
-
-        // P2.K0: flee a nearby invader/keeper before doing remote work — a miner
-        // that stands and dies is a net energy sink (the job owns this move).
-        if try_flee_from_local_threats(&mut tick_context) {
-            return;
-        }
 
         crate::machine_tick::run_state_machine(&mut self.state, "HarvestJob", |state| {
             state.tick(&mut self.context, &mut tick_context)

@@ -33,6 +33,9 @@ machine!(
         Delivery { deposits: Vec<TransferDepositTicket> },
         Wait { ticks: u32 },
         MoveToRoom { room_name: RoomName },
+        /// Fleeing a nearby invader / Source Keeper (P2.K0). Owns the move so it
+        /// never competes with hauling; returns to `Idle` once clear.
+        Flee,
     }
 
     impl {
@@ -42,9 +45,9 @@ machine!(
             std::any::type_name::<Self>().to_string()
         }
 
-        Idle, MoveToRoom, Wait => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
+        Idle, MoveToRoom, Wait, Flee => fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
 
-        Idle, MoveToRoom, Wait => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
+        Idle, MoveToRoom, Wait, Flee => fn gather_data(&self, _system_data: &JobExecutionSystemData, _runtime_data: &mut JobExecutionRuntimeData) {}
 
         _ => fn tick(&mut self, state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState>;
     }
@@ -52,6 +55,10 @@ machine!(
 
 impl Idle {
     fn tick(&mut self, state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
+        // P2.K0: a nearby invader/keeper (remote room) transitions us into Flee.
+        if is_threatened(tick_context) {
+            return Some(HaulState::flee());
+        }
         let creep = tick_context.runtime_data.owner;
         let pickup_rooms = state_context
             .pickup_rooms
@@ -145,6 +152,10 @@ impl Pickup {
     }
 
     fn tick(&mut self, state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
+        // P2.K0: a nearby invader/keeper (remote room) transitions us into Flee.
+        if is_threatened(tick_context) {
+            return Some(HaulState::flee());
+        }
         //
         // NOTE: All haulers run this at the same time so that transfer data is only hydrated on this tick.
         //
@@ -211,6 +222,10 @@ impl Delivery {
     }
 
     fn tick(&mut self, state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
+        // P2.K0: a nearby invader/keeper (remote room) transitions us into Flee.
+        if is_threatened(tick_context) {
+            return Some(HaulState::flee());
+        }
         if state_context.allow_repair {
             if let Some(consumed_energy) = tick_opportunistic_repair(tick_context, Some(RepairPriority::Low)) {
                 consume_resource_from_deposits(&mut self.deposits, ResourceType::Energy, consumed_energy);
@@ -223,6 +238,10 @@ impl Delivery {
 
 impl MoveToRoom {
     fn tick(&mut self, state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
+        // P2.K0: a nearby invader/keeper (traveling through a remote room) transitions us into Flee.
+        if is_threatened(tick_context) {
+            return Some(HaulState::flee());
+        }
         if state_context.allow_repair {
             tick_opportunistic_repair(tick_context, Some(RepairPriority::Low));
         }
@@ -233,8 +252,22 @@ impl MoveToRoom {
 
 impl Wait {
     pub fn tick(&mut self, _state_context: &HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
+        if is_threatened(tick_context) {
+            return Some(HaulState::flee());
+        }
         mark_idle(tick_context);
         tick_wait(&mut self.ticks, HaulState::idle)
+    }
+}
+
+impl Flee {
+    fn tick(&mut self, _state_context: &mut HaulJobContext, tick_context: &mut JobTickContext) -> Option<HaulState> {
+        // Owns the move; competes with no other action. Resume hauling when clear.
+        if issue_flee(tick_context) {
+            None
+        } else {
+            Some(HaulState::idle())
+        }
     }
 }
 
@@ -275,12 +308,6 @@ impl Job for HaulJob {
             runtime_data,
             action_flags: SimultaneousActionFlags::UNSET,
         };
-
-        // P2.K0: flee a nearby invader/keeper before hauling through a remote room —
-        // a hauler that stands and dies is a net energy sink (the job owns this move).
-        if try_flee_from_local_threats(&mut tick_context) {
-            return;
-        }
 
         crate::machine_tick::run_state_machine(&mut self.state, "HaulJob", |state| state.tick(&mut self.context, &mut tick_context));
     }

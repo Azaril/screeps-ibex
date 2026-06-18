@@ -87,7 +87,10 @@ machine!(
         MoveToContainer,
         Harvest,
         Wait { ticks: u32 },
-        FindContainer { ticks: u32 }
+        FindContainer { ticks: u32 },
+        /// Fleeing a nearby invader / Source Keeper (P2.K0). Owns the move so it
+        /// never competes with mining; returns to `MoveToContainer` once clear.
+        Flee
     }
 
     impl {
@@ -107,6 +110,10 @@ machine!(
 
 impl MoveToContainer {
     fn tick(&mut self, state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
+        // P2.K0: a nearby invader/keeper transitions us into Flee (the move lives there).
+        if is_threatened(tick_context) {
+            return Some(StaticMineState::flee());
+        }
         // Verify the container still exists before walking to it.
         if state_context.container_target.resolve().is_none() {
             // Container is gone — try to find a replacement near the mine target.
@@ -176,6 +183,11 @@ fn try_harvest_mine_target(creep: &Creep, mine_target: &StaticMineTarget, tick_c
 
 impl Harvest {
     fn tick(&mut self, state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
+        // P2.K0: a nearby invader/keeper transitions us into Flee (the move lives there).
+        if is_threatened(tick_context) {
+            return Some(StaticMineState::flee());
+        }
+
         let creep = tick_context.runtime_data.owner;
 
         // Bind the container once -- no re-resolve + unwrap below (IBEX-009).
@@ -256,6 +268,11 @@ impl Harvest {
 
 impl Wait {
     fn tick(&mut self, state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
+        // P2.K0: a nearby invader/keeper transitions us into Flee (the move lives there).
+        if is_threatened(tick_context) {
+            return Some(StaticMineState::flee());
+        }
+
         let creep = tick_context.runtime_data.owner;
 
         // If the container is gone, try to rediscover it.
@@ -279,6 +296,11 @@ impl Wait {
 
 impl FindContainer {
     fn tick(&mut self, state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
+        // P2.K0: a nearby invader/keeper transitions us into Flee (the move lives there).
+        if is_threatened(tick_context) {
+            return Some(StaticMineState::flee());
+        }
+
         // Container was missing when we entered this state — check again.
         if state_context.try_rediscover_container(tick_context) {
             return Some(StaticMineState::move_to_container());
@@ -286,6 +308,17 @@ impl FindContainer {
 
         // No container yet, but go harvest anyway — don't waste source regen.
         Some(StaticMineState::harvest())
+    }
+}
+
+impl Flee {
+    fn tick(&mut self, _state_context: &mut StaticMineJobContext, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
+        // Owns the move; competes with no other action. Resume mining when clear.
+        if issue_flee(tick_context) {
+            None
+        } else {
+            Some(StaticMineState::move_to_container())
+        }
     }
 }
 
@@ -324,12 +357,6 @@ impl Job for StaticMineJob {
             runtime_data,
             action_flags: SimultaneousActionFlags::UNSET,
         };
-
-        // P2.K0: flee a nearby invader/keeper before doing remote work — a miner
-        // that stands and dies is a net energy sink (the job owns this move).
-        if try_flee_from_local_threats(&mut tick_context) {
-            return;
-        }
 
         crate::machine_tick::run_state_machine(&mut self.state, "StaticMineJob", |state| {
             state.tick(&mut self.context, &mut tick_context)

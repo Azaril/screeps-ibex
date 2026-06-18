@@ -197,42 +197,51 @@ fn remote_room_hostiles(room_name: RoomName, tick_context: &JobTickContext) -> O
     )
 }
 
-/// General remote-economy safety reflex (P2.K0, ADR 0018 §3.4): if a dangerous
-/// hostile (invader or Source Keeper) is within [`THREAT_FLEE_RANGE`] in a
-/// non-owned room, issue a flee from every such nearby hostile and return
-/// `true` so the caller skips its work this tick. Reuses the rover flee
-/// primitive and the cached hostile visibility — the same mechanism
-/// `squad_combat::flee_from_hostiles` uses.
-///
-/// Remote miners and haulers call this at the top of their tick: without it
-/// they stand and die (room-safety only gates *new spawns*; existing creeps
-/// have no threat awareness), repeatedly feeding kills — a net energy sink.
-/// The creep's **job** owns this movement request; missions only supply
-/// context (ADR 0008 §5 flag / ADR 0018 §2 principle 8).
-#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn try_flee_from_local_threats(tick_context: &mut JobTickContext) -> bool {
+/// The flee targets for the dangerous hostiles within [`THREAT_FLEE_RANGE`] of
+/// the creep — empty when there is nothing to flee. Reads cached `RoomData`
+/// hostiles (skips our own rooms: towers + defenders handle those). Shared by
+/// [`is_threatened`] and [`issue_flee`].
+fn compute_flee_targets(tick_context: &JobTickContext) -> Vec<FleeTarget> {
     let creep_pos = tick_context.runtime_data.owner.pos();
-    let room_name = creep_pos.room_name();
-
-    let hostiles = match remote_room_hostiles(room_name, tick_context) {
+    let hostiles = match remote_room_hostiles(creep_pos.room_name(), tick_context) {
         Some(hostiles) => hostiles,
-        None => return false, // our own room — defense handles it
+        None => return Vec::new(), // our own room — defense handles it
     };
-
     let tagged: Vec<(Position, bool)> = hostiles.iter().map(|c| (c.pos(), hostile_is_dangerous(c))).collect();
-    let flee_targets = nearby_threat_flee_targets(creep_pos, &tagged, THREAT_FLEE_RANGE);
+    nearby_threat_flee_targets(creep_pos, &tagged, THREAT_FLEE_RANGE)
+}
+
+/// Whether a dangerous remote hostile (invader or Source Keeper) is close
+/// enough to flee — the **transition guard into a job's `Flee` state** (P2.K0,
+/// ADR 0018 §3.4). Detection only; issues no intent.
+///
+/// Remote miners and haulers need this because room-safety only gates *new
+/// spawns*: a creep already in the room has no threat awareness and stands and
+/// dies, repeatedly feeding kills — a net energy sink. Making flee a state
+/// (entered via this guard) means the creep's **job** owns the move and it does
+/// not compete with work intents (ADR 0008 §5 flag / ADR 0018 §2 principle 8).
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn is_threatened(tick_context: &JobTickContext) -> bool {
+    !compute_flee_targets(tick_context).is_empty()
+}
+
+/// Issue a flee from every nearby dangerous hostile and return `true`; return
+/// `false` when none remain (safe to resume work). Call this from a job's
+/// `Flee` state — it owns the move and competes with no other action, so it
+/// needs no `SimultaneousActionFlags` guard. Reuses the rover flee primitive,
+/// the same mechanism `squad_combat::flee_from_hostiles` uses.
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn issue_flee(tick_context: &mut JobTickContext) -> bool {
+    let flee_targets = compute_flee_targets(tick_context);
     if flee_targets.is_empty() {
         return false;
     }
-
     let creep_entity = tick_context.runtime_data.creep_entity;
-    if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
-        tick_context
-            .runtime_data
-            .movement
-            .flee(creep_entity, flee_targets)
-            .range(THREAT_FLEE_RANGE);
-    }
+    tick_context
+        .runtime_data
+        .movement
+        .flee(creep_entity, flee_targets)
+        .range(THREAT_FLEE_RANGE);
     true
 }
 

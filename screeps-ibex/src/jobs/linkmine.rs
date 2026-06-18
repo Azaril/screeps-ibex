@@ -48,7 +48,10 @@ machine!(
         Harvest,
         DepositLink,
         DepositContainer,
-        Wait { ticks: u32 }
+        Wait { ticks: u32 },
+        /// Fleeing a nearby invader / Source Keeper (P2.K0). Owns the move so it
+        /// never competes with mining; returns to `Idle` once clear.
+        Flee
     }
 
     impl {
@@ -68,12 +71,18 @@ machine!(
 
 impl MoveToPosition {
     pub fn tick(&mut self, _state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
+        if is_threatened(tick_context) {
+            return Some(LinkMineState::flee());
+        }
         tick_move_to_position(tick_context, self.target.into(), 0, None, LinkMineState::idle)
     }
 }
 
 impl Idle {
     pub fn tick(&mut self, state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
+        if is_threatened(tick_context) {
+            return Some(LinkMineState::flee());
+        }
         let creep = tick_context.runtime_data.owner;
         let displaced = state_context.is_displaced(creep);
 
@@ -128,6 +137,9 @@ impl Idle {
 
 impl Harvest {
     pub fn tick(&mut self, state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
+        if is_threatened(tick_context) {
+            return Some(LinkMineState::flee());
+        }
         let creep = tick_context.runtime_data.owner;
         let near_source = creep.pos().is_near_to(state_context.mine_target.pos());
 
@@ -152,6 +164,9 @@ impl Harvest {
 
 impl DepositLink {
     pub fn tick(&mut self, state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
+        if is_threatened(tick_context) {
+            return Some(LinkMineState::flee());
+        }
         let creep = tick_context.runtime_data.owner;
         let near_link = creep.pos().is_near_to(state_context.link_target.pos());
 
@@ -173,6 +188,9 @@ impl DepositLink {
 
 impl DepositContainer {
     pub fn tick(&mut self, state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
+        if is_threatened(tick_context) {
+            return Some(LinkMineState::flee());
+        }
         let Some(container_id) = state_context.container_target else {
             return Some(LinkMineState::idle());
         };
@@ -198,6 +216,9 @@ impl DepositContainer {
 
 impl Wait {
     pub fn tick(&mut self, state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
+        if is_threatened(tick_context) {
+            return Some(LinkMineState::flee());
+        }
         let creep = tick_context.runtime_data.owner;
 
         if state_context.is_displaced(creep) {
@@ -210,6 +231,17 @@ impl Wait {
         movebehavior::mark_stationed(tick_context);
 
         tick_wait(&mut self.ticks, LinkMineState::idle)
+    }
+}
+
+impl Flee {
+    pub fn tick(&mut self, _state_context: &LinkMineJobContext, tick_context: &mut JobTickContext) -> Option<LinkMineState> {
+        // Owns the move; competes with no other action. Resume when clear.
+        if issue_flee(tick_context) {
+            None
+        } else {
+            Some(LinkMineState::idle())
+        }
     }
 }
 
@@ -298,12 +330,6 @@ impl Job for LinkMineJob {
             runtime_data,
             action_flags: SimultaneousActionFlags::UNSET,
         };
-
-        // P2.K0: flee a nearby invader/keeper before doing remote work — a miner
-        // that stands and dies is a net energy sink (the job owns this move).
-        if try_flee_from_local_threats(&mut tick_context) {
-            return;
-        }
 
         crate::machine_tick::run_state_machine(&mut self.state, "LinkMineJob", |state| {
             state.tick(&mut self.context, &mut tick_context)
