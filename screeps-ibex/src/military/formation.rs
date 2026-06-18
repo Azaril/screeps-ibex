@@ -425,9 +425,14 @@ fn advance_virtual_pos(squad: &mut SquadContext, destination: Position) {
         Some(matrix)
     };
 
-    let _outcome = path.anchor.advance(destination, footprint, &mut pf, &mut room_cb);
-    // `_outcome == Blocked` means no footprint path; the anchor held. Responding to it (relax the
-    // footprint for corridors, re-target, or abort) lands with P2.M3 / the squad manager.
+    let outcome = path.anchor.advance(destination, footprint, &mut pf, &mut room_cb);
+    if outcome == AnchorOutcome::Blocked && footprint != (1, 1) {
+        // Corridor relax (P2.M3): the box can't fit → thread single-file (width-1 footprint). The
+        // anchor threads the corridor; members path toward it. (Switching the member layout to a
+        // line for true single-file is the remaining M3 polish on the live side.)
+        let _ = path.anchor.advance(destination, (1, 1), &mut pf, &mut room_cb);
+    }
+    // A still-`Blocked` anchor holds (stuck_ticks rises) for the squad manager to respond to.
 }
 
 const ROOM_SIZE: u8 = 50;
