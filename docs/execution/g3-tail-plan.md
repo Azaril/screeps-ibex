@@ -32,9 +32,11 @@ owning the goal** — the no-one-off-pathfinding rule + "don't be disorganized w
   reachable tile; `ScreepsPathfinder` **delegates to `LocalPathfinder`** (a bounded single-room scored search
   has no server-PF analog, and delegating makes live kite positioning byte-identical to the sim). 3 rover tests
   (rover 19). **DONE** (superproject ptr bumped).
-- [ ] **Step 3 — pure `plan_kite_anchor`** (`kite.rs`, add `screeps-rover` dep to the decision crate):
-  `plan_kite_anchor(view, pf: &mut dyn PathfindingProvider, room_callback, max_ops) -> Option<KitePlan{goal}>`.
-  ONE `search_scored` from the centroid pricing tiles with `score_tile`. `MAX_KITE_OPS ≈ 400`. Tests with `LocalPathfinder` + synthetic matrices.
+- [x] **Step 3 — pure `plan_kite_anchor`** (`kite.rs`; `screeps-rover` dep added to the decision crate, pure
+  default features): `plan_kite_anchor(view, pf, room_callback, max_ops) -> Option<KitePlan{goal}>` runs ONE
+  `search_scored` from the centroid pricing tiles with `score_tile` (+ a `walkable_neighbors` openness lookup);
+  `None` = holding is optimal. `MAX_KITE_OPS=400`. 2 tests (flee-to-safe-near-centroid, hold-when-safe).
+  decision crate 31; bot wasm + agent crate still green (rover feature unification OK). **DONE.**
 - [ ] **Step 4 — `SquadMovement` directive + `decide_squad_with_pathing`** (`lib.rs`): `enum SquadMovement { Advance{goal,range}|Kite{goal}|Hold }`;
   `SquadMemberView` gains `pos: Option<Position>` + `has_ranged`; `SquadDecision` gains `movement`,
   `center: Option<Position>`, `cohesion_radius` (and becomes `Clone`, not `Copy`, ahead of Step 7).
