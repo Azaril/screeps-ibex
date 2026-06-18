@@ -37,16 +37,19 @@ owning the goal** — the no-one-off-pathfinding rule + "don't be disorganized w
   `search_scored` from the centroid pricing tiles with `score_tile` (+ a `walkable_neighbors` openness lookup);
   `None` = holding is optimal. `MAX_KITE_OPS=400`. 2 tests (flee-to-safe-near-centroid, hold-when-safe).
   decision crate 31; bot wasm + agent crate still green (rover feature unification OK). **DONE.**
-- [ ] **Step 4 — `SquadMovement` directive + `decide_squad_with_pathing`** (`lib.rs`): `enum SquadMovement { Advance{goal,range}|Kite{goal}|Hold }`;
-  `SquadMemberView` gains `pos: Option<Position>` + `has_ranged`; `SquadDecision` gains `movement`,
-  `center: Option<Position>`, `cohesion_radius` (and becomes `Clone`, not `Copy`, ahead of Step 7).
-  `decide_squad_with_pathing(view, pf, room_callback, max_ops)` runs focus+hysteresis then `plan_kite_anchor`
-  only when kiting/retreating; `decide_squad` = the same with a `NullPathfinder` (existing tests stay byte-identical).
-  Consts `SQUAD_COHESION_RADIUS=2`, `CRITICAL_HP_FRACTION=0.30`.
-- [ ] **Step 5 — rewrite `decide_movement` to consume the squad goal** (`lib.rs`): `SquadStateDto` gains
-  `movement: SquadMovement` + `cohesion_radius`; `center` becomes the REAL centroid. Precedence:
-  (1) critical-HP raw-flee → (2) immediate melee-evade [byte-identical to today, the SK-duo guard] →
-  (3) squad Kite/Advance goal → (4) out-of-cohesion rejoin → (5) today's exact fallback. Pinned regression tests.
+- [x] **Step 4 — `SquadMovement` directive + `decide_squad_with_pathing`** (`lib.rs`): `enum SquadMovement
+  { Advance{goal,range}|Kite{goal}|Hold }`; `SquadMemberView` gained `pos`+`has_ranged`; `SquadDecision` gained
+  `movement`/`center`/`cohesion_radius` (now `Clone`). `decide_squad_with_pathing(view, room_callback, max_ops)`
+  runs focus+hysteresis then `plan_kite_anchor` only when kiting/retreating; `decide_squad` = the no-pathing path
+  (Advance to weapon range / Hold). `kite_threats` (melee/keeper reach 2, ranged-only 0) + `kite_towers`. Consts
+  `SQUAD_COHESION_RADIUS=2`/`CRITICAL_HP_FRACTION=0.30`. Manager fills the new member fields (still `decide_squad`;
+  live switch is Step 6). **DONE** (decision 34).
+- [x] **Step 5 — rewrite `decide_movement` to consume the squad goal** (`lib.rs`): `SquadStateDto` gained
+  `movement`+`cohesion_radius`. Precedence: (1) critical-HP raw-flee → (2) immediate melee-evade [byte-identical
+  to today, the SK-duo guard] → (3) squad Kite/Advance goal → (4) out-of-cohesion rejoin → (5) the prior
+  `decide_movement_fallback` (only when `cohesion_radius==0`, solo/unmanaged). The 6 existing per-creep tests hit
+  (5) byte-identical (live + sim adapters set `Hold`/`0` for now); 3 new precedence tests. **DONE** (decision 37,
+  agent 17, bot 164, wasm green).
 - [ ] **Step 6 — live wiring + ⚑ `WORLD_FORMAT_VERSION` 11→12** (`squad_manager.rs`, `squad_combat.rs`,
   `squad.rs`, `game_loop.rs`): build `member_views` with `pos`/`has_ranged` + the kite cost matrix (terrain+threats+towers)
   + a `ScreepsPathfinder`; call `decide_squad_with_pathing`; `TickOrders` gains `center`/`cohesion_radius`,

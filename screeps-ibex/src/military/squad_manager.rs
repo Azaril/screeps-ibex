@@ -386,15 +386,25 @@ fn compute_squad_orders(
     squad_entity: Entity,
     target_room: RoomName,
 ) {
-    // Read the roster's cached status (immutable).
+    // Read the roster's cached status (immutable). `pos`/`has_ranged` feed the centroid + the kite
+    // plan; `has_ranged` resolves the creep body (the adapter's job — the pure crate stays JS-free).
     let (member_views, current_state, retreat_threshold) = match squad_contexts.get(squad_entity) {
         Some(ctx) => (
             ctx.members
                 .iter()
-                .map(|m| SquadMemberView {
-                    hits: m.current_hits,
-                    hits_max: m.max_hits,
-                    heal_power: m.heal_power,
+                .map(|m| {
+                    let has_ranged = creep_owner
+                        .get(m.entity)
+                        .and_then(|co| co.owner.resolve())
+                        .map(|c| c.body().iter().any(|p| p.part() == Part::RangedAttack && p.hits() > 0))
+                        .unwrap_or(false);
+                    SquadMemberView {
+                        hits: m.current_hits,
+                        hits_max: m.max_hits,
+                        heal_power: m.heal_power,
+                        pos: m.position,
+                        has_ranged,
+                    }
                 })
                 .collect::<Vec<_>>(),
             squad_state_to_order(ctx.state),

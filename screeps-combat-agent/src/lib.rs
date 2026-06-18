@@ -21,7 +21,7 @@ pub mod squad;
 use screeps::{Position, RawObjectId, RoomName, StructureType};
 use screeps_combat_decision::{
     decide_combat, decide_movement, select_focus_target, CombatBodyPart, CombatCreepDto, CombatIntent,
-    CombatStructureDto, CombatView, CreepOrders, FocusTarget, Ownership, SquadStateDto, TacticalAgent,
+    CombatStructureDto, CombatView, CreepOrders, FocusTarget, Ownership, SquadMovement, SquadStateDto, TacticalAgent,
 };
 use screeps_combat_engine::{CombatAction, CombatWorld, CreepId, Intents, PlayerId, SimCreep, StructureKind};
 use std::collections::HashMap;
@@ -132,7 +132,9 @@ impl SimView {
         Self {
             tick: world.tick,
             me_owner,
-            squad: SquadStateDto { center, room },
+            // No squad directive in the per-creep SimView (cohesion_radius 0 → the fallback path);
+            // the real squad goal is stamped by `SimSquad` in P2.G3-tail Step 8.
+            squad: SquadStateDto { center, room, movement: SquadMovement::Hold, cohesion_radius: 0 },
             friends,
             friend_ids,
             hostiles,

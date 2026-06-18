@@ -35,7 +35,8 @@ pub mod cohesion;
 /// Pure per-tile pricing for cohesive, safe, higher-EV kite/flee positioning (P2.G3-tail).
 pub mod kite;
 
-use screeps::{Part, Position, RawObjectId, StructureType};
+use screeps::local::LocalCostMatrix;
+use screeps::{Part, Position, RawObjectId, RoomName, StructureType};
 
 /// One working/destroyed body part as the decision sees it (front-to-back order, mirroring
 /// `creep.body()` / the engine's per-part 100-hit pools). `hits == 0` ⇒ the part is destroyed and
@@ -96,14 +97,20 @@ pub struct CombatStructureDto {
     pub ownership: Ownership,
 }
 
-/// Squad-level state the decision reads. Grows over H2/M2 (orientation, mode, retreat threshold);
-/// the decisions extracted so far need only the shared centroid + the operating room.
+/// Squad-level state the per-creep decision reads. `center` is the squad's **real centroid** (the
+/// shared coordinate frame); `movement`/`cohesion_radius` carry the squad's shared directive
+/// ([`decide_squad_with_pathing`]) so `decide_movement` moves the block as one. `cohesion_radius == 0`
+/// marks an unmanaged/solo creep (no squad goal → the per-creep fallback).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SquadStateDto {
     /// The squad's shared coordinate frame — its centroid / virtual anchor.
     pub center: Position,
     /// The room the squad is fighting in (target selection is gated to the visible room).
     pub room: screeps::RoomName,
+    /// The squad's shared movement directive this tick (the block's goal).
+    pub movement: SquadMovement,
+    /// Loose-centroid cohesion radius K (0 ⇒ unmanaged/solo, no squad goal).
+    pub cohesion_radius: u32,
 }
 
 /// Per-creep orders the squad layer hands the per-tick decision (the live `TickOrders`, combat
@@ -384,7 +391,71 @@ fn is_melee_only(c: &CombatCreepDto) -> bool {
 ///
 /// "Target" is the shared focus creep when set, else the nearest hostile. Returns 0 or 1 intents
 /// (empty = hold this tick). This is the **per-creep** layer; the squad anchor advance is P2.M2.
+///
+/// Precedence (P2.G3-tail): (1) **critical-HP** raw-flee — the one sanctioned cohesion break (a creep
+/// about to die); (2) **immediate melee-evade** for a ranged creep (the SK-duo guard, byte-identical
+/// to the prior kiting) — *before* the squad goal so a directive never walks a kiter into melee;
+/// (3) follow the **squad movement directive** (the block moves as one to the pathfinding-scored
+/// goal); (4) **rejoin** if a managed-squad member strayed past the cohesion radius, else hold;
+/// (5) **fallback** — the prior per-creep kiting/engage/heal-follow, for a solo/unmanaged creep
+/// (`cohesion_radius == 0`). The existing per-creep tests exercise (5) and stay byte-identical.
 pub fn decide_movement(view: &CombatView) -> Vec<CombatIntent> {
+    let me = view.me;
+
+    // (1) Critical-HP override — the one sanctioned break from the squad (a creep about to die).
+    if me.hits_max > 0 && (me.hits as f32 / me.hits_max as f32) < CRITICAL_HP_FRACTION {
+        let near: Vec<Position> = view.hostiles.iter().filter(|c| me.pos.get_range_to(c.pos) <= 3).map(|c| c.pos).collect();
+        if !near.is_empty() {
+            return vec![CombatIntent::Flee { from: near, range: 3 }];
+        }
+    }
+
+    // (2) Immediate melee-evade for a ranged creep — evaluated BEFORE the squad goal (the SK-duo
+    //     guard): a focus/advance directive must never charge a kiter into a melee threat.
+    if me.has_working(Part::RangedAttack) {
+        let melee_threats: Vec<Position> = view
+            .hostiles
+            .iter()
+            .filter(|c| is_melee_only(c) && me.pos.get_range_to(c.pos) <= 2)
+            .map(|c| c.pos)
+            .collect();
+        if !melee_threats.is_empty() {
+            return vec![CombatIntent::Flee { from: melee_threats, range: 3 }];
+        }
+    }
+
+    // (3) Follow the squad's shared movement directive (the block moves as one).
+    match view.squad.movement {
+        SquadMovement::Advance { goal, range } => return move_to_or_hold(me.pos, goal, range),
+        SquadMovement::Kite { goal } => return move_to_or_hold(me.pos, goal, 0),
+        SquadMovement::Hold => {
+            // (4) Managed squad, "hold optimal": rejoin if strayed past K, else hold. A solo/unmanaged
+            //     creep (cohesion_radius 0) has no squad goal → fall through to the per-creep fallback.
+            if view.squad.cohesion_radius > 0 {
+                if me.pos.get_range_to(view.squad.center) > view.squad.cohesion_radius {
+                    return vec![CombatIntent::MoveTo { target: view.squad.center, range: view.squad.cohesion_radius as u8 }];
+                }
+                return Vec::new();
+            }
+        }
+    }
+
+    // (5) Fallback — the prior per-creep movement (no squad goal / solo).
+    decide_movement_fallback(view)
+}
+
+/// Move toward `goal`, stopping within `range`; empty (hold) when already in range.
+fn move_to_or_hold(from: Position, goal: Position, range: u8) -> Vec<CombatIntent> {
+    if from.get_range_to(goal) > range as u32 {
+        vec![CombatIntent::MoveTo { target: goal, range }]
+    } else {
+        Vec::new()
+    }
+}
+
+/// The prior per-creep tactical movement (kiting/engage/heal-follow) — the fallback when there is no
+/// squad directive (solo/unmanaged creep). Unchanged from the pre-G3-tail `decide_movement` body.
+fn decide_movement_fallback(view: &CombatView) -> Vec<CombatIntent> {
     let me = view.me;
     let has_attack = me.has_working(Part::Attack);
     let has_ranged = me.has_working(Part::RangedAttack);
@@ -447,6 +518,13 @@ pub fn decide_movement(view: &CombatView) -> Vec<CombatIntent> {
 // reassignment / threat orientation migrate here next (they are already pure over the
 // member data).
 
+/// Loose-centroid cohesion radius K: a member beyond this from the squad goal/centroid rejoins
+/// (Step 5); the kite scorer steepens its cohesion penalty past it.
+pub const SQUAD_COHESION_RADIUS: u32 = 2;
+/// HP fraction at/below which a member may break cohesion to flee individually — the ONE sanctioned
+/// "individual benefit outweighs the squad" exception (a creep about to die).
+pub const CRITICAL_HP_FRACTION: f32 = 0.30;
+
 /// The squad's combat lifecycle state, as the decision computes it (the live
 /// `military::squad::SquadState` combat subset — kept JS-free here).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -461,15 +539,32 @@ pub enum SquadOrderState {
     Retreating,
 }
 
+/// The squad's shared per-tick movement directive — ONE goal the whole block moves toward, so
+/// cohesion is structural (every in-cohesion member targets the same tile). The per-creep
+/// `decide_movement` consumes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SquadMovement {
+    /// Advance the block toward `goal`, stopping within `range` (engage at weapon range).
+    Advance { goal: Position, range: u8 },
+    /// Kite/flee the block to a pathfinding-scored safe + cohesive + value-preserving `goal` tile.
+    Kite { goal: Position },
+    /// Hold position (already optimal / nothing to move toward this tick).
+    Hold,
+}
+
 /// A squad member as the squad decision sees it — the cached per-tick status the live
-/// `SquadContext` already tracks (HP + heal power), JS-free. Enough for the retreat
-/// hysteresis; positions/ids are added when heal-assignment migrates here.
+/// `SquadContext` already tracks, JS-free. `pos`/`has_ranged` feed the centroid + the kite plan;
+/// `id`/`damage_taken_last_tick` (Step 7) feed the heal assignment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct SquadMemberView {
     pub hits: u32,
     pub hits_max: u32,
     /// Count of working HEAL parts (the heal-capacity primitive).
     pub heal_power: u32,
+    /// Current position (None before the first position sync).
+    pub pos: Option<Position>,
+    /// Has a working RANGED_ATTACK part (drives "the squad can kite").
+    pub has_ranged: bool,
 }
 
 /// The squad-level read seam: the roster's cached status + the room's hostiles/
@@ -484,14 +579,19 @@ pub struct SquadView<'a> {
     pub current_state: SquadOrderState,
 }
 
-/// The squad-level decision: the new combat state + the shared focus the members
-/// concentrate fire on (the per-creep `decide_combat` consumes the focus via
-/// [`CreepOrders`]). `focus` is set whenever a target exists, independent of state, so
-/// a retreating ranged squad keeps shooting while it kites.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The squad-level decision: the new combat state, the shared focus the members concentrate fire on
+/// (the per-creep `decide_combat` consumes it), the shared movement directive (`decide_movement`
+/// consumes it), the real squad centroid, and the cohesion radius. `focus` is set whenever a target
+/// exists, independent of state, so a retreating ranged squad keeps shooting while it kites. `Clone`
+/// (not `Copy`) ahead of the Step-7 heal-assignment vector.
+#[derive(Clone, Debug, PartialEq)]
 pub struct SquadDecision {
     pub state: SquadOrderState,
     pub focus: Option<FocusTarget>,
+    pub movement: SquadMovement,
+    /// The squad's centroid (the real coordinate frame; `None` if no member has a position).
+    pub center: Option<Position>,
+    pub cohesion_radius: u32,
 }
 
 /// Mean HP fraction over members that have spawned (`hits_max > 0`).
@@ -563,7 +663,107 @@ pub fn decide_squad(view: &SquadView) -> SquadDecision {
         }
     };
 
-    SquadDecision { state, focus }
+    let center = cohesion::centroid(&member_positions(view.members));
+
+    // The non-pathing movement directive: engage advances the block toward the focus at weapon range
+    // (ranged 3, else 1); retreat/idle hold. `decide_squad_with_pathing` overrides engage-vs-melee +
+    // retreat with the pathfinding-scored kite goal.
+    let squad_has_ranged = view.members.iter().any(|m| m.has_ranged);
+    let movement = match (state, focus) {
+        (SquadOrderState::Engaged, Some(f)) => SquadMovement::Advance {
+            goal: f.pos,
+            range: if squad_has_ranged { 3 } else { 1 },
+        },
+        _ => SquadMovement::Hold,
+    };
+
+    SquadDecision { state, focus, movement, center, cohesion_radius: SQUAD_COHESION_RADIUS }
+}
+
+/// Member positions that have synced (the centroid input).
+fn member_positions(members: &[SquadMemberView]) -> Vec<Position> {
+    members.iter().filter_map(|m| m.pos).collect()
+}
+
+/// Hostiles a kiting block must price for safety: melee-capable threats (incl. keepers, which carry
+/// both) are kept beyond melee (reach 2 → kite to range 3, still shootable); ranged-only threats get
+/// reach 0 (a ranged squad trades at range, it can't out-kite an equal-range threat — the value term
+/// holds range 3). Harmless creeps (no attack parts) are skipped. (Towers are priced separately.)
+fn kite_threats(hostiles: &[CombatCreepDto]) -> Vec<kite::KiteThreat> {
+    hostiles
+        .iter()
+        .filter_map(|c| {
+            let melee = c.has_working(Part::Attack);
+            let ranged = c.has_working(Part::RangedAttack);
+            if !melee && !ranged {
+                return None;
+            }
+            Some(kite::KiteThreat {
+                pos: c.pos,
+                kind: if melee { kite::ThreatKind::MeleeOnly } else { kite::ThreatKind::Ranged },
+                reach: if melee { 2 } else { 0 },
+            })
+        })
+        .collect()
+}
+
+/// Live hostile towers (the tower-DPS-falloff term drifts the block out of tower-optimal range).
+fn kite_towers(structures: &[CombatStructureDto]) -> Vec<kite::KiteTower> {
+    structures
+        .iter()
+        .filter(|s| s.ownership == Ownership::Hostile && s.structure_type == StructureType::Tower && s.hits > 0)
+        .map(|s| kite::KiteTower { pos: s.pos })
+        .collect()
+}
+
+/// **The full squad decision incl. the pathfinding-scored kite goal** (P2.G3-tail). Runs
+/// [`decide_squad`] for the focus + hysteresis + state, then — only when kiting is warranted
+/// (`Retreating`, or `Engaged` with a ranged squad and a melee-capable threat near the centroid) —
+/// runs ONE [`kite::plan_kite_anchor`] to override `movement` with a `Kite` goal that is
+/// simultaneously safe, cohesive, and value-preserving (a `None` plan ⇒ holding is best). The live
+/// `SquadManager` and the sim both call this with their room's cost matrix; the bounded local search
+/// is shared (no fork). `decide_squad` alone is the no-pathing path (it never searches).
+pub fn decide_squad_with_pathing(
+    view: &SquadView,
+    room_callback: &mut dyn FnMut(RoomName) -> Option<LocalCostMatrix>,
+    max_ops: u32,
+) -> SquadDecision {
+    let mut decision = decide_squad(view);
+    let centroid = match decision.center {
+        Some(c) => c,
+        None => return decision, // no positioned members → nothing to kite
+    };
+
+    let should_kite = match decision.state {
+        SquadOrderState::Retreating => true,
+        SquadOrderState::Engaged => {
+            let squad_has_ranged = view.members.iter().any(|m| m.has_ranged);
+            let melee_threat_near = view
+                .hostiles
+                .iter()
+                .any(|c| c.has_working(Part::Attack) && centroid.get_range_to(c.pos) <= 5);
+            squad_has_ranged && melee_threat_near
+        }
+        _ => false,
+    };
+
+    if should_kite {
+        let threats = kite_threats(view.hostiles);
+        let towers = kite_towers(view.structures);
+        let kite_view = kite::SquadKiteView {
+            centroid,
+            threats: &threats,
+            towers: &towers,
+            focus: decision.focus.map(|f| f.pos),
+            params: kite::KiteScoreParams::default(),
+        };
+        decision.movement = match kite::plan_kite_anchor(&kite_view, room_callback, max_ops) {
+            Some(plan) => SquadMovement::Kite { goal: plan.goal },
+            None => SquadMovement::Hold, // already the safest + most cohesive tile
+        };
+    }
+
+    decision
 }
 
 #[cfg(test)]
@@ -593,7 +793,8 @@ mod tests {
         CombatStructureDto { pos: pos(x, y), structure_type: ty, hits: 1000, hits_max: 1000, ownership }
     }
     fn squad() -> SquadStateDto {
-        SquadStateDto { center: pos(25, 25), room: "W1N1".parse().unwrap() }
+        // cohesion_radius 0 + Hold ⇒ the per-creep fallback path (the existing tests' behavior).
+        SquadStateDto { center: pos(25, 25), room: "W1N1".parse().unwrap(), movement: SquadMovement::Hold, cohesion_radius: 0 }
     }
 
     struct Scene {
@@ -831,9 +1032,62 @@ mod tests {
         );
     }
 
+    // ── decide_movement: the squad-goal precedence (managed squad, cohesion_radius > 0) ──
+    fn managed_squad(movement: SquadMovement) -> SquadStateDto {
+        SquadStateDto { center: pos(25, 25), room: "W1N1".parse().unwrap(), movement, cohesion_radius: 2 }
+    }
+
+    #[test]
+    fn decide_movement_follows_the_squad_kite_goal() {
+        let goal = pos(28, 25);
+        let s = Scene {
+            squad: managed_squad(SquadMovement::Kite { goal }),
+            friends: vec![],
+            hostiles: vec![creep(9, 32, 25, 600, &[(Part::RangedAttack, 6)])], // ranged, no melee-evade
+            structures: vec![],
+        };
+        let me = creep(1, 25, 25, 700, &[(Part::RangedAttack, 7)]);
+        assert_eq!(decide_movement(&s.view(&me, None)), vec![CombatIntent::MoveTo { target: goal, range: 0 }]);
+    }
+
+    #[test]
+    fn decide_movement_rejoins_a_strayed_member() {
+        let s = Scene {
+            squad: managed_squad(SquadMovement::Hold),
+            friends: vec![],
+            hostiles: vec![],
+            structures: vec![],
+        };
+        // Range 5 from the centroid (> K=2), nothing to fight → regroup to the squad.
+        let me = creep(1, 30, 25, 700, &[(Part::RangedAttack, 7)]);
+        assert_eq!(decide_movement(&s.view(&me, None)), vec![CombatIntent::MoveTo { target: pos(25, 25), range: 2 }]);
+    }
+
+    #[test]
+    fn decide_movement_critical_hp_breaks_cohesion_to_flee() {
+        let s = Scene {
+            squad: managed_squad(SquadMovement::Advance { goal: pos(20, 25), range: 1 }),
+            friends: vec![],
+            hostiles: vec![creep(9, 26, 25, 600, &[(Part::Attack, 6)])], // adjacent melee
+            structures: vec![],
+        };
+        // 100/700 ≈ 14% < CRITICAL_HP_FRACTION → flee individually, ignoring the Advance directive.
+        let me = creep(1, 25, 25, 100, &[(Part::RangedAttack, 7)]);
+        match &decide_movement(&s.view(&me, None))[..] {
+            [CombatIntent::Flee { from, range }] => {
+                assert_eq!(*range, 3);
+                assert!(from.contains(&pos(26, 25)), "flees the nearby threat");
+            }
+            other => panic!("expected a critical-HP Flee that overrides the squad goal, got {other:?}"),
+        }
+    }
+
     // ── decide_squad (squad-level focus + engage/retreat hysteresis) ────
     fn member(hits: u32, hits_max: u32, heal_power: u32) -> SquadMemberView {
-        SquadMemberView { hits, hits_max, heal_power }
+        SquadMemberView { hits, hits_max, heal_power, ..Default::default() }
+    }
+    fn ranged_member_at(hits: u32, hits_max: u32, x: u8, y: u8) -> SquadMemberView {
+        SquadMemberView { hits, hits_max, heal_power: 0, pos: Some(pos(x, y)), has_ranged: true }
     }
     fn squad_view<'a>(
         members: &'a [SquadMemberView],
@@ -877,5 +1131,68 @@ mod tests {
         // Recovered above the band (0.7 > 0.6) → re-engage.
         let high = vec![member(420, 600, 0)];
         assert_eq!(decide_squad(&squad_view(&high, &hostiles, SquadOrderState::Retreating)).state, SquadOrderState::Engaged);
+    }
+
+    // ── decide_squad movement directive + decide_squad_with_pathing ─────
+    #[test]
+    fn decide_squad_no_pathing_advances_to_weapon_range() {
+        // A ranged squad with a target → Engaged, Advance to shooting range 3 (no kite search).
+        let members = vec![ranged_member_at(700, 700, 25, 25)];
+        let hostiles = vec![creep(9, 30, 25, 600, &[(Part::RangedAttack, 6)])];
+        let view = SquadView {
+            members: &members,
+            hostiles: &hostiles,
+            structures: &[],
+            retreat_threshold: 0.3,
+            current_state: SquadOrderState::Moving,
+        };
+        let d = decide_squad(&view);
+        assert_eq!(d.state, SquadOrderState::Engaged);
+        match d.movement {
+            SquadMovement::Advance { range, .. } => assert_eq!(range, 3, "ranged squad advances to shooting range"),
+            other => panic!("expected Advance, got {other:?}"),
+        }
+        assert!(d.center.is_some(), "centroid from member positions");
+    }
+
+    #[test]
+    fn decide_squad_with_pathing_kites_a_melee_threat_but_stays_in_range() {
+        // Ranged duo, a melee threat adjacent to the centroid → Kite to a tile clear of the melee
+        // reach (>2) but the value term keeps the focus shootable (the goal is near, not fled to ∞).
+        let members = vec![ranged_member_at(700, 700, 25, 25), ranged_member_at(700, 700, 26, 25)];
+        let hostiles = vec![creep(9, 24, 25, 600, &[(Part::Attack, 6), (Part::Move, 6)])];
+        let view = SquadView {
+            members: &members,
+            hostiles: &hostiles,
+            structures: &[],
+            retreat_threshold: 0.3,
+            current_state: SquadOrderState::Engaged,
+        };
+        let mut cb = |_r| Some(LocalCostMatrix::new());
+        let d = decide_squad_with_pathing(&view, &mut cb, kite::MAX_KITE_OPS);
+        assert_eq!(d.state, SquadOrderState::Engaged);
+        match d.movement {
+            SquadMovement::Kite { goal } => {
+                assert!(goal.get_range_to(pos(24, 25)) > 2, "kite goal clears the melee reach: {goal:?}");
+                assert!(goal.get_range_to(pos(24, 25)) <= 4, "but stays near the threat (focus shootable): {goal:?}");
+            }
+            other => panic!("expected a Kite directive vs a melee threat, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decide_squad_with_pathing_holds_when_no_engageable_target() {
+        let members = vec![ranged_member_at(700, 700, 25, 25)];
+        let view = SquadView {
+            members: &members,
+            hostiles: &[],
+            structures: &[],
+            retreat_threshold: 0.3,
+            current_state: SquadOrderState::Moving,
+        };
+        let mut cb = |_r| Some(LocalCostMatrix::new());
+        let d = decide_squad_with_pathing(&view, &mut cb, kite::MAX_KITE_OPS);
+        assert_eq!(d.state, SquadOrderState::Moving);
+        assert_eq!(d.movement, SquadMovement::Hold);
     }
 }

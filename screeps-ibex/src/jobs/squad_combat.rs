@@ -425,7 +425,7 @@ impl Engaged {
     // replaces the old inline `execute_*_with_orders` / `fallback_*` (attack + heal). Movement is
     // handled separately below and rides P2.M2.
     fn execute_combat_via_seam(creep: &Creep, creep_pos: Position, tick_orders: Option<&TickOrders>, tick_context: &mut JobTickContext) {
-        use crate::combat::{decide_combat, CombatView, CreepOrders, FocusTarget, SquadStateDto};
+        use crate::combat::{decide_combat, CombatView, CreepOrders, FocusTarget, SquadMovement, SquadStateDto};
 
         let room = creep_pos.room_name();
         let hostiles_raw = get_hostile_creeps(room, tick_context);
@@ -444,7 +444,9 @@ impl Engaged {
             heal_target: o.heal_target.and_then(|id| id.resolve()).map(|c| FocusTarget { pos: c.pos(), id: c.try_raw_id() }),
         });
 
-        let squad = SquadStateDto { center: creep_pos, room };
+        // `decide_combat` (attack/heal) reads only `center`/`room`; the movement directive +
+        // cohesion radius are for `decide_movement` (wired live in P2.G3-tail Step 6).
+        let squad = SquadStateDto { center: creep_pos, room, movement: SquadMovement::Hold, cohesion_radius: 0 };
         let intents = {
             let view = CombatView {
                 tick: game::time(),
