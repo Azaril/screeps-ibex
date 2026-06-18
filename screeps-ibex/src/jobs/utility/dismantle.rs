@@ -183,7 +183,7 @@ pub fn blocker_fingerprint(blockers: &std::collections::HashMap<(u8, u8), Breach
 }
 
 /// Breach-corridor PRICING POLICY over the pathfinding system's
-/// [`room_grid_dijkstra`](crate::pathing::gridsearch::room_grid_dijkstra)
+/// [`room_grid_dijkstra`](screeps_rover::room_grid_dijkstra)
 /// mechanism: plan the cheapest corridor from `start` to within range 1 of
 /// `goal` (the controller), where entering a tile costs [`BREACH_STEP_COST`]
 /// plus [`BREACH_HIT_WEIGHT`] per hit of dismantlable blocker standing on
@@ -193,8 +193,9 @@ pub fn blocker_fingerprint(blockers: &std::collections::HashMap<(u8, u8), Breach
 /// or by structures past the hit-pool horizon).
 ///
 /// Pure (host-tested): terrain arrives as a closure, blockers as plain tile
-/// coordinates. The search algorithm itself lives in `pathing::gridsearch` —
-/// pathfinding algorithms are never implemented in feature modules.
+/// coordinates. The search algorithm itself lives in the pathfinding system
+/// (`screeps_rover::room_grid_dijkstra`) — pathfinding algorithms are never
+/// implemented in feature modules.
 pub fn breach_path_blockers(
     is_wall: &dyn Fn(u8, u8) -> bool,
     blockers: &std::collections::HashMap<(u8, u8), BreachBlocker>,
@@ -213,7 +214,7 @@ pub fn breach_path_blockers(
         }
     };
 
-    let path = crate::pathing::gridsearch::room_grid_dijkstra(&enter_cost, start, goal, 1)?;
+    let path = screeps_rover::room_grid_dijkstra(&enter_cost, start, goal, 1)?;
 
     Some(
         path.into_iter()

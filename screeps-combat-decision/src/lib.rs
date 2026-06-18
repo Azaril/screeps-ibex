@@ -36,7 +36,7 @@ pub mod cohesion;
 pub mod kite;
 
 use screeps::local::LocalCostMatrix;
-use screeps::{Direction, Part, Position, RawObjectId, RoomName, StructureType};
+use screeps::{Direction, Part, Position, RawObjectId, RoomCoordinate, RoomName, RoomXY, StructureType};
 
 /// One working/destroyed body part as the decision sees it (front-to-back order, mirroring
 /// `creep.body()` / the engine's per-part 100-hit pools). `hits == 0` ⇒ the part is destroyed and
@@ -852,6 +852,94 @@ fn kite_towers(structures: &[CombatStructureDto]) -> Vec<kite::KiteTower> {
 /// simultaneously safe, cohesive, and value-preserving (a `None` plan ⇒ holding is best). The live
 /// `SquadManager` and the sim both call this with their room's cost matrix; the bounded local search
 /// is shared (no fork). `decide_squad` alone is the no-pathing path (it never searches).
+/// Weight per blocker-hit for the combat breach search — larger than the max step count (50×50) so
+/// the corridor minimizes total hits to clear, ties broken by length (mirrors the derelict breach
+/// pricing). The *algorithm* is the pathfinding system's `room_grid_dijkstra`; this is combat pricing.
+const BREACH_HIT_WEIGHT: u64 = 4_096;
+
+/// O3 — layered dismantle targeting. When the squad's focus is a hostile **structure** that can only
+/// be reached by clearing a hostile rampart/wall, redirect the focus to the FIRST such blocker on the
+/// cheapest breach corridor — break the breach before the target it shields. Pure: the search is the
+/// pathfinding system's [`screeps_rover::room_grid_dijkstra`]; combat supplies the *pricing* —
+/// terrain walls + non-rampart structures are impassable (route around / the target is the goal),
+/// hostile ramparts/walls are dismantlable, priced by their hits. Returns the focus unchanged when
+/// the target is already reachable, there's no focus structure, or no corridor exists.
+fn breach_redirect(
+    focus: FocusTarget,
+    centroid: Position,
+    structures: &[CombatStructureDto],
+    room_callback: &mut dyn FnMut(RoomName) -> Option<LocalCostMatrix>,
+) -> FocusTarget {
+    // Structures carry no resolved id in the focus (creeps do) — only redirect a structure focus,
+    // and only within the squad's room (the breach search is single-room).
+    if focus.id.is_some() || focus.pos.room_name() != centroid.room_name() {
+        return focus;
+    }
+    let room = centroid.room_name();
+    let matrix = match room_callback(room) {
+        Some(m) => m,
+        None => return focus,
+    };
+    let goal = (focus.pos.x().u8(), focus.pos.y().u8());
+
+    // Classify hostile structures by tile: ramparts/walls are dismantlable (priced by hits); every
+    // other hostile structure (and the goal tile itself) blocks walking-through — the search routes
+    // around them and stops at `goal_range` 1 of the target.
+    let mut breach_hits: std::collections::HashMap<(u8, u8), u64> = std::collections::HashMap::new();
+    let mut solid: std::collections::HashSet<(u8, u8)> = std::collections::HashSet::new();
+    for s in structures.iter() {
+        let tile = (s.pos.x().u8(), s.pos.y().u8());
+        match s.structure_type {
+            // Constructed walls are unowned (`Neutral`) but always block + are dismantlable.
+            StructureType::Wall => {
+                breach_hits.insert(tile, s.hits as u64);
+            }
+            // A hostile rampart shields its tile and is dismantlable; ours/none don't block us.
+            StructureType::Rampart if s.ownership == Ownership::Hostile => {
+                breach_hits.insert(tile, s.hits as u64);
+            }
+            // Any other hostile structure blocks walking-through → route around it.
+            _ if s.ownership == Ownership::Hostile => {
+                solid.insert(tile);
+            }
+            // Our/neutral non-wall structures (roads, containers, …) don't block the corridor.
+            _ => {}
+        }
+    }
+
+    let enter_cost = |x: u8, y: u8| -> Option<u64> {
+        // Terrain wall (baked as max cost by the caller's matrix) → impassable.
+        if RoomXY::checked_new(x, y).map(|xy| matrix.get(xy) == u8::MAX).unwrap_or(true) {
+            return None;
+        }
+        if (x, y) == goal {
+            return None; // the target's own tile isn't walkable; the search stops at range 1.
+        }
+        if let Some(hits) = breach_hits.get(&(x, y)) {
+            return Some(1 + hits * BREACH_HIT_WEIGHT);
+        }
+        if solid.contains(&(x, y)) {
+            return None; // another structure blocks the tile → route around.
+        }
+        Some(1)
+    };
+
+    let start = (centroid.x().u8(), centroid.y().u8());
+    let path = match screeps_rover::room_grid_dijkstra(&enter_cost, start, goal, 1) {
+        Some(p) => p,
+        None => return focus, // no corridor even through dismantlable blockers
+    };
+    // The first dismantlable blocker on the corridor is the breach to break first.
+    for tile in path {
+        if breach_hits.contains_key(&tile) {
+            if let (Ok(cx), Ok(cy)) = (RoomCoordinate::new(tile.0), RoomCoordinate::new(tile.1)) {
+                return FocusTarget { pos: Position::new(cx, cy, room), id: None };
+            }
+        }
+    }
+    focus
+}
+
 pub fn decide_squad_with_pathing(
     view: &SquadView,
     room_callback: &mut dyn FnMut(RoomName) -> Option<LocalCostMatrix>,
@@ -862,6 +950,20 @@ pub fn decide_squad_with_pathing(
         Some(c) => c,
         None => return decision, // no positioned members → nothing to kite
     };
+
+    // O3 — layered dismantle: if the focus is a structure shielded by a rampart/wall, redirect to the
+    // breach blocker on the path (break it first) and re-aim an Advance at it. Runs only in the
+    // structure-siege phase (a structure focus means no hostile creeps remain), so the per-tick grid
+    // search is bounded to that phase.
+    if let Some(focus) = decision.focus {
+        let redirected = breach_redirect(focus, centroid, view.structures, room_callback);
+        if redirected.pos != focus.pos {
+            decision.focus = Some(redirected);
+            if let SquadMovement::Advance { range, .. } = decision.movement {
+                decision.movement = SquadMovement::Advance { goal: redirected.pos, range };
+            }
+        }
+    }
 
     let should_kite = match decision.state {
         SquadOrderState::Retreating => true,
@@ -1310,6 +1412,48 @@ mod tests {
         let d2 = decide_squad(&squad_view(&members, &[], SquadOrderState::Moving));
         assert_eq!(d2.state, SquadOrderState::Moving);
         assert_eq!(d2.orientation, None);
+    }
+
+    #[test]
+    fn breach_redirect_targets_the_rampart_shielding_the_structure() {
+        // A terrain-wall column at x=8 with one gap at (8,25) plugged by a dismantlable hostile
+        // rampart; the only corridor from the squad (5,25) to the spawn (10,25) crosses it. O3
+        // redirects the focus to that rampart — break the breach before the target it shields.
+        let xy = |x: u8, y: u8| RoomXY::checked_new(x, y).unwrap();
+        let mut cm = LocalCostMatrix::new();
+        for y in 0..50u8 {
+            if y != 25 {
+                cm.set(xy(8, y), u8::MAX);
+            }
+        }
+        let mut cb = move |_r| Some(cm.clone());
+
+        let structures = vec![
+            CombatStructureDto { pos: pos(8, 25), structure_type: StructureType::Rampart, hits: 100, hits_max: 100, ownership: Ownership::Hostile },
+            CombatStructureDto { pos: pos(10, 25), structure_type: StructureType::Spawn, hits: 5000, hits_max: 5000, ownership: Ownership::Hostile },
+        ];
+        let members = vec![SquadMemberView {
+            hits: 1000,
+            hits_max: 1000,
+            heal_power: 0,
+            pos: Some(pos(5, 25)),
+            has_ranged: false,
+            damage_taken_last_tick: 0,
+        }];
+        let view = SquadView {
+            members: &members,
+            hostiles: &[],
+            structures: &structures,
+            retreat_threshold: 0.3,
+            current_state: SquadOrderState::Moving,
+        };
+
+        let d = decide_squad_with_pathing(&view, &mut cb, kite::MAX_KITE_OPS);
+        assert_eq!(d.focus.map(|f| f.pos), Some(pos(8, 25)), "focus the shielding rampart, not the spawn behind it");
+        match d.movement {
+            SquadMovement::Advance { goal, .. } => assert_eq!(goal, pos(8, 25), "advance toward the breach"),
+            other => panic!("expected Advance to the breach, got {other:?}"),
+        }
     }
 
     #[test]
