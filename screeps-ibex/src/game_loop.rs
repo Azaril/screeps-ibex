@@ -583,10 +583,13 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// 10 = the SquadManager (P2.G2, ADR 0008 §3): SquadContext gains an objective_id
 /// field (the manager↔objective binding that survives a reset), reshaping the
 /// serialized SquadContext.
+/// 11 = SK source mining (P2.K3): SourceKeeperFarmMission becomes a coordinator —
+/// gains source_mining_missions + haul_mission child fields, reshaping the
+/// MissionData::SourceKeeperFarm variant.
 /// NOTE: bincode is positional and never signals early end-of-sequence, so a
 /// trailing #[serde(default)] field does NOT make old payloads decode safely --
 /// the version fingerprint is the only real gate, hence this bump.
-const WORLD_FORMAT_VERSION: u32 = 10;
+const WORLD_FORMAT_VERSION: u32 = 11;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode
