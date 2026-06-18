@@ -353,11 +353,9 @@ pub struct MilitaryFeatures {
     pub nuke_defense: bool,
     /// Route room defense through the `SquadManager` via a `Defend` objective on
     /// the `CombatObjectiveQueue` (ADR 0008 §W1) instead of the legacy
-    /// squad-less `SquadDefenseMission`. Default **false** (the migration ships
-    /// inert; flip ON to validate the objective-managed defense path on a private
-    /// server before it touches live defense). When false the legacy path is
-    /// unchanged.
-    #[serde(default)]
+    /// squad-less `SquadDefenseMission`. Default **true** (operator 2026-06-18 —
+    /// combat-overhaul behaviors on by default; validate in Docker/sim before MMO).
+    /// Set false to fall back to the legacy defense path.
     pub manager_defense: bool,
     /// Enable verbose debug logging for war system (target selection, threat
     /// intel, defense decisions). Useful for diagnosing why attacks are or
@@ -596,7 +594,9 @@ impl Default for DerelictFeatures {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SourceKeeperFeatures {
-    /// Master kill-switch for SK-room farming (clearing + mining). Default FALSE.
+    /// Master kill-switch for SK-room farming (clearing + mining). Default **true**
+    /// (operator 2026-06-18 — the combat-overhaul behaviors run on by default; we
+    /// validate in Docker/sim before an MMO deploy). Set false to disable.
     pub farming: bool,
     /// Max concurrent SK farms (each a suppression duo + miners). Default 1.
     pub max_concurrent_farms: u32,
@@ -609,7 +609,7 @@ pub struct SourceKeeperFeatures {
 impl Default for SourceKeeperFeatures {
     fn default() -> Self {
         Self {
-            farming: false,
+            farming: true,
             max_concurrent_farms: 1,
             max_range: 2,
             diagnostics: false,
