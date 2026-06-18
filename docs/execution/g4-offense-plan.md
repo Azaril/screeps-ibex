@@ -66,9 +66,16 @@
   `threat_direction`). Inert live until O6 (no Dismantle objectives yet — all current squads Skirmish);
   unit-tested (decision 40, bot 166); full formation-orient behavior validates in the sim + soak when
   O6 fields siege squads.
-- [ ] **O3 — Layered dismantle targeting (pure).** A pure `select_dismantle_target` (rampart/wall on
-  the path to the ranked structure → core/spawn/tower) added to `decide_squad`. Self-play vs a ramparted
-  target. Reuse the rover cost-matrix to know "what blocks the path".
+- [x] **O3 — Layered dismantle targeting.** DONE (`9780df9`; rover submodule `448c2d4`). **Pathfinding
+  move:** `room_grid_dijkstra` + `reaches_room_edge` relocated from the bot's `pathing::gridsearch` into
+  `screeps-rover` (general pure-std primitives → the decision crate can reuse them; no-one-off-pathfinding
+  rule). **Pure combat breach:** `breach_redirect` in `decide_squad_with_pathing` — when the focus is a
+  hostile structure, build the breach pricing from the view's structures (walls + hostile ramparts =
+  dismantlable by hits; other structures + terrain = impassable), run `room_grid_dijkstra` centroid→target,
+  and redirect the focus + Advance goal to the first dismantlable blocker on the cheapest corridor. Bounded
+  to the structure-siege phase (a structure focus ⇒ no hostile creeps left). Separation upheld (search in
+  the pathfinding system, pricing/decision pure, manager applies, job moves). No WFV bump. +1 unit test.
+  Inert live until O6; sim-/unit-validated now (rover 27, decision 41, bot 158 [8 gridsearch moved to rover]).
 - [ ] **O4 — Wave retry / unwinnable in the manager.** Generalize `handle_wave_wipe` into the manager:
   on a wiped squad with the objective still wanted, retire-and-rebuild; after K failures call
   `objective_queue.mark_unwinnable(room)` (backoff already exists). Delete the combat `request_renew`
