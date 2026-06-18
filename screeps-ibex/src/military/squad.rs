@@ -258,6 +258,16 @@ pub struct TickOrders {
     pub heal_target: Option<ObjectId<Creep>>,
     /// Movement intent for this tick.
     pub movement: TickMovement,
+    /// The squad's shared movement directive (P2.G3-tail) — the manager computes it (incl. the
+    /// pathfinding-scored kite goal); the job feeds it to the pure `decide_movement`. Ephemeral.
+    #[serde(skip)]
+    pub squad_movement: crate::combat::SquadMovement,
+    /// The squad's real centroid this tick (the cohesion frame). Ephemeral.
+    #[serde(skip)]
+    pub squad_center: Option<Position>,
+    /// Loose-centroid cohesion radius K (0 ⇒ no squad goal → the per-creep fallback). Ephemeral.
+    #[serde(skip)]
+    pub squad_cohesion_radius: u32,
 }
 
 impl Default for TickOrders {
@@ -266,6 +276,9 @@ impl Default for TickOrders {
             attack_target: None,
             heal_target: None,
             movement: TickMovement::Formation,
+            squad_movement: crate::combat::SquadMovement::Hold,
+            squad_center: None,
+            squad_cohesion_radius: 0,
         }
     }
 }

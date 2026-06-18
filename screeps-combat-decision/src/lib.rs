@@ -542,13 +542,14 @@ pub enum SquadOrderState {
 /// The squad's shared per-tick movement directive — ONE goal the whole block moves toward, so
 /// cohesion is structural (every in-cohesion member targets the same tile). The per-creep
 /// `decide_movement` consumes it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SquadMovement {
     /// Advance the block toward `goal`, stopping within `range` (engage at weapon range).
     Advance { goal: Position, range: u8 },
     /// Kite/flee the block to a pathfinding-scored safe + cohesive + value-preserving `goal` tile.
     Kite { goal: Position },
     /// Hold position (already optimal / nothing to move toward this tick).
+    #[default]
     Hold,
 }
 

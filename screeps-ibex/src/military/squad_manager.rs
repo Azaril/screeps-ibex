@@ -30,7 +30,8 @@
 use super::composition::{SquadComposition, SquadSlot};
 use super::objective_queue::{CombatObjectiveQueue, ObjectiveId, ObjectiveKind, OBJECTIVE_PRIORITY_HIGH};
 use super::squad::{AttackTarget, SquadContext, SquadState, SquadTarget, TickMovement, TickOrders};
-use crate::combat::{decide_squad, CombatCreepDto, CombatStructureDto, SquadDecision, SquadMemberView, SquadOrderState, SquadView};
+use crate::combat::kite::MAX_KITE_OPS;
+use crate::combat::{decide_squad_with_pathing, CombatCreepDto, CombatStructureDto, SquadDecision, SquadMemberView, SquadOrderState, SquadView};
 use crate::creep::{spawning, CreepOwner};
 use crate::entitymappingsystem::EntityMappingData;
 use crate::jobs::squad_combat::{creep_to_dto, structure_to_dto};
@@ -38,6 +39,7 @@ use crate::room::data::RoomData;
 use crate::serialize::SerializeMarker;
 use crate::spawnsystem::*;
 use screeps::*;
+use screeps_rover::{CostMatrixCache, CostMatrixOptions, CostMatrixSystem};
 use specs::prelude::*;
 use specs::saveload::*;
 
@@ -418,24 +420,49 @@ fn compute_squad_orders(
 
     let (hostiles, structures) = build_room_combat_dtos(room_data, mapping, target_room);
 
-    let decision = decide_squad(&SquadView {
+    let view = SquadView {
         members: &member_views,
         hostiles: &hostiles,
         structures: &structures,
         retreat_threshold,
         current_state,
-    });
+    };
+
+    // Build the target room's movement cost matrix (terrain walls baked in — the headless
+    // `LocalPathfinder` reads walls from the matrix) for the ONE bounded kite search. Same recipe
+    // the squad anchor mover uses (formation.rs); the search itself is the pure `LocalPathfinder`.
+    let mut cache = CostMatrixCache::default();
+    let mut cms = CostMatrixSystem::new(&mut cache, Box::new(screeps_rover::screeps_impl::ScreepsCostMatrixDataSource));
+    let opts = CostMatrixOptions::default();
+    let mut room_cb = |r: RoomName| {
+        let mut matrix = cms.build_local_cost_matrix(r, &opts).ok()?;
+        if let Some(terrain) = game::map::get_room_terrain(r) {
+            for x in 0..50u8 {
+                for y in 0..50u8 {
+                    if terrain.get(x, y) == Terrain::Wall {
+                        if let Ok(xy) = RoomXY::checked_new(x, y) {
+                            matrix.set(xy, u8::MAX);
+                        }
+                    }
+                }
+            }
+        }
+        Some(matrix)
+    };
+
+    let decision = decide_squad_with_pathing(&view, &mut room_cb, MAX_KITE_OPS);
 
     if let Some(ctx) = squad_contexts.get_mut(squad_entity) {
         apply_squad_decision(ctx, &decision, creep_owner);
     }
 }
 
-/// Write a `SquadDecision` into the `SquadContext`: the combat state, the shared focus,
-/// and per-member orders. Movement stays `Formation` — for a manager squad (no anchor)
-/// the job owns movement (kites) so a focus order never charges a ranged squad into
-/// melee (§5 ⚑). Heal *assignment* still reuses `SquadContext::compute_heal_assignments`
-/// until that migrates into `decide_squad`.
+/// Write a `SquadDecision` into the `SquadContext`: the combat state, the shared focus, and per-member
+/// orders. The per-member `movement` stays `Formation` — for a manager squad (no anchor) the job
+/// routes it through the pure `decide_movement` (§5 ⚑ job-owns-movement), reading the squad's shared
+/// directive (`squad_movement`/`squad_center`/`squad_cohesion_radius`) the manager stamps here so the
+/// block kites/advances as one. Heal *assignment* still reuses `SquadContext::compute_heal_assignments`
+/// until that migrates into `decide_squad` (Step 7).
 fn apply_squad_decision(ctx: &mut SquadContext, decision: &SquadDecision, creep_owner: &ReadStorage<CreepOwner>) {
     ctx.state = order_state_to_squad(decision.state);
     ctx.focus_target = decision.focus.map(|f| f.pos);
@@ -452,6 +479,9 @@ fn apply_squad_decision(ctx: &mut SquadContext, decision: &SquadDecision, creep_
                 member.tick_orders = Some(TickOrders {
                     attack_target,
                     movement: TickMovement::Formation,
+                    squad_movement: decision.movement,
+                    squad_center: decision.center,
+                    squad_cohesion_radius: decision.cohesion_radius,
                     ..Default::default()
                 });
             }

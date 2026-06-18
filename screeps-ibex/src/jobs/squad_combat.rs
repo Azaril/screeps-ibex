@@ -384,17 +384,16 @@ impl Engaged {
         if let Some(ref orders) = tick_orders {
             match &orders.movement {
                 TickMovement::Formation => {
-                    // Formation movement needs the squad's anchor path. A
-                    // manager-fielded squad (P2.G3) carries combat orders (focus +
-                    // heal) but no anchor; for it, the job owns movement (kiting via
-                    // `fallback_movement`) so a manager focus order never forces a
-                    // ranged squad into melee through the formation range-1 fallback
-                    // (§5 ⚑ — the job issues the movement request). AttackMission
-                    // squads do populate `squad_path`, so they keep anchor movement.
+                    // Anchored AttackMission squads follow their cached anchor path. A manager-fielded
+                    // squad (P2.G3-tail) has no anchor; it routes movement through the pure
+                    // `decide_movement` using the squad's shared directive (the cohesive,
+                    // pathfinding-scored kite/advance goal the manager stamped on the orders) — the job
+                    // issues the request (§5 ⚑ job-owns-movement). decide_movement's own precedence
+                    // (critical-HP flee, immediate melee-evade, cohesion rejoin) keeps the block together.
                     if squad_has_anchor(state_context.squad_entity, tick_context) {
                         execute_formation_movement(state_context, creep_entity, orders, tick_context);
                     } else {
-                        Self::fallback_movement(creep, creep_pos, creep_entity, tick_context, state_context);
+                        Self::execute_decide_movement(creep, creep_pos, orders, tick_context);
                     }
                 }
                 TickMovement::MoveTo(pos) => {
@@ -513,6 +512,73 @@ impl Engaged {
                     }
                 }
                 CombatIntent::Dismantle { .. } | CombatIntent::MoveTo { .. } | CombatIntent::Flee { .. } | CombatIntent::Idle => {}
+            }
+        }
+    }
+
+    // ── Squad-cohesive movement via the tactical seam (P2.G3-tail) ──
+    //
+    // The live adapter for the pure `decide_movement`: build the per-creep `CombatView` from
+    // `game::*` + the squad's shared directive (the manager stamped `squad_movement`/`squad_center`/
+    // `squad_cohesion_radius` on the orders), run `decide_movement` (the SAME code the sim runs —
+    // cohesive kiting/advance with the critical-HP + melee-evade + rejoin precedence), and translate
+    // its single movement goal into a rover request. Used for anchorless manager squads (the SK duo,
+    // defense); AttackMission squads keep the anchor mover.
+    fn execute_decide_movement(creep: &Creep, creep_pos: Position, orders: &TickOrders, tick_context: &mut JobTickContext) {
+        use crate::combat::{decide_movement, CombatIntent, CombatView, CreepOrders, FocusTarget, SquadStateDto};
+
+        let room = creep_pos.room_name();
+        let hostiles_raw = get_hostile_creeps(room, tick_context);
+        let friends_raw = get_friendly_creeps(room, tick_context);
+        let structures_raw = get_hostile_structures(room, tick_context);
+
+        let me_dto = creep_to_dto(creep);
+        let hostiles: Vec<_> = hostiles_raw.iter().map(creep_to_dto).collect();
+        let friends: Vec<_> = friends_raw.iter().map(creep_to_dto).collect();
+        let structures: Vec<_> = structures_raw.iter().map(structure_to_dto).collect();
+
+        let creep_orders = CreepOrders {
+            focus: orders.attack_target.and_then(|t| t.resolve_creep()).map(|c| FocusTarget { pos: c.pos(), id: c.try_raw_id() }),
+            heal_target: orders.heal_target.and_then(|id| id.resolve()).map(|c| FocusTarget { pos: c.pos(), id: c.try_raw_id() }),
+        };
+        let squad = SquadStateDto {
+            center: orders.squad_center.unwrap_or(creep_pos),
+            room,
+            movement: orders.squad_movement,
+            cohesion_radius: orders.squad_cohesion_radius,
+        };
+        let intents = {
+            let view = CombatView {
+                tick: game::time(),
+                me: &me_dto,
+                squad: &squad,
+                orders: Some(creep_orders),
+                friends: &friends,
+                hostiles: &hostiles,
+                structures: &structures,
+            };
+            decide_movement(&view)
+        };
+
+        let creep_entity = tick_context.runtime_data.creep_entity;
+        for intent in intents {
+            match intent {
+                CombatIntent::MoveTo { target, range } => {
+                    tick_context
+                        .runtime_data
+                        .movement
+                        .move_to(creep_entity, target)
+                        .range(range as u32)
+                        .priority(MovementPriority::High);
+                }
+                CombatIntent::Flee { from, range } => {
+                    let targets: Vec<FleeTarget> = from.iter().map(|p| FleeTarget { pos: *p, range: range as u32 }).collect();
+                    if !targets.is_empty() {
+                        tick_context.runtime_data.movement.flee(creep_entity, targets).range(range as u32);
+                    }
+                }
+                // decide_movement emits only MoveTo/Flee (empty = hold this tick).
+                _ => {}
             }
         }
     }

@@ -50,13 +50,16 @@ owning the goal** — the no-one-off-pathfinding rule + "don't be disorganized w
   `decide_movement_fallback` (only when `cohesion_radius==0`, solo/unmanaged). The 6 existing per-creep tests hit
   (5) byte-identical (live + sim adapters set `Hold`/`0` for now); 3 new precedence tests. **DONE** (decision 37,
   agent 17, bot 164, wasm green).
-- [ ] **Step 6 — live wiring + ⚑ `WORLD_FORMAT_VERSION` 11→12** (`squad_manager.rs`, `squad_combat.rs`,
-  `squad.rs`, `game_loop.rs`): build `member_views` with `pos`/`has_ranged` + the kite cost matrix (terrain+threats+towers)
-  + a `ScreepsPathfinder`; call `decide_squad_with_pathing`; `TickOrders` gains `center`/`cohesion_radius`,
-  `TickMovement` gains `KiteTo(Position)` (**serialized → the bump**); `execute_combat_via_seam` passes the
-  REAL centroid (`tick_orders.center.unwrap_or(creep_pos)`); route the anchorless `Formation` branch through the
-  pure `decide_movement` (wire it LIVE — today live still uses `fallback_movement`). Anchored AttackMission
-  squads keep `execute_formation_movement`; orphan `tick_orders==None` keeps `fallback_movement`.
+- [x] **Step 6 — live wiring (NO WFV bump after all)** (`squad_manager.rs`, `squad_combat.rs`, `squad.rs`): the
+  manager builds `member_views` (`pos`/`has_ranged` resolved from the body) + the room's terrain-baked cost matrix
+  (the formation.rs recipe) and calls `decide_squad_with_pathing`; `apply_squad_decision` stamps the squad directive
+  (`squad_movement`/`squad_center`/`squad_cohesion_radius`) onto each member's `TickOrders`. The job's anchorless
+  Engaged `Formation` branch now routes through the pure `decide_movement` (`execute_decide_movement` — builds the
+  CombatView with the real squad goal, translates `MoveTo`/`Flee` to rover). **WFV stays 11** — the squad context
+  is conveyed via `#[serde(skip)]` `TickOrders` fields (ephemeral, rewritten each tick), so the serialized shape is
+  unchanged; no `TickMovement::KiteTo` was needed (the directive rides `squad_movement`). The plan's 11→12 bump was
+  over-cautious. Anchored AttackMission squads keep `execute_formation_movement`; the orphan/solo `tick_orders==None`
+  path keeps `fallback_movement`. **DONE** (bot 164, wasm + clippy clean).
 - [ ] **Step 7 — heal-assignment → pure** (`lib.rs`, `squad_manager.rs`, `squad.rs`): port
   `SquadContext::compute_heal_assignments` (the greedy: urgency sort, range bands 12@≤1 / 4@≤3, over-heal cap,
   preemptive pass) to pure over member INDICES → `SquadDecision.heal_assignments: Vec<HealAssignment{healer_idx,target_idx,expected_heal}>`;
