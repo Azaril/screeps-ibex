@@ -1,5 +1,7 @@
 use super::data::*;
 use super::operationsystem::*;
+use crate::military::composition::SquadComposition;
+use crate::military::objective_queue::{ForceRequirement, ObjectiveKind, ObjectiveOwner, ObjectiveRequest, OBJECTIVE_PRIORITY_HIGH};
 use crate::military::threatmap::*;
 use crate::missions::data::*;
 use crate::missions::nuke_defense::*;
@@ -16,6 +18,12 @@ use serde::{Deserialize, Serialize};
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
+
+/// TTL (ticks) for a `Defend` objective when defense is routed through the
+/// `SquadManager` (W1). Short, so a cleared/lost room retires its defense squad
+/// quickly — the defense scan re-asserts every 1–2 ticks while the threat stands,
+/// so this only needs to exceed that cadence by a comfortable margin.
+const DEFEND_OBJECTIVE_TTL: u32 = 60;
 
 // ---------------------------------------------------------------------------
 // Target scoring
@@ -379,12 +387,42 @@ impl WarOperation {
         // ── Create squad defense missions ──────────────────────────────────
 
         for need in rooms_needing_defense {
+            let escalation = DefenseEscalation::from_threat(need.estimated_dps, need.estimated_heal, need.hostile_count, need.any_boosted);
+
+            // ── Migrated path (ADR 0008 §W1): route defense through the
+            // SquadManager via a `Defend` objective instead of the legacy
+            // squad-less SquadDefenseMission. Feature-flagged, default OFF — the
+            // legacy `match escalation { … }` below is untouched when off. The
+            // producer re-asserts every defense scan while the room warrants a
+            // defender; when it stops (room safe / lost) the short TTL lapses and
+            // the manager retires the squad.
+            if system_data.features.military.manager_defense {
+                let room_name = match system_data.room_data.get(need.room_entity) {
+                    Some(rd) => rd.name,
+                    None => continue,
+                };
+                let composition = match escalation {
+                    DefenseEscalation::Quad => SquadComposition::quad_ranged(),
+                    DefenseEscalation::Duo => SquadComposition::duo_attack_heal(),
+                    DefenseEscalation::Solo => SquadComposition::solo_ranged(),
+                };
+                system_data.combat_objective_queue.request(
+                    ObjectiveRequest::new(
+                        ObjectiveKind::Defend { room: room_name },
+                        OBJECTIVE_PRIORITY_HIGH,
+                        ForceRequirement::single(composition),
+                    )
+                    .owner(ObjectiveOwner::Defense)
+                    .ttl(DEFEND_OBJECTIVE_TTL),
+                    game::time(),
+                );
+                continue;
+            }
+
             let room_data = match system_data.room_data.get_mut(need.room_entity) {
                 Some(rd) => rd,
                 None => continue,
             };
-
-            let escalation = DefenseEscalation::from_threat(need.estimated_dps, need.estimated_heal, need.hostile_count, need.any_boosted);
 
             info!(
                 "[War] Starting {:?} squad defense for room: {} (dps={:.0}, heal={:.0}, count={})",

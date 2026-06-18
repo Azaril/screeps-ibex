@@ -28,7 +28,7 @@
 //! `Recall` terminal state (P2.M0) lands.
 
 use super::composition::{SquadComposition, SquadSlot};
-use super::objective_queue::{CombatObjectiveQueue, ObjectiveId, ObjectiveKind};
+use super::objective_queue::{CombatObjectiveQueue, ObjectiveId, ObjectiveKind, OBJECTIVE_PRIORITY_HIGH};
 use super::squad::{SquadContext, SquadTarget};
 use crate::creep::spawning;
 use crate::room::data::RoomData;
@@ -51,6 +51,17 @@ const MAX_SPAWN_DISTANCE: u32 = 6;
 fn room_distance(a: RoomName, b: RoomName) -> u32 {
     let delta = a - b;
     delta.0.unsigned_abs().max(delta.1.unsigned_abs())
+}
+
+/// Map an objective's selection priority to a spawn-queue priority, so a
+/// high-priority objective (defense) is not starved below economy. (Defense
+/// objectives upsert at `OBJECTIVE_PRIORITY_HIGH`; farms at `..._LOW`.)
+fn spawn_priority_for(objective_priority: f32) -> f32 {
+    if objective_priority >= OBJECTIVE_PRIORITY_HIGH {
+        SPAWN_PRIORITY_HIGH
+    } else {
+        SPAWN_PRIORITY_MEDIUM
+    }
 }
 
 /// Map an objective to the squad's target + the room its members travel to.
@@ -179,9 +190,9 @@ impl<'a> System<'a> for SquadManagerSystem {
         // ── Phase B: field rosters (spawn unfilled slots) for live squads. ──
         for (squad_entity, obj_id) in &live_managed {
             // Read the composition off the objective each tick (the producer owns it).
-            let (slots, target_room) = match data.objective_queue.get(*obj_id) {
+            let (slots, target_room, spawn_priority) = match data.objective_queue.get(*obj_id) {
                 Some(obj) => match obj.force.squads.first() {
-                    Some(comp) => (comp.slots.clone(), objective_target(&obj.kind).1),
+                    Some(comp) => (comp.slots.clone(), objective_target(&obj.kind).1, spawn_priority_for(obj.priority)),
                     None => continue,
                 },
                 None => continue,
@@ -196,7 +207,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 if already_filled {
                     continue;
                 }
-                queue_slot_spawn(&mut data.spawn_queue, &homes, slot, slot_index, target_room, *squad_entity);
+                queue_slot_spawn(&mut data.spawn_queue, &homes, slot, slot_index, target_room, *squad_entity, spawn_priority);
             }
         }
 
@@ -252,6 +263,7 @@ fn queue_slot_spawn(
     slot_index: usize,
     target_room: RoomName,
     squad_entity: Entity,
+    priority: f32,
 ) {
     let token = spawn_queue.token();
     for home in homes.iter().filter(|h| room_distance(h.name, target_room) <= MAX_SPAWN_DISTANCE) {
@@ -261,7 +273,7 @@ fn queue_slot_spawn(
                 let request = SpawnRequest::new(
                     format!("Squad-{:?} {}", slot.role, target_room),
                     &body,
-                    SPAWN_PRIORITY_MEDIUM,
+                    priority,
                     Some(token),
                     create_spawn_callback(slot.role, slot_index, target_room, squad_entity),
                 );

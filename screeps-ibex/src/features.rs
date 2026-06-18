@@ -351,6 +351,14 @@ pub struct MilitaryFeatures {
     pub safe_mode: bool,
     /// Enable nuke defense mission.
     pub nuke_defense: bool,
+    /// Route room defense through the `SquadManager` via a `Defend` objective on
+    /// the `CombatObjectiveQueue` (ADR 0008 §W1) instead of the legacy
+    /// squad-less `SquadDefenseMission`. Default **false** (the migration ships
+    /// inert; flip ON to validate the objective-managed defense path on a private
+    /// server before it touches live defense). When false the legacy path is
+    /// unchanged.
+    #[serde(default)]
+    pub manager_defense: bool,
     /// Enable verbose debug logging for war system (target selection, threat
     /// intel, defense decisions). Useful for diagnosing why attacks are or
     /// aren't being launched.
@@ -369,6 +377,7 @@ impl Default for MilitaryFeatures {
             boost_military: false,
             safe_mode: true,
             nuke_defense: true,
+            manager_defense: false,
             debug_log: false,
             visualize: MilitaryVisualizeFeatures::default(),
         }

@@ -5,6 +5,7 @@ use crate::entitymappingsystem::EntityMappingData;
 use crate::expansion::ExpansionAvoidance;
 use crate::metrics::CpuBudget;
 use crate::military::economy::*;
+use crate::military::objective_queue::CombatObjectiveQueue;
 use crate::military::threatmap::RoomThreatData;
 use crate::missions::data::*;
 use crate::pathing::pathfinderservice::PathfinderService;
@@ -27,6 +28,7 @@ pub struct OperationSystemData<'a> {
     mission_data: ReadStorage<'a, MissionData>,
     mapping: Read<'a, EntityMappingData>,
     visibility: Write<'a, VisibilityQueue>,
+    combat_objective_queue: Write<'a, CombatObjectiveQueue>,
     visualization_data: Option<Write<'a, VisualizationData>>,
     cleanup_queue: Write<'a, EntityCleanupQueue>,
     economy: Write<'a, EconomySnapshot>,
@@ -48,6 +50,9 @@ pub struct OperationExecutionSystemData<'a, 'b> {
     pub mission_data: &'b ReadStorage<'a, MissionData>,
     pub mapping: &'b Read<'a, EntityMappingData>,
     pub visibility: &'b mut VisibilityQueue,
+    /// The combat objective queue (ADR 0008 §2 / P2.G1). Operation *producers*
+    /// (war/claim/attack) upsert here; the `SquadManager` fields the squads.
+    pub combat_objective_queue: &'b mut CombatObjectiveQueue,
     pub map_viz_data: Option<&'b mut MapVisualizationData>,
     pub economy: &'b mut EconomySnapshot,
     pub pathfinder: &'b mut PathfinderService,
@@ -130,6 +135,7 @@ impl<'a> System<'a> for PreRunOperationSystem {
             mission_data: &data.mission_data,
             mapping: &data.mapping,
             visibility: &mut data.visibility,
+            combat_objective_queue: &mut data.combat_objective_queue,
             map_viz_data: map_viz,
             economy: &mut data.economy,
             pathfinder: &mut data.pathfinder,
@@ -169,6 +175,7 @@ impl<'a> System<'a> for RunOperationSystem {
             mission_data: &data.mission_data,
             mapping: &data.mapping,
             visibility: &mut data.visibility,
+            combat_objective_queue: &mut data.combat_objective_queue,
             map_viz_data: map_viz,
             economy: &mut data.economy,
             pathfinder: &mut data.pathfinder,
