@@ -6,9 +6,10 @@
 //! "server"), so live and sim plan paths through the same system and the engine validates the move
 //! (ADR 0006 §B.2). Real pathfinding, not a greedy stepper: a kiter routes *around* obstacles.
 
+use screeps::local::LocalCostMatrix;
 use screeps::{Direction, Position, RoomName};
 use screeps_combat_decision::CombatIntent;
-use screeps_combat_engine::CombatWorld;
+use screeps_combat_engine::{CombatWorld, PlayerId};
 use screeps_rover::{
     ConstructionSiteCostMatrixCache, CostMatrixCache, CostMatrixDataSource, CostMatrixOptions, CostMatrixSystem,
     CostMatrixWrite, CreepCostMatrixCache, LinearCostMatrix, LocalPathfinder, PathfindingProvider,
@@ -22,19 +23,22 @@ const SWAMP_COST: u8 = 10;
 
 /// A [`CostMatrixDataSource`] over a `CombatWorld` snapshot. It owns its data (no borrow of the
 /// world), satisfying the `'static` bound `CostMatrixSystem` places on its boxed data source. Every
-/// obstacle — walls, structures, towers, and every living creep — is impassable (255); swamps cost
-/// [`SWAMP_COST`]. The pathing creep's own tile being blocked is harmless: the search starts there
-/// and never re-enters it.
+/// obstacle — walls, structures, towers, and **hostile** creeps — is impassable (255); swamps cost
+/// [`SWAMP_COST`]. **Friendly creeps (same owner as the pather) are NOT obstacles** — they are
+/// moving with you, and treating a teammate's tile as a wall would stall tight formations (a member
+/// could never path into a slot a teammate is vacating). This matches the live bot's default
+/// (`friendly_creeps: false`). The pather's own tile being blocked is harmless anyway (the search
+/// starts there and never re-enters it).
 struct CombatCostSource {
     room: RoomName,
     walls: Vec<(u8, u8)>,
     swamps: Vec<(u8, u8)>,
     blockers: Vec<(u8, u8)>,
-    creeps: Vec<(u8, u8)>,
+    hostiles: Vec<(u8, u8)>,
 }
 
 impl CombatCostSource {
-    fn from_world(world: &CombatWorld, room: RoomName) -> Self {
+    fn from_world(world: &CombatWorld, room: RoomName, me_owner: PlayerId) -> Self {
         let mut blockers = Vec::new();
         for s in world.structures.iter().filter(|s| s.is_alive()) {
             blockers.push((s.pos.x().u8(), s.pos.y().u8()));
@@ -47,10 +51,10 @@ impl CombatCostSource {
             walls: world.terrain.walls.iter().copied().collect(),
             swamps: world.terrain.swamps.iter().copied().collect(),
             blockers,
-            creeps: world
+            hostiles: world
                 .creeps
                 .iter()
-                .filter(|c| c.is_alive())
+                .filter(|c| c.is_alive() && c.owner != me_owner)
                 .map(|c| (c.pos.x().u8(), c.pos.y().u8()))
                 .collect(),
         }
@@ -82,27 +86,39 @@ impl CostMatrixDataSource for CombatCostSource {
             return None;
         }
         let mut hostile_creeps = LinearCostMatrix::new();
-        for &(x, y) in &self.creeps {
+        for &(x, y) in &self.hostiles {
             hostile_creeps.set(x, y, u8::MAX);
         }
         Some(CreepCostMatrixCache {
-            friendly_creeps: LinearCostMatrix::new(),
+            friendly_creeps: LinearCostMatrix::new(), // friendlies intentionally NOT avoided
             hostile_creeps,
             source_keeper_agro: LinearCostMatrix::new(),
         })
     }
 }
 
-/// Resolve a movement goal to the next-step [`Direction`] from `from`, via rover's pathfinder over
-/// the `CombatWorld`. Returns `None` for non-movement intents, when already satisfied (empty path),
-/// or when no route exists. Combat intents (`Attack`/`Heal`/…) and `Idle` yield `None` here.
-pub fn resolve_move_direction(world: &CombatWorld, from: Position, intent: &CombatIntent) -> Option<Direction> {
-    let room = from.room_name();
+/// Build the combat cost matrix for `room` from `me_owner`'s perspective via rover's cost-matrix
+/// builder (the same pipeline live uses, with a `CombatWorld` data source). Hostiles + structures +
+/// walls block; friendlies do not. Shared by per-creep movement and the squad anchor mover so both
+/// path over identical costs. `None` for a room the world doesn't model.
+pub fn build_combat_matrix(world: &CombatWorld, room: RoomName, me_owner: PlayerId) -> Option<LocalCostMatrix> {
     let mut cache = CostMatrixCache::default();
-    let source = Box::new(CombatCostSource::from_world(world, room));
-    let mut system = CostMatrixSystem::new(&mut cache, source);
+    let mut system = CostMatrixSystem::new(&mut cache, Box::new(CombatCostSource::from_world(world, room, me_owner)));
+    system.build_local_cost_matrix(room, &CostMatrixOptions::default()).ok()
+}
+
+/// Resolve a movement goal to the next-step [`Direction`] from `from` (owned by `me_owner`), via
+/// rover's pathfinder over the `CombatWorld`. Returns `None` for non-movement intents, when already
+/// satisfied (empty path), or when no route exists. Combat intents (`Attack`/`Heal`/…) and `Idle`
+/// yield `None` here.
+pub fn resolve_move_direction(
+    world: &CombatWorld,
+    from: Position,
+    me_owner: PlayerId,
+    intent: &CombatIntent,
+) -> Option<Direction> {
     let opts = CostMatrixOptions::default();
-    let mut room_cb = |r: RoomName| system.build_local_cost_matrix(r, &opts).ok();
+    let mut room_cb = |r: RoomName| build_combat_matrix(world, r, me_owner);
     let mut pf = LocalPathfinder;
 
     let result = match intent {
@@ -144,7 +160,7 @@ mod tests {
     #[test]
     fn moves_toward_an_open_goal() {
         let world = CombatWorld { creeps: vec![creep(1, 5, 25)], ..Default::default() };
-        let dir = resolve_move_direction(&world, pos(5, 25), &CombatIntent::MoveTo { target: pos(15, 25), range: 0 });
+        let dir = resolve_move_direction(&world, pos(5, 25), 0, &CombatIntent::MoveTo { target: pos(15, 25), range: 0 });
         // 8-directional + uniform cost ⇒ Right / TopRight / BottomRight are all equally-optimal
         // first steps toward an eastern goal; assert we head east, not the exact diagonal.
         assert!(
@@ -162,7 +178,7 @@ mod tests {
         for y in 23..=27 {
             world.terrain.walls.insert((6, y));
         }
-        let dir = resolve_move_direction(&world, pos(5, 25), &CombatIntent::MoveTo { target: pos(10, 25), range: 0 })
+        let dir = resolve_move_direction(&world, pos(5, 25), 0, &CombatIntent::MoveTo { target: pos(10, 25), range: 0 })
             .expect("a route around exists");
         // Stepping Right would enter the wall at (6,25); the planner must pick a detour.
         assert_ne!(dir, Direction::Right, "does not walk into the wall");
@@ -176,14 +192,14 @@ mod tests {
     #[test]
     fn already_in_range_yields_no_move() {
         let world = CombatWorld { creeps: vec![creep(1, 5, 25)], ..Default::default() };
-        let dir = resolve_move_direction(&world, pos(5, 25), &CombatIntent::MoveTo { target: pos(7, 25), range: 3 });
+        let dir = resolve_move_direction(&world, pos(5, 25), 0, &CombatIntent::MoveTo { target: pos(7, 25), range: 3 });
         assert_eq!(dir, None, "distance 2 already within range 3 → hold");
     }
 
     #[test]
     fn flees_away_from_a_threat() {
         let world = CombatWorld { creeps: vec![creep(1, 30, 25)], ..Default::default() };
-        let dir = resolve_move_direction(&world, pos(30, 25), &CombatIntent::Flee { from: vec![pos(25, 25)], range: 5 })
+        let dir = resolve_move_direction(&world, pos(30, 25), 0, &CombatIntent::Flee { from: vec![pos(25, 25)], range: 5 })
             .expect("can flee in an open room");
         // Threat is to the west (x=25); fleeing should move east (away), increasing x.
         assert!(
@@ -196,6 +212,6 @@ mod tests {
     #[test]
     fn non_movement_intent_is_none() {
         let world = CombatWorld { creeps: vec![creep(1, 5, 25)], ..Default::default() };
-        assert_eq!(resolve_move_direction(&world, pos(5, 25), &CombatIntent::Idle), None);
+        assert_eq!(resolve_move_direction(&world, pos(5, 25), 0, &CombatIntent::Idle), None);
     }
 }

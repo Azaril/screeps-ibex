@@ -16,6 +16,7 @@
 //! `screeps-combat-engine` (mechanism) member crates — not the whole bot.
 
 pub mod pathing;
+pub mod squad;
 
 use screeps::{Position, RawObjectId, RoomName, StructureType};
 use screeps_combat_decision::{
@@ -68,6 +69,7 @@ fn creep_dto(c: &SimCreep, raw: RawObjectId) -> CombatCreepDto {
 /// focus is computed once (`select_focus_target`); per-creep views come from [`SimView::view_for`].
 pub struct SimView {
     tick: u32,
+    me_owner: PlayerId,
     squad: SquadStateDto,
     /// The deciding side's living creeps, in `CombatWorld::creeps` order.
     friends: Vec<CombatCreepDto>,
@@ -129,6 +131,7 @@ impl SimView {
 
         Self {
             tick: world.tick,
+            me_owner,
             squad: SquadStateDto { center, room },
             friends,
             friend_ids,
@@ -139,6 +142,11 @@ impl SimView {
         }
     }
 
+    /// The side this view is built for.
+    pub fn me_owner(&self) -> PlayerId {
+        self.me_owner
+    }
+
     /// The deciding side's creeps (parallel to [`SimView::friend_id`]).
     pub fn friends(&self) -> &[CombatCreepDto] {
         &self.friends
@@ -147,6 +155,11 @@ impl SimView {
     /// The engine `CreepId` of friend `i` (for keying its engine intents).
     pub fn friend_id(&self, i: usize) -> CreepId {
         self.friend_ids[i]
+    }
+
+    /// The friend index of a given `CreepId`, if it is on this side and alive.
+    pub fn friend_index(&self, id: CreepId) -> Option<usize> {
+        self.friend_ids.iter().position(|&x| x == id)
     }
 
     /// A per-creep read seam for friend `i`, carrying the shared squad focus as its orders.
@@ -213,7 +226,7 @@ pub fn agent_intents<A: TacticalAgent>(world: &CombatWorld, sim: &SimView, agent
         for intent in agent.decide(&view) {
             if let Some(action) = to_engine_action(&intent, sim) {
                 actions.push(action);
-            } else if let Some(dir) = pathing::resolve_move_direction(world, me_pos, &intent) {
+            } else if let Some(dir) = pathing::resolve_move_direction(world, me_pos, sim.me_owner(), &intent) {
                 intents.set_move(creep_id, dir);
             }
         }
