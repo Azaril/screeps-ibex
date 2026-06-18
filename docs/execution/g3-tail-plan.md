@@ -27,11 +27,11 @@ owning the goal** — the no-one-off-pathfinding rule + "don't be disorganized w
   (extracted, shared by live+sim); new `kite.rs` = `ThreatKind`/`KiteThreat`/`KiteTower`/
   `KiteScoreParams`/`SquadKiteView`, `tower_dps_at_range`, `score_tile(view, tile, walkable_neighbors) -> i64`
   (**lower = better cost**: SAFETY ≫ COHESION > VALUE > openness). 6 kernel tests. **DONE.**
-- [ ] **Step 1 — rover `search_scored`** (`screeps-rover` submodule: `traits.rs`, `local_pathfinder.rs`,
-  `screeps_impl.rs`): `fn search_scored(origin, room_callback, max_ops, plain_cost, swamp_cost, cost: &dyn Fn(Position)->i64) -> PathfindingResult`.
-  `LocalPathfinder` floods bounded + returns the min-`cost` reachable tile (generalize `run()`'s existing
-  `score` closure; pure Dijkstra priority = `g`). `ScreepsPathfinder` (live): `search_many(flee)` then
-  re-rank the path tail+neighbours by `cost`. 3 rover tests. **Submodule: commit in rover, bump the superproject ptr.**
+- [x] **Step 1 — rover `search_scored`** (`screeps-rover` submodule `e6d996f`): added to `PathfindingProvider`;
+  `LocalPathfinder` floods bounded (Dijkstra by `g` — `run` gained a `dijkstra` flag) + returns the min-`cost`
+  reachable tile; `ScreepsPathfinder` **delegates to `LocalPathfinder`** (a bounded single-room scored search
+  has no server-PF analog, and delegating makes live kite positioning byte-identical to the sim). 3 rover tests
+  (rover 19). **DONE** (superproject ptr bumped).
 - [ ] **Step 3 — pure `plan_kite_anchor`** (`kite.rs`, add `screeps-rover` dep to the decision crate):
   `plan_kite_anchor(view, pf: &mut dyn PathfindingProvider, room_callback, max_ops) -> Option<KitePlan{goal}>`.
   ONE `search_scored` from the centroid pricing tiles with `score_tile`. `MAX_KITE_OPS ≈ 400`. Tests with `LocalPathfinder` + synthetic matrices.
