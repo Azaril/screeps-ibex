@@ -110,19 +110,36 @@
   So O5 lands **with O6/O7**, building the dropped-power haul as `AttackMission`'s `Exploiting` is
   removed/replaced. (Engine note: dropped power decays `ceil(amount/1000)`/tick ≈ 5/tick for a 5000
   pile → hundreds of ticks, so hauler timing is forgiving — no razor-edge 20%-HP pre-deploy needed.)
-- [ ] **O6 — Offense producers (NEXT).** `WarOperation::run_offense_evaluation` upserts `Secure` /
+- [~] **O6 — Offense producers (IN PROGRESS).** `WarOperation::run_offense_evaluation` upserts `Secure` /
   `Dismantle` / `Harass` objectives instead of launching `AttackOperation`s — the **live consumer +
   validation gate** for O1/O2/O3 (a real offense squad now travels in formation, orients, breaches).
   Map each live `AttackReason` → objective kind + threat-sized composition (mirror W1's
   escalation→composition) + priority. **Scope — single-squad cases first** (the common NPC-policing +
-  light targets, which map cleanly to ONE objective): `InvaderCore` → `Secure`/`Dismantle`;
-  `InvaderCreeps` → `Secure` (**reconcile with the migrated remote-defense `Defend`** — don't
-  double-field the same room); `Flag` → `Secure`; `ResourceDenial` → `Harass`; `ProactiveDefense`.
-  **The HEAVY multi-squad player assault** (`plan_by_detected_threat` towers≥4 → drain-duo + quad with
-  `DeployCondition` sequencing) does NOT map to the one-squad-per-objective model → **defer** (needs a
-  multi-squad / sequenced-objective mechanism; keep it on `AttackMission` until then, so O7's delete is
-  gated on that too). Cap: count active offense objectives (replace `count_power_bank_attacks` /
-  `active_attacks`). Validate on Docker (up): the bot clears an invader core via a manager squad.
+  light targets, which map cleanly to ONE objective).
+  - [x] **O6.1 — `InvaderCore` → `Dismantle { room, pos: core_pos }` (DONE; no WFV bump; deployed to Docker).**
+    `run_offense_evaluation`'s invader-core block now captures the highest-level core's level **and
+    position** and, when `invader_core_attack_score` says it's worth attacking (affordability/interest
+    gate preserved), **upserts** a `Dismantle` objective (`ForceRequirement::single(siege_quad())`,
+    `OBJECTIVE_PRIORITY_MEDIUM` — above SK-farm LOW, below all defense; `owner(Attack)`;
+    `OFFENSE_OBJECTIVE_TTL=100`) instead of pushing an `AttackCandidate` / launching an
+    `AttackOperation`. The room is re-evaluated each scan (no `active_attacks` entry), so the upsert is
+    idempotent + re-asserts the TTL; core dies ⇒ room drops out ⇒ TTL lapses ⇒ manager retires the
+    siege squad. The consumer side was already complete (manager `objective_target` maps `Dismantle`→
+    `SquadTarget::AttackStructure`; `is_formation_objective(Dismantle)`=true ⇒ O1 travel + O2 orient +
+    O3 breach). **Composition is standardized `siege_quad` for all levels** (level-aware sizing — e.g.
+    `solo_core_attacker` for a level-0 reserver — is a future refinement, consistent with the W1
+    accepted trade-off). **Cap:** no war-side cap on this increment — the manager's
+    `MAX_CONCURRENT_SQUADS` gates fielding; a dedicated active-offense-objective count reconciles the
+    war cap when the remaining reasons migrate. Bot host 160, wasm + clippy clean; deployed to Docker
+    (hot swap, no reset, ticking clean; behavior validates when a core appears — world peaceful now).
+  - [ ] **O6.2 — the rest, single-squad:** `InvaderCreeps` → `Secure` (**reconcile with the migrated
+    remote-defense `Defend`** — don't double-field the same room); `Flag` → `Secure`; `ResourceDenial`
+    → `Harass`; `ProactiveDefense`. Then add the dedicated **active-offense-objective count** (replace
+    `count_power_bank_attacks` / `active_attacks`) to reconcile the war cap.
+  - **The HEAVY multi-squad player assault** (`plan_by_detected_threat` towers≥4 → drain-duo + quad with
+    `DeployCondition` sequencing) does NOT map to the one-squad-per-objective model → **defer** (needs a
+    multi-squad / sequenced-objective mechanism; keep it on `AttackMission` until then, so O7's delete is
+    gated on that too). Validate on Docker (up): the bot clears an invader core via a manager squad.
 - [ ] **O7 — Parity + DELETE the legacy.** Once O1–O6 reach parity (the bot clears an invader core +
   takes/sieges a target on the private-server soak): delete `AttackMission` (`attack_mission.rs`),
   `AttackOperation` (`operations/attack.rs`), the `AttackReason` enum, the `MissionData::AttackMission`

@@ -27,6 +27,12 @@ use specs::*;
 /// so this only needs to exceed that cadence by a comfortable margin.
 const DEFEND_OBJECTIVE_TTL: u32 = 60;
 
+/// TTL (ticks) for an offense objective (O6) upserted by the offense scan.
+/// `OFFENSE_CADENCE` re-asserts every 10 ticks (stretching to 40 under CPU
+/// pressure), so this comfortably outlives the re-assert gap — a cleared room
+/// (no core ⇒ no upsert) then lapses and the manager retires the siege squad.
+const OFFENSE_OBJECTIVE_TTL: u32 = 100;
+
 // ---------------------------------------------------------------------------
 // Target scoring
 // ---------------------------------------------------------------------------
@@ -739,10 +745,19 @@ impl WarOperation {
             // Presence must stay distinguishable from absence: collapsing
             // both to 0 made reserver cores untargetable, so they squatted
             // our remote-mining rooms until their collapse timer expired.
-            let invader_core_level = room_entity
+            // Capture the highest-level core's level *and* position — O6 fields a
+            // `Dismantle { room, pos }` objective at the core, so it needs the tile.
+            let invader_core = room_entity
                 .and_then(|e| system_data.room_data.get(e))
                 .and_then(|rd| rd.get_structures())
-                .and_then(|structures| structures.invader_cores().iter().map(|core| core.level()).max());
+                .and_then(|structures| {
+                    structures
+                        .invader_cores()
+                        .iter()
+                        .max_by_key(|core| core.level())
+                        .map(|core| (core.level(), core.pos()))
+                });
+            let invader_core_level = invader_core.map(|(level, _)| level);
 
             // Check for power banks.
             let power_bank_info = room_entity
@@ -773,39 +788,65 @@ impl WarOperation {
                 );
             }
 
-            // ── Invader core targeting ────────────────────────────────────
-            if let Some(core_level) = invader_core_level {
-                if features.military.attack_invaders {
-                    let is_our_remote = room_entity
-                        .and_then(|e| system_data.room_data.get(e))
-                        .and_then(|rd| rd.get_dynamic_visibility_data())
-                        .map(|d| d.reservation().mine())
-                        .unwrap_or(false);
+            // ── Invader core targeting (O6: objective-driven) ─────────────
+            // An invader core is migrated OFF `AttackOperation` onto a `Dismantle`
+            // objective fielded by the `SquadManager` — a siege squad that travels
+            // in formation (O1), orients toward the core (O2), and breaches the
+            // shielding rampart of a stronghold core (O3). All OTHER attack reasons
+            // stay on `AttackOperation` for now (coexistence) — see g4-offense-plan O6.
+            // The room is re-evaluated every scan (no `active_attacks` entry), so the
+            // upsert is idempotent and re-asserts the TTL; once the core is dead the
+            // room drops out, the objective lapses, and the manager retires the squad.
+            if let (Some((core_level, core_pos)), true) = (invader_core, features.military.attack_invaders) {
+                let is_our_remote = room_entity
+                    .and_then(|e| system_data.room_data.get(e))
+                    .and_then(|rd| rd.get_dynamic_visibility_data())
+                    .map(|d| d.reservation().mine())
+                    .unwrap_or(false);
 
-                    let has_sources = room_entity
-                        .and_then(|e| system_data.room_data.get(e))
-                        .and_then(|rd| rd.get_static_visibility_data())
-                        .map(|s| !s.sources().is_empty())
-                        .unwrap_or(false);
+                let has_sources = room_entity
+                    .and_then(|e| system_data.room_data.get(e))
+                    .and_then(|rd| rd.get_static_visibility_data())
+                    .map(|s| !s.sources().is_empty())
+                    .unwrap_or(false);
 
-                    if let Some(score) = invader_core_attack_score(
+                // Preserve the affordability/interest gate (won't siege an
+                // unaffordable level, won't clear a reserver in a room we don't mine).
+                let worth_attacking = invader_core_attack_score(
+                    core_level,
+                    min_distance,
+                    system_data.economy.total_stored_energy,
+                    is_our_remote,
+                    has_sources,
+                )
+                .is_some();
+
+                if worth_attacking {
+                    info!(
+                        "[War] Dismantle objective for invader core L{} in {} @ ({},{})",
                         core_level,
-                        min_distance,
-                        system_data.economy.total_stored_energy,
-                        is_our_remote,
-                        has_sources,
-                    ) {
-                        candidates.push(AttackCandidate {
-                            room: room_name,
-                            source: TargetSource::InvaderCore { level: core_level },
-                            score,
-                            tower_count,
-                            estimated_enemy_dps: threat_data.estimated_dps,
-                            estimated_enemy_heal: threat_data.estimated_heal,
-                            has_safe_mode: false,
-                            estimated_roi: None,
-                        });
-                    }
+                        room_name,
+                        core_pos.x().u8(),
+                        core_pos.y().u8()
+                    );
+                    // NPC remote-policing offense: priority MEDIUM (above SK-farm LOW,
+                    // below all defense). No war-side concurrency cap on the first
+                    // increment — the manager's `MAX_CONCURRENT_SQUADS` gates fielding;
+                    // a dedicated active-offense-objective count reconciles the war cap
+                    // when the remaining single-squad reasons migrate.
+                    system_data.combat_objective_queue.request(
+                        ObjectiveRequest::new(
+                            ObjectiveKind::Dismantle {
+                                room: room_name,
+                                pos: core_pos,
+                            },
+                            OBJECTIVE_PRIORITY_MEDIUM,
+                            ForceRequirement::single(SquadComposition::siege_quad()),
+                        )
+                        .owner(ObjectiveOwner::Attack)
+                        .ttl(OFFENSE_OBJECTIVE_TTL),
+                        game::time(),
+                    );
                 }
             }
 
