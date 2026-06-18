@@ -60,10 +60,13 @@ owning the goal** — the no-one-off-pathfinding rule + "don't be disorganized w
   unchanged; no `TickMovement::KiteTo` was needed (the directive rides `squad_movement`). The plan's 11→12 bump was
   over-cautious. Anchored AttackMission squads keep `execute_formation_movement`; the orphan/solo `tick_orders==None`
   path keeps `fallback_movement`. **DONE** (bot 164, wasm + clippy clean).
-- [ ] **Step 7 — heal-assignment → pure** (`lib.rs`, `squad_manager.rs`, `squad.rs`): port
-  `SquadContext::compute_heal_assignments` (the greedy: urgency sort, range bands 12@≤1 / 4@≤3, over-heal cap,
-  preemptive pass) to pure over member INDICES → `SquadDecision.heal_assignments: Vec<HealAssignment{healer_idx,target_idx,expected_heal}>`;
-  `SquadMemberView` gains `id`/`damage_taken_last_tick`. Adapter maps indices→entity→`ObjectId` via `CreepOwner`.
+- [x] **Step 7 — heal-assignment → pure** (`lib.rs`, `squad_manager.rs`): ported the greedy
+  (`assign_heals`: urgency sort, range bands 12@≤1 / 4@≤3, over-heal cap, preemptive pass) pure over member
+  INDICES → `SquadDecision.heal_assignments: Vec<HealAssignment{healer_idx,target_idx,expected_heal}>`;
+  `SquadMemberView` gained `damage_taken_last_tick` (the index resolution makes `id` unnecessary — the adapter
+  has the entity). The manager resolves `target_idx → entity → ObjectId` via `CreepOwner` and stamps each
+  assigned healer's `tick_orders.heal_target`, replacing the `ctx.compute_heal_assignments`/`apply` calls (those
+  stay for the retreat path). 2 tests. **DONE** (decision 39, bot 164, wasm + clippy clean).
   No WFV bump.
 - [ ] **Step 8 — sim wiring + cohesion regression scenario** (`screeps-combat-agent`): `SimView::from_world`
   derives `center = cohesion::centroid(friends)`; `SimSquad::step` calls `decide_squad_with_pathing` (sim

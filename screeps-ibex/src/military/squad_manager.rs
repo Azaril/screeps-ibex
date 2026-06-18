@@ -406,6 +406,7 @@ fn compute_squad_orders(
                         heal_power: m.heal_power,
                         pos: m.position,
                         has_ranged,
+                        damage_taken_last_tick: m.damage_taken_last_tick,
                     }
                 })
                 .collect::<Vec<_>>(),
@@ -485,8 +486,22 @@ fn apply_squad_decision(ctx: &mut SquadContext, decision: &SquadDecision, creep_
                     ..Default::default()
                 });
             }
-            let heal_assignments = ctx.compute_heal_assignments(Some(creep_owner));
-            ctx.apply_heal_assignments(&heal_assignments);
+            // Apply the pure heal assignments (Step 7): resolve member indices → the target's creep
+            // ObjectId, then set each assigned healer's heal_target. (Indices match `member_views`,
+            // built in the same order as `ctx.members`.) Resolve first to avoid an aliasing borrow.
+            let heal_targets: Vec<(usize, Option<ObjectId<Creep>>)> = decision
+                .heal_assignments
+                .iter()
+                .map(|a| {
+                    let target_id = ctx.members.get(a.target_idx).and_then(|m| creep_owner.get(m.entity)).map(|co| co.owner);
+                    (a.healer_idx, target_id)
+                })
+                .collect();
+            for (healer_idx, target_id) in heal_targets {
+                if let Some(orders) = ctx.members.get_mut(healer_idx).and_then(|m| m.tick_orders.as_mut()) {
+                    orders.heal_target = target_id;
+                }
+            }
         }
         // Forming / Moving: no combat orders — the job self-drives to the room.
         _ => {}

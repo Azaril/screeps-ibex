@@ -566,6 +566,17 @@ pub struct SquadMemberView {
     pub pos: Option<Position>,
     /// Has a working RANGED_ATTACK part (drives "the squad can kite").
     pub has_ranged: bool,
+    /// Damage taken since last tick (predicted incoming, for proactive heal assignment).
+    pub damage_taken_last_tick: u32,
+}
+
+/// A computed heal assignment over member **indices** (the live adapter / sim resolve indices to the
+/// actual creep). `healer_idx` heals `target_idx`; `expected_heal` is the (over-heal-capped) amount.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HealAssignment {
+    pub healer_idx: usize,
+    pub target_idx: usize,
+    pub expected_heal: u32,
 }
 
 /// The squad-level read seam: the roster's cached status + the room's hostiles/
@@ -593,6 +604,9 @@ pub struct SquadDecision {
     /// The squad's centroid (the real coordinate frame; `None` if no member has a position).
     pub center: Option<Position>,
     pub cohesion_radius: u32,
+    /// Per-tick heal assignments over member indices (the greedy healer→target matching, P2.G3-tail
+    /// Step 7 — ported pure from `SquadContext::compute_heal_assignments`).
+    pub heal_assignments: Vec<HealAssignment>,
 }
 
 /// Mean HP fraction over members that have spawned (`hits_max > 0`).
@@ -678,7 +692,107 @@ pub fn decide_squad(view: &SquadView) -> SquadDecision {
         _ => SquadMovement::Hold,
     };
 
-    SquadDecision { state, focus, movement, center, cohesion_radius: SQUAD_COHESION_RADIUS }
+    let heal_assignments = assign_heals(view.members);
+
+    SquadDecision {
+        state,
+        focus,
+        movement,
+        center,
+        cohesion_radius: SQUAD_COHESION_RADIUS,
+        heal_assignments,
+    }
+}
+
+/// Greedy heal assignment over member indices (a faithful pure port of
+/// `SquadContext::compute_heal_assignments`): sort the wounded by urgency (deficit + predicted
+/// incoming), greedily give each the available healer with the most healing (range bands 12@≤1 /
+/// 4@≤3, adjacent preferred on a tie), cap to the remaining deficit; then any idle healer pre-heals
+/// the in-range member taking the most predicted damage. Indices are into `members`; the adapter
+/// resolves them to creeps.
+fn assign_heals(members: &[SquadMemberView]) -> Vec<HealAssignment> {
+    let healers: Vec<usize> = (0..members.len())
+        .filter(|&i| members[i].heal_power > 0 && members[i].pos.is_some())
+        .collect();
+    if healers.is_empty() {
+        return Vec::new();
+    }
+
+    struct Target {
+        idx: usize,
+        pos: Position,
+        remaining: u32,
+    }
+    let mut targets: Vec<Target> = (0..members.len())
+        .filter_map(|i| {
+            let m = &members[i];
+            let pos = m.pos?;
+            if m.hits_max == 0 || (m.hits >= m.hits_max && m.damage_taken_last_tick == 0) {
+                return None;
+            }
+            let deficit = m.hits_max - m.hits;
+            Some(Target { idx: i, pos, remaining: deficit + m.damage_taken_last_tick })
+        })
+        .collect();
+    targets.sort_by_key(|t| std::cmp::Reverse(t.remaining));
+
+    let mut assigned = vec![false; healers.len()];
+    let mut out = Vec::new();
+
+    for t in targets.iter_mut() {
+        if t.remaining == 0 {
+            continue;
+        }
+        let mut best: Option<(usize, u32, bool)> = None; // (healer slot, heal, ranged)
+        for (slot, &mi) in healers.iter().enumerate() {
+            if assigned[slot] {
+                continue;
+            }
+            let hp = members[mi].pos.expect("healer filtered to have a position");
+            let range = hp.get_range_to(t.pos);
+            let (heal, ranged) = if range <= 1 {
+                (members[mi].heal_power * 12, false)
+            } else if range <= 3 {
+                (members[mi].heal_power * 4, true)
+            } else {
+                continue;
+            };
+            let better = match best {
+                None => true,
+                Some((_, bh, br)) => heal > bh || (heal == bh && !ranged && br),
+            };
+            if better {
+                best = Some((slot, heal, ranged));
+            }
+        }
+        if let Some((slot, heal, _)) = best {
+            assigned[slot] = true;
+            let effective = heal.min(t.remaining);
+            t.remaining = t.remaining.saturating_sub(effective);
+            out.push(HealAssignment { healer_idx: healers[slot], target_idx: t.idx, expected_heal: effective });
+        }
+    }
+
+    // Preemptive: an idle healer pre-heals the in-range member taking the most predicted damage.
+    for (slot, &mi) in healers.iter().enumerate() {
+        if assigned[slot] {
+            continue;
+        }
+        let hp = members[mi].pos.expect("healer filtered to have a position");
+        let best = (0..members.len())
+            .filter(|&j| j != mi && members[j].pos.is_some_and(|p| hp.get_range_to(p) <= 3))
+            .max_by_key(|&j| members[j].damage_taken_last_tick);
+        if let Some(j) = best {
+            let m = &members[j];
+            if m.damage_taken_last_tick > 0 || m.hits < m.hits_max {
+                let range = hp.get_range_to(m.pos.unwrap());
+                let heal = if range > 1 { members[mi].heal_power * 4 } else { members[mi].heal_power * 12 };
+                out.push(HealAssignment { healer_idx: mi, target_idx: j, expected_heal: heal });
+            }
+        }
+    }
+
+    out
 }
 
 /// Member positions that have synced (the centroid input).
@@ -1088,7 +1202,10 @@ mod tests {
         SquadMemberView { hits, hits_max, heal_power, ..Default::default() }
     }
     fn ranged_member_at(hits: u32, hits_max: u32, x: u8, y: u8) -> SquadMemberView {
-        SquadMemberView { hits, hits_max, heal_power: 0, pos: Some(pos(x, y)), has_ranged: true }
+        SquadMemberView { hits, hits_max, heal_power: 0, pos: Some(pos(x, y)), has_ranged: true, ..Default::default() }
+    }
+    fn healer_at(hits: u32, hits_max: u32, heal_power: u32, x: u8, y: u8) -> SquadMemberView {
+        SquadMemberView { hits, hits_max, heal_power, pos: Some(pos(x, y)), has_ranged: false, damage_taken_last_tick: 0 }
     }
     fn squad_view<'a>(
         members: &'a [SquadMemberView],
@@ -1179,6 +1296,38 @@ mod tests {
             }
             other => panic!("expected a Kite directive vs a melee threat, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn assign_heals_gives_the_most_wounded_the_best_in_range_healer() {
+        // Member 0 = a wounded ranged attacker (range 1 from the healer); member 1 = a full healer.
+        let members = vec![
+            ranged_member_at(100, 700, 25, 25),
+            healer_at(600, 600, 5, 26, 25),
+        ];
+        let d = decide_squad(&SquadView {
+            members: &members,
+            hostiles: &[creep(9, 24, 25, 600, &[(Part::Attack, 6)])],
+            structures: &[],
+            retreat_threshold: 0.3,
+            current_state: SquadOrderState::Engaged,
+        });
+        // The healer (idx 1) is assigned to the wounded attacker (idx 0), adjacent → 12/part.
+        assert_eq!(d.heal_assignments.len(), 1);
+        let h = d.heal_assignments[0];
+        assert_eq!(h.healer_idx, 1);
+        assert_eq!(h.target_idx, 0);
+        assert_eq!(h.expected_heal, 5 * 12, "adjacent heal = 12/part");
+    }
+
+    #[test]
+    fn assign_heals_empty_when_no_healers_or_no_wounded() {
+        // No healers.
+        let m1 = vec![ranged_member_at(100, 700, 25, 25)];
+        assert!(decide_squad(&SquadView { members: &m1, hostiles: &[], structures: &[], retreat_threshold: 0.3, current_state: SquadOrderState::Moving }).heal_assignments.is_empty());
+        // A healer but everyone full + no damage taken.
+        let m2 = vec![ranged_member_at(700, 700, 25, 25), healer_at(600, 600, 5, 26, 25)];
+        assert!(decide_squad(&SquadView { members: &m2, hostiles: &[], structures: &[], retreat_threshold: 0.3, current_state: SquadOrderState::Moving }).heal_assignments.is_empty());
     }
 
     #[test]
