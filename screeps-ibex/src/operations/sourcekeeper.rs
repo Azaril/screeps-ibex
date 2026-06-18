@@ -129,6 +129,8 @@ pub fn score_sk_farm(inp: &SkRoiInputs) -> SkRoiScore {
 
 use super::data::*;
 use super::operationsystem::*;
+use crate::missions::data::*;
+use crate::missions::sourcekeeperfarm::SourceKeeperFarmMission;
 use crate::room::gather::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
@@ -213,7 +215,7 @@ impl Operation for SourceKeeperOperation {
     fn run_operation(
         &mut self,
         system_data: &mut OperationExecutionSystemData,
-        _runtime_data: &mut OperationExecutionRuntimeData,
+        runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
         // Master kill-switch (ADR 0018 §3.5) — default OFF until validated.
         let sk_features = system_data.features.source_keeper;
@@ -249,59 +251,101 @@ impl Operation for SourceKeeperOperation {
             ));
         }
 
-        // Tick-wide gates (same for every candidate this scan).
+        // Tick-wide CPU gate (same for every candidate this scan).
         let cpu_ok = system_data.governor.tier != crate::cpugovernor::Tier::Critical;
-        // TODO(K2c): count live SourceKeeperFarmMissions for the cap + per-room already_committed.
-        let under_farm_cap = true;
+
+        // Farms already committed on the rooms we can see this scan — the
+        // concurrency cap. Within-scan creations bump it so we never over-commit
+        // in one pass.
+        let mut active_farm_count = gathered
+            .candidate_rooms()
+            .iter()
+            .filter(|candidate| {
+                system_data
+                    .room_data
+                    .get(candidate.room_data_entity())
+                    .map(|room_data| {
+                        room_data
+                            .get_missions()
+                            .iter()
+                            .any(|m| system_data.mission_data.get(*m).as_mission_type::<SourceKeeperFarmMission>().is_some())
+                    })
+                    .unwrap_or(false)
+            })
+            .count() as u32;
 
         for candidate in gathered.candidate_rooms().iter() {
-            let Some(room_data) = system_data.room_data.get(candidate.room_data_entity()) else {
+            let candidate_entity = candidate.room_data_entity();
+
+            // Read intel into copies (immutable borrows) so the `get_mut` to
+            // attach the mission below does not overlap.
+            let intel = (|| {
+                let room_data = system_data.room_data.get(candidate_entity)?;
+                let static_visibility_data = room_data.get_static_visibility_data()?;
+                let dynamic_visibility_data = room_data.get_dynamic_visibility_data();
+
+                let live_sources = static_visibility_data.sources().len() as u32;
+                let contested = dynamic_visibility_data
+                    .map(|d| d.owner().hostile() || d.reservation().hostile())
+                    .unwrap_or(false);
+                let already_committed = room_data
+                    .get_missions()
+                    .iter()
+                    .any(|m| system_data.mission_data.get(*m).as_mission_type::<SourceKeeperFarmMission>().is_some());
+                let home_capacity = candidate
+                    .home_room_data_entities()
+                    .iter()
+                    .filter_map(|e| system_data.room_data.get(*e))
+                    .filter_map(|home| game::rooms().get(home.name))
+                    .map(|home| home.energy_capacity_available())
+                    .max()
+                    .unwrap_or(0);
+
+                Some((room_data.name, live_sources, contested, home_capacity, already_committed))
+            })();
+            let Some((room_name, live_sources, contested, home_capacity, already_committed)) = intel else {
                 continue;
             };
-            let Some(static_visibility_data) = room_data.get_static_visibility_data() else {
-                continue;
-            };
-            let dynamic_visibility_data = room_data.get_dynamic_visibility_data();
-
-            let live_sources = static_visibility_data.sources().len() as u32;
-            let haul_tiles = candidate.distance() * TILES_PER_ROOM;
-            let contested = dynamic_visibility_data
-                .map(|d| d.owner().hostile() || d.reservation().hostile())
-                .unwrap_or(false);
-
-            // Affordability: the nearest home must spawn the largest duo body.
-            let home_capacity = candidate
-                .home_room_data_entities()
-                .iter()
-                .filter_map(|e| system_data.room_data.get(*e))
-                .filter_map(|home| game::rooms().get(home.name))
-                .map(|home| home.energy_capacity_available())
-                .max()
-                .unwrap_or(0);
-            let affordable = home_capacity >= SK_DUO_MAX_BODY_COST;
 
             let inputs = SkRoiInputs {
                 live_sources,
-                haul_tiles,
+                haul_tiles: candidate.distance() * TILES_PER_ROOM,
                 suppression_cost: SK_DUO_BODY_COST,
-                affordable,
+                affordable: home_capacity >= SK_DUO_MAX_BODY_COST,
                 contested,
                 cpu_ok,
-                military_free: true, // TODO(K2c/W): yield to active defense / declared war
-                under_farm_cap,
-                already_committed: false, // TODO(K2c): a SourceKeeperFarmMission already farms this room
+                military_free: true, // TODO(K2c-2/W): yield to active defense / declared war
+                under_farm_cap: active_farm_count < sk_features.max_concurrent_farms,
+                already_committed,
             };
             let score = score_sk_farm(&inputs);
 
             if sk_features.diagnostics {
                 info!(
                     "SK farm candidate {}: {} sources @ {} tiles, gross {:.1} net {:.1} e/t -> {:?}",
-                    room_data.name, live_sources, haul_tiles, score.gross_per_tick, score.net_per_tick, score.decision
+                    room_name, live_sources, inputs.haul_tiles, score.gross_per_tick, score.net_per_tick, score.decision
                 );
             }
 
-            // TODO(K2c): on Commit, build/keep a SourceKeeperFarmMission for this room;
-            // on Withhold/Veto, withdraw any existing one.
+            // Commit → create the persistent farm mission (idempotent: only if the
+            // room has none yet). Withhold/Veto retirement of an existing farm is
+            // the next increment (K2c-2).
+            if score.decision == SkRoiDecision::Commit && !already_committed {
+                info!("Starting source keeper farm for room {}", room_name);
+
+                let mission_entity = SourceKeeperFarmMission::build(
+                    system_data.updater.create_entity(system_data.entities),
+                    Some(runtime_data.entity),
+                    candidate_entity,
+                    candidate.home_room_data_entities(),
+                )
+                .build();
+
+                if let Some(room_data) = system_data.room_data.get_mut(candidate_entity) {
+                    room_data.add_mission(mission_entity);
+                }
+                active_farm_count += 1;
+            }
         }
 
         Ok(OperationResult::Running)

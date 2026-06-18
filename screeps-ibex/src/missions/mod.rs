@@ -18,6 +18,7 @@ pub mod reserve;
 pub mod safe_mode;
 pub mod salvage;
 pub mod scout;
+pub mod sourcekeeperfarm;
 pub mod squad_defense;
 pub mod terminal;
 pub mod tower;

@@ -36,6 +36,7 @@ pub enum MissionData {
     RoomTransfer(EntityRefCell<super::localsupply::room_transfer::RoomTransferMission>),
     AttackMission(EntityRefCell<super::attack_mission::AttackMission>),
     Salvage(EntityRefCell<super::salvage::SalvageMission>),
+    SourceKeeperFarm(EntityRefCell<super::sourcekeeperfarm::SourceKeeperFarmMission>),
 }
 
 impl MissionData {
@@ -66,6 +67,7 @@ impl MissionData {
             MissionData::RoomTransfer(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::AttackMission(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::Salvage(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
+            MissionData::SourceKeeperFarm(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
         }
     }
 
@@ -101,6 +103,7 @@ impl MissionData {
             MissionData::RoomTransfer(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::AttackMission(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::Salvage(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
+            MissionData::SourceKeeperFarm(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
         }
     }
 }
@@ -254,3 +257,4 @@ mission_type!(super::localsupply::mineral_mining::MineralMiningMission, MissionD
 mission_type!(super::localsupply::room_transfer::RoomTransferMission, MissionData::RoomTransfer);
 mission_type!(super::attack_mission::AttackMission, MissionData::AttackMission);
 mission_type!(super::salvage::SalvageMission, MissionData::Salvage);
+mission_type!(super::sourcekeeperfarm::SourceKeeperFarmMission, MissionData::SourceKeeperFarm);
