@@ -95,9 +95,26 @@ pub fn colony_health(blocks: &[MetricsBlock], gates: GateInputs) -> ColonyHealth
         _ => 0.0,
     };
 
-    // v1: no combat scenarios exist yet — the term is absent until the
-    // cohesion metrics (Inc 4) land in the block schema.
-    let military: Option<f64> = None;
+    // Military effectiveness (P2.H3): squad cohesion during engagements. A run
+    // carries a combat signal only if a squad was ever Engaged; otherwise the
+    // term is absent and the blend renormalizes over CPU + econ. The score is
+    // the mean in-formation rate across the engagement window — the movement
+    // overhaul's objective is that squads re-form into a tight formation as
+    // soon as a group path is available, so sustained high in-formation rate
+    // through combat is exactly what we reward.
+    let military: Option<f64> = {
+        let engaged: Vec<f64> = blocks
+            .iter()
+            .filter_map(|b| b.cohesion.as_ref())
+            .filter(|c| c.engaged_squads > 0)
+            .map(|c| c.avg_in_formation_rate as f64)
+            .collect();
+        if engaged.is_empty() {
+            None
+        } else {
+            Some((engaged.iter().sum::<f64>() / engaged.len() as f64).clamp(0.0, 1.0))
+        }
+    };
 
     let mut weight_sum = WEIGHT_CPU + WEIGHT_ECON;
     let mut blend = WEIGHT_CPU * cpu_headroom + WEIGHT_ECON * econ_growth;
@@ -183,7 +200,23 @@ mod tests {
             faults: FaultCounters::default(),
             governor: None,
             pathing: None,
+            intents: None,
+            cpu_model: None,
+            cohesion: None,
         }
+    }
+
+    /// A block from a tick where one squad is Engaged at the given in-formation rate.
+    fn engaged_block(tick: u32, in_formation: f32) -> MetricsBlock {
+        let mut b = block(tick, 5, 0.0, 10.0);
+        b.cohesion = Some(CohesionMetrics {
+            squad_count: 1,
+            engaged_squads: 1,
+            avg_in_formation_rate: in_formation,
+            avg_centroid_spread: 1.0,
+            max_pairwise: 2,
+        });
+        b
     }
 
     /// Survival dominates: a panicked run scores ~0 with a booming economy.
@@ -233,6 +266,34 @@ mod tests {
             GateInputs::default(),
         );
         assert!(idle.cpu_headroom > burning.cpu_headroom);
+    }
+
+    /// The military term is absent without combat and rewards tight formation
+    /// during engagements (the movement-overhaul objective).
+    #[test]
+    fn military_term_rewards_cohesion_during_combat() {
+        // No combat signal: term absent, blend renormalizes over CPU + econ.
+        let peace = colony_health(&[block(100, 5, 0.0, 10.0), block(700, 5, 600.0, 10.0)], GateInputs::default());
+        assert!(peace.military.is_none());
+
+        // Cohesion present but never engaged: still no combat signal.
+        let mut idle_squad = block(700, 5, 0.0, 10.0);
+        idle_squad.cohesion = Some(CohesionMetrics {
+            squad_count: 1,
+            engaged_squads: 0,
+            avg_in_formation_rate: 1.0,
+            avg_centroid_spread: 0.5,
+            max_pairwise: 1,
+        });
+        let forming = colony_health(&[block(100, 5, 0.0, 10.0), idle_squad], GateInputs::default());
+        assert!(forming.military.is_none(), "no engaged squad means no military signal");
+
+        // Engaged: a tight squad scores higher than a scattered one.
+        let tight = colony_health(&[block(100, 5, 0.0, 10.0), engaged_block(700, 1.0)], GateInputs::default());
+        let scattered = colony_health(&[block(100, 5, 0.0, 10.0), engaged_block(700, 0.1)], GateInputs::default());
+        assert_eq!(tight.military, Some(1.0));
+        assert!(scattered.military.unwrap() < 0.2);
+        assert!(tight.total > scattered.total, "tighter formation -> higher health");
     }
 
     #[test]

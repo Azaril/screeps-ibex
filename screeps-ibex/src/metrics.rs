@@ -307,6 +307,7 @@ pub struct MetricsSystemData<'a> {
     governor: Read<'a, GovernorSnapshot>,
     pathfinder: Read<'a, PathfinderService>,
     intents: Read<'a, crate::intents::IntentRecorder>,
+    squad_contexts: ReadStorage<'a, crate::military::squad::SquadContext>,
 }
 
 pub struct MetricsSystem;
@@ -408,6 +409,66 @@ impl MetricsSystem {
                 }
             }),
             cpu_model: data.state.cpu_model_metrics(),
+            cohesion: Some(Self::cohesion_metrics(data)),
+        }
+    }
+
+    /// Squad cohesion telemetry (P2.H3): the validation instrument for the movement
+    /// workstream. Aggregates the per-squad geometry from
+    /// [`crate::combat::cohesion::measure`] across all live squads so a soak can show
+    /// whether formations actually tighten as they re-form. Member positions are paired
+    /// with the layout's slot offsets by index for the in-formation rate.
+    fn cohesion_metrics(data: &MetricsSystemData) -> CohesionMetrics {
+        use crate::military::squad::SquadState;
+
+        let mut squad_count = 0u32;
+        let mut engaged_squads = 0u32;
+        let mut sum_in_formation = 0.0f32;
+        let mut sum_centroid_spread = 0.0f32;
+        let mut max_pairwise = 0u32;
+        let mut measured = 0u32;
+
+        for (_entity, squad) in (&data.entities, &data.squad_contexts).join() {
+            if squad.members.is_empty() {
+                continue;
+            }
+            squad_count += 1;
+            if squad.state == SquadState::Engaged {
+                engaged_squads += 1;
+            }
+
+            let positions: Vec<Position> = squad.members.iter().filter_map(|m| m.position).collect();
+            if positions.is_empty() {
+                continue;
+            }
+
+            // The squad's intended formation: anchor (virtual position) + slot offsets.
+            let formation = squad
+                .squad_path
+                .as_ref()
+                .map(|p| p.anchor.virtual_pos)
+                .zip(squad.layout.as_ref())
+                .map(|(anchor, layout)| (anchor, layout.offsets.as_slice()));
+
+            let sample = crate::combat::cohesion::measure(&positions, formation, 1);
+            sum_in_formation += sample.in_formation_rate;
+            sum_centroid_spread += sample.centroid_spread;
+            max_pairwise = max_pairwise.max(sample.max_pairwise);
+            measured += 1;
+        }
+
+        let (avg_in_formation_rate, avg_centroid_spread) = if measured > 0 {
+            (sum_in_formation / measured as f32, sum_centroid_spread / measured as f32)
+        } else {
+            (0.0, 0.0)
+        };
+
+        CohesionMetrics {
+            squad_count,
+            engaged_squads,
+            avg_in_formation_rate,
+            avg_centroid_spread,
+            max_pairwise,
         }
     }
 }

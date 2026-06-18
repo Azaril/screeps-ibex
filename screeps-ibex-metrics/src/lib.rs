@@ -73,6 +73,11 @@ pub struct MetricsBlock {
     /// EMA from this block on load. Absent until the model has samples.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_model: Option<CpuModelMetrics>,
+    /// Squad-cohesion view (P2.H3) — the combat-effectiveness signal: how tightly squads hold
+    /// formation. Absent until a squad exists. Feeds the colony-health military term + the
+    /// movement-overhaul soak (cohesion should hold ~1.0 forming/idle and recover after engagements).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cohesion: Option<CohesionMetrics>,
 }
 
 /// Persisted CPU cost model: an exponential moving average of per-tick CPU
@@ -106,6 +111,28 @@ pub struct IntentMetrics {
     /// Chained FNV-1a over the tick's intent tuples, hex-encoded.
     #[serde(default)]
     pub digest: String,
+}
+
+/// Squad-cohesion aggregate for the tick (P2.H3) — the combat-effectiveness signal. Computed from
+/// `combat-decision::cohesion::measure` over each squad's live member positions. `f32` fields ⇒
+/// `PartialEq`, not `Eq`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct CohesionMetrics {
+    /// Squads with ≥1 living member this tick.
+    #[serde(default)]
+    pub squad_count: u32,
+    /// Squads currently in the Engaged state (the "is there combat?" gate for the military score).
+    #[serde(default)]
+    pub engaged_squads: u32,
+    /// Mean fraction of members in formation (anchor + slot), over all squads. 1.0 = perfectly held.
+    #[serde(default)]
+    pub avg_in_formation_rate: f32,
+    /// Mean member-to-centroid Chebyshev distance (tightness; lower = tighter), over all squads.
+    #[serde(default)]
+    pub avg_centroid_spread: f32,
+    /// Worst single-squad diameter (max pairwise Chebyshev) — the scatter alarm.
+    #[serde(default)]
+    pub max_pairwise: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -293,6 +320,13 @@ mod tests {
             cpu_model: Some(CpuModelMetrics {
                 ema_used: 12.5,
                 samples: 100,
+            }),
+            cohesion: Some(CohesionMetrics {
+                squad_count: 2,
+                engaged_squads: 1,
+                avg_in_formation_rate: 0.875,
+                avg_centroid_spread: 0.6,
+                max_pairwise: 2,
             }),
         }
     }
