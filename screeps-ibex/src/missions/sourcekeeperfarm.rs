@@ -90,13 +90,36 @@ impl Mission for SourceKeeperFarmMission {
         Ok(())
     }
 
-    fn run_mission(&mut self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<MissionResult, String> {
+    fn run_mission(&mut self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> Result<MissionResult, String> {
+        // Self-cancel when PERMANENTLY no longer viable (ADR 0018 §3.5). The
+        // operation cannot retire us (its `mission_data` is read-only), so we
+        // release the farm (→ cleanup) ourselves. `Success` here is "withdrawn",
+        // not "objective achieved" — a keeper farm has no completion.
+        //
+        //   • feature kill-switch OFF — stops EXISTING farms, not just new ones;
+        //   • the room is contested — a player owns or reserves it (no point
+        //     farming a room another player took).
+        //
+        // TRANSIENT pressure (CPU-critical, war preempting the bodies) must PAUSE
+        // the squad, never cancel the farm — so it is deliberately NOT checked
+        // here. (Lost home rooms self-cancel via `pre_run_mission`. The ROI /
+        // out-of-haul-range withdrawal + the squad spawn/renew + teardown land
+        // with K2c-2.)
+        if !system_data.features.source_keeper.farming {
+            return Ok(MissionResult::Success);
+        }
+        if let Some(room_data) = system_data.room_data.get(self.sk_room_data) {
+            if let Some(dynamic) = room_data.get_dynamic_visibility_data() {
+                if dynamic.owner().hostile() || dynamic.reservation().hostile() {
+                    return Ok(MissionResult::Success);
+                }
+            }
+        }
+
         // P2.K2c-2 TODO: spawn + renew the `duo_sk_farmer` squad (a `SquadContext`
         // + per-member `SquadCombatJob` targeting the SK room — reusing the
         // AttackMission spawn/renew machinery), run the T-NPC-2 kite, and publish
-        // the per-source suppression signal K3 mining reads. Persistent: never
-        // returns Success on its own — withdrawn by the operation (Withhold/Veto)
-        // or when it loses all home rooms (above).
+        // the per-source suppression signal K3 mining reads.
         Ok(MissionResult::Running)
     }
 }
