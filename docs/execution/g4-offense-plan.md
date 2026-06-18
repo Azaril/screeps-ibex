@@ -100,14 +100,29 @@
   - **Validation:** host-test `squad_is_wiped` + the queue backoff is already tested; the manager
     wiring builds + ticks clean. Improves **live** robustness now (a wiped SK-farm duo / future offense
     backs off instead of feeding); inert for defense by design.
-- [ ] **O5 — Power-bank as `Farm{PowerBank}`.** Producer upserts `Farm{PowerBank}` (the `power_bank_duo`
-  composition exists); the coordinator owns the timed `power_bank_haulers` deploy (mirrors the SK
-  coordinator owning mining children, P2.K). Replaces `AttackReason::PowerBank`.
-- [ ] **O6 — Offense producers.** `WarOperation::run_offense_evaluation` upserts `Secure`/`Harass`
-  (player offense gated by ADR 0014 `WarDecl`; NPC `InvaderCore`/`InvaderCreeps` policing autonomous);
-  `AttackOperation` → `Dismantle` for blocking structures. Map every live `AttackReason` → objective
-  kind + composition + priority + (re-assert-until-clear) lifetime. (`InvaderCreeps` in a reserved
-  remote is already handled by the migrated remote-defense `Defend` path — fold/avoid overlap.)
+- [ ] **O5 — Power-bank as `Farm{PowerBank}` — DEFERRED to the O6/O7 window (operator 2026-06-18).**
+  Mapping (`wf_bd77e5d0`): `FarmKind::PowerBank` + `power_bank_duo`/`power_bank_haulers` already exist,
+  and the **crack** maps cleanly to `Farm{PowerBank}` + the manager. **But the haul is special:** the
+  power drops on the ground in a HIGHWAY room, which is NOT a transfer-queue source, so `HaulMission`
+  (the SK-farm reuse) can't collect it — a **bespoke dropped-power collector** is needed, and that logic
+  lives only inside `AttackMission`'s `Exploiting` phase (deleted in O7). Power banks are also niche +
+  intermittent (hard to soak-test), and the crack-alone would *regress* (lose the power collection).
+  So O5 lands **with O6/O7**, building the dropped-power haul as `AttackMission`'s `Exploiting` is
+  removed/replaced. (Engine note: dropped power decays `ceil(amount/1000)`/tick ≈ 5/tick for a 5000
+  pile → hundreds of ticks, so hauler timing is forgiving — no razor-edge 20%-HP pre-deploy needed.)
+- [ ] **O6 — Offense producers (NEXT).** `WarOperation::run_offense_evaluation` upserts `Secure` /
+  `Dismantle` / `Harass` objectives instead of launching `AttackOperation`s — the **live consumer +
+  validation gate** for O1/O2/O3 (a real offense squad now travels in formation, orients, breaches).
+  Map each live `AttackReason` → objective kind + threat-sized composition (mirror W1's
+  escalation→composition) + priority. **Scope — single-squad cases first** (the common NPC-policing +
+  light targets, which map cleanly to ONE objective): `InvaderCore` → `Secure`/`Dismantle`;
+  `InvaderCreeps` → `Secure` (**reconcile with the migrated remote-defense `Defend`** — don't
+  double-field the same room); `Flag` → `Secure`; `ResourceDenial` → `Harass`; `ProactiveDefense`.
+  **The HEAVY multi-squad player assault** (`plan_by_detected_threat` towers≥4 → drain-duo + quad with
+  `DeployCondition` sequencing) does NOT map to the one-squad-per-objective model → **defer** (needs a
+  multi-squad / sequenced-objective mechanism; keep it on `AttackMission` until then, so O7's delete is
+  gated on that too). Cap: count active offense objectives (replace `count_power_bank_attacks` /
+  `active_attacks`). Validate on Docker (up): the bot clears an invader core via a manager squad.
 - [ ] **O7 — Parity + DELETE the legacy.** Once O1–O6 reach parity (the bot clears an invader core +
   takes/sieges a target on the private-server soak): delete `AttackMission` (`attack_mission.rs`),
   `AttackOperation` (`operations/attack.rs`), the `AttackReason` enum, the `MissionData::AttackMission`
