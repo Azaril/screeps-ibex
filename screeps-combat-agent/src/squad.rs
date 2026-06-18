@@ -9,8 +9,11 @@
 
 use crate::pathing::{build_combat_matrix, resolve_move_direction};
 use crate::{to_engine_action, SimView};
-use screeps::{Position, RoomCoordinate};
-use screeps_combat_decision::{cohesion, decide_combat, CombatIntent};
+use screeps::{Part, Position, RoomCoordinate};
+use screeps_combat_decision::{
+    cohesion, decide_combat, decide_movement, decide_squad_with_pathing, kite::MAX_KITE_OPS, CombatIntent, CreepOrders, FocusTarget,
+    SquadMemberView, SquadOrderState, SquadStateDto, SquadView,
+};
 use screeps_combat_engine::{CombatWorld, CreepId, Intents, PlayerId};
 use screeps_rover::{AnchorOutcome, AnchorPath, LocalPathfinder};
 
@@ -158,10 +161,100 @@ impl SimSquad {
     }
 }
 
+/// A **manager-fielded** squad in the sim (P2.G3-tail Step 8): anchorless, driven by the pure
+/// `decide_squad_with_pathing` (shared focus + heal assignment + the cohesive, pathfinding-scored
+/// kite goal) and the per-creep `decide_movement` — exactly the live `SquadManager` + `SquadCombatJob`
+/// path (no anchor mover). This is the self-play vehicle that validates cohesive kiting + focus-fire
+/// + heal against the engine (no fork: the SAME decision code runs live).
+pub struct ManagedSimSquad {
+    pub owner: PlayerId,
+    /// Members in slot order (the decision indexes the *living* subset of these each tick).
+    pub members: Vec<CreepId>,
+    /// Where the squad is fighting (the centroid fallback + the room).
+    pub objective: Position,
+    pub retreat_threshold: f32,
+    state: SquadOrderState,
+}
+
+impl ManagedSimSquad {
+    pub fn new(owner: PlayerId, members: Vec<CreepId>, objective: Position) -> Self {
+        Self { owner, members, objective, retreat_threshold: 0.3, state: SquadOrderState::Forming }
+    }
+
+    /// Advance one tick: build the `SquadView` from living members, run `decide_squad_with_pathing`
+    /// (the squad's ONE bounded kite search), then run the per-creep `decide_combat` + `decide_movement`
+    /// with the shared directive, returning the engine [`Intents`].
+    pub fn step(&mut self, world: &CombatWorld) -> Intents {
+        let room = self.objective.room_name();
+        let sim = SimView::from_world(world, self.owner, self.objective, room);
+
+        // Living members in slot order — `member_views` and the decision index by THIS list.
+        let living: Vec<(CreepId, usize)> = self.members.iter().filter_map(|&id| sim.friend_index(id).map(|fi| (id, fi))).collect();
+        if living.is_empty() {
+            return Intents::new();
+        }
+        let member_views: Vec<SquadMemberView> = living
+            .iter()
+            .map(|&(_, fi)| {
+                let f = &sim.friends()[fi];
+                SquadMemberView {
+                    hits: f.hits,
+                    hits_max: f.hits_max,
+                    heal_power: f.working_parts(Part::Heal) as u32,
+                    pos: Some(f.pos),
+                    has_ranged: f.has_working(Part::RangedAttack),
+                    damage_taken_last_tick: 0,
+                }
+            })
+            .collect();
+
+        let view = SquadView {
+            members: &member_views,
+            hostiles: sim.hostiles(),
+            structures: sim.structures(),
+            retreat_threshold: self.retreat_threshold,
+            current_state: self.state,
+        };
+        let decision = decide_squad_with_pathing(&view, &mut |r| build_combat_matrix(world, r, self.owner), MAX_KITE_OPS);
+        self.state = decision.state;
+
+        let squad_dto = SquadStateDto {
+            center: decision.center.unwrap_or(self.objective),
+            room,
+            movement: decision.movement,
+            cohesion_radius: decision.cohesion_radius,
+        };
+
+        let mut intents = Intents::new();
+        for (idx, &(member_id, fi)) in living.iter().enumerate() {
+            let heal_target = decision.heal_assignments.iter().find(|a| a.healer_idx == idx).and_then(|a| {
+                let &(_, tfi) = living.get(a.target_idx)?;
+                let tf = &sim.friends()[tfi];
+                Some(FocusTarget { pos: tf.pos, id: tf.id })
+            });
+            let orders = CreepOrders { focus: decision.focus, heal_target };
+            let view_i = sim.view_for_with(fi, &squad_dto, orders);
+
+            let actions: Vec<_> = decide_combat(&view_i).iter().filter_map(|ci| to_engine_action(ci, &sim)).collect();
+            if !actions.is_empty() {
+                intents.set(member_id, actions);
+            }
+            let me_pos = sim.friends()[fi].pos;
+            for mv in decide_movement(&view_i) {
+                if let Some(dir) = resolve_move_direction(world, me_pos, self.owner, &mv) {
+                    intents.set_move(member_id, dir);
+                    break;
+                }
+            }
+        }
+        intents
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use screeps::{Part, RoomName};
+    use screeps::RoomName;
     use screeps_combat_engine::{resolve_tick, SimBody, SimCreep};
 
     fn room() -> RoomName {
@@ -325,6 +418,46 @@ mod tests {
         }
         assert!(saw_blocked, "fully sealed → Blocked surfaced (even single-file can't pass)");
         assert!(squad.anchor.virtual_pos.x().u8() < 20, "anchor held on the near side, never clipped through");
+    }
+
+    // ── EXP-SQUAD-KITE-1: managed cohesive kiting + focus-fire + survival (P2.G3-tail Step 8) ──
+    #[test]
+    fn exp_squad_kite_1_managed_duo_kites_cohesively_and_focus_fires() {
+        // A high-HP melee keeper + a ranged attacker + a healer, driven by the manager path
+        // (decide_squad_with_pathing → per-creep decide_movement). The squad should advance to its
+        // pathfinding-scored kite goal (shooting range, clear of the keeper's melee reach), stay
+        // cohesive (ONE shared goal → the block doesn't separate), and chip the keeper while surviving.
+        let keeper_body: Vec<Part> = std::iter::repeat(Part::Attack)
+            .take(5)
+            .chain(std::iter::repeat(Part::Move).take(5))
+            .chain(std::iter::repeat(Part::Tough).take(10))
+            .collect();
+        let keeper = SimCreep { id: 99, owner: 1, pos: pos(25, 25), body: SimBody::unboosted(&keeper_body), fatigue: 0 };
+        let ra_body = [Part::RangedAttack, Part::RangedAttack, Part::RangedAttack, Part::RangedAttack, Part::RangedAttack, Part::Move, Part::Move, Part::Move, Part::Move, Part::Move];
+        let attacker = SimCreep { id: 1, owner: 0, pos: pos(20, 25), body: SimBody::unboosted(&ra_body), fatigue: 0 };
+        let heal_body = [Part::Heal, Part::Heal, Part::Heal, Part::Move, Part::Move, Part::Move];
+        let healer = SimCreep { id: 2, owner: 0, pos: pos(20, 26), body: SimBody::unboosted(&heal_body), fatigue: 0 };
+
+        let mut world = CombatWorld { creeps: vec![keeper, attacker, healer], ..Default::default() };
+        let keeper_hits_0 = world.creeps.iter().find(|c| c.id == 99).unwrap().body.hits;
+
+        let mut squad = ManagedSimSquad::new(0, vec![1, 2], pos(25, 25));
+        let mut worst_pairwise = 0u32;
+        for _ in 0..50 {
+            let intents = squad.step(&world);
+            resolve_tick(&mut world, &intents);
+            let positions: Vec<Position> = world.creeps.iter().filter(|c| c.owner == 0 && c.is_alive()).map(|c| c.pos).collect();
+            if positions.len() >= 2 {
+                worst_pairwise = worst_pairwise.max(cohesion::measure(&positions, None, 0).max_pairwise);
+            }
+        }
+
+        let keeper_hits_1 = world.creeps.iter().find(|c| c.id == 99).map(|c| if c.is_alive() { c.body.hits } else { 0 }).unwrap_or(0);
+        let duo_alive = world.creeps.iter().filter(|c| c.owner == 0 && c.is_alive()).count();
+
+        assert!(keeper_hits_1 < keeper_hits_0, "the squad focus-fired the keeper ({keeper_hits_0} -> {keeper_hits_1})");
+        assert_eq!(duo_alive, 2, "the duo kited to shooting range + survived (took no melee)");
+        assert!(worst_pairwise <= 4, "the duo stayed cohesive throughout (worst pairwise {worst_pairwise})");
     }
 
     #[test]

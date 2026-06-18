@@ -177,6 +177,32 @@ impl SimView {
         }
     }
 
+    /// Hostile creeps in view (the squad layer reads these for its kite threats / focus).
+    pub fn hostiles(&self) -> &[CombatCreepDto] {
+        &self.hostiles
+    }
+
+    /// Structures in view (hostile towers feed the kite tower term).
+    pub fn structures(&self) -> &[CombatStructureDto] {
+        &self.structures
+    }
+
+    /// Like [`view_for`](Self::view_for) but with a caller-supplied squad directive + per-creep
+    /// orders — the **managed-squad** path (P2.G3-tail Step 8): the squad layer
+    /// (`decide_squad_with_pathing`) computes the shared movement goal + heal assignment, the sim
+    /// stamps them here, and the per-creep `decide_combat`/`decide_movement` consume them.
+    pub fn view_for_with<'a>(&'a self, i: usize, squad: &'a SquadStateDto, orders: CreepOrders) -> CombatView<'a> {
+        CombatView {
+            tick: self.tick,
+            me: &self.friends[i],
+            squad,
+            orders: Some(orders),
+            friends: &self.friends,
+            hostiles: &self.hostiles,
+            structures: &self.structures,
+        }
+    }
+
     /// Resolve an emitted intent's target id back to its engine `CreepId`.
     pub fn creep_for(&self, id: RawObjectId) -> Option<CreepId> {
         self.id_to_creep.get(&id).copied()

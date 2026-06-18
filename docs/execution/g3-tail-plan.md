@@ -68,11 +68,17 @@ owning the goal** — the no-one-off-pathfinding rule + "don't be disorganized w
   assigned healer's `tick_orders.heal_target`, replacing the `ctx.compute_heal_assignments`/`apply` calls (those
   stay for the retreat path). 2 tests. **DONE** (decision 39, bot 164, wasm + clippy clean).
   No WFV bump.
-- [ ] **Step 8 — sim wiring + cohesion regression scenario** (`screeps-combat-agent`): `SimView::from_world`
-  derives `center = cohesion::centroid(friends)`; `SimSquad::step` calls `decide_squad_with_pathing` (sim
-  `LocalPathfinder` + `build_combat_matrix`), persists state, stamps the goal into each per-creep view.
-  New self-play scenario EXP-SQUAD-KITE-1: ranged duo+healer vs a 5000HP hard-hitting melee keeper; assert
-  focus-fire + `max_pairwise ≤ K` throughout + survival ≥ today's fallback. Closes the self-play loop (no fork).
+- [x] **Step 8 — sim wiring + cohesion regression scenario** (`screeps-combat-agent`): new `ManagedSimSquad`
+  (the anchorless manager path: builds a `SquadView` from living members, runs `decide_squad_with_pathing` with the
+  sim's `build_combat_matrix`, then per-creep `decide_combat`+`decide_movement` via the new `SimView::view_for_with`
+  / `hostiles()`/`structures()` accessors) — exactly the live `SquadManager`+`SquadCombatJob` path, no fork. New
+  self-play scenario **EXP-SQUAD-KITE-1**: a ranged attacker + healer vs a high-HP melee keeper — asserts the squad
+  focus-fires it down, the duo stays cohesive (`max_pairwise ≤ 4` every tick), and survives (kited to shooting range,
+  no melee taken). **DONE** (agent 18, decision 39, bot 164, wasm + clippy clean). *(Tuning: `should_kite` fires only
+  when a melee threat is ≤3 of the centroid — farther out the squad Advances to weapon range first, else the cohesion
+  term out-weighs value and it sits out of range.)*
+
+**G3-tail COMPLETE** — cohesive, pathfinding-scored kiting is pure + simulatable + wired live + self-play-validated.
 
 ## Future — attack-positioning via the SAME scored search (operator 2026-06-18; explore AFTER flee/kiting)
 

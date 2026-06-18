@@ -852,11 +852,16 @@ pub fn decide_squad_with_pathing(
     let should_kite = match decision.state {
         SquadOrderState::Retreating => true,
         SquadOrderState::Engaged => {
+            // Kite only once a melee-capable threat is close enough that *holding distance* matters
+            // (within the kite-maintain band of the centroid). Farther out, the squad keeps the
+            // `Advance` directive and closes to weapon range first — otherwise the cohesion term
+            // (centred on the squad's current position) would out-weigh the value term and the squad
+            // would sit out of shooting range. `3` = shooting range, where it transitions to kiting.
             let squad_has_ranged = view.members.iter().any(|m| m.has_ranged);
             let melee_threat_near = view
                 .hostiles
                 .iter()
-                .any(|c| c.has_working(Part::Attack) && centroid.get_range_to(c.pos) <= 5);
+                .any(|c| c.has_working(Part::Attack) && centroid.get_range_to(c.pos) <= 3);
             squad_has_ranged && melee_threat_near
         }
         _ => false,
