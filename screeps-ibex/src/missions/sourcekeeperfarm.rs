@@ -25,7 +25,10 @@ use super::utility::*;
 use crate::military::composition::SquadComposition;
 use crate::military::objective_queue::*;
 use crate::remoteobjectid::*;
+use crate::room::data::RoomData;
+use crate::room::visibilitysystem::*;
 use crate::serialize::*;
+use log::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 #[allow(deprecated)]
@@ -37,6 +40,47 @@ use specs::*;
 /// mine — a miner would just flee (K0). Matches the keeper spawn radius / the K0
 /// `THREAT_FLEE_RANGE`.
 const KEEPER_DANGER_RANGE: u32 = 5;
+
+/// While a stronghold pauses the farm the room goes blind (no friendly creeps),
+/// so the persisted `hostile_structures` flag sticks at its last-observed value
+/// and the farm cannot learn the stronghold has cleared without an active probe.
+/// An observer refreshes it for free, but SK farming starts at RCL 6 while
+/// observers are RCL 8 — so once per ~creep-lifetime we dispatch one cheap scout
+/// to peek the room (a single tick of visibility on entry is enough to re-read
+/// the flag). Throttled so we never feed a scout to the towers every tick; the
+/// stronghold itself lasts ~75k ticks, so a probe every 1500t resumes promptly
+/// enough. (A *non-opportunistic* request can't be paired with an every-tick
+/// opportunistic one — the queue upsert makes the non-opportunistic flag sticky.)
+const STRONGHOLD_RESCOUT_INTERVAL: u32 = 1500;
+
+/// True when the SK room holds — or last held, while out of view — a dangerous
+/// **invader stronghold** (a level≥1 [`StructureInvaderCore`]). A deployed
+/// stronghold rings its core with ramparts and 1–6 towers that reach the
+/// *entire* room (≥150 dmg/tick each, up to 6×600 at L5) and spawns defender
+/// creeps, so the whole room is lethal: the farm must stand down rather than
+/// feed the suppression duo or any miner into tower fire (ADR 0018 §3.5).
+///
+/// Detection mirrors the keeper read, but for structures:
+/// * **Visible** — read the live cores directly and ignore harmless level-0
+///   highway placeholders (they never deploy or defend). A core is treated as
+///   dangerous from the moment it appears: the deploy window itself has no fire,
+///   but it flips to lethal the instant `ticks_to_deploy` expires, so we stand
+///   down on sight rather than risk being caught mid-deploy.
+/// * **Out of view** — `invader_cores()` is live-only (`#[serde(skip)]`), so
+///   fall back to the persisted `hostile_structures` flag. In an unclaimable SK
+///   room the only owned, non-keeper-lair structures are a stronghold, so this
+///   is a reliable last-observed signal that keeps the farm paused until we
+///   regain visibility and confirm the stronghold is gone (it auto-collapses
+///   after ~75k ticks, or we / another player clear it).
+pub fn sk_room_has_stronghold(room_data: &RoomData) -> bool {
+    if let Some(structures) = room_data.get_structures() {
+        return structures.invader_cores().iter().any(|core| core.level() >= 1);
+    }
+    room_data
+        .get_dynamic_visibility_data()
+        .map(|dynamic| dynamic.hostile_structures())
+        .unwrap_or(false)
+}
 
 #[derive(Clone, ConvertSaveload)]
 pub struct SourceKeeperFarmMission {
@@ -136,24 +180,31 @@ impl SourceKeeperFarmMission {
     /// `KEEPER_DANGER_RANGE` of it (the duo creates these dead-keeper windows). The
     /// haul child runs whenever any source is minable. (The signal is *data* the
     /// child reads — the miner job still owns its movement; ADR 0008 §5 / principle 8.)
-    fn gate_mining_children(&self, system_data: &mut MissionExecutionSystemData) {
-        let (has_visibility, keepers): (bool, Vec<Position>) = match system_data.room_data.get(self.sk_room_data) {
-            Some(rd) => {
-                let visible = rd.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false);
-                let keepers = rd
-                    .get_creeps()
-                    .map(|creeps| {
-                        creeps
-                            .hostile()
-                            .iter()
-                            .filter(|c| crate::military::is_source_keeper_owner(&c.owner().username()))
-                            .map(|c| c.pos())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                (visible, keepers)
+    fn gate_mining_children(&self, system_data: &mut MissionExecutionSystemData, force_off: bool) {
+        // `force_off` (an invader stronghold makes the WHOLE room lethal) forces
+        // every child off regardless of per-keeper state — skip the now-moot
+        // keeper scan and leave `has_visibility` false so nothing is suppressed.
+        let (has_visibility, keepers): (bool, Vec<Position>) = if force_off {
+            (false, Vec::new())
+        } else {
+            match system_data.room_data.get(self.sk_room_data) {
+                Some(rd) => {
+                    let visible = rd.get_dynamic_visibility_data().map(|v| v.visible()).unwrap_or(false);
+                    let keepers = rd
+                        .get_creeps()
+                        .map(|creeps| {
+                            creeps
+                                .hostile()
+                                .iter()
+                                .filter(|c| crate::military::is_source_keeper_owner(&c.owner().username()))
+                                .map(|c| c.pos())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    (visible, keepers)
+                }
+                None => return,
             }
-            None => return,
         };
 
         let source_suppressed = |source: &RemoteObjectId<Source>| -> bool {
@@ -239,31 +290,73 @@ impl Mission for SourceKeeperFarmMission {
             return Ok(MissionResult::Success);
         }
 
-        let sk_room = match system_data.room_data.get(self.sk_room_data) {
+        let (sk_room, stronghold_present) = match system_data.room_data.get(self.sk_room_data) {
             Some(room_data) => {
                 if let Some(dynamic) = room_data.get_dynamic_visibility_data() {
                     if dynamic.owner().hostile() || dynamic.reservation().hostile() {
                         return Ok(MissionResult::Success);
                     }
                 }
-                room_data.name
+                (room_data.name, sk_room_has_stronghold(room_data))
             }
             None => return Ok(MissionResult::Success),
         };
+
+        // Keep the K3 mining children attached either way (idempotent) so the
+        // farm resumes instantly once the room is clear again.
+        self.ensure_mining_children(system_data, mission_entity)?;
+
+        let farm_kind = ObjectiveKind::Farm {
+            kind: FarmKind::SourceKeeper,
+            room: sk_room,
+        };
+
+        // Stand down on an invader stronghold (ADR 0018 §3.5 — a stronghold is
+        // TRANSIENT, so PAUSE, never cancel: it auto-collapses in ~75k ticks).
+        // A level≥1 core rings the whole room with towers + defenders that shred
+        // the suppression duo and any miner. We (1) WITHDRAW the `Farm{sk}`
+        // objective immediately — not merely stop re-asserting it — so the
+        // `SquadManager` retires the duo THIS tick instead of commanding it to
+        // engage keepers for the 200t objective TTL (driving it deeper into
+        // tower fire); (2) force ALL source mining + hauling off; and (3)
+        // periodically re-probe visibility (`STRONGHOLD_RESCOUT_INTERVAL`) so we
+        // notice when the stronghold clears and can resume. The mission stays
+        // Running (a stronghold is transient).
+        //
+        // ⚠ Residual gap (ADR 0008 L1 — single-room flee): this stops the bot
+        // FEEDING the room, but creeps already inside cannot flee *across* the
+        // room boundary, and the duo's disband / the miner flee-reflex only
+        // react to hostile creeps, not towers — so the last in-flight creeps may
+        // still take tower fire on the way out. Prompt cross-room evacuation is
+        // tracked as the L1 follow-up.
+        if stronghold_present {
+            if let Some(id) = system_data.combat_objective_queue.find_by_kind(&farm_kind) {
+                system_data.combat_objective_queue.withdraw(id);
+            }
+            self.gate_mining_children(system_data, true);
+            if game::time().is_multiple_of(STRONGHOLD_RESCOUT_INTERVAL) {
+                system_data.visibility.request(VisibilityRequest::new(
+                    sk_room,
+                    VISIBILITY_PRIORITY_LOW,
+                    VisibilityRequestFlags::ALL,
+                ));
+            }
+            if system_data.features.source_keeper.diagnostics {
+                info!("SK farm {sk_room}: invader stronghold present — standing down (duo recalled, mining paused)");
+            }
+            return Ok(MissionResult::Running);
+        }
 
         // Coordinator role (ADR 0018 §3.3, reconciliation §2.0 (ad)): the mission
         // does NOT own a squad. It REQUESTS a low-priority, preemptible `Farm{sk}`
         // objective each tick it is viable; the `SquadManager` claims it, fields the
         // `duo_sk_farmer`, and retires the squad when this upsert stops (feature off
-        // / contested / lost homes → self-cancel above → the objective TTL-lapses).
-        // The squad's `SquadCombatJob` self-drives to the SK room and suppresses the
-        // keepers (job-owns-movement, ADR 0008 §5 ⚑). K3 source mining + the
-        // per-source suppression signal remain the coordinator's to own.
+        // / contested / lost homes / stronghold → the objective is withdrawn or
+        // TTL-lapses). The squad's `SquadCombatJob` self-drives to the SK room and
+        // suppresses the keepers (job-owns-movement, ADR 0008 §5 ⚑). K3 source
+        // mining + the per-source suppression signal remain the coordinator's to own.
         let request = ObjectiveRequest::new(
-            ObjectiveKind::Farm {
-                kind: FarmKind::SourceKeeper,
-                room: sk_room,
-            },
+            farm_kind,
             OBJECTIVE_PRIORITY_LOW,
             ForceRequirement::single(SquadComposition::duo_sk_farmer()),
         )
@@ -271,8 +364,7 @@ impl Mission for SourceKeeperFarmMission {
         system_data.combat_objective_queue.request(request, game::time());
 
         // K3: own per-source mining + hauling, gated on per-source keeper liveness.
-        self.ensure_mining_children(system_data, mission_entity)?;
-        self.gate_mining_children(system_data);
+        self.gate_mining_children(system_data, false);
 
         Ok(MissionResult::Running)
     }

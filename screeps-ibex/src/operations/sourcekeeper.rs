@@ -63,6 +63,11 @@ pub struct SkRoiInputs {
     pub under_farm_cap: bool,
     /// We are already farming this room — applies the withdraw-hysteresis floor.
     pub already_committed: bool,
+    /// An invader **stronghold** (level≥1 core) is present in the SK room — its
+    /// towers + defenders make the whole room lethal. A hard veto on *starting*
+    /// a farm; an already-committed farm pauses itself in-mission (it stays
+    /// alive through the transient stronghold rather than tearing down).
+    pub stronghold_present: bool,
 }
 
 /// The commit/withhold/veto verdict for one candidate.
@@ -90,6 +95,7 @@ pub struct SkRoiScore {
 pub fn score_sk_farm(inp: &SkRoiInputs) -> SkRoiScore {
     // Hard gates — no farm regardless of yield.
     let vetoed = inp.contested
+        || inp.stronghold_present
         || !inp.cpu_ok
         || !inp.military_free
         || !inp.affordable
@@ -130,7 +136,7 @@ pub fn score_sk_farm(inp: &SkRoiInputs) -> SkRoiScore {
 use super::data::*;
 use super::operationsystem::*;
 use crate::missions::data::*;
-use crate::missions::sourcekeeperfarm::SourceKeeperFarmMission;
+use crate::missions::sourcekeeperfarm::{sk_room_has_stronghold, SourceKeeperFarmMission};
 use crate::room::gather::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
@@ -288,6 +294,7 @@ impl Operation for SourceKeeperOperation {
                 let contested = dynamic_visibility_data
                     .map(|d| d.owner().hostile() || d.reservation().hostile())
                     .unwrap_or(false);
+                let stronghold = sk_room_has_stronghold(room_data);
                 let already_committed = room_data
                     .get_missions()
                     .iter()
@@ -301,9 +308,9 @@ impl Operation for SourceKeeperOperation {
                     .max()
                     .unwrap_or(0);
 
-                Some((room_data.name, live_sources, contested, home_capacity, already_committed))
+                Some((room_data.name, live_sources, contested, stronghold, home_capacity, already_committed))
             })();
-            let Some((room_name, live_sources, contested, home_capacity, already_committed)) = intel else {
+            let Some((room_name, live_sources, contested, stronghold, home_capacity, already_committed)) = intel else {
                 continue;
             };
 
@@ -317,6 +324,7 @@ impl Operation for SourceKeeperOperation {
                 military_free: true, // TODO(K2c-2/W): yield to active defense / declared war
                 under_farm_cap: active_farm_count < sk_features.max_concurrent_farms,
                 already_committed,
+                stronghold_present: stronghold,
             };
             let score = score_sk_farm(&inputs);
 
@@ -368,6 +376,7 @@ mod tests {
             military_free: true,
             under_farm_cap: true,
             already_committed: false,
+            stronghold_present: false,
         }
     }
 
@@ -392,6 +401,7 @@ mod tests {
     fn hard_gates_veto_regardless_of_yield() {
         for bad in [
             SkRoiInputs { contested: true, ..nearby() },
+            SkRoiInputs { stronghold_present: true, ..nearby() },
             SkRoiInputs { cpu_ok: false, ..nearby() },
             SkRoiInputs { military_free: false, ..nearby() },
             SkRoiInputs { affordable: false, ..nearby() },
@@ -406,6 +416,16 @@ mod tests {
         // Over the cap but already committed → the cap no longer vetoes it.
         let existing = SkRoiInputs { under_farm_cap: false, already_committed: true, ..nearby() };
         assert_eq!(score_sk_farm(&existing).decision, SkRoiDecision::Commit);
+    }
+
+    #[test]
+    fn a_stronghold_vetoes_even_an_established_farm() {
+        // Unlike the concurrency cap (which an existing farm is grandfathered
+        // past), an invader stronghold is a hard veto regardless of commitment:
+        // the operation must never (re)create a farm into a lethal room. The
+        // running mission pauses itself in-mission rather than relying on this.
+        let committed = SkRoiInputs { stronghold_present: true, already_committed: true, ..nearby() };
+        assert_eq!(score_sk_farm(&committed).decision, SkRoiDecision::Veto);
     }
 
     #[test]

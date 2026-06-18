@@ -98,7 +98,7 @@ squad **cannot flee across a room boundary**. This is correct for the normal cas
 room; cross-room travel is the separate `MoveToRoom`/objective phase that uses the multi-room server
 pathfinder). But it is a real edge: a squad **cornered at a room edge**, with the threat between it and
 the room interior, can't escape into the (safer) adjacent room — it picks the best in-room tile and may
-stay in danger / get pinned. **Document + watch on the Docker soak.** Fixes if it bites: (a) a **hybrid**
+stay in danger / get pinned. **Document + watch on the Docker soak.** **Concrete recurring trigger (P2.K5, 2026-06-18):** when an invader stronghold appears in a farmed SK room, the SK farm stands down (withdraws the objective + halts mining), but creeps already inside can't flee *across* the boundary and the K0 reflex ignores towers — so the last in-flight duo/miners can take tower fire on the way out. This is the first standing consumer that makes the L1 fix worth scheduling. Fixes if it bites: (a) a **hybrid**
 — when the local scored search can't find a safe in-room tile (cornered), fall back to the server
 `PathFinder`'s **multi-room flee** (`search_many(flee)` is multi-room) for the "just get out" case
 (live-only; the sim stays single-room, so this path wouldn't be self-play-validated); or (b) extend the
