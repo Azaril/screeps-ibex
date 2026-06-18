@@ -384,7 +384,18 @@ impl Engaged {
         if let Some(ref orders) = tick_orders {
             match &orders.movement {
                 TickMovement::Formation => {
-                    execute_formation_movement(state_context, creep_entity, orders, tick_context);
+                    // Formation movement needs the squad's anchor path. A
+                    // manager-fielded squad (P2.G3) carries combat orders (focus +
+                    // heal) but no anchor; for it, the job owns movement (kiting via
+                    // `fallback_movement`) so a manager focus order never forces a
+                    // ranged squad into melee through the formation range-1 fallback
+                    // (§5 ⚑ — the job issues the movement request). AttackMission
+                    // squads do populate `squad_path`, so they keep anchor movement.
+                    if squad_has_anchor(state_context.squad_entity, tick_context) {
+                        execute_formation_movement(state_context, creep_entity, orders, tick_context);
+                    } else {
+                        Self::fallback_movement(creep, creep_pos, creep_entity, tick_context, state_context);
+                    }
                 }
                 TickMovement::MoveTo(pos) => {
                     tick_context
@@ -877,6 +888,17 @@ fn get_squad_state(squad_entity_id: Option<u32>, tick_context: &JobTickContext) 
     let entity = tick_context.system_data.entities.entity(id);
     let squad_ctx = tick_context.system_data.squad_contexts.get(entity)?;
     Some(squad_ctx.state)
+}
+
+/// Whether the squad has a populated anchor path (`SquadPath`). Anchor-driven
+/// formation movement only applies when one exists; manager-fielded squads
+/// (P2.G3) have none and own their movement via the job (kiting).
+fn squad_has_anchor(squad_entity_id: Option<u32>, tick_context: &JobTickContext) -> bool {
+    squad_entity_id
+        .map(|id| tick_context.system_data.entities.entity(id))
+        .and_then(|e| tick_context.system_data.squad_contexts.get(e))
+        .map(|ctx| ctx.squad_path.is_some())
+        .unwrap_or(false)
 }
 
 /// Get cached hostile creeps in the given room from dynamic visibility data.

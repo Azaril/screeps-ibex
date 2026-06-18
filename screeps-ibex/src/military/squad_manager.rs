@@ -29,8 +29,11 @@
 
 use super::composition::{SquadComposition, SquadSlot};
 use super::objective_queue::{CombatObjectiveQueue, ObjectiveId, ObjectiveKind, OBJECTIVE_PRIORITY_HIGH};
-use super::squad::{SquadContext, SquadTarget};
-use crate::creep::spawning;
+use super::squad::{AttackTarget, SquadContext, SquadState, SquadTarget, TickMovement, TickOrders};
+use crate::combat::{decide_squad, CombatCreepDto, CombatStructureDto, SquadDecision, SquadMemberView, SquadOrderState, SquadView};
+use crate::creep::{spawning, CreepOwner};
+use crate::entitymappingsystem::EntityMappingData;
+use crate::jobs::squad_combat::{creep_to_dto, structure_to_dto};
 use crate::room::data::RoomData;
 use crate::serialize::SerializeMarker;
 use crate::spawnsystem::*;
@@ -124,6 +127,8 @@ pub struct SquadManagerSystemData<'a> {
     squad_contexts: WriteStorage<'a, SquadContext>,
     spawn_queue: Write<'a, SpawnQueue>,
     room_data: ReadStorage<'a, RoomData>,
+    mapping: Read<'a, EntityMappingData>,
+    creep_owner: ReadStorage<'a, CreepOwner>,
 }
 
 /// A home room that can act as a spawn source for a squad.
@@ -209,6 +214,20 @@ impl<'a> System<'a> for SquadManagerSystem {
                 }
                 queue_slot_spawn(&mut data.spawn_queue, &homes, slot, slot_index, target_room, *squad_entity, spawn_priority);
             }
+        }
+
+        // ── Phase B2: compute per-squad tactical orders. ──
+        // The *tactics* are the pure `decide_squad` (focus + engage/retreat hysteresis,
+        // ADR 0008 §4 / P2.G3) — the SAME code the sim runs. The manager is only the
+        // live adapter: it builds the JS-free `SquadView` from `SquadContext` + the room,
+        // calls `decide_squad`, and writes the result back as orders/state. No tactics
+        // math lives here.
+        for (squad_entity, obj_id) in &live_managed {
+            let target_room = match data.objective_queue.get(*obj_id) {
+                Some(obj) => objective_target(&obj.kind).1,
+                None => continue,
+            };
+            compute_squad_orders(&data.room_data, &data.mapping, &mut data.squad_contexts, &data.creep_owner, *squad_entity, target_room);
         }
 
         // ── Phase C: claim new objectives up to the global cap. ──
@@ -308,6 +327,130 @@ fn field_new_squad(
         .build();
 
     queue.claim(obj_id, squad_entity);
+}
+
+/// Map the live squad state to the pure decision's combat-state subset.
+fn squad_state_to_order(state: SquadState) -> SquadOrderState {
+    match state {
+        SquadState::Forming | SquadState::Rallying => SquadOrderState::Forming,
+        SquadState::Moving => SquadOrderState::Moving,
+        SquadState::Engaged => SquadOrderState::Engaged,
+        SquadState::Retreating => SquadOrderState::Retreating,
+        SquadState::Complete => SquadOrderState::Moving,
+    }
+}
+
+/// Map the pure decision's combat state back to the live squad state.
+fn order_state_to_squad(state: SquadOrderState) -> SquadState {
+    match state {
+        SquadOrderState::Forming => SquadState::Forming,
+        SquadOrderState::Moving => SquadState::Moving,
+        SquadOrderState::Engaged => SquadState::Engaged,
+        SquadOrderState::Retreating => SquadState::Retreating,
+    }
+}
+
+/// Read a room's hostiles + structures into JS-free combat DTOs (the live adapter leaf;
+/// the shared `squad_combat` adapters preserve ordering so the decision's tie-breaks match).
+fn build_room_combat_dtos(
+    room_data: &ReadStorage<RoomData>,
+    mapping: &EntityMappingData,
+    room: RoomName,
+) -> (Vec<CombatCreepDto>, Vec<CombatStructureDto>) {
+    let entity = match mapping.get_room(&room) {
+        Some(e) => e,
+        None => return (Vec::new(), Vec::new()),
+    };
+    let rd = match room_data.get(entity) {
+        Some(rd) => rd,
+        None => return (Vec::new(), Vec::new()),
+    };
+    let hostiles = rd
+        .get_creeps()
+        .map(|c| c.hostile().iter().map(creep_to_dto).collect())
+        .unwrap_or_default();
+    let structures = rd
+        .get_structures()
+        .map(|s| s.all().iter().map(structure_to_dto).collect())
+        .unwrap_or_default();
+    (hostiles, structures)
+}
+
+/// Build the squad view, run the pure `decide_squad`, and apply the result to the
+/// `SquadContext` (state + per-member orders). The live adapter for P2.G3 tactics.
+fn compute_squad_orders(
+    room_data: &ReadStorage<RoomData>,
+    mapping: &EntityMappingData,
+    squad_contexts: &mut WriteStorage<SquadContext>,
+    creep_owner: &ReadStorage<CreepOwner>,
+    squad_entity: Entity,
+    target_room: RoomName,
+) {
+    // Read the roster's cached status (immutable).
+    let (member_views, current_state, retreat_threshold) = match squad_contexts.get(squad_entity) {
+        Some(ctx) => (
+            ctx.members
+                .iter()
+                .map(|m| SquadMemberView {
+                    hits: m.current_hits,
+                    hits_max: m.max_hits,
+                    heal_power: m.heal_power,
+                })
+                .collect::<Vec<_>>(),
+            squad_state_to_order(ctx.state),
+            ctx.retreat_threshold,
+        ),
+        None => return,
+    };
+    if member_views.is_empty() {
+        return;
+    }
+
+    let (hostiles, structures) = build_room_combat_dtos(room_data, mapping, target_room);
+
+    let decision = decide_squad(&SquadView {
+        members: &member_views,
+        hostiles: &hostiles,
+        structures: &structures,
+        retreat_threshold,
+        current_state,
+    });
+
+    if let Some(ctx) = squad_contexts.get_mut(squad_entity) {
+        apply_squad_decision(ctx, &decision, creep_owner);
+    }
+}
+
+/// Write a `SquadDecision` into the `SquadContext`: the combat state, the shared focus,
+/// and per-member orders. Movement stays `Formation` — for a manager squad (no anchor)
+/// the job owns movement (kites) so a focus order never charges a ranged squad into
+/// melee (§5 ⚑). Heal *assignment* still reuses `SquadContext::compute_heal_assignments`
+/// until that migrates into `decide_squad`.
+fn apply_squad_decision(ctx: &mut SquadContext, decision: &SquadDecision, creep_owner: &ReadStorage<CreepOwner>) {
+    ctx.state = order_state_to_squad(decision.state);
+    ctx.focus_target = decision.focus.map(|f| f.pos);
+
+    match decision.state {
+        SquadOrderState::Retreating => {
+            ctx.issue_retreat_orders(None, Some(creep_owner));
+        }
+        SquadOrderState::Engaged => {
+            let attack_target = decision
+                .focus
+                .map(|f| f.id.map(AttackTarget::Creep).unwrap_or(AttackTarget::Structure(f.pos)));
+            for member in ctx.members.iter_mut() {
+                member.tick_orders = Some(TickOrders {
+                    attack_target,
+                    movement: TickMovement::Formation,
+                    ..Default::default()
+                });
+            }
+            let heal_assignments = ctx.compute_heal_assignments(Some(creep_owner));
+            ctx.apply_heal_assignments(&heal_assignments);
+        }
+        // Forming / Moving: no combat orders — the job self-drives to the room.
+        _ => {}
+    }
 }
 
 #[cfg(test)]

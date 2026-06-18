@@ -430,6 +430,140 @@ pub fn decide_movement(view: &CombatView) -> Vec<CombatIntent> {
     mv.into_iter().collect()
 }
 
+// ─── Squad-level decision (P2.G3) ────────────────────────────────────────────
+//
+// The squad analog of `decide_combat`/`decide_movement`: the pure tactics ONE layer
+// up. It picks the squad's shared focus and decides engage-vs-retreat with coupled
+// hysteresis, returning orders the per-creep decisions consume. Lives here (not in
+// the game-coupled `SquadManager`) so the SAME squad tactics run live and in the sim
+// — the whole point of the harness (no tactics fork). The live `SquadManager` and the
+// sim build a [`SquadView`] and apply the [`SquadDecision`]; the manager is then a thin
+// lifecycle+adapter layer with no tactics math.
+//
+// v1 = shared focus + engage/retreat hysteresis. Heal *assignment* (the greedy
+// healer→target matching, today `SquadContext::compute_heal_assignments`) and slot
+// reassignment / threat orientation migrate here next (they are already pure over the
+// member data).
+
+/// The squad's combat lifecycle state, as the decision computes it (the live
+/// `military::squad::SquadState` combat subset — kept JS-free here).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SquadOrderState {
+    /// Roster incomplete / not yet at the objective.
+    Forming,
+    /// At/approaching the objective, no engageable target this tick.
+    Moving,
+    /// Actively engaging — members focus-fire the shared target.
+    Engaged,
+    /// Disengaging (low HP); re-engages only above the separated hysteresis band.
+    Retreating,
+}
+
+/// A squad member as the squad decision sees it — the cached per-tick status the live
+/// `SquadContext` already tracks (HP + heal power), JS-free. Enough for the retreat
+/// hysteresis; positions/ids are added when heal-assignment migrates here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct SquadMemberView {
+    pub hits: u32,
+    pub hits_max: u32,
+    /// Count of working HEAL parts (the heal-capacity primitive).
+    pub heal_power: u32,
+}
+
+/// The squad-level read seam: the roster's cached status + the room's hostiles/
+/// structures + the squad's retreat policy + its current state (for hysteresis).
+pub struct SquadView<'a> {
+    pub members: &'a [SquadMemberView],
+    pub hostiles: &'a [CombatCreepDto],
+    pub structures: &'a [CombatStructureDto],
+    /// HP fraction below which the squad retreats (composition-supplied).
+    pub retreat_threshold: f32,
+    /// The squad's state coming into this tick (drives the coupled hysteresis).
+    pub current_state: SquadOrderState,
+}
+
+/// The squad-level decision: the new combat state + the shared focus the members
+/// concentrate fire on (the per-creep `decide_combat` consumes the focus via
+/// [`CreepOrders`]). `focus` is set whenever a target exists, independent of state, so
+/// a retreating ranged squad keeps shooting while it kites.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SquadDecision {
+    pub state: SquadOrderState,
+    pub focus: Option<FocusTarget>,
+}
+
+/// Mean HP fraction over members that have spawned (`hits_max > 0`).
+fn squad_avg_hp_fraction(members: &[SquadMemberView]) -> f32 {
+    let living: Vec<_> = members.iter().filter(|m| m.hits_max > 0).collect();
+    if living.is_empty() {
+        return 0.0;
+    }
+    let total: f32 = living.iter().map(|m| m.hits as f32 / m.hits_max as f32).sum();
+    total / living.len() as f32
+}
+
+/// The retreat trigger (a faithful port of `SquadContext::should_retreat`): avg HP below
+/// the threshold, OR any single member critically low (<25%), OR a total HP deficit the
+/// healers cannot recover within ~10 ticks.
+fn squad_should_retreat(members: &[SquadMemberView], retreat_threshold: f32) -> bool {
+    let living: Vec<_> = members.iter().filter(|m| m.hits_max > 0).collect();
+    if living.is_empty() {
+        return false;
+    }
+    if squad_avg_hp_fraction(members) < retreat_threshold {
+        return true;
+    }
+    if living.iter().any(|m| (m.hits as f32 / m.hits_max as f32) < 0.25) {
+        return true;
+    }
+    let total_deficit: u32 = living.iter().map(|m| m.hits_max - m.hits).sum();
+    let heal_per_tick: u32 = living.iter().map(|m| m.heal_power * 12).sum();
+    heal_per_tick > 0 && total_deficit > heal_per_tick * 10
+}
+
+/// **The squad-level tactical decision** (ADR 0008 §4, P2.G3). Picks the squad's shared
+/// focus ([`select_focus_target`] from the whole roster's perspective) and resolves
+/// engage-vs-retreat with **coupled hysteresis** (no yo-yo): once `Retreating`, the squad
+/// re-engages only above a band well separated from the retreat threshold (and never
+/// while a member is critical); otherwise it retreats on the trigger and engages when a
+/// target exists. The per-creep `decide_combat`/`decide_movement` consume the focus +
+/// state; the live `SquadManager` and the sim share this one implementation.
+pub fn decide_squad(view: &SquadView) -> SquadDecision {
+    let focus = select_focus_target(view.hostiles, view.structures);
+    let engaged_or_moving = if focus.is_some() {
+        SquadOrderState::Engaged
+    } else {
+        SquadOrderState::Moving
+    };
+
+    let avg = squad_avg_hp_fraction(view.members);
+    let any_critical = view
+        .members
+        .iter()
+        .any(|m| m.hits_max > 0 && (m.hits as f32 / m.hits_max as f32) < 0.25);
+    // Re-engage band: well above the retreat threshold so the squad doesn't oscillate.
+    let re_engage_band = (view.retreat_threshold + 0.3).min(0.95);
+
+    let state = match view.current_state {
+        SquadOrderState::Retreating => {
+            if avg > re_engage_band && !any_critical {
+                engaged_or_moving
+            } else {
+                SquadOrderState::Retreating
+            }
+        }
+        _ => {
+            if squad_should_retreat(view.members, view.retreat_threshold) {
+                SquadOrderState::Retreating
+            } else {
+                engaged_or_moving
+            }
+        }
+    };
+
+    SquadDecision { state, focus }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -693,5 +827,53 @@ mod tests {
             decide_movement(&s.view(&me, None)),
             vec![CombatIntent::MoveTo { target: pos(28, 25), range: 1 }]
         );
+    }
+
+    // ── decide_squad (squad-level focus + engage/retreat hysteresis) ────
+    fn member(hits: u32, hits_max: u32, heal_power: u32) -> SquadMemberView {
+        SquadMemberView { hits, hits_max, heal_power }
+    }
+    fn squad_view<'a>(
+        members: &'a [SquadMemberView],
+        hostiles: &'a [CombatCreepDto],
+        current_state: SquadOrderState,
+    ) -> SquadView<'a> {
+        SquadView { members, hostiles, structures: &[], retreat_threshold: 0.3, current_state }
+    }
+
+    #[test]
+    fn squad_engages_when_a_target_exists_else_moves() {
+        let hostiles = vec![creep(1, 25, 25, 100, &[(Part::Attack, 1)])];
+        let members = vec![member(600, 600, 0)];
+        let d = decide_squad(&squad_view(&members, &hostiles, SquadOrderState::Moving));
+        assert_eq!(d.state, SquadOrderState::Engaged);
+        assert!(d.focus.is_some());
+
+        let d2 = decide_squad(&squad_view(&members, &[], SquadOrderState::Moving));
+        assert_eq!(d2.state, SquadOrderState::Moving);
+        assert!(d2.focus.is_none());
+    }
+
+    #[test]
+    fn squad_retreats_on_low_avg_or_critical_member() {
+        let hostiles = vec![creep(1, 25, 25, 100, &[(Part::Attack, 1)])];
+        // avg HP 0.2 < 0.3 threshold → retreat.
+        let low = vec![member(120, 600, 0)];
+        assert_eq!(decide_squad(&squad_view(&low, &hostiles, SquadOrderState::Engaged)).state, SquadOrderState::Retreating);
+        // avg fine (~0.58) but one member critical (<25%) → retreat.
+        let mixed = vec![member(600, 600, 0), member(100, 600, 0)];
+        assert_eq!(decide_squad(&squad_view(&mixed, &hostiles, SquadOrderState::Engaged)).state, SquadOrderState::Retreating);
+    }
+
+    #[test]
+    fn squad_retreat_hysteresis_has_no_yo_yo() {
+        let hostiles = vec![creep(1, 25, 25, 100, &[(Part::Attack, 1)])];
+        // Retreating, recovered to 0.5 — above the 0.3 threshold but below the re-engage
+        // band (0.3+0.3=0.6) → stay retreating (no premature flip).
+        let mid = vec![member(300, 600, 0)];
+        assert_eq!(decide_squad(&squad_view(&mid, &hostiles, SquadOrderState::Retreating)).state, SquadOrderState::Retreating);
+        // Recovered above the band (0.7 > 0.6) → re-engage.
+        let high = vec![member(420, 600, 0)];
+        assert_eq!(decide_squad(&squad_view(&high, &hostiles, SquadOrderState::Retreating)).state, SquadOrderState::Engaged);
     }
 }
