@@ -3,7 +3,7 @@ use super::operationsystem::*;
 use crate::military::composition::SquadComposition;
 use crate::military::objective_queue::{
     ForceRequirement, ObjectiveKind, ObjectiveOwner, ObjectiveRequest, OBJECTIVE_PRIORITY_CRITICAL, OBJECTIVE_PRIORITY_HIGH,
-    OBJECTIVE_PRIORITY_MEDIUM,
+    OBJECTIVE_PRIORITY_LOW, OBJECTIVE_PRIORITY_MEDIUM,
 };
 use crate::military::threatmap::*;
 use crate::missions::data::*;
@@ -88,6 +88,9 @@ pub struct AttackCandidate {
     pub has_safe_mode: bool,
     /// For power banks: estimated ROI (power value vs energy cost).
     pub estimated_roi: Option<f32>,
+    /// Target tile for objective-driven offense that needs a position
+    /// (e.g. `InvaderCore` → `Dismantle { pos }`). `None` for room-level reasons.
+    pub target_pos: Option<Position>,
 }
 
 /// Defense escalation level, replacing string-based "Solo"/"Duo"/"Quad".
@@ -672,6 +675,7 @@ impl WarOperation {
                     estimated_enemy_heal: 0.0,
                     has_safe_mode: false,
                     estimated_roi: None,
+                    target_pos: None,
                 });
             }
         }
@@ -788,65 +792,44 @@ impl WarOperation {
                 );
             }
 
-            // ── Invader core targeting (O6: objective-driven) ─────────────
-            // An invader core is migrated OFF `AttackOperation` onto a `Dismantle`
-            // objective fielded by the `SquadManager` — a siege squad that travels
-            // in formation (O1), orients toward the core (O2), and breaches the
-            // shielding rampart of a stronghold core (O3). All OTHER attack reasons
-            // stay on `AttackOperation` for now (coexistence) — see g4-offense-plan O6.
-            // The room is re-evaluated every scan (no `active_attacks` entry), so the
-            // upsert is idempotent and re-asserts the TTL; once the core is dead the
-            // room drops out, the objective lapses, and the manager retires the squad.
-            if let (Some((core_level, core_pos)), true) = (invader_core, features.military.attack_invaders) {
-                let is_our_remote = room_entity
-                    .and_then(|e| system_data.room_data.get(e))
-                    .and_then(|rd| rd.get_dynamic_visibility_data())
-                    .map(|d| d.reservation().mine())
-                    .unwrap_or(false);
+            // ── Invader core targeting ────────────────────────────────────
+            // Migrated to an objective (O6): the candidate carries the core's tile
+            // and the launch loop upserts a `Dismantle { room, pos }` instead of
+            // launching an `AttackOperation` — see the launch loop's source→objective
+            // mapping. The affordability/interest gate is preserved here.
+            if let Some((core_level, core_pos)) = invader_core {
+                if features.military.attack_invaders {
+                    let is_our_remote = room_entity
+                        .and_then(|e| system_data.room_data.get(e))
+                        .and_then(|rd| rd.get_dynamic_visibility_data())
+                        .map(|d| d.reservation().mine())
+                        .unwrap_or(false);
 
-                let has_sources = room_entity
-                    .and_then(|e| system_data.room_data.get(e))
-                    .and_then(|rd| rd.get_static_visibility_data())
-                    .map(|s| !s.sources().is_empty())
-                    .unwrap_or(false);
+                    let has_sources = room_entity
+                        .and_then(|e| system_data.room_data.get(e))
+                        .and_then(|rd| rd.get_static_visibility_data())
+                        .map(|s| !s.sources().is_empty())
+                        .unwrap_or(false);
 
-                // Preserve the affordability/interest gate (won't siege an
-                // unaffordable level, won't clear a reserver in a room we don't mine).
-                let worth_attacking = invader_core_attack_score(
-                    core_level,
-                    min_distance,
-                    system_data.economy.total_stored_energy,
-                    is_our_remote,
-                    has_sources,
-                )
-                .is_some();
-
-                if worth_attacking {
-                    info!(
-                        "[War] Dismantle objective for invader core L{} in {} @ ({},{})",
+                    if let Some(score) = invader_core_attack_score(
                         core_level,
-                        room_name,
-                        core_pos.x().u8(),
-                        core_pos.y().u8()
-                    );
-                    // NPC remote-policing offense: priority MEDIUM (above SK-farm LOW,
-                    // below all defense). No war-side concurrency cap on the first
-                    // increment — the manager's `MAX_CONCURRENT_SQUADS` gates fielding;
-                    // a dedicated active-offense-objective count reconciles the war cap
-                    // when the remaining single-squad reasons migrate.
-                    system_data.combat_objective_queue.request(
-                        ObjectiveRequest::new(
-                            ObjectiveKind::Dismantle {
-                                room: room_name,
-                                pos: core_pos,
-                            },
-                            OBJECTIVE_PRIORITY_MEDIUM,
-                            ForceRequirement::single(SquadComposition::siege_quad()),
-                        )
-                        .owner(ObjectiveOwner::Attack)
-                        .ttl(OFFENSE_OBJECTIVE_TTL),
-                        game::time(),
-                    );
+                        min_distance,
+                        system_data.economy.total_stored_energy,
+                        is_our_remote,
+                        has_sources,
+                    ) {
+                        candidates.push(AttackCandidate {
+                            room: room_name,
+                            source: TargetSource::InvaderCore { level: core_level },
+                            score,
+                            tower_count,
+                            estimated_enemy_dps: threat_data.estimated_dps,
+                            estimated_enemy_heal: threat_data.estimated_heal,
+                            has_safe_mode: false,
+                            estimated_roi: None,
+                            target_pos: Some(core_pos),
+                        });
+                    }
                 }
             }
 
@@ -882,52 +865,21 @@ impl WarOperation {
                             estimated_enemy_heal: 0.0,
                             has_safe_mode: false,
                             estimated_roi: Some(roi),
+                            target_pos: None,
                         });
                     }
                 }
             }
 
-            // ── Invader creeps in remote rooms ───────────────────────────
-            // Invader creeps disrupting our reserved rooms should be cleared.
-            // Source Keepers are permanent residents of SK rooms and should NOT
-            // trigger an InvaderCreeps attack. Only actual Invader NPCs count.
-            let has_invader_creeps = threat_data
-                .hostile_creeps
-                .iter()
-                .any(|c| crate::military::is_invader_owner(&c.owner));
+            // ── Invader creeps in remote rooms (RECONCILED — no offense path) ──
+            // Invader creeps disrupting a reserved remote are cleared by the
+            // remote-invader `Defend` context in `run_defense_scan` (same trigger:
+            // `reservation().mine() && visible() && hostile invaders`). Producing a
+            // `Secure` objective here too would double-field the same room, so the
+            // O6 migration DROPS the InvaderCreeps offense path. We still compute
+            // `all_npc` — the resource-denial block below needs it to exclude
+            // NPC-only rooms (those are policed, not contested as player targets).
             let all_npc = threat_data.hostile_creeps.iter().all(|c| crate::military::is_npc_owner(&c.owner));
-            let is_our_remote = room_entity
-                .and_then(|e| system_data.room_data.get(e))
-                .and_then(|rd| rd.get_dynamic_visibility_data())
-                .map(|d| d.reservation().mine())
-                .unwrap_or(false);
-
-            // A present core (any level, including a level-0 reserver) routes
-            // through the InvaderCore candidate above instead -- killing the
-            // core is what actually clears the room.
-            if has_invader_creeps
-                && all_npc
-                && features.military.attack_invaders
-                && is_our_remote
-                && invader_core_level.is_none()
-                && power_bank_info.is_none()
-            {
-                let distance_penalty = min_distance as f32 * 2.0;
-                let score = 50.0 - distance_penalty;
-
-                if score > 0.0 {
-                    candidates.push(AttackCandidate {
-                        room: room_name,
-                        source: TargetSource::InvaderCreeps,
-                        score,
-                        tower_count: 0,
-                        estimated_enemy_dps: threat_data.estimated_dps,
-                        estimated_enemy_heal: threat_data.estimated_heal,
-                        has_safe_mode: false,
-                        estimated_roi: None,
-                    });
-                }
-            }
 
             // ── Hostile player rooms (resource denial / expansion) ───────
             if room_owner_hostile && features.military.attack_players && !all_npc && threat_data.threat_level >= ThreatLevel::PlayerScout {
@@ -949,6 +901,7 @@ impl WarOperation {
                             estimated_enemy_heal: threat_data.estimated_heal,
                             has_safe_mode,
                             estimated_roi: None,
+                            target_pos: None,
                         });
                     }
                 }
@@ -989,11 +942,77 @@ impl WarOperation {
             }
         }
 
-        // ── 4. Launch attacks for top candidates ─────────────────────────
+        // ── 4. Field top candidates: objective-driven (O6) or legacy attack ──
+
+        // Combined concurrent-offense budget. Offense is now split between the
+        // objective queue (migrated reasons, fielded by the `SquadManager`) and
+        // legacy `AttackOperation`s (un-migrated reasons), so the war cap counts
+        // BOTH — Attack-owned objectives already in the queue + active attacks.
+        // (Replaces the old `active_attacks`-only break.)
+        let mut offense_count = self.active_attacks.len() as u32
+            + system_data
+                .combat_objective_queue
+                .objectives
+                .iter()
+                .filter(|o| o.owner == ObjectiveOwner::Attack)
+                .count() as u32;
 
         for candidate in candidates {
-            if self.active_attacks.len() as u32 >= self.max_concurrent_attacks {
-                break;
+            // Map the candidate's reason to an objective (migrated), or `None` to
+            // fall through to a legacy `AttackOperation` (un-migrated, coexistence).
+            let objective: Option<(ObjectiveKind, f32, SquadComposition)> = match candidate.source {
+                // Invader core → siege the core tile (O1 travel + O2 orient + O3 breach).
+                TargetSource::InvaderCore { .. } => candidate.target_pos.map(|pos| {
+                    (
+                        ObjectiveKind::Dismantle { room: candidate.room, pos },
+                        OBJECTIVE_PRIORITY_MEDIUM,
+                        SquadComposition::siege_quad(),
+                    )
+                }),
+                // Operator attack flag → clear the room (HIGH: explicit operator intent).
+                TargetSource::AttackFlag => Some((
+                    ObjectiveKind::Secure { room: candidate.room },
+                    OBJECTIVE_PRIORITY_HIGH,
+                    SquadComposition::quad_ranged(),
+                )),
+                // Resource denial → harass a hostile player's remote (LOW: opportunistic).
+                TargetSource::ResourceDenial => Some((
+                    ObjectiveKind::Harass { room: candidate.room },
+                    OBJECTIVE_PRIORITY_LOW,
+                    SquadComposition::solo_harasser(),
+                )),
+                // Un-migrated: PowerBank (O5) + any others stay on `AttackOperation`.
+                _ => None,
+            };
+
+            if let Some((kind, priority, composition)) = objective {
+                // Always re-assert an EXISTING objective (refresh its TTL so the
+                // manager keeps fielding it); gate only NEW offense on the cap.
+                // Candidates are score-sorted desc, so a skipped new objective is
+                // the lowest-value one.
+                let is_new = system_data.combat_objective_queue.find_by_kind(&kind).is_none();
+                if is_new && offense_count >= self.max_concurrent_attacks {
+                    continue;
+                }
+                info!(
+                    "[War] Offense objective {:?} for {} (source={:?}, score={:.1})",
+                    kind, candidate.room, candidate.source, candidate.score
+                );
+                system_data.combat_objective_queue.request(
+                    ObjectiveRequest::new(kind, priority, ForceRequirement::single(composition))
+                        .owner(ObjectiveOwner::Attack)
+                        .ttl(OFFENSE_OBJECTIVE_TTL),
+                    game::time(),
+                );
+                if is_new {
+                    offense_count += 1;
+                }
+                continue;
+            }
+
+            // ── Legacy `AttackOperation` path (un-migrated reasons) ──────────
+            if offense_count >= self.max_concurrent_attacks {
+                continue;
             }
 
             info!(
@@ -1016,6 +1035,7 @@ impl WarOperation {
             .build();
 
             self.add_active_attack(attack_entity, candidate.room, reason);
+            offense_count += 1;
 
             // Force a home room rebalance on the next tick so the new attack
             // gets home rooms assigned promptly rather than waiting up to
