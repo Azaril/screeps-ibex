@@ -71,6 +71,13 @@ fn spawn_priority_for(objective_priority: f32) -> f32 {
     }
 }
 
+/// A squad is *wiped* (overwhelmed — all members lost) when it had spawned members but none remain
+/// alive. Gradual losses are refilled by the unfilled-slot spawns (Phase B) and never reach
+/// all-empty; only a squad that lost everyone does. Pure so it's host-testable without an ECS world.
+fn squad_is_wiped(total_members_added: u32, living_members: usize) -> bool {
+    total_members_added > 0 && living_members == 0
+}
+
 /// Whether an objective's squad fights as an oriented **formation box** (siege: keep the anchor
 /// when engaged, advance to the focus, present armor toward the threat) vs **skirmishes** (kite via
 /// `decide_movement`). Today only `Dismantle` (structure siege) is a formation; defense / farm /
@@ -191,9 +198,30 @@ impl<'a> System<'a> for SquadManagerSystem {
         let mut covered: std::collections::HashSet<ObjectiveId> = std::collections::HashSet::new();
 
         for (squad_entity, obj_id) in managed {
-            // A duplicate squad for an already-covered objective is retired (keep one).
             let objective_gone = data.objective_queue.get(obj_id).is_none();
-            if objective_gone || covered.contains(&obj_id) {
+            // Wave-wipe (P2.G4-O4): the squad had members and all are now dead — overwhelmed.
+            let wiped = data
+                .squad_contexts
+                .get(squad_entity)
+                .map(|ctx| squad_is_wiped(ctx.total_members_added, ctx.members.len()))
+                .unwrap_or(false);
+
+            // Retire a duplicate, an orphaned (objective gone), or a wiped squad.
+            if objective_gone || covered.contains(&obj_id) || wiped {
+                // On a wave-wipe of a non-`Defend` objective, back off: mark the room unwinnable so the
+                // manager stops feeding squads into an unwinnable siege (the queue's exponential backoff
+                // makes `best_unclaimed_near` skip it until `retry_after`; the producer's re-assert is
+                // ignored meanwhile, and a fresh squad is fielded once the backoff lapses). Defense is
+                // exempt — we never abandon an owned room; a wiped defense squad is simply re-staffed.
+                if wiped && !objective_gone {
+                    let backoff_room = data
+                        .objective_queue
+                        .get(obj_id)
+                        .and_then(|obj| (!matches!(obj.kind, ObjectiveKind::Defend { .. })).then(|| obj.kind.room()));
+                    if let Some(room) = backoff_room {
+                        data.objective_queue.mark_unwinnable(room, now);
+                    }
+                }
                 retire_squad(&data.updater, &data.entities, squad_entity);
                 data.objective_queue.release_entity(squad_entity);
                 continue;
@@ -622,5 +650,23 @@ mod tests {
         assert_eq!(room_distance(room("W0N0"), room("W0N0")), 0);
         assert_eq!(room_distance(room("W1N1"), room("W4N1")), 3); // dx dominates
         assert_eq!(room_distance(room("W1N1"), room("W4N5")), 4); // dy dominates
+    }
+
+    #[test]
+    fn squad_is_wiped_only_after_spawning_then_losing_everyone() {
+        assert!(!squad_is_wiped(0, 0), "fresh squad, nothing spawned yet → not wiped");
+        assert!(!squad_is_wiped(4, 2), "still has living members → not wiped");
+        assert!(squad_is_wiped(4, 0), "spawned members and all are gone → wiped");
+    }
+
+    #[test]
+    fn only_dismantle_fights_as_a_formation() {
+        let r = room("W5N5");
+        let pos = Position::new(RoomCoordinate::new(10).unwrap(), RoomCoordinate::new(10).unwrap(), r);
+        assert!(is_formation_objective(&ObjectiveKind::Dismantle { room: r, pos }));
+        assert!(!is_formation_objective(&ObjectiveKind::Defend { room: r }));
+        assert!(!is_formation_objective(&ObjectiveKind::Farm { kind: FarmKind::SourceKeeper, room: r }));
+        assert!(!is_formation_objective(&ObjectiveKind::Harass { room: r }));
+        assert!(!is_formation_objective(&ObjectiveKind::Secure { room: r }));
     }
 }
