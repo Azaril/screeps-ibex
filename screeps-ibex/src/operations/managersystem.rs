@@ -4,6 +4,7 @@ use super::data::*;
 use super::miningoutpost::*;
 use super::salvage::*;
 use super::scout::*;
+use super::sourcekeeper::*;
 use super::war::*;
 use log::*;
 use specs::*;
@@ -21,6 +22,7 @@ impl<'a> System<'a> for OperationManagerSystem {
         let mut has_scout = false;
         let mut has_war = false;
         let mut has_salvage = false;
+        let mut has_source_keeper = false;
 
         for (_, operation) in (&entities, &operations).join() {
             match operation {
@@ -31,6 +33,7 @@ impl<'a> System<'a> for OperationManagerSystem {
                 OperationData::Scout(_) => has_scout = true,
                 OperationData::War(_) => has_war = true,
                 OperationData::Salvage(_) => has_salvage = true,
+                OperationData::SourceKeeper(_) => has_source_keeper = true,
             }
         }
 
@@ -68,6 +71,12 @@ impl<'a> System<'a> for OperationManagerSystem {
             info!("Salvage operation does not exist, creating.");
 
             SalvageOperation::build(updater.create_entity(&entities), None).build();
+        }
+
+        if !has_source_keeper {
+            info!("Source Keeper operation does not exist, creating.");
+
+            SourceKeeperOperation::build(updater.create_entity(&entities), None).build();
         }
     }
 }

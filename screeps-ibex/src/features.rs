@@ -581,6 +581,33 @@ impl Default for DerelictFeatures {
     }
 }
 
+/// Source Keeper room exploitation (ADR 0018): clear/suppress the keepers in an
+/// adjacent SK room and mine around them. Default OFF until the sim + a
+/// private-server soak validate it (the duo kite, the suppression↔mining gate).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SourceKeeperFeatures {
+    /// Master kill-switch for SK-room farming (clearing + mining). Default FALSE.
+    pub farming: bool,
+    /// Max concurrent SK farms (each a suppression duo + miners). Default 1.
+    pub max_concurrent_farms: u32,
+    /// Max linear room distance (hops) from a home room for an SK candidate. Default 2.
+    pub max_range: u32,
+    /// Emit per-candidate ROI diagnostics to the log each scan. Default false.
+    pub diagnostics: bool,
+}
+
+impl Default for SourceKeeperFeatures {
+    fn default() -> Self {
+        Self {
+            farming: false,
+            max_concurrent_farms: 1,
+            max_range: 2,
+            diagnostics: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
@@ -632,6 +659,7 @@ pub struct Features {
     pub raid: bool,
     pub claim: ClaimFeatures,
     pub derelict: DerelictFeatures,
+    pub source_keeper: SourceKeeperFeatures,
     pub visibility: VisibilityFeatures,
     /// Allow the dismantler role in salvage missions; semantics as `raid`.
     /// Default: true.
@@ -657,6 +685,7 @@ impl Default for Features {
             raid: true,
             claim: ClaimFeatures::default(),
             derelict: DerelictFeatures::default(),
+            source_keeper: SourceKeeperFeatures::default(),
             visibility: VisibilityFeatures::default(),
             dismantle: true,
             system_timing: false,

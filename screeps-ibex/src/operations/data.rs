@@ -15,6 +15,7 @@ pub enum OperationData {
     Scout(super::scout::ScoutOperation),
     War(super::war::WarOperation),
     Salvage(super::salvage::SalvageOperation),
+    SourceKeeper(super::sourcekeeper::SourceKeeperOperation),
 }
 
 impl OperationData {
@@ -27,6 +28,7 @@ impl OperationData {
             OperationData::Scout(ref mut data) => data,
             OperationData::War(ref mut data) => data,
             OperationData::Salvage(ref mut data) => data,
+            OperationData::SourceKeeper(ref mut data) => data,
         }
     }
 
@@ -40,6 +42,7 @@ impl OperationData {
             OperationData::Scout(ref data) => data.describe_operation(ctx),
             OperationData::War(ref data) => data.describe_operation(ctx),
             OperationData::Salvage(ref data) => data.describe_operation(ctx),
+            OperationData::SourceKeeper(ref data) => data.describe_operation(ctx),
         }
     }
 }

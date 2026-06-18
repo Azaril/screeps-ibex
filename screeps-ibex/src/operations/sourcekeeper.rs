@@ -125,6 +125,189 @@ pub fn score_sk_farm(inp: &SkRoiInputs) -> SkRoiScore {
     SkRoiScore { gross_per_tick: gross, net_per_tick: net, decision }
 }
 
+// ─── Operation (P2.K2b) ─────────────────────────────────────────────────────
+
+use super::data::*;
+use super::operationsystem::*;
+use crate::room::gather::*;
+use crate::room::visibilitysystem::*;
+use crate::serialize::*;
+use crate::visualization::SummaryContent;
+use log::*;
+use screeps::*;
+use serde::{Deserialize, Serialize};
+#[allow(deprecated)]
+use specs::error::NoError;
+use specs::saveload::*;
+use specs::*;
+
+/// Estimated total body-energy of the `duo_sk_farmer` (SK ranged attacker
+/// 10RA+10MOVE+1HEAL ≈ 2250, SK healer 10HEAL+12MOVE ≈ 3100), for the
+/// suppression e/t term. Refined to the real composition cost in K2c.
+const SK_DUO_BODY_COST: u32 = 5350;
+/// Largest single duo body (the healer) — the home must spawn it in one piece.
+const SK_DUO_MAX_BODY_COST: u32 = 3100;
+/// Min home RCL to consider an SK farm at all (the affordability check below is
+/// the real gate; this just trims the home set cheaply).
+const SK_HOME_MIN_RCL: u32 = 6;
+/// Scan cadence offset (spread CPU vs other throttled operations).
+const SK_SCAN_OFFSET: u32 = 35;
+/// Tiles per room-hop, for the haul-distance estimate.
+const TILES_PER_ROOM: u32 = 50;
+
+#[derive(Clone, ConvertSaveload)]
+pub struct SourceKeeperOperation {
+    owner: EntityOption<Entity>,
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+impl SourceKeeperOperation {
+    pub fn build<B>(builder: B, owner: Option<Entity>) -> B
+    where
+        B: Builder + MarkedBuilder,
+    {
+        let operation = SourceKeeperOperation::new(owner);
+        builder.with(OperationData::SourceKeeper(operation)).marked::<SerializeMarker>()
+    }
+
+    pub fn new(owner: Option<Entity>) -> SourceKeeperOperation {
+        SourceKeeperOperation { owner: owner.into() }
+    }
+
+    /// `SkFrontier` candidate (ADR 0018 §3.1): a scouted SK room (static lairs)
+    /// with sources is a viable farm target; the BFS never expands *through* an
+    /// SK or hostile-owned room (they are targets/walls), but does traverse
+    /// neutral rooms to reach an SK ring a couple hops out.
+    fn gather_candidate_room_data(gather_system_data: &GatherSystemData, room_name: RoomName) -> Option<CandidateRoomData> {
+        let room_entity = gather_system_data.mapping.get_room(&room_name)?;
+        let room_data = gather_system_data.room_data.get(room_entity)?;
+
+        let static_visibility_data = room_data.get_static_visibility_data()?;
+        let dynamic_visibility_data = room_data.get_dynamic_visibility_data()?;
+
+        let is_sk = static_visibility_data.is_source_keeper();
+        let has_sources = !static_visibility_data.sources().is_empty();
+
+        let viable = is_sk && has_sources;
+        let can_expand = !is_sk && !dynamic_visibility_data.owner().hostile();
+
+        Some(CandidateRoomData::new(room_entity, viable, can_expand))
+    }
+}
+
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+impl Operation for SourceKeeperOperation {
+    fn get_owner(&self) -> &Option<Entity> {
+        &self.owner
+    }
+
+    fn owner_complete(&mut self, owner: Entity) {
+        assert!(Some(owner) == *self.owner);
+        self.owner.take();
+    }
+
+    fn describe_operation(&self, _ctx: &OperationDescribeContext) -> SummaryContent {
+        SummaryContent::Text("Source Keeper".to_string())
+    }
+
+    fn run_operation(
+        &mut self,
+        system_data: &mut OperationExecutionSystemData,
+        _runtime_data: &mut OperationExecutionRuntimeData,
+    ) -> Result<OperationResult, ()> {
+        // Master kill-switch (ADR 0018 §3.5) — default OFF until validated.
+        let sk_features = system_data.features.source_keeper;
+        if !sk_features.farming {
+            return Ok(OperationResult::Running);
+        }
+        if game::time() % 50 != SK_SCAN_OFFSET {
+            return Ok(OperationResult::Running);
+        }
+
+        let gather_system_data = GatherSystemData {
+            entities: system_data.entities,
+            mapping: system_data.mapping,
+            room_data: system_data.room_data,
+            room_plan_data: system_data.room_plan_data,
+            room_status_cache: system_data.room_status_cache,
+            derelict_features: system_data.features.derelict,
+        };
+
+        let home_rooms = gather_home_rooms(&gather_system_data, SK_HOME_MIN_RCL);
+        if home_rooms.is_empty() {
+            return Ok(OperationResult::Running);
+        }
+
+        let gathered = gather_candidate_rooms(&gather_system_data, &home_rooms, sk_features.max_range, Self::gather_candidate_room_data);
+
+        // Scout the frontier so unscouted ring rooms become viable candidates.
+        for unknown_room in gathered.unknown_rooms().iter() {
+            system_data.visibility.request(VisibilityRequest::new(
+                unknown_room.room_name(),
+                VISIBILITY_PRIORITY_MEDIUM,
+                VisibilityRequestFlags::ALL,
+            ));
+        }
+
+        // Tick-wide gates (same for every candidate this scan).
+        let cpu_ok = system_data.governor.tier != crate::cpugovernor::Tier::Critical;
+        // TODO(K2c): count live SourceKeeperFarmMissions for the cap + per-room already_committed.
+        let under_farm_cap = true;
+
+        for candidate in gathered.candidate_rooms().iter() {
+            let Some(room_data) = system_data.room_data.get(candidate.room_data_entity()) else {
+                continue;
+            };
+            let Some(static_visibility_data) = room_data.get_static_visibility_data() else {
+                continue;
+            };
+            let dynamic_visibility_data = room_data.get_dynamic_visibility_data();
+
+            let live_sources = static_visibility_data.sources().len() as u32;
+            let haul_tiles = candidate.distance() * TILES_PER_ROOM;
+            let contested = dynamic_visibility_data
+                .map(|d| d.owner().hostile() || d.reservation().hostile())
+                .unwrap_or(false);
+
+            // Affordability: the nearest home must spawn the largest duo body.
+            let home_capacity = candidate
+                .home_room_data_entities()
+                .iter()
+                .filter_map(|e| system_data.room_data.get(*e))
+                .filter_map(|home| game::rooms().get(home.name))
+                .map(|home| home.energy_capacity_available())
+                .max()
+                .unwrap_or(0);
+            let affordable = home_capacity >= SK_DUO_MAX_BODY_COST;
+
+            let inputs = SkRoiInputs {
+                live_sources,
+                haul_tiles,
+                suppression_cost: SK_DUO_BODY_COST,
+                affordable,
+                contested,
+                cpu_ok,
+                military_free: true, // TODO(K2c/W): yield to active defense / declared war
+                under_farm_cap,
+                already_committed: false, // TODO(K2c): a SourceKeeperFarmMission already farms this room
+            };
+            let score = score_sk_farm(&inputs);
+
+            if sk_features.diagnostics {
+                info!(
+                    "SK farm candidate {}: {} sources @ {} tiles, gross {:.1} net {:.1} e/t -> {:?}",
+                    room_data.name, live_sources, haul_tiles, score.gross_per_tick, score.net_per_tick, score.decision
+                );
+            }
+
+            // TODO(K2c): on Commit, build/keep a SourceKeeperFarmMission for this room;
+            // on Withhold/Veto, withdraw any existing one.
+        }
+
+        Ok(OperationResult::Running)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
