@@ -95,6 +95,17 @@ enum Command {
         #[arg(long)]
         grep: Option<String>,
     },
+    /// Run a single JavaScript expression once in a bot's runtime console
+    /// (`POST /api/user/console`). E.g. restore the feature defaults after a
+    /// `_features` shape change: `exec --user ibex-2 "delete Memory._features"`.
+    Exec {
+        /// Bot identity whose runtime to run in: a .screeps.yaml servers:
+        /// entry (default: --server-name, else the first bots: entry)
+        #[arg(long)]
+        user: Option<String>,
+        /// The JavaScript expression to evaluate once in the bot's runtime
+        expression: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -286,6 +297,14 @@ async fn main() -> Result<()> {
             let name = user.as_deref().or(cli.server_name.as_deref());
             let cfg = KitConfig::load(cli.config.as_deref(), name)?;
             screeps_server_kit::console::tail(&cfg, seconds, grep.as_deref()).await
+        }
+        Command::Exec { user, expression } => {
+            let name = user.as_deref().or(cli.server_name.as_deref());
+            let cfg = KitConfig::load(cli.config.as_deref(), name)?;
+            let api = screeps_server_kit::api::connect(&cfg.server).await?;
+            api.console(&expression).await?;
+            println!("sent to '{}': {expression}", cfg.server.username);
+            Ok(())
         }
     }
 }
