@@ -49,8 +49,10 @@ use specs::saveload::*;
 const MAX_CONCURRENT_SQUADS: usize = 4;
 
 /// Max room distance from a candidate home to the objective room for that home to
-/// be a spawn source (keeps a squad from being spawned across the map).
-const MAX_SPAWN_DISTANCE: u32 = 6;
+/// be a spawn source (keeps a squad from being spawned across the map). Matches
+/// the legacy `MAX_DEFENSE_SOURCE_DISTANCE` (10) so the defense migration does not
+/// narrow the set of rooms a defender can be sourced from.
+const MAX_SPAWN_DISTANCE: u32 = 10;
 
 /// Chebyshev distance between two rooms.
 fn room_distance(a: RoomName, b: RoomName) -> u32 {
@@ -233,11 +235,17 @@ impl<'a> System<'a> for SquadManagerSystem {
         }
 
         // ── Phase C: claim new objectives up to the global cap. ──
+        // `skipped` holds objectives we cannot field THIS tick (no requested force,
+        // or no spawn-home in range). We pass over them WITHOUT claiming — claiming
+        // an unfieldable objective would leak a concurrency slot to a `SquadContext`
+        // that never spawns (the pre-removal slot-leak vector for a far operator
+        // `defend`-flag room) — and exclude them so the selection loop doesn't spin.
         let mut active = live_managed.len();
+        let mut skipped: Vec<ObjectiveId> = Vec::new();
         while active < MAX_CONCURRENT_SQUADS {
             // Anchor proximity selection on the closest owned room (any home).
             let anchor = homes.first().map(|h| h.name);
-            let obj_id = match data.objective_queue.best_unclaimed_near(anchor, now) {
+            let obj_id = match data.objective_queue.best_unclaimed_near_excluding(anchor, now, &skipped) {
                 Some(id) => id,
                 None => break,
             };
@@ -246,17 +254,21 @@ impl<'a> System<'a> for SquadManagerSystem {
                 Some(obj) => match obj.force.squads.first() {
                     Some(comp) => (comp.clone(), objective_target(&obj.kind)),
                     None => {
-                        // No force requested → nothing to field; claim it anyway so we
-                        // don't spin on it this tick, and move on.
-                        let placeholder = data.entities.create();
-                        data.objective_queue.claim(obj_id, placeholder);
-                        let _ = data.entities.delete(placeholder);
-                        active += 1;
+                        // Malformed objective (no force requested) — can't field it.
+                        skipped.push(obj_id);
                         continue;
                     }
                 },
                 None => break,
             };
+
+            // No in-range home can spawn this squad → don't claim it (a claimed-but-
+            // never-spawned `SquadContext` would linger forever holding a cap slot).
+            // Skip and try the next-best objective.
+            if !homes.iter().any(|h| room_distance(h.name, target.1) <= MAX_SPAWN_DISTANCE) {
+                skipped.push(obj_id);
+                continue;
+            }
 
             field_new_squad(&data.updater, &data.entities, &mut data.objective_queue, obj_id, &composition, target);
             active += 1;

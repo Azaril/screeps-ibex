@@ -27,7 +27,6 @@ pub enum MissionData {
     Defend(EntityRefCell<super::defend::DefendMission>),
     PowerSpawn(EntityRefCell<super::powerspawn::PowerSpawnMission>),
     Labs(EntityRefCell<super::labs::LabsMission>),
-    SquadDefense(EntityRefCell<super::squad_defense::SquadDefenseMission>),
     NukeDefense(EntityRefCell<super::nuke_defense::NukeDefenseMission>),
     SafeMode(EntityRefCell<super::safe_mode::SafeModeMission>),
     WallRepair(EntityRefCell<super::wall_repair::WallRepairMission>),
@@ -58,7 +57,6 @@ impl MissionData {
             MissionData::Defend(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::PowerSpawn(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::Labs(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
-            MissionData::SquadDefense(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::NukeDefense(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::SafeMode(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
             MissionData::WallRepair(ref data) => Ref::map(data.borrow(), |m| -> &dyn Mission { m }),
@@ -94,7 +92,6 @@ impl MissionData {
             MissionData::Defend(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::PowerSpawn(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::Labs(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
-            MissionData::SquadDefense(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::NukeDefense(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::SafeMode(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
             MissionData::WallRepair(ref data) => RefMut::map(data.borrow_mut(), |m| -> &mut dyn Mission { m }),
@@ -248,7 +245,6 @@ mission_type!(super::colony::ColonyMission, MissionData::Colony);
 mission_type!(super::defend::DefendMission, MissionData::Defend);
 mission_type!(super::powerspawn::PowerSpawnMission, MissionData::PowerSpawn);
 mission_type!(super::labs::LabsMission, MissionData::Labs);
-mission_type!(super::squad_defense::SquadDefenseMission, MissionData::SquadDefense);
 mission_type!(super::nuke_defense::NukeDefenseMission, MissionData::NukeDefense);
 mission_type!(super::safe_mode::SafeModeMission, MissionData::SafeMode);
 mission_type!(super::wall_repair::WallRepairMission, MissionData::WallRepair);

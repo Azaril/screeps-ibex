@@ -1,12 +1,14 @@
 use super::data::*;
 use super::operationsystem::*;
 use crate::military::composition::SquadComposition;
-use crate::military::objective_queue::{ForceRequirement, ObjectiveKind, ObjectiveOwner, ObjectiveRequest, OBJECTIVE_PRIORITY_HIGH};
+use crate::military::objective_queue::{
+    ForceRequirement, ObjectiveKind, ObjectiveOwner, ObjectiveRequest, OBJECTIVE_PRIORITY_CRITICAL, OBJECTIVE_PRIORITY_HIGH,
+    OBJECTIVE_PRIORITY_MEDIUM,
+};
 use crate::military::threatmap::*;
 use crate::missions::data::*;
 use crate::missions::nuke_defense::*;
 use crate::missions::safe_mode::*;
-use crate::missions::squad_defense::*;
 use crate::missions::wall_repair::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
@@ -144,8 +146,9 @@ pub struct ActiveAttack {
 }
 
 /// Unified military coordinator singleton. Manages both offense
-/// (AttackOperations) and defense (SquadDefenseMission, NukeDefenseMission,
-/// SafeModeMission, WallRepairMission).
+/// (AttackOperations) and defense — the latter produced as `Defend` objectives
+/// on the `CombatObjectiveQueue` (fielded by the `SquadManager`), plus
+/// NukeDefenseMission, SafeModeMission, WallRepairMission.
 ///
 /// Uses tiered cadences:
 /// - Defense scan: every 1-2 ticks (cheap, checks owned rooms for threats)
@@ -341,17 +344,8 @@ impl WarOperation {
                     return None;
                 }
 
-                let has_squad_defense = room_data.get_missions().iter().any(|mission_entity| {
-                    system_data
-                        .mission_data
-                        .get(*mission_entity)
-                        .as_mission_type::<SquadDefenseMission>()
-                        .is_some()
-                });
-
-                if has_squad_defense {
-                    return None;
-                }
+                // No de-dup guard needed: the `Defend` objective upsert below is
+                // idempotent (keyed by room), so re-asserting each scan is safe.
 
                 let mut estimated_dps: f32 = 0.0;
                 let mut estimated_heal: f32 = 0.0;
@@ -386,74 +380,44 @@ impl WarOperation {
 
         // ── Create squad defense missions ──────────────────────────────────
 
+        // Defense is produced as a `Defend` objective on the CombatObjectiveQueue
+        // (ADR 0008 §W1/§5) — the `SquadManager` claims it, fields the threat-sized
+        // squad with full G3 tactics (focus-fire / heal / cohesion), and retires it
+        // when this producer stops re-asserting. The producer re-asserts every scan
+        // while the (owned, visible) room warrants a defender; the gather scoping
+        // (`owner().mine() && visible()`) preserves the ADR 0017 §13 ownership-
+        // subordinate invariant — a lost room drops out, its TTL lapses, the squad
+        // retires. (Replaces the removed squad-less `SquadDefenseMission`.)
         for need in rooms_needing_defense {
             let escalation = DefenseEscalation::from_threat(need.estimated_dps, need.estimated_heal, need.hostile_count, need.any_boosted);
-
-            // ── Migrated path (ADR 0008 §W1): route defense through the
-            // SquadManager via a `Defend` objective instead of the legacy
-            // squad-less SquadDefenseMission. Feature-flagged, default OFF — the
-            // legacy `match escalation { … }` below is untouched when off. The
-            // producer re-asserts every defense scan while the room warrants a
-            // defender; when it stops (room safe / lost) the short TTL lapses and
-            // the manager retires the squad.
-            if system_data.features.military.manager_defense {
-                let room_name = match system_data.room_data.get(need.room_entity) {
-                    Some(rd) => rd.name,
-                    None => continue,
-                };
-                let composition = match escalation {
-                    DefenseEscalation::Quad => SquadComposition::quad_ranged(),
-                    DefenseEscalation::Duo => SquadComposition::duo_attack_heal(),
-                    DefenseEscalation::Solo => SquadComposition::solo_ranged(),
-                };
-                system_data.combat_objective_queue.request(
-                    ObjectiveRequest::new(
-                        ObjectiveKind::Defend { room: room_name },
-                        OBJECTIVE_PRIORITY_HIGH,
-                        ForceRequirement::single(composition),
-                    )
-                    .owner(ObjectiveOwner::Defense)
-                    .ttl(DEFEND_OBJECTIVE_TTL),
-                    game::time(),
-                );
-                continue;
-            }
-
-            let room_data = match system_data.room_data.get_mut(need.room_entity) {
-                Some(rd) => rd,
+            let room_name = match system_data.room_data.get(need.room_entity) {
+                Some(rd) => rd.name,
                 None => continue,
             };
-
-            info!(
-                "[War] Starting {:?} squad defense for room: {} (dps={:.0}, heal={:.0}, count={})",
-                escalation, room_data.name, need.estimated_dps, need.estimated_heal, need.hostile_count
-            );
-
-            let mission_entity = match escalation {
-                DefenseEscalation::Quad => SquadDefenseMission::build_quad(
-                    system_data.updater.create_entity(system_data.entities),
-                    Some(runtime_data.entity),
-                    need.room_entity,
-                    &home_rooms,
-                )
-                .build(),
-                DefenseEscalation::Duo => SquadDefenseMission::build_duo(
-                    system_data.updater.create_entity(system_data.entities),
-                    Some(runtime_data.entity),
-                    need.room_entity,
-                    &home_rooms,
-                )
-                .build(),
-                DefenseEscalation::Solo => SquadDefenseMission::build(
-                    system_data.updater.create_entity(system_data.entities),
-                    Some(runtime_data.entity),
-                    need.room_entity,
-                    &home_rooms,
-                )
-                .build(),
+            let composition = match escalation {
+                DefenseEscalation::Quad => SquadComposition::quad_ranged(),
+                DefenseEscalation::Duo => SquadComposition::duo_attack_heal(),
+                DefenseEscalation::Solo => SquadComposition::solo_ranged(),
             };
-
-            room_data.add_mission(mission_entity);
+            info!(
+                "[War] Defend objective for owned room {} ({:?}, dps={:.0}, heal={:.0}, count={})",
+                room_name, escalation, need.estimated_dps, need.estimated_heal, need.hostile_count
+            );
+            // Owned-room defense is CRITICAL — our base is under attack. Under the
+            // manager's concurrency cap it must out-rank operator defend-flags (HIGH)
+            // and remote-invader cleanup (MEDIUM) so a far owned room is never starved
+            // by a lower-value defense (the equal-HIGH-priority starvation the review
+            // flagged when all three contexts funnel through one capped manager).
+            system_data.combat_objective_queue.request(
+                ObjectiveRequest::new(
+                    ObjectiveKind::Defend { room: room_name },
+                    OBJECTIVE_PRIORITY_CRITICAL,
+                    ForceRequirement::single(composition),
+                )
+                .owner(ObjectiveOwner::Defense)
+                .ttl(DEFEND_OBJECTIVE_TTL),
+                game::time(),
+            );
         }
 
         // ── Nuke defense, safe mode, wall repair (home rooms only) ──────────
@@ -517,42 +481,21 @@ impl WarOperation {
         }
         self.defend_flag_rooms = defend_rooms;
 
+        // Operator `defend`-flag rooms → a `Defend` objective (duo). Re-asserted
+        // each scan while the flag is present; addressed by RoomName so it works
+        // even for a room we have no `RoomData` entity for yet (the squad travels
+        // there). The manager retires it when the flag is removed (TTL lapse).
         for &defend_room in &self.defend_flag_rooms {
-            let room_entity = (system_data.entities, &*system_data.room_data)
-                .join()
-                .find(|(_, rd)| rd.name == defend_room)
-                .map(|(e, _)| e);
-
-            if let Some(room_entity) = room_entity {
-                let room_data = match system_data.room_data.get(room_entity) {
-                    Some(rd) => rd,
-                    None => continue,
-                };
-
-                let has_squad_defense = room_data.get_missions().iter().any(|mission_entity| {
-                    system_data
-                        .mission_data
-                        .get(*mission_entity)
-                        .as_mission_type::<SquadDefenseMission>()
-                        .is_some()
-                });
-
-                if !has_squad_defense {
-                    info!("[War] Creating defend-flag defense mission for room: {}", defend_room);
-                    let room_data = match system_data.room_data.get_mut(room_entity) {
-                        Some(rd) => rd,
-                        None => continue,
-                    };
-                    let mission_entity = SquadDefenseMission::build_duo(
-                        system_data.updater.create_entity(system_data.entities),
-                        Some(runtime_data.entity),
-                        room_entity,
-                        &home_rooms,
-                    )
-                    .build();
-                    room_data.add_mission(mission_entity);
-                }
-            }
+            system_data.combat_objective_queue.request(
+                ObjectiveRequest::new(
+                    ObjectiveKind::Defend { room: defend_room },
+                    OBJECTIVE_PRIORITY_HIGH,
+                    ForceRequirement::single(SquadComposition::duo_attack_heal()),
+                )
+                .owner(ObjectiveOwner::Defense)
+                .ttl(DEFEND_OBJECTIVE_TTL),
+                game::time(),
+            );
         }
 
         // ── Remote room defense (invader creeps in reserved rooms) ────────
@@ -573,14 +516,7 @@ impl WarOperation {
                     return None;
                 }
 
-                // Already has defense?
-                let has_defense = room_data
-                    .get_missions()
-                    .iter()
-                    .any(|me| system_data.mission_data.get(*me).as_mission_type::<SquadDefenseMission>().is_some());
-                if has_defense {
-                    return None;
-                }
+                // No de-dup guard: the `Defend` objective upsert below is idempotent.
 
                 let creeps = room_data.get_creeps()?;
                 // Only count actual Invader NPCs, not Source Keepers.
@@ -616,42 +552,46 @@ impl WarOperation {
             })
             .collect();
 
+        // Invader creeps in a RESERVED remote → a `Defend` objective. NOTE: this
+        // is the path that previously thrashed — a squad-less SquadDefenseMission
+        // on a reserved (not owned) remote self-terminated every tick via the
+        // ADR 0017 ownership-subordinate guard (`!owner().mine()`), so the producer
+        // re-created it endlessly. As an objective there is no mission-internal
+        // ownership self-termination; the producer re-asserts while invaders are
+        // present and the manager retires the squad (TTL lapse) once they're gone.
         for (room_entity, dps, heal, count) in remote_rooms_with_invaders {
-            let room_data = match system_data.room_data.get_mut(room_entity) {
-                Some(rd) => rd,
+            let room_name = match system_data.room_data.get(room_entity) {
+                Some(rd) => rd.name,
                 None => continue,
             };
-
             // Escalate based on invader strength.
             let escalation = if dps > 100.0 || heal > 30.0 || count >= 3 {
                 DefenseEscalation::Duo
             } else {
                 DefenseEscalation::Solo
             };
-
-            info!(
-                "[War] Invaders in remote room {}: {:?} defense (dps={:.0}, heal={:.0}, count={})",
-                room_data.name, escalation, dps, heal, count
-            );
-
-            let mission_entity = match escalation {
-                DefenseEscalation::Duo => SquadDefenseMission::build_duo(
-                    system_data.updater.create_entity(system_data.entities),
-                    Some(runtime_data.entity),
-                    room_entity,
-                    &home_rooms,
-                )
-                .build(),
-                _ => SquadDefenseMission::build(
-                    system_data.updater.create_entity(system_data.entities),
-                    Some(runtime_data.entity),
-                    room_entity,
-                    &home_rooms,
-                )
-                .build(),
+            let composition = match escalation {
+                DefenseEscalation::Duo => SquadComposition::duo_attack_heal(),
+                _ => SquadComposition::solo_ranged(),
             };
-
-            room_data.add_mission(mission_entity);
+            info!(
+                "[War] Defend objective for remote room {} ({:?}, dps={:.0}, heal={:.0}, count={})",
+                room_name, escalation, dps, heal, count
+            );
+            // Remote-invader cleanup is MEDIUM — below owned-room defense (CRITICAL)
+            // and operator defend-flags (HIGH), above SK farming (LOW). So under the
+            // concurrency cap, protecting our base + honoring operator intent comes
+            // first, and a remote skirmish never starves them.
+            system_data.combat_objective_queue.request(
+                ObjectiveRequest::new(
+                    ObjectiveKind::Defend { room: room_name },
+                    OBJECTIVE_PRIORITY_MEDIUM,
+                    ForceRequirement::single(composition),
+                )
+                .owner(ObjectiveOwner::Defense)
+                .ttl(DEFEND_OBJECTIVE_TTL),
+                game::time(),
+            );
         }
     }
 

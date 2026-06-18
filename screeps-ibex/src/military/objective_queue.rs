@@ -344,9 +344,19 @@ impl CombatObjectiveQueue {
     /// nearest to `home`. Skips claimed objectives and any whose room is in
     /// give-up backoff. The manager calls this with a candidate home room.
     pub fn best_unclaimed_near(&self, home: Option<RoomName>, now: u32) -> Option<ObjectiveId> {
+        self.best_unclaimed_near_excluding(home, now, &[])
+    }
+
+    /// As [`Self::best_unclaimed_near`], but also skips any id in `exclude`. The
+    /// manager uses this to pass over objectives it cannot field *this tick*
+    /// (no requested force, or no spawn-home in range) without claiming them —
+    /// so an unfieldable objective neither spins the selection loop nor leaks a
+    /// concurrency slot to a squad that would never spawn.
+    pub fn best_unclaimed_near_excluding(&self, home: Option<RoomName>, now: u32, exclude: &[ObjectiveId]) -> Option<ObjectiveId> {
         self.objectives
             .iter()
             .filter(|o| !self.is_claimed(o.id))
+            .filter(|o| !exclude.contains(&o.id))
             .filter(|o| !self.is_unwinnable_now(o.kind.room(), now))
             .max_by(|a, b| {
                 a.priority
