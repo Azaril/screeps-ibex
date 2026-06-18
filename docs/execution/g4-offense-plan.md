@@ -40,10 +40,20 @@
 
 ## Steps
 
-- [ ] **O1 — Squad anchor mover (M2).** Footprint-aware ("moving-maximum") anchor pathfind in the
-  pathfinding/rover layer + lockstep block advance + hard cohesion gate, consumed by the manager so a
-  squad travels multi-room *as a formation*. Corridor relaxation + loose-centroid for N>4. This is the
-  prerequisite for any siege; **build + sim-validate first** (cohesion metric on a multi-room move).
+- [x] **O1 — Squad anchor mover (M2) wired into the manager.** The mechanism was already built + tested
+  (rover `AnchorPath` footprint-aware cached pathfind via `moving_maximum` + holds-on-blocked; `formation.rs`
+  `advance_squad_virtual_position` cohesion gate + corridor collapse/re-form; the job's `MoveToRoom`
+  formation-travel + `squad_has_anchor`→`execute_formation_movement` branch). The gap was that the
+  `SquadManager` never set up/advanced the squad anchor. **DONE (`a0e4284`):** `compute_squad_orders`
+  advances the squad's footprint anchor toward the target-room centre while the squad is still converging
+  (the job reads `virtual_pos` + issues each member's `move_to` — manager decides the frame, job moves,
+  §5), and DROPS the anchor on arrival so the `Engaged` state kites via `decide_movement` (engaged
+  formation-follow is O2 — keeps G3 kiting intact). No WFV bump (reuses `SquadContext.squad_path`). Host
+  165 + wasm + clippy green; mechanism rover-tested; **deployed to Docker (WFV 11→12 reset clean, no thrash,
+  bot ticking)**. Multi-room cohesion + the trickle-in formation-hold validate on the soak under a real
+  threat. *(Note: the manager's travel anchor uses the live multi-room `ScreepsPathfinder`, so it is
+  Docker-validated, not combat-sim-validated — the sim is single-room; the AnchorPath mechanism is the
+  sim-runnable part and is rover-tested.)*
 - [ ] **O2 — Formation orientation (pure).** Port `threat_direction`/`reassign_slots` into
   `decide_squad` (or a pure `orient_formation`) so the block faces the threat with tanks front. Wire
   through `apply_squad_decision`. Self-play scenario.
