@@ -928,6 +928,28 @@ impl Engaging {
             // Store position on SquadContext for squad-level movement direction.
             squad_ctx.focus_target = focus_data.map(|(pos, _)| pos);
 
+            // 1b. Orient the formation toward the threat: record the bearing from
+            //     the squad's coordinate frame (anchor, or fallback to a member)
+            //     to the focus, then let reassign_slots() push front-worthy members
+            //     (tanks/high-HP) into the threat-facing slots and healers to the
+            //     back. reassign_slots only reshuffles member→slot — it does not
+            //     rotate the geometry — so calling it every Engaged tick is stable.
+            if let Some(focus_pos) = squad_ctx.focus_target {
+                let center = squad_ctx
+                    .squad_path
+                    .as_ref()
+                    .map(|p| p.anchor.virtual_pos)
+                    .or_else(|| squad_ctx.members.iter().filter_map(|m| m.position).next());
+                if let Some(center) = center {
+                    if center.room_name() == focus_pos.room_name() {
+                        if let Some(dir) = center.get_direction_to(focus_pos) {
+                            squad_ctx.threat_direction = Some(dir);
+                            squad_ctx.reassign_slots();
+                        }
+                    }
+                }
+            }
+
             // 2. Check retreat.
             if squad_ctx.should_retreat() {
                 squad_ctx.state = SquadState::Retreating;

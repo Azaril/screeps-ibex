@@ -399,40 +399,84 @@ fn squad_footprint(squad: &SquadContext) -> (u8, u8) {
 /// footprint expansion). Cost-matrix/source/pathfinder are built ad-hoc (they read `game::*`
 /// lazily). Validate behavior on the private server before relying on it live.
 fn advance_virtual_pos(squad: &mut SquadContext, destination: Position) {
-    let footprint = squad_footprint(squad);
-    let path = match squad.squad_path.as_mut() {
-        Some(p) => p,
-        None => return,
-    };
+    // The cohesive footprint we WANT to route as. For a full quad this is the 2×2 box even when
+    // the member layout is temporarily collapsed to a line for a corridor; for everything else it
+    // is just the current layout's footprint. Probing with the tight footprint every tick gives a
+    // stable "does the box fit here?" signal independent of the current member layout, so the
+    // collapse/re-form below cannot oscillate.
+    let layout_footprint = squad_footprint(squad);
+    let is_quad = squad.members.len() >= 4;
+    let tight_footprint = if is_quad { (2, 2) } else { layout_footprint };
 
-    let mut cache = CostMatrixCache::default();
-    let mut cms = CostMatrixSystem::new(&mut cache, Box::new(screeps_rover::screeps_impl::ScreepsCostMatrixDataSource));
-    let opts = CostMatrixOptions::default();
-    let mut pf = screeps_rover::screeps_impl::ScreepsPathfinder;
-    let mut room_cb = |r: RoomName| {
-        let mut matrix = cms.build_local_cost_matrix(r, &opts).ok()?;
-        if let Some(terrain) = game::map::get_room_terrain(r) {
-            for x in 0..ROOM_SIZE {
-                for y in 0..ROOM_SIZE {
-                    if terrain.get(x, y) == Terrain::Wall {
-                        if let Ok(xy) = RoomXY::checked_new(x, y) {
-                            matrix.set(xy, u8::MAX);
+    // Advance the anchor with the tight footprint; thread single-file when the box can't fit.
+    // `tight_blocked` is the corridor signal that drives the member-layout collapse below.
+    let tight_blocked = {
+        let path = match squad.squad_path.as_mut() {
+            Some(p) => p,
+            None => return,
+        };
+
+        let mut cache = CostMatrixCache::default();
+        let mut cms = CostMatrixSystem::new(&mut cache, Box::new(screeps_rover::screeps_impl::ScreepsCostMatrixDataSource));
+        let opts = CostMatrixOptions::default();
+        let mut pf = screeps_rover::screeps_impl::ScreepsPathfinder;
+        let mut room_cb = |r: RoomName| {
+            let mut matrix = cms.build_local_cost_matrix(r, &opts).ok()?;
+            if let Some(terrain) = game::map::get_room_terrain(r) {
+                for x in 0..ROOM_SIZE {
+                    for y in 0..ROOM_SIZE {
+                        if terrain.get(x, y) == Terrain::Wall {
+                            if let Ok(xy) = RoomXY::checked_new(x, y) {
+                                matrix.set(xy, u8::MAX);
+                            }
                         }
                     }
                 }
             }
+            Some(matrix)
+        };
+
+        let outcome = path.anchor.advance(destination, tight_footprint, &mut pf, &mut room_cb);
+        if outcome == AnchorOutcome::Blocked && tight_footprint != (1, 1) {
+            // Corridor relax (P2.M3): the tight box can't fit → thread single-file (width-1).
+            let _ = path.anchor.advance(destination, (1, 1), &mut pf, &mut room_cb);
+            true
+        } else {
+            // A still-`Blocked` width-1 anchor holds (stuck_ticks rises) for the manager to respond to.
+            false
         }
-        Some(matrix)
     };
 
-    let outcome = path.anchor.advance(destination, footprint, &mut pf, &mut room_cb);
-    if outcome == AnchorOutcome::Blocked && footprint != (1, 1) {
-        // Corridor relax (P2.M3): the box can't fit → thread single-file (width-1 footprint). The
-        // anchor threads the corridor; members path toward it. (Switching the member layout to a
-        // line for true single-file is the remaining M3 polish on the live side.)
-        let _ = path.anchor.advance(destination, (1, 1), &mut pf, &mut room_cb);
+    // Member-layout corridor switch (P2.M3): collapse a stuck box to single-file so members thread
+    // the corridor behind the width-1 anchor, then re-form to the tight box the moment it fits
+    // again — the transition back to a cohesive squad as soon as a group path exists.
+    if let Some(new_layout) = corridor_layout_transition(squad.layout.as_ref().map(|l| l.shape), squad.members.len(), tight_blocked) {
+        squad.layout = Some(new_layout);
+        squad.compact_formation_slots();
     }
-    // A still-`Blocked` anchor holds (stuck_ticks rises) for the squad manager to respond to.
+}
+
+/// Decide the member layout for a quad given whether its tight (2×2 box) footprint is currently
+/// blocked. Returns `Some(new_layout)` when the layout should change this tick, or `None` to keep
+/// the current one.
+///
+/// - **Collapse**: a `Box2x2` whose footprint is blocked drops to a single-file `Line` so members
+///   thread the corridor.
+/// - **Re-form**: a `Line` whose box footprint fits again snaps back to `Box2x2` — the corridor →
+///   cohesive transition, taken the instant a group path exists.
+///
+/// Scoped to full quads (≥4 members): every intended `Line` composition is a 2-member duo, so a
+/// 4-member `Line` is always a collapsed quad and re-forming it can never clobber an intended line.
+/// This is pure (no `game::*`) so the transition is unit-testable without the game runtime.
+fn corridor_layout_transition(shape: Option<FormationShape>, member_count: usize, tight_blocked: bool) -> Option<FormationLayout> {
+    if member_count < 4 {
+        return None;
+    }
+    match shape {
+        Some(FormationShape::Box2x2) if tight_blocked => Some(FormationLayout::line(member_count)),
+        Some(FormationShape::Line) if !tight_blocked => Some(FormationLayout::box_2x2()),
+        _ => None,
+    }
 }
 
 const ROOM_SIZE: u8 = 50;
@@ -492,5 +536,41 @@ pub fn issue_virtual_anchor_flee(
 
     for member in squad.members.iter() {
         movement.flee(member.entity, targets.clone()).range(flee_range);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stuck quad box collapses to single-file, then snaps back to a box the moment the corridor
+    /// opens — the loose→tight transition the movement overhaul is meant to make ASAP.
+    #[test]
+    fn quad_collapses_in_a_corridor_and_re_forms_when_clear() {
+        // Box, tight footprint fits → no change.
+        assert!(corridor_layout_transition(Some(FormationShape::Box2x2), 4, false).is_none());
+
+        // Box, tight footprint blocked → collapse to a 4-long single-file line.
+        let collapsed = corridor_layout_transition(Some(FormationShape::Box2x2), 4, true).expect("should collapse");
+        assert_eq!(collapsed.shape, FormationShape::Line);
+        assert_eq!(collapsed.offsets.len(), 4);
+
+        // Line, still blocked → stay collapsed.
+        assert!(corridor_layout_transition(Some(FormationShape::Line), 4, true).is_none());
+
+        // Line, box fits again → re-form to the tight box immediately.
+        let reformed = corridor_layout_transition(Some(FormationShape::Line), 4, false).expect("should re-form");
+        assert_eq!(reformed.shape, FormationShape::Box2x2);
+        assert_eq!(reformed.offsets, QUAD_OFFSETS.to_vec());
+    }
+
+    /// Duos (and any <4-member squad) are never touched: an intended 2-member `Line` must not be
+    /// "re-formed" into a box, and a 2-member squad has no box to collapse.
+    #[test]
+    fn duos_are_left_alone() {
+        assert!(corridor_layout_transition(Some(FormationShape::Line), 2, false).is_none());
+        assert!(corridor_layout_transition(Some(FormationShape::Line), 2, true).is_none());
+        assert!(corridor_layout_transition(Some(FormationShape::Box2x2), 3, true).is_none());
+        assert!(corridor_layout_transition(Some(FormationShape::None), 1, true).is_none());
     }
 }
