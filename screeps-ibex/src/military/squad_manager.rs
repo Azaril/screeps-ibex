@@ -71,6 +71,14 @@ fn spawn_priority_for(objective_priority: f32) -> f32 {
     }
 }
 
+/// Whether an objective's squad fights as an oriented **formation box** (siege: keep the anchor
+/// when engaged, advance to the focus, present armor toward the threat) vs **skirmishes** (kite via
+/// `decide_movement`). Today only `Dismantle` (structure siege) is a formation; defense / farm /
+/// harass kite. (Offense `Secure`'s style is decided when its producer lands — P2.G4-O6.)
+fn is_formation_objective(kind: &ObjectiveKind) -> bool {
+    matches!(kind, ObjectiveKind::Dismantle { .. })
+}
+
 /// Map an objective to the squad's target + the room its members travel to.
 fn objective_target(kind: &ObjectiveKind) -> (SquadTarget, RoomName) {
     match kind {
@@ -227,11 +235,19 @@ impl<'a> System<'a> for SquadManagerSystem {
         // calls `decide_squad`, and writes the result back as orders/state. No tactics
         // math lives here.
         for (squad_entity, obj_id) in &live_managed {
-            let target_room = match data.objective_queue.get(*obj_id) {
-                Some(obj) => objective_target(&obj.kind).1,
+            let (target_room, formation) = match data.objective_queue.get(*obj_id) {
+                Some(obj) => (objective_target(&obj.kind).1, is_formation_objective(&obj.kind)),
                 None => continue,
             };
-            compute_squad_orders(&data.room_data, &data.mapping, &mut data.squad_contexts, &data.creep_owner, *squad_entity, target_room);
+            compute_squad_orders(
+                &data.room_data,
+                &data.mapping,
+                &mut data.squad_contexts,
+                &data.creep_owner,
+                *squad_entity,
+                target_room,
+                formation,
+            );
         }
 
         // ── Phase C: claim new objectives up to the global cap. ──
@@ -399,6 +415,7 @@ fn compute_squad_orders(
     creep_owner: &ReadStorage<CreepOwner>,
     squad_entity: Entity,
     target_room: RoomName,
+    formation: bool,
 ) {
     // Read the roster's cached status (immutable). `pos`/`has_ranged` feed the centroid + the kite
     // plan; `has_ranged` resolves the creep body (the adapter's job — the pure crate stays JS-free).
@@ -478,11 +495,27 @@ fn compute_squad_orders(
         .all(|m| m.pos.map(|p| p.room_name() == target_room).unwrap_or(false));
 
     if let Some(ctx) = squad_contexts.get_mut(squad_entity) {
-        if all_arrived {
+        if !all_arrived {
+            // Traveling (both styles): advance the anchor toward the room centre so the squad
+            // arrives cohesively (O1). The job's `MoveToRoom` follows `virtual_pos`.
+            if let Ok(centre) = RoomCoordinate::new(25) {
+                let dest = Position::new(centre, centre, target_room);
+                crate::military::formation::advance_squad_virtual_position(ctx, dest);
+            }
+        } else if formation {
+            // Arrived + FORMATION (siege, O2): keep the anchor and advance it toward the focus
+            // (close to dismantle/weapon range) while ORIENTING the block toward the threat —
+            // `reassign_slots` puts tanks/high-HP in the threat-facing slots, healers at the back
+            // (`decide_squad.orientation` → `threat_direction`). The job's `squad_has_anchor`
+            // branch then formation-follows. (Pure decision in the crate; manager applies; job moves.)
+            if let Some(focus) = decision.focus {
+                crate::military::formation::advance_squad_virtual_position(ctx, focus.pos);
+            }
+            ctx.threat_direction = decision.orientation;
+            ctx.reassign_slots();
+        } else {
+            // Arrived + SKIRMISH: drop the anchor so `Engaged` kites via `decide_movement` (O1).
             ctx.squad_path = None;
-        } else if let Ok(centre) = RoomCoordinate::new(25) {
-            let dest = Position::new(centre, centre, target_room);
-            crate::military::formation::advance_squad_virtual_position(ctx, dest);
         }
         apply_squad_decision(ctx, &decision, creep_owner);
     }

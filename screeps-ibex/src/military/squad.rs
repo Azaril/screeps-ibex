@@ -798,13 +798,10 @@ impl SquadContext {
         };
 
         self.layout = Some(new_layout);
-
-        if let Some(dir) = self.threat_direction {
-            if let Some(layout) = self.layout.as_mut() {
-                layout.orient_toward(dir);
-            }
-        }
-
+        // Orientation is NOT baked into the layout offsets (that double-rotates if re-applied);
+        // it lives in slot assignment instead — `reassign_slots`/`slots_front_to_back` pick the
+        // threat-facing slots from `threat_direction` (P2.G4-O2). The layout stays in base
+        // orientation so the footprint + travel path are stable.
         self.compact_formation_slots();
     }
 
@@ -815,29 +812,24 @@ impl SquadContext {
         }
     }
 
-    /// Reassign formation slots based on tactical conditions.
-    /// Called by the mission each tick during Engaged/Retreating states.
+    /// Reassign formation slots so the most front-worthy members (high HP, tank/melee roles) take
+    /// the slots facing the threat and healers fall to the back — re-evaluated each engaged tick.
+    /// "Front" is **direction-aware** ([`Self::slots_front_to_back`] projects each slot offset onto
+    /// `threat_direction`), so the block presents its armor toward the threat (P2.G4-O2) rather than
+    /// always toward the layout's base edge.
     pub fn reassign_slots(&mut self) {
-        let living: Vec<usize> = (0..self.members.len()).collect();
-
-        if living.len() <= 1 {
+        if self.members.len() <= 1 {
+            return;
+        }
+        let ordered = self.slots_front_to_back();
+        if ordered.is_empty() {
             return;
         }
 
-        // Determine which slots face the threat.
-        let threat_slots = self.threat_facing_slots();
-        let safe_slots = self.safe_slots();
-
-        if threat_slots.is_empty() || safe_slots.is_empty() {
-            return;
-        }
-
-        // Score each living member for "should be in front" (facing threat):
-        // Higher HP fraction = more front-worthy, Tank role = more front-worthy,
-        // Healer role = less front-worthy.
-        let mut scored: Vec<(usize, f32)> = living
-            .iter()
-            .map(|&idx| {
+        // Score each member's front-worthiness: HP fraction (0.6) + a role lean (0.4; tank/melee
+        // front, healer back). Highest score → front-most slot.
+        let mut scored: Vec<(usize, f32)> = (0..self.members.len())
+            .map(|idx| {
                 let m = &self.members[idx];
                 let hp_score = if m.max_hits > 0 {
                     m.current_hits as f32 / m.max_hits as f32
@@ -855,66 +847,49 @@ impl SquadContext {
                 (idx, hp_score * 0.6 + role_score * 0.4)
             })
             .collect();
-
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Assign highest-scored members to threat-facing slots.
-        let all_slots: Vec<usize> = threat_slots.iter().chain(safe_slots.iter()).copied().collect();
-
         for (i, &(member_idx, _)) in scored.iter().enumerate() {
-            if let Some(&slot) = all_slots.get(i) {
+            if let Some(&slot) = ordered.get(i) {
                 self.members[member_idx].formation_slot = slot;
             }
         }
     }
 
-    /// Get formation slot indices that face the threat direction.
-    fn threat_facing_slots(&self) -> Vec<usize> {
+    /// All formation slot indices ordered FRONT → BACK relative to `threat_direction` (front =
+    /// toward the threat). Projects each slot's `(dx, dy)` offset onto the threat-direction unit
+    /// vector; higher projection = more forward. With no threat direction it falls back to the base
+    /// "front = low Y" edge. Pure (no game state) — the O2 orientation primitive.
+    fn slots_front_to_back(&self) -> Vec<usize> {
         let layout = match &self.layout {
             Some(l) => l,
             None => return Vec::new(),
         };
-
-        let _direction = match self.threat_direction {
-            Some(d) => d,
-            None => return (0..layout.slot_count()).collect(),
-        };
-
-        // For a box formation, the "front" slots depend on threat direction.
-        // Simplified: slots with the smallest Y offset face "forward" (threat).
-        if layout.offsets.len() <= 1 {
-            return vec![0];
-        }
-
-        let min_y = layout.offsets.iter().map(|(_, y)| *y).min().unwrap_or(0);
-        layout
+        let (dx, dy) = self.threat_direction.map(direction_delta).unwrap_or((0, -1));
+        let mut indexed: Vec<(usize, i32)> = layout
             .offsets
             .iter()
             .enumerate()
-            .filter(|(_, (_, y))| *y == min_y)
-            .map(|(i, _)| i)
-            .collect()
+            .map(|(i, (ox, oy))| (i, ox * dx + oy * dy))
+            .collect();
+        // Descending projection: most-toward-the-threat first.
+        indexed.sort_by_key(|&(_, proj)| std::cmp::Reverse(proj));
+        indexed.into_iter().map(|(i, _)| i).collect()
     }
+}
 
-    /// Get formation slot indices that are "safe" (away from threat).
-    fn safe_slots(&self) -> Vec<usize> {
-        let layout = match &self.layout {
-            Some(l) => l,
-            None => return Vec::new(),
-        };
-
-        if layout.offsets.len() <= 1 {
-            return Vec::new();
-        }
-
-        let max_y = layout.offsets.iter().map(|(_, y)| *y).max().unwrap_or(0);
-        layout
-            .offsets
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, y))| *y == max_y)
-            .map(|(i, _)| i)
-            .collect()
+/// Unit step `(dx, dy)` for a `Direction` in screeps room coordinates (+y is south/down). Used to
+/// project formation-slot offsets onto the threat direction ([`SquadContext::slots_front_to_back`]).
+fn direction_delta(dir: Direction) -> (i32, i32) {
+    match dir {
+        Direction::Top => (0, -1),
+        Direction::TopRight => (1, -1),
+        Direction::Right => (1, 0),
+        Direction::BottomRight => (1, 1),
+        Direction::Bottom => (0, 1),
+        Direction::BottomLeft => (-1, 1),
+        Direction::Left => (-1, 0),
+        Direction::TopLeft => (-1, -1),
     }
 }
 
@@ -1014,5 +989,35 @@ impl<'a> System<'a> for RunSquadUpdateSystem {
                 squad_ctx.update_formation_for_living_count();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::military::composition::SquadComposition;
+
+    /// O2: the formation faces the threat — `slots_front_to_back` puts the slots toward the threat
+    /// direction first, so `reassign_slots` lands tanks/high-HP at the front. (Pure: layout offsets
+    /// projected onto the threat direction; no entities/game state.)
+    #[test]
+    fn slots_front_to_back_orients_toward_the_threat() {
+        // quad_ranged → a 2×2 box: slot offsets [(0,0),(1,0),(0,1),(1,1)].
+        let mut ctx = SquadContext::from_composition(&SquadComposition::quad_ranged());
+
+        // Threat to the east (+x): the max-x slots {1,3} lead.
+        ctx.threat_direction = Some(Direction::Right);
+        let front: std::collections::HashSet<usize> = ctx.slots_front_to_back()[..2].iter().copied().collect();
+        assert_eq!(front, [1, 3].into_iter().collect(), "east threat → +x edge leads");
+
+        // Threat to the south (+y): the max-y slots {2,3} lead.
+        ctx.threat_direction = Some(Direction::Bottom);
+        let front: std::collections::HashSet<usize> = ctx.slots_front_to_back()[..2].iter().copied().collect();
+        assert_eq!(front, [2, 3].into_iter().collect(), "south threat → +y edge leads");
+
+        // No threat direction → the base front (low-Y edge {0,1}).
+        ctx.threat_direction = None;
+        let front: std::collections::HashSet<usize> = ctx.slots_front_to_back()[..2].iter().copied().collect();
+        assert_eq!(front, [0, 1].into_iter().collect(), "default front = low-Y edge");
     }
 }

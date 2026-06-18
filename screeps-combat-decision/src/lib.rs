@@ -36,7 +36,7 @@ pub mod cohesion;
 pub mod kite;
 
 use screeps::local::LocalCostMatrix;
-use screeps::{Part, Position, RawObjectId, RoomName, StructureType};
+use screeps::{Direction, Part, Position, RawObjectId, RoomName, StructureType};
 
 /// One working/destroyed body part as the decision sees it (front-to-back order, mirroring
 /// `creep.body()` / the engine's per-part 100-hit pools). `hits == 0` ⇒ the part is destroyed and
@@ -607,6 +607,11 @@ pub struct SquadDecision {
     /// Per-tick heal assignments over member indices (the greedy healer→target matching, P2.G3-tail
     /// Step 7 — ported pure from `SquadContext::compute_heal_assignments`).
     pub heal_assignments: Vec<HealAssignment>,
+    /// The direction the formation should FACE this tick — centroid → focus (P2.G4-O2). `Some` only
+    /// when Engaged with a focus. A box-fighting squad orients toward it (tanks/high-HP front, healers
+    /// back, present fresh armor); a kiting (skirmish) squad ignores it. Pure tactic — the live
+    /// `SquadManager` / sim applies it (`orient_toward` + `reassign_slots`); the job executes movement.
+    pub orientation: Option<Direction>,
 }
 
 /// Mean HP fraction over members that have spawned (`hits_max > 0`).
@@ -694,6 +699,14 @@ pub fn decide_squad(view: &SquadView) -> SquadDecision {
 
     let heal_assignments = assign_heals(view.members);
 
+    // Formation facing (O2): when engaged with a focus, the block faces the threat — the centroid →
+    // focus direction. A box-fighting squad orients to it; a kiting squad ignores it. Pure: the
+    // adapter applies it (`orient_toward` + `reassign_slots`).
+    let orientation = match (state, focus, center) {
+        (SquadOrderState::Engaged, Some(f), Some(c)) => c.get_direction_to(f.pos),
+        _ => None,
+    };
+
     SquadDecision {
         state,
         focus,
@@ -701,6 +714,7 @@ pub fn decide_squad(view: &SquadView) -> SquadDecision {
         center,
         cohesion_radius: SQUAD_COHESION_RADIUS,
         heal_assignments,
+        orientation,
     }
 }
 
@@ -1276,6 +1290,26 @@ mod tests {
             other => panic!("expected Advance, got {other:?}"),
         }
         assert!(d.center.is_some(), "centroid from member positions");
+    }
+
+    #[test]
+    fn squad_orients_the_formation_toward_the_focus_when_engaged() {
+        // Squad centroid (25,25); a hostile to the east at (30,25) → the block faces Right (O2).
+        let members = vec![ranged_member_at(700, 700, 25, 25)];
+        let hostiles = vec![creep(9, 30, 25, 600, &[(Part::RangedAttack, 6)])];
+        let d = decide_squad(&squad_view(&members, &hostiles, SquadOrderState::Engaged));
+        assert_eq!(d.state, SquadOrderState::Engaged);
+        assert_eq!(d.orientation, Some(Direction::Right), "faces the threat to the east");
+
+        // A threat to the north (smaller y) → faces Top.
+        let north = vec![creep(9, 25, 20, 600, &[(Part::RangedAttack, 6)])];
+        let dn = decide_squad(&squad_view(&members, &north, SquadOrderState::Engaged));
+        assert_eq!(dn.orientation, Some(Direction::Top), "faces the threat to the north");
+
+        // No focus (no hostiles) → Moving, no orientation to apply.
+        let d2 = decide_squad(&squad_view(&members, &[], SquadOrderState::Moving));
+        assert_eq!(d2.state, SquadOrderState::Moving);
+        assert_eq!(d2.orientation, None);
     }
 
     #[test]
