@@ -12,7 +12,7 @@
 
 use screeps::local::{LocalCostMatrix, RoomXY};
 use screeps::{Position, RoomName};
-use screeps_rover::PathfindingProvider;
+use screeps_rover::LocalPathfinder;
 
 /// Op budget for the per-squad kite search — a local ~window flood, not a full-room path. Bounded
 /// so it costs ~one cheap search per squad per kiting tick (and degrades gracefully on exhaustion).
@@ -166,14 +166,18 @@ fn walkable_neighbors(cm: &LocalCostMatrix, tile: Position) -> u8 {
     n
 }
 
-/// Plan ONE kite/flee goal for the whole squad: a single bounded `search_scored` from the centroid,
-/// pricing each reached tile with [`score_tile`] (safety + cohesion + value + openness). `None` ⇒
-/// holding the centroid is already optimal (members hold/shoot). This is the squad's ONE bounded
-/// search per kiting tick (members reuse the goal via their own move request) — combat supplies the
-/// pricing, rover owns the search (the no-one-off-pathfinding rule).
+/// Plan ONE kite/flee goal for the whole squad: a single bounded `LocalPathfinder::search_scored`
+/// from the centroid, pricing each reached tile with [`score_tile`] (safety + cohesion + value +
+/// openness). `None` ⇒ holding the centroid is already optimal (members hold/shoot). This is the
+/// squad's ONE bounded search per kiting tick (members reuse the goal via their own move request) —
+/// combat supplies the pricing, rover owns the search (the no-one-off-pathfinding rule).
+///
+/// `room_callback` supplies the room's movement cost matrix (terrain walls baked in): the **same**
+/// `LocalPathfinder` runs live and in the sim — only the matrix source differs (the live
+/// `CostMatrixSystem` vs the sim's synthetic). Kiting is single-room by nature (cross-room travel is
+/// the separate `MoveToRoom` phase), so the headless local search is the right tool for both.
 pub fn plan_kite_anchor(
     view: &SquadKiteView,
-    pf: &mut dyn PathfindingProvider,
     room_callback: &mut dyn FnMut(RoomName) -> Option<LocalCostMatrix>,
     max_ops: u32,
 ) -> Option<KitePlan> {
@@ -182,7 +186,7 @@ pub fn plan_kite_anchor(
     let cost = |tile: Position| -> i64 { score_tile(view, tile, walkable_neighbors(&matrix, tile)) };
     // Feed the search the already-fetched matrix (so the openness lookup + the search agree).
     let mut cb = |_r: RoomName| Some(matrix.clone());
-    let result = pf.search_scored(view.centroid, &mut cb, max_ops, 1, 5, &cost);
+    let result = LocalPathfinder.search_scored(view.centroid, &mut cb, max_ops, 1, &cost);
     result.path.last().copied().map(|goal| KitePlan { goal })
 }
 
@@ -272,23 +276,21 @@ mod tests {
     // ── plan_kite_anchor (one bounded search per squad) ─────────────────
     #[test]
     fn plan_kite_anchor_flees_to_a_safe_tile_near_the_centroid() {
-        let mut pf = screeps_rover::LocalPathfinder;
         let mut cb = |_r| Some(LocalCostMatrix::new());
         let centroid = pos(25, 25);
         // A melee threat adjacent to the centroid → holding is unsafe; kite out of reach.
         let threats = [melee(24, 25, 3)];
         let v = view(centroid, &threats, &[], None);
-        let plan = plan_kite_anchor(&v, &mut pf, &mut cb, MAX_KITE_OPS).expect("a safer tile than the centroid exists");
+        let plan = plan_kite_anchor(&v, &mut cb, MAX_KITE_OPS).expect("a safer tile than the centroid exists");
         assert!(plan.goal.get_range_to(pos(24, 25)) > 3, "escapes the melee reach: {:?}", plan.goal);
         assert!(plan.goal.get_range_to(centroid) <= 6, "stays near the squad (cohesion in the score): {:?}", plan.goal);
     }
 
     #[test]
     fn plan_kite_anchor_holds_when_already_safe() {
-        let mut pf = screeps_rover::LocalPathfinder;
         let mut cb = |_r| Some(LocalCostMatrix::new());
         // No threats/towers/focus → the centroid (cohesion 0) is the global min → hold (no goal).
         let v = view(pos(25, 25), &[], &[], None);
-        assert!(plan_kite_anchor(&v, &mut pf, &mut cb, MAX_KITE_OPS).is_none(), "nothing to flee → hold");
+        assert!(plan_kite_anchor(&v, &mut cb, MAX_KITE_OPS).is_none(), "nothing to flee → hold");
     }
 }
