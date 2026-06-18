@@ -76,10 +76,28 @@
   to the structure-siege phase (a structure focus ⇒ no hostile creeps left). Separation upheld (search in
   the pathfinding system, pricing/decision pure, manager applies, job moves). No WFV bump. +1 unit test.
   Inert live until O6; sim-/unit-validated now (rover 27, decision 41, bot 158 [8 gridsearch moved to rover]).
-- [ ] **O4 — Wave retry / unwinnable in the manager.** Generalize `handle_wave_wipe` into the manager:
-  on a wiped squad with the objective still wanted, retire-and-rebuild; after K failures call
-  `objective_queue.mark_unwinnable(room)` (backoff already exists). Delete the combat `request_renew`
-  sites (pre-spawn replacement, ADR 0011 D4/D8).
+- [ ] **O4 — Wave retry / unwinnable in the manager.** Generalize `AttackMission::handle_wave_wipe`
+  into the `SquadManager` Phase A (reconcile). **Design:**
+  - **Wipe detection (pure):** a managed squad is *wiped* when it had members but all are now dead —
+    `total_members_added > 0 && members.is_empty()`. (Gradual losses are refilled by Phase B's
+    unfilled-slot spawns and never hit all-empty; only an overwhelmed squad does.) Extract a tiny pure
+    `squad_is_wiped(total_added, member_count)` so it's host-testable without an ECS `World`.
+  - **On wipe:** retire the (empty) squad entity + `objective_queue.release_entity`. For a **non-`Defend`**
+    objective also `objective_queue.mark_unwinnable(room, now)` — the queue's existing exponential
+    backoff (`UNWINNABLE_BACKOFF_BASE`, doubling per call, capped) then makes `best_unclaimed_near` skip
+    that room until `retry_after`, so the manager stops feeding squads into an unwinnable siege and the
+    producer's re-assert is ignored meanwhile. The **retry** is automatic: when the backoff lapses and
+    the producer still wants it, a fresh squad is fielded.
+  - **`Defend` stays persistent** — never `mark_unwinnable` an owned-room defense (we don't abandon our
+    own room; a wiped defense squad is simply re-staffed by Phase B). This is the one kind exempt.
+  - **No `clear_unwinnable` wiring yet** (the backoff self-expires); revisit if a winnable-again signal
+    is needed (e.g. the threat weakens) — out of O4 scope.
+  - Delete the combat `request_renew` sites (pre-spawn replacement, ADR 0011 D4/D8) — *audit:* the
+    legacy renew lives in `AttackMission`/`squad_defense` (already removed); the manager already does
+    replacement via Phase B unfilled-slot spawns, so confirm no live combat `request_renew` remains.
+  - **Validation:** host-test `squad_is_wiped` + the queue backoff is already tested; the manager
+    wiring builds + ticks clean. Improves **live** robustness now (a wiped SK-farm duo / future offense
+    backs off instead of feeding); inert for defense by design.
 - [ ] **O5 — Power-bank as `Farm{PowerBank}`.** Producer upserts `Farm{PowerBank}` (the `power_bank_duo`
   composition exists); the coordinator owns the timed `power_bank_haulers` deploy (mirrors the SK
   coordinator owning mining children, P2.K). Replaces `AttackReason::PowerBank`.
