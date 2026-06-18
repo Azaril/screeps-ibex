@@ -366,6 +366,12 @@ pub struct SquadContext {
     /// Used to detect "this squad ever had members" even after dead
     /// members are removed from the `members` vec.
     pub total_members_added: u32,
+    /// The combat objective this squad was fielded for, if it is owned by the
+    /// `SquadManager` (P2.G2). `None` for legacy mission-owned squads
+    /// (`AttackMission`/`SquadDefenseMission`), which the manager ignores — so
+    /// the two ownership models coexist during the migration. Serialized, so the
+    /// manager re-binds the ephemeral objective claim after a VM reset.
+    pub objective_id: Option<crate::military::objective_queue::ObjectiveId>,
 }
 
 impl SquadContext {
@@ -390,6 +396,7 @@ impl SquadContext {
             retreat_threshold: composition.retreat_threshold,
             heal_priority: None.into(),
             total_members_added: 0,
+            objective_id: None,
         }
     }
 

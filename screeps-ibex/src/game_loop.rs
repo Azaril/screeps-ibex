@@ -9,6 +9,7 @@ use crate::military::boostqueue::*;
 use crate::military::economy::*;
 use crate::military::objective_queue::*;
 use crate::military::squad::*;
+use crate::military::squad_manager::*;
 use crate::military::threatmap::*;
 use crate::missions::data::*;
 use crate::missions::missionsystem::*;
@@ -95,6 +96,9 @@ macro_rules! for_each_system {
         // === Main-pass: Execution ===
         $op!(RunOperationSystem, "run_operations", StageClass::Always);
         $op!(RunMissionSystem, "run_missions", StageClass::Always);
+        // Squad lifecycle owner (P2.G2): runs after producers (operations/missions)
+        // push objectives this tick and before the spawn queue consumes its demand.
+        $op!(SquadManagerSystem, "squad_manager", StageClass::Always);
         $op!(RunSquadUpdateSystem, "run_squad_update", StageClass::Always);
         $op!(RunJobSystem, "run_jobs", StageClass::Always);
         // === Entity cleanup: process all pending deletions ===
@@ -576,10 +580,13 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// CombatObjectiveData (objectives + UnwinnableTarget backoff + the minted-id counter)
 /// joins the component stream — bincode is positional, so adding a component to the
 /// (de)serialize tuple shifts every subsequent component and requires this bump.
+/// 10 = the SquadManager (P2.G2, ADR 0008 §3): SquadContext gains an objective_id
+/// field (the manager↔objective binding that survives a reset), reshaping the
+/// serialized SquadContext.
 /// NOTE: bincode is positional and never signals early end-of-sequence, so a
 /// trailing #[serde(default)] field does NOT make old payloads decode safely --
 /// the version fingerprint is the only real gate, hence this bump.
-const WORLD_FORMAT_VERSION: u32 = 9;
+const WORLD_FORMAT_VERSION: u32 = 10;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode

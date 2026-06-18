@@ -6,6 +6,7 @@ pub mod economy;
 pub mod formation;
 pub mod objective_queue;
 pub mod squad;
+pub mod squad_manager;
 pub mod threatmap;
 
 /// Screeps NPC owner usernames. Use these constants instead of hardcoding
