@@ -54,9 +54,18 @@
   threat. *(Note: the manager's travel anchor uses the live multi-room `ScreepsPathfinder`, so it is
   Docker-validated, not combat-sim-validated — the sim is single-room; the AnchorPath mechanism is the
   sim-runnable part and is rover-tested.)*
-- [ ] **O2 — Formation orientation (pure).** Port `threat_direction`/`reassign_slots` into
-  `decide_squad` (or a pure `orient_formation`) so the block faces the threat with tanks front. Wire
-  through `apply_squad_decision`. Self-play scenario.
+- [x] **O2 — Formation orientation.** DONE (`0c79fa7`). Pure: `decide_squad` outputs
+  `orientation: Option<Direction>` (centroid → focus, Engaged-only). Application: `slots_front_to_back`
+  projects each slot offset onto `threat_direction` (front = toward the threat) and `reassign_slots`
+  lands tanks/high-HP in the leading slots — replacing the min-Y placeholder + dropping the per-death
+  `orient_toward` (orientation lives in slot assignment, no double-rotation; layout stays base so
+  footprint/travel are stable). Manager derives combat style from the objective kind
+  (`is_formation_objective`: Dismantle → Formation/siege keeps the anchor + advances to the focus +
+  orients; everything else → Skirmish/kite, O1). Separation upheld (pure decide → manager applies →
+  job moves). **No WFV bump** (combat style derived per-tick, not serialized; reuses
+  `threat_direction`). Inert live until O6 (no Dismantle objectives yet — all current squads Skirmish);
+  unit-tested (decision 40, bot 166); full formation-orient behavior validates in the sim + soak when
+  O6 fields siege squads.
 - [ ] **O3 — Layered dismantle targeting (pure).** A pure `select_dismantle_target` (rampart/wall on
   the path to the ranked structure → core/spawn/tower) added to `decide_squad`. Self-play vs a ramparted
   target. Reuse the rover cost-matrix to know "what blocks the path".
