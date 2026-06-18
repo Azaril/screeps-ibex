@@ -465,7 +465,25 @@ fn compute_squad_orders(
 
     let decision = decide_squad_with_pathing(&view, &mut room_cb, MAX_KITE_OPS);
 
+    // Travel cohesion (P2.G4-O1): while the squad is still converging on the target room, the manager
+    // advances the squad's footprint anchor toward the room centre — the rover `AnchorPath` via
+    // `advance_squad_virtual_position` (cached, footprint-aware, holds-on-blocked). The job's
+    // `MoveToRoom` reads `virtual_pos` and issues each member's `move_to` (§5 separation: the manager
+    // decides the squad frame, the job owns movement issuance). Once every member has ARRIVED we drop
+    // the anchor so the `Engaged` state kites via the pure `decide_movement` rather than
+    // formation-follow — keeping G3 kiting intact; engaged formation/orientation is the separate O2.
+    // This stops a squad from trickling into a contested room one creep at a time.
+    let all_arrived = member_views
+        .iter()
+        .all(|m| m.pos.map(|p| p.room_name() == target_room).unwrap_or(false));
+
     if let Some(ctx) = squad_contexts.get_mut(squad_entity) {
+        if all_arrived {
+            ctx.squad_path = None;
+        } else if let Ok(centre) = RoomCoordinate::new(25) {
+            let dest = Position::new(centre, centre, target_room);
+            crate::military::formation::advance_squad_virtual_position(ctx, dest);
+        }
         apply_squad_decision(ctx, &decision, creep_owner);
     }
 }
@@ -515,8 +533,20 @@ fn apply_squad_decision(ctx: &mut SquadContext, decision: &SquadDecision, creep_
                 }
             }
         }
-        // Forming / Moving: no combat orders — the job self-drives to the room.
-        _ => {}
+        // Forming / Moving (traveling, no engagement yet). When the manager has set a travel
+        // anchor (O1), emit a bare `Formation` directive so the job's `MoveToRoom` follows the
+        // anchor (cohesive travel) instead of self-driving per-creep. Without an anchor (no layout
+        // / no path) this is a no-op and the job falls back to plain room navigation.
+        _ => {
+            if ctx.squad_path.is_some() {
+                for member in ctx.members.iter_mut() {
+                    member.tick_orders = Some(TickOrders {
+                        movement: TickMovement::Formation,
+                        ..Default::default()
+                    });
+                }
+            }
+        }
     }
 }
 
