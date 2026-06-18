@@ -7,4 +7,5 @@ pub mod miningoutpost;
 pub mod operationsystem;
 pub mod salvage;
 pub mod scout;
+pub mod sourcekeeper;
 pub mod war;
