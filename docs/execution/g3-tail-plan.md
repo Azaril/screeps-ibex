@@ -88,3 +88,35 @@ the focus incl. RMA stacking, heal coverage, optimal weapon range) and **minimiz
 the desired goal/focus target. Same `plan_*_anchor` shape, a different `score_tile`-style pricing
 (e.g. `plan_engage_anchor`). Tracked as a **T-POS experiment** in [ADR 0008a](../design/0008a-combat-tactics.md);
 sequenced strictly after the flee/kiting positioning is complete + validated.
+
+## Known limitations & future evaluations (operator 2026-06-18)
+
+### L1 — single-room flee/kite (the local search never leaves the room) ⚠
+`LocalPathfinder::search_scored` (and therefore `plan_kite_anchor`, `decide_movement`'s goal, and the
+retreat centroid) search a **single room**. The kite/flee goal is always *within the current room* — a
+squad **cannot flee across a room boundary**. This is correct for the normal case (a squad fights in one
+room; cross-room travel is the separate `MoveToRoom`/objective phase that uses the multi-room server
+pathfinder). But it is a real edge: a squad **cornered at a room edge**, with the threat between it and
+the room interior, can't escape into the (safer) adjacent room — it picks the best in-room tile and may
+stay in danger / get pinned. **Document + watch on the Docker soak.** Fixes if it bites: (a) a **hybrid**
+— when the local scored search can't find a safe in-room tile (cornered), fall back to the server
+`PathFinder`'s **multi-room flee** (`search_many(flee)` is multi-room) for the "just get out" case
+(live-only; the sim stays single-room, so this path wouldn't be self-play-validated); or (b) extend the
+scored search to multi-room (heavier — multi-room cost matrices + an exit-aware score). Prefer (a) as a
+narrow cornered-escape fallback; keep the single-room scored search as the primary (cohesive) kite.
+
+### L2 — evaluate a trait-based combat view (avoid the per-tick DTO copy on the live path)
+Today the live adapter **eagerly copies** every `Creep`/`StructureObject` into JS-free DTOs
+(`CombatCreepDto`/`CombatStructureDto` via `creep_to_dto`/`structure_to_dto`) **each combat tick**, and
+builds `Vec<DTO>` per creep decision. The **pathfinding system instead abstracts the data source with
+traits** (`CreepHandle`, `CostMatrixDataSource`, `PathfindingProvider`): the live impl reads `game::*`
+**lazily** through the trait, the sim impl reads its own world — **no eager copy**. **Evaluate applying
+the same pattern to the combat seam:** make the creep/structure view a **trait** (e.g. `CombatCreep`,
+live `impl` over `screeps::Creep`, sim `impl` over `SimCreep`) and make the decisions generic over it,
+so the live path reads `game::*` lazily with no per-tick DTO allocation. **Trade-offs:** *pro* — drops
+the per-tick copy/alloc (CPU + GC on the hot live combat path); *con* — the decisions become generic over
+a trait (lifetimes, heavier signatures), and the current **value-over-DTO** design is what keeps the
+`IntentRecorder` digest + the kernel/sim tests simple (DTOs are trivially constructed in tests, and the
+sim builds them once from `CombatWorld`). **Measure first** — the DTO build reads *cached* `RoomData`
+(cheap-ish), so the copy may not be worth the trait complexity; gate the change on a measured live CPU
+win. Mirrors the rover trait pattern (the precedent this would extend).
