@@ -1,0 +1,221 @@
+//! Pure per-tile pricing for squad kite/flee positioning (P2.G3-tail, ADR 0008 §4.1 / §5).
+//!
+//! This is the **combat pricing** the pathfinding system consumes — NOT a search. The search is
+//! `screeps-rover`'s pure `LocalPathfinder` (`search_scored`); the squad runs **one** bounded
+//! search pricing each reached tile with [`score_tile`], so "stay cohesive" and "find a safe,
+//! higher-expected-value position" are **one** scoring function (the cohesion term lives in the
+//! score, not a separate per-creep clamp — the operator's "don't be disorganized with squads").
+//!
+//! `score_tile` returns a **cost (lower = better)** so it drops straight into the min-scored search
+//! with no sign juggling. Pure over `screeps::Position` — no `game::*`, no serialization. The weights
+//! are tunable params (the ADR 0008a EXP-* loop tunes them on the sim).
+
+use screeps::Position;
+
+/// How a hostile threatens a tile — drives the safety "danger reach".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThreatKind {
+    /// Melee-only (must be kept beyond range 1; we keep beyond `reach` to be safe).
+    MeleeOnly,
+    /// Has ranged attack (dangerous out to ~range 3).
+    Ranged,
+}
+
+/// A hostile as the kite scorer sees it.
+#[derive(Clone, Copy, Debug)]
+pub struct KiteThreat {
+    pub pos: Position,
+    pub kind: ThreatKind,
+    /// Danger reach (tiles): stand beyond this. Melee kiters keep ~3 from a melee-only chaser;
+    /// ranged threats reach ~3.
+    pub reach: u32,
+}
+
+/// A hostile tower (its damage falls off with range — see [`tower_dps_at_range`]).
+#[derive(Clone, Copy, Debug)]
+pub struct KiteTower {
+    pub pos: Position,
+}
+
+/// Tunable weights for [`score_tile`]. Default ordering: **SAFETY ≫ COHESION > VALUE > openness**
+/// (the operator priority — don't die, then stay with the squad, then keep the focus shootable).
+#[derive(Clone, Copy, Debug)]
+pub struct KiteScoreParams {
+    pub w_safety: f32,
+    pub w_cohesion: f32,
+    pub w_value: f32,
+    pub w_openness: f32,
+    /// Cohesion radius K: beyond this distance from the centroid the penalty steepens (×3/tile).
+    pub max_cohesion_radius: u32,
+}
+
+impl Default for KiteScoreParams {
+    fn default() -> Self {
+        Self {
+            w_safety: 1000.0,
+            w_cohesion: 10.0,
+            w_value: 3.0,
+            w_openness: 1.0,
+            max_cohesion_radius: 2,
+        }
+    }
+}
+
+/// The squad's kite-scoring context — its centroid (cohesion anchor), the threats/towers to avoid,
+/// and the shared focus the value term keeps shootable.
+pub struct SquadKiteView<'a> {
+    pub centroid: Position,
+    pub threats: &'a [KiteThreat],
+    pub towers: &'a [KiteTower],
+    /// Shared focus position; the value term keeps it within shooting range 3.
+    pub focus: Option<Position>,
+    pub params: KiteScoreParams,
+}
+
+/// Engine tower-damage curve at a Chebyshev `range`: 600 at ≤5, linear down to 150 at ≥20 (mirrors
+/// `TOWER_*` falloff). Used to drift the squad out of tower-optimal range.
+pub fn tower_dps_at_range(range: u32) -> u32 {
+    if range <= 5 {
+        600
+    } else if range >= 20 {
+        150
+    } else {
+        // Linear 600 → 150 over range 5 → 20.
+        let t = (range - 5) as f32 / 15.0;
+        (600.0 - t * 450.0).round() as u32
+    }
+}
+
+/// Cost of the squad standing its block on `tile` — **LOWER is better** (composes directly with
+/// rover's min-scored search). Sums four weighted penalties:
+/// - **SAFETY:** inside a threat's `reach` (worse the deeper) + tower DPS at this range;
+/// - **COHESION:** Chebyshev distance from the centroid, steepening ×3/tile past `max_cohesion_radius`;
+/// - **VALUE:** the focus being beyond shooting range 3;
+/// - **OPENNESS:** fewer walkable neighbours (0–8, supplied from the cost matrix) → nearer a dead-end.
+pub fn score_tile(view: &SquadKiteView, tile: Position, walkable_neighbors: u8) -> i64 {
+    let p = &view.params;
+
+    // SAFETY — being within a threat's danger reach (deeper = worse), plus tower DPS here.
+    let mut safety = 0.0f32;
+    for t in view.threats {
+        let r = tile.get_range_to(t.pos);
+        if r <= t.reach {
+            safety += (t.reach + 1 - r) as f32;
+        }
+    }
+    for tw in view.towers {
+        let r = tile.get_range_to(tw.pos);
+        // Normalize to ~1.0 (min tower hit) .. 4.0 (point-blank).
+        safety += tower_dps_at_range(r) as f32 / 150.0;
+    }
+
+    // COHESION — distance from the centroid, steepening past K so the block doesn't string out.
+    let d = tile.get_range_to(view.centroid);
+    let cohesion = if d <= p.max_cohesion_radius {
+        d as f32
+    } else {
+        p.max_cohesion_radius as f32 + (d - p.max_cohesion_radius) as f32 * 3.0
+    };
+
+    // VALUE — keep the focus within shooting range 3.
+    let value = match view.focus {
+        Some(f) => {
+            let r = tile.get_range_to(f);
+            if r <= 3 {
+                0.0
+            } else {
+                (r - 3) as f32
+            }
+        }
+        None => 0.0,
+    };
+
+    // OPENNESS — penalize dead-ends (few walkable neighbours).
+    let openness = (8 - walkable_neighbors.min(8)) as f32;
+
+    (p.w_safety * safety + p.w_cohesion * cohesion + p.w_value * value + p.w_openness * openness).round() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use screeps::{RoomCoordinate, RoomName};
+
+    fn pos(x: u8, y: u8) -> Position {
+        let room: RoomName = "W1N1".parse().unwrap();
+        Position::new(RoomCoordinate::new(x).unwrap(), RoomCoordinate::new(y).unwrap(), room)
+    }
+    fn view<'a>(centroid: Position, threats: &'a [KiteThreat], towers: &'a [KiteTower], focus: Option<Position>) -> SquadKiteView<'a> {
+        SquadKiteView { centroid, threats, towers, focus, params: KiteScoreParams::default() }
+    }
+    fn melee(x: u8, y: u8, reach: u32) -> KiteThreat {
+        KiteThreat { pos: pos(x, y), kind: ThreatKind::MeleeOnly, reach }
+    }
+
+    #[test]
+    fn tower_dps_curve_matches_engine_falloff() {
+        assert_eq!(tower_dps_at_range(0), 600);
+        assert_eq!(tower_dps_at_range(5), 600);
+        assert_eq!(tower_dps_at_range(20), 150);
+        assert_eq!(tower_dps_at_range(30), 150);
+        // Monotonic non-increasing between 5 and 20.
+        assert!(tower_dps_at_range(10) < 600 && tower_dps_at_range(10) > 150);
+        assert!(tower_dps_at_range(10) >= tower_dps_at_range(15));
+    }
+
+    #[test]
+    fn safety_penalizes_being_inside_a_threats_reach() {
+        let c = pos(25, 25);
+        let threats = [melee(25, 25, 3)];
+        let v = view(c, &threats, &[], None);
+        // Outside reach (range 4) vs inside (range 1): inside is worse.
+        let outside = score_tile(&v, pos(29, 25), 8);
+        let inside = score_tile(&v, pos(26, 25), 8);
+        assert!(inside > outside, "inside reach must cost more: in={inside} out={outside}");
+    }
+
+    #[test]
+    fn cohesion_penalizes_distance_and_steepens_past_k() {
+        let c = pos(25, 25);
+        let v = view(c, &[], &[], None);
+        let d1 = score_tile(&v, pos(26, 25), 8); // d=1 (<=K)
+        let d2 = score_tile(&v, pos(27, 25), 8); // d=2 (==K)
+        let d3 = score_tile(&v, pos(28, 25), 8); // d=3 (>K, steepened)
+        let d4 = score_tile(&v, pos(29, 25), 8); // d=4 (>K)
+        assert!(d1 < d2 && d2 < d3 && d3 < d4, "monotonic in distance");
+        // The marginal cost past K (d2→d3) exceeds the marginal cost within K (d1→d2).
+        assert!((d3 - d2) > (d2 - d1), "cohesion penalty steepens past K");
+    }
+
+    #[test]
+    fn value_keeps_the_focus_in_shooting_range() {
+        let c = pos(25, 25);
+        let focus = pos(25, 30);
+        let v = view(c, &[], &[], Some(focus));
+        // Both equidistant from the centroid (d=3); A keeps the focus in range 3, B does not.
+        let in_range = score_tile(&v, pos(25, 28), 8); // range to focus = 2
+        let out_range = score_tile(&v, pos(25, 22), 8); // range to focus = 8
+        assert!(in_range < out_range, "keeping the focus shootable is preferred: in={in_range} out={out_range}");
+    }
+
+    #[test]
+    fn openness_avoids_dead_ends() {
+        let c = pos(25, 25);
+        let v = view(c, &[], &[], None);
+        let open = score_tile(&v, pos(26, 25), 8); // 8 walkable neighbours
+        let pocket = score_tile(&v, pos(26, 25), 1); // 1 walkable neighbour (dead-end)
+        assert!(pocket > open, "a dead-end pocket costs more");
+    }
+
+    #[test]
+    fn safety_dominates_cohesion() {
+        let c = pos(25, 25);
+        let threats = [melee(25, 25, 3)];
+        let v = view(c, &threats, &[], None);
+        // A: safe (range 4 from the threat) but far from the centroid (d=5).
+        let safe_far = score_tile(&v, pos(30, 25), 8);
+        // B: in the threat's reach (range 1) but right next to the centroid (d=1).
+        let danger_close = score_tile(&v, pos(26, 25), 8);
+        assert!(safe_far < danger_close, "safety outweighs cohesion: safe_far={safe_far} danger_close={danger_close}");
+    }
+}

@@ -32,6 +32,8 @@
 
 /// Squad-cohesion geometry (the movement validation instrument; see module docs).
 pub mod cohesion;
+/// Pure per-tile pricing for cohesive, safe, higher-EV kite/flee positioning (P2.G3-tail).
+pub mod kite;
 
 use screeps::{Part, Position, RawObjectId, StructureType};
 

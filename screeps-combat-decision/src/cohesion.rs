@@ -18,6 +18,26 @@ pub struct CohesionSample {
     pub in_formation_rate: f32,
 }
 
+/// The squad's centroid — the rounded, room-clamped mean of member positions; `None` for an empty
+/// slice. Shared by the live adapter and the sim so both derive the squad's coordinate frame the
+/// SAME way (the cohesion + kite scoring all reference it). Uses the first position's room.
+pub fn centroid(positions: &[Position]) -> Option<Position> {
+    let n = positions.len();
+    if n == 0 {
+        return None;
+    }
+    let (sx, sy) = positions
+        .iter()
+        .fold((0i32, 0i32), |(ax, ay), p| (ax + p.x().u8() as i32, ay + p.y().u8() as i32));
+    let cx = (sx as f32 / n as f32).round().clamp(0.0, 49.0) as u8;
+    let cy = (sy as f32 / n as f32).round().clamp(0.0, 49.0) as u8;
+    Some(Position::new(
+        RoomCoordinate::new(cx).unwrap(),
+        RoomCoordinate::new(cy).unwrap(),
+        positions[0].room_name(),
+    ))
+}
+
 /// `anchor + (dx,dy)`, or `None` if it leaves the room.
 fn offset_pos(anchor: Position, (dx, dy): (i32, i32)) -> Option<Position> {
     let x = anchor.x().u8() as i32 + dx;
@@ -51,12 +71,7 @@ pub fn measure(positions: &[Position], formation: Option<(Position, &[(i32, i32)
     }
 
     // Centroid (rounded, clamped into the room), then mean distance to it.
-    let (sx, sy) = positions
-        .iter()
-        .fold((0i32, 0i32), |(ax, ay), p| (ax + p.x().u8() as i32, ay + p.y().u8() as i32));
-    let cx = (sx as f32 / n as f32).round().clamp(0.0, 49.0) as u8;
-    let cy = (sy as f32 / n as f32).round().clamp(0.0, 49.0) as u8;
-    let centroid = Position::new(RoomCoordinate::new(cx).unwrap(), RoomCoordinate::new(cy).unwrap(), positions[0].room_name());
+    let centroid = centroid(positions).expect("non-empty checked above");
     let centroid_spread = positions.iter().map(|p| p.get_range_to(centroid) as f32).sum::<f32>() / n as f32;
 
     let in_formation_rate = match formation {
