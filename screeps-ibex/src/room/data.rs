@@ -83,6 +83,13 @@ pub struct RoomStaticVisibilityData {
     /// Static data -- never changes for a given room.
     #[serde(default, rename = "e")]
     exits: Option<Vec<(Direction, RoomName)>>,
+    /// Source-Keeper lair positions (empty ⇒ not an SK room). Static — lairs are
+    /// permanent, so this is scout-once / know-forever, and the SK farm
+    /// (ADR 0018) can pre-stage at a lair before its respawn without re-scanning
+    /// or holding visibility. Distinct from the *dynamic* `source_keeper` flag
+    /// (`RoomDynamicVisibilityData`), which only holds while we have eyes.
+    #[serde(default, rename = "kl")]
+    keeper_lairs: Vec<Position>,
 }
 
 impl RoomStaticVisibilityData {
@@ -108,6 +115,18 @@ impl RoomStaticVisibilityData {
 
     pub fn set_exits(&mut self, exits: Vec<(Direction, RoomName)>) {
         self.exits = Some(exits);
+    }
+
+    /// Source-Keeper lair positions (empty ⇒ not an SK room).
+    pub fn keeper_lairs(&self) -> &[Position] {
+        &self.keeper_lairs
+    }
+
+    /// Persisted, visibility-independent "this is a Source Keeper room" check —
+    /// true once a scout has ever seen the (permanent) lairs. Exploitation
+    /// (ADR 0018) triggers off this, not the transient dynamic flag.
+    pub fn is_source_keeper(&self) -> bool {
+        !self.keeper_lairs.is_empty()
     }
 }
 
@@ -498,12 +517,21 @@ impl RoomData {
         let exits = game::map::describe_exits(room.name());
         let exit_list: Vec<(Direction, RoomName)> = exits.entries().collect();
 
+        // Source-Keeper lair positions (permanent — recorded once, see RoomStaticVisibilityData).
+        let keeper_lairs = room
+            .find(find::STRUCTURES, None)
+            .into_iter()
+            .filter(|s| s.structure_type() == StructureType::KeeperLair)
+            .map(|s| s.pos())
+            .collect();
+
         RoomStaticVisibilityData {
             controller: controller_id,
             sources: source_ids,
             minerals: mineral_ids,
             terrain_statistics,
             exits: Some(exit_list),
+            keeper_lairs,
         }
     }
 
