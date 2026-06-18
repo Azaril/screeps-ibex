@@ -8,6 +8,7 @@ use crate::expansion::ExpansionAvoidance;
 use crate::jobs::data::*;
 use crate::military::boostqueue::*;
 use crate::military::economy::*;
+use crate::military::objective_queue::CombatObjectiveQueue;
 use crate::military::squad::SquadContext;
 use crate::military::threatmap::RoomThreatData;
 use crate::pathing::pathfinderservice::PathfinderService;
@@ -49,6 +50,7 @@ pub struct MissionSystemData<'a> {
     mapping: Read<'a, EntityMappingData>,
     threat_data: ReadStorage<'a, RoomThreatData>,
     expansion_avoidance: Write<'a, ExpansionAvoidance>,
+    combat_objective_queue: Write<'a, CombatObjectiveQueue>,
 }
 
 pub struct MissionExecutionSystemData<'a, 'b> {
@@ -82,6 +84,9 @@ pub struct MissionExecutionSystemData<'a, 'b> {
     pub threat_data: &'b ReadStorage<'a, RoomThreatData>,
     /// Avoid-cooldown map for abandoned/failed claim targets (ADR 0017).
     pub expansion_avoidance: &'b mut ExpansionAvoidance,
+    /// The combat objective queue (ADR 0008 §2 / P2.G1). Missions that are
+    /// objective *producers* upsert here; the `SquadManager` fields the squads.
+    pub combat_objective_queue: &'b mut CombatObjectiveQueue,
 }
 
 /// Queue a mission for cleanup via the `EntityCleanupQueue`.
@@ -216,6 +221,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 mapping: &data.mapping,
                 threat_data: &data.threat_data,
                 expansion_avoidance: &mut data.expansion_avoidance,
+                combat_objective_queue: &mut data.combat_objective_queue,
             };
 
             if let Some(mission_data) = data.missions.get(entity) {
@@ -275,6 +281,7 @@ impl<'a> System<'a> for RunMissionSystem {
                 mapping: &data.mapping,
                 threat_data: &data.threat_data,
                 expansion_avoidance: &mut data.expansion_avoidance,
+                combat_objective_queue: &mut data.combat_objective_queue,
             };
 
             if let Some(mission_data) = data.missions.get(entity) {
