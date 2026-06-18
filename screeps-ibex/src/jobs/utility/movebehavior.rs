@@ -147,6 +147,95 @@ where
     tick_move_to_position(tick_context, target_pos, range, room_options, next_state)
 }
 
+/// Stay at least this Chebyshev distance from a dangerous remote hostile.
+/// Covers a Source Keeper's melee (range 1) + ranged (range 3) with margin;
+/// tunable.
+pub const THREAT_FLEE_RANGE: u32 = 5;
+
+/// Whether a hostile creep can actually hurt a non-combatant — it has a live
+/// `ATTACK` or `RANGED_ATTACK` part. Source Keepers and NPC invaders qualify;
+/// a harmless enemy scout/claimer/hauler does not, so we never abandon work
+/// for one.
+fn hostile_is_dangerous(creep: &Creep) -> bool {
+    creep
+        .body()
+        .iter()
+        .any(|p| p.hits() > 0 && matches!(p.part(), Part::Attack | Part::RangedAttack))
+}
+
+/// Pure core of the flee reflex: the flee targets for the dangerous hostiles
+/// within `range` of the creep. Split out so the range/danger filter is
+/// unit-testable without the game runtime. `hostiles` is `(position, dangerous)`.
+fn nearby_threat_flee_targets(creep_pos: Position, hostiles: &[(Position, bool)], range: u32) -> Vec<FleeTarget> {
+    hostiles
+        .iter()
+        .filter(|(pos, dangerous)| *dangerous && creep_pos.get_range_to(*pos) <= range)
+        .map(|(pos, _)| FleeTarget { pos: *pos, range })
+        .collect()
+}
+
+/// Hostile creeps in `room_name` for the flee reflex — or `None` if the room
+/// is **ours** (skip: towers + defenders handle threats there and we don't
+/// interrupt mining for a covered incursion). Reads cached visibility, falling
+/// back to the live room (treated as remote) when we have no `RoomData`.
+fn remote_room_hostiles(room_name: RoomName, tick_context: &JobTickContext) -> Option<Vec<Creep>> {
+    if let Some(room_entity) = tick_context.runtime_data.mapping.get_room(&room_name) {
+        if let Some(room_data) = tick_context.system_data.room_data.get(room_entity) {
+            if room_data.get_dynamic_visibility_data().map(|v| v.owner().mine()).unwrap_or(false) {
+                return None;
+            }
+            if let Some(creeps) = room_data.get_creeps() {
+                return Some(creeps.hostile().to_vec());
+            }
+        }
+    }
+    Some(
+        game::rooms()
+            .get(room_name)
+            .map(|room| room.find(find::HOSTILE_CREEPS, None))
+            .unwrap_or_default(),
+    )
+}
+
+/// General remote-economy safety reflex (P2.K0, ADR 0018 §3.4): if a dangerous
+/// hostile (invader or Source Keeper) is within [`THREAT_FLEE_RANGE`] in a
+/// non-owned room, issue a flee from every such nearby hostile and return
+/// `true` so the caller skips its work this tick. Reuses the rover flee
+/// primitive and the cached hostile visibility — the same mechanism
+/// `squad_combat::flee_from_hostiles` uses.
+///
+/// Remote miners and haulers call this at the top of their tick: without it
+/// they stand and die (room-safety only gates *new spawns*; existing creeps
+/// have no threat awareness), repeatedly feeding kills — a net energy sink.
+/// The creep's **job** owns this movement request; missions only supply
+/// context (ADR 0008 §5 flag / ADR 0018 §2 principle 8).
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn try_flee_from_local_threats(tick_context: &mut JobTickContext) -> bool {
+    let creep_pos = tick_context.runtime_data.owner.pos();
+    let room_name = creep_pos.room_name();
+
+    let hostiles = match remote_room_hostiles(room_name, tick_context) {
+        Some(hostiles) => hostiles,
+        None => return false, // our own room — defense handles it
+    };
+
+    let tagged: Vec<(Position, bool)> = hostiles.iter().map(|c| (c.pos(), hostile_is_dangerous(c))).collect();
+    let flee_targets = nearby_threat_flee_targets(creep_pos, &tagged, THREAT_FLEE_RANGE);
+    if flee_targets.is_empty() {
+        return false;
+    }
+
+    let creep_entity = tick_context.runtime_data.creep_entity;
+    if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
+        tick_context
+            .runtime_data
+            .movement
+            .flee(creep_entity, flee_targets)
+            .range(THREAT_FLEE_RANGE);
+    }
+    true
+}
+
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn tick_move_to_position<F, R>(
     tick_context: &mut JobTickContext,
@@ -178,4 +267,51 @@ where
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pos(x: u8, y: u8) -> Position {
+        Position::new(
+            RoomCoordinate::new(x).unwrap(),
+            RoomCoordinate::new(y).unwrap(),
+            "W5N5".parse::<RoomName>().unwrap(),
+        )
+    }
+
+    /// The reflex flees only hostiles that are BOTH dangerous (attack-capable)
+    /// AND within range — not a harmless scout, and not a distant keeper.
+    #[test]
+    fn flees_only_nearby_dangerous_hostiles() {
+        let me = pos(25, 25);
+        let hostiles = [
+            (pos(27, 25), true),  // dangerous, range 2 -> flee
+            (pos(25, 28), false), // harmless scout, range 3 -> ignore
+            (pos(40, 40), true),  // dangerous but range 15 -> ignore
+        ];
+        let targets = nearby_threat_flee_targets(me, &hostiles, THREAT_FLEE_RANGE);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].pos, pos(27, 25));
+        assert_eq!(targets[0].range, THREAT_FLEE_RANGE);
+    }
+
+    /// No dangerous hostile in range -> the reflex is a no-op (work continues).
+    #[test]
+    fn no_nearby_danger_means_no_flee() {
+        let me = pos(25, 25);
+        let hostiles = [(pos(26, 25), false), (pos(45, 45), true)];
+        assert!(nearby_threat_flee_targets(me, &hostiles, THREAT_FLEE_RANGE).is_empty());
+        assert!(nearby_threat_flee_targets(me, &[], THREAT_FLEE_RANGE).is_empty());
+    }
+
+    /// A keeper at melee range (the respawn-next-to-miner case) is fled.
+    #[test]
+    fn keeper_at_melee_range_is_fled() {
+        let me = pos(10, 10);
+        let hostiles = [(pos(11, 10), true)];
+        let targets = nearby_threat_flee_targets(me, &hostiles, THREAT_FLEE_RANGE);
+        assert_eq!(targets.len(), 1);
+    }
 }

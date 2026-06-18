@@ -276,6 +276,12 @@ impl Job for HaulJob {
             action_flags: SimultaneousActionFlags::UNSET,
         };
 
+        // P2.K0: flee a nearby invader/keeper before hauling through a remote room —
+        // a hauler that stands and dies is a net energy sink (the job owns this move).
+        if try_flee_from_local_threats(&mut tick_context) {
+            return;
+        }
+
         crate::machine_tick::run_state_machine(&mut self.state, "HaulJob", |state| state.tick(&mut self.context, &mut tick_context));
     }
 }
