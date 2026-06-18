@@ -76,8 +76,10 @@
   to the structure-siege phase (a structure focus ⇒ no hostile creeps left). Separation upheld (search in
   the pathfinding system, pricing/decision pure, manager applies, job moves). No WFV bump. +1 unit test.
   Inert live until O6; sim-/unit-validated now (rover 27, decision 41, bot 158 [8 gridsearch moved to rover]).
-- [ ] **O4 — Wave retry / unwinnable in the manager.** Generalize `AttackMission::handle_wave_wipe`
-  into the `SquadManager` Phase A (reconcile). **Design:**
+- [x] **O4 — Wave retry / unwinnable in the manager.** DONE (commit after `9780df9`). Generalized
+  `AttackMission::handle_wave_wipe` into the `SquadManager` Phase A; `squad_is_wiped` + the non-`Defend`
+  `mark_unwinnable` backoff are wired + host-tested (bot 160). `request_renew` audit: none in the manager
+  (it never renews — Phase B replacement; only the legacy AttackMission has it → O7). **Design (as built):**
   - **Wipe detection (pure):** a managed squad is *wiped* when it had members but all are now dead —
     `total_members_added > 0 && members.is_empty()`. (Gradual losses are refilled by Phase B's
     unfilled-slot spawns and never hit all-empty; only an overwhelmed squad does.) Extract a tiny pure
