@@ -7,6 +7,7 @@ use crate::memorysystem::*;
 use crate::metrics::MetricsSystem;
 use crate::military::boostqueue::*;
 use crate::military::economy::*;
+use crate::military::objective_queue::*;
 use crate::military::squad::*;
 use crate::military::threatmap::*;
 use crate::missions::data::*;
@@ -82,6 +83,7 @@ macro_rules! for_each_system {
         $op!(RepairQueueClearSystem, "repair_queue_clear", StageClass::Always);
         $op!(ClearVisualizationSystem, "clear_visualization", StageClass::Always);
         $op!(VisibilityQueueCleanupSystem, "visibility_cleanup", StageClass::Always);
+        $op!(CombatObjectiveCleanupSystem, "combat_objective_cleanup", StageClass::Always);
         $op!(CostMatrixClearSystem, "cost_matrix_clear", StageClass::Always);
         $op!(RoomStatusCacheClearSystem, "room_status_cache_clear", StageClass::Always);
         // === Main-pass: Pre-run (defense/spawn/haul live below) ===
@@ -137,6 +139,7 @@ macro_rules! for_each_system {
         $op!(ApplyVisualsSystem, "apply_visuals", StageClass::SkipUnderCritical);
         // === Main-pass: Persistence (never shed) ===
         $op!(VisibilityQueueSyncSystem, "visibility_sync", StageClass::Always);
+        $op!(CombatObjectiveSyncSystem, "combat_objective_sync", StageClass::Always);
         $op!(CostMatrixStoreSystem, "cost_matrix_store", StageClass::Always);
         $op!(MemoryArbiterSystem, "memory", StageClass::Always);
     };
@@ -446,6 +449,7 @@ fn serialize_world(world: &World, segments: &[u32]) {
         mission_data: ReadStorage<'a, MissionData>,
         squad_context: ReadStorage<'a, SquadContext>,
         visibility_queue_data: ReadStorage<'a, VisibilityQueueData>,
+        combat_objective_data: ReadStorage<'a, CombatObjectiveData>,
         room_threat_data: ReadStorage<'a, RoomThreatData>,
     }
 
@@ -470,6 +474,7 @@ fn serialize_world(world: &World, segments: &[u32]) {
                     &data.mission_data,
                     &data.squad_context,
                     &data.visibility_queue_data,
+                    &data.combat_objective_data,
                     &data.room_threat_data,
                 ),
                 &data.entities,
@@ -567,10 +572,14 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// 8 = the squad anchor mover (P2.M2): SquadPath now embeds a rover::AnchorPath (cached
 /// footprint-aware path) in place of the bare virtual_pos/destination/stuck_ticks fields, so the
 /// serialized SquadPath shape changes — one loud reset on deploy.
+/// 9 = the combat objective queue (P2.G1, ADR 0008 §2): a new serialized component
+/// CombatObjectiveData (objectives + UnwinnableTarget backoff + the minted-id counter)
+/// joins the component stream — bincode is positional, so adding a component to the
+/// (de)serialize tuple shifts every subsequent component and requires this bump.
 /// NOTE: bincode is positional and never signals early end-of-sequence, so a
 /// trailing #[serde(default)] field does NOT make old payloads decode safely --
 /// the version fingerprint is the only real gate, hence this bump.
-const WORLD_FORMAT_VERSION: u32 = 8;
+const WORLD_FORMAT_VERSION: u32 = 9;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode
@@ -599,6 +608,7 @@ fn deserialize_world(world: &World, segments: &[u32]) {
         mission_data: WriteStorage<'a, MissionData>,
         squad_context: WriteStorage<'a, SquadContext>,
         visibility_queue_data: WriteStorage<'a, VisibilityQueueData>,
+        combat_objective_data: WriteStorage<'a, CombatObjectiveData>,
         room_threat_data: WriteStorage<'a, RoomThreatData>,
     }
 
@@ -660,6 +670,7 @@ fn deserialize_world(world: &World, segments: &[u32]) {
                             &mut data.mission_data,
                             &mut data.squad_context,
                             &mut data.visibility_queue_data,
+                            &mut data.combat_objective_data,
                             &mut data.room_threat_data,
                         ),
                         &data.entities,
@@ -689,6 +700,7 @@ fn deserialize_world(world: &World, segments: &[u32]) {
                         data.mission_data.clear();
                         data.squad_context.clear();
                         data.visibility_queue_data.clear();
+                        data.combat_objective_data.clear();
                         data.room_threat_data.clear();
                         data.markers.clear();
                         *data.marker_alloc = Default::default();
