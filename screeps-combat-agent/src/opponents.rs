@@ -12,9 +12,46 @@
 
 use screeps::{Part, Position, RoomName};
 use screeps_combat_decision::{CombatCreepDto, CombatIntent, CombatView, TacticalAgent};
-use screeps_combat_engine::{resolve_tick, CombatWorld, CreepId, PlayerId, SimBody, SimCreep};
+use screeps_combat_engine::{
+    record_tick, CombatRecording, CombatWorld, CreepId, Intents, PlayerId, SimBody, SimCreep, TowerAction,
+};
 
 use crate::{agent_intents, SimView};
+
+/// The heal intent for the most-damaged of {self, in-range allies}, if `me` can heal and anyone is
+/// hurt. `Heal` (range 1) when adjacent, else `RangedHeal` (range ≤3). Shared by the stationary
+/// support archetypes (turtle / drain).
+fn self_or_ally_heal(view: &CombatView) -> Option<CombatIntent> {
+    let me = view.me;
+    if !me.has_working(Part::Heal) {
+        return None;
+    }
+    let mut best_deficit = me.hits_max.saturating_sub(me.hits);
+    let mut target_pos = me.pos;
+    let mut target_id = me.id;
+    let mut target_range = 0u32;
+    for f in view.friends.iter() {
+        let r = me.pos.get_range_to(f.pos);
+        if r > 3 {
+            continue;
+        }
+        let deficit = f.hits_max.saturating_sub(f.hits);
+        if deficit > best_deficit {
+            best_deficit = deficit;
+            target_pos = f.pos;
+            target_id = f.id;
+            target_range = r;
+        }
+    }
+    if best_deficit == 0 {
+        return None;
+    }
+    Some(if target_range <= 1 {
+        CombatIntent::Heal { target: target_pos, id: target_id }
+    } else {
+        CombatIntent::RangedHeal { target: target_pos, id: target_id }
+    })
+}
 
 /// One unit in a composition: a `body` (parts × counts, spawn order) instantiated once at each
 /// listed position. The harness building block for fielding our AI (or an opponent) in an arbitrary
@@ -124,53 +161,66 @@ impl TacticalAgent for TurtleAgent {
         }
 
         // Heal: the most-damaged of {self, in-range allies}.
-        if me.has_working(Part::Heal) {
-            let mut best_deficit = me.hits_max.saturating_sub(me.hits);
-            let mut target_pos = me.pos;
-            let mut target_id = me.id;
-            let mut target_range = 0u32;
-            for f in view.friends.iter() {
-                let r = me.pos.get_range_to(f.pos);
-                if r > 3 {
-                    continue;
-                }
-                let deficit = f.hits_max.saturating_sub(f.hits);
-                if deficit > best_deficit {
-                    best_deficit = deficit;
-                    target_pos = f.pos;
-                    target_id = f.id;
-                    target_range = r;
-                }
-            }
-            if best_deficit > 0 {
-                if target_range <= 1 {
-                    out.push(CombatIntent::Heal { target: target_pos, id: target_id });
-                } else {
-                    out.push(CombatIntent::RangedHeal { target: target_pos, id: target_id });
-                }
-            }
-        }
+        out.extend(self_or_ally_heal(view));
 
         // Holds position (no movement intent).
         out
     }
 }
 
+/// **Drain** — a pure tower-bait tank: self-heal (and heal allies), never move or attack. Carries
+/// only HEAL/TOUGH, so it soaks tower fire while its heal out-paces the (falloff) damage, bleeding
+/// the tower's energy to zero — the drain tactic. Positioned at the standoff range where heal
+/// sustains; the scenario provides the tower.
+#[derive(Default)]
+pub struct DrainAgent;
+
+impl TacticalAgent for DrainAgent {
+    fn decide(&mut self, view: &CombatView) -> Vec<CombatIntent> {
+        self_or_ally_heal(view).into_iter().collect()
+    }
+}
+
+/// Scripted tower controller: every living tower with energy fires `Attack` at the nearest enemy
+/// creep (any owner but its own). Towers aren't agent-driven, so the harness drives them — this is
+/// the defender's tower AI for tower scenarios (drain, breach-under-fire).
+fn tower_intents(world: &CombatWorld, intents: &mut Intents) {
+    for (idx, tower) in world.towers.iter().enumerate() {
+        if !tower.is_alive() {
+            continue;
+        }
+        let target = world
+            .creeps
+            .iter()
+            .filter(|c| c.is_alive() && c.owner != tower.owner)
+            .min_by_key(|c| tower.pos.get_range_to(c.pos));
+        if let Some(t) = target {
+            // resolve_tick's `can_fire` gate skips the shot if the tower is out of energy.
+            intents.set_tower(idx, TowerAction::Attack(t.id));
+        }
+    }
+}
+
 /// Outcome of a head-to-head engagement run through the engine.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct EngagementOutcome {
-    /// Ticks actually simulated (≤ `max_ticks`; stops early when a side is wiped).
+    /// Ticks actually simulated (≤ `max_ticks`; stops early when a side is fully gone).
     pub ticks: u32,
     pub side_a_alive: usize,
     pub side_b_alive: usize,
     /// Worst (max) pairwise Chebyshev distance among side-A creeps over the run — a cohesion proxy
     /// (lower = tighter; 0 when side A never has >1 creep).
     pub worst_cohesion_a: u32,
+    /// Total remaining energy across side-B's living towers (0 if none) — for drain validation.
+    pub side_b_tower_energy: u32,
+    /// Per-tick replay capture — render with [`crate::replay::to_svg`] (or `recording.render()`).
+    pub recording: CombatRecording,
 }
 
 /// Run `agent_a` (owner `a_owner`) vs `agent_b` (owner `b_owner`) through the engine until one side
-/// is wiped or `max_ticks` elapses. Both sides decide via the same per-creep `decide` contract; the
-/// engine `resolve_tick` is the authoritative "server". Returns the outcome + side-A cohesion.
+/// is fully gone (no creeps AND no towers) or `max_ticks` elapses. Both sides' creeps decide via the
+/// per-creep `decide` contract; each side's towers fire via the scripted [`tower_intents`]; the
+/// engine `resolve_tick` is the authoritative "server".
 #[allow(clippy::too_many_arguments)]
 pub fn run_engagement<A: TacticalAgent, B: TacticalAgent>(
     mut world: CombatWorld,
@@ -183,11 +233,14 @@ pub fn run_engagement<A: TacticalAgent, B: TacticalAgent>(
     agent_b: &mut B,
     max_ticks: u32,
 ) -> EngagementOutcome {
-    let alive = |w: &CombatWorld, owner: PlayerId| w.creeps.iter().filter(|c| c.owner == owner).count();
+    let creeps = |w: &CombatWorld, owner: PlayerId| w.creeps.iter().filter(|c| c.owner == owner).count();
+    let towers = |w: &CombatWorld, owner: PlayerId| w.towers.iter().filter(|t| t.is_alive() && t.owner == owner).count();
+    let gone = |w: &CombatWorld, owner: PlayerId| creeps(w, owner) == 0 && towers(w, owner) == 0;
     let mut worst_cohesion_a = 0u32;
     let mut ticks = 0;
+    let mut recording = CombatRecording::new();
     while ticks < max_ticks {
-        if alive(&world, a_owner) == 0 || alive(&world, b_owner) == 0 {
+        if gone(&world, a_owner) || gone(&world, b_owner) {
             break;
         }
         // Side-A cohesion (max pairwise Chebyshev distance).
@@ -197,29 +250,33 @@ pub fn run_engagement<A: TacticalAgent, B: TacticalAgent>(
                 worst_cohesion_a = worst_cohesion_a.max(a_pos[i].get_range_to(a_pos[j]));
             }
         }
-        // Both sides decide; merge disjoint intents (creep ids are disjoint by side); resolve.
+        // Both sides' creeps decide; merge disjoint intents; towers fire; resolve.
         let sva = SimView::from_world(&world, a_owner, a_center, room);
         let mut intents = agent_intents(&world, &sva, agent_a);
         let svb = SimView::from_world(&world, b_owner, b_center, room);
         let ib = agent_intents(&world, &svb, agent_b);
         intents.creeps.extend(ib.creeps);
         intents.moves.extend(ib.moves);
-        resolve_tick(&mut world, &intents);
+        tower_intents(&world, &mut intents);
+        record_tick(&mut recording, &mut world, &intents); // drop-in for resolve_tick + captures a frame
         ticks += 1;
     }
     EngagementOutcome {
+        side_a_alive: creeps(&world, a_owner),
+        side_b_alive: creeps(&world, b_owner),
+        side_b_tower_energy: world.towers.iter().filter(|t| t.is_alive() && t.owner == b_owner).map(|t| t.energy).sum(),
         ticks,
-        side_a_alive: alive(&world, a_owner),
-        side_b_alive: alive(&world, b_owner),
         worst_cohesion_a,
+        recording,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::IbexAgent;
+    use crate::{HoldAgent, IbexAgent};
     use screeps::RoomCoordinate;
+    use screeps_combat_engine::{resolve_tick, SimTower};
 
     fn room() -> RoomName {
         "W1N1".parse().unwrap()
@@ -390,5 +447,21 @@ mod tests {
         let out = run_engagement(world, room(), 0, pos(25, 22), &mut IbexAgent, 1, pos(25, 25), &mut TurtleAgent, 40);
         assert_eq!(out.side_b_alive, 0, "the quad's 280 dps beats the turtle's 120/tick heal");
         assert_eq!(out.side_a_alive, 4, "the quad takes no damage from a weaponless healer");
+    }
+
+    #[test]
+    fn drain_tank_outlasts_a_tower_and_bleeds_its_energy() {
+        // A DrainAgent tank (13 HEAL = 156/tick) at the room edge, ~21 tiles from a centred tower
+        // (≥ falloff range → 150/tick), self-heals through the fire while the tower bleeds 10
+        // energy/shot to zero. Exercises the tower scenario (scripted tower controller, side B has a
+        // tower + no creeps) + the drain tactic. Mirrors the engine's drain conformance config.
+        let world = CombatWorld {
+            creeps: vec![creep(1, 0, 25, 1, &[(Part::Heal, 13)])],
+            towers: vec![SimTower { id: 200, owner: 1, pos: pos(25, 22), energy: 100, hits: 3000, hits_max: 3000 }],
+            ..Default::default()
+        };
+        let out = run_engagement(world, room(), 0, pos(25, 1), &mut DrainAgent, 1, pos(25, 22), &mut HoldAgent, 15);
+        assert_eq!(out.side_a_alive, 1, "the drain tank out-heals the falloff tower");
+        assert_eq!(out.side_b_tower_energy, 0, "the tower bled all its energy (10/shot) firing at the drainer");
     }
 }
