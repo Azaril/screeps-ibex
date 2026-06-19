@@ -15,6 +15,7 @@
 //! Host-only (workspace-excluded): it depends only on the `screeps-combat-decision` (tactics) and
 //! `screeps-combat-engine` (mechanism) member crates — not the whole bot.
 
+pub mod opponents;
 pub mod pathing;
 pub mod squad;
 
