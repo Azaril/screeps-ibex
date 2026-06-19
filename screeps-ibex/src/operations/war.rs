@@ -181,9 +181,6 @@ pub struct WarOperation {
 
     /// Maximum concurrent attack operations (scales with economy).
     max_concurrent_attacks: u32,
-
-    /// Separate cap for power bank operations.
-    max_concurrent_power_banks: u32,
 }
 
 // Cadence constants (ticks) — P1.B6 / IBEX-021: every tier ran at 1,
@@ -229,7 +226,6 @@ impl WarOperation {
             active_attacks: EntityVec::new(),
             defend_flag_rooms: Vec::new(),
             max_concurrent_attacks: 1,
-            max_concurrent_power_banks: 1,
         }
     }
 
@@ -833,43 +829,18 @@ impl WarOperation {
                 }
             }
 
-            // ── Power bank targeting ─────────────────────────────────────
-            if let Some((power, ticks_to_decay)) = power_bank_info {
-                // Only farm power banks if we have significant economy and
-                // enough time remaining to actually extract the power.
-                let min_ticks_needed = power_bank_min_ticks_needed(min_distance);
-                // Count only attacks launched as power-bank farms
-                // (AttackReason::PowerBank) against the power-bank cap;
-                // unrelated attacks must not consume power-bank slots
-                // (IBEX-043). War recorded the reason at launch, so this is
-                // a filter over its own bookkeeping.
-                let power_bank_count = count_power_bank_attacks(&self.active_attacks);
-
-                if power >= 1000
-                    && ticks_to_decay > min_ticks_needed
-                    && system_data.economy.total_stored_energy > 100_000
-                    && power_bank_count < self.max_concurrent_power_banks
-                {
-                    let roi = power as f32 / 8_000.0; // Rough energy cost estimate.
-                    let distance_penalty = min_distance as f32 * 2.0;
-                    let decay_bonus = if ticks_to_decay > 3000 { 10.0 } else { 0.0 };
-                    let score = 20.0 + (roi * 5.0).min(30.0) - distance_penalty + decay_bonus;
-
-                    if score > 0.0 {
-                        candidates.push(AttackCandidate {
-                            room: room_name,
-                            source: TargetSource::PowerBank { power, ticks_to_decay },
-                            score,
-                            tower_count: 0,
-                            estimated_enemy_dps: 0.0,
-                            estimated_enemy_heal: 0.0,
-                            has_safe_mode: false,
-                            estimated_roi: Some(roi),
-                            target_pos: None,
-                        });
-                    }
-                }
-            }
+            // ── Power banks: intentionally NOT farmed (O5, 2026-06-18) ────
+            // Power-bank farming was non-functional — the neutral bank is never
+            // targeted by the combat decision (`get_hostile_structures` excludes
+            // unowned structures; `select_focus_target` only picks hostile ones),
+            // and there is no dropped-power collector — so the offense scan no
+            // longer produces a candidate for it (it only wasted a duo + haulers
+            // idling in a highway room). Real power-bank farming is a deferred
+            // workstream: it needs a DEDICATED healed squad (the bank deals
+            // `damage × POWER_BANK_HIT_BACK` back to attackers, so unhealed creeps
+            // die) + a PREDICTIVE dropped-power collector timed to the crack. See
+            // the master plan doc §5 and the pending power-bank ADR.
+            // (`power_bank_info` is still surfaced in the diagnostics line above.)
 
             // ── Invader creeps in remote rooms (RECONCILED — no offense path) ──
             // Invader creeps disrupting a reserved remote are cleared by the
@@ -1061,7 +1032,6 @@ impl WarOperation {
             0
         };
         self.max_concurrent_attacks = base_attacks.saturating_sub(1).max(1) + economy_multiplier;
-        self.max_concurrent_power_banks = std::cmp::min(2, system_data.economy.room_count);
 
         // ── 2. Propagate threat intel to active AttackOperations ─────────
 
@@ -1412,38 +1382,6 @@ fn cadence_elapsed(now: u32, last_tick: Option<u32>, cadence: u32) -> bool {
     last_tick.map(|t| now.saturating_sub(t) >= cadence).unwrap_or(true)
 }
 
-/// Power-bank launch feasibility window (P1.D5 / ADR 0013 D1.2): the
-/// farm only fits the bank's decay window when kill time AT THE DUO'S
-/// CAPPED DPS + travel + serial duo spawn + a margin all fit. The
-/// pre-D5 window (`dist·50 + 500`) ignored kill time entirely (~3.3k
-/// ticks), green-lighting banks that could never be finished.
-fn power_bank_min_ticks_needed(min_distance: u32) -> u32 {
-    /// Engine: POWER_BANK_HITS.
-    const BANK_HITS: u32 = 2_000_000;
-    /// bodies.rs `power_bank_attacker_body` cap (healer-matched).
-    const DUO_ATTACK_PARTS: u32 = 20;
-    /// ATTACK_POWER = 30 hits/part/tick.
-    const DUO_DPS: u32 = DUO_ATTACK_PARTS * 30;
-    /// Serial spawn of the duo: (20 ATTACK + 20 MOVE) + (25 HEAL +
-    /// 25 MOVE) parts × 3 ticks/part.
-    const DUO_SPAWN_TICKS: u32 = (40 + 50) * 3;
-    /// Slack for rally, lair dodges, and the loot haul-out.
-    const MARGIN_TICKS: u32 = 200;
-
-    let kill_ticks = BANK_HITS / DUO_DPS;
-    kill_ticks + (min_distance * 50) + DUO_SPAWN_TICKS + MARGIN_TICKS
-}
-
-/// Count active attacks that war launched as power-bank farms
-/// (`AttackReason::PowerBank`). Feeds the `max_concurrent_power_banks` gate
-/// (IBEX-043): the reason is war's own bookkeeping, recorded at launch.
-fn count_power_bank_attacks(attacks: &[ActiveAttack]) -> u32 {
-    attacks
-        .iter()
-        .filter(|a| matches!(a.reason, super::attack::AttackReason::PowerBank { .. }))
-        .count() as u32
-}
-
 /// Score an invader core as an attack candidate; `None` = don't attack.
 ///
 /// `core_level` is the strongest core *present* in the room -- absence is the
@@ -1676,22 +1614,6 @@ mod tests {
         assert!(!hostile_warrants_defender(&[]));
     }
 
-    /// P1.D5 / ADR 0013 D1.2: the feasibility window must include kill
-    /// time — at 20×ATTACK (600 dps) a 2M bank takes 3333 ticks, so
-    /// even a zero-distance bank needs >3.5k ticks of decay left; the
-    /// pre-D5 window claimed 500.
-    #[test]
-    fn power_bank_window_includes_kill_time() {
-        let zero_dist = power_bank_min_ticks_needed(0);
-        assert_eq!(zero_dist, 3333 + 270 + 200, "{zero_dist}");
-        // Distance adds 50 ticks/room.
-        assert_eq!(power_bank_min_ticks_needed(4) - zero_dist, 200);
-        // A freshly-spawned bank (5000 decay) IS farmable nearby…
-        assert!(power_bank_min_ticks_needed(5) < 5000);
-        // …but never at 25+ rooms out.
-        assert!(power_bank_min_ticks_needed(25) > 5000);
-    }
-
     // Pin (IBEX-044): cadence checks must not underflow when the persisted
     // tick is ahead of the current time (private-server time reset, restored
     // snapshot). The boundary behavior is "cadence not elapsed yet" -- a
@@ -1717,67 +1639,6 @@ mod tests {
         // "not elapsed" for any cadence >= 1.
         assert!(!cadence_elapsed(100, Some(10_000), 1));
         assert!(!cadence_elapsed(0, Some(u32::MAX), 50));
-    }
-
-    // Pin (IBEX-043): the power-bank concurrency gate counts only attacks
-    // war launched as power-bank farms (AttackReason::PowerBank), using the
-    // reason recorded in war's own ActiveAttack bookkeeping -- never "all
-    // active attacks", and never a predicate on the generic operation
-    // surface (AGENTS.md §8).
-
-    use super::super::attack::AttackReason;
-
-    fn active_attack(world: &mut specs::World, reason: AttackReason) -> ActiveAttack {
-        ActiveAttack {
-            entity: world.create_entity().build(),
-            room: "E1N1".parse().expect("valid room name"),
-            reason,
-        }
-    }
-
-    #[test]
-    fn power_bank_counter_counts_only_power_bank_attacks() {
-        let mut world = specs::World::new();
-
-        // Three non-power-bank attacks plus one power-bank farm: the counter
-        // feeding `max_concurrent_power_banks` must see exactly 1, so
-        // unrelated attacks cannot exhaust the power-bank slots.
-        let attacks = vec![
-            active_attack(&mut world, AttackReason::Flag),
-            active_attack(&mut world, AttackReason::InvaderCreeps),
-            active_attack(&mut world, AttackReason::ThreatResponse),
-            active_attack(&mut world, AttackReason::PowerBank { power: 4000 }),
-        ];
-
-        assert_eq!(count_power_bank_attacks(&attacks), 1);
-        assert_eq!(count_power_bank_attacks(&[]), 0);
-    }
-
-    #[test]
-    fn power_bank_counter_reason_matrix() {
-        let mut world = specs::World::new();
-
-        let reasons = [
-            (AttackReason::Flag, 0),
-            (AttackReason::ThreatResponse, 0),
-            (AttackReason::Expansion, 0),
-            (AttackReason::ResourceDenial, 0),
-            (AttackReason::InvaderCore { level: 2 }, 0),
-            (AttackReason::InvaderCreeps, 0),
-            (AttackReason::SourceKeeper, 0),
-            (AttackReason::PowerBank { power: 3000 }, 1),
-            (AttackReason::ProactiveDefense, 0),
-        ];
-
-        for (reason, expected) in reasons {
-            let attacks = [active_attack(&mut world, reason.clone())];
-            assert_eq!(
-                count_power_bank_attacks(&attacks),
-                expected,
-                "power-bank count mismatch for reason {:?}",
-                reason
-            );
-        }
     }
 
     // Pin: a level-0 "reserver" invader core must be a valid attack target
