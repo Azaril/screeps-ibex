@@ -16,10 +16,12 @@
 pub mod metrics;
 pub mod scoring;
 
+use crate::metrics::SideMetrics;
 use screeps::{Part, Position, RoomCoordinate, RoomName};
 use screeps_combat_agent::opponents::{run_engagement, world_from_units, DrainAgent, RushAgent, TurtleAgent, Unit};
+use screeps_combat_agent::scenario::ScenarioBuilder;
 use screeps_combat_agent::{HoldAgent, IbexAgent};
-use screeps_combat_engine::{CombatWorld, SimBody, SimCreep, SimTower};
+use screeps_combat_engine::{CombatWorld, SimBody, SimCreep, SimTower, StructureKind};
 
 // ─── Framework ───────────────────────────────────────────────────────────────
 
@@ -55,7 +57,16 @@ fn result(id: &'static str, hypothesis: &'static str, metrics: Vec<Metric>) -> E
 
 /// Run the whole register (one entry per EXP-*).
 pub fn register() -> Vec<ExperimentResult> {
-    vec![exp_found_1(), exp_kite_1(), exp_focus_1(), exp_tower_1(), exp_comp_1()]
+    vec![
+        exp_found_1(),
+        exp_kite_1(),
+        exp_focus_1(),
+        exp_tower_1(),
+        exp_comp_1(),
+        // U7 room-variety suite (walls / ramparts / towers via the ScenarioBuilder):
+        exp_breach_1(),
+        exp_nest_1(),
+    ]
 }
 
 /// Render the register results as a readable text report (the tuning-loop dashboard).
@@ -217,6 +228,74 @@ fn exp_comp_1() -> ExperimentResult {
     )
 }
 
+/// EXP-BREACH-1 (U7) — a rampart-shielded spawn: a ranged siege force in range of a **hostile
+/// rampart** (the shield) breaks the rampart and then the spawn it covers. Exercises the U1
+/// ScenarioBuilder (rampart/spawn), the U3 structure-targeted apply layer (`RangedAttackStructure`
+/// resolves the shield first), and the U5 structure-DPS metric.
+fn exp_breach_1() -> ExperimentResult {
+    // 3×(10 RANGED) = 300 dmg/tick, all within range 3 of the shield tile; rampart 3000 + spawn 5000
+    // = 8000 hits ⇒ ~27 ticks to fully breach + raze. Cap 50.
+    let mut b = ScenarioBuilder::from_units(
+        room(),
+        0,
+        &[Unit::new(vec![(Part::RangedAttack, 10)], vec![pos(25, 23), pos(24, 23), pos(26, 23)])],
+        1,
+        &[],
+    );
+    b.structure(StructureKind::Rampart, Some(1), 25, 25, 3000, 3000);
+    b.structure(StructureKind::Spawn, Some(1), 25, 25, 5000, 5000);
+    let world = b.build();
+    let out = run_engagement(world, room(), 0, pos(25, 23), &mut IbexAgent, 1, pos(25, 25), &mut HoldAgent, 50);
+    let m = SideMetrics::from_recording(&out.recording, 0);
+    // Gate the breach MECHANIC (U3 shield-first apply + U5 structure DPS), not bot siege navigation:
+    // the shield must fall first (a `Rampart` is destroyed), proving the apply layer targets the
+    // rampart over the spawn it covers. (Sustained in-range siege to fully raze the spawn is a U8/U9
+    // movement concern — a per-creep attacker with no creep to anchor on drifts out of range.)
+    let rampart_fell = destroyed_kind_count(&out.recording, StructureKind::Rampart) >= 1;
+    result(
+        "EXP-BREACH-1",
+        "a ranged siege breaks the hostile rampart SHIELD first (shield-over-spawn apply layer)",
+        vec![
+            measured("structure damage dealt", m.structure_damage_dealt as f64, ">= 3000 (shield)", m.structure_damage_dealt >= 3000),
+            boolean("the rampart shield is destroyed", "rampart fell", rampart_fell),
+            measured("siege survivors", m.survivors as f64, "== 3 (unopposed)", m.survivors == 3),
+        ],
+    )
+}
+
+/// How many structures of `kind` were destroyed across the whole run (U2 `destroyed_kinds`).
+fn destroyed_kind_count(rec: &screeps_combat_engine::CombatRecording, kind: StructureKind) -> usize {
+    rec.frames.iter().flat_map(|f| f.destroyed_kinds.iter()).filter(|(_, k)| *k == kind).count()
+}
+
+/// EXP-NEST-1 (U7) — a defender **tower nest** (no defender creeps) punishes attackers that walk in:
+/// the nest deals attributed tower damage (must-fix 1 — it's the *defender's* tower output, not creep
+/// DPS) and the attackers bleed. Exercises the U1 `tower_nest` builder + the scripted tower controller.
+fn exp_nest_1() -> ExperimentResult {
+    // 3 towers (full energy) centred at (25,25); two soft attackers walk into the room centre.
+    let mut b = ScenarioBuilder::from_units(
+        room(),
+        0,
+        &[Unit::new(vec![(Part::Attack, 5), (Part::Move, 5)], vec![pos(22, 22), pos(23, 22)])],
+        1,
+        &[],
+    );
+    b = b.tower_nest(1, 25, 25, 3, 1000);
+    let world = b.build();
+    let out = run_engagement(world, room(), 0, pos(22, 22), &mut RushAgent, 1, pos(25, 25), &mut HoldAgent, 30);
+    let attackers = SideMetrics::from_recording(&out.recording, 0);
+    let defender = SideMetrics::from_recording(&out.recording, 1);
+    result(
+        "EXP-NEST-1",
+        "a 3-tower nest deals attributed tower damage and bleeds attackers (no defender creeps)",
+        vec![
+            measured("defender tower damage dealt", defender.tower_damage_dealt as f64, "> 0", defender.tower_damage_dealt > 0),
+            boolean("none of that is creep DPS (no defender creeps)", "creep DPS == 0", defender.creep_damage_dealt == 0),
+            measured("attacker damage taken", attackers.damage_taken as f64, "> 0 (bled by the nest)", attackers.damage_taken > 0),
+        ],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,7 +303,7 @@ mod tests {
     #[test]
     fn exp_register_passes_all_gates() {
         let results = register();
-        assert_eq!(results.len(), 5, "the register has 5 experiments");
+        assert_eq!(results.len(), 7, "the register has 7 experiments");
         for r in &results {
             assert!(r.pass, "{} failed its gates:\n{}", r.id, report(std::slice::from_ref(r)));
         }
@@ -233,7 +312,7 @@ mod tests {
     #[test]
     fn report_renders_the_register() {
         let s = report(&register());
-        assert!(s.contains("5/5 experiments passed"), "{s}");
-        assert!(s.contains("EXP-FOUND-1") && s.contains("EXP-COMP-1"));
+        assert!(s.contains("7/7 experiments passed"), "{s}");
+        assert!(s.contains("EXP-FOUND-1") && s.contains("EXP-COMP-1") && s.contains("EXP-BREACH-1"));
     }
 }

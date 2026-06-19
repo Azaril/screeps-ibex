@@ -236,7 +236,10 @@ pub fn run_engagement<A: TacticalAgent, B: TacticalAgent>(
 ) -> EngagementOutcome {
     let creeps = |w: &CombatWorld, owner: PlayerId| w.creeps.iter().filter(|c| c.owner == owner).count();
     let towers = |w: &CombatWorld, owner: PlayerId| w.towers.iter().filter(|t| t.is_alive() && t.owner == owner).count();
-    let gone = |w: &CombatWorld, owner: PlayerId| creeps(w, owner) == 0 && towers(w, owner) == 0;
+    // A side with standing owned structures (a spawn/rampart, not a neutral wall) isn't "gone" — so a
+    // breach/dismantle scenario (defender has structures but maybe no creeps) runs until they fall.
+    let structs = |w: &CombatWorld, owner: PlayerId| w.structures.iter().filter(|s| s.is_alive() && s.owner == Some(owner)).count();
+    let gone = |w: &CombatWorld, owner: PlayerId| creeps(w, owner) == 0 && towers(w, owner) == 0 && structs(w, owner) == 0;
     let mut worst_cohesion_a = 0u32;
     let mut worst_cohesion_b = 0u32;
     let mut ticks = 0;
