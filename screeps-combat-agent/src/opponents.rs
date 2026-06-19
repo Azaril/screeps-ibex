@@ -207,11 +207,14 @@ pub struct EngagementOutcome {
     pub side_a_alive: usize,
     pub side_b_alive: usize,
     /// Worst (max) pairwise Chebyshev distance among side-A creeps over the run — a cohesion proxy
-    /// (lower = tighter; 0 when side A never has >1 creep).
+    /// (lower = tighter; 0 when a side never has >1 creep). Symmetric `_b` companion below (U6).
     pub worst_cohesion_a: u32,
-    /// Total remaining energy across side-B's living towers (0 if none) — for drain validation.
+    pub worst_cohesion_b: u32,
+    /// Total remaining energy across each side's living towers (0 if none) — for drain validation.
+    pub side_a_tower_energy: u32,
     pub side_b_tower_energy: u32,
-    /// Per-tick replay capture — render with [`crate::replay::to_svg`] (or `recording.render()`).
+    /// Per-tick replay capture — render with [`crate::replay::to_svg`] (or `recording.render()`). The
+    /// richer per-side metrics + stalemate adjudication are computed from this in `screeps-combat-eval`.
     pub recording: CombatRecording,
 }
 
@@ -235,19 +238,26 @@ pub fn run_engagement<A: TacticalAgent, B: TacticalAgent>(
     let towers = |w: &CombatWorld, owner: PlayerId| w.towers.iter().filter(|t| t.is_alive() && t.owner == owner).count();
     let gone = |w: &CombatWorld, owner: PlayerId| creeps(w, owner) == 0 && towers(w, owner) == 0;
     let mut worst_cohesion_a = 0u32;
+    let mut worst_cohesion_b = 0u32;
     let mut ticks = 0;
     let mut recording = CombatRecording::new();
+    let worst_pairwise = |w: &CombatWorld, owner: PlayerId| {
+        let p: Vec<Position> = w.creeps.iter().filter(|c| c.owner == owner).map(|c| c.pos).collect();
+        let mut m = 0u32;
+        for i in 0..p.len() {
+            for j in (i + 1)..p.len() {
+                m = m.max(p[i].get_range_to(p[j]));
+            }
+        }
+        m
+    };
     while ticks < max_ticks {
         if gone(&world, a_owner) || gone(&world, b_owner) {
             break;
         }
-        // Side-A cohesion (max pairwise Chebyshev distance).
-        let a_pos: Vec<Position> = world.creeps.iter().filter(|c| c.owner == a_owner).map(|c| c.pos).collect();
-        for i in 0..a_pos.len() {
-            for j in (i + 1)..a_pos.len() {
-                worst_cohesion_a = worst_cohesion_a.max(a_pos[i].get_range_to(a_pos[j]));
-            }
-        }
+        // Per-side cohesion (max pairwise Chebyshev distance) — symmetric (U6).
+        worst_cohesion_a = worst_cohesion_a.max(worst_pairwise(&world, a_owner));
+        worst_cohesion_b = worst_cohesion_b.max(worst_pairwise(&world, b_owner));
         // Both sides' creeps decide; merge disjoint intents; towers fire; resolve.
         let sva = SimView::from_world(&world, a_owner, a_center, room);
         let mut intents = agent_intents(&world, &sva, agent_a);
@@ -259,14 +269,44 @@ pub fn run_engagement<A: TacticalAgent, B: TacticalAgent>(
         record_tick(&mut recording, &mut world, &intents); // drop-in for resolve_tick + captures a frame
         ticks += 1;
     }
+    let tower_energy = |w: &CombatWorld, owner: PlayerId| {
+        w.towers.iter().filter(|t| t.is_alive() && t.owner == owner).map(|t| t.energy).sum()
+    };
     EngagementOutcome {
         side_a_alive: creeps(&world, a_owner),
         side_b_alive: creeps(&world, b_owner),
-        side_b_tower_energy: world.towers.iter().filter(|t| t.is_alive() && t.owner == b_owner).map(|t| t.energy).sum(),
+        side_a_tower_energy: tower_energy(&world, a_owner),
+        side_b_tower_energy: tower_energy(&world, b_owner),
         ticks,
         worst_cohesion_a,
+        worst_cohesion_b,
         recording,
     }
+}
+
+/// Self-play convenience: run the bot's real `IbexAgent` on **both** sides (the no-fork self-play
+/// the trait seam exists for — ADR 0006 §B.2). The stalemate adjudication lives in
+/// `screeps-combat-eval::scoring` (policy), computed from the returned recording.
+pub fn self_play(
+    world: CombatWorld,
+    room: RoomName,
+    a_owner: PlayerId,
+    a_center: Position,
+    b_owner: PlayerId,
+    b_center: Position,
+    max_ticks: u32,
+) -> EngagementOutcome {
+    run_engagement(
+        world,
+        room,
+        a_owner,
+        a_center,
+        &mut crate::IbexAgent,
+        b_owner,
+        b_center,
+        &mut crate::IbexAgent,
+        max_ticks,
+    )
 }
 
 #[cfg(test)]

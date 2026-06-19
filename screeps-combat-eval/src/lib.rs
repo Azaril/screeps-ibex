@@ -14,6 +14,7 @@
 //! register items (BREACH / DEF-2 / CTRL / PARITY) land as the sim grows ramparts/controllers.
 
 pub mod metrics;
+pub mod scoring;
 
 use screeps::{Part, Position, RoomCoordinate, RoomName};
 use screeps_combat_agent::opponents::{run_engagement, world_from_units, DrainAgent, RushAgent, TurtleAgent, Unit};
