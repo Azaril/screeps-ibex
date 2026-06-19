@@ -61,12 +61,14 @@ pub enum TowerAction {
 }
 
 /// All actors' intents for a tick. Creep actions are keyed by creep id; tower actions by the
-/// tower's index in [`CombatWorld::towers`]. (The decision of *what* to do is the agent's job,
-/// H2; this resolver only executes a given set under the engine's priority rules.)
+/// tower's stable [`StructureId`] (**not** its `CombatWorld::towers` index — a destroyed tower is
+/// retained out of the Vec each tick, so indices shift; keying by id keeps a multi-tower nest's
+/// intents valid as towers fall — U4). (The decision of *what* to do is the agent's job, H2; this
+/// resolver only executes a given set under the engine's priority rules.)
 #[derive(Clone, Debug, Default)]
 pub struct Intents {
     pub creeps: HashMap<CreepId, Vec<CombatAction>>,
-    pub towers: HashMap<usize, TowerAction>,
+    pub towers: HashMap<StructureId, TowerAction>,
     /// Per-creep move direction this tick (resolved in phase C). The *decision* (which way) is the
     /// agent's job (H2 / the rover pathfinder); this resolver only executes a given direction.
     pub moves: HashMap<CreepId, Direction>,
@@ -87,8 +89,9 @@ impl Intents {
         self.creeps.insert(creep, actions);
         self
     }
-    pub fn set_tower(&mut self, tower_idx: usize, action: TowerAction) -> &mut Self {
-        self.towers.insert(tower_idx, action);
+    /// Set a tower's action for the tick, keyed by the tower's stable [`StructureId`].
+    pub fn set_tower(&mut self, tower_id: StructureId, action: TowerAction) -> &mut Self {
+        self.towers.insert(tower_id, action);
         self
     }
     /// Set a creep's move direction for the tick.
@@ -361,7 +364,11 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
 
     // Towers act (cost energy, range falloff). A hostile tower's attack on the safe-mode owner is
     // zeroed; heal/repair target friendlies.
-    for (&idx, action) in &intents.towers {
+    for (&tower_id, action) in &intents.towers {
+        let idx = match world.towers.iter().position(|tw| tw.id == tower_id) {
+            Some(i) => i,
+            None => continue, // a tower destroyed earlier this resolution / unknown id
+        };
         let (tower_owner, tower_pos, can_fire) = match world.towers.get(idx) {
             Some(tw) => (tw.owner, tw.pos, tw.energy >= TOWER_ENERGY_COST),
             None => continue,
@@ -649,7 +656,7 @@ mod tests {
         for _ in 0..10 {
             let mut i = Intents::new();
             i.set(1, vec![CombatAction::Heal(1)]);
-            i.set_tower(0, TowerAction::Attack(1));
+            i.set_tower(200, TowerAction::Attack(1));
             resolve_tick(&mut world, &i);
         }
         assert!(
@@ -888,7 +895,7 @@ mod tests {
         for _ in 0..5 {
             let mut i = Intents::new();
             i.set(1, vec![CombatAction::RangedAttack(2)]);
-            i.set_tower(0, TowerAction::Heal(2));
+            i.set_tower(200, TowerAction::Heal(2));
             resolve_tick(&mut world, &i);
         }
         assert!(
@@ -923,7 +930,7 @@ mod tests {
         for _ in 0..5 {
             let mut i = Intents::new();
             i.set(1, vec![CombatAction::Dismantle(100)]);
-            i.set_tower(0, TowerAction::Repair(100));
+            i.set_tower(200, TowerAction::Repair(100));
             resolve_tick(&mut world, &i);
         }
         let r = world
@@ -996,7 +1003,7 @@ mod tests {
         };
         let mut i = Intents::new();
         i.set(1, vec![CombatAction::Dismantle(200)]);
-        i.set_tower(0, TowerAction::Attack(2));
+        i.set_tower(200, TowerAction::Attack(2));
         let r = resolve_tick(&mut world, &i);
         assert!(
             r.destroyed_structures.contains(&200),
@@ -1027,7 +1034,7 @@ mod tests {
             ..Default::default()
         };
         let mut i = Intents::new();
-        i.set_tower(0, TowerAction::Repair(201));
+        i.set_tower(200, TowerAction::Repair(201));
         resolve_tick(&mut world, &i);
         let b = world.towers.iter().find(|t| t.id == 201).expect("alive");
         assert_eq!(b.hits, 1800, "friendly tower repaired by 800");

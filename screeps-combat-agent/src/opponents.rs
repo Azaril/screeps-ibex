@@ -185,18 +185,16 @@ impl TacticalAgent for DrainAgent {
 /// creep (any owner but its own). Towers aren't agent-driven, so the harness drives them — this is
 /// the defender's tower AI for tower scenarios (drain, breach-under-fire).
 fn tower_intents(world: &CombatWorld, intents: &mut Intents) {
-    for (idx, tower) in world.towers.iter().enumerate() {
-        if !tower.is_alive() {
-            continue;
-        }
+    for tower in world.towers.iter().filter(|t| t.is_alive()) {
         let target = world
             .creeps
             .iter()
             .filter(|c| c.is_alive() && c.owner != tower.owner)
             .min_by_key(|c| tower.pos.get_range_to(c.pos));
         if let Some(t) = target {
+            // Keyed by the tower's stable id (U4) so a nest's shots stay valid as towers fall.
             // resolve_tick's `can_fire` gate skips the shot if the tower is out of energy.
-            intents.set_tower(idx, TowerAction::Attack(t.id));
+            intents.set_tower(tower.id, TowerAction::Attack(t.id));
         }
     }
 }

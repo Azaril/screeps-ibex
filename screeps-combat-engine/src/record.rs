@@ -78,7 +78,9 @@ pub struct TickFrame {
     pub structures: Vec<StructureFrame>,
     pub towers: Vec<TowerFrame>,
     pub intents: Vec<CreepIntentRecord>,
-    pub tower_intents: Vec<(usize, TowerAction)>,
+    /// Tower actions this tick, keyed by the tower's stable [`StructureId`] (U4 — was the towers-Vec
+    /// index, which shifts as towers are destroyed).
+    pub tower_intents: Vec<(StructureId, TowerAction)>,
     pub results: Vec<CreepResult>,
     pub deaths: Vec<CreepId>,
     pub destroyed_structures: Vec<StructureId>,
@@ -227,8 +229,8 @@ pub fn record_tick(
         }
     }
     intent_records.sort_by_key(|r| r.id);
-    let mut tower_intents: Vec<(usize, TowerAction)> =
-        intents.towers.iter().map(|(&i, &a)| (i, a)).collect();
+    let mut tower_intents: Vec<(StructureId, TowerAction)> =
+        intents.towers.iter().map(|(&id, &a)| (id, a)).collect();
     tower_intents.sort_by_key(|x| x.0);
 
     let report = resolve_tick(world, intents);

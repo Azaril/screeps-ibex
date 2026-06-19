@@ -26,7 +26,9 @@ use screeps_combat_decision::{
     decide_combat, decide_movement, select_focus_target, CombatBodyPart, CombatCreepDto, CombatIntent,
     CombatStructureDto, CombatView, CreepOrders, FocusTarget, Ownership, SquadMovement, SquadStateDto, TacticalAgent,
 };
-use screeps_combat_engine::{CombatAction, CombatWorld, CreepId, Intents, PlayerId, SimCreep, StructureKind};
+use screeps_combat_engine::{
+    CombatAction, CombatWorld, CreepId, Intents, PlayerId, SimCreep, StructureId, StructureKind,
+};
 use std::collections::HashMap;
 
 /// Mint a stable, host-constructible `RawObjectId` for a sim creep from its `CreepId`. Sim creeps
@@ -85,6 +87,12 @@ pub struct SimView {
     focus: Option<FocusTarget>,
     /// synthetic `RawObjectId` → the engine `CreepId` it stands for (both sides).
     id_to_creep: HashMap<RawObjectId, CreepId>,
+    /// In-room `Position` → the engine `StructureId` to hit there (U3 apply layer). Decision intents
+    /// target a structure by **position** (`id: None`); this resolves it back to an engine id so a
+    /// creep can `AttackStructure`/`Dismantle` a specific wall/rampart/tower/spawn. On a shared tile
+    /// (a rampart over a spawn) the **shield** wins — you must break the rampart before the structure
+    /// it covers, and the engine applies single-target structure damage directly (no auto-redirect).
+    pos_to_struct: HashMap<Position, StructureId>,
 }
 
 impl SimView {
@@ -108,25 +116,49 @@ impl SimView {
             }
         }
 
+        // `pos_to_struct` resolves a decision target position back to the engine structure id. On a
+        // shared tile the shield (rampart, then wall) wins so a breach hits it first; `prefer` ranks
+        // candidates (lower = keep) and only overwrites when the newcomer outranks the incumbent.
+        let mut pos_to_struct: HashMap<Position, StructureId> = HashMap::new();
+        let mut struct_kind_at: HashMap<Position, StructureKind> = HashMap::new();
+        let prefer = |k: StructureKind| match k {
+            StructureKind::Rampart => 0,
+            StructureKind::Wall => 1,
+            _ => 2,
+        };
+        let mut index_struct = |pos: Position, kind: StructureKind, id: StructureId| {
+            let replace = struct_kind_at.get(&pos).is_none_or(|&prev| prefer(kind) < prefer(prev));
+            if replace {
+                pos_to_struct.insert(pos, id);
+                struct_kind_at.insert(pos, kind);
+            }
+        };
+
         let mut structures: Vec<CombatStructureDto> = world
             .structures
             .iter()
             .filter(|s| s.is_alive())
-            .map(|s| CombatStructureDto {
-                pos: s.pos,
-                structure_type: structure_type(s.kind),
-                hits: s.hits,
-                hits_max: s.hits_max,
-                ownership: ownership(s.owner, me_owner),
+            .map(|s| {
+                index_struct(s.pos, s.kind, s.id);
+                CombatStructureDto {
+                    pos: s.pos,
+                    structure_type: structure_type(s.kind),
+                    hits: s.hits,
+                    hits_max: s.hits_max,
+                    ownership: ownership(s.owner, me_owner),
+                }
             })
             .collect();
         // Towers are targetable structures too (engine kind `Tower`).
-        structures.extend(world.towers.iter().filter(|t| t.is_alive()).map(|t| CombatStructureDto {
-            pos: t.pos,
-            structure_type: StructureType::Tower,
-            hits: t.hits,
-            hits_max: t.hits_max,
-            ownership: ownership(Some(t.owner), me_owner),
+        structures.extend(world.towers.iter().filter(|t| t.is_alive()).map(|t| {
+            index_struct(t.pos, StructureKind::Tower, t.id);
+            CombatStructureDto {
+                pos: t.pos,
+                structure_type: StructureType::Tower,
+                hits: t.hits,
+                hits_max: t.hits_max,
+                ownership: ownership(Some(t.owner), me_owner),
+            }
         }));
 
         // The shared focus is creep-only (structures are scanned per-creep by `decide_combat`).
@@ -144,6 +176,7 @@ impl SimView {
             structures,
             focus,
             id_to_creep,
+            pos_to_struct,
         }
     }
 
@@ -210,16 +243,29 @@ impl SimView {
     pub fn creep_for(&self, id: RawObjectId) -> Option<CreepId> {
         self.id_to_creep.get(&id).copied()
     }
+
+    /// Resolve a structure-targeted intent's **position** back to the engine `StructureId` to hit
+    /// (U3 apply layer; the shield wins on a shared tile — see [`SimView::pos_to_struct`]).
+    pub fn structure_for(&self, pos: Position) -> Option<StructureId> {
+        self.pos_to_struct.get(&pos).copied()
+    }
 }
 
-/// Translate a creep-targeted [`CombatIntent`] into a [`CombatAction`] the engine resolver accepts
-/// (resolving the target id back to a `CreepId`). Returns `None` for movement intents and
-/// structure-targeted intents (the latter need structure-id resolution — a follow-on with the
-/// scenario/apply layer, P2.H4).
+/// Translate a [`CombatIntent`] into a [`CombatAction`] the engine resolver accepts. Creep-targeted
+/// intents (`id: Some`) resolve via [`SimView::creep_for`]; **structure-targeted** intents (`id: None`
+/// — the decision layer addresses immobile structures by position) resolve via
+/// [`SimView::structure_for`] (U3 apply layer): `Attack`/`RangedAttack` on a structure become
+/// `AttackStructure`/`RangedAttackStructure`, and `Dismantle` becomes the WORK-part dismantle. Returns
+/// `None` for movement intents and for a structure-targeted intent whose position holds no structure.
 pub fn to_engine_action(intent: &CombatIntent, view: &SimView) -> Option<CombatAction> {
     match intent {
         CombatIntent::Attack { id: Some(raw), .. } => view.creep_for(*raw).map(CombatAction::Attack),
+        CombatIntent::Attack { id: None, target } => view.structure_for(*target).map(CombatAction::AttackStructure),
         CombatIntent::RangedAttack { id: Some(raw), .. } => view.creep_for(*raw).map(CombatAction::RangedAttack),
+        CombatIntent::RangedAttack { id: None, target } => {
+            view.structure_for(*target).map(CombatAction::RangedAttackStructure)
+        }
+        CombatIntent::Dismantle { target, .. } => view.structure_for(*target).map(CombatAction::Dismantle),
         CombatIntent::RangedMassAttack => Some(CombatAction::RangedMassAttack),
         CombatIntent::Heal { id: Some(raw), .. } => view.creep_for(*raw).map(CombatAction::Heal),
         CombatIntent::RangedHeal { id: Some(raw), .. } => view.creep_for(*raw).map(CombatAction::RangedHeal),
@@ -418,5 +464,79 @@ mod tests {
         };
         let sv = SimView::from_world(&world, 0, pos(25, 25), room());
         assert_eq!(HoldAgent.decide(&sv.view_for(0)), vec![CombatIntent::Idle]);
+    }
+
+    // ── U3: structure-targeted apply layer ──
+
+    #[test]
+    fn to_engine_action_resolves_structure_targeted_intents() {
+        use screeps_combat_engine::SimStructure;
+        // A hostile spawn at (25,25); the view should resolve a by-position structure intent to the
+        // engine `AttackStructure`/`RangedAttackStructure`/`Dismantle` on the spawn's id (5_000_000).
+        let world = CombatWorld {
+            structures: vec![SimStructure {
+                id: 5_000_000,
+                kind: StructureKind::Spawn,
+                owner: Some(1),
+                pos: pos(25, 25),
+                hits: 5000,
+                hits_max: 5000,
+            }],
+            ..Default::default()
+        };
+        let sv = SimView::from_world(&world, 0, pos(24, 25), room());
+        let t = pos(25, 25);
+        assert_eq!(
+            to_engine_action(&CombatIntent::Attack { target: t, id: None }, &sv),
+            Some(CombatAction::AttackStructure(5_000_000))
+        );
+        assert_eq!(
+            to_engine_action(&CombatIntent::RangedAttack { target: t, id: None }, &sv),
+            Some(CombatAction::RangedAttackStructure(5_000_000))
+        );
+        assert_eq!(
+            to_engine_action(&CombatIntent::Dismantle { target: t, id: None }, &sv),
+            Some(CombatAction::Dismantle(5_000_000))
+        );
+        // No structure at an empty tile → None (so a stray structure intent is dropped, not misrouted).
+        assert_eq!(to_engine_action(&CombatIntent::Attack { target: pos(10, 10), id: None }, &sv), None);
+    }
+
+    #[test]
+    fn shield_wins_on_a_shared_tile() {
+        use screeps_combat_engine::SimStructure;
+        // A rampart (id 7) shielding a spawn (id 5) on the same tile: a by-position attack must hit
+        // the rampart first (the engine applies single-target structure damage with no auto-redirect,
+        // so the apply layer breaks the shield before the structure it covers).
+        let world = CombatWorld {
+            structures: vec![
+                SimStructure { id: 5, kind: StructureKind::Spawn, owner: Some(1), pos: pos(25, 25), hits: 5000, hits_max: 5000 },
+                SimStructure { id: 7, kind: StructureKind::Rampart, owner: Some(1), pos: pos(25, 25), hits: 100_000, hits_max: 100_000 },
+            ],
+            ..Default::default()
+        };
+        let sv = SimView::from_world(&world, 0, pos(24, 25), room());
+        assert_eq!(sv.structure_for(pos(25, 25)), Some(7), "the rampart, not the shielded spawn");
+    }
+
+    // ── U4: tower intents keyed by stable StructureId ──
+
+    #[test]
+    fn tower_intents_survive_a_nest_losing_a_tower() {
+        use screeps_combat_engine::{resolve_tick, SimTower, TowerAction};
+        // Two towers (ids 11, 22). Destroy the first in the world (retain drops it, shifting indices),
+        // then a set_tower keyed by id 22 must still fire — index-keying would have gone stale.
+        let mut world = CombatWorld {
+            creeps: vec![creep(1, 0, 25, 25, &[(Part::Move, 1)])], // a target for the surviving tower
+            towers: vec![
+                SimTower { id: 11, owner: 1, pos: pos(10, 10), energy: 0, hits: 0, hits_max: 3000 }, // dead → retained out
+                SimTower { id: 22, owner: 1, pos: pos(25, 26), energy: 1000, hits: 3000, hits_max: 3000 },
+            ],
+            ..Default::default()
+        };
+        let mut intents = Intents::new();
+        intents.set_tower(22, TowerAction::Attack(1)); // keyed by id, not the (now-shifted) index
+        let report = resolve_tick(&mut world, &intents);
+        assert!(report.outcomes.get(&1).is_some_and(|o| o.effective_damage > 0), "tower 22 still fired by id");
     }
 }
