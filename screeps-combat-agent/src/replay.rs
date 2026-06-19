@@ -33,7 +33,7 @@ pub fn to_svg(rec: &CombatRecording) -> String {
     let frame_h = ROOM * CELL;
     let n = rec.frames.len().max(1) as u32;
     let cols = COLS.min(n);
-    let rows = (n + cols - 1) / cols;
+    let rows = n.div_ceil(cols);
     let cell_h = LABEL_H + frame_h + GAP;
     let total_w = PAD + cols * (frame_w + GAP);
     let total_h = PAD + rows * cell_h;

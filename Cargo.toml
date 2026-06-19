@@ -16,6 +16,9 @@ members = [
     # not the bot, it is a member too — so it inherits the workspace [patch] table + Cargo.lock
     # (no replication) and builds host+wasm like the other pure crates (operator note 2026-06-17).
     "screeps-combat-agent",
+    # The combat policy layer (H5): the EXP-* experiment register over the sim. Member like agent —
+    # deps only on the combat members + game-api.
+    "screeps-combat-eval",
 ]
 exclude = [
     "screeps-foreman-bench",
