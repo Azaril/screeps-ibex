@@ -11,7 +11,7 @@
 | **THIS doc** | Current status by workstream + the single ordered remaining-work plan + gates. Supersedes the phase-2.md Status columns. |
 | ADR [0008](../design/0008-combat-and-squad-architecture.md) (+ [0008a](../design/0008a-combat-tactics.md) annex) | Design end-state / why. 0008a = the ~55-tactic catalog + ~70-knob param table + EXP-* register. |
 | [`phase-2.md`](../execution/phase-2.md) | Cold-resume per-task historical log: §2.0 newest-first status log w/ commit SHAs, §2.2–2.7a per-task validation cells, §2.8 sequencing graph, §2.9 checkpoints, §2.1 operator-settled constraints. |
-| [`../execution/g4-offense-plan.md`](../execution/g4-offense-plan.md), [`../execution/g3-tail-plan.md`](../execution/g3-tail-plan.md) (ARCHIVED in place) | Archived sub-plan history (O-series + 8-step kite). Redirect here for what remains. |
+| ~~g4-offense-plan.md / g3-tail-plan.md~~ (DELETED) | Old sub-plans, removed 2026-06-18 — their remaining work folded into §5–6 here, landed history into [`phase-2.md`](../execution/phase-2.md) §2.0. Full text in git history if ever needed. |
 
 One-line rule: **forward-looking status lives here; landed-task detail lives in phase-2.md; design rationale lives in ADR 0008.**
 
@@ -163,5 +163,5 @@ Unblock map: CP-H/CP-M ← live soak + H4; CP-I ← I1/I2; CP-G ← O7; CP-W ←
 
 - **Design end-state:** ADR [0008](../design/0008-combat-and-squad-architecture.md) (+ [0008a](../design/0008a-combat-tactics.md) tactics annex + EXP register).
 - **Landed-task history with SHAs:** [`phase-2.md`](../execution/phase-2.md) §2.0 (newest-first); §2.9 checkpoints.
-- **Archived sub-plans (ARCHIVED in place):** [`../execution/g3-tail-plan.md`](../execution/g3-tail-plan.md) (8-step kite history; T-POS/L1/L2 future now tracked in §5 here) and [`../execution/g4-offense-plan.md`](../execution/g4-offense-plan.md) (O-series landed history + the `AttackReason→ObjectiveKind` mapping table + O7 deletion checklist).
+- **Old sub-plans (DELETED 2026-06-18):** `g3-tail-plan.md` (8-step kite) and `g4-offense-plan.md` (O-series) were removed once complete — their remaining items live in §5, the legacy delete-tracking in §6, and the `AttackReason→ObjectiveKind` mapping in ADR 0008 §2. Landed history with SHAs: [`phase-2.md`](../execution/phase-2.md) §2.0. Full original text recoverable from git history.
 - **This doc is the source of truth for status and supersedes the phase-2.md Status columns.**
