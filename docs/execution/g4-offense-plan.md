@@ -1,5 +1,7 @@
 # P2.G4 — Offense migration (`AttackMission` → objectives) + final legacy removal
 
+> **⚠ ARCHIVED (2026-06-18).** O1/O2/O3/O4/O6 are landed; only **O5** (power-bank `Farm`) + **O7** (delete the legacy) + the deferred **heavy multi-squad assault** remain. For the current plan see the master doc [`../plans/combat-overhaul-plan.md`](../plans/combat-overhaul-plan.md) §5–6; for the landed-increment history with SHAs see [`phase-2.md`](phase-2.md) §2.0 (at…ay). This file is preserved as the authoritative record of the O-series sequencing rationale, the `AttackReason→ObjectiveKind` mapping table, the manager-gap audit, and the O7 deletion checklist + soak gate.
+
 > Companion to [`g3-tail-plan.md`](g3-tail-plan.md). Authored 2026-06-18 after the **defense
 > half** of the legacy removal landed (`SquadDefenseMission` deleted; all defense now routes
 > through `Defend` objectives — see phase-2 §2.0). This is the **offense half**: it is the

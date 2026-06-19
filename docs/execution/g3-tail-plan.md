@@ -1,5 +1,7 @@
 # P2.G3-tail — Cohesive, pathfinding-scored squad movement (kite/flee) + heal-port + sim wiring
 
+> **⚠ ARCHIVED (2026-06-18).** All 8 steps are DONE. The remaining forward-looking items (T-POS attack-positioning, L1 cross-room flee, L2 trait-based lazy view) are tracked in the master doc [`../plans/combat-overhaul-plan.md`](../plans/combat-overhaul-plan.md) §5; landed history with SHAs is in [`phase-2.md`](phase-2.md) §2.0 (ao/ap/aq). NOTE: the "Only Step 6 bumps WORLD_FORMAT_VERSION" line below is stale — no g3-tail step bumped WFV (Step 6 itself records the 11→12 bump was over-cautious; WFV stayed 11). Preserved as the kiting/cohesion design record.
+
 > Synthesized from the design workflow (`wpk8wt7bo`, 2026-06-18). This is the execution checklist;
 > rationale is in [ADR 0008 §4.1/§5](../design/0008-combat-and-squad-architecture.md). Each step is
 > **independently committable + green** (host tests + wasm build + clippy). Only **Step 6** bumps
