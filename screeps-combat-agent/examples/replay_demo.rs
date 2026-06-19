@@ -7,7 +7,18 @@
 use screeps::{Part, Position, RoomCoordinate};
 use screeps_combat_agent::opponents::{run_engagement, world_from_units, DrainAgent, RushAgent, TurtleAgent, Unit};
 use screeps_combat_agent::{replay, IbexAgent};
-use screeps_combat_engine::{CombatWorld, SimBody, SimCreep, SimTower};
+use screeps_combat_engine::{CombatRecording, CombatWorld, SimBody, SimCreep, SimTower};
+
+/// Evenly sample a recording down to at most `max` frames (always keeping first + last) — a compact
+/// replay for inline viewing.
+fn sample(rec: &CombatRecording, max: usize) -> CombatRecording {
+    let l = rec.frames.len();
+    if l <= max {
+        return rec.clone();
+    }
+    let frames = (0..max).map(|i| rec.frames[i * (l - 1) / (max - 1)].clone()).collect();
+    CombatRecording { frames }
+}
 
 fn p(x: u8, y: u8) -> Position {
     Position::new(RoomCoordinate::new(x).unwrap(), RoomCoordinate::new(y).unwrap(), "W1N1".parse().unwrap())
@@ -67,11 +78,11 @@ fn main() {
 }
 
 fn write(dir: &std::path::Path, name: &str, out: &screeps_combat_agent::opponents::EngagementOutcome) {
-    let path = dir.join(format!("{name}.svg"));
-    std::fs::write(&path, replay::to_svg(&out.recording)).expect("write svg");
+    // Full filmstrip + a compact (≤6-frame) version for inline viewing.
+    std::fs::write(dir.join(format!("{name}.svg")), replay::to_svg(&out.recording)).expect("write svg");
+    std::fs::write(dir.join(format!("{name}_compact.svg")), replay::to_svg(&sample(&out.recording, 6))).expect("write svg");
     println!(
-        "{:28} ticks={:2} a_alive={} b_alive={} cohesion_a={} tower_e={} -> {}",
-        name, out.ticks, out.side_a_alive, out.side_b_alive, out.worst_cohesion_a, out.side_b_tower_energy,
-        path.display()
+        "{:28} ticks={:2} a_alive={} b_alive={} cohesion_a={} tower_e={}",
+        name, out.ticks, out.side_a_alive, out.side_b_alive, out.worst_cohesion_a, out.side_b_tower_energy
     );
 }

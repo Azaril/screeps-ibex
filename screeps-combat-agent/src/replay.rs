@@ -26,11 +26,17 @@ fn owner_fill(owner: PlayerId) -> &'static str {
 /// Render the recording as an SVG filmstrip (one mini-map per tick, left→right). Deterministic —
 /// the recording's frames + rows are already id-sorted, so output never depends on map iteration.
 pub fn to_svg(rec: &CombatRecording) -> String {
+    // Wrap the timeline into a row-major grid (read left→right, top→bottom) so long engagements
+    // stay viewable instead of a single ultra-wide strip.
+    const COLS: u32 = 8;
     let frame_w = ROOM * CELL;
     let frame_h = ROOM * CELL;
     let n = rec.frames.len().max(1) as u32;
-    let total_w = PAD + n * (frame_w + GAP);
-    let total_h = PAD + LABEL_H + frame_h + PAD;
+    let cols = COLS.min(n);
+    let rows = (n + cols - 1) / cols;
+    let cell_h = LABEL_H + frame_h + GAP;
+    let total_w = PAD + cols * (frame_w + GAP);
+    let total_h = PAD + rows * cell_h;
 
     let mut s = String::new();
     let _ = write!(
@@ -39,8 +45,8 @@ pub fn to_svg(rec: &CombatRecording) -> String {
          viewBox=\"0 0 {total_w} {total_h}\" font-family=\"monospace\" font-size=\"9\">"
     );
     for (i, f) in rec.frames.iter().enumerate() {
-        let ox = PAD + i as u32 * (frame_w + GAP);
-        let oy = PAD + LABEL_H;
+        let ox = PAD + (i as u32 % cols) * (frame_w + GAP);
+        let oy = PAD + (i as u32 / cols) * cell_h + LABEL_H;
         let _ = write!(s, "<g transform=\"translate({ox},{oy})\">");
         let _ = write!(
             s,
