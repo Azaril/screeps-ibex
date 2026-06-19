@@ -49,9 +49,25 @@ pub struct CreepIntentRecord {
 #[derive(Clone, Copy, Debug)]
 pub struct CreepResult {
     pub id: CreepId,
+    /// Effective damage after TOUGH/boost reduction (what actually came off hits).
     pub damage_taken: u32,
+    /// Raw incoming damage before reduction — `raw - effective` = TOUGH absorption / overkill.
+    pub raw_damage: u32,
     pub healed: u32,
     pub died: bool,
+}
+
+/// A tower's state at the start of a recorded tick (towers aren't in `structures`, so they need
+/// their own frame for the energy/HP-over-time metrics — P2.H5/U2).
+#[derive(Clone, Copy, Debug)]
+pub struct TowerFrame {
+    pub id: StructureId,
+    pub owner: PlayerId,
+    pub x: u8,
+    pub y: u8,
+    pub energy: u32,
+    pub hits: u32,
+    pub hits_max: u32,
 }
 
 /// One recorded tick: pre-tick state + intents + outcomes.
@@ -60,11 +76,15 @@ pub struct TickFrame {
     pub tick: u32,
     pub creeps: Vec<CreepFrame>,
     pub structures: Vec<StructureFrame>,
+    pub towers: Vec<TowerFrame>,
     pub intents: Vec<CreepIntentRecord>,
     pub tower_intents: Vec<(usize, TowerAction)>,
     pub results: Vec<CreepResult>,
     pub deaths: Vec<CreepId>,
     pub destroyed_structures: Vec<StructureId>,
+    /// `destroyed_structures` tagged with each one's kind (so metrics can tell a downed tower from a
+    /// breached wall). Additive parallel to `destroyed_structures` — same ids, kept non-breaking.
+    pub destroyed_kinds: Vec<(StructureId, StructureKind)>,
 }
 
 /// A full engagement recording — a deterministic, scrubbable sequence of frames.
@@ -122,6 +142,13 @@ impl CombatRecording {
                     st.kind, st.owner, st.id, st.x, st.y, st.hits, st.hits_max
                 );
             }
+            for tw in &f.towers {
+                let _ = writeln!(
+                    s,
+                    "  [Tower P{} #{}] ({},{}) {}/{}hp e{}",
+                    tw.owner, tw.id, tw.x, tw.y, tw.hits, tw.hits_max, tw.energy
+                );
+            }
             if !f.destroyed_structures.is_empty() {
                 let _ = writeln!(s, "  destroyed: {:?}", f.destroyed_structures);
             }
@@ -164,6 +191,19 @@ pub fn record_tick(
             hits_max: s.hits_max,
         })
         .collect();
+    let towers: Vec<TowerFrame> = world
+        .towers
+        .iter()
+        .map(|t| TowerFrame {
+            id: t.id,
+            owner: t.owner,
+            x: t.pos.x().u8(),
+            y: t.pos.y().u8(),
+            energy: t.energy,
+            hits: t.hits,
+            hits_max: t.hits_max,
+        })
+        .collect();
 
     // Intent records: union of creeps with combat actions and creeps with only a move; id-sorted.
     let mut intent_records: Vec<CreepIntentRecord> = intents
@@ -199,6 +239,7 @@ pub fn record_tick(
         .map(|(&id, o)| CreepResult {
             id,
             damage_taken: o.effective_damage,
+            raw_damage: o.raw_damage,
             healed: o.heal,
             died: o.died,
         })
@@ -208,16 +249,31 @@ pub fn record_tick(
     deaths.sort_unstable();
     let mut destroyed_structures = report.destroyed_structures.clone();
     destroyed_structures.sort_unstable();
+    // Tag each destroyed id by kind from the PRE-tick snapshots (structures + towers).
+    let mut destroyed_kinds: Vec<(StructureId, StructureKind)> = destroyed_structures
+        .iter()
+        .map(|&id| {
+            let kind = structures
+                .iter()
+                .find(|s| s.id == id)
+                .map(|s| s.kind)
+                .or_else(|| towers.iter().any(|t| t.id == id).then_some(StructureKind::Tower));
+            (id, kind.unwrap_or(StructureKind::Wall))
+        })
+        .collect();
+    destroyed_kinds.sort_by_key(|x| x.0);
 
     rec.frames.push(TickFrame {
         tick,
         creeps,
         structures,
+        towers,
         intents: intent_records,
         tower_intents,
         results,
         deaths,
         destroyed_structures,
+        destroyed_kinds,
     });
     report
 }
