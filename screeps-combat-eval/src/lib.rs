@@ -13,11 +13,12 @@
 //! seeded gate are the follow-on increment (they need Docker-capture integration). The harder
 //! register items (BREACH / DEF-2 / CTRL / PARITY) land as the sim grows ramparts/controllers.
 
+pub mod metrics;
+
 use screeps::{Part, Position, RoomCoordinate, RoomName};
 use screeps_combat_agent::opponents::{run_engagement, world_from_units, DrainAgent, RushAgent, TurtleAgent, Unit};
 use screeps_combat_agent::{HoldAgent, IbexAgent};
-use screeps_combat_engine::{CombatRecording, CombatWorld, PlayerId, SimBody, SimCreep, SimTower};
-use std::collections::HashSet;
+use screeps_combat_engine::{CombatWorld, SimBody, SimCreep, SimTower};
 
 // ─── Framework ───────────────────────────────────────────────────────────────
 
@@ -98,16 +99,6 @@ fn pos(x: u8, y: u8) -> Position {
     Position::new(RoomCoordinate::new(x).unwrap(), RoomCoordinate::new(y).unwrap(), room())
 }
 
-/// Total effective damage taken across a side's creeps over the whole run (from the replay).
-fn damage_taken_by(rec: &CombatRecording, owner: PlayerId) -> u32 {
-    let mut total = 0;
-    for f in &rec.frames {
-        let ids: HashSet<_> = f.creeps.iter().filter(|c| c.owner == owner).map(|c| c.id).collect();
-        total += f.results.iter().filter(|r| ids.contains(&r.id)).map(|r| r.damage_taken).sum::<u32>();
-    }
-    total
-}
-
 // ─── Experiments (ADR 0008a register) ────────────────────────────────────────
 
 /// EXP-FOUND-1 — the two-phase kill inequality predicts kill-or-not. DPS > heal ⇒ the target dies;
@@ -144,12 +135,13 @@ fn exp_kite_1() -> ExperimentResult {
         &[Unit::new(vec![(Part::Attack, 10), (Part::Move, 10)], vec![pos(27, 25)])],
     );
     let out = run_engagement(world, room(), 0, pos(30, 25), &mut IbexAgent, 1, pos(27, 25), &mut RushAgent, 30);
-    let dmg = damage_taken_by(&out.recording, 0);
+    let m = metrics::SideMetrics::from_recording(&out.recording, 0); // U5 metrics power the gate
     result(
         "EXP-KITE-1",
         "a range-3 kiter at MOVE parity takes 0 melee damage and chips the chaser",
         vec![
-            measured("melee damage taken by the kiter", dmg as f64, "== 0", dmg == 0),
+            measured("melee damage taken by the kiter", m.damage_taken as f64, "== 0", m.damage_taken == 0),
+            boolean("the kiter's DPS is uncontaminated by towers", "creep==total", m.creep_damage_dealt == m.damage_to_enemy_creeps),
             boolean("the chaser dies to ranged fire", "dead", out.side_b_alive == 0),
         ],
     )
