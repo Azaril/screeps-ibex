@@ -589,10 +589,15 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// 12 = defense legacy removal (P2.G4, defense half): the `MissionData::SquadDefense`
 /// variant is deleted (SquadDefenseMission removed — all defense now routes through
 /// `Defend` objectives on the CombatObjectiveQueue), reshaping the MissionData enum.
+/// 13 = offense legacy removal (P2.G4-O7): the `MissionData::AttackMission` +
+/// `OperationData::Attack` variants are deleted (AttackMission/AttackOperation/
+/// AttackReason removed — all offense now routes through Secure/Dismantle/Harass
+/// objectives on the CombatObjectiveQueue), reshaping both the MissionData and
+/// OperationData enums.
 /// NOTE: bincode is positional and never signals early end-of-sequence, so a
 /// trailing #[serde(default)] field does NOT make old payloads decode safely --
 /// the version fingerprint is the only real gate, hence this bump.
-const WORLD_FORMAT_VERSION: u32 = 12;
+const WORLD_FORMAT_VERSION: u32 = 13;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode

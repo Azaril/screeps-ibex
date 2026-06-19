@@ -8,7 +8,6 @@
 
 use crate::creep::CreepOwner;
 use crate::jobs::data::JobData;
-use crate::military::squad::SquadContext;
 use crate::missions::data::MissionData;
 use crate::operations::data::OperationData;
 use crate::room::data::RoomData;
@@ -151,8 +150,6 @@ pub struct SummarizeMissionSystemData<'a> {
     entities: Entities<'a>,
     mission_data: ReadStorage<'a, MissionData>,
     mission_summary: WriteStorage<'a, MissionSummaryComponent>,
-    squad_contexts: ReadStorage<'a, SquadContext>,
-    creep_owner: ReadStorage<'a, CreepOwner>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -165,13 +162,7 @@ impl<'a> System<'a> for SummarizeMissionSystem {
         }
 
         for (entity, mission_data) in (&data.entities, &data.mission_data).join() {
-            let content = match mission_data {
-                MissionData::AttackMission(ref cell) => {
-                    let mission = cell.borrow();
-                    mission.summarize_with(&data.squad_contexts, &data.creep_owner)
-                }
-                _ => mission_data.summarize(),
-            };
+            let content = mission_data.summarize();
             let _ = data.mission_summary.insert(entity, MissionSummaryComponent { content });
         }
     }

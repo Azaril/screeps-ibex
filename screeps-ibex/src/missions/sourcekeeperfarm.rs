@@ -1,9 +1,9 @@
 //! Persistent Source Keeper farm mission (ADR 0018 §3.3, P2.K2c).
 //!
 //! Owns a `duo_sk_farmer` squad that suppresses the keepers of one SK room so
-//! K3 mining can harvest around them. UNLIKE [`AttackMission`](super::attack_mission)
-//! (one-shot — it completes and deletes itself once the target is clear), this
-//! mission runs **indefinitely**: keepers respawn every 300t, so suppression is
+//! K3 mining can harvest around them. This mission requests a low-priority
+//! `Farm{SourceKeeper}` objective (the `SquadManager` fields the duo); it runs
+//! **indefinitely**: keepers respawn every 300t, so suppression is
 //! a standing commitment with per-creep TTL renewal and no completion-on-clear.
 //! It is created/retired by `SourceKeeperOperation` per the ROI decision.
 //!

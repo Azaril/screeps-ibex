@@ -384,9 +384,9 @@ impl Engaged {
         if let Some(ref orders) = tick_orders {
             match &orders.movement {
                 TickMovement::Formation => {
-                    // Anchored AttackMission squads follow their cached anchor path. A manager-fielded
-                    // squad (P2.G3-tail) has no anchor; it routes movement through the pure
-                    // `decide_movement` using the squad's shared directive (the cohesive,
+                    // A squad with a cached anchor path (manager-fielded siege/Formation, O1)
+                    // follows it. An anchorless manager squad (P2.G3-tail) routes movement through
+                    // the pure `decide_movement` using the squad's shared directive (the cohesive,
                     // pathfinding-scored kite/advance goal the manager stamped on the orders) — the job
                     // issues the request (§5 ⚑ job-owns-movement). decide_movement's own precedence
                     // (critical-HP flee, immediate melee-evade, cohesion rejoin) keeps the block together.
@@ -523,7 +523,7 @@ impl Engaged {
     // `squad_cohesion_radius` on the orders), run `decide_movement` (the SAME code the sim runs —
     // cohesive kiting/advance with the critical-HP + melee-evade + rejoin precedence), and translate
     // its single movement goal into a rover request. Used for anchorless manager squads (the SK duo,
-    // defense); AttackMission squads keep the anchor mover.
+    // defense); squads with a cached anchor path (siege/Formation) keep the anchor mover.
     fn execute_decide_movement(creep: &Creep, creep_pos: Position, orders: &TickOrders, tick_context: &mut JobTickContext) {
         use crate::combat::{decide_movement, CombatIntent, CombatView, CreepOrders, FocusTarget, SquadStateDto};
 

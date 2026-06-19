@@ -49,7 +49,7 @@ This table **supersedes** the phase-2.md Status columns (including the stale §2
 | **H** harness/engine | **PARTIAL** | H1/H2/H3 DONE (combat-engine, tactical seam, seg-57 cohesion metrics + military score term). **H4/H5 UNSTARTED** (scenarios/opponents/self-play/replay; server-parity + nightly gate). |
 | **I** identity | **UNSTARTED** | Manager interim-keys squads by `SquadContext` Entity. I1 SquadStore/SquadId + I2 re-key both UNSTARTED. |
 | **M** movement | **PARTIAL** | M1 DONE (footprint primitive). M2 code-done + sim-validated + live-swapped (WFV 7→8); orientation gap closed via G4-O2; **behavioral live-combat validation pending (M2-LIVE)**. M3 DONE (sim). M4 conditional. |
-| **G** goals/squads | **PARTIAL** | G1/G2/G3/G3-tail DONE. G4: defense-half + offense O1/O2/O3/O4/O6 + SK-DEADCODE DONE; O5 dropped, G4-HEAVY deferred (both non-functional/unreachable, §5(g)). **Only O7 left = delete the now runtime-unreachable legacy, soak-gated.** |
+| **G** goals/squads | **DONE** | G1/G2/G3/G3-tail + G4 (defense-half + offense O1/O2/O3/O4/O6 + SK-DEADCODE + **O7 legacy deletion**) all landed. O5 dropped, G4-HEAVY deferred (§5(g)). **All combat is now objective-driven via the SquadManager — no legacy AttackMission/AttackOperation code remains.** |
 | **W** war supervisor | **PARTIAL** | W1 DONE (defense → Defend, default ON). **W2/W3/W4 UNSTARTED** (supervisor trim/economy-abort; Escort producer; WarDecl posture). |
 | **S** spawning | **UNSTARTED** | S1 sole-demand-producer (GroupId=SquadId) + S2 boost handoff (gated ADR 0010). |
 | **K** source-keeper | **PARTIAL** | K0/K1/K2/K3/K5 DONE. K2c-2 (military_free gate + farm retirement) + K-RECONCILE UNSTARTED; **K4 mineral DEFERRED/BLOCKED** (needs remote extractor/container + market-glut predicate). |
@@ -58,7 +58,7 @@ This table **supersedes** the phase-2.md Status columns (including the stale §2
 
 **RESUME POINT (2026-06-18):** after P2.G4-O6. Combat slice on master at Docker **WFV 12** (clean reset, ticking, no thrash). Host tests green: bot 160, rover 27, decision 41; wasm + clippy clean. Current Docker soak is the validation gate for defense `Defend` squads / O1 cohesive travel / K5 stronghold standdown — **world is peaceful post-reset, so combat paths are dormant until a threat appears.**
 
-**Do-next ordering** (re-numbered sequentially): O5 (power-banks) and G4-HEAVY (heavy assault) are both **resolved by dropping/deferring** — both were non-functional/unreachable after O6, so neither gates O7 (real versions are deferred future work in §5(g)). SK-DEADCODE is **DONE**. So the offense finish is now just **O7 = delete the (already runtime-unreachable) legacy**, gated ONLY on the Docker soak validating the new objective/manager path (clear a real invader core cohesively). Then **H4/H5, I1/I2, W2–W4, S1/S2** as independent tracks. Full dependency-ordered queue in §5.
+**Do-next ordering:** **The entire G workstream (incl. G4 offense migration) is DONE** — O7 deleted the legacy (WFV 12→13, deployed); all combat is objective-driven via the `SquadManager`. O5 (power-banks) + G4-HEAVY (heavy assault) are deferred future capabilities (§5(g)). **Remaining are the independent tracks: H4/H5 (harness), I1/I2 (SquadStore/SquadId), W2–W4 (war supervisor/escort/posture), S1/S2 (synchronized spawn), K2c-2/K-RECONCILE/K4 (SK), plus the validation/future items in §5(g).** Recommended next: validate the objective/manager combat path on the Docker soak (offense ON), then pick up **I1** (foundational — unblocks S1 + a future G4-HEAVY) or **H4** (unblocks the EXP-* tuning loop). Full dependency-ordered queue in §5.
 
 ## 5. Remaining work (the execution plan)
 
@@ -68,7 +68,7 @@ Dependency order. Each item: id · what · why · deps · gated_on · effort.
 
 - **P2.G4-O5 — DONE-by-dropping (2026-06-18).** Power-bank farming was found **non-functional** (the neutral bank is never targeted — `get_hostile_structures` excludes unowned structures, `select_focus_target` only picks hostile ones; and `CollectResources` has no executor, so the "haulers" were `SquadCombatJob` that just idled). There was no working power-farming to preserve, so O7 is **not** gated on a power-bank port. Resolution: the offense scan no longer produces a `PowerBank` candidate (it only wasted a duo + haulers); removed `power_bank_min_ticks_needed` / `count_power_bank_attacks` / `max_concurrent_power_banks` + their tests. **Real power-bank farming is deferred to its own ADR-gated workstream — see §5(g) Power-bank farming.**
 - **P2.G4-SK-DEADCODE — DONE (2026-06-18).** Removed the dead `AttackReason::SourceKeeper` variant + its `build_force_plan` arm + status label in `operations/attack.rs` (SK is fully `SourceKeeperOperation→Farm{SourceKeeper}`; the `duo_sk_farmer` composition is kept — still used by the SK farm). Not deployed standalone (removing a serialized enum variant rides O7's WFV-bump reset, so it doesn't wipe the running soak). Bot host 157, wasm + clippy clean.
-- **P2.G4-O7** — Delete legacy `AttackMission`/`AttackOperation`/`AttackReason` (+ `OperationData::Attack`/`MissionData::AttackMission` variants, dispatch arms, `mission_type!`/`operation_type!`, mod exports, `war.rs` ActiveAttack/active_attacks/reassign_home_rooms/update_threat_intel + the dead `_ => None` legacy launch branch + `TargetSource→AttackReason` From impl, the heavy-assault planner `plan_by_detected_threat`/`build_force_plan`, tests) and bump WFV. *Why:* completes "no legacy combat-driving mission code remains"; `SquadCombatJob` shrinks to pure order-execution + Recall. **The legacy is already RUNTIME-UNREACHABLE** (after O5+O6 every offense candidate maps to an objective and `continue`s; the only `AttackOperation` constructor — `build_with_context` at `war.rs:1000` — is never reached), so O7 is a pure dead-code deletion. *Deps:* none — **NOT gated on G4-HEAVY** (no live heavy assault to preserve; see §5(g)). *Gated_on:* **private-server (Docker) soak parity on the NEW path** — the bot must clear a real invader core via the `Dismantle` objective + manager siege squad, cohesive, no CPU spiral / orphan-idle. "Do not delete on faith" applies to validating the *new* path, not preserving the old. *Effort:* M.
+- **P2.G4-O7 — DONE + DEPLOYED (2026-06-18).** Deleted `missions/attack_mission.rs` + `operations/attack.rs` (AttackMission/AttackOperation/AttackReason/AttackPhase/PlannedSquad/DeployCondition/ManagedSquad + the heavy-assault planner `plan_by_detected_threat`/`build_force_plan`), the `MissionData::AttackMission` + `OperationData::Attack` variants + their dispatch arms + `mission_type!`, the mod exports, and all of war.rs's active-attack machinery (`ActiveAttack`, `active_attacks`, `reassign_home_rooms`, the heavy-recompute threat-propagation, `is_attacking_room`/`get_attack_for_room`/`add`/`remove`/`cleanup_dead_attacks`, the `TargetSource→AttackReason` From impl, the dead `_ => None` launch branch). `run_offense_evaluation` is now purely objective-driven; `run_heavy_recompute` shrank to the cap calc + border-visibility refresh. **WFV 12→13** (removed serialized enum variants → loud reset). Pure dead-code deletion (the legacy was already runtime-unreachable). **`SquadCombatJob` is now the only combat-driving job — "no legacy combat-driving mission code remains."** Bot host 157, wasm + clippy clean. *(The heavy multi-squad player assault is the deferred future capability in §5(g); its design survives in ADR 0008a.)*
 
 ### (b) Harness
 
@@ -113,19 +113,13 @@ Dependency order. Each item: id · what · why · deps · gated_on · effort.
 - **P2.M4** — pull for under-MOVE compositions (Follow/pull for no-MOVE/under-MOVE bodies). *Why:* only sanctioned use of lead-follower. *Deps:* M2-LIVE. *Gated_on:* conditional — only if under-MOVE compositions get fielded; otherwise skip. *Effort:* S.
 - **CP-CHECKPOINTS** — Reach CP-I/CP-G/CP-W/CP-S/CP-K + close CP-H/CP-M live + audit the 11 M4 exit criteria. *Why:* checkpoints are the milestone gates for the whole Phase 2 overhaul; all 11 exit criteria pending. *Deps:* O7, I2, W4, S2, K2c-2, M2-LIVE. *Gated_on:* aggregates all workstreams + live validation. *Effort:* M.
 
-## 6. Legacy still present (delete-tracking — input to the O7 checklist)
+## 6. Legacy / inert code (tracking)
 
-Compiled-but-scheduled-for-deletion combat code and why it can't go yet:
+**The offense legacy is GONE (O7, 2026-06-18):** `AttackMission`, `AttackOperation`, `AttackReason`, the heavy-assault planner, and war.rs's active-attack machinery are all deleted. All combat is objective-driven via the `SquadManager`. Remaining inert/cleanup items (not legacy combat drivers, just loose ends):
 
-- **The whole legacy is RUNTIME-UNREACHABLE (2026-06-18).** After O5+O6, `war.rs:run_offense_evaluation` maps every offense candidate (InvaderCore→Dismantle, AttackFlag→Secure, ResourceDenial→Harass) to an objective and `continue`s; the only `AttackOperation` constructor (`build_with_context`, war.rs:1000, the `_ => None` branch) is never reached. So nothing below is *executed* — it's pure dead code awaiting O7's deletion. (Not yet deleted only because O7 is soak-gated on the new path, and the deletion bumps WFV.)
-- `operations/attack.rs`: **`AttackOperation`** (full Recon/Prepare/Execute/Exploit/Complete state machine), `AttackReason`, `AttackPhase` — no producer. All `AttackReason` arms (Flag/ThreatResponse/Expansion/ResourceDenial/InvaderCore/InvaderCreeps/PowerBank/ProactiveDefense) are dead; `SourceKeeper` already removed (SK-DEADCODE).
-- `operations/attack.rs:build_force_plan`/`plan_by_detected_threat` — the heavy multi-squad assault planner; dead (its capability deferred to §5(g)).
-- `missions/attack_mission.rs`: **`AttackMission`** — multi-room siege state machine + the non-functional power-bank `Exploiting`/`power_bank_haulers` scaffolding; referenced by `jobs/squad_combat.rs` anchor-path branch. Dead (no `AttackOperation` creates it).
-- `war.rs`: `ActiveAttack`/`active_attacks`/`reassign_home_rooms`/`update_threat_intel` + the `_ => None` legacy launch branch + `TargetSource→AttackReason` From impl — all dead.
-- `war.rs`: `ActiveAttack`/`active_attacks`/`reassign_home_rooms`/`update_threat_intel` + `TargetSource→AttackReason` From impl + legacy launch path — all exist solely to drive legacy `AttackOperation`s.
-- `ObjectiveKind::Escort` — defined + handled, **no producer** (inert; W3).
+- `ObjectiveKind::Escort` — defined + handled by the manager, **no producer** (inert; W3 adds one).
 - `sourcekeeper.rs`: `military_free: true` hardcoded (TODO K2c-2/W); no Withhold/Veto retirement of an existing farm (K2c-2).
-- `war.rs:run_heavy_recompute` ProactiveDefense — only `debug!`-logs; produces no objective.
+- `TargetSource` (war.rs) retains a few never-constructed variants (DefendFlag/ThreatResponse/Expansion/InvaderCreeps/PowerBank/ProactiveDefense) — harmless pub enum variants; prune opportunistically.
 
 ## 7. WORLD_FORMAT_VERSION ledger
 
@@ -135,7 +129,8 @@ Compiled-but-scheduled-for-deletion combat code and why it can't go yet:
 | G1 CombatObjectiveQueue | 8→9 |
 | G2 SquadManager | 9→10 |
 | K3 per-source mining | 10→11 |
-| G4 defense-half | 11→12 (**current Docker**) |
+| G4 defense-half | 11→12 |
+| G4-O7 offense legacy removal | 12→13 (**current**) |
 | I2 (SquadId field) | pending |
 | O7 (removed enum variants) | pending |
 

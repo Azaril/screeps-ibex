@@ -29,7 +29,6 @@ impl<'a> System<'a> for OperationManagerSystem {
                 OperationData::MiningOutpost(_) => has_mining_outpost = true,
                 OperationData::Claim(_) => has_claim = true,
                 OperationData::Colony(_) => has_colony = true,
-                OperationData::Attack(_) => {}
                 OperationData::Scout(_) => has_scout = true,
                 OperationData::War(_) => has_war = true,
                 OperationData::Salvage(_) => has_salvage = true,

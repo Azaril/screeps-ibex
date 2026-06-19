@@ -1,4 +1,3 @@
-pub mod attack;
 pub mod claim;
 pub mod colony;
 pub mod data;

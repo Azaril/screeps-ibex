@@ -60,22 +60,6 @@ pub enum TargetSource {
     ProactiveDefense,
 }
 
-impl From<TargetSource> for super::attack::AttackReason {
-    fn from(source: TargetSource) -> Self {
-        match source {
-            TargetSource::AttackFlag => Self::Flag,
-            TargetSource::DefendFlag => Self::Flag,
-            TargetSource::ThreatResponse => Self::ThreatResponse,
-            TargetSource::Expansion => Self::Expansion,
-            TargetSource::ResourceDenial => Self::ResourceDenial,
-            TargetSource::InvaderCore { level } => Self::InvaderCore { level },
-            TargetSource::InvaderCreeps => Self::InvaderCreeps,
-            TargetSource::PowerBank { power, .. } => Self::PowerBank { power },
-            TargetSource::ProactiveDefense => Self::ProactiveDefense,
-        }
-    }
-}
-
 /// A scored attack candidate.
 #[derive(Clone, Debug)]
 pub struct AttackCandidate {
@@ -140,29 +124,16 @@ pub fn hostile_warrants_defender(parts: &[Part]) -> bool {
 // WarOperation
 // ---------------------------------------------------------------------------
 
-/// War's own bookkeeping for one active child AttackOperation: the entity,
-/// its target room, and the reason it was launched.
-///
-/// The reason is recorded HERE, at launch time, because war is the module
-/// that decided it (AGENTS.md §8: keep the information with its owner) --
-/// concurrency gates like the power-bank cap filter this list instead of
-/// asking the generic operation surface what kind of attack an entity is.
-#[derive(Clone, ConvertSaveload)]
-pub struct ActiveAttack {
-    entity: Entity,
-    room: RoomName,
-    reason: super::attack::AttackReason,
-}
-
-/// Unified military coordinator singleton. Manages both offense
-/// (AttackOperations) and defense — the latter produced as `Defend` objectives
-/// on the `CombatObjectiveQueue` (fielded by the `SquadManager`), plus
-/// NukeDefenseMission, SafeModeMission, WallRepairMission.
+/// Unified military coordinator singleton. Both offense and defense are produced
+/// as objectives on the `CombatObjectiveQueue` (fielded by the `SquadManager`):
+/// offense → `Secure`/`Dismantle`/`Harass`, defense → `Defend`. Also owns the
+/// non-squad utility missions (NukeDefense, SafeMode, WallRepair). The legacy
+/// `AttackOperation`/`AttackMission` offense path was removed in P2.G4-O7.
 ///
 /// Uses tiered cadences:
 /// - Defense scan: every 1-2 ticks (cheap, checks owned rooms for threats)
-/// - Offense evaluation: every 10-20 ticks (scores candidates, launches attacks)
-/// - Heavy recompute: every 50+ ticks (full retarget, rebalance room assignments)
+/// - Offense evaluation: every 10-20 ticks (scores candidates, upserts objectives)
+/// - Heavy recompute: every 50+ ticks (cap update + border visibility refresh)
 #[derive(Clone, ConvertSaveload)]
 pub struct WarOperation {
     owner: EntityOption<Entity>,
@@ -171,9 +142,6 @@ pub struct WarOperation {
     last_defense_tick: Option<u32>,
     last_offense_tick: Option<u32>,
     last_recompute_tick: Option<u32>,
-
-    /// Child AttackOperations (offense): entity + target room + launch reason.
-    active_attacks: EntityVec<ActiveAttack>,
 
     /// Rooms with manually placed 'defend' flags (persisted so we don't
     /// re-scan flags every tick -- just refresh periodically).
@@ -223,7 +191,6 @@ impl WarOperation {
             last_defense_tick: None,
             last_offense_tick: None,
             last_recompute_tick: None,
-            active_attacks: EntityVec::new(),
             defend_flag_rooms: Vec::new(),
             max_concurrent_attacks: 1,
         }
@@ -602,27 +569,12 @@ impl WarOperation {
 
     // ── Offense evaluation (every 10-20 ticks) ────────────────────────────
 
-    fn run_offense_evaluation(&mut self, system_data: &mut OperationExecutionSystemData, runtime_data: &mut OperationExecutionRuntimeData) {
+    fn run_offense_evaluation(&mut self, system_data: &mut OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {
         let features = system_data.features;
 
         if !features.military.offense {
             if features.military.debug_log {
                 info!("[War] Offense disabled by feature flag");
-            }
-            return;
-        }
-
-        // Clean up completed/dead attack operations and their room tracking.
-        self.cleanup_dead_attacks(system_data);
-
-        // Don't launch new attacks if at capacity.
-        if self.active_attacks.len() as u32 >= self.max_concurrent_attacks {
-            if features.military.debug_log {
-                info!(
-                    "[War] Offense at capacity ({}/{})",
-                    self.active_attacks.len(),
-                    self.max_concurrent_attacks
-                );
             }
             return;
         }
@@ -659,9 +611,6 @@ impl WarOperation {
             let name = flag.name();
             if name.to_lowercase().starts_with("attack") {
                 let room = flag.pos().room_name();
-                if self.is_attacking_room(room) {
-                    continue;
-                }
                 candidates.push(AttackCandidate {
                     room,
                     source: TargetSource::AttackFlag,
@@ -691,9 +640,8 @@ impl WarOperation {
 
         if war_debug {
             info!(
-                "[War] Offense scan: {} threat rooms, {} active attacks (cap {}), economy={}",
+                "[War] Offense scan: {} threat rooms (offense-objective cap {}), economy={}",
                 threat_rooms.len(),
-                self.active_attacks.len(),
                 self.max_concurrent_attacks,
                 system_data.economy.total_stored_energy
             );
@@ -703,9 +651,8 @@ impl WarOperation {
             let room_name = *room_name;
             let room_entity = Some(*room_entity);
 
-            if self.is_attacking_room(room_name) {
-                continue;
-            }
+            // (No "already attacking" skip needed — offense objectives are upserted
+            // idempotently, so re-evaluating a room just refreshes its objective.)
 
             // Skip rooms we own (defense handles those).
             let is_owned = room_entity
@@ -913,24 +860,22 @@ impl WarOperation {
             }
         }
 
-        // ── 4. Field top candidates: objective-driven (O6) or legacy attack ──
+        // ── 4. Field top candidates as offense objectives ──
 
-        // Combined concurrent-offense budget. Offense is now split between the
-        // objective queue (migrated reasons, fielded by the `SquadManager`) and
-        // legacy `AttackOperation`s (un-migrated reasons), so the war cap counts
-        // BOTH — Attack-owned objectives already in the queue + active attacks.
-        // (Replaces the old `active_attacks`-only break.)
-        let mut offense_count = self.active_attacks.len() as u32
-            + system_data
-                .combat_objective_queue
-                .objectives
-                .iter()
-                .filter(|o| o.owner == ObjectiveOwner::Attack)
-                .count() as u32;
+        // Concurrent-offense budget = the count of Attack-owned objectives already
+        // in the queue (all offense is objective-driven since O7; the manager fields
+        // them up to its own MAX_CONCURRENT_SQUADS).
+        let mut offense_count = system_data
+            .combat_objective_queue
+            .objectives
+            .iter()
+            .filter(|o| o.owner == ObjectiveOwner::Attack)
+            .count() as u32;
 
         for candidate in candidates {
-            // Map the candidate's reason to an objective (migrated), or `None` to
-            // fall through to a legacy `AttackOperation` (un-migrated, coexistence).
+            // Map the candidate's reason to an offense objective kind + composition
+            // + priority. Any source without a mapping is skipped (all offense is
+            // objective-driven since O7 — there is no legacy launch fallback).
             let objective: Option<(ObjectiveKind, f32, SquadComposition)> = match candidate.source {
                 // Invader core → siege the core tile (O1 travel + O2 orient + O3 breach).
                 TargetSource::InvaderCore { .. } => candidate.target_pos.map(|pos| {
@@ -952,77 +897,42 @@ impl WarOperation {
                     OBJECTIVE_PRIORITY_LOW,
                     SquadComposition::solo_harasser(),
                 )),
-                // Un-migrated: PowerBank (O5) + any others stay on `AttackOperation`.
                 _ => None,
             };
 
-            if let Some((kind, priority, composition)) = objective {
-                // Always re-assert an EXISTING objective (refresh its TTL so the
-                // manager keeps fielding it); gate only NEW offense on the cap.
-                // Candidates are score-sorted desc, so a skipped new objective is
-                // the lowest-value one.
-                let is_new = system_data.combat_objective_queue.find_by_kind(&kind).is_none();
-                if is_new && offense_count >= self.max_concurrent_attacks {
-                    continue;
-                }
-                info!(
-                    "[War] Offense objective {:?} for {} (source={:?}, score={:.1})",
-                    kind, candidate.room, candidate.source, candidate.score
-                );
-                system_data.combat_objective_queue.request(
-                    ObjectiveRequest::new(kind, priority, ForceRequirement::single(composition))
-                        .owner(ObjectiveOwner::Attack)
-                        .ttl(OFFENSE_OBJECTIVE_TTL),
-                    game::time(),
-                );
-                if is_new {
-                    offense_count += 1;
-                }
+            let Some((kind, priority, composition)) = objective else {
+                continue;
+            };
+
+            // Always re-assert an EXISTING objective (refresh its TTL so the manager
+            // keeps fielding it); gate only NEW offense on the cap. Candidates are
+            // score-sorted desc, so a skipped new objective is the lowest-value one.
+            let is_new = system_data.combat_objective_queue.find_by_kind(&kind).is_none();
+            if is_new && offense_count >= self.max_concurrent_attacks {
                 continue;
             }
-
-            // ── Legacy `AttackOperation` path (un-migrated reasons) ──────────
-            if offense_count >= self.max_concurrent_attacks {
-                continue;
-            }
-
             info!(
-                "[War] Launching AttackOperation for {} (source={:?}, score={:.1}, towers={}, dps={:.0}, heal={:.0})",
-                candidate.room,
-                candidate.source,
-                candidate.score,
-                candidate.tower_count,
-                candidate.estimated_enemy_dps,
-                candidate.estimated_enemy_heal
+                "[War] Offense objective {:?} for {} (source={:?}, score={:.1})",
+                kind, candidate.room, candidate.source, candidate.score
             );
-
-            let reason: super::attack::AttackReason = candidate.source.into();
-            let attack_entity = super::attack::AttackOperation::build_with_context(
-                system_data.updater.create_entity(system_data.entities),
-                Some(runtime_data.entity),
-                candidate.room,
-                reason.clone(),
-            )
-            .build();
-
-            self.add_active_attack(attack_entity, candidate.room, reason);
-            offense_count += 1;
-
-            // Force a home room rebalance on the next tick so the new attack
-            // gets home rooms assigned promptly rather than waiting up to
-            // RECOMPUTE_CADENCE ticks.
-            self.last_recompute_tick = None;
+            system_data.combat_objective_queue.request(
+                ObjectiveRequest::new(kind, priority, ForceRequirement::single(composition))
+                    .owner(ObjectiveOwner::Attack)
+                    .ttl(OFFENSE_OBJECTIVE_TTL),
+                game::time(),
+            );
+            if is_new {
+                offense_count += 1;
+            }
         }
     }
 
     // ── Heavy recompute (every 50+ ticks) ─────────────────────────────────
 
     fn run_heavy_recompute(&mut self, system_data: &mut OperationExecutionSystemData, _runtime_data: &mut OperationExecutionRuntimeData) {
-        let current_tick = game::time();
+        // ── 1. Update the offense-objective cap based on economy ──────────
 
-        // ── 1. Update concurrent attack limits based on economy ──────────
-
-        // Scale attack capacity with room count and economy health.
+        // Scale capacity with room count and economy health.
         let base_attacks = system_data.economy.room_count.max(1);
         let economy_multiplier = if system_data.economy.total_stored_energy > 300_000 {
             2
@@ -1033,62 +943,9 @@ impl WarOperation {
         };
         self.max_concurrent_attacks = base_attacks.saturating_sub(1).max(1) + economy_multiplier;
 
-        // ── 2. Propagate threat intel to active AttackOperations ─────────
-
-        let war_debug = system_data.features.military.debug_log;
-
-        for attack in self.active_attacks.iter() {
-            let entity = attack.entity;
-            if !system_data.entities.is_alive(entity) {
-                continue;
-            }
-            let room_name = attack.room;
-
-            // Read threat data from the room entity's component.
-            let room_entity = system_data.mapping.get_room(&room_name);
-            let threat_data = room_entity.and_then(|e| system_data.threat_data.get(e));
-
-            if let Some(threat_data) = threat_data {
-                let tower_count = threat_data.hostile_tower_positions.len() as u32;
-                let player_hostiles: Vec<_> = threat_data
-                    .hostile_creeps
-                    .iter()
-                    .filter(|c| !crate::military::is_npc_owner(&c.owner))
-                    .collect();
-                let hostile_count = player_hostiles.len() as u32;
-                let enemy_dps: f32 = player_hostiles.iter().map(|c| c.melee_dps + c.ranged_dps).sum::<f32>() + tower_count as f32 * 600.0;
-                let enemy_heal: f32 = player_hostiles.iter().map(|c| c.heal_per_tick).sum();
-                let any_boosted = player_hostiles.iter().any(|c| c.boosted);
-
-                if war_debug && (hostile_count > 0 || tower_count > 0) {
-                    info!(
-                        "[War] Threat update for {}: towers={}, dps={:.0}, heal={:.0}, hostiles={}, boosted={}, safe_mode={}/{}",
-                        room_name,
-                        tower_count,
-                        enemy_dps,
-                        enemy_heal,
-                        hostile_count,
-                        any_boosted,
-                        threat_data.safe_mode_active,
-                        threat_data.safe_mode_available
-                    );
-                }
-
-                // Propagate updated intel to the AttackOperation via LazyUpdate
-                // (we can't access the operations storage directly here).
-                let safe_active = threat_data.safe_mode_active;
-                let safe_available = threat_data.safe_mode_available;
-                system_data.updater.exec_mut(move |world| {
-                    if let Some(OperationData::Attack(ref mut attack_op)) = world.write_storage::<OperationData>().get_mut(entity) {
-                        attack_op.update_threat_intel(tower_count, enemy_dps, enemy_heal, hostile_count, safe_active, safe_available);
-                    }
-                });
-            }
-        }
-
-        // ── 3. Request visibility for rooms adjacent to our territory ────
+        // ── 2. Request visibility for rooms adjacent to our territory ────
         // This ensures threat data is fresh for rooms near our
-        // borders, enabling proactive threat detection and target selection.
+        // borders, feeding the defense + offense scans' target selection.
 
         let home_rooms: Vec<RoomName> = (system_data.entities, &*system_data.room_data)
             .join()
@@ -1126,204 +983,9 @@ impl WarOperation {
             }
         }
 
-        // Also request visibility for rooms we're actively attacking but
-        // don't currently have fresh data for.
-        for attack in self.active_attacks.iter() {
-            let room_entity = system_data.mapping.get_room(&attack.room);
-            let has_fresh_data = room_entity
-                .and_then(|e| system_data.threat_data.get(e))
-                .map(|d| current_tick.saturating_sub(d.last_seen) < 50)
-                .unwrap_or(false);
-
-            if !has_fresh_data {
-                system_data
-                    .visibility
-                    .request(VisibilityRequest::new(attack.room, 1.0, VisibilityRequestFlags::ALL));
-            }
-        }
-
-        // ── 4. Detect threats near territory not yet being attacked ──────
-        // Proactive defense: if a room adjacent to our territory has player
-        // hostiles and we're not already responding, log it for the next
-        // offense evaluation cycle to pick up.
-
-        for (_, rd, threat_data) in (system_data.entities, &*system_data.room_data, system_data.threat_data).join() {
-            let room_name = rd.name;
-            if threat_data.threat_level < ThreatLevel::PlayerRaid {
-                continue;
-            }
-            if self.is_attacking_room(room_name) {
-                continue;
-            }
-
-            // Check if this room is adjacent to one of our rooms.
-            let near_home = home_rooms.iter().any(|&home| {
-                let route = system_data.pathfinder.route_distance(home, room_name, current_tick);
-                route.reachable && route.hops <= 2
-            });
-
-            if near_home {
-                debug!(
-                    "[War] Proactive: player threat ({:?}) detected near territory in {} (dps={:.0}, heal={:.0})",
-                    threat_data.threat_level, room_name, threat_data.estimated_dps, threat_data.estimated_heal
-                );
-            }
-        }
-
-        // ── 5. Rebalance home room assignments across active attacks ────
-        self.reassign_home_rooms(system_data);
-    }
-
-    // ── Home room rebalancing ────────────────────────────────────────────────
-
-    fn reassign_home_rooms(&self, system_data: &mut OperationExecutionSystemData) {
-        let current_tick = game::time();
-        let war_debug = system_data.features.military.debug_log;
-
-        // Collect home rooms with spawns: (entity, room_name).
-        let home_rooms: Vec<(Entity, RoomName)> = (system_data.entities, &*system_data.room_data)
-            .join()
-            .filter(|(_, rd)| {
-                rd.get_dynamic_visibility_data().map(|d| d.owner().mine()).unwrap_or(false)
-                    && rd.get_structures().map(|s| !s.spawns().is_empty()).unwrap_or(false)
-            })
-            .map(|(e, rd)| (e, rd.name))
-            .collect();
-
-        if home_rooms.is_empty() {
-            return;
-        }
-
-        // Collect active attacks: (entity, target_room_name).
-        let attacks: Vec<(Entity, RoomName)> = self
-            .active_attacks
-            .iter()
-            .filter(|a| system_data.entities.is_alive(a.entity))
-            .map(|a| (a.entity, a.room))
-            .collect();
-
-        if attacks.is_empty() {
-            return;
-        }
-
-        // Build distance matrix: for each (attack_idx, home_idx) -> hops.
-        let distances: Vec<Vec<u32>> = attacks
-            .iter()
-            .map(|(_, target)| {
-                home_rooms
-                    .iter()
-                    .map(|(_, home_name)| {
-                        let route = system_data.pathfinder.route_distance(*home_name, *target, current_tick);
-                        if route.reachable {
-                            route.hops
-                        } else {
-                            u32::MAX
-                        }
-                    })
-                    .collect()
-            })
-            .collect();
-
-        // Greedy assignment: each home room assigned to at most one attack.
-        // First pass: assign the closest available home room to each attack.
-        let mut assigned: Vec<Vec<usize>> = vec![Vec::new(); attacks.len()];
-        let mut home_taken = vec![false; home_rooms.len()];
-
-        // Sort attacks by fewest reachable home rooms (most constrained first).
-        let mut attack_order: Vec<usize> = (0..attacks.len()).collect();
-        attack_order.sort_by_key(|&ai| distances[ai].iter().filter(|&&d| d < u32::MAX).count());
-
-        for &ai in &attack_order {
-            // Find closest untaken home room.
-            let best = distances[ai]
-                .iter()
-                .enumerate()
-                .filter(|(hi, _)| !home_taken[*hi])
-                .filter(|(_, &d)| d < u32::MAX)
-                .min_by_key(|(_, &d)| d);
-
-            if let Some((hi, _)) = best {
-                assigned[ai].push(hi);
-                home_taken[hi] = true;
-            }
-        }
-
-        // Second pass: distribute remaining unassigned home rooms to the
-        // closest attack that could use them (round-robin by distance).
-        for hi in 0..home_rooms.len() {
-            if home_taken[hi] {
-                continue;
-            }
-            // Find the attack closest to this home room that has the fewest
-            // assignments (prefer under-served attacks).
-            let best_attack = attacks
-                .iter()
-                .enumerate()
-                .filter(|(ai, _)| distances[*ai][hi] < u32::MAX)
-                .min_by_key(|(ai, _)| (assigned[*ai].len(), distances[*ai][hi]));
-
-            if let Some((ai, _)) = best_attack {
-                assigned[ai].push(hi);
-                home_taken[hi] = true;
-            }
-        }
-
-        // Build EntityVec assignments and push via LazyUpdate.
-        for (ai, home_indices) in assigned.iter().enumerate() {
-            let attack_entity = attacks[ai].0;
-            let mut rooms = EntityVec::new();
-            for &hi in home_indices {
-                rooms.push(home_rooms[hi].0);
-            }
-
-            if war_debug {
-                let room_names: Vec<String> = home_indices.iter().map(|&hi| home_rooms[hi].1.to_string()).collect();
-                info!("[War] Assign {} -> spawn: [{}]", attacks[ai].1, room_names.join(", "));
-            }
-
-            // Don't overwrite existing home rooms with an empty assignment.
-            // This can happen when route distances are unreachable or all
-            // home rooms were consumed by higher-priority attacks.
-            if rooms.is_empty() {
-                if war_debug {
-                    info!("[War] Skipping empty home room assignment for {} (keeping existing)", attacks[ai].1);
-                }
-                continue;
-            }
-
-            system_data.updater.exec_mut(move |world| {
-                // Collect mission entities before mutating operation storage.
-                let mission_entities: Vec<Entity> = {
-                    let ops = world.read_storage::<OperationData>();
-                    if let Some(OperationData::Attack(ref attack_op)) = ops.get(attack_entity) {
-                        attack_op.mission_entities().to_vec()
-                    } else {
-                        Vec::new()
-                    }
-                };
-
-                // Update the operation's home rooms.
-                if let Some(OperationData::Attack(ref mut attack_op)) = world.write_storage::<OperationData>().get_mut(attack_entity) {
-                    attack_op.set_home_rooms(rooms.clone());
-                }
-
-                // Propagate to child AttackMissions.
-                let missions = world.read_storage::<MissionData>();
-                for mission_entity in mission_entities {
-                    if let Some(MissionData::AttackMission(ref cell)) = missions.get(mission_entity) {
-                        cell.borrow_mut().set_home_rooms(rooms.clone());
-                    }
-                }
-            });
-        }
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────
-
-    /// Check if we already have an active attack targeting this room.
-    fn is_attacking_room(&self, room: RoomName) -> bool {
-        self.active_attacks.iter().any(|a| a.room == room)
-    }
 
     /// Compute the minimum route distance from any home room to a target room.
     fn min_distance_to_homes(
@@ -1345,26 +1007,6 @@ impl WarOperation {
             })
             .min()
             .unwrap_or(u32::MAX)
-    }
-
-    /// Get the attack operation entity targeting a given room, if any.
-    pub fn get_attack_for_room(&self, room: RoomName) -> Option<Entity> {
-        self.active_attacks.iter().find(|a| a.room == room).map(|a| a.entity)
-    }
-
-    /// Record a newly launched attack with the reason war launched it for.
-    fn add_active_attack(&mut self, entity: Entity, room: RoomName, reason: super::attack::AttackReason) {
-        self.active_attacks.push(ActiveAttack { entity, room, reason });
-    }
-
-    /// Remove an active attack by entity.
-    fn remove_active_attack(&mut self, entity: Entity) {
-        self.active_attacks.retain(|a| a.entity != entity);
-    }
-
-    /// Clean up dead/completed attack operations from tracking.
-    fn cleanup_dead_attacks(&mut self, system_data: &OperationExecutionSystemData) {
-        self.active_attacks.retain(|a| system_data.entities.is_alive(a.entity));
     }
 
     fn should_run_tier(&self, last_tick: Option<u32>, cadence: u32) -> bool {
@@ -1455,54 +1097,20 @@ impl Operation for WarOperation {
         self.owner.take();
     }
 
-    fn child_complete(&mut self, child: Entity) {
-        self.remove_active_attack(child);
-    }
-
-    fn repair_entity_refs(&mut self, is_valid: &dyn Fn(Entity) -> bool) {
-        let before = self.active_attacks.len();
-        self.active_attacks.retain(|a| {
-            let valid = is_valid(a.entity);
-            if !valid {
-                error!("INTEGRITY: dead attack entity {:?} removed from WarOperation", a.entity);
-            }
-            valid
-        });
-        if self.active_attacks.len() < before {
-            warn!(
-                "INTEGRITY: removed {} dead attack ref(s) from WarOperation",
-                before - self.active_attacks.len()
-            );
-        }
-    }
-
     fn describe_operation(&self, ctx: &OperationDescribeContext) -> SummaryContent {
         let features = ctx.features;
         let mut children = Vec::new();
 
-        // Offense section.
+        // Offense section. Offense is now objective-driven (Secure/Dismantle/Harass
+        // on the CombatObjectiveQueue, fielded by the SquadManager) — war no longer
+        // tracks AttackOperations, so this reports the cap + on/off only.
         {
-            let mut offense_items = Vec::new();
-            for attack in self.active_attacks.iter() {
-                offense_items.push(format!("-> {}", attack.room));
-            }
             let label = if features.military.offense {
-                if offense_items.is_empty() {
-                    format!("Offense: ON (cap {})", self.max_concurrent_attacks)
-                } else {
-                    format!("Offense: {}/{} active", offense_items.len(), self.max_concurrent_attacks)
-                }
+                format!("Offense: ON (objective cap {})", self.max_concurrent_attacks)
             } else {
                 "Offense: OFF".to_string()
             };
-            if offense_items.is_empty() {
-                children.push(SummaryContent::Text(label));
-            } else {
-                children.push(SummaryContent::Lines {
-                    header: label,
-                    items: offense_items,
-                });
-            }
+            children.push(SummaryContent::Text(label));
         }
 
         // Defense section.
