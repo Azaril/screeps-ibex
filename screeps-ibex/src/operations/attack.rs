@@ -48,8 +48,6 @@ pub enum AttackReason {
     InvaderCore { level: u8 },
     /// Invader creeps in remote mining room.
     InvaderCreeps,
-    /// Source Keeper room farming.
-    SourceKeeper,
     /// Power bank farming.
     PowerBank { power: u32 },
     /// Proactive defense.
@@ -171,14 +169,6 @@ impl AttackOperation {
                 vec![PlannedSquad {
                     composition: SquadComposition::solo_ranged(),
                     target: SquadTarget::DefendRoom { room: self.target_room },
-                    deploy_condition: DeployCondition::Immediate,
-                }]
-            }
-            AttackReason::SourceKeeper => {
-                // Source Keeper farming: ranged kiter + healer duo.
-                vec![PlannedSquad {
-                    composition: SquadComposition::duo_sk_farmer(),
-                    target: SquadTarget::AttackRoom { room: self.target_room },
                     deploy_condition: DeployCondition::Immediate,
                 }]
             }
@@ -505,7 +495,6 @@ impl Operation for AttackOperation {
             AttackReason::ResourceDenial => "denial".to_string(),
             AttackReason::InvaderCore { level } => format!("core L{}", level),
             AttackReason::InvaderCreeps => "invaders".to_string(),
-            AttackReason::SourceKeeper => "SK".to_string(),
             AttackReason::PowerBank { power } => format!("power {}pw", power),
             AttackReason::ProactiveDefense => "proactive".to_string(),
         };
