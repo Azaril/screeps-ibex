@@ -24,6 +24,9 @@ use screeps_combat_agent::scenario::ScenarioBuilder;
 use screeps_combat_agent::squad::ManagedSimSquad;
 use screeps_combat_agent::{HoldAgent, IbexAgent};
 use screeps_combat_decision::cohesion;
+use screeps_combat_decision::kite::SquadTacticParams;
+#[cfg(test)]
+use screeps_combat_decision::kite::KiteScoreParams;
 use screeps_combat_engine::{resolve_tick, CombatWorld, Intents, PlayerId, SimBody, SimCreep, SimTower, StructureKind};
 
 // ─── Framework ───────────────────────────────────────────────────────────────
@@ -418,30 +421,112 @@ fn exp_pos_selfplay_1() -> ExperimentResult {
 /// chips it, exercising the kite preset + cohesion under live pursuit (the melee squad's advance is
 /// driven by the same utility, so it genuinely chases).
 fn exp_pos_kite_1() -> ExperimentResult {
+    let o = run_kite_vs_melee(SquadTacticParams::default(), false);
+    result(
+        "EXP-POS-KITE-1",
+        "a managed ranged squad kites a melee squad — out-survives it and kills it without being caught",
+        vec![
+            measured("ranged survivors", o.ranged_alive as f64, ">= melee survivors (kiting advantage)", o.ranged_alive >= o.melee_alive),
+            measured("melee casualties (kited + shot down)", o.melee_casualties() as f64, ">= 1 (chipped to a kill)", o.melee_casualties() >= 1),
+        ],
+    )
+}
+
+/// The outcome of a kite-vs-melee engagement (the substrate for both EXP-POS-KITE-1 and the Stage-4
+/// weight sweep): who survived + the continuous HP exchange.
+struct KiteOutcome {
+    ranged_alive: usize,
+    melee_alive: usize,
+    /// HP the ranged side dealt to the melee (deaths counted at full HP). Read by the sweep `score`.
+    #[cfg_attr(not(test), allow(dead_code))]
+    melee_damage_dealt: u32,
+    /// HP the ranged side took, incl. its own deaths counted at full HP (so a wipe scores worst).
+    #[cfg_attr(not(test), allow(dead_code))]
+    ranged_damage_taken: u32,
+}
+impl KiteOutcome {
+    fn melee_casualties(&self) -> usize {
+        3 - self.melee_alive
+    }
+    /// Tactical fitness (higher = better): the **net HP exchange** (damage dealt − damage taken). A
+    /// *continuous* score — unlike survivor/kill counts it varies with every positioning difference, so
+    /// the sweep can actually resolve which weights fight better (the coarse count saturated).
+    #[cfg(test)]
+    fn score(&self) -> i64 {
+        self.melee_damage_dealt as i64 - self.ranged_damage_taken as i64
+    }
+}
+
+/// Run the kite-vs-melee scenario with a given set of position-scoring weights on the RANGED side (the
+/// melee side always uses the defaults). `slow_ranged` picks the bed:
+/// - `false` — a fully-MOVE'd ranged squad vs plain melee (the **behavior gate**, `exp_pos_kite_1`):
+///   equal-speed open-terrain kiting is trivially winnable, so this asserts the *capability* (kite +
+///   out-survive) holds, not weight quality.
+/// - `true` — an **under-MOVE'd (slow) ranged squad** vs the same melee (the **tuning bed**): now the
+///   melee closes faster than the kiter flees, so survival hinges on positioning quality → the weights
+///   actually discriminate, giving the sweep a gradient (open-terrain full-MOVE kiting is flat).
+fn run_kite_vs_melee(ranged_tactics: SquadTacticParams, slow_ranged: bool) -> KiteOutcome {
     let melee_body: Vec<Part> = std::iter::repeat_n(Part::Attack, 5).chain(std::iter::repeat_n(Part::Move, 5)).collect();
-    let mut creeps = ranged_file(0, 1, 30, 24, 3);
+    let ra_body: Vec<Part> = if slow_ranged {
+        // 5 RANGED + 2 MOVE → fatigues on plains (moves ~1 in 3 ticks), so it can't perfectly maintain
+        // range — a slow kiter must position WELL to survive (the gradient the sweep needs).
+        std::iter::repeat_n(Part::RangedAttack, 5).chain(std::iter::repeat_n(Part::Move, 2)).collect()
+    } else {
+        std::iter::repeat_n(Part::RangedAttack, 5).chain(std::iter::repeat_n(Part::Move, 5)).collect()
+    };
+    let mut creeps: Vec<SimCreep> = [(30u8, 24u8), (30, 25), (30, 26)]
+        .iter()
+        .enumerate()
+        .map(|(i, &(x, y))| SimCreep { id: 1 + i as u32, owner: 0, pos: pos(x, y), body: SimBody::unboosted(&ra_body), fatigue: 0 })
+        .collect();
     for (i, &(x, y)) in [(20, 24), (20, 25), (20, 26)].iter().enumerate() {
         creeps.push(SimCreep { id: 11 + i as u32, owner: 1, pos: pos(x, y), body: SimBody::unboosted(&melee_body), fatigue: 0 });
     }
+    let ranged_max: u32 = creeps.iter().filter(|c| c.owner == 0).map(|c| c.body.hits_max()).sum();
+    let melee_max: u32 = creeps.iter().filter(|c| c.owner == 1).map(|c| c.body.hits_max()).sum();
     let mut world = CombatWorld { creeps, ..Default::default() };
     let a_ids: Vec<_> = world.creeps.iter().filter(|c| c.owner == 0).map(|c| c.id).collect();
     let b_ids: Vec<_> = world.creeps.iter().filter(|c| c.owner == 1).map(|c| c.id).collect();
     let mut squads = [
-        ManagedSimSquad::new(0, a_ids, pos(20, 25)),
+        ManagedSimSquad::new(0, a_ids, pos(20, 25)).with_tactics(ranged_tactics),
         ManagedSimSquad::new(1, b_ids, pos(30, 25)),
     ];
     run_managed(&mut world, &mut squads, 60);
     let ranged_alive = world.creeps.iter().filter(|c| c.owner == 0 && c.is_alive()).count();
     let melee_alive = world.creeps.iter().filter(|c| c.owner == 1 && c.is_alive()).count();
-    let melee_casualties = 3 - melee_alive;
-    result(
-        "EXP-POS-KITE-1",
-        "a managed ranged squad kites a melee squad — out-survives it and kills it without being caught",
-        vec![
-            measured("ranged survivors", ranged_alive as f64, ">= melee survivors (kiting advantage)", ranged_alive >= melee_alive),
-            measured("melee casualties (kited + shot down)", melee_casualties as f64, ">= 1 (chipped to a kill)", melee_casualties >= 1),
-        ],
-    )
+    let ranged_hp_now: u32 = world.creeps.iter().filter(|c| c.owner == 0 && c.is_alive()).map(|c| c.body.hits).sum();
+    let melee_hp_now: u32 = world.creeps.iter().filter(|c| c.owner == 1 && c.is_alive()).map(|c| c.body.hits).sum();
+    KiteOutcome {
+        ranged_alive,
+        melee_alive,
+        melee_damage_dealt: melee_max.saturating_sub(melee_hp_now),
+        ranged_damage_taken: ranged_max.saturating_sub(ranged_hp_now),
+    }
+}
+
+/// **ADR 0019 Stage 4 — the measure-first weight-sweep tuning loop.** Sweeps the kite preset's two most
+/// load-bearing weights — `w_future` (how hard to flee a chaser's reach) and `w_prox` (how hard to hold
+/// weapon range to keep shooting) — over a grid on the kite-vs-melee scenario, scoring each by
+/// [`KiteOutcome::score`], and returns `(best_params, best_score, default_score, distinct_scores)`. This
+/// is the loop that turns the seeded weights into measured defaults: re-run after any scorer change to
+/// see which weights win, and confirm the chosen preset isn't dominated.
+#[cfg(test)]
+fn sweep_kite_weights() -> (KiteScoreParams, i64, i64, usize) {
+    let base = KiteScoreParams::default();
+    let default_score = run_kite_vs_melee(SquadTacticParams::default(), true).score();
+    let mut best = (base, i64::MIN);
+    let mut scores = std::collections::BTreeSet::new();
+    for &w_future in &[0.0f32, 0.5, 1.0, 2.0] {
+        for &w_prox in &[0.5f32, 1.0, 1.5, 2.0] {
+            let kite = KiteScoreParams { w_future, w_prox, ..base };
+            let s = run_kite_vs_melee(SquadTacticParams { kite, engage: KiteScoreParams::engage() }, true).score();
+            scores.insert(s);
+            if s > best.1 {
+                best = (kite, s);
+            }
+        }
+    }
+    (best.0, best.1, default_score, scores.len())
 }
 
 /// How many structures of `kind` were destroyed across the whole run (U2 `destroyed_kinds`).
@@ -480,6 +565,34 @@ fn exp_nest_1() -> ExperimentResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn weight_sweep_default_is_not_dominated() {
+        // ADR 0019 Stage 4 — the measure-first tuning loop, run as a standing REGRESSION GUARD. It
+        // sweeps the kite preset's two load-bearing weights (w_future / w_prox) over a grid on the
+        // tuning bed and confirms the SHIPPED DEFAULT is near-optimal — no grid config beats it by more
+        // than `TOL` net HP. If a future scorer change leaves the default badly off-optimum, the best
+        // found pulls away and this trips, flagging "retune the preset".
+        //
+        // FINDING (2026-06-19): on the melee beds (open/slow/healing-bruiser) the response is FLAT — the
+        // outcome is invariant to these weights (the utility isn't brittle to weight choice when the
+        // fight is a melee standoff; positioning shifts tiles, not who-bleeds). So there's no tuning
+        // *gain* to capture here — the value is the guard + the reusable loop. A weight-DISCRIMINATING
+        // bed (terrain-constrained / tower-pressure, where damage-taken is a continuous function of
+        // position) is where the sweep will actually tune; tracked as Stage-4 follow-up.
+        let (best, best_score, default_score, distinct) = sweep_kite_weights();
+        println!(
+            "[ADR0019 Stage4 sweep] best (w_future={}, w_prox={}) score={} | default score={} | {} distinct outcomes",
+            best.w_future, best.w_prox, best_score, default_score, distinct
+        );
+        const TOL: i64 = 200; // net-HP slack: a config beating default by more than this ⇒ retune
+        assert!(
+            best_score - default_score <= TOL,
+            "the shipped default is dominated (best {best_score} vs default {default_score}, by w_future={} w_prox={}) — retune",
+            best.w_future,
+            best.w_prox
+        );
+    }
 
     #[test]
     fn exp_register_passes_all_gates() {
