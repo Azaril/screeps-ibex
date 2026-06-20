@@ -485,17 +485,32 @@ fn compute_squad_orders(
             ctx.members
                 .iter()
                 .map(|m| {
-                    let has_ranged = creep_owner
+                    // Resolve the body ONCE for has_ranged + the per-tick attack output (the engage
+                    // DMG reward's melee/ranged power, ADR 0019 focus_damage richness).
+                    let (has_ranged, melee_power, ranged_power) = creep_owner
                         .get(m.entity)
                         .and_then(|co| co.owner.resolve())
-                        .map(|c| c.body().iter().any(|p| p.part() == Part::RangedAttack && p.hits() > 0))
-                        .unwrap_or(false);
+                        .map(|c| {
+                            let mut atk = 0u32;
+                            let mut rng = 0u32;
+                            for p in c.body().iter().filter(|p| p.hits() > 0) {
+                                match p.part() {
+                                    Part::Attack => atk += 1,
+                                    Part::RangedAttack => rng += 1,
+                                    _ => {}
+                                }
+                            }
+                            (rng > 0, atk * screeps::constants::ATTACK_POWER, rng * screeps::constants::RANGED_ATTACK_POWER)
+                        })
+                        .unwrap_or((false, 0, 0));
                     SquadMemberView {
                         hits: m.current_hits,
                         hits_max: m.max_hits,
                         heal_power: m.heal_power,
                         pos: m.position,
                         has_ranged,
+                        melee_power,
+                        ranged_power,
                         damage_taken_last_tick: m.damage_taken_last_tick,
                     }
                 })

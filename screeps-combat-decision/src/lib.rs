@@ -625,6 +625,12 @@ pub struct SquadMemberView {
     pub pos: Option<Position>,
     /// Has a working RANGED_ATTACK part (drives "the squad can kite").
     pub has_ranged: bool,
+    /// Melee output/tick (working ATTACK parts × `ATTACK_POWER`) — the focus-damage reward's range-1
+    /// term (ADR 0019 focus_damage richness). Default 0 (the basic constructors omit it).
+    pub melee_power: u32,
+    /// Ranged output/tick (working RANGED_ATTACK parts × `RANGED_ATTACK_POWER`) — the focus-damage
+    /// reward's within-`r*` term. Default 0.
+    pub ranged_power: u32,
     /// Damage taken since last tick (predicted incoming, for proactive heal assignment).
     pub damage_taken_last_tick: u32,
 }
@@ -929,6 +935,36 @@ fn kite_towers(structures: &[CombatStructureDto]) -> Vec<kite::KiteTower> {
         .collect()
 }
 
+/// The actual-hits inputs for the engage DMG reward (ADR 0019 focus_damage richness): the squad's own
+/// melee/ranged output (per-tick, from the living members) + the focus creep's hits (kill-priority) +
+/// the heal/tick reaching the focus (enemy healers in heal range of it — `HEAL_POWER` adjacent, else
+/// `RANGED_HEAL_POWER` within range 3, the engine's heal-range model). `score_tile` turns these into a
+/// net-hits-landed reward so engage closes a melee block to range 1, presses a near-dead focus, and
+/// disengages an out-healed one.
+fn focus_damage_inputs(view: &SquadView, focus_pos: Position) -> kite::FocusDamage {
+    use screeps_combat_engine::constants::{HEAL_POWER, RANGED_HEAL_POWER};
+    let melee_power: u32 = view.members.iter().filter(|m| m.hits > 0).map(|m| m.melee_power).sum();
+    let ranged_power: u32 = view.members.iter().filter(|m| m.hits > 0).map(|m| m.ranged_power).sum();
+    let focus_hits = view.hostiles.iter().find(|h| h.pos == focus_pos).map(|h| h.hits).unwrap_or(0);
+    let focus_heal: u32 = view
+        .hostiles
+        .iter()
+        .filter(|h| h.has_working(Part::Heal))
+        .map(|h| {
+            let r = h.pos.get_range_to(focus_pos);
+            let per_part = if r <= 1 {
+                HEAL_POWER
+            } else if r <= 3 {
+                RANGED_HEAL_POWER
+            } else {
+                0
+            };
+            h.working_parts(Part::Heal) as u32 * per_part
+        })
+        .sum();
+    kite::FocusDamage { melee_power, ranged_power, focus_hits, focus_heal }
+}
+
 /// Build the per-(room, tick) shared [`kite::PositionLayers`] (threat field + reachability flood) from
 /// the room's hostiles + structures (ADR 0019 Stage 3b build-once-per-room). These layers depend only
 /// on the room's enemies — not the deciding squad — so the live `SquadManager` builds this **once per
@@ -1112,6 +1148,8 @@ pub fn decide_squad_with_pathing(
             threats: &threats,
             towers: &towers,
             focus: decision.focus.map(|f| f.pos),
+            // Kite weights the DMG term 0, so the richness inputs are moot here — keep it None.
+            focus_damage: None,
             params: kite::KiteScoreParams::default(),
             fragile_hits,
             squad_heal,
@@ -1124,11 +1162,17 @@ pub fn decide_squad_with_pathing(
     } else if engage_position {
         let threats = kite_threats(view.hostiles);
         let towers = kite_towers(view.structures);
+        // ACTUAL-HITS DMG richness (ADR 0019 focus_damage): the squad's own melee/ranged output, the
+        // focus's hits (kill-priority), and the heal/tick reaching the focus (enemy healers in heal
+        // range of it) — so the engage reward rewards tiles by net hits actually landed, pulls a melee
+        // block to range 1, and shrinks to 0 against an out-healed target (→ safety repositions it).
+        let focus_damage = decision.focus.and_then(|f| f.id.map(|_| focus_damage_inputs(view, f.pos)));
         let engage_view = kite::SquadKiteView {
             centroid,
             threats: &threats,
             towers: &towers,
             focus: decision.focus.map(|f| f.pos),
+            focus_damage,
             params: kite::KiteScoreParams::engage(),
             fragile_hits,
             squad_heal,
@@ -1466,10 +1510,12 @@ mod tests {
         SquadMemberView { hits, hits_max, heal_power, ..Default::default() }
     }
     fn ranged_member_at(hits: u32, hits_max: u32, x: u8, y: u8) -> SquadMemberView {
-        SquadMemberView { hits, hits_max, heal_power: 0, pos: Some(pos(x, y)), has_ranged: true, ..Default::default() }
+        // 7 RANGED_ATTACK parts (×10) — a real ranged body, so the engage DMG reward (focus_damage) is
+        // exercised, not collapsed to 0.
+        SquadMemberView { hits, hits_max, heal_power: 0, pos: Some(pos(x, y)), has_ranged: true, ranged_power: 70, ..Default::default() }
     }
     fn healer_at(hits: u32, hits_max: u32, heal_power: u32, x: u8, y: u8) -> SquadMemberView {
-        SquadMemberView { hits, hits_max, heal_power, pos: Some(pos(x, y)), has_ranged: false, damage_taken_last_tick: 0 }
+        SquadMemberView { hits, hits_max, heal_power, pos: Some(pos(x, y)), has_ranged: false, melee_power: 0, ranged_power: 0, damage_taken_last_tick: 0 }
     }
     fn squad_view<'a>(
         members: &'a [SquadMemberView],
@@ -1603,6 +1649,8 @@ mod tests {
             heal_power: 0,
             pos: Some(pos(5, 25)),
             has_ranged: false,
+            melee_power: 0,
+            ranged_power: 0,
             damage_taken_last_tick: 0,
         }];
         let view = SquadView {

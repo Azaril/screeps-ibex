@@ -271,6 +271,25 @@ impl PositionLayers {
     }
 }
 
+/// The squad's offensive capacity against its shared focus, for the **actual-hits** DMG reward (ADR
+/// 0019 Stage 3b focus_damage richness). The flat "in weapon range → full reward" was range-blind and
+/// heal-blind; with this the DMG term rewards a tile by the *net hits the squad would actually land on
+/// the focus from there* — melee output only lands at range 1, ranged within `r*`, and the focus's
+/// nearby heal is subtracted — scaled up by **kill-priority** (a near-dead focus is worth committing
+/// to). `None` ⇒ the flat in-range reward (the term-isolation unit tests + the sim path that doesn't
+/// resolve focus HP), so those stay byte-identical.
+#[derive(Clone, Copy, Debug)]
+pub struct FocusDamage {
+    /// The squad's melee output/tick (working ATTACK parts × power) — lands only at range 1.
+    pub melee_power: u32,
+    /// The squad's ranged output/tick (working RANGED_ATTACK parts × power) — lands within `r*`.
+    pub ranged_power: u32,
+    /// The focus's current hits — kill-priority denominator (net/hits → 1 = killable this tick).
+    pub focus_hits: u32,
+    /// Aggregate heal/tick reaching the focus (enemy healers near it) — subtracted from dealt.
+    pub focus_heal: u32,
+}
+
 /// The squad's kite-scoring context — its centroid (cohesion anchor), the threats/towers to avoid,
 /// and the shared focus the value term keeps shootable.
 pub struct SquadKiteView<'a> {
@@ -279,6 +298,9 @@ pub struct SquadKiteView<'a> {
     pub towers: &'a [KiteTower],
     /// Shared focus position; the value term keeps it within shooting range 3.
     pub focus: Option<Position>,
+    /// The actual-hits inputs for the DMG reward (ADR 0019 focus_damage richness). `None` ⇒ the flat
+    /// in-`r*` reward (byte-identical to the pre-richness behavior, for unit tests + the basic sim).
+    pub focus_damage: Option<FocusDamage>,
     pub params: KiteScoreParams,
     /// Hits of the squad's most-fragile member (ADR 0019 #2/#4) — the safety/veto denominator.
     pub fragile_hits: u32,
@@ -384,9 +406,44 @@ pub fn score_tile(view: &SquadKiteView, tile: Position, walkable_neighbors: u8, 
         }
     };
 
-    // DMG (reward) — in weapon range of the focus → commit to dealing damage (engage). 0 for kite.
-    let focus_dmg = match view.focus {
-        Some(f) if tile.get_range_to(f) <= r_star => SCALE_F,
+    // DMG (reward) — committing to deal damage to the focus (engage). With FocusDamage (live path):
+    // the ACTUAL net hits landed from this tile — melee output only at range 1, ranged within `r*`,
+    // minus the focus's nearby heal — as a fraction of the squad's max output (so a melee block is
+    // pulled to range 1 where it lands more), plus a kill-priority bonus (net relative to the focus's
+    // hits → saturates the reward when the focus is killable this tick). 0 when out-healed (don't
+    // commit to an unkillable target → safety dominates → reposition). Without it (tests / basic sim):
+    // the flat in-`r*` reward (byte-identical to pre-richness). 0 in the kite preset (`w_dmg == 0`).
+    let focus_dmg = match (view.focus, view.focus_damage) {
+        (Some(f), Some(fd)) => {
+            let r = tile.get_range_to(f);
+            let dealt = if r <= 1 {
+                fd.melee_power + fd.ranged_power
+            } else if r <= r_star {
+                fd.ranged_power
+            } else {
+                0
+            };
+            if dealt == 0 {
+                0.0
+            } else {
+                let net = dealt.saturating_sub(fd.focus_heal);
+                let best = (fd.melee_power + fd.ranged_power).max(1);
+                // EFFECTIVENESS: net as a fraction of our max output (range-1 beats range-3 when melee
+                // > 0 → pulls a melee block in). KILL-PRIORITY: net relative to the focus's hits, capped
+                // at 1 (killable-this-tick). Convex blend → stays in [0, SCALE]; both → 0 when out-
+                // healed (net 0) so safety dominates and the squad disengages an unkillable target.
+                let eff = (net as f32 / best as f32).min(1.0);
+                let kill = (net as f32 / fd.focus_hits.max(1) as f32).min(1.0);
+                ((0.6 * eff + 0.4 * kill) * SCALE_F).min(SCALE_F)
+            }
+        }
+        (Some(f), None) => {
+            if tile.get_range_to(f) <= r_star {
+                SCALE_F
+            } else {
+                0.0
+            }
+        }
         _ => 0.0,
     };
 
@@ -511,7 +568,7 @@ mod tests {
     }
     fn view<'a>(centroid: Position, threats: &'a [KiteThreat], towers: &'a [KiteTower], focus: Option<Position>) -> SquadKiteView<'a> {
         // fragile_hits 0 ⇒ the survival veto is disabled (the term-isolation tests don't want it).
-        SquadKiteView { centroid, threats, towers, focus, params: KiteScoreParams::default(), fragile_hits: 0, squad_heal: 0, weapon_range: 3 }
+        SquadKiteView { centroid, threats, towers, focus, focus_damage: None, params: KiteScoreParams::default(), fragile_hits: 0, squad_heal: 0, weapon_range: 3 }
     }
     fn melee(x: u8, y: u8, reach: u32) -> KiteThreat {
         KiteThreat { pos: pos(x, y), kind: ThreatKind::MeleeOnly, reach, step_ticks: Some(1), attack_power: 30, ranged_power: 0 }
@@ -646,16 +703,77 @@ mod tests {
         let a = pos(26, 25); // range 2 to focus (in range), range 1 to the threat (inside reach)
         let b = pos(22, 25); // range 6 to focus (out of range), range 5 to the threat (safe)
 
-        let kite = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), params: KiteScoreParams::default(), fragile_hits: 0, squad_heal: 0, weapon_range: 3 };
+        let kite = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), focus_damage: None, params: KiteScoreParams::default(), fragile_hits: 0, squad_heal: 0, weapon_range: 3 };
         assert!(
             score_tile(&kite, b, 8, &KiteFields::default()) < score_tile(&kite, a, 8, &KiteFields::default()),
             "kite prefers the safe tile B (flee)"
         );
 
-        let engage = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), params: KiteScoreParams::engage(), fragile_hits: 0, squad_heal: 0, weapon_range: 3 };
+        let engage = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), focus_damage: None, params: KiteScoreParams::engage(), fragile_hits: 0, squad_heal: 0, weapon_range: 3 };
         assert!(
             score_tile(&engage, a, 8, &KiteFields::default()) < score_tile(&engage, b, 8, &KiteFields::default()),
             "engage prefers the in-range tile A (stand and fight)"
+        );
+    }
+
+    // ── focus_damage actual-hits richness (ADR 0019 Stage 3b) ──
+    fn engage_view<'a>(centroid: Position, focus: Position, fd: Option<FocusDamage>) -> SquadKiteView<'a> {
+        SquadKiteView {
+            centroid,
+            threats: &[],
+            towers: &[],
+            focus: Some(focus),
+            focus_damage: fd,
+            params: KiteScoreParams::engage(),
+            fragile_hits: 5000, // veto disabled at these damage levels
+            squad_heal: 0,
+            weapon_range: 3,
+        }
+    }
+
+    #[test]
+    fn focus_damage_pulls_a_melee_block_to_range_one() {
+        // A melee+ranged squad lands MORE on the focus at range 1 (melee + ranged) than at range 3
+        // (ranged only) → the DMG reward favors range 1 MORE than a pure-ranged squad does (whose
+        // output is identical at either range). Isolated by comparing the r1-vs-r3 cost delta across
+        // the two compositions (centroid == focus, so cohesion is common to both).
+        let c = pos(25, 25);
+        let r1 = pos(26, 25); // range 1 to focus
+        let r3 = pos(28, 25); // range 3 to focus
+        let mixed = engage_view(c, c, Some(FocusDamage { melee_power: 90, ranged_power: 30, focus_hits: 100_000, focus_heal: 0 }));
+        let ranged = engage_view(c, c, Some(FocusDamage { melee_power: 0, ranged_power: 30, focus_hits: 100_000, focus_heal: 0 }));
+        let mixed_pull = score_tile(&mixed, r3, 8, &KiteFields::default()) - score_tile(&mixed, r1, 8, &KiteFields::default());
+        let ranged_pull = score_tile(&ranged, r3, 8, &KiteFields::default()) - score_tile(&ranged, r1, 8, &KiteFields::default());
+        assert!(mixed_pull > ranged_pull, "melee composition pulls harder to range 1: mixed={mixed_pull} ranged={ranged_pull}");
+    }
+
+    #[test]
+    fn focus_damage_zero_when_out_healed() {
+        // The focus's heal/tick meets or exceeds our output → net 0 → the DMG reward vanishes → the
+        // in-range tile is no more attractive than when we deal real damage (it costs MORE).
+        let c = pos(25, 25);
+        let tile = pos(27, 25); // range 2 to the focus (in r*)
+        let focus = pos(25, 25);
+        let dealing = engage_view(c, focus, Some(FocusDamage { melee_power: 0, ranged_power: 100, focus_hits: 100_000, focus_heal: 0 }));
+        let out_healed = engage_view(c, focus, Some(FocusDamage { melee_power: 0, ranged_power: 100, focus_hits: 100_000, focus_heal: 100 }));
+        assert!(
+            score_tile(&out_healed, tile, 8, &KiteFields::default()) > score_tile(&dealing, tile, 8, &KiteFields::default()),
+            "an out-healed target gives no engage reward"
+        );
+    }
+
+    #[test]
+    fn focus_damage_kill_priority_saturates_on_a_near_dead_focus() {
+        // Same dealt damage, two focus HP: a near-dead focus (kill this tick) gets the saturated reward
+        // → its in-range tile costs LESS than against a full-HP focus (commit to the kill).
+        let c = pos(25, 25);
+        let tile = pos(27, 25);
+        let focus = pos(25, 25);
+        let near_dead = engage_view(c, focus, Some(FocusDamage { melee_power: 0, ranged_power: 50, focus_hits: 40, focus_heal: 0 }));
+        let full_hp = engage_view(c, focus, Some(FocusDamage { melee_power: 0, ranged_power: 50, focus_hits: 100_000, focus_heal: 0 }));
+        assert!(
+            score_tile(&near_dead, tile, 8, &KiteFields::default()) < score_tile(&full_hp, tile, 8, &KiteFields::default()),
+            "a killable focus is worth committing to"
         );
     }
 
@@ -677,7 +795,7 @@ mod tests {
         let kite = view(centroid, &threats, &[], None); // default weights (w_future = 5)
         let mut attack_params = KiteScoreParams::default();
         attack_params.w_future = 0.0; // a use that ignores durable-standoff
-        let attack = SquadKiteView { centroid, threats: &threats, towers: &[], focus: None, params: attack_params, fragile_hits: 0, squad_heal: 0, weapon_range: 3 };
+        let attack = SquadKiteView { centroid, threats: &threats, towers: &[], focus: None, focus_damage: None, params: attack_params, fragile_hits: 0, squad_heal: 0, weapon_range: 3 };
 
         let kite_score = score_tile(&kite, tile, 8, &fields);
         let attack_score = score_tile(&attack, tile, 8, &fields);
@@ -724,7 +842,7 @@ mod tests {
         let mut cb = |_r| Some(LocalCostMatrix::new());
         let centroid = pos(25, 25);
         let threat = KiteThreat { pos: pos(25, 25), kind: ThreatKind::Ranged, reach: 0, step_ticks: Some(1), attack_power: 0, ranged_power: 100 };
-        let v = SquadKiteView { centroid, threats: &[threat], towers: &[], focus: None, params: KiteScoreParams::default(), fragile_hits: 200, squad_heal: 0, weapon_range: 3 };
+        let v = SquadKiteView { centroid, threats: &[threat], towers: &[], focus: None, focus_damage: None, params: KiteScoreParams::default(), fragile_hits: 200, squad_heal: 0, weapon_range: 3 };
         let plan = plan_kite_anchor(&v, None, &mut cb, MAX_KITE_OPS).expect("a non-lethal tile exists");
         assert!(plan.goal.get_range_to(pos(25, 25)) > 3, "fled outside the lethal ranged zone: {:?}", plan.goal);
     }

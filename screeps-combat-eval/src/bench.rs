@@ -78,6 +78,7 @@ pub fn run_compound_worst_case(ticks: usize) -> BenchResult {
                 threats: &threats,
                 towers: &towers,
                 focus: None,
+                focus_damage: None,
                 params: KiteScoreParams::default(),
                 fragile_hits: 5000, // a boosted brick — edge tiles survivable, centre lethal (veto active)
                 squad_heal: 0,

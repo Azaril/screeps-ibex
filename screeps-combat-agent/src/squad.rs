@@ -203,6 +203,9 @@ impl ManagedSimSquad {
                     heal_power: f.working_parts(Part::Heal) as u32,
                     pos: Some(f.pos),
                     has_ranged: f.has_working(Part::RangedAttack),
+                    // Per-tick attack output for the engage DMG reward (ADR 0019 focus_damage richness).
+                    melee_power: f.working_parts(Part::Attack) as u32 * screeps_combat_engine::constants::ATTACK_POWER,
+                    ranged_power: f.working_parts(Part::RangedAttack) as u32 * screeps_combat_engine::constants::RANGED_ATTACK_POWER,
                     damage_taken_last_tick: 0,
                 }
             })
