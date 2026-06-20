@@ -146,10 +146,12 @@ impl SimView {
                     hits: s.hits,
                     hits_max: s.hits_max,
                     ownership: ownership(s.owner, me_owner),
+                    energy: 0, // non-tower structures don't fire/heal
                 }
             })
             .collect();
-        // Towers are targetable structures too (engine kind `Tower`).
+        // Towers are targetable structures too (engine kind `Tower`) — carry energy so the decision
+        // excludes a drained tower from the threat field + max-heal estimate.
         structures.extend(world.towers.iter().filter(|t| t.is_alive()).map(|t| {
             index_struct(t.pos, StructureKind::Tower, t.id);
             CombatStructureDto {
@@ -158,6 +160,7 @@ impl SimView {
                 hits: t.hits,
                 hits_max: t.hits_max,
                 ownership: ownership(Some(t.owner), me_owner),
+                energy: t.energy,
             }
         }));
 

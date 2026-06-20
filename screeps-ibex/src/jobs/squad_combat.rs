@@ -88,12 +88,19 @@ pub(crate) fn structure_to_dto(s: &StructureObject) -> crate::combat::CombatStru
         None => Ownership::Neutral,
     };
     let (hits, hits_max) = s.as_attackable().map(|a| (a.hits(), a.hits_max())).unwrap_or((0, 0));
+    // Tower stored energy: a tower with < TOWER_ENERGY_COST can't fire or heal, so the decision must
+    // exclude a drained tower from the threat field + the max-heal estimate (ADR 0020).
+    let energy = match s {
+        StructureObject::StructureTower(t) => t.store().get_used_capacity(Some(screeps::constants::ResourceType::Energy)),
+        _ => 0,
+    };
     crate::combat::CombatStructureDto {
         pos: s.pos(),
         structure_type: s.structure_type(),
         hits,
         hits_max,
         ownership,
+        energy,
     }
 }
 

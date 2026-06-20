@@ -95,6 +95,10 @@ pub struct CombatStructureDto {
     pub hits: u32,
     pub hits_max: u32,
     pub ownership: Ownership,
+    /// For a **tower**: its stored energy. A tower with `< TOWER_ENERGY_COST` (10) can neither fire
+    /// nor heal, so it must be excluded from the threat field AND from the max-heal estimate. 0 for
+    /// non-towers (irrelevant).
+    pub energy: u32,
 }
 
 /// Squad-level state the per-creep decision reads. `center` is the squad's **real centroid** (the
@@ -235,11 +239,17 @@ fn hostile_rampart_tiles(structures: &[CombatStructureDto]) -> std::collections:
         .collect()
 }
 
-/// Heal/tick reaching `pos` from any hostile in heal range (incl. a self-healer on the tile) — the
-/// engine heal-range model (`HEAL_POWER` ≤1, `RANGED_HEAL_POWER` ≤3).
-fn heal_reaching(hostiles: &[CombatCreepDto], pos: Position) -> u32 {
+/// **Maximum** heal/tick a creep at `pos` could receive THIS tick — the engine nets damage THEN heal
+/// THEN checks death (`creeps/tick.js:120-136`), so a target dies only if `damage ≥ hits + heal`; this
+/// is that `heal`. Counts BOTH sources (the "potential maximum" — we assume the enemy saves the target,
+/// so we never commit to a kill it can out-heal):
+/// - hostile **creep** healers in heal range (`HEAL_POWER` ≤1, `RANGED_HEAL_POWER` ≤3; incl. a
+///   self-healer on the tile);
+/// - hostile **towers** (room-wide, range falloff ~400→100/tick each — `tower_heal_at_range`), which
+///   can heal a defender same-tick and dominate the sustain in a turtle room.
+fn heal_reaching(hostiles: &[CombatCreepDto], structures: &[CombatStructureDto], pos: Position) -> u32 {
     use screeps_combat_engine::constants::{HEAL_POWER, RANGED_HEAL_POWER};
-    hostiles
+    let creep_heal: u32 = hostiles
         .iter()
         .filter(|h| h.has_working(Part::Heal))
         .map(|h| {
@@ -250,7 +260,18 @@ fn heal_reaching(hostiles: &[CombatCreepDto], pos: Position) -> u32 {
             };
             h.working_parts(Part::Heal) as u32 * per
         })
-        .sum()
+        .sum();
+    let tower_heal: u32 = structures
+        .iter()
+        .filter(|s| {
+            s.structure_type == StructureType::Tower
+                && s.ownership == Ownership::Hostile
+                && s.hits > 0
+                && s.energy >= screeps_combat_engine::constants::TOWER_ENERGY_COST
+        })
+        .map(|t| screeps_combat_engine::damage::tower_heal_at_range(t.pos.get_range_to(pos)))
+        .sum();
+    creep_heal + tower_heal
 }
 
 /// Capability removed by killing `c`: its attack + ranged + heal output (denying sustain counts —
@@ -272,7 +293,7 @@ fn ev_target_order<'a>(hostiles: &'a [CombatCreepDto], structures: &[CombatStruc
         .iter()
         .filter(|c| !ramparts.contains(&(c.pos.x().u8(), c.pos.y().u8())))
         .filter_map(|c| {
-            let heal = heal_reaching(hostiles, c.pos);
+            let heal = heal_reaching(hostiles, structures, c.pos);
             let net = our_dps.saturating_sub(heal);
             if net == 0 {
                 return None; // out-healed → unkillable
@@ -1042,42 +1063,30 @@ fn kite_threats(hostiles: &[CombatCreepDto]) -> Vec<kite::KiteThreat> {
         .collect()
 }
 
-/// Live hostile towers (the tower-DPS-falloff term drifts the block out of tower-optimal range).
+/// Live hostile towers that can actually FIRE — i.e. with `>= TOWER_ENERGY_COST` stored energy (a
+/// drained tower deals no damage, so it must not shape the threat field / tower-avoidance term).
 fn kite_towers(structures: &[CombatStructureDto]) -> Vec<kite::KiteTower> {
+    use screeps_combat_engine::constants::TOWER_ENERGY_COST;
     structures
         .iter()
-        .filter(|s| s.ownership == Ownership::Hostile && s.structure_type == StructureType::Tower && s.hits > 0)
+        .filter(|s| {
+            s.ownership == Ownership::Hostile && s.structure_type == StructureType::Tower && s.hits > 0 && s.energy >= TOWER_ENERGY_COST
+        })
         .map(|s| kite::KiteTower { pos: s.pos })
         .collect()
 }
 
 /// The actual-hits inputs for the engage DMG reward (ADR 0019 focus_damage richness): the squad's own
 /// melee/ranged output (per-tick, from the living members) + the focus creep's hits (kill-priority) +
-/// the heal/tick reaching the focus (enemy healers in heal range of it — `HEAL_POWER` adjacent, else
-/// `RANGED_HEAL_POWER` within range 3, the engine's heal-range model). `score_tile` turns these into a
-/// net-hits-landed reward so engage closes a melee block to range 1, presses a near-dead focus, and
-/// disengages an out-healed one.
+/// the **maximum same-tick heal** reaching the focus (enemy creep healers AND energized hostile towers,
+/// via [`heal_reaching`] — the engine nets damage→heal→death, so the heal we must out-damage). So the
+/// engage reward closes a melee block to range 1, presses a near-dead focus, and disengages a focus the
+/// enemy can out-heal (creeps or towers).
 fn focus_damage_inputs(view: &SquadView, focus_pos: Position) -> kite::FocusDamage {
-    use screeps_combat_engine::constants::{HEAL_POWER, RANGED_HEAL_POWER};
     let melee_power: u32 = view.members.iter().filter(|m| m.hits > 0).map(|m| m.melee_power).sum();
     let ranged_power: u32 = view.members.iter().filter(|m| m.hits > 0).map(|m| m.ranged_power).sum();
     let focus_hits = view.hostiles.iter().find(|h| h.pos == focus_pos).map(|h| h.hits).unwrap_or(0);
-    let focus_heal: u32 = view
-        .hostiles
-        .iter()
-        .filter(|h| h.has_working(Part::Heal))
-        .map(|h| {
-            let r = h.pos.get_range_to(focus_pos);
-            let per_part = if r <= 1 {
-                HEAL_POWER
-            } else if r <= 3 {
-                RANGED_HEAL_POWER
-            } else {
-                0
-            };
-            h.working_parts(Part::Heal) as u32 * per_part
-        })
-        .sum();
+    let focus_heal = heal_reaching(view.hostiles, view.structures, focus_pos);
     kite::FocusDamage { melee_power, ranged_power, focus_hits, focus_heal }
 }
 
@@ -1336,7 +1345,9 @@ mod tests {
         CombatCreepDto { id: Some(raw(id)), pos: pos(x, y), hits: hits.min(hits_max), hits_max, body: b }
     }
     fn structure(x: u8, y: u8, ty: StructureType, ownership: Ownership) -> CombatStructureDto {
-        CombatStructureDto { pos: pos(x, y), structure_type: ty, hits: 1000, hits_max: 1000, ownership }
+        // Towers default to full energy (so tower tests see a firing/healing tower); 0 for the rest.
+        let energy = if ty == StructureType::Tower { 1000 } else { 0 };
+        CombatStructureDto { pos: pos(x, y), structure_type: ty, hits: 1000, hits_max: 1000, ownership, energy }
     }
     fn squad() -> SquadStateDto {
         // cohesion_radius 0 + Hold ⇒ the per-creep fallback path (the existing tests' behavior).
@@ -1420,6 +1431,38 @@ mod tests {
         // No offense (healers only) ⇒ nothing killable ⇒ all None (fall back to the shared focus).
         let healers = vec![healer_at(600, 600, 5, 25, 25), healer_at(600, 600, 5, 26, 25)];
         assert!(assign_focus_fire(&healers, &[big], &[]).iter().all(|f| f.is_none()));
+    }
+
+    #[test]
+    fn tower_heal_counts_toward_killability_only_when_energized() {
+        // Two ranged shooters (140 dps). A 100-hit target beside a hostile tower. An ENERGIZED tower
+        // heals ~400/tick → out-heals us → the target is unkillable (no shooter assigned). A DRAINED
+        // tower (energy 0) can't heal → the target becomes killable. (Operator: count tower heal, but
+        // only when the tower has >= TOWER_ENERGY_COST energy. Same gate applies to its damage.)
+        let members = vec![ranged_member_at(700, 700, 20, 25), ranged_member_at(700, 700, 21, 25)];
+        let target = creep(1, 25, 25, 100, &[(Part::Attack, 1), (Part::Move, 1)]);
+        let tower_on = structure(25, 26, StructureType::Tower, Ownership::Hostile); // helper → energy 1000
+        let on = assign_focus_fire(&members, &[target.clone()], &[tower_on.clone()]);
+        assert!(on.iter().all(|f| f.is_none()), "energized tower out-heals → target unkillable");
+
+        let tower_off = CombatStructureDto { energy: 0, ..tower_on };
+        let off = assign_focus_fire(&members, &[target], &[tower_off]);
+        assert_eq!(off[0].and_then(|f| f.id), Some(raw(1)), "a drained tower can't heal → target killable");
+    }
+
+    #[test]
+    fn kill_budget_includes_same_tick_heal_so_no_premature_spill() {
+        // The engine nets damage THEN heal THEN checks death (tick.js:120-136), so a creep dies this
+        // tick only if damage >= hits + same-tick heal. X has 100 hits + 60 self-heal → budget 160.
+        // Two shooters (120 + 40 = 160 dps) must BOTH stay on X (budget exactly met); if the budget
+        // wrongly ignored heal (100), the 120-shooter would "finish" X and the 40 would spill to Y.
+        let shooter = |rp: u32, x: u8| SquadMemberView { hits: 700, hits_max: 700, pos: Some(pos(x, 25)), has_ranged: true, ranged_power: rp, ..Default::default() };
+        let members = vec![shooter(120, 25), shooter(40, 26)];
+        let x = creep(1, 30, 25, 100, &[(Part::Heal, 5)]); // self-heals 60/tick at range 0 → budget 160
+        let y = creep(2, 35, 25, 500, &[(Part::Attack, 5)]); // a spill target if X were under-budgeted
+        let a = assign_focus_fire(&members, &[x, y], &[]);
+        assert_eq!(a[0].and_then(|f| f.id), Some(raw(1)));
+        assert_eq!(a[1].and_then(|f| f.id), Some(raw(1)), "both stay on X — heal is counted in its kill budget");
     }
 
     #[test]
@@ -1842,8 +1885,8 @@ mod tests {
         let mut cb = move |_r| Some(cm.clone());
 
         let structures = vec![
-            CombatStructureDto { pos: pos(8, 25), structure_type: StructureType::Rampart, hits: 100, hits_max: 100, ownership: Ownership::Hostile },
-            CombatStructureDto { pos: pos(10, 25), structure_type: StructureType::Spawn, hits: 5000, hits_max: 5000, ownership: Ownership::Hostile },
+            CombatStructureDto { pos: pos(8, 25), structure_type: StructureType::Rampart, hits: 100, hits_max: 100, ownership: Ownership::Hostile, energy: 0 },
+            CombatStructureDto { pos: pos(10, 25), structure_type: StructureType::Spawn, hits: 5000, hits_max: 5000, ownership: Ownership::Hostile, energy: 0 },
         ];
         let members = vec![SquadMemberView {
             hits: 1000,
