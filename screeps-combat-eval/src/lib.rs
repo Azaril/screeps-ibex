@@ -13,6 +13,7 @@
 //! seeded gate are the follow-on increment (they need Docker-capture integration). The harder
 //! register items (BREACH / DEF-2 / CTRL / PARITY) land as the sim grows ramparts/controllers.
 
+pub mod bench;
 pub mod metrics;
 pub mod scoring;
 
