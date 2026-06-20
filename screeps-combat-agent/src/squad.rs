@@ -12,7 +12,7 @@ use crate::{to_engine_action, SimView};
 use screeps::{Part, Position, RoomCoordinate};
 use screeps_combat_decision::{
     cohesion, decide_combat, decide_movement, decide_squad_with_pathing, kite::MAX_KITE_OPS, CombatIntent, CreepOrders, FocusTarget,
-    SquadMemberView, SquadOrderState, SquadStateDto, SquadView,
+    SquadMemberView, SquadMovement, SquadOrderState, SquadStateDto, SquadView,
 };
 use screeps_combat_engine::{CombatWorld, CreepId, Intents, PlayerId};
 use screeps_rover::{AnchorOutcome, AnchorPath, LocalPathfinder};
@@ -174,11 +174,14 @@ pub struct ManagedSimSquad {
     pub objective: Position,
     pub retreat_threshold: f32,
     state: SquadOrderState,
+    /// Last tick's kite/engage goal — fed back as `prev_goal` for goal-latching (ADR 0019 #6b), so the
+    /// sim exercises the same anti-oscillation stickiness the live `SquadManager` does.
+    prev_goal: Option<Position>,
 }
 
 impl ManagedSimSquad {
     pub fn new(owner: PlayerId, members: Vec<CreepId>, objective: Position) -> Self {
-        Self { owner, members, objective, retreat_threshold: 0.3, state: SquadOrderState::Forming }
+        Self { owner, members, objective, retreat_threshold: 0.3, state: SquadOrderState::Forming, prev_goal: None }
     }
 
     /// Advance one tick: build the `SquadView` from living members, run `decide_squad_with_pathing`
@@ -218,8 +221,14 @@ impl ManagedSimSquad {
             retreat_threshold: self.retreat_threshold,
             current_state: self.state,
         };
-        let decision = decide_squad_with_pathing(&view, None, &mut |r| build_combat_matrix(world, r, self.owner), MAX_KITE_OPS);
+        let decision = decide_squad_with_pathing(&view, None, self.prev_goal, &mut |r| build_combat_matrix(world, r, self.owner), MAX_KITE_OPS);
         self.state = decision.state;
+        // Remember this tick's kite/engage goal for next tick's latch (None otherwise → no stale latch).
+        self.prev_goal = match decision.movement {
+            SquadMovement::Kite { goal } => Some(goal),
+            SquadMovement::Advance { goal, range: 0 } => Some(goal),
+            _ => None,
+        };
 
         let squad_dto = SquadStateDto {
             center: decision.center.unwrap_or(self.objective),
