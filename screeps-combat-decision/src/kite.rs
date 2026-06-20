@@ -440,15 +440,24 @@ fn walkable_neighbors(cm: &LocalCostMatrix, tile: Position) -> u8 {
 /// the separate `MoveToRoom` phase), so the headless local search is the right tool for both.
 pub fn plan_kite_anchor(
     view: &SquadKiteView,
+    shared: Option<&PositionLayers>,
     room_callback: &mut dyn FnMut(RoomName) -> Option<LocalCostMatrix>,
     max_ops: u32,
 ) -> Option<KitePlan> {
     let room = view.centroid.room_name();
     let matrix = room_callback(room)?;
-    // Build the per-(room,tick) cached layers ONCE (ADR 0019 Stage 3a/3b): just the THREAT flood now
-    // — cohesion comes free from the search's own `g` below (Stage 3b flood-dedup). A future attack-
-    // positioning scorer for the same squad/tick reuses this exact instance.
-    let layers = PositionLayers::build(view.threats, view.towers, room, &matrix, max_ops);
+    // The per-(room,tick) cached layers (threat field + reachability). When the caller built them once
+    // for the room (ADR 0019 Stage 3b build-once-per-room sharing), reuse that instance across every
+    // squad in the room; otherwise build them here (the sim / tests). Cohesion comes free from the
+    // search's own `g` below (the flood-dedup), so it stays per-squad regardless.
+    let owned;
+    let layers = match shared {
+        Some(l) => l,
+        None => {
+            owned = PositionLayers::build(view.threats, view.towers, room, &matrix, max_ops);
+            &owned
+        }
+    };
     let threat_reach = layers.threat_reach();
     let threat_field = layers.threat_field();
     // SURVIVAL VETO (ADR 0019 Guard 4 / #4): a tile whose net incoming would kill the most-fragile
@@ -686,7 +695,7 @@ mod tests {
         // A melee threat adjacent to the centroid → holding is unsafe; kite out of reach.
         let threats = [melee(24, 25, 3)];
         let v = view(centroid, &threats, &[], None);
-        let plan = plan_kite_anchor(&v, &mut cb, MAX_KITE_OPS).expect("a safer tile than the centroid exists");
+        let plan = plan_kite_anchor(&v, None, &mut cb, MAX_KITE_OPS).expect("a safer tile than the centroid exists");
         assert!(plan.goal.get_range_to(pos(24, 25)) > 3, "escapes the melee reach: {:?}", plan.goal);
         assert!(plan.goal.get_range_to(centroid) <= 6, "stays near the squad (cohesion in the score): {:?}", plan.goal);
     }
@@ -716,7 +725,7 @@ mod tests {
         let centroid = pos(25, 25);
         let threat = KiteThreat { pos: pos(25, 25), kind: ThreatKind::Ranged, reach: 0, step_ticks: Some(1), attack_power: 0, ranged_power: 100 };
         let v = SquadKiteView { centroid, threats: &[threat], towers: &[], focus: None, params: KiteScoreParams::default(), fragile_hits: 200, squad_heal: 0, weapon_range: 3 };
-        let plan = plan_kite_anchor(&v, &mut cb, MAX_KITE_OPS).expect("a non-lethal tile exists");
+        let plan = plan_kite_anchor(&v, None, &mut cb, MAX_KITE_OPS).expect("a non-lethal tile exists");
         assert!(plan.goal.get_range_to(pos(25, 25)) > 3, "fled outside the lethal ranged zone: {:?}", plan.goal);
     }
 
@@ -725,6 +734,6 @@ mod tests {
         let mut cb = |_r| Some(LocalCostMatrix::new());
         // No threats/towers/focus → the centroid (cohesion 0) is the global min → hold (no goal).
         let v = view(pos(25, 25), &[], &[], None);
-        assert!(plan_kite_anchor(&v, &mut cb, MAX_KITE_OPS).is_none(), "nothing to flee → hold");
+        assert!(plan_kite_anchor(&v, None, &mut cb, MAX_KITE_OPS).is_none(), "nothing to flee → hold");
     }
 }

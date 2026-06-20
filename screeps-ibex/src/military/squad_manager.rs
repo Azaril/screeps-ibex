@@ -30,8 +30,12 @@
 use super::composition::{SquadComposition, SquadSlot};
 use super::objective_queue::{CombatObjectiveQueue, ObjectiveId, ObjectiveKind, OBJECTIVE_PRIORITY_HIGH};
 use super::squad::{AttackTarget, SquadContext, SquadState, SquadTarget, TickMovement, TickOrders};
-use crate::combat::kite::MAX_KITE_OPS;
-use crate::combat::{decide_squad_with_pathing, CombatCreepDto, CombatStructureDto, SquadDecision, SquadMemberView, SquadOrderState, SquadView};
+use crate::combat::kite::{PositionLayers, MAX_KITE_OPS};
+use crate::combat::{
+    build_room_layers, decide_squad_with_pathing, CombatCreepDto, CombatStructureDto, SquadDecision, SquadMemberView,
+    SquadOrderState, SquadView,
+};
+use std::collections::HashMap;
 use crate::creep::{spawning, CreepOwner};
 use crate::entitymappingsystem::EntityMappingData;
 use crate::jobs::squad_combat::{creep_to_dto, structure_to_dto};
@@ -262,6 +266,10 @@ impl<'a> System<'a> for SquadManagerSystem {
         // live adapter: it builds the JS-free `SquadView` from `SquadContext` + the room,
         // calls `decide_squad`, and writes the result back as orders/state. No tactics
         // math lives here.
+        // ADR 0019 Stage 3b build-once-per-room sharing: the threat field + reachability flood depend
+        // only on a room's enemies, not the deciding squad, so they are built ONCE per room (this tick)
+        // and reused by every squad fighting there. Per-squad work (the cohesion search) is unaffected.
+        let mut room_layers: HashMap<RoomName, (LocalCostMatrix, PositionLayers)> = HashMap::new();
         for (squad_entity, obj_id) in &live_managed {
             let (target_room, formation) = match data.objective_queue.get(*obj_id) {
                 Some(obj) => (objective_target(&obj.kind).1, is_formation_objective(&obj.kind)),
@@ -275,6 +283,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 *squad_entity,
                 target_room,
                 formation,
+                &mut room_layers,
             );
         }
 
@@ -434,6 +443,29 @@ fn build_room_combat_dtos(
     (hostiles, structures)
 }
 
+/// Build a room's movement cost matrix with terrain walls overlaid (the headless `LocalPathfinder`
+/// reads walls from the matrix, so the `Terrain::Wall` overlay is mandatory). Extracted so the
+/// per-room `PositionLayers` cache (build-once-per-room) and the kite search share one matrix build.
+fn build_target_matrix(
+    cms: &mut CostMatrixSystem,
+    opts: &CostMatrixOptions,
+    room: RoomName,
+) -> Option<LocalCostMatrix> {
+    let mut matrix = cms.build_local_cost_matrix(room, opts).ok()?;
+    if let Some(terrain) = game::map::get_room_terrain(room) {
+        for x in 0..50u8 {
+            for y in 0..50u8 {
+                if terrain.get(x, y) == Terrain::Wall {
+                    if let Ok(xy) = RoomXY::checked_new(x, y) {
+                        matrix.set(xy, u8::MAX);
+                    }
+                }
+            }
+        }
+    }
+    Some(matrix)
+}
+
 /// Build the squad view, run the pure `decide_squad`, and apply the result to the
 /// `SquadContext` (state + per-member orders). The live adapter for P2.G3 tactics.
 fn compute_squad_orders(
@@ -444,6 +476,7 @@ fn compute_squad_orders(
     squad_entity: Entity,
     target_room: RoomName,
     formation: bool,
+    room_layers: &mut HashMap<RoomName, (LocalCostMatrix, PositionLayers)>,
 ) {
     // Read the roster's cached status (immutable). `pos`/`has_ranged` feed the centroid + the kite
     // plan; `has_ranged` resolves the creep body (the adapter's job — the pure crate stays JS-free).
@@ -487,28 +520,31 @@ fn compute_squad_orders(
     };
 
     // Build the target room's movement cost matrix (terrain walls baked in — the headless
-    // `LocalPathfinder` reads walls from the matrix) for the ONE bounded kite search. Same recipe
-    // the squad anchor mover uses (formation.rs); the search itself is the pure `LocalPathfinder`.
-    let mut cache = CostMatrixCache::default();
-    let mut cms = CostMatrixSystem::new(&mut cache, Box::new(screeps_rover::screeps_impl::ScreepsCostMatrixDataSource));
-    let opts = CostMatrixOptions::default();
-    let mut room_cb = |r: RoomName| {
-        let mut matrix = cms.build_local_cost_matrix(r, &opts).ok()?;
-        if let Some(terrain) = game::map::get_room_terrain(r) {
-            for x in 0..50u8 {
-                for y in 0..50u8 {
-                    if terrain.get(x, y) == Terrain::Wall {
-                        if let Ok(xy) = RoomXY::checked_new(x, y) {
-                            matrix.set(xy, u8::MAX);
-                        }
-                    }
-                }
-            }
+    // `LocalPathfinder` reads walls from the matrix) plus the per-room `PositionLayers` (threat
+    // field + reachability flood) ONCE per room and share across every squad targeting it — the
+    // threat field and floods depend only on the room's enemies, not on which squad is asking
+    // (ADR 0019 Stage 3b build-once-per-room). Same matrix recipe the squad anchor mover uses
+    // (formation.rs); the search itself is the pure `LocalPathfinder`.
+    if !room_layers.contains_key(&target_room) {
+        let mut cache = CostMatrixCache::default();
+        let mut cms = CostMatrixSystem::new(&mut cache, Box::new(screeps_rover::screeps_impl::ScreepsCostMatrixDataSource));
+        let opts = CostMatrixOptions::default();
+        if let Some(matrix) = build_target_matrix(&mut cms, &opts, target_room) {
+            let layers = build_room_layers(&hostiles, &structures, target_room, &matrix, MAX_KITE_OPS);
+            room_layers.insert(target_room, (matrix, layers));
         }
-        Some(matrix)
-    };
+    }
 
-    let decision = decide_squad_with_pathing(&view, &mut room_cb, MAX_KITE_OPS);
+    let decision = match room_layers.get(&target_room) {
+        Some((matrix, layers)) => {
+            let mut room_cb = |_r: RoomName| Some(matrix.clone());
+            decide_squad_with_pathing(&view, Some(layers), &mut room_cb, MAX_KITE_OPS)
+        }
+        None => {
+            let mut room_cb = |_r: RoomName| None;
+            decide_squad_with_pathing(&view, None, &mut room_cb, MAX_KITE_OPS)
+        }
+    };
 
     // Travel cohesion (P2.G4-O1): while the squad is still converging on the target room, the manager
     // advances the squad's footprint anchor toward the room centre — the rover `AnchorPath` via

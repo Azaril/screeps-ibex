@@ -215,7 +215,7 @@ impl ManagedSimSquad {
             retreat_threshold: self.retreat_threshold,
             current_state: self.state,
         };
-        let decision = decide_squad_with_pathing(&view, &mut |r| build_combat_matrix(world, r, self.owner), MAX_KITE_OPS);
+        let decision = decide_squad_with_pathing(&view, None, &mut |r| build_combat_matrix(world, r, self.owner), MAX_KITE_OPS);
         self.state = decision.state;
 
         let squad_dto = SquadStateDto {

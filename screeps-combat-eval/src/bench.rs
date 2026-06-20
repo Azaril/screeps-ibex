@@ -84,7 +84,7 @@ pub fn run_compound_worst_case(ticks: usize) -> BenchResult {
                 weapon_range: 3,
             };
             let mut cb = |_r: RoomName| Some(matrix.clone());
-            if plan_kite_anchor(&view, &mut cb, MAX_KITE_OPS).is_some() {
+            if plan_kite_anchor(&view, None, &mut cb, MAX_KITE_OPS).is_some() {
                 plans += 1;
             }
         }

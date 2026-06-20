@@ -929,6 +929,23 @@ fn kite_towers(structures: &[CombatStructureDto]) -> Vec<kite::KiteTower> {
         .collect()
 }
 
+/// Build the per-(room, tick) shared [`kite::PositionLayers`] (threat field + reachability flood) from
+/// the room's hostiles + structures (ADR 0019 Stage 3b build-once-per-room). These layers depend only
+/// on the room's enemies — not the deciding squad — so the live `SquadManager` builds this **once per
+/// room** and passes it to every squad's [`decide_squad_with_pathing`] via `shared`, instead of each
+/// squad rebuilding the floods. The per-squad cohesion still comes from each squad's own search `g`.
+pub fn build_room_layers(
+    hostiles: &[CombatCreepDto],
+    structures: &[CombatStructureDto],
+    room: RoomName,
+    matrix: &screeps::local::LocalCostMatrix,
+    max_ops: u32,
+) -> kite::PositionLayers {
+    let threats = kite_threats(hostiles);
+    let towers = kite_towers(structures);
+    kite::PositionLayers::build(&threats, &towers, room, matrix, max_ops)
+}
+
 /// **The full squad decision incl. the pathfinding-scored kite goal** (P2.G3-tail). Runs
 /// [`decide_squad`] for the focus + hysteresis + state, then — only when kiting is warranted
 /// (`Retreating`, or `Engaged` with a ranged squad and a melee-capable threat near the centroid) —
@@ -1026,6 +1043,7 @@ fn breach_redirect(
 
 pub fn decide_squad_with_pathing(
     view: &SquadView,
+    shared: Option<&kite::PositionLayers>,
     room_callback: &mut dyn FnMut(RoomName) -> Option<LocalCostMatrix>,
     max_ops: u32,
 ) -> SquadDecision {
@@ -1099,7 +1117,7 @@ pub fn decide_squad_with_pathing(
             squad_heal,
             weapon_range,
         };
-        decision.movement = match kite::plan_kite_anchor(&kite_view, room_callback, max_ops) {
+        decision.movement = match kite::plan_kite_anchor(&kite_view, shared, room_callback, max_ops) {
             Some(plan) => SquadMovement::Kite { goal: plan.goal },
             None => SquadMovement::Hold, // already the safest + most cohesive tile
         };
@@ -1116,7 +1134,7 @@ pub fn decide_squad_with_pathing(
             squad_heal,
             weapon_range,
         };
-        decision.movement = match kite::plan_kite_anchor(&engage_view, room_callback, max_ops) {
+        decision.movement = match kite::plan_kite_anchor(&engage_view, shared, room_callback, max_ops) {
             // Move onto the scored engagement tile (range 0); `None` ⇒ the centroid is already the best
             // place to fight from → hold and deal damage.
             Some(plan) => SquadMovement::Advance { goal: plan.goal, range: 0 },
@@ -1529,7 +1547,7 @@ mod tests {
         let hostiles = vec![creep(9, 30, 25, 600, &[(Part::RangedAttack, 6)])]; // ranged-only: no melee → no kite
         let view = squad_view(&members, &hostiles, SquadOrderState::Engaged);
         let mut cb = |_r| Some(LocalCostMatrix::new());
-        let d = decide_squad_with_pathing(&view, &mut cb, kite::MAX_KITE_OPS);
+        let d = decide_squad_with_pathing(&view, None, &mut cb, kite::MAX_KITE_OPS);
         assert_eq!(d.state, SquadOrderState::Engaged);
         match d.movement {
             SquadMovement::Advance { goal, range } => {
@@ -1595,7 +1613,7 @@ mod tests {
             current_state: SquadOrderState::Moving,
         };
 
-        let d = decide_squad_with_pathing(&view, &mut cb, kite::MAX_KITE_OPS);
+        let d = decide_squad_with_pathing(&view, None, &mut cb, kite::MAX_KITE_OPS);
         assert_eq!(d.focus.map(|f| f.pos), Some(pos(8, 25)), "focus the shielding rampart, not the spawn behind it");
         match d.movement {
             SquadMovement::Advance { goal, .. } => assert_eq!(goal, pos(8, 25), "advance toward the breach"),
@@ -1617,7 +1635,7 @@ mod tests {
             current_state: SquadOrderState::Engaged,
         };
         let mut cb = |_r| Some(LocalCostMatrix::new());
-        let d = decide_squad_with_pathing(&view, &mut cb, kite::MAX_KITE_OPS);
+        let d = decide_squad_with_pathing(&view, None, &mut cb, kite::MAX_KITE_OPS);
         assert_eq!(d.state, SquadOrderState::Engaged);
         match d.movement {
             SquadMovement::Kite { goal } => {
@@ -1652,8 +1670,8 @@ mod tests {
         let view = SquadView { members: &members, hostiles: &hostiles, structures: &[], retreat_threshold: 0.3, current_state: SquadOrderState::Engaged };
         let mut cb1 = |_r| Some(LocalCostMatrix::new());
         let mut cb2 = |_r| Some(LocalCostMatrix::new());
-        let a = decide_squad_with_pathing(&view, &mut cb1, kite::MAX_KITE_OPS);
-        let b = decide_squad_with_pathing(&view, &mut cb2, kite::MAX_KITE_OPS);
+        let a = decide_squad_with_pathing(&view, None, &mut cb1, kite::MAX_KITE_OPS);
+        let b = decide_squad_with_pathing(&view, None, &mut cb2, kite::MAX_KITE_OPS);
         assert_eq!(a.movement, b.movement, "same input → same goal (deterministic)");
     }
 
@@ -1700,7 +1718,7 @@ mod tests {
             current_state: SquadOrderState::Moving,
         };
         let mut cb = |_r| Some(LocalCostMatrix::new());
-        let d = decide_squad_with_pathing(&view, &mut cb, kite::MAX_KITE_OPS);
+        let d = decide_squad_with_pathing(&view, None, &mut cb, kite::MAX_KITE_OPS);
         assert_eq!(d.state, SquadOrderState::Moving);
         assert_eq!(d.movement, SquadMovement::Hold);
     }
