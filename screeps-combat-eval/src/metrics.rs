@@ -472,4 +472,20 @@ mod u8 {
         }
         assert!(n > 0 && (sum as f64 / n as f64) > 2.0, "holds standoff after breaking out");
     }
+
+    #[test]
+    fn solo_healer_kites_a_melee_chaser_instead_of_dying() {
+        // U8-2: a pure support creep (HEAL + MOVE, no offense) used to walk up and get cut down by a
+        // melee chaser. It now evades + self-heals — surviving the run and taking far less damage.
+        let world = world_from_units(
+            0,
+            &[Unit::new(vec![(Part::Heal, 5), (Part::Move, 5)], vec![pos(30, 25)])],
+            1,
+            &[Unit::new(vec![(Part::Attack, 7), (Part::Move, 7)], vec![pos(27, 25)])],
+        );
+        let out = run_engagement(world, room(), 0, pos(30, 25), &mut IbexAgent, 1, pos(27, 25), &mut RushAgent, 40);
+        let m = SideMetrics::from_recording(&out.recording, 0);
+        assert_eq!(m.survivors, 1, "the healer evades + self-heals instead of standing to die");
+        assert!(m.hp_healed > 0, "it self-heals while kiting");
+    }
 }

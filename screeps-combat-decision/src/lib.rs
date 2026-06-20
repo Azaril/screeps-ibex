@@ -242,6 +242,19 @@ fn min_hits_hostile_within<'a>(view: &CombatView<'a>, range: u32) -> Option<&'a 
     view.hostiles.iter().filter(|c| view.me.pos.get_range_to(c.pos) <= range).min_by_key(|c| c.hits)
 }
 
+/// The target a SOLO creep (no squad focus) should pick within `range`: a hostile **healer** first
+/// (lowest-hits — break the enemy's sustain), else the lowest-hits hostile. Mirrors
+/// [`select_focus_target`]'s healer-first priority so an unmanaged creep fights as smartly as a
+/// squad-coordinated one (U8 focus consistency) instead of just chipping the nearest weakling while
+/// a healer keeps the pack topped up.
+fn priority_hostile_within<'a>(view: &CombatView<'a>, range: u32) -> Option<&'a CombatCreepDto> {
+    let me = view.me;
+    let in_range = |c: &&CombatCreepDto| me.pos.get_range_to(c.pos) <= range;
+    view.hostiles.iter().filter(in_range).filter(|c| c.has_working(Part::Heal)).min_by_key(|c| c.hits).or_else(|| {
+        view.hostiles.iter().filter(in_range).min_by_key(|c| c.hits)
+    })
+}
+
 fn best_hostile_structure_within<'a>(view: &CombatView<'a>, range: u32) -> Option<&'a CombatStructureDto> {
     view.structures
         .iter()
@@ -323,18 +336,18 @@ fn fallback_attack(view: &CombatView, out: &mut Vec<CombatIntent>) {
         return;
     }
 
-    // Pipeline A: melee the lowest-hits adjacent hostile.
+    // Pipeline A: melee the adjacent target — a healer first, else the lowest-hits hostile (U8).
     if me.has_working(Part::Attack) {
-        if let Some(t) = min_hits_hostile_within(view, 1) {
+        if let Some(t) = priority_hostile_within(view, 1) {
             out.push(CombatIntent::Attack { target: t.pos, id: t.id });
         }
     }
-    // Pipeline B: mass-attack when ≥3 adjacent, else focus the lowest-hits hostile in range 3.
+    // Pipeline B: mass-attack when ≥3 adjacent, else focus a healer (then lowest-hits) in range 3 (U8).
     if me.has_working(Part::RangedAttack) {
         let in_range_1 = view.hostiles.iter().filter(|c| me.pos.get_range_to(c.pos) <= 1).count();
         if in_range_1 >= 3 {
             out.push(CombatIntent::RangedMassAttack);
-        } else if let Some(t) = min_hits_hostile_within(view, 3) {
+        } else if let Some(t) = priority_hostile_within(view, 3) {
             out.push(CombatIntent::RangedAttack { target: t.pos, id: t.id });
         }
     }
@@ -524,13 +537,25 @@ fn decide_movement_fallback(view: &CombatView) -> Vec<CombatIntent> {
             .filter(|tp| me.pos.get_range_to(*tp) > 1)
             .map(|tp| CombatIntent::MoveTo { target: tp, range: 1 })
     } else if has_heal {
-        // Pure healer: follow the nearest damaged ally (excluding self) to range 1.
-        view.friends
+        // Pure support: it can't win a melee, so evade any melee-CAPABLE hostile closing on it
+        // (edge-aware — U8), self-healing as it backs off; only when nothing threatens does it move
+        // up to a wounded ally to heal it. (Before U8-2 it just walked to allies and got cut down.)
+        let melee_threats: Vec<Position> = view
+            .hostiles
             .iter()
-            .filter(|c| c.is_damaged() && c.pos != me.pos)
-            .min_by_key(|c| me.pos.get_range_to(c.pos))
-            .filter(|c| me.pos.get_range_to(c.pos) > 1)
-            .map(|c| CombatIntent::MoveTo { target: c.pos, range: 1 })
+            .filter(|c| c.has_working(Part::Attack) && me.pos.get_range_to(c.pos) <= 2)
+            .map(|c| c.pos)
+            .collect();
+        if !melee_threats.is_empty() {
+            Some(CombatIntent::Flee { from: kite_repulsors(me.pos, &melee_threats), range: 3 })
+        } else {
+            view.friends
+                .iter()
+                .filter(|c| c.is_damaged() && c.pos != me.pos)
+                .min_by_key(|c| me.pos.get_range_to(c.pos))
+                .filter(|c| me.pos.get_range_to(c.pos) > 1)
+                .map(|c| CombatIntent::MoveTo { target: c.pos, range: 1 })
+        }
     } else {
         None
     };
@@ -1600,5 +1625,35 @@ mod tests {
             }
             other => panic!("expected an edge-aware Flee, got {other:?}"),
         }
+    }
+
+    // ── U8-2: a pure support creep evades melee instead of standing ──
+
+    #[test]
+    fn solo_healer_evades_a_closing_melee_threat() {
+        // A pure healer (no attack/ranged) with a melee-capable hostile at range 2 flees rather than
+        // walking up to heal and getting cut down (the U8-2 bug: it used to just stand/follow).
+        let me = creep(1, 25, 25, 500, &[(Part::Heal, 5), (Part::Move, 5)]);
+        let chaser = creep(2, 25, 27, 1000, &[(Part::Attack, 7), (Part::Move, 7)]);
+        let scene = Scene { squad: squad(), friends: vec![me.clone()], hostiles: vec![chaser], structures: vec![] };
+        let intents = decide_movement(&scene.view(&me, Some(CreepOrders::default())));
+        assert!(matches!(intents.as_slice(), [CombatIntent::Flee { .. }]), "healer flees the melee threat: {intents:?}");
+    }
+
+    // ── U8-3: solo focus prioritizes the enemy healer ──
+
+    #[test]
+    fn solo_fallback_focuses_the_healer_not_the_weakling() {
+        // orders=None (no squad focus): a ranged creep targets the hostile HEALER (break the enemy's
+        // sustain) over a lower-hits non-healer in range — matching the coordinated path's priority.
+        let me = creep(1, 25, 25, 700, &[(Part::RangedAttack, 7)]);
+        let weakling = creep(2, 24, 25, 50, &[(Part::Move, 1)]); // lower hits, in range 1
+        let healer = creep(3, 26, 25, 500, &[(Part::Heal, 5)]); // a healer, more hits, in range 1
+        let scene = Scene { squad: squad(), friends: vec![me.clone()], hostiles: vec![weakling, healer], structures: vec![] };
+        let intents = decide_combat(&scene.view(&me, None));
+        assert!(
+            intents.contains(&CombatIntent::RangedAttack { target: pos(26, 25), id: Some(raw(3)) }),
+            "solo creep focuses the healer (id 3): {intents:?}"
+        );
     }
 }
