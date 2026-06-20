@@ -1064,6 +1064,19 @@ pub fn decide_squad_with_pathing(
         _ => false,
     };
 
+    // ENGAGE positioning (ADR 0019 Stage 3b): a ranged squad that is engaged with a focus and NOT
+    // kiting picks the best engagement tile via the SAME scored search, reweighted to stand-and-fight
+    // (`KiteScoreParams::engage()` — in weapon range of the focus, minimal threat, cohesive) instead
+    // of a straight-line `Advance` to the focus. flee (kite) vs stand (engage) thus share one search,
+    // differing only by the weight preset. Ranged-only: a melee/siege squad keeps the range-1 Advance
+    // (the weapon-range r* parameterization is a follow-up). A structure (breach) focus keeps the
+    // breach Advance set above.
+    let squad_has_ranged = view.members.iter().any(|m| m.has_ranged);
+    let engage_position = !should_kite
+        && matches!(decision.state, SquadOrderState::Engaged)
+        && decision.focus.is_some_and(|f| f.id.is_some())
+        && squad_has_ranged;
+
     if should_kite {
         let threats = kite_threats(view.hostiles);
         let towers = kite_towers(view.structures);
@@ -1077,6 +1090,22 @@ pub fn decide_squad_with_pathing(
         decision.movement = match kite::plan_kite_anchor(&kite_view, room_callback, max_ops) {
             Some(plan) => SquadMovement::Kite { goal: plan.goal },
             None => SquadMovement::Hold, // already the safest + most cohesive tile
+        };
+    } else if engage_position {
+        let threats = kite_threats(view.hostiles);
+        let towers = kite_towers(view.structures);
+        let engage_view = kite::SquadKiteView {
+            centroid,
+            threats: &threats,
+            towers: &towers,
+            focus: decision.focus.map(|f| f.pos),
+            params: kite::KiteScoreParams::engage(),
+        };
+        decision.movement = match kite::plan_kite_anchor(&engage_view, room_callback, max_ops) {
+            // Move onto the scored engagement tile (range 0); `None` ⇒ the centroid is already the best
+            // place to fight from → hold and deal damage.
+            Some(plan) => SquadMovement::Advance { goal: plan.goal, range: 0 },
+            None => SquadMovement::Hold,
         };
     }
 
@@ -1473,6 +1502,28 @@ mod tests {
             other => panic!("expected Advance, got {other:?}"),
         }
         assert!(d.center.is_some(), "centroid from member positions");
+    }
+
+    #[test]
+    fn engaged_ranged_squad_uses_scored_engage_positioning() {
+        // A ranged squad engaged with a ranged-creep focus, no melee threat near → NOT kiting → the
+        // ENGAGE branch (ADR 0019 Stage 3b) runs the scored search with engage weights and produces a
+        // positioning Advance{range:0} (move onto the chosen in-weapon-range tile), NOT the naive
+        // Advance{range:3} straight at the focus nor a Kite. The flee↔stand split is the weight preset.
+        let members = vec![ranged_member_at(700, 700, 25, 25)];
+        let hostiles = vec![creep(9, 30, 25, 600, &[(Part::RangedAttack, 6)])]; // ranged-only: no melee → no kite
+        let view = squad_view(&members, &hostiles, SquadOrderState::Engaged);
+        let mut cb = |_r| Some(LocalCostMatrix::new());
+        let d = decide_squad_with_pathing(&view, &mut cb, kite::MAX_KITE_OPS);
+        assert_eq!(d.state, SquadOrderState::Engaged);
+        match d.movement {
+            SquadMovement::Advance { goal, range } => {
+                assert_eq!(range, 0, "engage positioning moves onto the scored tile");
+                assert!(goal.get_range_to(pos(30, 25)) <= 3, "the scored tile is in weapon range of the focus: {goal:?}");
+            }
+            SquadMovement::Hold => {} // acceptable if the centroid is already the optimal fighting tile
+            other => panic!("expected an engage Advance{{range:0}} or Hold, got {other:?}"),
+        }
     }
 
     #[test]
