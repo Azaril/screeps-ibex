@@ -227,6 +227,8 @@ impl ManagedSimSquad {
             structures: sim.structures(),
             retreat_threshold: self.retreat_threshold,
             current_state: self.state,
+            // Enemy safe mode nullifies all our combat in the room (engage-veto, ADR 0020 §8).
+            enemy_safe_mode: world.safe_mode_owner.is_some_and(|o| o != self.owner),
         };
         let decision = decide_squad_with_pathing(&view, None, self.tactics, &mut |r| build_combat_matrix(world, r, self.owner), MAX_KITE_OPS);
         self.state = decision.state;

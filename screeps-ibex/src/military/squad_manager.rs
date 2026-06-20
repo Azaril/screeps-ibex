@@ -528,12 +528,21 @@ fn compute_squad_orders(
 
     let (hostiles, structures) = build_room_combat_dtos(room_data, mapping, target_room);
 
+    // Enemy safe mode → all our combat in the room is nullified (engage-veto, ADR 0020 §8). Only known
+    // when the room is visible; default false otherwise (we discover + retreat on arrival).
+    let enemy_safe_mode = game::rooms()
+        .get(target_room)
+        .and_then(|r| r.controller())
+        .map(|c| !c.my() && c.safe_mode().unwrap_or(0) > 0)
+        .unwrap_or(false);
+
     let view = SquadView {
         members: &member_views,
         hostiles: &hostiles,
         structures: &structures,
         retreat_threshold,
         current_state,
+        enemy_safe_mode,
     };
 
     // Build the target room's movement cost matrix (terrain walls baked in — the headless

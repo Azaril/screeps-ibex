@@ -779,6 +779,10 @@ pub struct SquadView<'a> {
     pub retreat_threshold: f32,
     /// The squad's state coming into this tick (drives the coupled hysteresis).
     pub current_state: SquadOrderState,
+    /// The target room's controller is in **safe mode** owned by someone other than us → ALL our
+    /// combat there is nullified (engine per-intent guard, e.g. `attack.js:30-32`). A hard engage veto
+    /// (ADR 0020 §8 / the Lanchester gate): never commit to a fight we can deal zero damage in.
+    pub enemy_safe_mode: bool,
 }
 
 /// The squad-level decision: the new combat state, the shared focus the members concentrate fire on
@@ -820,23 +824,88 @@ fn squad_avg_hp_fraction(members: &[SquadMemberView]) -> f32 {
     total / living.len() as f32
 }
 
-/// The retreat trigger (a faithful port of `SquadContext::should_retreat`): avg HP below
-/// the threshold, OR any single member critically low (<25%), OR a total HP deficit the
-/// healers cannot recover within ~10 ticks.
-fn squad_should_retreat(members: &[SquadMemberView], retreat_threshold: f32) -> bool {
-    let living: Vec<_> = members.iter().filter(|m| m.hits_max > 0).collect();
-    if living.is_empty() {
-        return false;
+/// Ticks of heal sustain folded into our effective-HP when assessing a fight: a squad that out-heals
+/// incoming for this long effectively carries that much extra HP. Seed; the EXP-* loop tunes it.
+const ENGAGE_HEAL_SUSTAIN_TICKS: u64 = 10;
+/// Lanchester attrition order (ADR 0020 §8.1): 2 = square law (force concentration rewarded — our
+/// focus-fire/spill), 1 = linear. A single integer default (parity-safe, no `powf`) until archetype
+/// selection (ADR 0020 step 6) picks it per matchup.
+const LANCHESTER_N: u32 = 2;
+/// Hysteresis band on the fighting-strength balance (permille of enemy strength): engage only when our
+/// strength leads by ≥ this, retreat when it trails by ≥ this — no yo-yo around parity.
+const ENGAGE_BALANCE_BAND: i64 = 200; // ±20%
+
+/// One side's Lanchester fighting strength: `dps × ehp^(n-1)`. n=2 ⇒ rate×mass (square law, rewards
+/// concentration); n=1 ⇒ rate only. Integer (parity-safe).
+fn fighting_strength(dps: u64, ehp: u64, n: u32) -> u64 {
+    if n >= 2 {
+        dps.saturating_mul(ehp)
+    } else {
+        dps
     }
-    if squad_avg_hp_fraction(members) < retreat_threshold {
-        return true;
+}
+
+/// The EV engage assessment (ADR 0020 §4.3 Lanchester gate): is this fight winnable, and by how much?
+struct EngageAssessment {
+    /// Fighting-strength balance (our − killable-enemy) in permille of enemy strength; >0 favours us.
+    balance: i64,
+    /// Hard veto — never engage: enemy safe mode, OR incoming damage we can neither remove (kill the
+    /// source) nor out-heal, so we just bleed out.
+    unwinnable: bool,
+}
+
+/// Assess engage-vs-retreat by Lanchester fighting strength over the **killable** enemy force, plus the
+/// hard vetoes the kill calc surfaces (ADR 0020 §8.2): out-healed/shielded enemies can't be cleared, and
+/// energized hostile towers + unkillable creeps are irremovable damage — if that exceeds our heal
+/// sustain (or the room is safe-moded), the fight is unwinnable regardless of the strength balance.
+fn assess_engage(view: &SquadView, centroid: Option<Position>) -> EngageAssessment {
+    use screeps_combat_engine::constants::{ATTACK_POWER, HEAL_POWER, RANGED_ATTACK_POWER, TOWER_ENERGY_COST};
+    if view.enemy_safe_mode {
+        return EngageAssessment { balance: -1000, unwinnable: true }; // our combat is nullified
     }
-    if living.iter().any(|m| (m.hits as f32 / m.hits_max as f32) < 0.25) {
-        return true;
+    let creep_dps = |c: &CombatCreepDto| -> u64 {
+        c.working_parts(Part::Attack) as u64 * ATTACK_POWER as u64 + c.working_parts(Part::RangedAttack) as u64 * RANGED_ATTACK_POWER as u64
+    };
+    let our_dps: u64 = view.members.iter().filter(|m| m.hits > 0).map(|m| (m.melee_power + m.ranged_power) as u64).sum();
+    let our_heal: u64 = view.members.iter().filter(|m| m.hits > 0).map(|m| m.heal_power as u64 * HEAL_POWER as u64).sum();
+    let our_hits: u64 = view.members.iter().filter(|m| m.hits > 0).map(|m| m.hits as u64).sum();
+    let our_ehp = our_hits + our_heal * ENGAGE_HEAL_SUSTAIN_TICKS;
+
+    // Killable enemies (we out-damage their max same-tick heal incl. towers) → the force we can clear.
+    let order = ev_target_order(view.hostiles, view.structures, our_dps as u32);
+    let killable: std::collections::HashSet<(u8, u8)> = order.iter().map(|(c, _)| (c.pos.x().u8(), c.pos.y().u8())).collect();
+    let (mut killable_dps, mut killable_ehp, mut unkillable_dps) = (0u64, 0u64, 0u64);
+    for c in view.hostiles {
+        let d = creep_dps(c);
+        if killable.contains(&(c.pos.x().u8(), c.pos.y().u8())) {
+            killable_dps += d;
+            killable_ehp += c.hits as u64;
+        } else {
+            unkillable_dps += d; // out-healed / rampart-shielded → we can't remove this damage source
+        }
     }
-    let total_deficit: u32 = living.iter().map(|m| m.hits_max - m.hits).sum();
-    let heal_per_tick: u32 = living.iter().map(|m| m.heal_power * 12).sum();
-    heal_per_tick > 0 && total_deficit > heal_per_tick * 10
+    // Energized hostile tower damage at our centroid — irremovable on a fight's timescale.
+    let tower_dps: u64 = centroid.map_or(0, |ctr| {
+        view.structures
+            .iter()
+            .filter(|s| s.structure_type == StructureType::Tower && s.ownership == Ownership::Hostile && s.hits > 0 && s.energy >= TOWER_ENERGY_COST)
+            .map(|t| screeps_combat_engine::damage::tower_attack_damage_at_range(ctr.get_range_to(t.pos)) as u64)
+            .sum()
+    });
+    // We bleed out if damage we can neither kill nor out-heal is positive.
+    let unwinnable = unkillable_dps + tower_dps > our_heal;
+
+    // No enemy creep deals damage (e.g. a STRUCTURE SIEGE — dismantle/raze, whose offense isn't
+    // melee/ranged) ⇒ there's no creep attrition race to lose, so the Lanchester μ doesn't apply;
+    // it's engageable (the tower `unwinnable` veto above still guards a tower turtle).
+    let balance = if killable_dps == 0 && unkillable_dps == 0 {
+        1000
+    } else {
+        let our_strength = fighting_strength(our_dps, our_ehp, LANCHESTER_N);
+        let enemy_strength = fighting_strength(killable_dps, killable_ehp, LANCHESTER_N).max(1);
+        ((our_strength as i128 - enemy_strength as i128) * 1000 / enemy_strength as i128).clamp(-1000, 1000) as i64
+    };
+    EngageAssessment { balance, unwinnable }
 }
 
 /// **The squad-level tactical decision** (ADR 0008 §4, P2.G3). Picks the squad's shared
@@ -857,32 +926,37 @@ pub fn decide_squad(view: &SquadView) -> SquadDecision {
         SquadOrderState::Moving
     };
 
+    let center = cohesion::centroid(&member_positions(view.members));
+
+    // EV winnability (ADR 0020 §4.3): the Lanchester fighting-strength balance over the KILLABLE enemy
+    // force + the hard vetoes (safeMode / irremovable damage we can't out-heal). This replaces the old
+    // flat-HP `squad_should_retreat` so we commit only to fights we predict we WIN, not just ones where
+    // we're healthy — and retreat from an unwinnable turtle/tower room even at full HP.
+    let assess = assess_engage(view, center);
+    // HP safety floor (kept from the old heuristic, OR'd in): pull back when badly hurt regardless of
+    // the strength balance, and don't re-engage until recovered above a separated band (no yo-yo).
     let avg = squad_avg_hp_fraction(view.members);
-    let any_critical = view
-        .members
-        .iter()
-        .any(|m| m.hits_max > 0 && (m.hits as f32 / m.hits_max as f32) < 0.25);
-    // Re-engage band: well above the retreat threshold so the squad doesn't oscillate.
+    let any_critical = view.members.iter().any(|m| m.hits_max > 0 && (m.hits as f32 / m.hits_max as f32) < 0.25);
     let re_engage_band = (view.retreat_threshold + 0.3).min(0.95);
 
+    let retreat_now = assess.unwinnable || assess.balance <= -ENGAGE_BALANCE_BAND || any_critical || avg < view.retreat_threshold;
+    let can_reengage = !assess.unwinnable && !any_critical && avg > re_engage_band && assess.balance >= ENGAGE_BALANCE_BAND;
     let state = match view.current_state {
         SquadOrderState::Retreating => {
-            if avg > re_engage_band && !any_critical {
+            if can_reengage {
                 engaged_or_moving
             } else {
                 SquadOrderState::Retreating
             }
         }
         _ => {
-            if squad_should_retreat(view.members, view.retreat_threshold) {
+            if retreat_now {
                 SquadOrderState::Retreating
             } else {
                 engaged_or_moving
             }
         }
     };
-
-    let center = cohesion::centroid(&member_positions(view.members));
 
     // The non-pathing movement directive: engage advances the block toward the focus at weapon range
     // (ranged 3, else 1); retreat/idle hold. `decide_squad_with_pathing` overrides engage-vs-melee +
@@ -1745,13 +1819,14 @@ mod tests {
         hostiles: &'a [CombatCreepDto],
         current_state: SquadOrderState,
     ) -> SquadView<'a> {
-        SquadView { members, hostiles, structures: &[], retreat_threshold: 0.3, current_state }
+        SquadView { members, hostiles, structures: &[], retreat_threshold: 0.3, current_state, enemy_safe_mode: false }
     }
 
     #[test]
     fn squad_engages_when_a_target_exists_else_moves() {
         let hostiles = vec![creep(1, 25, 25, 100, &[(Part::Attack, 1)])];
-        let members = vec![member(600, 600, 0)];
+        // A combat-capable squad (70 ranged DPS) vs a weak 30-DPS target → EV-winnable → Engaged.
+        let members = vec![ranged_member_at(600, 600, 25, 26)];
         let d = decide_squad(&squad_view(&members, &hostiles, SquadOrderState::Moving));
         assert_eq!(d.state, SquadOrderState::Engaged);
         assert!(d.focus.is_some());
@@ -1774,14 +1849,55 @@ mod tests {
 
     #[test]
     fn squad_retreat_hysteresis_has_no_yo_yo() {
+        // A combat-winnable matchup (70 DPS vs a 30-DPS target) so μ engages — the HP hysteresis is
+        // what's under test here: retreat stays sticky until HP recovers past the re-engage band.
         let hostiles = vec![creep(1, 25, 25, 100, &[(Part::Attack, 1)])];
-        // Retreating, recovered to 0.5 — above the 0.3 threshold but below the re-engage
-        // band (0.3+0.3=0.6) → stay retreating (no premature flip).
-        let mid = vec![member(300, 600, 0)];
+        // Recovered to 0.5 — above the 0.3 threshold but below the re-engage band (0.6) → stay retreating.
+        let mid = vec![ranged_member_at(300, 600, 25, 26)];
         assert_eq!(decide_squad(&squad_view(&mid, &hostiles, SquadOrderState::Retreating)).state, SquadOrderState::Retreating);
         // Recovered above the band (0.7 > 0.6) → re-engage.
-        let high = vec![member(420, 600, 0)];
+        let high = vec![ranged_member_at(420, 600, 25, 26)];
         assert_eq!(decide_squad(&squad_view(&high, &hostiles, SquadOrderState::Retreating)).state, SquadOrderState::Engaged);
+    }
+
+    #[test]
+    fn lanchester_retreats_from_an_unwinnable_fight_even_at_full_hp() {
+        // One ranged creep (70 DPS, FULL HP) vs four 150-DPS bruisers → the Lanchester balance is
+        // hugely negative → retreat. The OLD flat-HP rule would have engaged (we're at 100% HP) — this
+        // is the core fix for "wiped in war": commit on winnability, not just health.
+        let members = vec![ranged_member_at(700, 700, 25, 25)];
+        let enemy: Vec<_> = (0..4).map(|i| creep(10 + i, 30, 25 + i as u8, 1000, &[(Part::Attack, 5), (Part::Move, 5)])).collect();
+        assert_eq!(decide_squad(&squad_view(&members, &enemy, SquadOrderState::Engaged)).state, SquadOrderState::Retreating);
+    }
+
+    #[test]
+    fn tank_and_heal_sieges_a_tower_base_instead_of_retreating() {
+        // Operator: retreat is about LOSS. A siege squad that OUT-HEALS the tower fire takes no net
+        // loss → it should engage + dismantle the base (a win), not retreat; below the heal sustain it
+        // bleeds → retreat. A tower at range 20 from the squad deals 150/tick.
+        let tank = SquadMemberView { hits: 2000, hits_max: 2000, pos: Some(pos(5, 25)), ..Default::default() };
+        let healer = |parts: u32| SquadMemberView { hits: 2000, hits_max: 2000, heal_power: parts, pos: Some(pos(5, 26)), ..Default::default() };
+        let base = vec![
+            structure(25, 25, StructureType::Tower, Ownership::Hostile), // energy 1000 (helper) → fires
+            structure(26, 25, StructureType::Spawn, Ownership::Hostile),
+        ];
+        let mk = |members: &[SquadMemberView], st| {
+            decide_squad(&SquadView { members, hostiles: &[], structures: &base, retreat_threshold: 0.3, current_state: st, enemy_safe_mode: false }).state
+        };
+        // 14 HEAL ×12 = 168 > 150 tower → sustained, no loss → siege the base.
+        assert_eq!(mk(&[tank, healer(14)], SquadOrderState::Engaged), SquadOrderState::Engaged, "out-heal the towers → dismantle, don't retreat");
+        // 12 HEAL ×12 = 144 < 150 → bleeding → retreat (a loss).
+        assert_eq!(mk(&[tank, healer(12)], SquadOrderState::Engaged), SquadOrderState::Retreating, "can't out-heal the towers → retreat");
+    }
+
+    #[test]
+    fn safe_mode_vetoes_engagement() {
+        // A trivially-winnable matchup, but the enemy room is in safe mode → our combat is nullified →
+        // never engage (ADR 0020 §8 engage-veto).
+        let members = vec![ranged_member_at(700, 700, 25, 25)];
+        let hostiles = vec![creep(1, 26, 25, 100, &[(Part::Attack, 1)])];
+        let view = SquadView { members: &members, hostiles: &hostiles, structures: &[], retreat_threshold: 0.3, current_state: SquadOrderState::Engaged, enemy_safe_mode: true };
+        assert_eq!(decide_squad(&view).state, SquadOrderState::Retreating, "safe mode nullifies our combat → never engage");
     }
 
     // ── decide_squad movement directive + decide_squad_with_pathing ─────
@@ -1796,6 +1912,7 @@ mod tests {
             structures: &[],
             retreat_threshold: 0.3,
             current_state: SquadOrderState::Moving,
+            enemy_safe_mode: false,
         };
         let d = decide_squad(&view);
         assert_eq!(d.state, SquadOrderState::Engaged);
@@ -1904,6 +2021,7 @@ mod tests {
             structures: &structures,
             retreat_threshold: 0.3,
             current_state: SquadOrderState::Moving,
+            enemy_safe_mode: false,
         };
 
         let d = decide_squad_with_pathing(&view, None, kite::SquadTacticParams::default(), &mut cb, kite::MAX_KITE_OPS);
@@ -1926,6 +2044,7 @@ mod tests {
             structures: &[],
             retreat_threshold: 0.3,
             current_state: SquadOrderState::Engaged,
+            enemy_safe_mode: false,
         };
         let mut cb = |_r| Some(LocalCostMatrix::new());
         let d = decide_squad_with_pathing(&view, None, kite::SquadTacticParams::default(), &mut cb, kite::MAX_KITE_OPS);
@@ -1960,7 +2079,7 @@ mod tests {
         // arbitrary tie resolution).
         let members = vec![ranged_member_at(700, 700, 25, 25), ranged_member_at(700, 700, 26, 25)];
         let hostiles = vec![creep(9, 24, 25, 600, &[(Part::Attack, 6), (Part::Move, 6)])];
-        let view = SquadView { members: &members, hostiles: &hostiles, structures: &[], retreat_threshold: 0.3, current_state: SquadOrderState::Engaged };
+        let view = SquadView { members: &members, hostiles: &hostiles, structures: &[], retreat_threshold: 0.3, current_state: SquadOrderState::Engaged, enemy_safe_mode: false };
         let mut cb1 = |_r| Some(LocalCostMatrix::new());
         let mut cb2 = |_r| Some(LocalCostMatrix::new());
         let a = decide_squad_with_pathing(&view, None, kite::SquadTacticParams::default(), &mut cb1, kite::MAX_KITE_OPS);
@@ -1981,6 +2100,7 @@ mod tests {
             structures: &[],
             retreat_threshold: 0.3,
             current_state: SquadOrderState::Engaged,
+            enemy_safe_mode: false,
         });
         // The healer (idx 1) is assigned to the wounded attacker (idx 0), adjacent → 12/part.
         assert_eq!(d.heal_assignments.len(), 1);
@@ -1994,10 +2114,10 @@ mod tests {
     fn assign_heals_empty_when_no_healers_or_no_wounded() {
         // No healers.
         let m1 = vec![ranged_member_at(100, 700, 25, 25)];
-        assert!(decide_squad(&SquadView { members: &m1, hostiles: &[], structures: &[], retreat_threshold: 0.3, current_state: SquadOrderState::Moving }).heal_assignments.is_empty());
+        assert!(decide_squad(&SquadView { members: &m1, hostiles: &[], structures: &[], retreat_threshold: 0.3, current_state: SquadOrderState::Moving, enemy_safe_mode: false }).heal_assignments.is_empty());
         // A healer but everyone full + no damage taken.
         let m2 = vec![ranged_member_at(700, 700, 25, 25), healer_at(600, 600, 5, 26, 25)];
-        assert!(decide_squad(&SquadView { members: &m2, hostiles: &[], structures: &[], retreat_threshold: 0.3, current_state: SquadOrderState::Moving }).heal_assignments.is_empty());
+        assert!(decide_squad(&SquadView { members: &m2, hostiles: &[], structures: &[], retreat_threshold: 0.3, current_state: SquadOrderState::Moving, enemy_safe_mode: false }).heal_assignments.is_empty());
     }
 
     #[test]
@@ -2009,6 +2129,7 @@ mod tests {
             structures: &[],
             retreat_threshold: 0.3,
             current_state: SquadOrderState::Moving,
+            enemy_safe_mode: false,
         };
         let mut cb = |_r| Some(LocalCostMatrix::new());
         let d = decide_squad_with_pathing(&view, None, kite::SquadTacticParams::default(), &mut cb, kite::MAX_KITE_OPS);
