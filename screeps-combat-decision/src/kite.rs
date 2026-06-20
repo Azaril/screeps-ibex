@@ -96,6 +96,45 @@ pub struct KiteFields<'a> {
     pub centroid_reach: Option<&'a ReachabilityMap>,
 }
 
+/// The per-(room, tick) **cached layer set** (ADR 0019 Stage 3a, operator architecture): the expensive
+/// shared computations — the threat-chaser reachability flood and the centroid-distance flood — built
+/// **once** and **reused across every position consumer** this tick. Different objectives *and uses*
+/// (kite / attack-positioning / defend) are weight vectors over the SAME layers, so the floods run
+/// once regardless of how many scorers read them — a scorer borrows a [`KiteFields`] view via
+/// [`PositionLayers::fields`]. (Stage 3b adds the integer threat field + focus-damage layers here.)
+pub struct PositionLayers {
+    threat_reach: Option<ReachabilityMap>,
+    centroid_dist: ReachabilityMap,
+}
+
+impl PositionLayers {
+    /// Build the layers once for a squad at `centroid` facing `threats`, over the room's cost matrix.
+    /// Use-agnostic (takes only the shared inputs, not a kite-specific view) so the attack-positioning
+    /// path reuses the exact same instance. The two floods are the Stage-2 / Stage-2-tail maps,
+    /// unchanged — so a kite plan over `fields()` is byte-identical to the pre-Stage-3a path.
+    pub fn build(centroid: Position, threats: &[KiteThreat], matrix: &LocalCostMatrix, max_ops: u32) -> Self {
+        let room = centroid.room_name();
+        let mut cb = |_r: RoomName| Some(matrix.clone());
+        // THREAT reachability: mobile chasers only (Guard 5 — an immobile threat seeds no wave).
+        let sources: Vec<ReachSource> = threats
+            .iter()
+            .filter_map(|t| t.step_ticks.map(|st| ReachSource { pos: t.pos, step_ticks: st }))
+            .collect();
+        let threat_reach =
+            (!sources.is_empty()).then(|| LocalPathfinder.reachability_from(&sources, room, &mut cb, max_ops));
+        // CENTROID distance (step_ticks 1 ⇒ g = tiles) → wall-aware cohesion.
+        let centroid_dist =
+            LocalPathfinder.reachability_from(&[ReachSource { pos: centroid, step_ticks: 1 }], room, &mut cb, max_ops);
+        Self { threat_reach, centroid_dist }
+    }
+
+    /// A borrowing [`KiteFields`] view over the cached layers (what [`score_tile`] consumes). Cheap to
+    /// call per consumer — the maps are not rebuilt.
+    pub fn fields(&self) -> KiteFields<'_> {
+        KiteFields { threat_reach: self.threat_reach.as_ref(), centroid_reach: Some(&self.centroid_dist) }
+    }
+}
+
 /// Cohesion distance used when a tile is unreachable from the centroid within the flood budget — a
 /// large room-scale value so a cut-off tile is heavily penalized (don't strand the block behind a wall).
 const UNREACHABLE_COHESION: u32 = 50;
@@ -232,21 +271,10 @@ pub fn plan_kite_anchor(
 ) -> Option<KitePlan> {
     let room = view.centroid.room_name();
     let matrix = room_callback(room)?;
-    // THREAT reachability seeds = the mobile chasers only (ADR 0019 Guard 5: an immobile threat seeds
-    // no wave). Built once, shared across every priced tile in the search below.
-    let sources: Vec<ReachSource> = view
-        .threats
-        .iter()
-        .filter_map(|t| t.step_ticks.map(|st| ReachSource { pos: t.pos, step_ticks: st }))
-        .collect();
-    let mut reach_cb = |_r: RoomName| Some(matrix.clone());
-    let threat_reach =
-        (!sources.is_empty()).then(|| LocalPathfinder.reachability_from(&sources, room, &mut reach_cb, max_ops));
-    // CENTROID reachability (step_ticks 1 ⇒ g = path distance in tiles) gives a wall-aware cohesion
-    // distance: a tile reachable only by routing around a wall is correctly "far" from the squad.
-    let centroid_src = [ReachSource { pos: view.centroid, step_ticks: 1 }];
-    let centroid_reach = LocalPathfinder.reachability_from(&centroid_src, room, &mut reach_cb, max_ops);
-    let fields = KiteFields { threat_reach: threat_reach.as_ref(), centroid_reach: Some(&centroid_reach) };
+    // Build the per-(room,tick) cached layers ONCE (ADR 0019 Stage 3a). A future attack-positioning
+    // scorer for the same squad/tick reuses this exact instance — the floods don't run twice.
+    let layers = PositionLayers::build(view.centroid, view.threats, &matrix, max_ops);
+    let fields = layers.fields();
     let cost = |tile: Position| -> i64 { score_tile(view, tile, walkable_neighbors(&matrix, tile), &fields) };
     // Feed the search the already-fetched matrix (so the openness lookup + the search agree).
     let mut cb = |_r: RoomName| Some(matrix.clone());
@@ -391,6 +419,34 @@ mod tests {
             score_tile(&v, open, 8, &KiteFields::default()),
             score_tile(&v, open, 8, &KiteFields { threat_reach: None, centroid_reach: Some(&creach) }),
             "open-terrain g-cost equals Chebyshev"
+        );
+    }
+
+    // ── PositionLayers cache (ADR 0019 Stage 3a) — build once, reweight per use ──
+    #[test]
+    fn position_layers_built_once_reused_across_weightings() {
+        // The operator's layer-cache point: the expensive floods are built ONCE, and different uses
+        // (here: a kite weighting vs an attack-ish weighting that ignores future-threat) score against
+        // the SAME cached layers — no rebuild, just different weights.
+        let matrix = LocalCostMatrix::new();
+        let centroid = pos(25, 25);
+        let threats = [KiteThreat { pos: pos(22, 25), kind: ThreatKind::MeleeOnly, reach: 2, step_ticks: Some(1) }];
+        let layers = PositionLayers::build(centroid, &threats, &matrix, MAX_KITE_OPS);
+        let fields = layers.fields();
+        // The cache exposes the wall-aware centroid distance (0 at the centroid itself).
+        assert_eq!(fields.centroid_reach.unwrap().ticks_to_reach(centroid), Some(0));
+
+        let tile = pos(24, 25); // 2 tiles from the chaser → within FUTURE_HORIZON
+        let kite = view(centroid, &threats, &[], None); // default weights (w_future = 5)
+        let mut attack_params = KiteScoreParams::default();
+        attack_params.w_future = 0.0; // a use that ignores durable-standoff
+        let attack = SquadKiteView { centroid, threats: &threats, towers: &[], focus: None, params: attack_params };
+
+        let kite_score = score_tile(&kite, tile, 8, &fields);
+        let attack_score = score_tile(&attack, tile, 8, &fields);
+        assert!(
+            kite_score > attack_score,
+            "same cached layers, different weights → different scores: kite={kite_score} attack={attack_score}"
         );
     }
 
