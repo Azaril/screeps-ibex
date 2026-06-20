@@ -213,6 +213,30 @@ fn dist_to_edge(x: u8, y: u8) -> u32 {
     (x.min(49 - x)).min(y.min(49 - y)) as u32
 }
 
+/// Weight of the proximity beeline tie-break (perpendicular deviation from the centroid→focus line).
+/// Small so it only resolves the flat Chebyshev iso-range plateau toward the approach line — never
+/// overrides the dominant Chebyshev distance ordering (a closer ring always beats a farther one).
+const PROX_BEELINE_WEIGHT: f32 = 0.25;
+/// Cap (tiles) on the perpendicular deviation fed to the beeline tie-break: with the weight above this
+/// bounds its contribution well under one Chebyshev ring step, so cross-ring ordering stays intact
+/// (gross off-line deviation is the cohesion term's job, not proximity's).
+const PROX_BEELINE_CAP: f32 = 3.0;
+
+/// Perpendicular distance (tiles) of `tile` from the line through `from` toward `to` — 0 on the line,
+/// growing off it. The proximity term's beeline tie-break: among tiles at equal Chebyshev range to the
+/// focus, the one on the centroid→focus approach line is preferred, so the advance heads straight at
+/// the focus (at any angle) instead of drifting to an iso-range corner. 0 when `from == to`.
+fn perp_offset(from: Position, to: Position, tile: Position) -> f32 {
+    let (cx, cy) = (from.x().u8() as f32, from.y().u8() as f32);
+    let (dx, dy) = (to.x().u8() as f32 - cx, to.y().u8() as f32 - cy);
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < f32::EPSILON {
+        return 0.0;
+    }
+    // |cross((to-from), (tile-from))| / |to-from| — the point-to-line distance.
+    (dx * (tile.y().u8() as f32 - cy) - dy * (tile.x().u8() as f32 - cx)).abs() / len
+}
+
 /// The shared per-room maps [`plan_kite_anchor`] builds once and every priced tile reads (ADR 0019
 /// Stage 2). All-`None` ⇒ the pre-Stage-2 behavior (Chebyshev cohesion, no future term) — exactly
 /// byte-identical, which the unit tests rely on.
@@ -387,19 +411,21 @@ pub fn score_tile(view: &SquadKiteView, tile: Position, walkable_neighbors: u8, 
 
     // PROXIMITY — the focus being beyond optimal weapon range `r*` (the **advance-to-damage** layer:
     // pull the block toward the focus until it's in weapon range). The in-range test is Chebyshev (the
-    // engine's weapon range), but the *magnitude* uses EUCLIDEAN distance: Chebyshev's square iso-range
-    // rings are flat plateaus, so the search's tie-break drifts the squad perpendicular to the focus
-    // (and, with terrain, off a corridor's mouth); euclidean has a unique minimum on the straight line
-    // centroid→focus, so the advance beelines and threads an aligned gap. 0 once in range.
+    // engine's weapon range). The distance is **Chebyshev** — Screeps charges equal cost for diagonal
+    // and cardinal steps, so ticks-to-reach / weapon range / `get_range_to` are all Chebyshev (NOT
+    // euclidean). But Chebyshev's square iso-range rings are flat plateaus: the deterministic tie-break
+    // would walk the squad to a ring corner, drifting it perpendicular to the focus (and, with terrain,
+    // off a corridor's mouth). So add a SMALL perpendicular-deviation tie-break from the centroid→focus
+    // line — it beelines the advance along the real approach line at any angle, while the dominant
+    // Chebyshev term keeps the (movement-correct) cross-ring ordering. 0 once in range.
     let prox = match view.focus {
         Some(f) => {
-            if tile.get_range_to(f) <= r_star {
+            let cheb = tile.get_range_to(f);
+            if cheb <= r_star {
                 0.0
             } else {
-                let dx = tile.x().u8() as f32 - f.x().u8() as f32;
-                let dy = tile.y().u8() as f32 - f.y().u8() as f32;
-                let euclid = (dx * dx + dy * dy).sqrt();
-                ((euclid - r_star as f32).max(0.0) / ROOM_DIAM_F * SCALE_F).min(SCALE_F)
+                let perp = perp_offset(view.centroid, f, tile).min(PROX_BEELINE_CAP);
+                (((cheb - r_star) as f32 + PROX_BEELINE_WEIGHT * perp) / ROOM_DIAM_F * SCALE_F).min(SCALE_F)
             }
         }
         None => 0.0,
