@@ -20,3 +20,7 @@ screeps-game-api = "0.23"
 # combat supplies only the per-tile pricing (the no-one-off-pathfinding rule). rover never depends on
 # this crate, so no cycle.
 screeps-rover = { path = "../screeps-rover" }
+# ADR 0019 Stage 1: the threat field delegates damage math (tower falloff, TOUGH mitigation, heal)
+# to the engine's verified formulas instead of re-transcribing them — one source of truth. The engine
+# is a pure leaf crate (value types only), so this adds no cycle (rover/engine never depend on this).
+screeps-combat-engine = { path = "../screeps-combat-engine" }

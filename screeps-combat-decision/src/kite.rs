@@ -37,7 +37,8 @@ pub struct KiteThreat {
     pub reach: u32,
 }
 
-/// A hostile tower (its damage falls off with range — see [`tower_dps_at_range`]).
+/// A hostile tower (its damage falls off with range — see the engine's
+/// `tower_attack_damage_at_range`, the single source of truth for the tower curve).
 #[derive(Clone, Copy, Debug)]
 pub struct KiteTower {
     pub pos: Position,
@@ -78,20 +79,6 @@ pub struct SquadKiteView<'a> {
     pub params: KiteScoreParams,
 }
 
-/// Engine tower-damage curve at a Chebyshev `range`: 600 at ≤5, linear down to 150 at ≥20 (mirrors
-/// `TOWER_*` falloff). Used to drift the squad out of tower-optimal range.
-pub fn tower_dps_at_range(range: u32) -> u32 {
-    if range <= 5 {
-        600
-    } else if range >= 20 {
-        150
-    } else {
-        // Linear 600 → 150 over range 5 → 20.
-        let t = (range - 5) as f32 / 15.0;
-        (600.0 - t * 450.0).round() as u32
-    }
-}
-
 /// Cost of the squad standing its block on `tile` — **LOWER is better** (composes directly with
 /// rover's min-scored search). Sums four weighted penalties:
 /// - **SAFETY:** inside a threat's `reach` (worse the deeper) + tower DPS at this range;
@@ -111,8 +98,10 @@ pub fn score_tile(view: &SquadKiteView, tile: Position, walkable_neighbors: u8) 
     }
     for tw in view.towers {
         let r = tile.get_range_to(tw.pos);
-        // Normalize to ~1.0 (min tower hit) .. 4.0 (point-blank).
-        safety += tower_dps_at_range(r) as f32 / 150.0;
+        // Normalize to ~1.0 (min tower hit) .. 4.0 (point-blank). Tower curve delegated to the engine
+        // (the single source of truth; the local duplicate was deleted in ADR 0019 Stage 1 after a
+        // bit-identity proof over all in-room ranges).
+        safety += screeps_combat_engine::damage::tower_attack_damage_at_range(r) as f32 / 150.0;
     }
 
     // COHESION — distance from the centroid, steepening past K so the block doesn't string out.
@@ -195,6 +184,19 @@ mod tests {
     use super::*;
     use screeps::{RoomCoordinate, RoomName};
 
+    /// ADR 0019 Stage 1 — kiting now delegates the tower curve to the engine (the local duplicate was
+    /// deleted after a bit-identity proof over all in-room ranges 0..=49). This pins the values the
+    /// kite safety term depends on, so a future engine-curve change that would shift kiting is caught.
+    #[test]
+    fn kite_uses_the_engine_tower_curve() {
+        use screeps_combat_engine::damage::tower_attack_damage_at_range as t;
+        assert_eq!(t(0), 600, "point-blank = optimal");
+        assert_eq!(t(5), 600, "optimal range edge");
+        assert_eq!(t(10), 450, "mid falloff");
+        assert_eq!(t(20), 150, "min-damage floor");
+        assert_eq!(t(49), 150, "beyond falloff stays at the floor");
+    }
+
     fn pos(x: u8, y: u8) -> Position {
         let room: RoomName = "W1N1".parse().unwrap();
         Position::new(RoomCoordinate::new(x).unwrap(), RoomCoordinate::new(y).unwrap(), room)
@@ -206,16 +208,6 @@ mod tests {
         KiteThreat { pos: pos(x, y), kind: ThreatKind::MeleeOnly, reach }
     }
 
-    #[test]
-    fn tower_dps_curve_matches_engine_falloff() {
-        assert_eq!(tower_dps_at_range(0), 600);
-        assert_eq!(tower_dps_at_range(5), 600);
-        assert_eq!(tower_dps_at_range(20), 150);
-        assert_eq!(tower_dps_at_range(30), 150);
-        // Monotonic non-increasing between 5 and 20.
-        assert!(tower_dps_at_range(10) < 600 && tower_dps_at_range(10) > 150);
-        assert!(tower_dps_at_range(10) >= tower_dps_at_range(15));
-    }
 
     #[test]
     fn safety_penalizes_being_inside_a_threats_reach() {
