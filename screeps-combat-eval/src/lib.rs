@@ -21,8 +21,10 @@ use crate::metrics::SideMetrics;
 use screeps::{Part, Position, RoomCoordinate, RoomName};
 use screeps_combat_agent::opponents::{run_engagement, world_from_units, DrainAgent, RushAgent, TurtleAgent, Unit};
 use screeps_combat_agent::scenario::ScenarioBuilder;
+use screeps_combat_agent::squad::ManagedSimSquad;
 use screeps_combat_agent::{HoldAgent, IbexAgent};
-use screeps_combat_engine::{CombatWorld, SimBody, SimCreep, SimTower, StructureKind};
+use screeps_combat_decision::cohesion;
+use screeps_combat_engine::{resolve_tick, CombatWorld, SimBody, SimCreep, SimTower, StructureKind};
 
 // ─── Framework ───────────────────────────────────────────────────────────────
 
@@ -67,6 +69,8 @@ pub fn register() -> Vec<ExperimentResult> {
         // U7 room-variety suite (walls / ramparts / towers via the ScenarioBuilder):
         exp_breach_1(),
         exp_nest_1(),
+        // ADR 0019 full-sim cohesion (the managed-squad decide_squad_with_pathing path + terrain):
+        exp_cohesion_1(),
     ]
 }
 
@@ -264,6 +268,74 @@ fn exp_breach_1() -> ExperimentResult {
     )
 }
 
+/// EXP-COHESION-1 (ADR 0019 full-sim) — a managed ranged squad threads a wall-gap CORRIDOR toward a
+/// melee threat and kites it cohesively. Unlike the unit cohesion tests (a clustered trio with no
+/// terrain), this drives the full **managed-squad** path — `decide_squad_with_pathing` (shared focus +
+/// the pathfinding-scored kite goal with the wall-aware cohesion term + #6b goal-latch) → per-creep
+/// `decide_movement` → the authoritative engine — through a 3-wide gap. The hypothesis: ONE shared kite
+/// goal keeps the block together through the pinch (it funnels, then re-forms to kite) — it never
+/// scatters, focus-fires the threat, and survives (a ranged block out-ranges a stationary melee).
+fn exp_cohesion_1() -> ExperimentResult {
+    let ra_body: Vec<Part> = std::iter::repeat_n(Part::RangedAttack, 5).chain(std::iter::repeat_n(Part::Move, 5)).collect();
+    let squad_ids = [1u32, 2, 3];
+    let mut creeps: Vec<SimCreep> = squad_ids
+        .iter()
+        .enumerate()
+        .map(|(i, &id)| SimCreep { id, owner: 0, pos: pos(10, 24 + i as u8), body: SimBody::unboosted(&ra_body), fatigue: 0 })
+        .collect();
+    // A high-HP TOUGH melee keeper on the FAR side of the wall — a stationary focus the squad must
+    // cross the corridor to engage (and then out-range).
+    let keeper_body: Vec<Part> = std::iter::repeat_n(Part::Attack, 5)
+        .chain(std::iter::repeat_n(Part::Move, 5))
+        .chain(std::iter::repeat_n(Part::Tough, 10))
+        .collect();
+    creeps.push(SimCreep { id: 99, owner: 1, pos: pos(35, 25), body: SimBody::unboosted(&keeper_body), fatigue: 0 });
+
+    let mut world = CombatWorld { creeps, ..Default::default() };
+    // A wall column at x=20 with a 3-wide gap (y=24..=26): the squad can pass nearly abreast, so cohesion
+    // is *achievable* through the pinch — the test is whether the shared goal keeps them together.
+    for y in 0..=49u8 {
+        if !(24..=26).contains(&y) {
+            world.terrain.walls.insert((20, y));
+        }
+    }
+    let keeper_hits_0 = world.creeps.iter().find(|c| c.id == 99).map(|c| c.body.hits).unwrap_or(0);
+
+    let mut squad = ManagedSimSquad::new(0, squad_ids.to_vec(), pos(35, 25));
+    let mut worst_pairwise = 0u32;
+    let mut crossed = false;
+    for _ in 0..90 {
+        let intents = squad.step(&world);
+        resolve_tick(&mut world, &intents);
+        let positions: Vec<Position> = world.creeps.iter().filter(|c| c.owner == 0 && c.is_alive()).map(|c| c.pos).collect();
+        if positions.len() >= 2 {
+            worst_pairwise = worst_pairwise.max(cohesion::measure(&positions, None, 0).max_pairwise);
+        }
+        // "Crossed" = the squad's centroid is on the far side of the wall (it threaded the corridor).
+        if !positions.is_empty() {
+            let cx = positions.iter().map(|p| p.x().u8() as u32).sum::<u32>() / positions.len() as u32;
+            crossed |= cx > 20;
+        }
+    }
+
+    let keeper_hits_1 = world.creeps.iter().find(|c| c.id == 99).map(|c| if c.is_alive() { c.body.hits } else { 0 }).unwrap_or(0);
+    let survivors = world.creeps.iter().filter(|c| c.owner == 0 && c.is_alive()).count();
+    // Cohesion bound: 3 creeps through a 3-wide gap funnel transiently; the shared goal must keep the
+    // spread bounded (a scattered block would blow well past this). Generous to the pinch, tight enough
+    // to fail a genuine scatter.
+    const COHESION_BOUND: u32 = 8;
+    result(
+        "EXP-COHESION-1",
+        "a managed ranged squad threads a wall corridor cohesively (one shared kite goal), focus-fires + survives",
+        vec![
+            boolean("squad threaded the corridor (centroid crossed the wall)", "crossed", crossed),
+            measured("worst pairwise spread", worst_pairwise as f64, "<= 8 (no scatter through the pinch)", worst_pairwise <= COHESION_BOUND),
+            measured("keeper damage", (keeper_hits_0.saturating_sub(keeper_hits_1)) as f64, "> 0 (focus-fired)", keeper_hits_1 < keeper_hits_0),
+            measured("survivors", survivors as f64, "== 3 (out-ranged the melee)", survivors == 3),
+        ],
+    )
+}
+
 /// How many structures of `kind` were destroyed across the whole run (U2 `destroyed_kinds`).
 fn destroyed_kind_count(rec: &screeps_combat_engine::CombatRecording, kind: StructureKind) -> usize {
     rec.frames.iter().flat_map(|f| f.destroyed_kinds.iter()).filter(|(_, k)| *k == kind).count()
@@ -304,7 +376,7 @@ mod tests {
     #[test]
     fn exp_register_passes_all_gates() {
         let results = register();
-        assert_eq!(results.len(), 7, "the register has 7 experiments");
+        assert_eq!(results.len(), 8, "the register has 8 experiments");
         for r in &results {
             assert!(r.pass, "{} failed its gates:\n{}", r.id, report(std::slice::from_ref(r)));
         }
@@ -313,7 +385,7 @@ mod tests {
     #[test]
     fn report_renders_the_register() {
         let s = report(&register());
-        assert!(s.contains("7/7 experiments passed"), "{s}");
-        assert!(s.contains("EXP-FOUND-1") && s.contains("EXP-COMP-1") && s.contains("EXP-BREACH-1"));
+        assert!(s.contains("8/8 experiments passed"), "{s}");
+        assert!(s.contains("EXP-FOUND-1") && s.contains("EXP-COMP-1") && s.contains("EXP-COHESION-1"));
     }
 }

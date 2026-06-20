@@ -26,13 +26,6 @@ pub const SURVIVAL_HORIZON: i32 = 3;
 /// lethal tile is only chosen when every reachable tile is lethal (best-effort least-bad fallback).
 const LETHAL_TILE_PENALTY: i64 = 1_000_000_000;
 
-/// Goal-latch stickiness discount (ADR 0019 #6b): the previous goal's tile is priced this much lower
-/// so the squad commits to it across ticks unless a competing tile beats it by more than this margin —
-/// damping near-tie oscillation. Small relative to the weighted [0, SCALE] terms (so a genuinely
-/// better tile still wins) and far below `LETHAL_TILE_PENALTY` (so a now-lethal latch is never kept).
-/// Seed; the EXP-* sim loop is the sanctioned tuner.
-const GOAL_LATCH_BONUS: i64 = 150;
-
 const FIELD_DIM: usize = 50;
 fn field_idx(x: u8, y: u8) -> usize {
     x as usize * FIELD_DIM + y as usize
@@ -178,12 +171,20 @@ impl KiteScoreParams {
     /// The **engage** preset: the SAME scorer reweighted to *stand and fight* — safety still matters
     /// but no longer dominates, the focus-damage reward dominates (commit to dealing damage), and the
     /// future-threat (kite-away) term is off.
+    ///
+    /// `w_prox` is the **advance-to-damage** layer and is deliberately the strongest term: the kite
+    /// search is a *bounded* flood, so a focus beyond its horizon is never reached — the squad must
+    /// march toward it. A dominant proximity weight makes the flood's best-effort tile the one closest
+    /// to the focus (the squad advances each tick), and because proximity is **0 once inside `r*`** it
+    /// vanishes on arrival, handing positioning to the safety/cohesion/DMG terms. So ONE search both
+    /// closes the distance AND picks the engage tile — no separate "approach vs position" branch (the
+    /// survival veto still forbids marching onto a lethal tile). Seeds; the EXP-* loop tunes them.
     pub fn engage() -> Self {
         Self {
             w_taken: 0.5,
             w_future: 0.0,
             w_cohesion: 0.3,
-            w_prox: 0.4,
+            w_prox: 1.5,
             w_openness: 0.05,
             w_edge: 0.1,
             w_dmg: 2.0,
@@ -305,12 +306,6 @@ pub struct SquadKiteView<'a> {
     pub towers: &'a [KiteTower],
     /// Shared focus position; the value term keeps it within shooting range 3.
     pub focus: Option<Position>,
-    /// The goal this squad latched onto last tick (ADR 0019 #6b goal-latching). When set, that tile
-    /// gets a stickiness discount in the search so the squad commits to it across ticks unless another
-    /// tile is *clearly* better — damping the near-tie goal-flip oscillation the deterministic
-    /// tie-break (#6a) alone can't (it only resolves exact ties; the field shifts tick-to-tick as
-    /// enemies move). Re-priced under the live field + survival veto, so a now-lethal latch is dropped.
-    pub prev_goal: Option<Position>,
     /// The actual-hits inputs for the DMG reward (ADR 0019 focus_damage richness). `None` ⇒ the flat
     /// in-`r*` reward (byte-identical to the pre-richness behavior, for unit tests + the basic sim).
     pub focus_damage: Option<FocusDamage>,
@@ -390,14 +385,21 @@ pub fn score_tile(view: &SquadKiteView, tile: Position, walkable_neighbors: u8, 
     };
     let cohesion = (coh_raw / ROOM_DIAM_F * SCALE_F).min(SCALE_F);
 
-    // PROXIMITY — the focus being beyond optimal weapon range `r*` (pull the block into range).
+    // PROXIMITY — the focus being beyond optimal weapon range `r*` (the **advance-to-damage** layer:
+    // pull the block toward the focus until it's in weapon range). The in-range test is Chebyshev (the
+    // engine's weapon range), but the *magnitude* uses EUCLIDEAN distance: Chebyshev's square iso-range
+    // rings are flat plateaus, so the search's tie-break drifts the squad perpendicular to the focus
+    // (and, with terrain, off a corridor's mouth); euclidean has a unique minimum on the straight line
+    // centroid→focus, so the advance beelines and threads an aligned gap. 0 once in range.
     let prox = match view.focus {
         Some(f) => {
-            let r = tile.get_range_to(f);
-            if r <= r_star {
+            if tile.get_range_to(f) <= r_star {
                 0.0
             } else {
-                ((r - r_star) as f32 / ROOM_DIAM_F * SCALE_F).min(SCALE_F)
+                let dx = tile.x().u8() as f32 - f.x().u8() as f32;
+                let dy = tile.y().u8() as f32 - f.y().u8() as f32;
+                let euclid = (dx * dx + dy * dy).sqrt();
+                ((euclid - r_star as f32).max(0.0) / ROOM_DIAM_F * SCALE_F).min(SCALE_F)
             }
         }
         None => 0.0,
@@ -546,11 +548,7 @@ pub fn plan_kite_anchor(
         let fields = KiteFields { threat_field: Some(threat_field), threat_reach, cohesion_dist: Some(g) };
         let base = score_tile(view, tile, walkable_neighbors(&matrix, tile), &fields);
         if veto(tile) {
-            // A lethal tile is never latchable — the veto penalty dominates the stickiness discount.
             base.saturating_add(LETHAL_TILE_PENALTY)
-        } else if view.prev_goal == Some(tile) {
-            // Stickiness: keep last tick's goal unless beaten by more than the latch margin (#6b).
-            base.saturating_sub(GOAL_LATCH_BONUS)
         } else {
             base
         }
@@ -585,7 +583,7 @@ mod tests {
     }
     fn view<'a>(centroid: Position, threats: &'a [KiteThreat], towers: &'a [KiteTower], focus: Option<Position>) -> SquadKiteView<'a> {
         // fragile_hits 0 ⇒ the survival veto is disabled (the term-isolation tests don't want it).
-        SquadKiteView { centroid, threats, towers, focus, prev_goal: None, focus_damage: None, params: KiteScoreParams::default(), fragile_hits: 0, squad_heal: 0, weapon_range: 3 }
+        SquadKiteView { centroid, threats, towers, focus, focus_damage: None, params: KiteScoreParams::default(), fragile_hits: 0, squad_heal: 0, weapon_range: 3 }
     }
     fn melee(x: u8, y: u8, reach: u32) -> KiteThreat {
         KiteThreat { pos: pos(x, y), kind: ThreatKind::MeleeOnly, reach, step_ticks: Some(1), attack_power: 30, ranged_power: 0 }
@@ -720,13 +718,13 @@ mod tests {
         let a = pos(26, 25); // range 2 to focus (in range), range 1 to the threat (inside reach)
         let b = pos(22, 25); // range 6 to focus (out of range), range 5 to the threat (safe)
 
-        let kite = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), prev_goal: None, focus_damage: None, params: KiteScoreParams::default(), fragile_hits: 0, squad_heal: 0, weapon_range: 3 };
+        let kite = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), focus_damage: None, params: KiteScoreParams::default(), fragile_hits: 0, squad_heal: 0, weapon_range: 3 };
         assert!(
             score_tile(&kite, b, 8, &KiteFields::default()) < score_tile(&kite, a, 8, &KiteFields::default()),
             "kite prefers the safe tile B (flee)"
         );
 
-        let engage = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), prev_goal: None, focus_damage: None, params: KiteScoreParams::engage(), fragile_hits: 0, squad_heal: 0, weapon_range: 3 };
+        let engage = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), focus_damage: None, params: KiteScoreParams::engage(), fragile_hits: 0, squad_heal: 0, weapon_range: 3 };
         assert!(
             score_tile(&engage, a, 8, &KiteFields::default()) < score_tile(&engage, b, 8, &KiteFields::default()),
             "engage prefers the in-range tile A (stand and fight)"
@@ -740,7 +738,6 @@ mod tests {
             threats: &[],
             towers: &[],
             focus: Some(focus),
-            prev_goal: None,
             focus_damage: fd,
             params: KiteScoreParams::engage(),
             fragile_hits: 5000, // veto disabled at these damage levels
@@ -813,7 +810,7 @@ mod tests {
         let kite = view(centroid, &threats, &[], None); // default weights (w_future = 5)
         let mut attack_params = KiteScoreParams::default();
         attack_params.w_future = 0.0; // a use that ignores durable-standoff
-        let attack = SquadKiteView { centroid, threats: &threats, towers: &[], focus: None, prev_goal: None, focus_damage: None, params: attack_params, fragile_hits: 0, squad_heal: 0, weapon_range: 3 };
+        let attack = SquadKiteView { centroid, threats: &threats, towers: &[], focus: None, focus_damage: None, params: attack_params, fragile_hits: 0, squad_heal: 0, weapon_range: 3 };
 
         let kite_score = score_tile(&kite, tile, 8, &fields);
         let attack_score = score_tile(&attack, tile, 8, &fields);
@@ -860,46 +857,9 @@ mod tests {
         let mut cb = |_r| Some(LocalCostMatrix::new());
         let centroid = pos(25, 25);
         let threat = KiteThreat { pos: pos(25, 25), kind: ThreatKind::Ranged, reach: 0, step_ticks: Some(1), attack_power: 0, ranged_power: 100 };
-        let v = SquadKiteView { centroid, threats: &[threat], towers: &[], focus: None, prev_goal: None, focus_damage: None, params: KiteScoreParams::default(), fragile_hits: 200, squad_heal: 0, weapon_range: 3 };
+        let v = SquadKiteView { centroid, threats: &[threat], towers: &[], focus: None, focus_damage: None, params: KiteScoreParams::default(), fragile_hits: 200, squad_heal: 0, weapon_range: 3 };
         let plan = plan_kite_anchor(&v, None, &mut cb, MAX_KITE_OPS).expect("a non-lethal tile exists");
         assert!(plan.goal.get_range_to(pos(25, 25)) > 3, "fled outside the lethal ranged zone: {:?}", plan.goal);
-    }
-
-    // ── goal-latching / stickiness (ADR 0019 #6b) ──
-    #[test]
-    fn goal_latch_keeps_a_co_optimal_previous_goal() {
-        // A melee threat due north of the centroid → the safe kite tiles south are symmetric east/west,
-        // so several share the optimal score. With no latch the deterministic tie-break picks one;
-        // pinning `prev_goal` to a *different* co-optimal safe tile makes the search keep THAT one
-        // (stickiness wins the tie) — the anti-oscillation property.
-        let mut cb = |_r| Some(LocalCostMatrix::new());
-        let centroid = pos(25, 25);
-        let threats = [melee(25, 22, 3)]; // north of the centroid
-
-        let mut base = view(centroid, &threats, &[], None);
-        let default_goal = plan_kite_anchor(&base, None, &mut cb, MAX_KITE_OPS).expect("flees").goal;
-
-        // The east/west mirror of the default pick across the threat's N–S axis is equally safe + equally
-        // far from the centroid → a co-optimal tile. Latching to it must make the plan return it.
-        let mirror = pos(50 - default_goal.x().u8(), default_goal.y().u8());
-        assert_ne!(mirror, default_goal, "the mirror is a distinct co-optimal tile");
-        base.prev_goal = Some(mirror);
-        let latched_goal = plan_kite_anchor(&base, None, &mut cb, MAX_KITE_OPS).expect("flees").goal;
-        assert_eq!(latched_goal, mirror, "the squad commits to its previous co-optimal goal");
-    }
-
-    #[test]
-    fn goal_latch_is_dropped_when_the_previous_goal_turns_lethal() {
-        // The latched tile is now inside a lethal ranged zone → the survival veto's penalty dwarfs the
-        // stickiness discount, so the squad abandons it rather than commit suicide.
-        let mut cb = |_r| Some(LocalCostMatrix::new());
-        let centroid = pos(25, 25);
-        let threat = KiteThreat { pos: pos(25, 25), kind: ThreatKind::Ranged, reach: 0, step_ticks: Some(1), attack_power: 0, ranged_power: 100 };
-        let mut v = SquadKiteView { centroid, threats: &[threat], towers: &[], focus: None, prev_goal: Some(pos(26, 25)), focus_damage: None, params: KiteScoreParams::default(), fragile_hits: 200, squad_heal: 0, weapon_range: 3 };
-        let goal = plan_kite_anchor(&v, None, &mut cb, MAX_KITE_OPS).expect("a non-lethal tile exists").goal;
-        assert!(goal.get_range_to(pos(25, 25)) > 3, "abandons the now-lethal latch: {goal:?}");
-        v.prev_goal = None; // sanity: the lethal-zone escape holds regardless of the latch
-        assert!(plan_kite_anchor(&v, None, &mut cb, MAX_KITE_OPS).unwrap().goal.get_range_to(pos(25, 25)) > 3);
     }
 
     #[test]

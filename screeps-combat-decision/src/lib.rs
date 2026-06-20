@@ -1080,7 +1080,6 @@ fn breach_redirect(
 pub fn decide_squad_with_pathing(
     view: &SquadView,
     shared: Option<&kite::PositionLayers>,
-    prev_goal: Option<Position>,
     room_callback: &mut dyn FnMut(RoomName) -> Option<LocalCostMatrix>,
     max_ops: u32,
 ) -> SquadDecision {
@@ -1129,11 +1128,17 @@ pub fn decide_squad_with_pathing(
     // differing only by the weight preset. Ranged-only: a melee/siege squad keeps the range-1 Advance
     // (the weapon-range r* parameterization is a follow-up). A structure (breach) focus keeps the
     // breach Advance set above.
+    //
+    // CLOSE *AND* POSITION IN ONE SEARCH: the engage preset's dominant proximity (advance-to-damage)
+    // layer makes the bounded flood's best-effort tile the one closest to the focus, so a distant focus
+    // is marched toward each tick; proximity is 0 once inside `r*`, so on arrival the safety/cohesion/
+    // DMG terms pick the engage tile. No separate "approach vs position" branch — the layer does both
+    // (the survival veto still forbids marching onto a lethal tile). EXP-COHESION-1 covers the march.
     let squad_has_ranged = view.members.iter().any(|m| m.has_ranged);
     let engage_position = !should_kite
         && matches!(decision.state, SquadOrderState::Engaged)
-        && decision.focus.is_some_and(|f| f.id.is_some())
-        && squad_has_ranged;
+        && squad_has_ranged
+        && decision.focus.is_some_and(|f| f.id.is_some());
 
     // Survival-veto / safety inputs (#2/#4): the most-fragile living member's hits + the squad's heal
     // sustain; and the optimal weapon range r* (3 ranged, 1 melee) for the proximity + focus terms.
@@ -1149,7 +1154,6 @@ pub fn decide_squad_with_pathing(
             threats: &threats,
             towers: &towers,
             focus: decision.focus.map(|f| f.pos),
-            prev_goal,
             // Kite weights the DMG term 0, so the richness inputs are moot here — keep it None.
             focus_damage: None,
             params: kite::KiteScoreParams::default(),
@@ -1174,7 +1178,6 @@ pub fn decide_squad_with_pathing(
             threats: &threats,
             towers: &towers,
             focus: decision.focus.map(|f| f.pos),
-            prev_goal,
             focus_damage,
             params: kite::KiteScoreParams::engage(),
             fragile_hits,
@@ -1596,7 +1599,7 @@ mod tests {
         let hostiles = vec![creep(9, 30, 25, 600, &[(Part::RangedAttack, 6)])]; // ranged-only: no melee → no kite
         let view = squad_view(&members, &hostiles, SquadOrderState::Engaged);
         let mut cb = |_r| Some(LocalCostMatrix::new());
-        let d = decide_squad_with_pathing(&view, None, None, &mut cb, kite::MAX_KITE_OPS);
+        let d = decide_squad_with_pathing(&view, None, &mut cb, kite::MAX_KITE_OPS);
         assert_eq!(d.state, SquadOrderState::Engaged);
         match d.movement {
             SquadMovement::Advance { goal, range } => {
@@ -1605,6 +1608,28 @@ mod tests {
             }
             SquadMovement::Hold => {} // acceptable if the centroid is already the optimal fighting tile
             other => panic!("expected an engage Advance{{range:0}} or Hold, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn engaged_ranged_squad_advances_toward_a_far_focus() {
+        // ADR 0019 advance-to-damage layer: a ranged squad engaged with a focus BEYOND the bounded
+        // search horizon must still march toward it (the dominant euclidean proximity term makes the
+        // flood's best-effort tile the one closest to the focus) — NOT Hold short. The chosen goal is
+        // strictly closer to the focus than the centroid (progress), with no special "approach" branch.
+        let members = vec![ranged_member_at(700, 700, 10, 25)];
+        let hostiles = vec![creep(9, 40, 25, 600, &[(Part::RangedAttack, 6)])]; // far focus (range 30)
+        let view = squad_view(&members, &hostiles, SquadOrderState::Engaged);
+        let mut cb = |_r| Some(LocalCostMatrix::new());
+        let d = decide_squad_with_pathing(&view, None, &mut cb, kite::MAX_KITE_OPS);
+        match d.movement {
+            SquadMovement::Advance { goal, .. } => {
+                assert!(
+                    goal.get_range_to(pos(40, 25)) < pos(10, 25).get_range_to(pos(40, 25)),
+                    "the goal advances toward the far focus: {goal:?}"
+                );
+            }
+            other => panic!("expected an Advance toward the far focus, got {other:?}"),
         }
     }
 
@@ -1664,7 +1689,7 @@ mod tests {
             current_state: SquadOrderState::Moving,
         };
 
-        let d = decide_squad_with_pathing(&view, None, None, &mut cb, kite::MAX_KITE_OPS);
+        let d = decide_squad_with_pathing(&view, None, &mut cb, kite::MAX_KITE_OPS);
         assert_eq!(d.focus.map(|f| f.pos), Some(pos(8, 25)), "focus the shielding rampart, not the spawn behind it");
         match d.movement {
             SquadMovement::Advance { goal, .. } => assert_eq!(goal, pos(8, 25), "advance toward the breach"),
@@ -1686,7 +1711,7 @@ mod tests {
             current_state: SquadOrderState::Engaged,
         };
         let mut cb = |_r| Some(LocalCostMatrix::new());
-        let d = decide_squad_with_pathing(&view, None, None, &mut cb, kite::MAX_KITE_OPS);
+        let d = decide_squad_with_pathing(&view, None, &mut cb, kite::MAX_KITE_OPS);
         assert_eq!(d.state, SquadOrderState::Engaged);
         match d.movement {
             SquadMovement::Kite { goal } => {
@@ -1721,8 +1746,8 @@ mod tests {
         let view = SquadView { members: &members, hostiles: &hostiles, structures: &[], retreat_threshold: 0.3, current_state: SquadOrderState::Engaged };
         let mut cb1 = |_r| Some(LocalCostMatrix::new());
         let mut cb2 = |_r| Some(LocalCostMatrix::new());
-        let a = decide_squad_with_pathing(&view, None, None, &mut cb1, kite::MAX_KITE_OPS);
-        let b = decide_squad_with_pathing(&view, None, None, &mut cb2, kite::MAX_KITE_OPS);
+        let a = decide_squad_with_pathing(&view, None, &mut cb1, kite::MAX_KITE_OPS);
+        let b = decide_squad_with_pathing(&view, None, &mut cb2, kite::MAX_KITE_OPS);
         assert_eq!(a.movement, b.movement, "same input → same goal (deterministic)");
     }
 
@@ -1769,7 +1794,7 @@ mod tests {
             current_state: SquadOrderState::Moving,
         };
         let mut cb = |_r| Some(LocalCostMatrix::new());
-        let d = decide_squad_with_pathing(&view, None, None, &mut cb, kite::MAX_KITE_OPS);
+        let d = decide_squad_with_pathing(&view, None, &mut cb, kite::MAX_KITE_OPS);
         assert_eq!(d.state, SquadOrderState::Moving);
         assert_eq!(d.movement, SquadMovement::Hold);
     }

@@ -33,7 +33,7 @@ use super::squad::{AttackTarget, SquadContext, SquadState, SquadTarget, TickMove
 use crate::combat::kite::{PositionLayers, MAX_KITE_OPS};
 use crate::combat::{
     build_room_layers, decide_squad_with_pathing, CombatCreepDto, CombatStructureDto, SquadDecision, SquadMemberView,
-    SquadMovement, SquadOrderState, SquadView,
+    SquadOrderState, SquadView,
 };
 use std::collections::HashMap;
 use crate::creep::{spawning, CreepOwner};
@@ -142,17 +142,6 @@ fn create_spawn_callback(
 
 pub struct SquadManagerSystem;
 
-/// Per-squad last-tick kite/engage goal — the goal-latch store (ADR 0019 #6b). A World resource (the
-/// spawn-queue pattern) rather than a `SquadContext` field: it must persist *across ticks* (so this
-/// tick can compare against last tick's goal) but NOT survive a VM reset (a stale latch is a hint, not
-/// state — losing it costs at most one un-damped tick), so it is deliberately **non-serialized** (no
-/// `WORLD_FORMAT_VERSION` bump). Auto-registered as `Default` by specs on first `Write` access; pruned
-/// each tick to the live managed squads so dead/recycled entities can't carry a stale goal.
-#[derive(Default)]
-pub struct SquadGoalLatch {
-    goals: HashMap<Entity, Position>,
-}
-
 #[derive(SystemData)]
 pub struct SquadManagerSystemData<'a> {
     entities: Entities<'a>,
@@ -160,7 +149,6 @@ pub struct SquadManagerSystemData<'a> {
     objective_queue: Write<'a, CombatObjectiveQueue>,
     squad_contexts: WriteStorage<'a, SquadContext>,
     spawn_queue: Write<'a, SpawnQueue>,
-    goal_latch: Write<'a, SquadGoalLatch>,
     room_data: ReadStorage<'a, RoomData>,
     mapping: Read<'a, EntityMappingData>,
     creep_owner: ReadStorage<'a, CreepOwner>,
@@ -282,16 +270,12 @@ impl<'a> System<'a> for SquadManagerSystem {
         // only on a room's enemies, not the deciding squad, so they are built ONCE per room (this tick)
         // and reused by every squad fighting there. Per-squad work (the cohesion search) is unaffected.
         let mut room_layers: HashMap<RoomName, (LocalCostMatrix, PositionLayers)> = HashMap::new();
-        // Goal-latch (#6b): drop entries for squads no longer live so a recycled entity can't inherit a
-        // stale goal, then carry each squad's last-tick goal in and its new goal out.
-        data.goal_latch.goals.retain(|e, _| live_managed.iter().any(|(se, _)| se == e));
         for (squad_entity, obj_id) in &live_managed {
             let (target_room, formation) = match data.objective_queue.get(*obj_id) {
                 Some(obj) => (objective_target(&obj.kind).1, is_formation_objective(&obj.kind)),
                 None => continue,
             };
-            let prev_goal = data.goal_latch.goals.get(squad_entity).copied();
-            let new_goal = compute_squad_orders(
+            compute_squad_orders(
                 &data.room_data,
                 &data.mapping,
                 &mut data.squad_contexts,
@@ -299,17 +283,8 @@ impl<'a> System<'a> for SquadManagerSystem {
                 *squad_entity,
                 target_room,
                 formation,
-                prev_goal,
                 &mut room_layers,
             );
-            match new_goal {
-                Some(goal) => {
-                    data.goal_latch.goals.insert(*squad_entity, goal);
-                }
-                None => {
-                    data.goal_latch.goals.remove(squad_entity);
-                }
-            }
         }
 
         // ── Phase C: claim new objectives up to the global cap. ──
@@ -492,9 +467,8 @@ fn build_target_matrix(
 }
 
 /// Build the squad view, run the pure `decide_squad`, and apply the result to the `SquadContext`
-/// (state + per-member orders). The live adapter for P2.G3 tactics. Returns the kite/engage goal to
-/// latch for next tick (#6b), or `None` when the squad has no scored-search goal this tick. (Many args:
-/// distinct ECS borrows that can't be cheaply bundled — the live adapter shim, like the haul builders.)
+/// (state + per-member orders). The live adapter for P2.G3 tactics. (Many args: distinct ECS borrows
+/// that can't be cheaply bundled — the live adapter shim, like the haul builders.)
 #[allow(clippy::too_many_arguments)]
 fn compute_squad_orders(
     room_data: &ReadStorage<RoomData>,
@@ -504,9 +478,8 @@ fn compute_squad_orders(
     squad_entity: Entity,
     target_room: RoomName,
     formation: bool,
-    prev_goal: Option<Position>,
     room_layers: &mut HashMap<RoomName, (LocalCostMatrix, PositionLayers)>,
-) -> Option<Position> {
+) {
     // Read the roster's cached status (immutable). `pos`/`has_ranged` feed the centroid + the kite
     // plan; `has_ranged` resolves the creep body (the adapter's job — the pure crate stays JS-free).
     let (member_views, current_state, retreat_threshold) = match squad_contexts.get(squad_entity) {
@@ -547,10 +520,10 @@ fn compute_squad_orders(
             squad_state_to_order(ctx.state),
             ctx.retreat_threshold,
         ),
-        None => return None,
+        None => return,
     };
     if member_views.is_empty() {
-        return None;
+        return;
     }
 
     let (hostiles, structures) = build_room_combat_dtos(room_data, mapping, target_room);
@@ -582,11 +555,11 @@ fn compute_squad_orders(
     let decision = match room_layers.get(&target_room) {
         Some((matrix, layers)) => {
             let mut room_cb = |_r: RoomName| Some(matrix.clone());
-            decide_squad_with_pathing(&view, Some(layers), prev_goal, &mut room_cb, MAX_KITE_OPS)
+            decide_squad_with_pathing(&view, Some(layers), &mut room_cb, MAX_KITE_OPS)
         }
         None => {
             let mut room_cb = |_r: RoomName| None;
-            decide_squad_with_pathing(&view, None, prev_goal, &mut room_cb, MAX_KITE_OPS)
+            decide_squad_with_pathing(&view, None, &mut room_cb, MAX_KITE_OPS)
         }
     };
 
@@ -626,14 +599,6 @@ fn compute_squad_orders(
             ctx.squad_path = None;
         }
         apply_squad_decision(ctx, &decision, creep_owner);
-    }
-
-    // The kite/engage goal to latch for next tick (#6b) — only the scored-search outputs; other
-    // movement (travel Advance{range>0}, Hold) carries no latchable goal.
-    match decision.movement {
-        SquadMovement::Kite { goal } => Some(goal),
-        SquadMovement::Advance { goal, range: 0 } => Some(goal),
-        _ => None,
     }
 }
 

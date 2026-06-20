@@ -96,7 +96,6 @@ fn run_worst_case(ticks: usize, shared: bool) -> BenchResult {
                 threats: &threats,
                 towers: &towers,
                 focus: None,
-                prev_goal: None,
                 focus_damage: None,
                 params: KiteScoreParams::default(),
                 fragile_hits: 5000, // a boosted brick — edge tiles survivable, centre lethal (veto active)
