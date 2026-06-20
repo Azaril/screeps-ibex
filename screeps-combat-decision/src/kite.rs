@@ -83,6 +83,23 @@ impl Default for KiteScoreParams {
 /// ticks is "far enough" and gets no future penalty; nearer arrivals scale up linearly.
 pub const FUTURE_HORIZON: u32 = 5;
 
+/// The shared per-room maps [`plan_kite_anchor`] builds once and every priced tile reads (ADR 0019
+/// Stage 2). All-`None` ⇒ the pre-Stage-2 behavior (Chebyshev cohesion, no future term) — exactly
+/// byte-identical, which the unit tests rely on.
+#[derive(Default, Clone, Copy)]
+pub struct KiteFields<'a> {
+    /// Soonest a mobile chaser reaches each tile → the **future-threat** term. `None` ⇒ omitted.
+    pub threat_reach: Option<&'a ReachabilityMap>,
+    /// Path-distance (in tiles, **wall-aware**) from the centroid → the **cohesion** term. `None` ⇒
+    /// the Chebyshev fallback. In open terrain this equals Chebyshev (8-dir uniform steps), so it only
+    /// differs — correctly — when a tile is reachable from the centroid only by routing around a wall.
+    pub centroid_reach: Option<&'a ReachabilityMap>,
+}
+
+/// Cohesion distance used when a tile is unreachable from the centroid within the flood budget — a
+/// large room-scale value so a cut-off tile is heavily penalized (don't strand the block behind a wall).
+const UNREACHABLE_COHESION: u32 = 50;
+
 /// The squad's kite-scoring context — its centroid (cohesion anchor), the threats/towers to avoid,
 /// and the shared focus the value term keeps shootable.
 pub struct SquadKiteView<'a> {
@@ -102,9 +119,10 @@ pub struct SquadKiteView<'a> {
 /// - **VALUE:** the focus being beyond shooting range 3;
 /// - **OPENNESS:** fewer walkable neighbours (0–8, supplied from the cost matrix) → nearer a dead-end.
 ///
-/// `reach` is the shared per-room reachability map (built once by [`plan_kite_anchor`]); `None` ⇒ the
-/// future term is omitted (byte-identical to the pre-Stage-2 four-term score).
-pub fn score_tile(view: &SquadKiteView, tile: Position, walkable_neighbors: u8, reach: Option<&ReachabilityMap>) -> i64 {
+/// `fields` carries the shared per-room maps (built once by [`plan_kite_anchor`]); an all-`None`
+/// [`KiteFields`] ⇒ the future term is omitted and cohesion falls back to Chebyshev (byte-identical
+/// to the pre-Stage-2 four-term score).
+pub fn score_tile(view: &SquadKiteView, tile: Position, walkable_neighbors: u8, fields: &KiteFields) -> i64 {
     let p = &view.params;
 
     // SAFETY — being within a threat's danger reach (deeper = worse), plus tower DPS here.
@@ -125,7 +143,7 @@ pub fn score_tile(view: &SquadKiteView, tile: Position, walkable_neighbors: u8, 
 
     // FUTURE — a tile a mobile chaser reaches soon offers no durable standoff; penalize low
     // ticks-to-reach (linearly within FUTURE_HORIZON). Avoids "safe this tick, caught the next".
-    let future = match reach {
+    let future = match fields.threat_reach {
         Some(map) => {
             let ttr = map.ticks_xy(tile.x().u8(), tile.y().u8());
             if ttr < FUTURE_HORIZON {
@@ -137,8 +155,12 @@ pub fn score_tile(view: &SquadKiteView, tile: Position, walkable_neighbors: u8, 
         None => 0.0,
     };
 
-    // COHESION — distance from the centroid, steepening past K so the block doesn't string out.
-    let d = tile.get_range_to(view.centroid);
+    // COHESION — distance from the centroid (wall-aware g-cost when available, else Chebyshev),
+    // steepening past K so the block doesn't string out / get split by a wall.
+    let d = match fields.centroid_reach {
+        Some(map) => map.ticks_to_reach(tile).unwrap_or(UNREACHABLE_COHESION),
+        None => tile.get_range_to(view.centroid),
+    };
     let cohesion = if d <= p.max_cohesion_radius {
         d as f32
     } else {
@@ -210,16 +232,22 @@ pub fn plan_kite_anchor(
 ) -> Option<KitePlan> {
     let room = view.centroid.room_name();
     let matrix = room_callback(room)?;
-    // Reachability seeds = the mobile chasers only (ADR 0019 Guard 5: an immobile threat seeds no
-    // wave). Built once, shared across every priced tile in the search below.
+    // THREAT reachability seeds = the mobile chasers only (ADR 0019 Guard 5: an immobile threat seeds
+    // no wave). Built once, shared across every priced tile in the search below.
     let sources: Vec<ReachSource> = view
         .threats
         .iter()
         .filter_map(|t| t.step_ticks.map(|st| ReachSource { pos: t.pos, step_ticks: st }))
         .collect();
     let mut reach_cb = |_r: RoomName| Some(matrix.clone());
-    let reach = (!sources.is_empty()).then(|| LocalPathfinder.reachability_from(&sources, room, &mut reach_cb, max_ops));
-    let cost = |tile: Position| -> i64 { score_tile(view, tile, walkable_neighbors(&matrix, tile), reach.as_ref()) };
+    let threat_reach =
+        (!sources.is_empty()).then(|| LocalPathfinder.reachability_from(&sources, room, &mut reach_cb, max_ops));
+    // CENTROID reachability (step_ticks 1 ⇒ g = path distance in tiles) gives a wall-aware cohesion
+    // distance: a tile reachable only by routing around a wall is correctly "far" from the squad.
+    let centroid_src = [ReachSource { pos: view.centroid, step_ticks: 1 }];
+    let centroid_reach = LocalPathfinder.reachability_from(&centroid_src, room, &mut reach_cb, max_ops);
+    let fields = KiteFields { threat_reach: threat_reach.as_ref(), centroid_reach: Some(&centroid_reach) };
+    let cost = |tile: Position| -> i64 { score_tile(view, tile, walkable_neighbors(&matrix, tile), &fields) };
     // Feed the search the already-fetched matrix (so the openness lookup + the search agree).
     let mut cb = |_r: RoomName| Some(matrix.clone());
     let result = LocalPathfinder.search_scored(view.centroid, &mut cb, max_ops, 1, &cost);
@@ -262,8 +290,8 @@ mod tests {
         let threats = [melee(25, 25, 3)];
         let v = view(c, &threats, &[], None);
         // Outside reach (range 4) vs inside (range 1): inside is worse.
-        let outside = score_tile(&v, pos(29, 25), 8, None);
-        let inside = score_tile(&v, pos(26, 25), 8, None);
+        let outside = score_tile(&v, pos(29, 25), 8, &KiteFields::default());
+        let inside = score_tile(&v, pos(26, 25), 8, &KiteFields::default());
         assert!(inside > outside, "inside reach must cost more: in={inside} out={outside}");
     }
 
@@ -271,10 +299,10 @@ mod tests {
     fn cohesion_penalizes_distance_and_steepens_past_k() {
         let c = pos(25, 25);
         let v = view(c, &[], &[], None);
-        let d1 = score_tile(&v, pos(26, 25), 8, None); // d=1 (<=K)
-        let d2 = score_tile(&v, pos(27, 25), 8, None); // d=2 (==K)
-        let d3 = score_tile(&v, pos(28, 25), 8, None); // d=3 (>K, steepened)
-        let d4 = score_tile(&v, pos(29, 25), 8, None); // d=4 (>K)
+        let d1 = score_tile(&v, pos(26, 25), 8, &KiteFields::default()); // d=1 (<=K)
+        let d2 = score_tile(&v, pos(27, 25), 8, &KiteFields::default()); // d=2 (==K)
+        let d3 = score_tile(&v, pos(28, 25), 8, &KiteFields::default()); // d=3 (>K, steepened)
+        let d4 = score_tile(&v, pos(29, 25), 8, &KiteFields::default()); // d=4 (>K)
         assert!(d1 < d2 && d2 < d3 && d3 < d4, "monotonic in distance");
         // The marginal cost past K (d2→d3) exceeds the marginal cost within K (d1→d2).
         assert!((d3 - d2) > (d2 - d1), "cohesion penalty steepens past K");
@@ -286,8 +314,8 @@ mod tests {
         let focus = pos(25, 30);
         let v = view(c, &[], &[], Some(focus));
         // Both equidistant from the centroid (d=3); A keeps the focus in range 3, B does not.
-        let in_range = score_tile(&v, pos(25, 28), 8, None); // range to focus = 2
-        let out_range = score_tile(&v, pos(25, 22), 8, None); // range to focus = 8
+        let in_range = score_tile(&v, pos(25, 28), 8, &KiteFields::default()); // range to focus = 2
+        let out_range = score_tile(&v, pos(25, 22), 8, &KiteFields::default()); // range to focus = 8
         assert!(in_range < out_range, "keeping the focus shootable is preferred: in={in_range} out={out_range}");
     }
 
@@ -295,8 +323,8 @@ mod tests {
     fn openness_avoids_dead_ends() {
         let c = pos(25, 25);
         let v = view(c, &[], &[], None);
-        let open = score_tile(&v, pos(26, 25), 8, None); // 8 walkable neighbours
-        let pocket = score_tile(&v, pos(26, 25), 1, None); // 1 walkable neighbour (dead-end)
+        let open = score_tile(&v, pos(26, 25), 8, &KiteFields::default()); // 8 walkable neighbours
+        let pocket = score_tile(&v, pos(26, 25), 1, &KiteFields::default()); // 1 walkable neighbour (dead-end)
         assert!(pocket > open, "a dead-end pocket costs more");
     }
 
@@ -306,9 +334,9 @@ mod tests {
         let threats = [melee(25, 25, 3)];
         let v = view(c, &threats, &[], None);
         // A: safe (range 4 from the threat) but far from the centroid (d=5).
-        let safe_far = score_tile(&v, pos(30, 25), 8, None);
+        let safe_far = score_tile(&v, pos(30, 25), 8, &KiteFields::default());
         // B: in the threat's reach (range 1) but right next to the centroid (d=1).
-        let danger_close = score_tile(&v, pos(26, 25), 8, None);
+        let danger_close = score_tile(&v, pos(26, 25), 8, &KiteFields::default());
         assert!(safe_far < danger_close, "safety outweighs cohesion: safe_far={safe_far} danger_close={danger_close}");
     }
 
@@ -324,14 +352,46 @@ mod tests {
         let reach = LocalPathfinder.reachability_from(&[ReachSource { pos: chaser, step_ticks: 1 }], room, &mut cb, 2000);
         let c = pos(25, 25);
         let v = view(c, &[], &[], None);
-        let near_in_time = score_tile(&v, pos(24, 25), 8, Some(&reach)); // 4 tiles → ttr 4 (< horizon)
-        let far_in_time = score_tile(&v, pos(26, 25), 8, Some(&reach)); // 6 tiles → ttr 6 (>= horizon)
+        let f = KiteFields { threat_reach: Some(&reach), centroid_reach: None };
+        let near_in_time = score_tile(&v, pos(24, 25), 8, &f); // 4 tiles → ttr 4 (< horizon)
+        let far_in_time = score_tile(&v, pos(26, 25), 8, &f); // 6 tiles → ttr 6 (>= horizon)
         assert!(
             near_in_time > far_in_time,
             "the tile the chaser reaches sooner costs more: near={near_in_time} far={far_in_time}"
         );
         // With no reachability map the two are equal (future term omitted → byte-identical to pre-Stage-2).
-        assert_eq!(score_tile(&v, pos(24, 25), 8, None), score_tile(&v, pos(26, 25), 8, None));
+        assert_eq!(score_tile(&v, pos(24, 25), 8, &KiteFields::default()), score_tile(&v, pos(26, 25), 8, &KiteFields::default()));
+    }
+
+    // ── wall-aware (g-cost) cohesion (ADR 0019 Stage 2-tail) ──
+    #[test]
+    fn cohesion_is_wall_aware_with_a_centroid_map() {
+        let room: RoomName = "W1N1".parse().unwrap();
+        // A wall column at x=26 with its only gap far away (y=40), so the tile just east of the
+        // centroid is Chebyshev-close but reachable only by a long detour.
+        let mut cb = |_r| {
+            let mut cm = LocalCostMatrix::new();
+            for y in 0..50u8 {
+                if y != 40 {
+                    cm.set(pos(26, y).xy(), u8::MAX);
+                }
+            }
+            Some(cm)
+        };
+        let centroid = pos(25, 25);
+        let creach = LocalPathfinder.reachability_from(&[ReachSource { pos: centroid, step_ticks: 1 }], room, &mut cb, 3000);
+        let v = view(centroid, &[], &[], None);
+        let walled = pos(27, 25); // Chebyshev 2 from the centroid, but only reachable via the y=40 gap
+        let cheby = score_tile(&v, walled, 8, &KiteFields::default());
+        let aware = score_tile(&v, walled, 8, &KiteFields { threat_reach: None, centroid_reach: Some(&creach) });
+        assert!(aware > cheby, "a tile behind a wall is correctly far for cohesion: aware={aware} cheby={cheby}");
+        // In open terrain (west of the centroid, no wall) the g-cost equals Chebyshev → identical score.
+        let open = pos(24, 25);
+        assert_eq!(
+            score_tile(&v, open, 8, &KiteFields::default()),
+            score_tile(&v, open, 8, &KiteFields { threat_reach: None, centroid_reach: Some(&creach) }),
+            "open-terrain g-cost equals Chebyshev"
+        );
     }
 
     // ── plan_kite_anchor (one bounded search per squad) ─────────────────
