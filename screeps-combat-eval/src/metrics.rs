@@ -393,3 +393,54 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod u8 {
+    use super::*;
+    use screeps::Part;
+    use screeps_combat_agent::opponents::{run_engagement, world_from_units, RushAgent, Unit};
+    use screeps_combat_agent::IbexAgent;
+
+    fn room() -> RoomName {
+        "W1N1".parse().unwrap()
+    }
+    fn pos(x: u8, y: u8) -> Position {
+        Position::new(RoomCoordinate::new(x).unwrap(), RoomCoordinate::new(y).unwrap(), room())
+    }
+
+    #[test]
+    fn edge_aware_kiter_rounds_a_corner_instead_of_pinning() {
+        // The U8 fix: a kiter started pinned in the SE corner with a slower-but-armed chaser between
+        // it and open space. Raw "flee = max distance from the threat" would drive it into (49,49)
+        // and pin it at range 1; the edge repulsors make it round the corner toward the interior.
+        // Kiter: fast (10 MOVE), low DPS (5 RA) so the TOUGH chaser stays armed the whole run.
+        let world = world_from_units(
+            0,
+            &[Unit::new(vec![(Part::RangedAttack, 5), (Part::Move, 10)], vec![pos(47, 47)])],
+            1,
+            &[Unit::new(vec![(Part::Attack, 10), (Part::Move, 8), (Part::Tough, 10)], vec![pos(45, 45)])],
+        );
+        let out = run_engagement(world, room(), 0, pos(47, 47), &mut IbexAgent, 1, pos(45, 45), &mut RushAgent, 30);
+        let m = SideMetrics::from_recording(&out.recording, 0);
+        assert_eq!(m.survivors, 1, "the kiter escapes the corner and lives");
+
+        let last = out.recording.frames.last().unwrap();
+        let kiter = last.creeps.iter().find(|c| c.owner == 0).expect("kiter alive");
+        let corner = synth_pos(49, 49);
+        assert!(
+            synth_pos(kiter.x, kiter.y).get_range_to(corner) >= 10,
+            "the kiter broke out toward open space, not into the corner (ended {} from (49,49))",
+            synth_pos(kiter.x, kiter.y).get_range_to(corner)
+        );
+
+        // After the breakout it holds standoff distance: the second half averages > range 2.
+        let half = out.recording.frames.len() / 2;
+        let (mut sum, mut n) = (0u32, 0u32);
+        for f in &out.recording.frames[half..] {
+            if let (Some(k), Some(e)) = (f.creeps.iter().find(|c| c.owner == 0), f.creeps.iter().find(|c| c.owner == 1)) {
+                sum += synth_pos(k.x, k.y).get_range_to(synth_pos(e.x, e.y));
+                n += 1;
+            }
+        }
+        assert!(n > 0 && (sum as f64 / n as f64) > 2.0, "holds standoff after breaking out");
+    }
+}

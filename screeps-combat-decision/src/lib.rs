@@ -381,6 +381,40 @@ fn is_melee_only(c: &CombatCreepDto) -> bool {
     c.has_working(Part::Attack) && !c.has_working(Part::RangedAttack)
 }
 
+/// A kiter within this many tiles of a room edge gets that edge added as a flee repulsor (U8): the
+/// raw "flee = maximize distance to the threat" steers a kiter into the room CORNER (the farthest
+/// point), where at MOVE parity it loses a step against the wall and the chaser closes to melee.
+/// Treating a near edge as something to flee *too* makes the kiter round the corner along the
+/// interior instead of jamming into it.
+const EDGE_AVOID_THRESHOLD: u32 = 6;
+const ROOM_EDGE_MAX: u8 = 49;
+
+/// Build the flee-repulsor list for a kiting creep: the threat positions plus a synthetic point on
+/// each room edge the creep is within [`EDGE_AVOID_THRESHOLD`] of (placed at the creep's own
+/// coordinate on that edge, so fleeing it pushes straight toward the interior). With no near edge
+/// this is just `threats` — byte-identical to the prior behavior in open space.
+fn kite_repulsors(pos: Position, threats: &[Position]) -> Vec<Position> {
+    let mut out = threats.to_vec();
+    let (x, y) = (pos.x().u8(), pos.y().u8());
+    let room = pos.room_name();
+    let edge = |ex: u8, ey: u8| {
+        Position::new(RoomCoordinate::new(ex).expect("0..=49"), RoomCoordinate::new(ey).expect("0..=49"), room)
+    };
+    if (x as u32) <= EDGE_AVOID_THRESHOLD {
+        out.push(edge(0, y));
+    }
+    if (ROOM_EDGE_MAX - x) as u32 <= EDGE_AVOID_THRESHOLD {
+        out.push(edge(ROOM_EDGE_MAX, y));
+    }
+    if (y as u32) <= EDGE_AVOID_THRESHOLD {
+        out.push(edge(x, 0));
+    }
+    if (ROOM_EDGE_MAX - y) as u32 <= EDGE_AVOID_THRESHOLD {
+        out.push(edge(x, ROOM_EDGE_MAX));
+    }
+    out
+}
+
 /// **The per-creep tactical movement decision** (ADR 0006 Inc B / P2.M): one creep's movement
 /// *goal* for the tick — `MoveTo`/`Flee` (the executor, live or sim, turns it into a path step via
 /// rover). A faithful port of `squad_combat`'s body-part-aware `fallback_movement`/kiting:
@@ -420,7 +454,7 @@ pub fn decide_movement(view: &CombatView) -> Vec<CombatIntent> {
             .map(|c| c.pos)
             .collect();
         if !melee_threats.is_empty() {
-            return vec![CombatIntent::Flee { from: melee_threats, range: 3 }];
+            return vec![CombatIntent::Flee { from: kite_repulsors(me.pos, &melee_threats), range: 3 }];
         }
     }
 
@@ -478,7 +512,7 @@ fn decide_movement_fallback(view: &CombatView) -> Vec<CombatIntent> {
             .map(|c| c.pos)
             .collect();
         if !melee_threats.is_empty() {
-            Some(CombatIntent::Flee { from: melee_threats, range: 3 })
+            Some(CombatIntent::Flee { from: kite_repulsors(me.pos, &melee_threats), range: 3 })
         } else {
             target_pos
                 .filter(|tp| me.pos.get_range_to(*tp) > 3)
@@ -1527,5 +1561,44 @@ mod tests {
         let d = decide_squad_with_pathing(&view, &mut cb, kite::MAX_KITE_OPS);
         assert_eq!(d.state, SquadOrderState::Moving);
         assert_eq!(d.movement, SquadMovement::Hold);
+    }
+
+    // ── U8: edge-aware kiting (don't flee into the corner) ──
+
+    #[test]
+    fn kite_repulsors_are_just_the_threat_in_open_space() {
+        // A kiter in the room interior (far from every edge) gets no synthetic edge repulsors —
+        // byte-identical to the prior flee behavior.
+        let threats = vec![pos(24, 25)];
+        assert_eq!(kite_repulsors(pos(25, 25), &threats), threats, "open space ⇒ threats only");
+    }
+
+    #[test]
+    fn kite_repulsors_add_the_near_edges() {
+        // Near the SE corner (within EDGE_AVOID_THRESHOLD of both x=49 and y=49): the right and
+        // bottom edges are added as repulsors so fleeing pushes back toward the interior.
+        let threats = vec![pos(44, 44)];
+        let r = kite_repulsors(pos(46, 46), &threats);
+        assert!(r.contains(&pos(49, 46)), "right edge at the kiter's y");
+        assert!(r.contains(&pos(46, 49)), "bottom edge at the kiter's x");
+        assert!(!r.contains(&pos(0, 46)) && !r.contains(&pos(46, 0)), "far edges are not added");
+        assert_eq!(r.len(), 3, "threat + 2 near edges");
+    }
+
+    #[test]
+    fn cornered_kiter_flees_the_edges_too() {
+        // A ranged kiter pinned near the SE corner with a melee-only threat at range 2: the emitted
+        // Flee carries the edge repulsors, so the rover flee rounds the corner instead of jamming
+        // into it (the U8 fix). In open space the same situation would flee the threat alone.
+        let me = creep(1, 47, 47, 700, &[(Part::RangedAttack, 5), (Part::Move, 2)]);
+        let threat = creep(2, 45, 45, 1500, &[(Part::Attack, 10), (Part::Move, 5)]);
+        let scene = Scene { squad: squad(), friends: vec![me.clone()], hostiles: vec![threat], structures: vec![] };
+        let intents = decide_movement(&scene.view(&me, Some(CreepOrders::default())));
+        match intents.as_slice() {
+            [CombatIntent::Flee { from, .. }] => {
+                assert!(from.contains(&pos(49, 47)) && from.contains(&pos(47, 49)), "fleeing the near edges too: {from:?}");
+            }
+            other => panic!("expected an edge-aware Flee, got {other:?}"),
+        }
     }
 }
