@@ -21,7 +21,7 @@ pub mod replay;
 pub mod scenario;
 pub mod squad;
 
-use screeps::{Position, RawObjectId, RoomName, StructureType};
+use screeps::{Part, Position, RawObjectId, RoomName, StructureType};
 use screeps_combat_decision::{
     decide_combat, decide_movement, select_focus_target, CombatBodyPart, CombatCreepDto, CombatIntent,
     CombatStructureDto, CombatView, CreepOrders, FocusTarget, Ownership, SquadMovement, SquadStateDto, TacticalAgent,
@@ -162,7 +162,15 @@ impl SimView {
         }));
 
         // The shared focus is creep-only (structures are scanned per-creep by `decide_combat`).
-        let focus = select_focus_target(&hostiles, &structures).filter(|f| f.id.is_some());
+        // Our focusable single-target DPS feeds the EV focus pick (out-healed/shielded discard, ttk).
+        let our_dps: u32 = friends
+            .iter()
+            .map(|c| {
+                c.working_parts(Part::Attack) as u32 * screeps_combat_engine::constants::ATTACK_POWER
+                    + c.working_parts(Part::RangedAttack) as u32 * screeps_combat_engine::constants::RANGED_ATTACK_POWER
+            })
+            .sum();
+        let focus = select_focus_target(&hostiles, &structures, our_dps).filter(|f| f.id.is_some());
 
         Self {
             tick: world.tick,

@@ -189,28 +189,77 @@ fn structure_rank(ty: StructureType) -> u32 {
     }
 }
 
-/// The squad's shared focus target (ADR 0006 Inc B). A faithful port of
-/// `attack_mission::compute_focus_target` — kept byte-identical in output so the live shim passes
-/// intent parity:
-/// 1. hostile with a working HEAL part, lowest hits (kill healers first to deny regen);
-/// 2. else the lowest-hits hostile (focus fire for kills);
-/// 3. else a hostile structure, prioritized InvaderCore > Spawn > Tower > other;
-/// 4. else `None`.
+/// The squad's shared focus target — an **expected-value** choice (ADR 0020 §4.2). Among the hostiles
+/// we can actually kill, pick the one whose death removes the most enemy capability per tick
+/// (`threat / ttk`):
+/// - **Discard the unkillable.** A hostile whose reachable heal ≥ our focusable DPS out-heals us
+///   (`net == 0`), and a hostile standing on a hostile rampart shields behind it — our single-target
+///   fire redirects to the rampart (engine `rangedAttack.js:33-36`), so neither dies to direct fire.
+///   This makes "kill the healer first" **conditional on the healer being killable**: the old
+///   unconditional rule dogpiled an out-healed / rampart-sheltered healer (the operator-observed bait).
+/// - **`threat`** removed = the target's attack + ranged + heal output (killing a healer denies the
+///   enemy's sustain — H heal/tick ≈ H damage/tick of value). **`ttk`** = `ceil(hits / net)`. Maximize
+///   `threat / ttk` (compared by integer cross-multiply; ties → lower hits = nearer kill).
 ///
-/// `min_by_key` returns the *first* of equal minimums, matching the prior tie-break given the
-/// adapter preserves hostile/structure ordering.
-pub fn select_focus_target(hostiles: &[CombatCreepDto], structures: &[CombatStructureDto]) -> Option<FocusTarget> {
-    if !hostiles.is_empty() {
-        // Priority 1: hostiles with a working HEAL part, lowest hits.
-        if let Some(t) = hostiles.iter().filter(|c| c.has_working(Part::Heal)).min_by_key(|c| c.hits) {
-            return Some(t.as_target());
-        }
-        // Priority 2: lowest-hits hostile (always succeeds on a non-empty list).
-        if let Some(t) = hostiles.iter().min_by_key(|c| c.hits) {
-            return Some(t.as_target());
-        }
+/// Fallbacks: a best-effort lowest-hits **unshielded** hostile (killability is a per-tick snapshot —
+/// heal may drop, or we chip it down), then hostile structures by rank (InvaderCore > Spawn > Tower >
+/// other), which the breach logic resolves to the shielding rampart. `our_dps` is the squad's
+/// focusable single-target output (melee + ranged); `0` ⇒ no offense → straight to the fallbacks.
+///
+/// (NOTE: safeMode — where the enemy room nullifies all our combat — is an engage-level veto handled
+/// by the upcoming Lanchester gate, not here; the DTOs don't yet carry it.)
+pub fn select_focus_target(hostiles: &[CombatCreepDto], structures: &[CombatStructureDto], our_dps: u32) -> Option<FocusTarget> {
+    use screeps_combat_engine::constants::{ATTACK_POWER, HEAL_POWER, RANGED_ATTACK_POWER, RANGED_HEAL_POWER};
+    // Hostile-rampart tiles: a creep here is shielded (single-target fire redirects to the rampart).
+    let rampart_tiles: std::collections::HashSet<(u8, u8)> = structures
+        .iter()
+        .filter(|s| s.structure_type == StructureType::Rampart && s.ownership == Ownership::Hostile && s.hits > 0)
+        .map(|s| (s.pos.x().u8(), s.pos.y().u8()))
+        .collect();
+    let shielded = |c: &CombatCreepDto| rampart_tiles.contains(&(c.pos.x().u8(), c.pos.y().u8()));
+    let working = |c: &CombatCreepDto, p: Part| c.working_parts(p) as u32;
+    let threat_value =
+        |c: &CombatCreepDto| working(c, Part::Attack) * ATTACK_POWER + working(c, Part::RangedAttack) * RANGED_ATTACK_POWER + working(c, Part::Heal) * HEAL_POWER;
+    // Heal/tick reaching `c` from any hostile in heal range (incl. self) — the engine heal-range model.
+    let heal_reaching = |c: &CombatCreepDto| -> u32 {
+        hostiles
+            .iter()
+            .filter(|h| h.has_working(Part::Heal))
+            .map(|h| {
+                let per = match h.pos.get_range_to(c.pos) {
+                    0..=1 => HEAL_POWER,
+                    2..=3 => RANGED_HEAL_POWER,
+                    _ => 0,
+                };
+                working(h, Part::Heal) * per
+            })
+            .sum()
+    };
+
+    // EV: argmax threat/ttk over killable + unshielded hostiles.
+    let best_ev = hostiles
+        .iter()
+        .filter(|c| !shielded(c))
+        .filter_map(|c| {
+            let net = our_dps.saturating_sub(heal_reaching(c));
+            if net == 0 {
+                return None; // out-healed → unkillable, don't waste fire
+            }
+            Some((c, threat_value(c).max(1), c.hits.div_ceil(net).max(1)))
+        })
+        .max_by(|a, b| {
+            // threat_a/ttk_a vs threat_b/ttk_b via cross-multiply (integer, exact); tie → lower hits.
+            (a.1 as u64 * b.2 as u64).cmp(&(b.1 as u64 * a.2 as u64)).then(b.0.hits.cmp(&a.0.hits))
+        });
+    if let Some((c, _, _)) = best_ev {
+        return Some(c.as_target());
     }
-    // Priority 3: hostile structures (position-only; structures don't move).
+
+    // Fallback 1: best-effort lowest-hits UNSHIELDED hostile (killability is a snapshot).
+    if let Some(c) = hostiles.iter().filter(|c| !shielded(c)).min_by_key(|c| c.hits) {
+        return Some(c.as_target());
+    }
+    // Fallback 2: hostile structures by rank (breach logic resolves a shielding rampart).
     structures
         .iter()
         .filter(|s| s.ownership == Ownership::Hostile)
@@ -716,7 +765,10 @@ fn squad_should_retreat(members: &[SquadMemberView], retreat_threshold: f32) -> 
 /// target exists. The per-creep `decide_combat`/`decide_movement` consume the focus +
 /// state; the live `SquadManager` and the sim share this one implementation.
 pub fn decide_squad(view: &SquadView) -> SquadDecision {
-    let focus = select_focus_target(view.hostiles, view.structures);
+    // Our focusable single-target output (melee + ranged) over living members — feeds the EV focus
+    // pick's kill-inequality (is a target out-healed?) and ttk ranking (ADR 0020 §4.2 / §8.2).
+    let our_dps: u32 = view.members.iter().filter(|m| m.hits > 0).map(|m| m.melee_power + m.ranged_power).sum();
+    let focus = select_focus_target(view.hostiles, view.structures, our_dps);
     let engaged_or_moving = if focus.is_some() {
         SquadOrderState::Engaged
     } else {
@@ -1247,32 +1299,64 @@ mod tests {
         }
     }
 
-    // ── select_focus_target ─────────────────────────────────────────────
+    // ── select_focus_target — EV target selection (ADR 0020 §4.2) ────────
     #[test]
-    fn focus_prefers_healer_then_lowest_hits_then_structures() {
-        let healer = creep(2, 30, 30, 500, &[(Part::Heal, 5)]);
+    fn focus_ev_skips_an_out_healed_healer_for_a_killable_attacker() {
+        // The bait: a LOW-HITS healer (the old unconditional "kill healer first" pick) that is
+        // out-healed by an adjacent second healer (180 heal/tick > our 100 DPS → net 0, unkillable).
+        // EV discards it and picks the exposed, killable attacker instead — no wasted fire.
+        let c1 = creep(2, 30, 30, 200, &[(Part::Heal, 5)]); // low hits, but...
+        let c2 = creep(3, 30, 31, 1000, &[(Part::Heal, 10)]); // ...adjacent → heals c1 120/tick (+self 60)
+        let attacker = creep(1, 10, 10, 300, &[(Part::Attack, 3)]); // far, unhealed → killable
+        let f = select_focus_target(&[c1, c2, attacker], &[], 100).unwrap();
+        assert_eq!(f.id, Some(raw(1)), "skips the out-healed healer, kills the exposed attacker");
+    }
+
+    #[test]
+    fn focus_ev_skips_a_rampart_shielded_target() {
+        // A low-hits target on a hostile rampart is shielded (our fire redirects to the rampart) →
+        // EV skips it for the unshielded one, even though the shielded one has fewer hits.
+        let shielded = creep(1, 25, 25, 100, &[(Part::Attack, 1)]);
+        let exposed = creep(2, 26, 25, 300, &[(Part::Attack, 1)]);
+        let ramparts = vec![structure(25, 25, StructureType::Rampart, Ownership::Hostile)];
+        let f = select_focus_target(&[shielded, exposed], &ramparts, 200).unwrap();
+        assert_eq!(f.id, Some(raw(2)), "the rampart-shielded creep is unkillable by direct fire");
+    }
+
+    #[test]
+    fn focus_ev_maximizes_threat_per_ttk_not_just_lowest_hits() {
+        // A: 1 ATTACK, 100 hits → threat 30, ttk 1 (ev 30). B: 5 ATTACK, 300 hits → threat 150,
+        // ttk 3 (ev 50). EV picks B (more enemy capability removed per tick) over the lower-hits A.
+        let a = creep(1, 10, 10, 100, &[(Part::Attack, 1)]);
+        let b = creep(2, 40, 40, 300, &[(Part::Attack, 5)]);
+        let f = select_focus_target(&[a, b], &[], 100).unwrap();
+        assert_eq!(f.id, Some(raw(2)), "threat/ttk beats raw lowest-hits");
+    }
+
+    #[test]
+    fn focus_ev_fallbacks() {
+        // No offense (our_dps 0) ⇒ nothing is "killable" ⇒ best-effort lowest-hits unshielded creep.
         let weak = creep(1, 20, 20, 100, &[(Part::Attack, 1)]);
-        assert_eq!(select_focus_target(&[weak.clone(), healer.clone()], &[]).unwrap().id, healer.id);
-        // No healer → lowest hits.
-        let strong = creep(3, 40, 40, 400, &[(Part::Attack, 5)]);
-        assert_eq!(select_focus_target(&[strong, weak.clone()], &[]).unwrap().id, weak.id);
+        let strong = creep(2, 40, 40, 400, &[(Part::Attack, 5)]);
+        assert_eq!(select_focus_target(&[strong, weak.clone()], &[], 0).unwrap().id, Some(raw(1)));
         // No hostiles → InvaderCore beats spawn/tower; my/neutral excluded.
         let structs = vec![
             structure(10, 10, StructureType::Tower, Ownership::Hostile),
             structure(11, 11, StructureType::InvaderCore, Ownership::Hostile),
             structure(12, 12, StructureType::Spawn, Ownership::Mine),
         ];
-        let t = select_focus_target(&[], &structs).unwrap();
+        let t = select_focus_target(&[], &structs, 100).unwrap();
         assert_eq!((t.pos, t.id), (pos(11, 11), None));
-        assert_eq!(select_focus_target(&[], &[]), None);
+        assert_eq!(select_focus_target(&[], &[], 100), None);
     }
 
     #[test]
     fn dead_heal_part_is_not_a_healer() {
         let mut faux = creep(1, 20, 20, 600, &[(Part::Heal, 1), (Part::Move, 5)]); // 600 hits
         faux.body[0].hits = 0; // its only HEAL part is destroyed → not a healer
-        let weak = creep(2, 30, 30, 150, &[(Part::Attack, 5)]); // genuinely lower hits
-        assert_eq!(select_focus_target(&[faux, weak.clone()], &[]).unwrap().id, weak.id);
+        let weak = creep(2, 30, 30, 150, &[(Part::Attack, 5)]); // genuinely lower hits + real threat
+        // EV: the dead HEAL part contributes no heal threat; the armed `weak` is the higher threat/ttk kill.
+        assert_eq!(select_focus_target(&[faux, weak.clone()], &[], 100).unwrap().id, weak.id);
     }
 
     // ── decide_combat: ordered path ─────────────────────────────────────
