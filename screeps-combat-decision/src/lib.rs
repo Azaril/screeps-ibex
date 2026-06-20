@@ -873,6 +873,27 @@ fn member_positions(members: &[SquadMemberView]) -> Vec<Position> {
     members.iter().filter_map(|m| m.pos).collect()
 }
 
+/// A threat's plain-terrain fatigue cadence — ticks it spends to step one tile (ADR 0019 Stage 2,
+/// the reachability seed speed). Engine model: a step adds `weight × 2` fatigue (plain rate), a tick
+/// clears `2 × move`, so ticks/step = ceil(weight / move). `weight` = working non-MOVE parts (combat
+/// bodies don't carry, so every other part generates fatigue). `None` ⇒ no working MOVE → immobile,
+/// not a chaser (Guard 5: seeds no reachability wave).
+fn threat_step_ticks(c: &CombatCreepDto) -> Option<u32> {
+    let mut move_parts = 0u32;
+    let mut weight = 0u32;
+    for bp in &c.body {
+        if bp.hits == 0 {
+            continue;
+        }
+        if bp.part == Part::Move {
+            move_parts += 1;
+        } else {
+            weight += 1;
+        }
+    }
+    (move_parts > 0).then(|| weight.div_ceil(move_parts).max(1))
+}
+
 /// Hostiles a kiting block must price for safety: melee-capable threats (incl. keepers, which carry
 /// both) are kept beyond melee (reach 2 → kite to range 3, still shootable); ranged-only threats get
 /// reach 0 (a ranged squad trades at range, it can't out-kite an equal-range threat — the value term
@@ -890,6 +911,7 @@ fn kite_threats(hostiles: &[CombatCreepDto]) -> Vec<kite::KiteThreat> {
                 pos: c.pos,
                 kind: if melee { kite::ThreatKind::MeleeOnly } else { kite::ThreatKind::Ranged },
                 reach: if melee { 2 } else { 0 },
+                step_ticks: threat_step_ticks(c),
             })
         })
         .collect()

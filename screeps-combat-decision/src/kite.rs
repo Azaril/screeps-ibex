@@ -12,7 +12,7 @@
 
 use screeps::local::{LocalCostMatrix, RoomXY};
 use screeps::{Position, RoomName};
-use screeps_rover::LocalPathfinder;
+use screeps_rover::{LocalPathfinder, ReachSource, ReachabilityMap};
 
 /// Op budget for the per-squad kite search — a local ~window flood, not a full-room path. Bounded
 /// so it costs ~one cheap search per squad per kiting tick (and degrades gracefully on exhaustion).
@@ -35,6 +35,10 @@ pub struct KiteThreat {
     /// Danger reach (tiles): stand beyond this. Melee kiters keep ~3 from a melee-only chaser;
     /// ranged threats reach ~3.
     pub reach: u32,
+    /// Fatigue cadence: ticks this threat spends to step one tile on plain terrain (`>=1`; lower =
+    /// faster). `None` ⇒ immobile (no working MOVE) → not a chaser, so it seeds no reachability wave
+    /// (ADR 0019 Guard 5), though it still contributes present danger via `reach`.
+    pub step_ticks: Option<u32>,
 }
 
 /// A hostile tower (its damage falls off with range — see the engine's
@@ -52,6 +56,10 @@ pub struct KiteScoreParams {
     pub w_cohesion: f32,
     pub w_value: f32,
     pub w_openness: f32,
+    /// Weight of the **future-threat** term (ADR 0019 Stage 2): penalize tiles a mobile chaser will
+    /// reach SOON (low ticks-to-reach), so the kiter favors positions with durable standoff instead
+    /// of ones safe only this tick. Scaled per-tile by `max(0, FUTURE_HORIZON - ticks_to_reach)`.
+    pub w_future: f32,
     /// Cohesion radius K: beyond this distance from the centroid the penalty steepens (×3/tile).
     pub max_cohesion_radius: u32,
 }
@@ -63,10 +71,17 @@ impl Default for KiteScoreParams {
             w_cohesion: 10.0,
             w_value: 3.0,
             w_openness: 1.0,
+            // Below cohesion (don't scatter) but above value/openness: durable standoff matters more
+            // than keeping the focus shootable, less than staying with the squad. Tuned by EXP-*.
+            w_future: 5.0,
             max_cohesion_radius: 2,
         }
     }
 }
+
+/// How many ticks ahead the future-threat term looks: a tile a chaser reaches in `>= FUTURE_HORIZON`
+/// ticks is "far enough" and gets no future penalty; nearer arrivals scale up linearly.
+pub const FUTURE_HORIZON: u32 = 5;
 
 /// The squad's kite-scoring context — its centroid (cohesion anchor), the threats/towers to avoid,
 /// and the shared focus the value term keeps shootable.
@@ -80,12 +95,16 @@ pub struct SquadKiteView<'a> {
 }
 
 /// Cost of the squad standing its block on `tile` — **LOWER is better** (composes directly with
-/// rover's min-scored search). Sums four weighted penalties:
+/// rover's min-scored search). Sums five weighted penalties:
 /// - **SAFETY:** inside a threat's `reach` (worse the deeper) + tower DPS at this range;
+/// - **FUTURE:** how soon a mobile chaser reaches this tile (`reach` optional map; ADR 0019 Stage 2);
 /// - **COHESION:** Chebyshev distance from the centroid, steepening ×3/tile past `max_cohesion_radius`;
 /// - **VALUE:** the focus being beyond shooting range 3;
 /// - **OPENNESS:** fewer walkable neighbours (0–8, supplied from the cost matrix) → nearer a dead-end.
-pub fn score_tile(view: &SquadKiteView, tile: Position, walkable_neighbors: u8) -> i64 {
+///
+/// `reach` is the shared per-room reachability map (built once by [`plan_kite_anchor`]); `None` ⇒ the
+/// future term is omitted (byte-identical to the pre-Stage-2 four-term score).
+pub fn score_tile(view: &SquadKiteView, tile: Position, walkable_neighbors: u8, reach: Option<&ReachabilityMap>) -> i64 {
     let p = &view.params;
 
     // SAFETY — being within a threat's danger reach (deeper = worse), plus tower DPS here.
@@ -103,6 +122,20 @@ pub fn score_tile(view: &SquadKiteView, tile: Position, walkable_neighbors: u8) 
         // bit-identity proof over all in-room ranges).
         safety += screeps_combat_engine::damage::tower_attack_damage_at_range(r) as f32 / 150.0;
     }
+
+    // FUTURE — a tile a mobile chaser reaches soon offers no durable standoff; penalize low
+    // ticks-to-reach (linearly within FUTURE_HORIZON). Avoids "safe this tick, caught the next".
+    let future = match reach {
+        Some(map) => {
+            let ttr = map.ticks_xy(tile.x().u8(), tile.y().u8());
+            if ttr < FUTURE_HORIZON {
+                (FUTURE_HORIZON - ttr) as f32
+            } else {
+                0.0
+            }
+        }
+        None => 0.0,
+    };
 
     // COHESION — distance from the centroid, steepening past K so the block doesn't string out.
     let d = tile.get_range_to(view.centroid);
@@ -128,7 +161,8 @@ pub fn score_tile(view: &SquadKiteView, tile: Position, walkable_neighbors: u8) 
     // OPENNESS — penalize dead-ends (few walkable neighbours).
     let openness = (8 - walkable_neighbors.min(8)) as f32;
 
-    (p.w_safety * safety + p.w_cohesion * cohesion + p.w_value * value + p.w_openness * openness).round() as i64
+    (p.w_safety * safety + p.w_future * future + p.w_cohesion * cohesion + p.w_value * value + p.w_openness * openness)
+        .round() as i64
 }
 
 /// A planned kite/flee goal for the whole squad — the single tile every in-cohesion member targets.
@@ -156,10 +190,14 @@ fn walkable_neighbors(cm: &LocalCostMatrix, tile: Position) -> u8 {
 }
 
 /// Plan ONE kite/flee goal for the whole squad: a single bounded `LocalPathfinder::search_scored`
-/// from the centroid, pricing each reached tile with [`score_tile`] (safety + cohesion + value +
-/// openness). `None` ⇒ holding the centroid is already optimal (members hold/shoot). This is the
-/// squad's ONE bounded search per kiting tick (members reuse the goal via their own move request) —
-/// combat supplies the pricing, rover owns the search (the no-one-off-pathfinding rule).
+/// from the centroid, pricing each reached tile with [`score_tile`] (safety + future-threat +
+/// cohesion + value + openness). `None` ⇒ holding the centroid is already optimal (members
+/// hold/shoot). This is the squad's ONE bounded search per kiting tick (members reuse the goal via
+/// their own move request) — combat supplies the pricing, rover owns the search (no one-off rule).
+///
+/// First builds the shared per-room **reachability map** (ADR 0019 Stage 2) — one multi-source flood
+/// seeded by the mobile chasers (`step_ticks.is_some()`) — so the future-threat term can prefer tiles
+/// with durable standoff. Both the flood and the goal search run over the *same* matrix, live and sim.
 ///
 /// `room_callback` supplies the room's movement cost matrix (terrain walls baked in): the **same**
 /// `LocalPathfinder` runs live and in the sim — only the matrix source differs (the live
@@ -172,7 +210,16 @@ pub fn plan_kite_anchor(
 ) -> Option<KitePlan> {
     let room = view.centroid.room_name();
     let matrix = room_callback(room)?;
-    let cost = |tile: Position| -> i64 { score_tile(view, tile, walkable_neighbors(&matrix, tile)) };
+    // Reachability seeds = the mobile chasers only (ADR 0019 Guard 5: an immobile threat seeds no
+    // wave). Built once, shared across every priced tile in the search below.
+    let sources: Vec<ReachSource> = view
+        .threats
+        .iter()
+        .filter_map(|t| t.step_ticks.map(|st| ReachSource { pos: t.pos, step_ticks: st }))
+        .collect();
+    let mut reach_cb = |_r: RoomName| Some(matrix.clone());
+    let reach = (!sources.is_empty()).then(|| LocalPathfinder.reachability_from(&sources, room, &mut reach_cb, max_ops));
+    let cost = |tile: Position| -> i64 { score_tile(view, tile, walkable_neighbors(&matrix, tile), reach.as_ref()) };
     // Feed the search the already-fetched matrix (so the openness lookup + the search agree).
     let mut cb = |_r: RoomName| Some(matrix.clone());
     let result = LocalPathfinder.search_scored(view.centroid, &mut cb, max_ops, 1, &cost);
@@ -205,7 +252,7 @@ mod tests {
         SquadKiteView { centroid, threats, towers, focus, params: KiteScoreParams::default() }
     }
     fn melee(x: u8, y: u8, reach: u32) -> KiteThreat {
-        KiteThreat { pos: pos(x, y), kind: ThreatKind::MeleeOnly, reach }
+        KiteThreat { pos: pos(x, y), kind: ThreatKind::MeleeOnly, reach, step_ticks: Some(1) }
     }
 
 
@@ -215,8 +262,8 @@ mod tests {
         let threats = [melee(25, 25, 3)];
         let v = view(c, &threats, &[], None);
         // Outside reach (range 4) vs inside (range 1): inside is worse.
-        let outside = score_tile(&v, pos(29, 25), 8);
-        let inside = score_tile(&v, pos(26, 25), 8);
+        let outside = score_tile(&v, pos(29, 25), 8, None);
+        let inside = score_tile(&v, pos(26, 25), 8, None);
         assert!(inside > outside, "inside reach must cost more: in={inside} out={outside}");
     }
 
@@ -224,10 +271,10 @@ mod tests {
     fn cohesion_penalizes_distance_and_steepens_past_k() {
         let c = pos(25, 25);
         let v = view(c, &[], &[], None);
-        let d1 = score_tile(&v, pos(26, 25), 8); // d=1 (<=K)
-        let d2 = score_tile(&v, pos(27, 25), 8); // d=2 (==K)
-        let d3 = score_tile(&v, pos(28, 25), 8); // d=3 (>K, steepened)
-        let d4 = score_tile(&v, pos(29, 25), 8); // d=4 (>K)
+        let d1 = score_tile(&v, pos(26, 25), 8, None); // d=1 (<=K)
+        let d2 = score_tile(&v, pos(27, 25), 8, None); // d=2 (==K)
+        let d3 = score_tile(&v, pos(28, 25), 8, None); // d=3 (>K, steepened)
+        let d4 = score_tile(&v, pos(29, 25), 8, None); // d=4 (>K)
         assert!(d1 < d2 && d2 < d3 && d3 < d4, "monotonic in distance");
         // The marginal cost past K (d2→d3) exceeds the marginal cost within K (d1→d2).
         assert!((d3 - d2) > (d2 - d1), "cohesion penalty steepens past K");
@@ -239,8 +286,8 @@ mod tests {
         let focus = pos(25, 30);
         let v = view(c, &[], &[], Some(focus));
         // Both equidistant from the centroid (d=3); A keeps the focus in range 3, B does not.
-        let in_range = score_tile(&v, pos(25, 28), 8); // range to focus = 2
-        let out_range = score_tile(&v, pos(25, 22), 8); // range to focus = 8
+        let in_range = score_tile(&v, pos(25, 28), 8, None); // range to focus = 2
+        let out_range = score_tile(&v, pos(25, 22), 8, None); // range to focus = 8
         assert!(in_range < out_range, "keeping the focus shootable is preferred: in={in_range} out={out_range}");
     }
 
@@ -248,8 +295,8 @@ mod tests {
     fn openness_avoids_dead_ends() {
         let c = pos(25, 25);
         let v = view(c, &[], &[], None);
-        let open = score_tile(&v, pos(26, 25), 8); // 8 walkable neighbours
-        let pocket = score_tile(&v, pos(26, 25), 1); // 1 walkable neighbour (dead-end)
+        let open = score_tile(&v, pos(26, 25), 8, None); // 8 walkable neighbours
+        let pocket = score_tile(&v, pos(26, 25), 1, None); // 1 walkable neighbour (dead-end)
         assert!(pocket > open, "a dead-end pocket costs more");
     }
 
@@ -259,10 +306,32 @@ mod tests {
         let threats = [melee(25, 25, 3)];
         let v = view(c, &threats, &[], None);
         // A: safe (range 4 from the threat) but far from the centroid (d=5).
-        let safe_far = score_tile(&v, pos(30, 25), 8);
+        let safe_far = score_tile(&v, pos(30, 25), 8, None);
         // B: in the threat's reach (range 1) but right next to the centroid (d=1).
-        let danger_close = score_tile(&v, pos(26, 25), 8);
+        let danger_close = score_tile(&v, pos(26, 25), 8, None);
         assert!(safe_far < danger_close, "safety outweighs cohesion: safe_far={safe_far} danger_close={danger_close}");
+    }
+
+    // ── future-threat term (ADR 0019 Stage 2 reachability folding) ──
+    #[test]
+    fn future_term_prefers_tiles_a_chaser_reaches_later() {
+        // Two tiles equidistant from the centroid and outside any present reach, but one is closer in
+        // TICKS to a fast chaser than the other. The future term makes the soon-reached tile cost more
+        // (durable standoff is preferred), with no present-threat/tower/focus terms to confound it.
+        let mut cb = |_r| Some(LocalCostMatrix::new());
+        let chaser = pos(20, 25);
+        let room: RoomName = "W1N1".parse().unwrap();
+        let reach = LocalPathfinder.reachability_from(&[ReachSource { pos: chaser, step_ticks: 1 }], room, &mut cb, 2000);
+        let c = pos(25, 25);
+        let v = view(c, &[], &[], None);
+        let near_in_time = score_tile(&v, pos(24, 25), 8, Some(&reach)); // 4 tiles → ttr 4 (< horizon)
+        let far_in_time = score_tile(&v, pos(26, 25), 8, Some(&reach)); // 6 tiles → ttr 6 (>= horizon)
+        assert!(
+            near_in_time > far_in_time,
+            "the tile the chaser reaches sooner costs more: near={near_in_time} far={far_in_time}"
+        );
+        // With no reachability map the two are equal (future term omitted → byte-identical to pre-Stage-2).
+        assert_eq!(score_tile(&v, pos(24, 25), 8, None), score_tile(&v, pos(26, 25), 8, None));
     }
 
     // ── plan_kite_anchor (one bounded search per squad) ─────────────────
