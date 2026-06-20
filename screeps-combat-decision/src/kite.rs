@@ -60,6 +60,12 @@ pub struct KiteScoreParams {
     /// reach SOON (low ticks-to-reach), so the kiter favors positions with durable standoff instead
     /// of ones safe only this tick. Scaled per-tile by `max(0, FUTURE_HORIZON - ticks_to_reach)`.
     pub w_future: f32,
+    /// Weight of the **focus-engagement reward** (ADR 0019 Stage 3b): a tile within weapon range of
+    /// the focus is rewarded (negative cost) so an ENGAGE objective commits to dealing damage. With
+    /// the safety term pulling the other way, the OBJECTIVE WEIGHTS decide which wins — so *flee*
+    /// (`default`/kite: this is 0, safety dominates) and *stand/close* (`engage`: this dominates)
+    /// emerge from one scorer. 0 ⇒ byte-identical to the pre-Stage-3b kite score.
+    pub w_focus_dmg: f32,
     /// Cohesion radius K: beyond this distance from the centroid the penalty steepens (×3/tile).
     pub max_cohesion_radius: u32,
 }
@@ -74,6 +80,25 @@ impl Default for KiteScoreParams {
             // Below cohesion (don't scatter) but above value/openness: durable standoff matters more
             // than keeping the focus shootable, less than staying with the squad. Tuned by EXP-*.
             w_future: 5.0,
+            w_focus_dmg: 0.0, // kite/retreat does not reward engagement (safety dominates → flee)
+            max_cohesion_radius: 2,
+        }
+    }
+}
+
+impl KiteScoreParams {
+    /// The **engage** preset (ADR 0019 Stage 3b): the SAME scorer, reweighted to *stand and fight*
+    /// rather than flee. Safety still matters but no longer dominates; the focus-engagement reward
+    /// dominates (commit to dealing damage), and the future-threat (kite-away) term is off. These are
+    /// *seeds* — the EXP-* sim loop is the only sanctioned tuner.
+    pub fn engage() -> Self {
+        Self {
+            w_safety: 50.0,
+            w_cohesion: 10.0,
+            w_value: 10.0,
+            w_openness: 1.0,
+            w_future: 0.0,
+            w_focus_dmg: 200.0,
             max_cohesion_radius: 2,
         }
     }
@@ -218,7 +243,16 @@ pub fn score_tile(view: &SquadKiteView, tile: Position, walkable_neighbors: u8, 
     // OPENNESS — penalize dead-ends (few walkable neighbours).
     let openness = (8 - walkable_neighbors.min(8)) as f32;
 
-    (p.w_safety * safety + p.w_future * future + p.w_cohesion * cohesion + p.w_value * value + p.w_openness * openness)
+    // FOCUS-ENGAGEMENT — a REWARD (negative cost) for being in weapon range of the focus, so an
+    // ENGAGE objective commits to dealing damage. Weighted 0 for kite/retreat (safety → flee); high
+    // for engage (→ stand and fight). The flip between flee and stand is purely these weights.
+    let focus_dmg = match view.focus {
+        Some(f) if tile.get_range_to(f) <= 3 => 1.0,
+        _ => 0.0,
+    };
+
+    (p.w_safety * safety + p.w_future * future + p.w_cohesion * cohesion + p.w_value * value + p.w_openness * openness
+        - p.w_focus_dmg * focus_dmg)
         .round() as i64
 }
 
@@ -423,6 +457,32 @@ mod tests {
             score_tile(&v, open, 8, &KiteFields::default()),
             score_tile(&v, open, 8, &KiteFields { threat_reach: None, cohesion_dist: Some(open_dist) }),
             "open-terrain g-cost equals Chebyshev"
+        );
+    }
+
+    // ── unified objective: flee vs stand emerge from the weights (ADR 0019 Stage 3b) ──
+    #[test]
+    fn objective_weights_flip_flee_versus_stand() {
+        // ONE scorer, two weight presets. Tile A is in weapon range of the focus but inside a melee
+        // threat's reach; tile B is safe but out of the focus's range. The KITE preset prefers B
+        // (flee — safety dominates); the ENGAGE preset prefers A (stand and fight — focus-damage
+        // dominates). The flip is purely the objective weights.
+        let centroid = pos(25, 25);
+        let focus = pos(28, 25);
+        let threats = [melee(27, 25, 3)]; // melee, reach 3, between the squad and the focus
+        let a = pos(26, 25); // range 2 to focus (in range), range 1 to the threat (inside reach)
+        let b = pos(22, 25); // range 6 to focus (out of range), range 5 to the threat (safe)
+
+        let kite = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), params: KiteScoreParams::default() };
+        assert!(
+            score_tile(&kite, b, 8, &KiteFields::default()) < score_tile(&kite, a, 8, &KiteFields::default()),
+            "kite prefers the safe tile B (flee)"
+        );
+
+        let engage = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), params: KiteScoreParams::engage() };
+        assert!(
+            score_tile(&engage, a, 8, &KiteFields::default()) < score_tile(&engage, b, 8, &KiteFields::default()),
+            "engage prefers the in-range tile A (stand and fight)"
         );
     }
 
