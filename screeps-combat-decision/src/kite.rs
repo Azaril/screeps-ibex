@@ -18,6 +18,77 @@ use screeps_rover::{LocalPathfinder, ReachSource, ReachabilityMap};
 /// so it costs ~one cheap search per squad per kiting tick (and degrades gracefully on exhaustion).
 pub const MAX_KITE_OPS: u32 = 400;
 
+/// Survival-veto horizon (ADR 0019 Guard 4): a tile is *lethal* — and rejected as a goal — if the net
+/// incoming damage there would kill the squad's most-fragile member in fewer than this many ticks
+/// (`net * H_MIN > fragile_hits`). Even an ENGAGE objective never positions onto a suicide tile.
+pub const SURVIVAL_HORIZON: i32 = 3;
+/// Cost added to a tile that fails the survival veto — large enough to dominate any normal score so a
+/// lethal tile is only chosen when every reachable tile is lethal (best-effort least-bad fallback).
+const LETHAL_TILE_PENALTY: i64 = 1_000_000_000;
+
+const FIELD_DIM: usize = 50;
+fn field_idx(x: u8, y: u8) -> usize {
+    x as usize * FIELD_DIM + y as usize
+}
+
+/// The per-(room, tick) **integer threat field** (ADR 0019 §2.1, Stage 3b): raw incoming hits/tick a
+/// creep would take standing on each tile, from enemy creeps (melee stamped over range 1, ranged over
+/// range 3) and towers (range falloff). All `i32` — powers are integer engine constants, so the field
+/// is exact + order-independent. A *layer* in [`PositionLayers`], built once and read by the survival
+/// veto + (next) the normalized safety term — shared across every position consumer this tick.
+///
+/// v1 stamps **unboosted** output (working ATTACK×30 / RANGED_ATTACK×10 / tower falloff) and does NOT
+/// model boosted-TOUGH damage reduction (a lategame follow-up needing the boost field) — correct for
+/// the common unboosted case, conservative (over-counts) for a boosted TOUGH defender.
+pub struct ThreatField {
+    dmg: Box<[i32; FIELD_DIM * FIELD_DIM]>,
+}
+
+impl ThreatField {
+    /// Stamp the field from the threats' weapon output + the towers' falloff (pure geometry — Screeps
+    /// ranged/tower damage needs range, not line-of-sight, so walls don't gate it).
+    pub fn build(threats: &[KiteThreat], towers: &[KiteTower]) -> Self {
+        let mut dmg = Box::new([0i32; FIELD_DIM * FIELD_DIM]);
+        let stamp = |dmg: &mut [i32; FIELD_DIM * FIELD_DIM], cx: i32, cy: i32, range: i32, power: i32| {
+            for x in (cx - range).max(0)..=(cx + range).min(FIELD_DIM as i32 - 1) {
+                for y in (cy - range).max(0)..=(cy + range).min(FIELD_DIM as i32 - 1) {
+                    dmg[field_idx(x as u8, y as u8)] += power;
+                }
+            }
+        };
+        for t in threats {
+            let (tx, ty) = (t.pos.x().u8() as i32, t.pos.y().u8() as i32);
+            if t.attack_power > 0 {
+                stamp(&mut dmg, tx, ty, 1, t.attack_power as i32);
+            }
+            if t.ranged_power > 0 {
+                stamp(&mut dmg, tx, ty, 3, t.ranged_power as i32);
+            }
+        }
+        // Tower falloff is range-only → a per-range LUT (computed once) makes each of the per-tower
+        // whole-room stamps an array read instead of a function call + clamp.
+        if !towers.is_empty() {
+            let lut: [i32; FIELD_DIM] =
+                std::array::from_fn(|r| screeps_combat_engine::damage::tower_attack_damage_at_range(r as u32) as i32);
+            for tw in towers {
+                let (wx, wy) = (tw.pos.x().u8() as i32, tw.pos.y().u8() as i32);
+                for x in 0..FIELD_DIM as i32 {
+                    for y in 0..FIELD_DIM as i32 {
+                        let r = (x - wx).abs().max((y - wy).abs()) as usize;
+                        dmg[field_idx(x as u8, y as u8)] += lut[r];
+                    }
+                }
+            }
+        }
+        Self { dmg }
+    }
+
+    /// Raw incoming hits/tick at `tile`.
+    pub fn raw_at(&self, tile: Position) -> i32 {
+        self.dmg[field_idx(tile.x().u8(), tile.y().u8())]
+    }
+}
+
 /// How a hostile threatens a tile — drives the safety "danger reach".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThreatKind {
@@ -39,6 +110,10 @@ pub struct KiteThreat {
     /// faster). `None` ⇒ immobile (no working MOVE) → not a chaser, so it seeds no reachability wave
     /// (ADR 0019 Guard 5), though it still contributes present danger via `reach`.
     pub step_ticks: Option<u32>,
+    /// Melee attack output (working ATTACK parts × power) — stamped over range 1 into the [`ThreatField`].
+    pub attack_power: u32,
+    /// Ranged attack output (working RANGED_ATTACK parts × power) — stamped over range 3.
+    pub ranged_power: u32,
 }
 
 /// A hostile tower (its damage falls off with range — see the engine's
@@ -132,13 +207,15 @@ pub struct KiteFields<'a> {
 /// separate centroid flood). (Stage 3b adds the integer threat field + focus-damage layers here.)
 pub struct PositionLayers {
     threat_reach: Option<ReachabilityMap>,
+    threat_field: ThreatField,
 }
 
 impl PositionLayers {
-    /// Build the layers once for a squad facing `threats`, over the room's cost matrix. Use-agnostic
-    /// (only the shared inputs) so the attack-positioning path reuses the exact same instance. The
-    /// threat flood is the Stage-2 map, unchanged — so a kite plan over it is byte-identical.
-    pub fn build(threats: &[KiteThreat], room: RoomName, matrix: &LocalCostMatrix, max_ops: u32) -> Self {
+    /// Build the layers once for a squad facing `threats` (+ `towers`), over the room's cost matrix.
+    /// Use-agnostic (only the shared inputs) so the attack-positioning path reuses the exact same
+    /// instance: the reachability flood (future-threat) + the integer [`ThreatField`] (incoming hits)
+    /// are built once and read by every consumer this tick.
+    pub fn build(threats: &[KiteThreat], towers: &[KiteTower], room: RoomName, matrix: &LocalCostMatrix, max_ops: u32) -> Self {
         let mut cb = |_r: RoomName| Some(matrix.clone());
         // THREAT reachability: mobile chasers only (Guard 5 — an immobile threat seeds no wave).
         let sources: Vec<ReachSource> = threats
@@ -147,7 +224,13 @@ impl PositionLayers {
             .collect();
         let threat_reach =
             (!sources.is_empty()).then(|| LocalPathfinder.reachability_from(&sources, room, &mut cb, max_ops));
-        Self { threat_reach }
+        let threat_field = ThreatField::build(threats, towers);
+        Self { threat_reach, threat_field }
+    }
+
+    /// The shared integer threat field (incoming hits/tile) — the survival-veto + safety input.
+    pub fn threat_field(&self) -> &ThreatField {
+        &self.threat_field
     }
 
     /// The shared threat-reachability layer (the future-threat input).
@@ -172,6 +255,10 @@ pub struct SquadKiteView<'a> {
     /// Shared focus position; the value term keeps it within shooting range 3.
     pub focus: Option<Position>,
     pub params: KiteScoreParams,
+    /// Hits of the squad's most-fragile member (ADR 0019 #2/#4) — the survival veto's denominator.
+    pub fragile_hits: u32,
+    /// The squad's total heal output per tick — the sustain subtracted from incoming for the veto.
+    pub squad_heal: u32,
 }
 
 /// Cost of the squad standing its block on `tile` — **LOWER is better** (composes directly with
@@ -304,12 +391,29 @@ pub fn plan_kite_anchor(
     // Build the per-(room,tick) cached layers ONCE (ADR 0019 Stage 3a/3b): just the THREAT flood now
     // — cohesion comes free from the search's own `g` below (Stage 3b flood-dedup). A future attack-
     // positioning scorer for the same squad/tick reuses this exact instance.
-    let layers = PositionLayers::build(view.threats, room, &matrix, max_ops);
+    let layers = PositionLayers::build(view.threats, view.towers, room, &matrix, max_ops);
     let threat_reach = layers.threat_reach();
+    let threat_field = layers.threat_field();
+    // SURVIVAL VETO (ADR 0019 Guard 4 / #4): a tile whose net incoming would kill the most-fragile
+    // member in < SURVIVAL_HORIZON ticks is lethal — price it astronomically so the search avoids it
+    // unless every tile is lethal (then the least-bad is the best-effort fallback). Even ENGAGE never
+    // walks onto a suicide tile. `0` fragile_hits (no members info) ⇒ veto disabled.
+    let veto = |tile: Position| -> bool {
+        if view.fragile_hits == 0 {
+            return false;
+        }
+        let net = (threat_field.raw_at(tile) - view.squad_heal as i32).max(0);
+        net > 0 && net * SURVIVAL_HORIZON > view.fragile_hits as i32
+    };
     // `g` is the search's path-cost from the centroid = the wall-aware cohesion distance for this tile.
     let cost = |tile: Position, g: u32| -> i64 {
         let fields = KiteFields { threat_reach, cohesion_dist: Some(g) };
-        score_tile(view, tile, walkable_neighbors(&matrix, tile), &fields)
+        let base = score_tile(view, tile, walkable_neighbors(&matrix, tile), &fields);
+        if veto(tile) {
+            base.saturating_add(LETHAL_TILE_PENALTY)
+        } else {
+            base
+        }
     };
     // Feed the search the already-fetched matrix (so the openness lookup + the search agree).
     let mut cb = |_r: RoomName| Some(matrix.clone());
@@ -340,10 +444,11 @@ mod tests {
         Position::new(RoomCoordinate::new(x).unwrap(), RoomCoordinate::new(y).unwrap(), room)
     }
     fn view<'a>(centroid: Position, threats: &'a [KiteThreat], towers: &'a [KiteTower], focus: Option<Position>) -> SquadKiteView<'a> {
-        SquadKiteView { centroid, threats, towers, focus, params: KiteScoreParams::default() }
+        // fragile_hits 0 ⇒ the survival veto is disabled (the term-isolation tests don't want it).
+        SquadKiteView { centroid, threats, towers, focus, params: KiteScoreParams::default(), fragile_hits: 0, squad_heal: 0 }
     }
     fn melee(x: u8, y: u8, reach: u32) -> KiteThreat {
-        KiteThreat { pos: pos(x, y), kind: ThreatKind::MeleeOnly, reach, step_ticks: Some(1) }
+        KiteThreat { pos: pos(x, y), kind: ThreatKind::MeleeOnly, reach, step_ticks: Some(1), attack_power: 30, ranged_power: 0 }
     }
 
 
@@ -473,13 +578,13 @@ mod tests {
         let a = pos(26, 25); // range 2 to focus (in range), range 1 to the threat (inside reach)
         let b = pos(22, 25); // range 6 to focus (out of range), range 5 to the threat (safe)
 
-        let kite = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), params: KiteScoreParams::default() };
+        let kite = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), params: KiteScoreParams::default(), fragile_hits: 0, squad_heal: 0 };
         assert!(
             score_tile(&kite, b, 8, &KiteFields::default()) < score_tile(&kite, a, 8, &KiteFields::default()),
             "kite prefers the safe tile B (flee)"
         );
 
-        let engage = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), params: KiteScoreParams::engage() };
+        let engage = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), params: KiteScoreParams::engage(), fragile_hits: 0, squad_heal: 0 };
         assert!(
             score_tile(&engage, a, 8, &KiteFields::default()) < score_tile(&engage, b, 8, &KiteFields::default()),
             "engage prefers the in-range tile A (stand and fight)"
@@ -494,8 +599,8 @@ mod tests {
         // the SAME cached layers — no rebuild, just different weights.
         let matrix = LocalCostMatrix::new();
         let centroid = pos(25, 25);
-        let threats = [KiteThreat { pos: pos(22, 25), kind: ThreatKind::MeleeOnly, reach: 2, step_ticks: Some(1) }];
-        let layers = PositionLayers::build(&threats, centroid.room_name(), &matrix, MAX_KITE_OPS);
+        let threats = [KiteThreat { pos: pos(22, 25), kind: ThreatKind::MeleeOnly, reach: 2, step_ticks: Some(1), attack_power: 30, ranged_power: 0 }];
+        let layers = PositionLayers::build(&threats, &[], centroid.room_name(), &matrix, MAX_KITE_OPS);
         let fields = layers.fields();
         // The cache holds the shared threat-reachability layer (a mobile chaser is present).
         assert!(fields.threat_reach.is_some(), "the threat layer is built once and shared");
@@ -504,7 +609,7 @@ mod tests {
         let kite = view(centroid, &threats, &[], None); // default weights (w_future = 5)
         let mut attack_params = KiteScoreParams::default();
         attack_params.w_future = 0.0; // a use that ignores durable-standoff
-        let attack = SquadKiteView { centroid, threats: &threats, towers: &[], focus: None, params: attack_params };
+        let attack = SquadKiteView { centroid, threats: &threats, towers: &[], focus: None, params: attack_params, fragile_hits: 0, squad_heal: 0 };
 
         let kite_score = score_tile(&kite, tile, 8, &fields);
         let attack_score = score_tile(&attack, tile, 8, &fields);
@@ -525,6 +630,35 @@ mod tests {
         let plan = plan_kite_anchor(&v, &mut cb, MAX_KITE_OPS).expect("a safer tile than the centroid exists");
         assert!(plan.goal.get_range_to(pos(24, 25)) > 3, "escapes the melee reach: {:?}", plan.goal);
         assert!(plan.goal.get_range_to(centroid) <= 6, "stays near the squad (cohesion in the score): {:?}", plan.goal);
+    }
+
+    // ── ThreatField (ADR 0019 Stage 3b richer layer) + survival veto (#4) ──
+    #[test]
+    fn threat_field_stamps_creep_footprints_and_tower_falloff() {
+        let melee_t = KiteThreat { pos: pos(10, 10), kind: ThreatKind::MeleeOnly, reach: 1, step_ticks: Some(1), attack_power: 30, ranged_power: 0 };
+        let ranged_t = KiteThreat { pos: pos(30, 30), kind: ThreatKind::Ranged, reach: 3, step_ticks: Some(1), attack_power: 0, ranged_power: 70 };
+        let tf = ThreatField::build(&[melee_t, ranged_t], &[]);
+        assert_eq!(tf.raw_at(pos(11, 10)), 30, "melee threatens range 1");
+        assert_eq!(tf.raw_at(pos(12, 10)), 0, "outside melee range 1");
+        assert_eq!(tf.raw_at(pos(33, 30)), 70, "ranged threatens range 3");
+        assert_eq!(tf.raw_at(pos(34, 30)), 0, "outside ranged range 3");
+
+        let twf = ThreatField::build(&[], &[KiteTower { pos: pos(25, 25) }]);
+        assert_eq!(twf.raw_at(pos(25, 25)), 600, "tower full damage at its own tile");
+        assert_eq!(twf.raw_at(pos(25, 45)), 150, "tower min damage at range 20");
+    }
+
+    #[test]
+    fn survival_veto_flees_a_lethal_ranged_zone() {
+        // A fragile squad (200 hits) vs a strong ranged threat with reach 0 (so the normal safety term
+        // does NOT push it away — ranged threats get reach 0). Only the survival veto (from the actual-
+        // hits field: 100/tick × 3 = 300 > 200 → lethal within range 3) drives it outside the kill zone.
+        let mut cb = |_r| Some(LocalCostMatrix::new());
+        let centroid = pos(25, 25);
+        let threat = KiteThreat { pos: pos(25, 25), kind: ThreatKind::Ranged, reach: 0, step_ticks: Some(1), attack_power: 0, ranged_power: 100 };
+        let v = SquadKiteView { centroid, threats: &[threat], towers: &[], focus: None, params: KiteScoreParams::default(), fragile_hits: 200, squad_heal: 0 };
+        let plan = plan_kite_anchor(&v, &mut cb, MAX_KITE_OPS).expect("a non-lethal tile exists");
+        assert!(plan.goal.get_range_to(pos(25, 25)) > 3, "fled outside the lethal ranged zone: {:?}", plan.goal);
     }
 
     #[test]

@@ -45,10 +45,10 @@ fn worst_case_threats() -> Vec<KiteThreat> {
     let ranged = [(20, 20), (30, 20), (20, 30), (30, 30), (25, 18)];
     let mut v = Vec::new();
     for &(x, y) in &melee {
-        v.push(KiteThreat { pos: pos(x, y), kind: ThreatKind::MeleeOnly, reach: 2, step_ticks: Some(1) });
+        v.push(KiteThreat { pos: pos(x, y), kind: ThreatKind::MeleeOnly, reach: 2, step_ticks: Some(1), attack_power: 300, ranged_power: 0 });
     }
     for &(x, y) in &ranged {
-        v.push(KiteThreat { pos: pos(x, y), kind: ThreatKind::Ranged, reach: 0, step_ticks: Some(1) });
+        v.push(KiteThreat { pos: pos(x, y), kind: ThreatKind::Ranged, reach: 0, step_ticks: Some(1), attack_power: 0, ranged_power: 100 });
     }
     v
 }
@@ -79,6 +79,8 @@ pub fn run_compound_worst_case(ticks: usize) -> BenchResult {
                 towers: &towers,
                 focus: None,
                 params: KiteScoreParams::default(),
+                fragile_hits: 1000, // a representative brick; exercises the survival veto path
+                squad_heal: 0,
             };
             let mut cb = |_r: RoomName| Some(matrix.clone());
             if plan_kite_anchor(&view, &mut cb, MAX_KITE_OPS).is_some() {

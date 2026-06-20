@@ -907,11 +907,14 @@ fn kite_threats(hostiles: &[CombatCreepDto]) -> Vec<kite::KiteThreat> {
             if !melee && !ranged {
                 return None;
             }
+            let working = |part: Part| c.body.iter().filter(|bp| bp.part == part && bp.hits > 0).count() as u32;
             Some(kite::KiteThreat {
                 pos: c.pos,
                 kind: if melee { kite::ThreatKind::MeleeOnly } else { kite::ThreatKind::Ranged },
                 reach: if melee { 2 } else { 0 },
                 step_ticks: threat_step_ticks(c),
+                attack_power: working(Part::Attack) * screeps_combat_engine::constants::ATTACK_POWER,
+                ranged_power: working(Part::RangedAttack) * screeps_combat_engine::constants::RANGED_ATTACK_POWER,
             })
         })
         .collect()
@@ -1077,6 +1080,10 @@ pub fn decide_squad_with_pathing(
         && decision.focus.is_some_and(|f| f.id.is_some())
         && squad_has_ranged;
 
+    // Survival-veto inputs (#2/#4): the most-fragile living member's hits + the squad's heal sustain.
+    let fragile_hits = view.members.iter().filter(|m| m.hits > 0).map(|m| m.hits).min().unwrap_or(0);
+    let squad_heal: u32 = view.members.iter().map(|m| m.heal_power).sum();
+
     if should_kite {
         let threats = kite_threats(view.hostiles);
         let towers = kite_towers(view.structures);
@@ -1086,6 +1093,8 @@ pub fn decide_squad_with_pathing(
             towers: &towers,
             focus: decision.focus.map(|f| f.pos),
             params: kite::KiteScoreParams::default(),
+            fragile_hits,
+            squad_heal,
         };
         decision.movement = match kite::plan_kite_anchor(&kite_view, room_callback, max_ops) {
             Some(plan) => SquadMovement::Kite { goal: plan.goal },
@@ -1100,6 +1109,8 @@ pub fn decide_squad_with_pathing(
             towers: &towers,
             focus: decision.focus.map(|f| f.pos),
             params: kite::KiteScoreParams::engage(),
+            fragile_hits,
+            squad_heal,
         };
         decision.movement = match kite::plan_kite_anchor(&engage_view, room_callback, max_ops) {
             // Move onto the scored engagement tile (range 0); `None` ⇒ the centroid is already the best
