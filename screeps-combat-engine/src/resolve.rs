@@ -19,8 +19,13 @@
 //! - **Safe mode** (`*.js` per-intent guard): a hostile's combat against the safe-mode owner's
 //!   objects is zeroed (the owner's own combat is not).
 //!
+//! - **Rampart redirect** (`attack.js:33-36`, `rangedAttack.js:33-36`, `towers/attack.js:27-30`,
+//!   `dismantle.js:27-29`): single-target attack/ranged/tower/dismantle on any object standing on a
+//!   rampart hits the RAMPART instead (ownership-blind; no attack-back, since the target is now a
+//!   structure). RMA is the exception — it *skips* a shielded target rather than redirecting.
+//!
 //! Structures (ramparts/walls/spawn/towers) are attack/dismantle/RMA targets with rampart
-//! RMA-shielding; towers fire (heal/repair/attack) and are themselves targetable + repairable;
+//! RMA-shielding + single-target redirect; towers fire (heal/repair/attack) and are themselves targetable + repairable;
 //! pull-based movement (rate2/rate3) is modelled. **Not yet modelled:** NPC AI, power creeps,
 //! multi-room, room-edge crossing. Tracked in `AGENTS.md`.
 
@@ -237,6 +242,15 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
         .filter(|s| s.kind == StructureKind::Rampart)
         .map(|s| (s.pos.x().u8(), s.pos.y().u8()))
         .collect();
+    // Tile → the rampart's id on it, for the single-target damage REDIRECT (engine `attack.js:33-36`,
+    // `rangedAttack.js:33-36`, `towers/attack.js:27-30`, `dismantle.js:27-29`): a single-target
+    // attack/ranged/tower/dismantle on any object standing on a rampart hits the RAMPART instead
+    // (ownership-blind). RMA is the exception — it *skips* a shielded target rather than redirecting.
+    let rampart_id_at: HashMap<(u8, u8), StructureId> = struct_snap
+        .iter()
+        .filter(|s| s.kind == StructureKind::Rampart)
+        .map(|s| ((s.pos.x().u8(), s.pos.y().u8()), s.id))
+        .collect();
 
     let safe_owner = world.safe_mode_owner;
     // A hostile's combat against the safe-mode owner's object is zeroed.
@@ -248,6 +262,14 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
         matches!((safe_owner, target_owner), (Some(o), Some(t)) if attacker_owner != o && t == o)
     };
     let on_rampart = |p: Position| rampart_tiles.contains(&(p.x().u8(), p.y().u8()));
+    // The rampart a single-target hit on `pos` redirects to, if any — `self_id` is the target's own
+    // id (a rampart is never redirected onto itself). `None` ⇒ no rampart on the tile, hit normally.
+    let redirect = |pos: Position, self_id: Option<StructureId>| -> Option<StructureId> {
+        rampart_id_at
+            .get(&(pos.x().u8(), pos.y().u8()))
+            .copied()
+            .filter(|&rid| Some(rid) != self_id)
+    };
 
     let mut dmg: HashMap<CreepId, u32> = HashMap::new();
     let mut heal: HashMap<CreepId, u32> = HashMap::new();
@@ -276,11 +298,18 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
                             && atk.pos.get_range_to(t.pos) <= 1
                             && !zeroed(atk.owner, t.owner)
                         {
-                            add(&mut dmg, tid, atk.attack);
-                            // Melee attack-back: the target's ATTACK parts hit the attacker —
-                            // unless the attacker stands on a rampart (engine `_damage.js:17`).
-                            if t.attack > 0 && !on_rampart(atk.pos) && !zeroed(t.owner, atk.owner) {
-                                add(&mut dmg, atk.id, t.attack);
+                            // Rampart redirect: a creep on a rampart is shielded — the hit lands on the
+                            // rampart, and (target is now a structure) there is NO melee attack-back
+                            // (engine `attack.js:33-36` → `_damage.js:16-21`).
+                            if let Some(rid) = redirect(t.pos, None) {
+                                add(&mut struct_dmg, rid, atk.attack);
+                            } else {
+                                add(&mut dmg, tid, atk.attack);
+                                // Melee attack-back: the target's ATTACK parts hit the attacker —
+                                // unless the attacker stands on a rampart (engine `_damage.js:17`).
+                                if t.attack > 0 && !on_rampart(atk.pos) && !zeroed(t.owner, atk.owner) {
+                                    add(&mut dmg, atk.id, t.attack);
+                                }
                             }
                         }
                     }
@@ -291,7 +320,11 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
                             && atk.pos.get_range_to(t.pos) <= 3
                             && !zeroed(atk.owner, t.owner)
                         {
-                            add(&mut dmg, tid, atk.ranged);
+                            // Rampart redirect (engine `rangedAttack.js:33-36`).
+                            match redirect(t.pos, None) {
+                                Some(rid) => add(&mut struct_dmg, rid, atk.ranged),
+                                None => add(&mut dmg, tid, atk.ranged),
+                            }
                         }
                     }
                 }
@@ -340,21 +373,23 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
                 CombatAction::Dismantle(sid) => {
                     if let Some(s) = sstruct(sid) {
                         if atk.pos.get_range_to(s.pos) <= 1 && !zeroed_s(atk.owner, s.owner) {
-                            add(&mut struct_dmg, sid, atk.dismantle);
+                            // A structure sheltered under a (different) rampart redirects to the rampart
+                            // (engine `dismantle.js:27-29`); a rampart dismantled directly hits itself.
+                            add(&mut struct_dmg, redirect(s.pos, Some(sid)).unwrap_or(sid), atk.dismantle);
                         }
                     }
                 }
                 CombatAction::AttackStructure(sid) => {
                     if let Some(s) = sstruct(sid) {
                         if atk.pos.get_range_to(s.pos) <= 1 && !zeroed_s(atk.owner, s.owner) {
-                            add(&mut struct_dmg, sid, atk.attack);
+                            add(&mut struct_dmg, redirect(s.pos, Some(sid)).unwrap_or(sid), atk.attack);
                         }
                     }
                 }
                 CombatAction::RangedAttackStructure(sid) => {
                     if let Some(s) = sstruct(sid) {
                         if atk.pos.get_range_to(s.pos) <= 3 && !zeroed_s(atk.owner, s.owner) {
-                            add(&mut struct_dmg, sid, atk.ranged);
+                            add(&mut struct_dmg, redirect(s.pos, Some(sid)).unwrap_or(sid), atk.ranged);
                         }
                     }
                 }
@@ -379,11 +414,13 @@ pub fn resolve_tick(world: &mut CombatWorld, intents: &Intents) -> TickReport {
         let fired = match *action {
             TowerAction::Attack(tid) => match snap(tid) {
                 Some(t) if t.alive && !zeroed(tower_owner, t.owner) => {
-                    add(
-                        &mut dmg,
-                        tid,
-                        tower_attack_damage_at_range(tower_pos.get_range_to(t.pos)),
-                    );
+                    let amount = tower_attack_damage_at_range(tower_pos.get_range_to(t.pos));
+                    // Rampart redirect (engine `towers/attack.js:27-30`): a creep on a rampart shields
+                    // behind it; the tower shot lands on the rampart.
+                    match redirect(t.pos, None) {
+                        Some(rid) => add(&mut struct_dmg, rid, amount),
+                        None => add(&mut dmg, tid, amount),
+                    }
                     true
                 }
                 _ => false,
@@ -808,39 +845,31 @@ mod tests {
     }
 
     #[test]
-    fn rampart_shields_creep_from_rma_but_not_single_target() {
-        // A defender stands on its rampart at range 2. RMA skips it (rampart-shielded); a single-
-        // target rangedAttack still hits it.
+    fn rampart_shields_creep_from_both_rma_and_single_target() {
+        // A defender stands on its rampart at range 2. RMA SKIPS it; a single-target rangedAttack
+        // REDIRECTS to the rampart (engine `rangedAttack.js:33-36`) — the creep takes 0 either way,
+        // and the single-target shot lands on the rampart. (This pins the rampart-redirect fidelity
+        // fix: the sim previously, wrongly, let single-target hit the creep through its rampart.)
         let make = || CombatWorld {
             creeps: vec![
                 creep(1, 0, 25, 25, &[(Part::RangedAttack, 10)]),
                 creep(2, 1, 25, 27, &[(Part::Move, 5)]),
             ],
-            structures: vec![structure(
-                100,
-                StructureKind::Rampart,
-                Some(1),
-                25,
-                27,
-                300_000,
-            )],
+            structures: vec![structure(100, StructureKind::Rampart, Some(1), 25, 27, 300_000)],
             ..Default::default()
         };
         let mut w = make();
         let mut i = Intents::new();
         i.set(1, vec![CombatAction::RangedMassAttack]);
-        assert_eq!(
-            resolve_tick(&mut w, &i).outcomes[&2].raw_damage,
-            0,
-            "RMA skips a creep on a rampart"
-        );
+        assert_eq!(resolve_tick(&mut w, &i).outcomes[&2].raw_damage, 0, "RMA skips a creep on a rampart");
+
         let mut w = make();
         let mut i = Intents::new();
         i.set(1, vec![CombatAction::RangedAttack(2)]);
-        assert!(
-            resolve_tick(&mut w, &i).outcomes[&2].raw_damage > 0,
-            "single-target ranged hits it"
-        );
+        let rep = resolve_tick(&mut w, &i);
+        assert_eq!(rep.outcomes[&2].raw_damage, 0, "single-target ranged is redirected away from the creep");
+        let rampart_hits = w.structures.iter().find(|s| s.id == 100).unwrap().hits;
+        assert_eq!(rampart_hits, 300_000 - 100, "the shot landed on the rampart (10 RANGED × 10 power)");
     }
 
     #[test]

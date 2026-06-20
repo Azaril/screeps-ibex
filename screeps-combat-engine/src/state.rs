@@ -47,9 +47,11 @@ pub enum StructureKind {
 }
 
 /// A passive (non-firing) structure that can be attacked/dismantled/repaired. Ramparts shield
-/// co-located targets from rangedMassAttack (engine `rangedMassAttack.js:38`) and suppress melee
-/// attack-back for an attacker standing on one (`_damage.js:17`); single-target attacks still hit
-/// a creep on a rampart directly (the engine does NOT redirect creep damage to the rampart).
+/// co-located targets: rangedMassAttack SKIPS a shielded target (engine `rangedMassAttack.js:38`),
+/// while single-target attack/rangedAttack/tower/dismantle REDIRECT to the rampart (`attack.js:33-36`,
+/// `rangedAttack.js:33-36`, `towers/attack.js:27-30`, `dismantle.js:27-29`) — ownership-blind, so a
+/// creep on a rampart takes 0 until the rampart breaks. A rampart also suppresses melee attack-back
+/// for an attacker standing on one (`_damage.js:17`). All modeled in `resolve.rs` (`redirect`).
 #[derive(Clone, Debug)]
 pub struct SimStructure {
     pub id: StructureId,
