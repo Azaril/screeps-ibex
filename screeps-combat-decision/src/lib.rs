@@ -1080,6 +1080,7 @@ fn breach_redirect(
 pub fn decide_squad_with_pathing(
     view: &SquadView,
     shared: Option<&kite::PositionLayers>,
+    tactics: kite::SquadTacticParams,
     room_callback: &mut dyn FnMut(RoomName) -> Option<LocalCostMatrix>,
     max_ops: u32,
 ) -> SquadDecision {
@@ -1156,7 +1157,7 @@ pub fn decide_squad_with_pathing(
             focus: decision.focus.map(|f| f.pos),
             // Kite weights the DMG term 0, so the richness inputs are moot here — keep it None.
             focus_damage: None,
-            params: kite::KiteScoreParams::default(),
+            params: tactics.kite,
             fragile_hits,
             squad_heal,
             weapon_range,
@@ -1179,7 +1180,7 @@ pub fn decide_squad_with_pathing(
             towers: &towers,
             focus: decision.focus.map(|f| f.pos),
             focus_damage,
-            params: kite::KiteScoreParams::engage(),
+            params: tactics.engage,
             fragile_hits,
             squad_heal,
             weapon_range,
@@ -1599,7 +1600,7 @@ mod tests {
         let hostiles = vec![creep(9, 30, 25, 600, &[(Part::RangedAttack, 6)])]; // ranged-only: no melee → no kite
         let view = squad_view(&members, &hostiles, SquadOrderState::Engaged);
         let mut cb = |_r| Some(LocalCostMatrix::new());
-        let d = decide_squad_with_pathing(&view, None, &mut cb, kite::MAX_KITE_OPS);
+        let d = decide_squad_with_pathing(&view, None, kite::SquadTacticParams::default(), &mut cb, kite::MAX_KITE_OPS);
         assert_eq!(d.state, SquadOrderState::Engaged);
         match d.movement {
             SquadMovement::Advance { goal, range } => {
@@ -1621,7 +1622,7 @@ mod tests {
         let hostiles = vec![creep(9, 40, 25, 600, &[(Part::RangedAttack, 6)])]; // far focus (range 30)
         let view = squad_view(&members, &hostiles, SquadOrderState::Engaged);
         let mut cb = |_r| Some(LocalCostMatrix::new());
-        let d = decide_squad_with_pathing(&view, None, &mut cb, kite::MAX_KITE_OPS);
+        let d = decide_squad_with_pathing(&view, None, kite::SquadTacticParams::default(), &mut cb, kite::MAX_KITE_OPS);
         match d.movement {
             SquadMovement::Advance { goal, .. } => {
                 assert!(
@@ -1689,7 +1690,7 @@ mod tests {
             current_state: SquadOrderState::Moving,
         };
 
-        let d = decide_squad_with_pathing(&view, None, &mut cb, kite::MAX_KITE_OPS);
+        let d = decide_squad_with_pathing(&view, None, kite::SquadTacticParams::default(), &mut cb, kite::MAX_KITE_OPS);
         assert_eq!(d.focus.map(|f| f.pos), Some(pos(8, 25)), "focus the shielding rampart, not the spawn behind it");
         match d.movement {
             SquadMovement::Advance { goal, .. } => assert_eq!(goal, pos(8, 25), "advance toward the breach"),
@@ -1711,7 +1712,7 @@ mod tests {
             current_state: SquadOrderState::Engaged,
         };
         let mut cb = |_r| Some(LocalCostMatrix::new());
-        let d = decide_squad_with_pathing(&view, None, &mut cb, kite::MAX_KITE_OPS);
+        let d = decide_squad_with_pathing(&view, None, kite::SquadTacticParams::default(), &mut cb, kite::MAX_KITE_OPS);
         assert_eq!(d.state, SquadOrderState::Engaged);
         match d.movement {
             SquadMovement::Kite { goal } => {
@@ -1746,8 +1747,8 @@ mod tests {
         let view = SquadView { members: &members, hostiles: &hostiles, structures: &[], retreat_threshold: 0.3, current_state: SquadOrderState::Engaged };
         let mut cb1 = |_r| Some(LocalCostMatrix::new());
         let mut cb2 = |_r| Some(LocalCostMatrix::new());
-        let a = decide_squad_with_pathing(&view, None, &mut cb1, kite::MAX_KITE_OPS);
-        let b = decide_squad_with_pathing(&view, None, &mut cb2, kite::MAX_KITE_OPS);
+        let a = decide_squad_with_pathing(&view, None, kite::SquadTacticParams::default(), &mut cb1, kite::MAX_KITE_OPS);
+        let b = decide_squad_with_pathing(&view, None, kite::SquadTacticParams::default(), &mut cb2, kite::MAX_KITE_OPS);
         assert_eq!(a.movement, b.movement, "same input → same goal (deterministic)");
     }
 
@@ -1794,7 +1795,7 @@ mod tests {
             current_state: SquadOrderState::Moving,
         };
         let mut cb = |_r| Some(LocalCostMatrix::new());
-        let d = decide_squad_with_pathing(&view, None, &mut cb, kite::MAX_KITE_OPS);
+        let d = decide_squad_with_pathing(&view, None, kite::SquadTacticParams::default(), &mut cb, kite::MAX_KITE_OPS);
         assert_eq!(d.state, SquadOrderState::Moving);
         assert_eq!(d.movement, SquadMovement::Hold);
     }

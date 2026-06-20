@@ -30,7 +30,7 @@
 use super::composition::{SquadComposition, SquadSlot};
 use super::objective_queue::{CombatObjectiveQueue, ObjectiveId, ObjectiveKind, OBJECTIVE_PRIORITY_HIGH};
 use super::squad::{AttackTarget, SquadContext, SquadState, SquadTarget, TickMovement, TickOrders};
-use crate::combat::kite::{PositionLayers, MAX_KITE_OPS};
+use crate::combat::kite::{PositionLayers, SquadTacticParams, MAX_KITE_OPS};
 use crate::combat::{
     build_room_layers, decide_squad_with_pathing, CombatCreepDto, CombatStructureDto, SquadDecision, SquadMemberView,
     SquadOrderState, SquadView,
@@ -555,11 +555,11 @@ fn compute_squad_orders(
     let decision = match room_layers.get(&target_room) {
         Some((matrix, layers)) => {
             let mut room_cb = |_r: RoomName| Some(matrix.clone());
-            decide_squad_with_pathing(&view, Some(layers), &mut room_cb, MAX_KITE_OPS)
+            decide_squad_with_pathing(&view, Some(layers), SquadTacticParams::default(), &mut room_cb, MAX_KITE_OPS)
         }
         None => {
             let mut room_cb = |_r: RoomName| None;
-            decide_squad_with_pathing(&view, None, &mut room_cb, MAX_KITE_OPS)
+            decide_squad_with_pathing(&view, None, SquadTacticParams::default(), &mut room_cb, MAX_KITE_OPS)
         }
     };
 

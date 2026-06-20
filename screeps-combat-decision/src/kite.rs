@@ -193,6 +193,25 @@ impl KiteScoreParams {
     }
 }
 
+/// The squad's two position-scoring presets — the **tunable seam for the EXP-\* sweep loop** (ADR 0019
+/// Stage 4, measure-first). `Default` returns the shipped presets ([`KiteScoreParams::default`] for
+/// kiting/fleeing, [`KiteScoreParams::engage`] for standing and fighting); the live bot always uses
+/// `Default`, while the sim sweep injects custom weight vectors to tune them empirically against the
+/// EXP metrics before any new defaults are baked in.
+#[derive(Clone, Copy, Debug)]
+pub struct SquadTacticParams {
+    /// Weights for the kite/flee/retreat scored search (`decide_squad_with_pathing`'s kite branch).
+    pub kite: KiteScoreParams,
+    /// Weights for the engage/advance scored search (the engage branch).
+    pub engage: KiteScoreParams,
+}
+
+impl Default for SquadTacticParams {
+    fn default() -> Self {
+        Self { kite: KiteScoreParams::default(), engage: KiteScoreParams::engage() }
+    }
+}
+
 /// How many ticks ahead the future-threat term looks: a tile a chaser reaches in `>= FUTURE_HORIZON`
 /// ticks is "far enough" and gets no future penalty; nearer arrivals scale up linearly. Kept small (a
 /// chaser is only an imminent danger a couple ticks out) so a kiter HOLDS weapon range rather than

@@ -11,8 +11,9 @@ use crate::pathing::{build_combat_matrix, resolve_move_direction};
 use crate::{to_engine_action, SimView};
 use screeps::{Part, Position, RoomCoordinate};
 use screeps_combat_decision::{
-    cohesion, decide_combat, decide_movement, decide_squad_with_pathing, kite::MAX_KITE_OPS, CombatIntent, CreepOrders, FocusTarget,
-    SquadMemberView, SquadOrderState, SquadStateDto, SquadView,
+    cohesion, decide_combat, decide_movement, decide_squad_with_pathing,
+    kite::{SquadTacticParams, MAX_KITE_OPS},
+    CombatIntent, CreepOrders, FocusTarget, SquadMemberView, SquadOrderState, SquadStateDto, SquadView,
 };
 use screeps_combat_engine::{CombatWorld, CreepId, Intents, PlayerId};
 use screeps_rover::{AnchorOutcome, AnchorPath, LocalPathfinder};
@@ -174,11 +175,20 @@ pub struct ManagedSimSquad {
     pub objective: Position,
     pub retreat_threshold: f32,
     state: SquadOrderState,
+    /// Position-scoring weights (ADR 0019 Stage 4 tuning seam). Defaults to the shipped presets; the
+    /// EXP sweep sets custom vectors via [`Self::with_tactics`] to tune them empirically.
+    tactics: SquadTacticParams,
 }
 
 impl ManagedSimSquad {
     pub fn new(owner: PlayerId, members: Vec<CreepId>, objective: Position) -> Self {
-        Self { owner, members, objective, retreat_threshold: 0.3, state: SquadOrderState::Forming }
+        Self { owner, members, objective, retreat_threshold: 0.3, state: SquadOrderState::Forming, tactics: SquadTacticParams::default() }
+    }
+
+    /// Override the position-scoring weights (the EXP-* sweep loop, ADR 0019 Stage 4).
+    pub fn with_tactics(mut self, tactics: SquadTacticParams) -> Self {
+        self.tactics = tactics;
+        self
     }
 
     /// Advance one tick: build the `SquadView` from living members, run `decide_squad_with_pathing`
@@ -218,7 +228,7 @@ impl ManagedSimSquad {
             retreat_threshold: self.retreat_threshold,
             current_state: self.state,
         };
-        let decision = decide_squad_with_pathing(&view, None, &mut |r| build_combat_matrix(world, r, self.owner), MAX_KITE_OPS);
+        let decision = decide_squad_with_pathing(&view, None, self.tactics, &mut |r| build_combat_matrix(world, r, self.owner), MAX_KITE_OPS);
         self.state = decision.state;
 
         let squad_dto = SquadStateDto {
