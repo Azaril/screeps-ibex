@@ -209,54 +209,13 @@ fn structure_rank(ty: StructureType) -> u32 {
 /// (NOTE: safeMode — where the enemy room nullifies all our combat — is an engage-level veto handled
 /// by the upcoming Lanchester gate, not here; the DTOs don't yet carry it.)
 pub fn select_focus_target(hostiles: &[CombatCreepDto], structures: &[CombatStructureDto], our_dps: u32) -> Option<FocusTarget> {
-    use screeps_combat_engine::constants::{ATTACK_POWER, HEAL_POWER, RANGED_ATTACK_POWER, RANGED_HEAL_POWER};
-    // Hostile-rampart tiles: a creep here is shielded (single-target fire redirects to the rampart).
-    let rampart_tiles: std::collections::HashSet<(u8, u8)> = structures
-        .iter()
-        .filter(|s| s.structure_type == StructureType::Rampart && s.ownership == Ownership::Hostile && s.hits > 0)
-        .map(|s| (s.pos.x().u8(), s.pos.y().u8()))
-        .collect();
-    let shielded = |c: &CombatCreepDto| rampart_tiles.contains(&(c.pos.x().u8(), c.pos.y().u8()));
-    let working = |c: &CombatCreepDto, p: Part| c.working_parts(p) as u32;
-    let threat_value =
-        |c: &CombatCreepDto| working(c, Part::Attack) * ATTACK_POWER + working(c, Part::RangedAttack) * RANGED_ATTACK_POWER + working(c, Part::Heal) * HEAL_POWER;
-    // Heal/tick reaching `c` from any hostile in heal range (incl. self) — the engine heal-range model.
-    let heal_reaching = |c: &CombatCreepDto| -> u32 {
-        hostiles
-            .iter()
-            .filter(|h| h.has_working(Part::Heal))
-            .map(|h| {
-                let per = match h.pos.get_range_to(c.pos) {
-                    0..=1 => HEAL_POWER,
-                    2..=3 => RANGED_HEAL_POWER,
-                    _ => 0,
-                };
-                working(h, Part::Heal) * per
-            })
-            .sum()
-    };
-
-    // EV: argmax threat/ttk over killable + unshielded hostiles.
-    let best_ev = hostiles
-        .iter()
-        .filter(|c| !shielded(c))
-        .filter_map(|c| {
-            let net = our_dps.saturating_sub(heal_reaching(c));
-            if net == 0 {
-                return None; // out-healed → unkillable, don't waste fire
-            }
-            Some((c, threat_value(c).max(1), c.hits.div_ceil(net).max(1)))
-        })
-        .max_by(|a, b| {
-            // threat_a/ttk_a vs threat_b/ttk_b via cross-multiply (integer, exact); tie → lower hits.
-            (a.1 as u64 * b.2 as u64).cmp(&(b.1 as u64 * a.2 as u64)).then(b.0.hits.cmp(&a.0.hits))
-        });
-    if let Some((c, _, _)) = best_ev {
+    // Primary: the top of the EV order (killable, unshielded, best threat/ttk).
+    if let Some((c, _)) = ev_target_order(hostiles, structures, our_dps).first() {
         return Some(c.as_target());
     }
-
-    // Fallback 1: best-effort lowest-hits UNSHIELDED hostile (killability is a snapshot).
-    if let Some(c) = hostiles.iter().filter(|c| !shielded(c)).min_by_key(|c| c.hits) {
+    // Fallback 1: best-effort lowest-hits UNSHIELDED hostile (killability is a per-tick snapshot).
+    let ramparts = hostile_rampart_tiles(structures);
+    if let Some(c) = hostiles.iter().filter(|c| !ramparts.contains(&(c.pos.x().u8(), c.pos.y().u8()))).min_by_key(|c| c.hits) {
         return Some(c.as_target());
     }
     // Fallback 2: hostile structures by rank (breach logic resolves a shielding rampart).
@@ -265,6 +224,102 @@ pub fn select_focus_target(hostiles: &[CombatCreepDto], structures: &[CombatStru
         .filter(|s| s.ownership == Ownership::Hostile)
         .min_by_key(|s| structure_rank(s.structure_type))
         .map(|s| FocusTarget { pos: s.pos, id: None })
+}
+
+/// Hostile-rampart tiles — a creep here is shielded (single-target fire redirects to the rampart).
+fn hostile_rampart_tiles(structures: &[CombatStructureDto]) -> std::collections::HashSet<(u8, u8)> {
+    structures
+        .iter()
+        .filter(|s| s.structure_type == StructureType::Rampart && s.ownership == Ownership::Hostile && s.hits > 0)
+        .map(|s| (s.pos.x().u8(), s.pos.y().u8()))
+        .collect()
+}
+
+/// Heal/tick reaching `pos` from any hostile in heal range (incl. a self-healer on the tile) — the
+/// engine heal-range model (`HEAL_POWER` ≤1, `RANGED_HEAL_POWER` ≤3).
+fn heal_reaching(hostiles: &[CombatCreepDto], pos: Position) -> u32 {
+    use screeps_combat_engine::constants::{HEAL_POWER, RANGED_HEAL_POWER};
+    hostiles
+        .iter()
+        .filter(|h| h.has_working(Part::Heal))
+        .map(|h| {
+            let per = match h.pos.get_range_to(pos) {
+                0..=1 => HEAL_POWER,
+                2..=3 => RANGED_HEAL_POWER,
+                _ => 0,
+            };
+            h.working_parts(Part::Heal) as u32 * per
+        })
+        .sum()
+}
+
+/// Capability removed by killing `c`: its attack + ranged + heal output (denying sustain counts —
+/// H heal/tick ≈ H damage/tick of value).
+fn threat_value(c: &CombatCreepDto) -> u32 {
+    use screeps_combat_engine::constants::{ATTACK_POWER, HEAL_POWER, RANGED_ATTACK_POWER};
+    c.working_parts(Part::Attack) as u32 * ATTACK_POWER
+        + c.working_parts(Part::RangedAttack) as u32 * RANGED_ATTACK_POWER
+        + c.working_parts(Part::Heal) as u32 * HEAL_POWER
+}
+
+/// Killable, unshielded hostiles in EV order (best `threat / ttk` first), each with its per-tick KILL
+/// BUDGET = `hits + heal reaching it` (the damage to finish it THIS tick). Shared by
+/// [`select_focus_target`] (primary = first) and [`assign_focus_fire`] (spill) so they agree. Empty ⇒
+/// nothing killable (out-healed, rampart-shielded, or `our_dps == 0`).
+fn ev_target_order<'a>(hostiles: &'a [CombatCreepDto], structures: &[CombatStructureDto], our_dps: u32) -> Vec<(&'a CombatCreepDto, u32)> {
+    let ramparts = hostile_rampart_tiles(structures);
+    let mut ranked: Vec<(&CombatCreepDto, u32, u64, u64)> = hostiles
+        .iter()
+        .filter(|c| !ramparts.contains(&(c.pos.x().u8(), c.pos.y().u8())))
+        .filter_map(|c| {
+            let heal = heal_reaching(hostiles, c.pos);
+            let net = our_dps.saturating_sub(heal);
+            if net == 0 {
+                return None; // out-healed → unkillable
+            }
+            let ttk = c.hits.div_ceil(net).max(1) as u64;
+            let threat = threat_value(c).max(1) as u64;
+            Some((c, c.hits + heal, threat, ttk)) // budget = damage to finish it this tick
+        })
+        .collect();
+    // EV desc via cross-multiply (threat_a/ttk_a vs threat_b/ttk_b); tie → lower hits first.
+    ranked.sort_by(|a, b| (b.2 * a.3).cmp(&(a.2 * b.3)).then(a.0.hits.cmp(&b.0.hits)));
+    ranked.into_iter().map(|(c, budget, _, _)| (c, budget)).collect()
+}
+
+/// Per-member focus with DAMAGE SPILL (ADR 0020 §4.2): allocate shooters (highest DPS first) across the
+/// EV-ordered targets, capping each at its per-tick kill budget so the squad does NOT over-damage one
+/// creep — once a target's budget is covered, extra shooters spill to the next target (the last soaks
+/// the remainder). Members with no offense get `None`. Returns a Vec parallel to `members`; `None` ⇒
+/// the consumer falls back to the shared `decision.focus`. The heal side is already deficit-capped +
+/// spread by [`assign_heals`]; this is the symmetric over-damage cap.
+fn assign_focus_fire(members: &[SquadMemberView], hostiles: &[CombatCreepDto], structures: &[CombatStructureDto]) -> Vec<Option<FocusTarget>> {
+    let our_dps: u32 = members.iter().filter(|m| m.hits > 0).map(|m| m.melee_power + m.ranged_power).sum();
+    let order = ev_target_order(hostiles, structures, our_dps);
+    let mut out = vec![None; members.len()];
+    if order.is_empty() {
+        return out;
+    }
+    let mut shooters: Vec<(usize, u32)> = members
+        .iter()
+        .enumerate()
+        .filter_map(|(i, m)| {
+            let dps = m.melee_power + m.ranged_power;
+            (m.hits > 0 && dps > 0).then_some((i, dps))
+        })
+        .collect();
+    shooters.sort_by_key(|(_, dps)| std::cmp::Reverse(*dps));
+    let mut ti = 0usize;
+    let mut remaining = order[0].1 as i64;
+    for (mi, dps) in shooters {
+        out[mi] = Some(order[ti].0.as_target());
+        remaining -= dps as i64;
+        if remaining <= 0 && ti + 1 < order.len() {
+            ti += 1;
+            remaining = order[ti].1 as i64;
+        }
+    }
+    out
 }
 
 /// **The per-creep combat decision** (ADR 0006 Inc B): one creep's attack + heal intents for a
@@ -721,6 +776,12 @@ pub struct SquadDecision {
     /// Per-tick heal assignments over member indices (the greedy healer→target matching, P2.G3-tail
     /// Step 7 — ported pure from `SquadContext::compute_heal_assignments`).
     pub heal_assignments: Vec<HealAssignment>,
+    /// Per-member focus assignment with **damage spill** (ADR 0020 §4.2), parallel to `members`:
+    /// `Some(t)` ⇒ this member shoots `t`; `None` ⇒ it uses the shared `focus`. Allocates shooters
+    /// across EV-ordered targets, capping each at its kill budget, so combined fire doesn't
+    /// over-damage one creep (the excess spills to the next target). Empty ⇒ no creep is killable
+    /// (everyone falls back to `focus`).
+    pub focus_assignments: Vec<Option<FocusTarget>>,
     /// The direction the formation should FACE this tick — centroid → focus (P2.G4-O2). `Some` only
     /// when Engaged with a focus. A box-fighting squad orients toward it (tanks/high-HP front, healers
     /// back, present fresh armor); a kiting (skirmish) squad ignores it. Pure tactic — the live
@@ -815,6 +876,8 @@ pub fn decide_squad(view: &SquadView) -> SquadDecision {
     };
 
     let heal_assignments = assign_heals(view.members);
+    // Damage spill (ADR 0020 §4.2): per-member focus so combined fire doesn't over-damage one creep.
+    let focus_assignments = assign_focus_fire(view.members, view.hostiles, view.structures);
 
     // Formation facing (O2): when engaged with a focus, the block faces the threat — the centroid →
     // focus direction. A box-fighting squad orients to it; a kiting squad ignores it. Pure: the
@@ -831,6 +894,7 @@ pub fn decide_squad(view: &SquadView) -> SquadDecision {
         center,
         cohesion_radius: SQUAD_COHESION_RADIUS,
         heal_assignments,
+        focus_assignments,
         orientation,
     }
 }
@@ -1331,6 +1395,31 @@ mod tests {
         let b = creep(2, 40, 40, 300, &[(Part::Attack, 5)]);
         let f = select_focus_target(&[a, b], &[], 100).unwrap();
         assert_eq!(f.id, Some(raw(2)), "threat/ttk beats raw lowest-hits");
+    }
+
+    #[test]
+    fn assign_focus_fire_spills_overkill_to_the_next_target() {
+        // Two ranged shooters (70 dps each → 140 total). Target X: high threat (5 ATTACK), 30 hits →
+        // a 1-shot, top EV. Target Y: low threat, 700 hits. One shooter finishes X (budget 30 < 70);
+        // the SECOND shooter spills to Y instead of wasting 110 dps overkilling X.
+        let members = vec![ranged_member_at(700, 700, 25, 25), ranged_member_at(700, 700, 26, 25)];
+        let x = creep(1, 30, 25, 30, &[(Part::Attack, 5)]);
+        let y = creep(2, 35, 25, 700, &[(Part::Attack, 1), (Part::Move, 6)]);
+        let a = assign_focus_fire(&members, &[x, y], &[]);
+        assert_eq!(a[0].and_then(|f| f.id), Some(raw(1)), "first shooter finishes the high-EV 1-shot");
+        assert_eq!(a[1].and_then(|f| f.id), Some(raw(2)), "the overkill shooter spills to the next target");
+    }
+
+    #[test]
+    fn assign_focus_fire_keeps_all_on_one_big_target_and_none_without_offense() {
+        let members = vec![ranged_member_at(700, 700, 25, 25), ranged_member_at(700, 700, 26, 25)];
+        let big = creep(1, 30, 25, 700, &[(Part::Attack, 1), (Part::Move, 6)]); // budget 700 > 140 dps
+        let a = assign_focus_fire(&members, &[big.clone()], &[]);
+        assert_eq!(a[0].and_then(|f| f.id), Some(raw(1)));
+        assert_eq!(a[1].and_then(|f| f.id), Some(raw(1)), "one big target soaks both shooters (no spill)");
+        // No offense (healers only) ⇒ nothing killable ⇒ all None (fall back to the shared focus).
+        let healers = vec![healer_at(600, 600, 5, 25, 25), healer_at(600, 600, 5, 26, 25)];
+        assert!(assign_focus_fire(&healers, &[big], &[]).iter().all(|f| f.is_none()));
     }
 
     #[test]

@@ -245,7 +245,10 @@ impl ManagedSimSquad {
                 let tf = &sim.friends()[tfi];
                 Some(FocusTarget { pos: tf.pos, id: tf.id })
             });
-            let orders = CreepOrders { focus: decision.focus, heal_target };
+            // Per-member focus with damage spill (ADR 0020 §4.2); `None` ⇒ the shared focus. `idx`
+            // aligns with `decision.focus_assignments` (member_views were built from `living` in order).
+            let focus = decision.focus_assignments.get(idx).copied().flatten().or(decision.focus);
+            let orders = CreepOrders { focus, heal_target };
             let view_i = sim.view_for_with(fi, &squad_dto, orders);
 
             let actions: Vec<_> = decide_combat(&view_i).iter().filter_map(|ci| to_engine_action(ci, &sim)).collect();

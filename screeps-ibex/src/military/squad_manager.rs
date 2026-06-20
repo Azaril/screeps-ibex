@@ -617,10 +617,11 @@ fn apply_squad_decision(ctx: &mut SquadContext, decision: &SquadDecision, creep_
             ctx.issue_retreat_orders(None, Some(creep_owner));
         }
         SquadOrderState::Engaged => {
-            let attack_target = decision
-                .focus
-                .map(|f| f.id.map(AttackTarget::Creep).unwrap_or(AttackTarget::Structure(f.pos)));
-            for member in ctx.members.iter_mut() {
+            // Per-member focus with damage spill (ADR 0020 §4.2); index aligns with view.members
+            // (built from ctx.members in order). `None` ⇒ the shared focus.
+            for (i, member) in ctx.members.iter_mut().enumerate() {
+                let focus = decision.focus_assignments.get(i).copied().flatten().or(decision.focus);
+                let attack_target = focus.map(|f| f.id.map(AttackTarget::Creep).unwrap_or(AttackTarget::Structure(f.pos)));
                 member.tick_orders = Some(TickOrders {
                     attack_target,
                     movement: TickMovement::Formation,
