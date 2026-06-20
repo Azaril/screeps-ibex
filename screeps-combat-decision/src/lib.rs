@@ -1080,9 +1080,11 @@ pub fn decide_squad_with_pathing(
         && decision.focus.is_some_and(|f| f.id.is_some())
         && squad_has_ranged;
 
-    // Survival-veto inputs (#2/#4): the most-fragile living member's hits + the squad's heal sustain.
+    // Survival-veto / safety inputs (#2/#4): the most-fragile living member's hits + the squad's heal
+    // sustain; and the optimal weapon range r* (3 ranged, 1 melee) for the proximity + focus terms.
     let fragile_hits = view.members.iter().filter(|m| m.hits > 0).map(|m| m.hits).min().unwrap_or(0);
     let squad_heal: u32 = view.members.iter().map(|m| m.heal_power).sum();
+    let weapon_range = if squad_has_ranged { 3 } else { 1 };
 
     if should_kite {
         let threats = kite_threats(view.hostiles);
@@ -1095,6 +1097,7 @@ pub fn decide_squad_with_pathing(
             params: kite::KiteScoreParams::default(),
             fragile_hits,
             squad_heal,
+            weapon_range,
         };
         decision.movement = match kite::plan_kite_anchor(&kite_view, room_callback, max_ops) {
             Some(plan) => SquadMovement::Kite { goal: plan.goal },
@@ -1111,6 +1114,7 @@ pub fn decide_squad_with_pathing(
             params: kite::KiteScoreParams::engage(),
             fragile_hits,
             squad_heal,
+            weapon_range,
         };
         decision.movement = match kite::plan_kite_anchor(&engage_view, room_callback, max_ops) {
             // Move onto the scored engagement tile (range 0); `None` ⇒ the centroid is already the best

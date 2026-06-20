@@ -123,71 +123,96 @@ pub struct KiteTower {
     pub pos: Position,
 }
 
-/// Tunable weights for [`score_tile`]. Default ordering: **SAFETY ≫ COHESION > VALUE > openness**
-/// (the operator priority — don't die, then stay with the squad, then keep the focus shootable).
+/// Tunable weights for [`score_tile`] (ADR 0019 Stage 3b final shape). Every term the weight scales
+/// is **normalized to `[0, SCALE]`** first, so a weight is a pure dimensionless mixing ratio and the
+/// objective preset (kite vs engage) is just a different weight vector — *flee* and *stand* emerge
+/// from one scorer. Seeds only; the EXP-* sim loop is the sanctioned tuner.
 #[derive(Clone, Copy, Debug)]
 pub struct KiteScoreParams {
-    pub w_safety: f32,
-    pub w_cohesion: f32,
-    pub w_value: f32,
-    pub w_openness: f32,
-    /// Weight of the **future-threat** term (ADR 0019 Stage 2): penalize tiles a mobile chaser will
-    /// reach SOON (low ticks-to-reach), so the kiter favors positions with durable standoff instead
-    /// of ones safe only this tick. Scaled per-tile by `max(0, FUTURE_HORIZON - ticks_to_reach)`.
+    /// Present **incoming damage** (the threat field, net of self-heal, per fragile HP).
+    pub w_taken: f32,
+    /// **Future exposure** — how soon a mobile chaser reaches the tile (reachability).
     pub w_future: f32,
-    /// Weight of the **focus-engagement reward** (ADR 0019 Stage 3b): a tile within weapon range of
-    /// the focus is rewarded (negative cost) so an ENGAGE objective commits to dealing damage. With
-    /// the safety term pulling the other way, the OBJECTIVE WEIGHTS decide which wins — so *flee*
-    /// (`default`/kite: this is 0, safety dominates) and *stand/close* (`engage`: this dominates)
-    /// emerge from one scorer. 0 ⇒ byte-identical to the pre-Stage-3b kite score.
-    pub w_focus_dmg: f32,
+    /// **Cohesion** — wall-aware distance from the squad centroid, steepening past K.
+    pub w_cohesion: f32,
+    /// **Proximity** — the focus being beyond optimal weapon range `r*` (pull into range).
+    pub w_prox: f32,
+    /// **Openness** — dead-end avoidance (fewer walkable neighbours).
+    pub w_openness: f32,
+    /// **Edge-trap** — penalize tiles near a room edge while threatened (anti-corner for the scored
+    /// path; complements the per-creep flee's edge repulsors).
+    pub w_edge: f32,
+    /// **Focus-damage reward** (negative cost) — a tile in weapon range of the focus. Kite weights it
+    /// 0 (safety → flee); engage weights it high (commit to dealing damage → stand and fight).
+    pub w_dmg: f32,
     /// Cohesion radius K: beyond this distance from the centroid the penalty steepens (×3/tile).
     pub max_cohesion_radius: u32,
 }
 
 impl Default for KiteScoreParams {
+    /// The **kite / retreat** preset: safety dominates → flee danger; the future term pushes off tiles
+    /// a chaser reaches imminently; the proximity term holds the focus in weapon range (so the kiter
+    /// stands off at `r*`, shooting, rather than fleeing past shooting range).
     fn default() -> Self {
         Self {
-            w_safety: 1000.0,
-            w_cohesion: 10.0,
-            w_value: 3.0,
-            w_openness: 1.0,
-            // Below cohesion (don't scatter) but above value/openness: durable standoff matters more
-            // than keeping the focus shootable, less than staying with the squad. Tuned by EXP-*.
-            w_future: 5.0,
-            w_focus_dmg: 0.0, // kite/retreat does not reward engagement (safety dominates → flee)
+            w_taken: 2.0,
+            w_future: 1.0,
+            w_cohesion: 0.3,
+            w_prox: 0.5,
+            w_openness: 0.05,
+            w_edge: 0.4,
+            w_dmg: 0.0,
             max_cohesion_radius: 2,
         }
     }
 }
 
 impl KiteScoreParams {
-    /// The **engage** preset (ADR 0019 Stage 3b): the SAME scorer, reweighted to *stand and fight*
-    /// rather than flee. Safety still matters but no longer dominates; the focus-engagement reward
-    /// dominates (commit to dealing damage), and the future-threat (kite-away) term is off. These are
-    /// *seeds* — the EXP-* sim loop is the only sanctioned tuner.
+    /// The **engage** preset: the SAME scorer reweighted to *stand and fight* — safety still matters
+    /// but no longer dominates, the focus-damage reward dominates (commit to dealing damage), and the
+    /// future-threat (kite-away) term is off.
     pub fn engage() -> Self {
         Self {
-            w_safety: 50.0,
-            w_cohesion: 10.0,
-            w_value: 10.0,
-            w_openness: 1.0,
+            w_taken: 0.5,
             w_future: 0.0,
-            w_focus_dmg: 200.0,
+            w_cohesion: 0.3,
+            w_prox: 0.4,
+            w_openness: 0.05,
+            w_edge: 0.1,
+            w_dmg: 2.0,
             max_cohesion_radius: 2,
         }
     }
 }
 
 /// How many ticks ahead the future-threat term looks: a tile a chaser reaches in `>= FUTURE_HORIZON`
-/// ticks is "far enough" and gets no future penalty; nearer arrivals scale up linearly.
-pub const FUTURE_HORIZON: u32 = 5;
+/// ticks is "far enough" and gets no future penalty; nearer arrivals scale up linearly. Kept small (a
+/// chaser is only an imminent danger a couple ticks out) so a kiter HOLDS weapon range rather than
+/// fleeing to the horizon — durable standoff at `r*`, not retreat. The proximity term pulls back in.
+pub const FUTURE_HORIZON: u32 = 3;
+
+/// The normalized band every score term is mapped into before weighting (ADR 0019 §1.2): a weight is
+/// then a pure dimensionless mixing ratio across comparable [0, SCALE] terms.
+const SCALE_F: f32 = 1000.0;
+/// Max in-room Chebyshev distance — normalizes the distance-based terms (cohesion, proximity).
+const ROOM_DIAM_F: f32 = 49.0;
+/// "Very dangerous" reference for the no-field reach-depth+tower safety proxy (term-isolation tests).
+const SAFETY_PROXY_REF: f32 = 8.0;
+/// Tiles from a room edge under which the edge-trap term applies (matches the per-creep flee repulsor).
+pub const EDGE_THRESH: u32 = 6;
+/// Min distance from `(x,y)` to any room edge (0 on an edge, up to 24 at the centre).
+fn dist_to_edge(x: u8, y: u8) -> u32 {
+    (x.min(49 - x)).min(y.min(49 - y)) as u32
+}
 
 /// The shared per-room maps [`plan_kite_anchor`] builds once and every priced tile reads (ADR 0019
 /// Stage 2). All-`None` ⇒ the pre-Stage-2 behavior (Chebyshev cohesion, no future term) — exactly
 /// byte-identical, which the unit tests rely on.
 #[derive(Default, Clone, Copy)]
 pub struct KiteFields<'a> {
+    /// Incoming hits/tile (creeps + towers) → the **safety** term (net of self-heal, per fragile HP).
+    /// `None` ⇒ the reach-depth+tower proxy (the pre-Stage-3b safety, for term-isolation unit tests).
+    pub threat_field: Option<&'a ThreatField>,
     /// Soonest a mobile chaser reaches each tile → the **future-threat** term. `None` ⇒ omitted.
     pub threat_reach: Option<&'a ReachabilityMap>,
     /// Wall-aware path distance (in tiles) from the squad centroid to this tile → the **cohesion**
@@ -242,7 +267,7 @@ impl PositionLayers {
     /// caller threads the per-tile search `g` in (the search floods from the centroid, so `g` *is* the
     /// wall-aware cohesion distance).
     pub fn fields(&self) -> KiteFields<'_> {
-        KiteFields { threat_reach: self.threat_reach.as_ref(), cohesion_dist: None }
+        KiteFields { threat_field: Some(&self.threat_field), threat_reach: self.threat_reach.as_ref(), cohesion_dist: None }
     }
 }
 
@@ -255,49 +280,64 @@ pub struct SquadKiteView<'a> {
     /// Shared focus position; the value term keeps it within shooting range 3.
     pub focus: Option<Position>,
     pub params: KiteScoreParams,
-    /// Hits of the squad's most-fragile member (ADR 0019 #2/#4) — the survival veto's denominator.
+    /// Hits of the squad's most-fragile member (ADR 0019 #2/#4) — the safety/veto denominator.
     pub fragile_hits: u32,
-    /// The squad's total heal output per tick — the sustain subtracted from incoming for the veto.
+    /// The squad's total heal output per tick — the sustain subtracted from incoming damage.
     pub squad_heal: u32,
+    /// Optimal weapon range `r*` (3 ranged, 1 melee) — the proximity + focus-damage terms use it so a
+    /// melee/siege block closes to range 1 while a ranged block holds range 3.
+    pub weapon_range: u32,
 }
 
 /// Cost of the squad standing its block on `tile` — **LOWER is better** (composes directly with
-/// rover's min-scored search). Sums five weighted penalties:
-/// - **SAFETY:** inside a threat's `reach` (worse the deeper) + tower DPS at this range;
-/// - **FUTURE:** how soon a mobile chaser reaches this tile (`reach` optional map; ADR 0019 Stage 2);
-/// - **COHESION:** Chebyshev distance from the centroid, steepening ×3/tile past `max_cohesion_radius`;
-/// - **VALUE:** the focus being beyond shooting range 3;
-/// - **OPENNESS:** fewer walkable neighbours (0–8, supplied from the cost matrix) → nearer a dead-end.
+/// rover's min-scored search). The ADR 0019 Stage-3b unified utility: every term is normalized to
+/// `[0, SCALE]` so the objective-preset weights are dimensionless mixing ratios, and *flee* (kite
+/// weights) vs *stand* (engage weights) emerge from this ONE function. Terms:
+/// - **TAKEN** (safety): the threat field's net incoming hits per fragile-HP (creeps + towers; #2/#3);
+/// - **FUTURE**: how soon a mobile chaser reaches the tile (reachability);
+/// - **COHESION**: wall-aware distance from the centroid, steepening past K;
+/// - **PROXIMITY**: the focus beyond optimal weapon range `r*`;
+/// - **OPENNESS**: dead-end avoidance;
+/// - **EDGE**: edge proximity while threatened (anti-corner);
+/// - **DMG** (reward): in weapon range of the focus (engage commits to damage).
 ///
-/// `fields` carries the shared per-room maps (built once by [`plan_kite_anchor`]); an all-`None`
-/// [`KiteFields`] ⇒ the future term is omitted and cohesion falls back to Chebyshev (byte-identical
-/// to the pre-Stage-2 four-term score).
+/// `fields` carries the shared per-(room,tick) layers. With no `threat_field` (term-isolation tests)
+/// the safety term falls back to the reach-depth+tower proxy (also normalized).
 pub fn score_tile(view: &SquadKiteView, tile: Position, walkable_neighbors: u8, fields: &KiteFields) -> i64 {
     let p = &view.params;
+    let r_star = view.weapon_range.max(1);
 
-    // SAFETY — being within a threat's danger reach (deeper = worse), plus tower DPS here.
-    let mut safety = 0.0f32;
-    for t in view.threats {
-        let r = tile.get_range_to(t.pos);
-        if r <= t.reach {
-            safety += (t.reach + 1 - r) as f32;
+    // TAKEN (safety) — incoming damage, normalized to [0,SCALE]. With the threat field (live path):
+    // net hits (raw − self-heal) as a fraction of the most-fragile member's HP (#2) — so RANGED
+    // threats and TOWERS shape positioning, which the reach-depth proxy ignored (ranged has reach 0).
+    // Without the field (unit tests): the reach-depth+tower proxy, normalized by SAFETY_PROXY_REF.
+    let safety = match fields.threat_field {
+        Some(tf) if view.fragile_hits > 0 => {
+            let net = (tf.raw_at(tile) - view.squad_heal as i32).max(0);
+            (net as f32 / view.fragile_hits as f32 * SCALE_F).min(SCALE_F)
         }
-    }
-    for tw in view.towers {
-        let r = tile.get_range_to(tw.pos);
-        // Normalize to ~1.0 (min tower hit) .. 4.0 (point-blank). Tower curve delegated to the engine
-        // (the single source of truth; the local duplicate was deleted in ADR 0019 Stage 1 after a
-        // bit-identity proof over all in-room ranges).
-        safety += screeps_combat_engine::damage::tower_attack_damage_at_range(r) as f32 / 150.0;
-    }
+        _ => {
+            let mut raw = 0.0f32;
+            for t in view.threats {
+                let r = tile.get_range_to(t.pos);
+                if r <= t.reach {
+                    raw += (t.reach + 1 - r) as f32;
+                }
+            }
+            for tw in view.towers {
+                let r = tile.get_range_to(tw.pos);
+                raw += screeps_combat_engine::damage::tower_attack_damage_at_range(r) as f32 / 150.0;
+            }
+            (raw / SAFETY_PROXY_REF * SCALE_F).min(SCALE_F)
+        }
+    };
 
-    // FUTURE — a tile a mobile chaser reaches soon offers no durable standoff; penalize low
-    // ticks-to-reach (linearly within FUTURE_HORIZON). Avoids "safe this tick, caught the next".
+    // FUTURE — penalize tiles a mobile chaser reaches soon (low ticks-to-reach), normalized.
     let future = match fields.threat_reach {
         Some(map) => {
             let ttr = map.ticks_xy(tile.x().u8(), tile.y().u8());
             if ttr < FUTURE_HORIZON {
-                (FUTURE_HORIZON - ttr) as f32
+                (FUTURE_HORIZON - ttr) as f32 / FUTURE_HORIZON as f32 * SCALE_F
             } else {
                 0.0
             }
@@ -305,41 +345,58 @@ pub fn score_tile(view: &SquadKiteView, tile: Position, walkable_neighbors: u8, 
         None => 0.0,
     };
 
-    // COHESION — distance from the centroid (wall-aware g-cost threaded from the search when present,
-    // else Chebyshev), steepening past K so the block doesn't string out / get split by a wall.
+    // COHESION — wall-aware distance from the centroid (the search's `g` when present, else Chebyshev),
+    // steepening past K, normalized.
     let d = fields.cohesion_dist.unwrap_or_else(|| tile.get_range_to(view.centroid));
-    let cohesion = if d <= p.max_cohesion_radius {
+    let coh_raw = if d <= p.max_cohesion_radius {
         d as f32
     } else {
         p.max_cohesion_radius as f32 + (d - p.max_cohesion_radius) as f32 * 3.0
     };
+    let cohesion = (coh_raw / ROOM_DIAM_F * SCALE_F).min(SCALE_F);
 
-    // VALUE — keep the focus within shooting range 3.
-    let value = match view.focus {
+    // PROXIMITY — the focus being beyond optimal weapon range `r*` (pull the block into range).
+    let prox = match view.focus {
         Some(f) => {
             let r = tile.get_range_to(f);
-            if r <= 3 {
+            if r <= r_star {
                 0.0
             } else {
-                (r - 3) as f32
+                ((r - r_star) as f32 / ROOM_DIAM_F * SCALE_F).min(SCALE_F)
             }
         }
         None => 0.0,
     };
 
-    // OPENNESS — penalize dead-ends (few walkable neighbours).
-    let openness = (8 - walkable_neighbors.min(8)) as f32;
+    // OPENNESS — penalize dead-ends, normalized.
+    let openness = (8 - walkable_neighbors.min(8)) as f32 / 8.0 * SCALE_F;
 
-    // FOCUS-ENGAGEMENT — a REWARD (negative cost) for being in weapon range of the focus, so an
-    // ENGAGE objective commits to dealing damage. Weighted 0 for kite/retreat (safety → flee); high
-    // for engage (→ stand and fight). The flip between flee and stand is purely these weights.
+    // EDGE — near a room edge while a threat is present → anti-corner for the scored path (the per-
+    // creep flee uses repulsors; the squad scored search uses this term). Off when no threats.
+    let edge = if view.threats.is_empty() {
+        0.0
+    } else {
+        let de = dist_to_edge(tile.x().u8(), tile.y().u8());
+        if de < EDGE_THRESH {
+            (EDGE_THRESH - de) as f32 / EDGE_THRESH as f32 * SCALE_F
+        } else {
+            0.0
+        }
+    };
+
+    // DMG (reward) — in weapon range of the focus → commit to dealing damage (engage). 0 for kite.
     let focus_dmg = match view.focus {
-        Some(f) if tile.get_range_to(f) <= 3 => 1.0,
+        Some(f) if tile.get_range_to(f) <= r_star => SCALE_F,
         _ => 0.0,
     };
 
-    (p.w_safety * safety + p.w_future * future + p.w_cohesion * cohesion + p.w_value * value + p.w_openness * openness
-        - p.w_focus_dmg * focus_dmg)
+    (p.w_taken * safety
+        + p.w_future * future
+        + p.w_cohesion * cohesion
+        + p.w_prox * prox
+        + p.w_openness * openness
+        + p.w_edge * edge
+        - p.w_dmg * focus_dmg)
         .round() as i64
 }
 
@@ -407,7 +464,7 @@ pub fn plan_kite_anchor(
     };
     // `g` is the search's path-cost from the centroid = the wall-aware cohesion distance for this tile.
     let cost = |tile: Position, g: u32| -> i64 {
-        let fields = KiteFields { threat_reach, cohesion_dist: Some(g) };
+        let fields = KiteFields { threat_field: Some(threat_field), threat_reach, cohesion_dist: Some(g) };
         let base = score_tile(view, tile, walkable_neighbors(&matrix, tile), &fields);
         if veto(tile) {
             base.saturating_add(LETHAL_TILE_PENALTY)
@@ -445,7 +502,7 @@ mod tests {
     }
     fn view<'a>(centroid: Position, threats: &'a [KiteThreat], towers: &'a [KiteTower], focus: Option<Position>) -> SquadKiteView<'a> {
         // fragile_hits 0 ⇒ the survival veto is disabled (the term-isolation tests don't want it).
-        SquadKiteView { centroid, threats, towers, focus, params: KiteScoreParams::default(), fragile_hits: 0, squad_heal: 0 }
+        SquadKiteView { centroid, threats, towers, focus, params: KiteScoreParams::default(), fragile_hits: 0, squad_heal: 0, weapon_range: 3 }
     }
     fn melee(x: u8, y: u8, reach: u32) -> KiteThreat {
         KiteThreat { pos: pos(x, y), kind: ThreatKind::MeleeOnly, reach, step_ticks: Some(1), attack_power: 30, ranged_power: 0 }
@@ -515,14 +572,16 @@ mod tests {
         // TICKS to a fast chaser than the other. The future term makes the soon-reached tile cost more
         // (durable standoff is preferred), with no present-threat/tower/focus terms to confound it.
         let mut cb = |_r| Some(LocalCostMatrix::new());
-        let chaser = pos(20, 25);
+        let chaser = pos(22, 25);
         let room: RoomName = "W1N1".parse().unwrap();
         let reach = LocalPathfinder.reachability_from(&[ReachSource { pos: chaser, step_ticks: 1 }], room, &mut cb, 2000);
         let c = pos(25, 25);
         let v = view(c, &[], &[], None);
-        let f = KiteFields { threat_reach: Some(&reach), cohesion_dist: None };
-        let near_in_time = score_tile(&v, pos(24, 25), 8, &f); // 4 tiles → ttr 4 (< horizon)
-        let far_in_time = score_tile(&v, pos(26, 25), 8, &f); // 6 tiles → ttr 6 (>= horizon)
+        let f = KiteFields { threat_field: None, threat_reach: Some(&reach), cohesion_dist: None };
+        // Two tiles EQUIDISTANT from the centroid (both d=1, so equal cohesion) but at different chaser
+        // ranges: (24,25) is ttr 2 (< horizon → penalized), (26,25) is ttr 4 (>= horizon → 0).
+        let near_in_time = score_tile(&v, pos(24, 25), 8, &f);
+        let far_in_time = score_tile(&v, pos(26, 25), 8, &f);
         assert!(
             near_in_time > far_in_time,
             "the tile the chaser reaches sooner costs more: near={near_in_time} far={far_in_time}"
@@ -553,14 +612,14 @@ mod tests {
         let walled = pos(27, 25); // Chebyshev 2 from the centroid, but only reachable via the y=40 gap
         let wall_dist = creach.ticks_to_reach(walled).expect("reachable via the gap");
         let cheby = score_tile(&v, walled, 8, &KiteFields::default()); // Chebyshev cohesion (d=2)
-        let aware = score_tile(&v, walled, 8, &KiteFields { threat_reach: None, cohesion_dist: Some(wall_dist) });
+        let aware = score_tile(&v, walled, 8, &KiteFields { threat_field: None, threat_reach: None, cohesion_dist: Some(wall_dist) });
         assert!(aware > cheby, "a tile behind a wall is correctly far for cohesion: aware={aware} cheby={cheby}");
         // In open terrain (west of the centroid, no wall) the g-cost equals Chebyshev → identical score.
         let open = pos(24, 25);
         let open_dist = creach.ticks_to_reach(open).expect("reachable");
         assert_eq!(
             score_tile(&v, open, 8, &KiteFields::default()),
-            score_tile(&v, open, 8, &KiteFields { threat_reach: None, cohesion_dist: Some(open_dist) }),
+            score_tile(&v, open, 8, &KiteFields { threat_field: None, threat_reach: None, cohesion_dist: Some(open_dist) }),
             "open-terrain g-cost equals Chebyshev"
         );
     }
@@ -578,13 +637,13 @@ mod tests {
         let a = pos(26, 25); // range 2 to focus (in range), range 1 to the threat (inside reach)
         let b = pos(22, 25); // range 6 to focus (out of range), range 5 to the threat (safe)
 
-        let kite = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), params: KiteScoreParams::default(), fragile_hits: 0, squad_heal: 0 };
+        let kite = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), params: KiteScoreParams::default(), fragile_hits: 0, squad_heal: 0, weapon_range: 3 };
         assert!(
             score_tile(&kite, b, 8, &KiteFields::default()) < score_tile(&kite, a, 8, &KiteFields::default()),
             "kite prefers the safe tile B (flee)"
         );
 
-        let engage = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), params: KiteScoreParams::engage(), fragile_hits: 0, squad_heal: 0 };
+        let engage = SquadKiteView { centroid, threats: &threats, towers: &[], focus: Some(focus), params: KiteScoreParams::engage(), fragile_hits: 0, squad_heal: 0, weapon_range: 3 };
         assert!(
             score_tile(&engage, a, 8, &KiteFields::default()) < score_tile(&engage, b, 8, &KiteFields::default()),
             "engage prefers the in-range tile A (stand and fight)"
@@ -609,7 +668,7 @@ mod tests {
         let kite = view(centroid, &threats, &[], None); // default weights (w_future = 5)
         let mut attack_params = KiteScoreParams::default();
         attack_params.w_future = 0.0; // a use that ignores durable-standoff
-        let attack = SquadKiteView { centroid, threats: &threats, towers: &[], focus: None, params: attack_params, fragile_hits: 0, squad_heal: 0 };
+        let attack = SquadKiteView { centroid, threats: &threats, towers: &[], focus: None, params: attack_params, fragile_hits: 0, squad_heal: 0, weapon_range: 3 };
 
         let kite_score = score_tile(&kite, tile, 8, &fields);
         let attack_score = score_tile(&attack, tile, 8, &fields);
@@ -656,7 +715,7 @@ mod tests {
         let mut cb = |_r| Some(LocalCostMatrix::new());
         let centroid = pos(25, 25);
         let threat = KiteThreat { pos: pos(25, 25), kind: ThreatKind::Ranged, reach: 0, step_ticks: Some(1), attack_power: 0, ranged_power: 100 };
-        let v = SquadKiteView { centroid, threats: &[threat], towers: &[], focus: None, params: KiteScoreParams::default(), fragile_hits: 200, squad_heal: 0 };
+        let v = SquadKiteView { centroid, threats: &[threat], towers: &[], focus: None, params: KiteScoreParams::default(), fragile_hits: 200, squad_heal: 0, weapon_range: 3 };
         let plan = plan_kite_anchor(&v, &mut cb, MAX_KITE_OPS).expect("a non-lethal tile exists");
         assert!(plan.goal.get_range_to(pos(25, 25)) > 3, "fled outside the lethal ranged zone: {:?}", plan.goal);
     }
