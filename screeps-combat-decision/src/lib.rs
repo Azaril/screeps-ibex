@@ -1614,6 +1614,35 @@ mod tests {
     }
 
     #[test]
+    fn threat_step_ticks_models_fatigue_cadence_and_filters_immobile() {
+        // ADR 0019 Guard 5 (seed filter) speed model: only mobile chasers seed the reachability flood,
+        // at their plain-terrain fatigue cadence ceil(weight/move).
+        // Balanced 1:1 body → moves every tick (cadence 1).
+        assert_eq!(threat_step_ticks(&creep(1, 25, 25, 500, &[(Part::Attack, 5), (Part::Move, 5)])), Some(1));
+        // Under-MOVE (weight 10, move 5) → 2 ticks/step.
+        assert_eq!(threat_step_ticks(&creep(1, 25, 25, 500, &[(Part::Attack, 10), (Part::Move, 5)])), Some(2));
+        // Over-MOVE (weight 3, move 6) → still 1 (floored).
+        assert_eq!(threat_step_ticks(&creep(1, 25, 25, 500, &[(Part::Attack, 3), (Part::Move, 6)])), Some(1));
+        // No working MOVE → immobile → None (seeds NO reachability wave; still a present threat).
+        assert_eq!(threat_step_ticks(&creep(1, 25, 25, 500, &[(Part::Attack, 5)])), None);
+    }
+
+    #[test]
+    fn scored_squad_plan_is_deterministic() {
+        // ADR 0019 must-fix #6 (deterministic argmax): the scored search has no RNG and a total tile
+        // order, so identical input yields an identical goal across runs (no tick-to-tick jitter from
+        // arbitrary tie resolution).
+        let members = vec![ranged_member_at(700, 700, 25, 25), ranged_member_at(700, 700, 26, 25)];
+        let hostiles = vec![creep(9, 24, 25, 600, &[(Part::Attack, 6), (Part::Move, 6)])];
+        let view = SquadView { members: &members, hostiles: &hostiles, structures: &[], retreat_threshold: 0.3, current_state: SquadOrderState::Engaged };
+        let mut cb1 = |_r| Some(LocalCostMatrix::new());
+        let mut cb2 = |_r| Some(LocalCostMatrix::new());
+        let a = decide_squad_with_pathing(&view, &mut cb1, kite::MAX_KITE_OPS);
+        let b = decide_squad_with_pathing(&view, &mut cb2, kite::MAX_KITE_OPS);
+        assert_eq!(a.movement, b.movement, "same input → same goal (deterministic)");
+    }
+
+    #[test]
     fn assign_heals_gives_the_most_wounded_the_best_in_range_healer() {
         // Member 0 = a wounded ranged attacker (range 1 from the healer); member 1 = a full healer.
         let members = vec![
