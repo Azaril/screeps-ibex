@@ -74,7 +74,9 @@ pub struct SideMetrics {
     /// Mean Chebyshev range from each living creep to its nearest living enemy, averaged over all
     /// creep-ticks (∞-safe: 0 if never co-present).
     pub mean_nearest_enemy_range: f64,
-    /// Fraction of creep-ticks spent within range 1 of an enemy (high = brawling, ~0 = clean kiting).
+    /// Fraction of creep-ticks spent within range 1 of an enemy that can **actually deal melee
+    /// damage** (a live ATTACK part) — high = brawling, ~0 = clean kiting. A disarmed adjacent enemy
+    /// is no threat and doesn't count.
     pub melee_exposure_rate: f64,
 
     // ── efficiency ──
@@ -228,8 +230,11 @@ fn enemy_structure_hp_lost(rec: &CombatRecording, side: PlayerId) -> u32 {
     first.iter().map(|(id, &fh)| fh.saturating_sub(*last.get(id).unwrap_or(&fh))).sum()
 }
 
-/// Body-free positioning: mean nearest-enemy range over living `side` creep-ticks, and the fraction
-/// of those creep-ticks within range 1 of an enemy.
+/// Positioning: mean nearest-enemy range over living `side` creep-ticks, and the **melee-exposure
+/// rate** — the fraction of those creep-ticks spent within range 1 of an enemy **that can actually
+/// deal melee damage** (a live ATTACK part). A disarmed creep adjacent to you is no threat, so it
+/// doesn't count as exposure (it inflated the metric when a kiter sat next to a chaser whose ATTACK
+/// parts had been shot off). `mean_nearest_enemy_range` still measures all enemies (raw geometry).
 fn positioning(rec: &CombatRecording, side: PlayerId) -> (f64, f64) {
     let mut range_sum = 0u64;
     let mut samples = 0u64;
@@ -239,11 +244,14 @@ fn positioning(rec: &CombatRecording, side: PlayerId) -> (f64, f64) {
         if enemies.is_empty() {
             continue;
         }
+        // Only enemies that can still deal melee damage count toward melee exposure.
+        let armed: Vec<Position> =
+            f.creeps.iter().filter(|c| c.owner != side && c.attack_power > 0).map(|c| synth_pos(c.x, c.y)).collect();
         for c in f.creeps.iter().filter(|c| c.owner == side) {
             let p = synth_pos(c.x, c.y);
             let nearest = enemies.iter().map(|e| p.get_range_to(*e)).min().unwrap_or(0);
             range_sum += nearest as u64;
-            if nearest <= 1 {
+            if armed.iter().any(|e| p.get_range_to(*e) <= 1) {
                 melee_ticks += 1;
             }
             samples += 1;
@@ -303,13 +311,16 @@ mod tests {
         let ko = run_engagement(kite, room(), 0, pos(30, 25), &mut KiteAgent, 1, pos(27, 25), &mut RushAgent, 12);
         let km = SideMetrics::from_recording(&ko.recording, 0);
 
+        // TOUGH-front so the ATTACK parts survive the fight (front-to-back degradation strips TOUGH
+        // first) — keeps both brawlers *armed* and adjacent, so the refined melee-exposure (armed
+        // enemies only) stays high through the run rather than collapsing as parts strip.
         let brawl = world_from_units(
             0,
-            &[Unit::new(vec![(Part::Attack, 10), (Part::Move, 10)], vec![pos(30, 25)])],
+            &[Unit::new(vec![(Part::Tough, 10), (Part::Attack, 10), (Part::Move, 10)], vec![pos(30, 25)])],
             1,
-            &[Unit::new(vec![(Part::Attack, 10), (Part::Move, 10)], vec![pos(27, 25)])],
+            &[Unit::new(vec![(Part::Tough, 10), (Part::Attack, 10), (Part::Move, 10)], vec![pos(27, 25)])],
         );
-        let bo = run_engagement(brawl, room(), 0, pos(30, 25), &mut RushAgent, 1, pos(27, 25), &mut RushAgent, 12);
+        let bo = run_engagement(brawl, room(), 0, pos(30, 25), &mut RushAgent, 1, pos(27, 25), &mut RushAgent, 16);
         let bm = SideMetrics::from_recording(&bo.recording, 0);
 
         // No towers in either → zero tower contamination, all DPS is creep DPS (must-fix 1).
@@ -329,7 +340,25 @@ mod tests {
             bm.melee_exposure_rate
         );
         assert!(km.melee_exposure_rate < 0.2, "a kiter barely touches melee pre-corner, got {}", km.melee_exposure_rate);
-        assert!(bm.melee_exposure_rate > 0.5, "a brawl lives in melee, got {}", bm.melee_exposure_rate);
+        assert!(bm.melee_exposure_rate > 0.3, "a brawl lives in (armed) melee, got {}", bm.melee_exposure_rate);
+    }
+
+    #[test]
+    fn melee_exposure_ignores_a_disarmed_adjacent_enemy() {
+        // The motivating case: a 7-RANGED kiter vs a 10-ATTACK chaser. The kiter chips the chaser's
+        // front-loaded ATTACK parts off before/as it closes, then sits next to a DISARMED chaser. The
+        // refined metric must NOT count that harmless adjacency — exposure stays low even though the
+        // creeps are at range 1 for many ticks (raw adjacency would read ~0.45 here).
+        let world = world_from_units(
+            0,
+            &[Unit::new(vec![(Part::RangedAttack, 7), (Part::Move, 7)], vec![pos(30, 25)])],
+            1,
+            &[Unit::new(vec![(Part::Attack, 10), (Part::Move, 10)], vec![pos(27, 25)])],
+        );
+        let out = run_engagement(world, room(), 0, pos(30, 25), &mut IbexAgent, 1, pos(27, 25), &mut RushAgent, 40);
+        let m = SideMetrics::from_recording(&out.recording, 0);
+        assert_eq!(m.damage_taken, 0, "the kiter is never actually hit");
+        assert!(m.melee_exposure_rate < 0.1, "adjacency to a disarmed chaser isn't exposure, got {}", m.melee_exposure_rate);
     }
 
     #[test]

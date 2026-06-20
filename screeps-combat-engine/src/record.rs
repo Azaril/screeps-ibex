@@ -22,6 +22,12 @@ pub struct CreepFrame {
     pub hits: u32,
     pub hits_max: u32,
     pub fatigue: u32,
+    /// Working **melee** attack output this tick (0 ⇒ no live ATTACK parts — disarmed, not a melee
+    /// threat). Lets body-free positioning metrics count adjacency only to creeps that can actually
+    /// deal melee damage.
+    pub attack_power: u32,
+    /// Working **ranged** attack output this tick (0 ⇒ no live RANGED_ATTACK parts).
+    pub ranged_power: u32,
 }
 
 /// A structure's state at the start of a recorded tick.
@@ -178,6 +184,8 @@ pub fn record_tick(
             hits: c.body.hits,
             hits_max: c.body.hits_max(),
             fatigue: c.fatigue,
+            attack_power: c.body.attack_power(),
+            ranged_power: c.body.ranged_attack_power(),
         })
         .collect();
     let structures: Vec<StructureFrame> = world
