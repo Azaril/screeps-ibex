@@ -90,30 +90,30 @@ pub const FUTURE_HORIZON: u32 = 5;
 pub struct KiteFields<'a> {
     /// Soonest a mobile chaser reaches each tile → the **future-threat** term. `None` ⇒ omitted.
     pub threat_reach: Option<&'a ReachabilityMap>,
-    /// Path-distance (in tiles, **wall-aware**) from the centroid → the **cohesion** term. `None` ⇒
-    /// the Chebyshev fallback. In open terrain this equals Chebyshev (8-dir uniform steps), so it only
-    /// differs — correctly — when a tile is reachable from the centroid only by routing around a wall.
-    pub centroid_reach: Option<&'a ReachabilityMap>,
+    /// Wall-aware path distance (in tiles) from the squad centroid to this tile → the **cohesion**
+    /// term. `None` ⇒ Chebyshev fallback. The scored search floods *from the centroid*, so it already
+    /// computes this as its path-cost `g`: [`plan_kite_anchor`] threads that `g` in here per tile
+    /// (ADR 0019 Stage 3b flood-dedup — no separate centroid flood). In open terrain `g` equals
+    /// Chebyshev (8-dir uniform steps); it differs — correctly — only around walls.
+    pub cohesion_dist: Option<u32>,
 }
 
-/// The per-(room, tick) **cached layer set** (ADR 0019 Stage 3a, operator architecture): the expensive
-/// shared computations — the threat-chaser reachability flood and the centroid-distance flood — built
-/// **once** and **reused across every position consumer** this tick. Different objectives *and uses*
-/// (kite / attack-positioning / defend) are weight vectors over the SAME layers, so the floods run
-/// once regardless of how many scorers read them — a scorer borrows a [`KiteFields`] view via
-/// [`PositionLayers::fields`]. (Stage 3b adds the integer threat field + focus-damage layers here.)
+/// The per-(room, tick) **cached layer set** (ADR 0019 Stage 3a/3b, operator architecture): the
+/// expensive shared computation — the threat-chaser reachability flood — built **once** and **reused
+/// across every position consumer** this tick. Different objectives *and uses* (kite / attack-
+/// positioning / defend) are weight vectors over the SAME layers, so the flood runs once regardless of
+/// how many scorers read it — a scorer borrows a [`KiteFields`] view via [`PositionLayers::fields`]
+/// and threads the *per-tile* cohesion distance from its own search `g` (Stage 3b flood-dedup — no
+/// separate centroid flood). (Stage 3b adds the integer threat field + focus-damage layers here.)
 pub struct PositionLayers {
     threat_reach: Option<ReachabilityMap>,
-    centroid_dist: ReachabilityMap,
 }
 
 impl PositionLayers {
-    /// Build the layers once for a squad at `centroid` facing `threats`, over the room's cost matrix.
-    /// Use-agnostic (takes only the shared inputs, not a kite-specific view) so the attack-positioning
-    /// path reuses the exact same instance. The two floods are the Stage-2 / Stage-2-tail maps,
-    /// unchanged — so a kite plan over `fields()` is byte-identical to the pre-Stage-3a path.
-    pub fn build(centroid: Position, threats: &[KiteThreat], matrix: &LocalCostMatrix, max_ops: u32) -> Self {
-        let room = centroid.room_name();
+    /// Build the layers once for a squad facing `threats`, over the room's cost matrix. Use-agnostic
+    /// (only the shared inputs) so the attack-positioning path reuses the exact same instance. The
+    /// threat flood is the Stage-2 map, unchanged — so a kite plan over it is byte-identical.
+    pub fn build(threats: &[KiteThreat], room: RoomName, matrix: &LocalCostMatrix, max_ops: u32) -> Self {
         let mut cb = |_r: RoomName| Some(matrix.clone());
         // THREAT reachability: mobile chasers only (Guard 5 — an immobile threat seeds no wave).
         let sources: Vec<ReachSource> = threats
@@ -122,22 +122,21 @@ impl PositionLayers {
             .collect();
         let threat_reach =
             (!sources.is_empty()).then(|| LocalPathfinder.reachability_from(&sources, room, &mut cb, max_ops));
-        // CENTROID distance (step_ticks 1 ⇒ g = tiles) → wall-aware cohesion.
-        let centroid_dist =
-            LocalPathfinder.reachability_from(&[ReachSource { pos: centroid, step_ticks: 1 }], room, &mut cb, max_ops);
-        Self { threat_reach, centroid_dist }
+        Self { threat_reach }
     }
 
-    /// A borrowing [`KiteFields`] view over the cached layers (what [`score_tile`] consumes). Cheap to
-    /// call per consumer — the maps are not rebuilt.
+    /// The shared threat-reachability layer (the future-threat input).
+    pub fn threat_reach(&self) -> Option<&ReachabilityMap> {
+        self.threat_reach.as_ref()
+    }
+
+    /// A borrowing [`KiteFields`] view over the cached layers. `cohesion_dist` is left `None` — the
+    /// caller threads the per-tile search `g` in (the search floods from the centroid, so `g` *is* the
+    /// wall-aware cohesion distance).
     pub fn fields(&self) -> KiteFields<'_> {
-        KiteFields { threat_reach: self.threat_reach.as_ref(), centroid_reach: Some(&self.centroid_dist) }
+        KiteFields { threat_reach: self.threat_reach.as_ref(), cohesion_dist: None }
     }
 }
-
-/// Cohesion distance used when a tile is unreachable from the centroid within the flood budget — a
-/// large room-scale value so a cut-off tile is heavily penalized (don't strand the block behind a wall).
-const UNREACHABLE_COHESION: u32 = 50;
 
 /// The squad's kite-scoring context — its centroid (cohesion anchor), the threats/towers to avoid,
 /// and the shared focus the value term keeps shootable.
@@ -194,12 +193,9 @@ pub fn score_tile(view: &SquadKiteView, tile: Position, walkable_neighbors: u8, 
         None => 0.0,
     };
 
-    // COHESION — distance from the centroid (wall-aware g-cost when available, else Chebyshev),
-    // steepening past K so the block doesn't string out / get split by a wall.
-    let d = match fields.centroid_reach {
-        Some(map) => map.ticks_to_reach(tile).unwrap_or(UNREACHABLE_COHESION),
-        None => tile.get_range_to(view.centroid),
-    };
+    // COHESION — distance from the centroid (wall-aware g-cost threaded from the search when present,
+    // else Chebyshev), steepening past K so the block doesn't string out / get split by a wall.
+    let d = fields.cohesion_dist.unwrap_or_else(|| tile.get_range_to(view.centroid));
     let cohesion = if d <= p.max_cohesion_radius {
         d as f32
     } else {
@@ -271,11 +267,16 @@ pub fn plan_kite_anchor(
 ) -> Option<KitePlan> {
     let room = view.centroid.room_name();
     let matrix = room_callback(room)?;
-    // Build the per-(room,tick) cached layers ONCE (ADR 0019 Stage 3a). A future attack-positioning
-    // scorer for the same squad/tick reuses this exact instance — the floods don't run twice.
-    let layers = PositionLayers::build(view.centroid, view.threats, &matrix, max_ops);
-    let fields = layers.fields();
-    let cost = |tile: Position| -> i64 { score_tile(view, tile, walkable_neighbors(&matrix, tile), &fields) };
+    // Build the per-(room,tick) cached layers ONCE (ADR 0019 Stage 3a/3b): just the THREAT flood now
+    // — cohesion comes free from the search's own `g` below (Stage 3b flood-dedup). A future attack-
+    // positioning scorer for the same squad/tick reuses this exact instance.
+    let layers = PositionLayers::build(view.threats, room, &matrix, max_ops);
+    let threat_reach = layers.threat_reach();
+    // `g` is the search's path-cost from the centroid = the wall-aware cohesion distance for this tile.
+    let cost = |tile: Position, g: u32| -> i64 {
+        let fields = KiteFields { threat_reach, cohesion_dist: Some(g) };
+        score_tile(view, tile, walkable_neighbors(&matrix, tile), &fields)
+    };
     // Feed the search the already-fetched matrix (so the openness lookup + the search agree).
     let mut cb = |_r: RoomName| Some(matrix.clone());
     let result = LocalPathfinder.search_scored(view.centroid, &mut cb, max_ops, 1, &cost);
@@ -380,7 +381,7 @@ mod tests {
         let reach = LocalPathfinder.reachability_from(&[ReachSource { pos: chaser, step_ticks: 1 }], room, &mut cb, 2000);
         let c = pos(25, 25);
         let v = view(c, &[], &[], None);
-        let f = KiteFields { threat_reach: Some(&reach), centroid_reach: None };
+        let f = KiteFields { threat_reach: Some(&reach), cohesion_dist: None };
         let near_in_time = score_tile(&v, pos(24, 25), 8, &f); // 4 tiles → ttr 4 (< horizon)
         let far_in_time = score_tile(&v, pos(26, 25), 8, &f); // 6 tiles → ttr 6 (>= horizon)
         assert!(
@@ -407,17 +408,20 @@ mod tests {
             Some(cm)
         };
         let centroid = pos(25, 25);
+        // The centroid flood gives the wall-aware path distance the SEARCH would thread in as `g`.
         let creach = LocalPathfinder.reachability_from(&[ReachSource { pos: centroid, step_ticks: 1 }], room, &mut cb, 3000);
         let v = view(centroid, &[], &[], None);
         let walled = pos(27, 25); // Chebyshev 2 from the centroid, but only reachable via the y=40 gap
-        let cheby = score_tile(&v, walled, 8, &KiteFields::default());
-        let aware = score_tile(&v, walled, 8, &KiteFields { threat_reach: None, centroid_reach: Some(&creach) });
+        let wall_dist = creach.ticks_to_reach(walled).expect("reachable via the gap");
+        let cheby = score_tile(&v, walled, 8, &KiteFields::default()); // Chebyshev cohesion (d=2)
+        let aware = score_tile(&v, walled, 8, &KiteFields { threat_reach: None, cohesion_dist: Some(wall_dist) });
         assert!(aware > cheby, "a tile behind a wall is correctly far for cohesion: aware={aware} cheby={cheby}");
         // In open terrain (west of the centroid, no wall) the g-cost equals Chebyshev → identical score.
         let open = pos(24, 25);
+        let open_dist = creach.ticks_to_reach(open).expect("reachable");
         assert_eq!(
             score_tile(&v, open, 8, &KiteFields::default()),
-            score_tile(&v, open, 8, &KiteFields { threat_reach: None, centroid_reach: Some(&creach) }),
+            score_tile(&v, open, 8, &KiteFields { threat_reach: None, cohesion_dist: Some(open_dist) }),
             "open-terrain g-cost equals Chebyshev"
         );
     }
@@ -431,10 +435,10 @@ mod tests {
         let matrix = LocalCostMatrix::new();
         let centroid = pos(25, 25);
         let threats = [KiteThreat { pos: pos(22, 25), kind: ThreatKind::MeleeOnly, reach: 2, step_ticks: Some(1) }];
-        let layers = PositionLayers::build(centroid, &threats, &matrix, MAX_KITE_OPS);
+        let layers = PositionLayers::build(&threats, centroid.room_name(), &matrix, MAX_KITE_OPS);
         let fields = layers.fields();
-        // The cache exposes the wall-aware centroid distance (0 at the centroid itself).
-        assert_eq!(fields.centroid_reach.unwrap().ticks_to_reach(centroid), Some(0));
+        // The cache holds the shared threat-reachability layer (a mobile chaser is present).
+        assert!(fields.threat_reach.is_some(), "the threat layer is built once and shared");
 
         let tile = pos(24, 25); // 2 tiles from the chaser → within FUTURE_HORIZON
         let kite = view(centroid, &threats, &[], None); // default weights (w_future = 5)
