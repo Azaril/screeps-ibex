@@ -183,8 +183,9 @@ impl TacticalAgent for DrainAgent {
 
 /// Scripted tower controller: every living tower with energy fires `Attack` at the nearest enemy
 /// creep (any owner but its own). Towers aren't agent-driven, so the harness drives them — this is
-/// the defender's tower AI for tower scenarios (drain, breach-under-fire).
-fn tower_intents(world: &CombatWorld, intents: &mut Intents) {
+/// the defender's tower AI for tower scenarios (drain, breach-under-fire). Public so the managed-squad
+/// EXP scenarios (eval) can drive defender towers against an advancing squad.
+pub fn tower_intents(world: &CombatWorld, intents: &mut Intents) {
     for tower in world.towers.iter().filter(|t| t.is_alive()) {
         let target = world
             .creeps

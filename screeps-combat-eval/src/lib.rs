@@ -19,12 +19,12 @@ pub mod scoring;
 
 use crate::metrics::SideMetrics;
 use screeps::{Part, Position, RoomCoordinate, RoomName};
-use screeps_combat_agent::opponents::{run_engagement, world_from_units, DrainAgent, RushAgent, TurtleAgent, Unit};
+use screeps_combat_agent::opponents::{run_engagement, tower_intents, world_from_units, DrainAgent, RushAgent, TurtleAgent, Unit};
 use screeps_combat_agent::scenario::ScenarioBuilder;
 use screeps_combat_agent::squad::ManagedSimSquad;
 use screeps_combat_agent::{HoldAgent, IbexAgent};
 use screeps_combat_decision::cohesion;
-use screeps_combat_engine::{resolve_tick, CombatWorld, SimBody, SimCreep, SimTower, StructureKind};
+use screeps_combat_engine::{resolve_tick, CombatWorld, Intents, PlayerId, SimBody, SimCreep, SimTower, StructureKind};
 
 // ─── Framework ───────────────────────────────────────────────────────────────
 
@@ -69,8 +69,10 @@ pub fn register() -> Vec<ExperimentResult> {
         // U7 room-variety suite (walls / ramparts / towers via the ScenarioBuilder):
         exp_breach_1(),
         exp_nest_1(),
-        // ADR 0019 full-sim cohesion (the managed-squad decide_squad_with_pathing path + terrain):
-        exp_cohesion_1(),
+        // ADR 0019 managed-squad positioning utility (the decide_squad_with_pathing path):
+        exp_cohesion_1(),   // cohesion through a corridor + terrain
+        exp_pos_selfplay_1(), // two managed squads head-to-head (advance + engage)
+        exp_pos_kite_1(),     // ranged kites melee (kite preset under pursuit)
     ]
 }
 
@@ -336,6 +338,112 @@ fn exp_cohesion_1() -> ExperimentResult {
     )
 }
 
+/// Step managed squads (each owner-tagged, decided via `decide_squad_with_pathing` — the ADR 0019
+/// positioning utility) against each other + any static creeps, driving hostile towers via the shared
+/// scripted controller, for `ticks`. The runner for the managed-squad EXP scenarios + the Stage-4
+/// weight sweep: it merges every squad's intents each tick so two managed squads fight head-to-head
+/// (the per-creep `run_engagement` runner can't — it drives the OLD per-creep path, not the squad).
+fn run_managed(world: &mut CombatWorld, squads: &mut [ManagedSimSquad], ticks: usize) {
+    for _ in 0..ticks {
+        let mut all = Intents::new();
+        for sq in squads.iter_mut() {
+            let i = sq.step(world);
+            all.creeps.extend(i.creeps);
+            all.moves.extend(i.moves);
+            all.pulls.extend(i.pulls);
+            all.reasons.extend(i.reasons);
+        }
+        tower_intents(world, &mut all); // squads don't drive towers; the scripted controller does
+        resolve_tick(world, &all);
+    }
+}
+
+/// A `count`-strong ranged squad (5×RANGED_ATTACK + 5×MOVE each) of `owner`, in a vertical file at
+/// column `x`, rows `y0..y0+count`. Returns the creeps to splice into a world.
+fn ranged_file(owner: PlayerId, first_id: u32, x: u8, y0: u8, count: u8) -> Vec<SimCreep> {
+    let body: Vec<Part> = std::iter::repeat_n(Part::RangedAttack, 5).chain(std::iter::repeat_n(Part::Move, 5)).collect();
+    (0..count)
+        .map(|i| SimCreep { id: first_id + i as u32, owner, pos: pos(x, y0 + i), body: SimBody::unboosted(&body), fatigue: 0 })
+        .collect()
+}
+
+/// EXP-POS-SELFPLAY-1 (ADR 0019 Stage 4) — TWO managed ranged squads (the positioning utility driving
+/// BOTH sides) advance from opposite ends of an open room and fight. Symmetric, so neither should be
+/// passive (both must actually engage + deal damage — proves the advance-to-damage + engage layers
+/// fire against a live opponent, not just a static dummy) and our measured side stays cohesive through
+/// the melee. The decisive winner is noise at this symmetry; the gate is "both engaged + cohesive".
+fn exp_pos_selfplay_1() -> ExperimentResult {
+    let mut creeps = ranged_file(0, 1, 8, 24, 3);
+    creeps.extend(ranged_file(1, 11, 41, 24, 3));
+    let mut world = CombatWorld { creeps, ..Default::default() };
+    let a_ids: Vec<_> = world.creeps.iter().filter(|c| c.owner == 0).map(|c| c.id).collect();
+    let b_ids: Vec<_> = world.creeps.iter().filter(|c| c.owner == 1).map(|c| c.id).collect();
+    let mut squads = [
+        ManagedSimSquad::new(0, a_ids, pos(41, 25)),
+        ManagedSimSquad::new(1, b_ids, pos(8, 25)),
+    ];
+    let mut worst_pairwise = 0u32;
+    for _ in 0..60 {
+        let mut all = Intents::new();
+        for sq in squads.iter_mut() {
+            let i = sq.step(&world);
+            all.creeps.extend(i.creeps);
+            all.moves.extend(i.moves);
+            all.reasons.extend(i.reasons);
+        }
+        resolve_tick(&mut world, &all);
+        let ps: Vec<Position> = world.creeps.iter().filter(|c| c.owner == 0 && c.is_alive()).map(|c| c.pos).collect();
+        if ps.len() >= 2 {
+            worst_pairwise = worst_pairwise.max(cohesion::measure(&ps, None, 0).max_pairwise);
+        }
+    }
+    let a_cas = 3 - world.creeps.iter().filter(|c| c.owner == 0 && c.is_alive()).count();
+    let b_cas = 3 - world.creeps.iter().filter(|c| c.owner == 1 && c.is_alive()).count();
+    result(
+        "EXP-POS-SELFPLAY-1",
+        "two managed ranged squads close and fight (the utility drives both sides to contact, not a passive standoff) and stay cohesive",
+        vec![
+            // The squads must close to contact and draw blood — a broken utility (stand passive / flee
+            // each other forever) yields zero casualties. The exact split is symmetry-noise. (NOTE: the
+            // fight is low-casualty — the squads reposition a lot rather than sustaining range-3 trade;
+            // a Stage-4 tuning target for engage stickiness, tracked separately.)
+            measured("combined casualties", (a_cas + b_cas) as f64, ">= 1 (closed + drew blood)", a_cas + b_cas >= 1),
+            measured("side-A worst pairwise spread", worst_pairwise as f64, "<= 6 (cohesive through the fight)", worst_pairwise <= 6),
+        ],
+    )
+}
+
+/// EXP-POS-KITE-1 (ADR 0019 Stage 4) — a managed RANGED squad vs a managed MELEE squad. The ranged
+/// block should KITE (hold weapon range, never let the melee close) → it out-survives the melee and
+/// chips it, exercising the kite preset + cohesion under live pursuit (the melee squad's advance is
+/// driven by the same utility, so it genuinely chases).
+fn exp_pos_kite_1() -> ExperimentResult {
+    let melee_body: Vec<Part> = std::iter::repeat_n(Part::Attack, 5).chain(std::iter::repeat_n(Part::Move, 5)).collect();
+    let mut creeps = ranged_file(0, 1, 30, 24, 3);
+    for (i, &(x, y)) in [(20, 24), (20, 25), (20, 26)].iter().enumerate() {
+        creeps.push(SimCreep { id: 11 + i as u32, owner: 1, pos: pos(x, y), body: SimBody::unboosted(&melee_body), fatigue: 0 });
+    }
+    let mut world = CombatWorld { creeps, ..Default::default() };
+    let a_ids: Vec<_> = world.creeps.iter().filter(|c| c.owner == 0).map(|c| c.id).collect();
+    let b_ids: Vec<_> = world.creeps.iter().filter(|c| c.owner == 1).map(|c| c.id).collect();
+    let mut squads = [
+        ManagedSimSquad::new(0, a_ids, pos(20, 25)),
+        ManagedSimSquad::new(1, b_ids, pos(30, 25)),
+    ];
+    run_managed(&mut world, &mut squads, 60);
+    let ranged_alive = world.creeps.iter().filter(|c| c.owner == 0 && c.is_alive()).count();
+    let melee_alive = world.creeps.iter().filter(|c| c.owner == 1 && c.is_alive()).count();
+    let melee_casualties = 3 - melee_alive;
+    result(
+        "EXP-POS-KITE-1",
+        "a managed ranged squad kites a melee squad — out-survives it and kills it without being caught",
+        vec![
+            measured("ranged survivors", ranged_alive as f64, ">= melee survivors (kiting advantage)", ranged_alive >= melee_alive),
+            measured("melee casualties (kited + shot down)", melee_casualties as f64, ">= 1 (chipped to a kill)", melee_casualties >= 1),
+        ],
+    )
+}
+
 /// How many structures of `kind` were destroyed across the whole run (U2 `destroyed_kinds`).
 fn destroyed_kind_count(rec: &screeps_combat_engine::CombatRecording, kind: StructureKind) -> usize {
     rec.frames.iter().flat_map(|f| f.destroyed_kinds.iter()).filter(|(_, k)| *k == kind).count()
@@ -376,7 +484,7 @@ mod tests {
     #[test]
     fn exp_register_passes_all_gates() {
         let results = register();
-        assert_eq!(results.len(), 8, "the register has 8 experiments");
+        assert_eq!(results.len(), 10, "the register has 10 experiments");
         for r in &results {
             assert!(r.pass, "{} failed its gates:\n{}", r.id, report(std::slice::from_ref(r)));
         }
@@ -385,7 +493,7 @@ mod tests {
     #[test]
     fn report_renders_the_register() {
         let s = report(&register());
-        assert!(s.contains("8/8 experiments passed"), "{s}");
-        assert!(s.contains("EXP-FOUND-1") && s.contains("EXP-COMP-1") && s.contains("EXP-COHESION-1"));
+        assert!(s.contains("10/10 experiments passed"), "{s}");
+        assert!(s.contains("EXP-FOUND-1") && s.contains("EXP-COHESION-1") && s.contains("EXP-POS-SELFPLAY-1"));
     }
 }
