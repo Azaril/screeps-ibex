@@ -93,8 +93,32 @@ setPassword('ibex', '<password-from-.screeps.yaml>')   // Promise -> user object
 - `setPassword` is a screepsmod-auth global. If it is **defined**, the auth mod
   loaded → a deploy `Cannot POST /api/auth/signin` (404) is a **password/state**
   issue, fixable here without a wipe. If `setPassword` is **undefined**, the auth
-  mod did not load → it is a mods problem (rare; a clean stack rebuild fixes it).
+  mod did not load → it is a mods problem (a clean rebuild does NOT fix it — the
+  launcher npm-installs the same broken version every boot).
 - The world CLI (21026) needs no auth; only the REST deploy path does.
+- The **authoritative diagnostic** is the backend's own log:
+  `docker exec screeps-eval-launcher cat /screeps/logs/backend.log` — a mod that
+  throws on load shows `Error loading ".../screepsmod-auth/index.js": ...`.
+
+### Known break: screepsmod-auth 2.9.0 (pin 2.8.3)
+
+`screepsmod-auth@2.9.0` (published 2026-06-16) **crashes on load** —
+`TypeError: Cannot read properties of undefined (reading 'db')` at
+`lib/index.js:123` — so neither `setPassword` (CLI) nor `POST /api/auth/signin`
+(REST) registers, and `deploy` fails with a 404. Fixed by pinning the **installed**
+version to `2.8.3` via the launcher's `extraPackages` (NOT `mods:` inline `@ver`,
+which the launcher mangles to `@*`, and NOT `pinnedPackages`, which is yarn
+*resolutions* and only overrides nested deps — `extraPackages` overrides the
+top-level dep key in `package.json`). In `screeps-server-kit/config/server.yml`:
+
+```yaml
+mods:
+  - screepsmod-auth        # stays here so it's loaded (mods.json)
+extraPackages:
+  screepsmod-auth: 2.8.3   # forces the installed version
+```
+
+Verify after a rebuild: `docker exec screeps-eval-launcher sh -c "grep version /screeps/node_modules/screepsmod-auth/package.json"` → `2.8.3`, and `POST /api/auth/signin` → 401 (route present), not 404. Re-evaluate when a fixed 2.9.x ships.
 
 ## Offense soak recipe (validate attack tactics)
 

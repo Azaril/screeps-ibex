@@ -25,6 +25,23 @@ mods:
   - screepsmod-auth
   - screepsmod-admin-utils
 
+# Pin the INSTALLED version of screepsmod-auth. The launcher installs each
+# `mods:` entry as `<name>: "*"` (latest) in package.json, but `extraPackages`
+# entries override that same dep key (launcher/packages.go writePackage:
+# deps[mod]="*" then deps[pkg]=ver), so this forces 2.8.3 while the mod stays
+# in `mods:` (and thus in mods.json) to be loaded.
+#
+# WHY: screepsmod-auth@2.9.0 (published 2026-06-16) CRASHES on load —
+# `TypeError: Cannot read properties of undefined (reading 'db')` at
+# lib/index.js:123 — so the mod never registers its CLI command (setPassword)
+# or REST route (POST /api/auth/signin -> 404), which breaks `deploy` auth.
+# 2.8.3 (2026-05-23) was the last working release (deploys worked 2026-06-09).
+# (`pinnedPackages`/yarn-resolutions does NOT work here — it only overrides
+# nested deps, not a top-level mod.) Re-evaluate when a fixed 2.9.x ships.
+# See docs/guides/private-server-commands.md (deploy-auth-404 diagnostic).
+extraPackages:
+  screepsmod-auth: 2.8.3
+
 # NPC bot AI available to `bots.spawn(...)` (upstream sample default).
 bots:
   simplebot: screepsbot-zeswarm
