@@ -16,6 +16,7 @@
 pub mod bench;
 pub mod metrics;
 pub mod scoring;
+pub mod tournament;
 
 use crate::metrics::SideMetrics;
 use screeps::{Part, Position, RoomCoordinate, RoomName};
@@ -346,7 +347,7 @@ fn exp_cohesion_1() -> ExperimentResult {
 /// scripted controller, for `ticks`. The runner for the managed-squad EXP scenarios + the Stage-4
 /// weight sweep: it merges every squad's intents each tick so two managed squads fight head-to-head
 /// (the per-creep `run_engagement` runner can't — it drives the OLD per-creep path, not the squad).
-fn run_managed(world: &mut CombatWorld, squads: &mut [ManagedSimSquad], ticks: usize) {
+pub(crate) fn run_managed(world: &mut CombatWorld, squads: &mut [ManagedSimSquad], ticks: usize) {
     for _ in 0..ticks {
         let mut all = Intents::new();
         for sq in squads.iter_mut() {
@@ -363,7 +364,7 @@ fn run_managed(world: &mut CombatWorld, squads: &mut [ManagedSimSquad], ticks: u
 
 /// A `count`-strong ranged squad (5×RANGED_ATTACK + 5×MOVE each) of `owner`, in a vertical file at
 /// column `x`, rows `y0..y0+count`. Returns the creeps to splice into a world.
-fn ranged_file(owner: PlayerId, first_id: u32, x: u8, y0: u8, count: u8) -> Vec<SimCreep> {
+pub(crate) fn ranged_file(owner: PlayerId, first_id: u32, x: u8, y0: u8, count: u8) -> Vec<SimCreep> {
     let body: Vec<Part> = std::iter::repeat_n(Part::RangedAttack, 5).chain(std::iter::repeat_n(Part::Move, 5)).collect();
     (0..count)
         .map(|i| SimCreep { id: first_id + i as u32, owner, pos: pos(x, y0 + i), body: SimBody::unboosted(&body), fatigue: 0 })
