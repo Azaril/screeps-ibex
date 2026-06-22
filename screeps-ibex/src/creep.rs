@@ -38,9 +38,14 @@ pub struct WaitForSpawnSystem;
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl<'a> System<'a> for WaitForSpawnSystem {
-    type SystemData = (Entities<'a>, WriteStorage<'a, CreepSpawning>, WriteStorage<'a, CreepOwner>);
+    type SystemData = (
+        Entities<'a>,
+        WriteStorage<'a, CreepSpawning>,
+        WriteStorage<'a, CreepOwner>,
+        Write<'a, EntityCleanupQueue>,
+    );
 
-    fn run(&mut self, (entities, mut creep_spawning, mut creep_owner): Self::SystemData) {
+    fn run(&mut self, (entities, mut creep_spawning, mut creep_owner, mut cleanup_queue): Self::SystemData) {
         let mut ready_creeps = Vec::new();
 
         for (entity, spawning) in (&entities, &creep_spawning).join() {
@@ -53,11 +58,18 @@ impl<'a> System<'a> for WaitForSpawnSystem {
                     }
                 }
             } else {
-                warn!("Deleting entity for spawning creep as it no longer exists. Name: {}", spawning.name);
+                // The spawn never produced a creep (cancelled/failed). Route the
+                // deletion through the cleanup queue -- NOT a direct
+                // `entities.delete()` -- so `EntityCleanupSystem` first strips this
+                // entity from every mission (`remove_creep`) and its owning
+                // `SquadContext` (`members.retain`). A direct delete here leaves
+                // those holders with a dangling `Entity`, which then panics at
+                // serialize time (`specs` `ConvertSaveload for Entity` unwraps the
+                // missing marker -- saveload/mod.rs:182). The cleanup prepass runs
+                // immediately after this system and before serialization.
+                warn!("Queuing cleanup for spawning creep as it no longer exists. Name: {}", spawning.name);
 
-                if let Err(error) = entities.delete(entity) {
-                    warn!("Failed to delete creep entity that was stale. Error: {}", error);
-                }
+                cleanup_queue.delete_creep(entity);
             }
         }
 
