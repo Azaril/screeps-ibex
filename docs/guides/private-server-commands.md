@@ -120,13 +120,40 @@ extraPackages:
 
 Verify after a rebuild: `docker exec screeps-eval-launcher sh -c "grep version /screeps/node_modules/screepsmod-auth/package.json"` → `2.8.3`, and `POST /api/auth/signin` → 401 (route present), not 404. Re-evaluate when a fixed 2.9.x ships.
 
+## Fast-forward shortcuts (testing / soak bootstrap)
+
+Skip the economic climb when you need a combat-capable colony fast. RCL/GCL are
+plain DB fields (wiki "Private Server Common Tasks"):
+
+```
+# Set a room's controller level (RCL) directly — the bot then builds the
+# newly-unlocked structures over the next ticks (fast with an existing creep base):
+storage.db['rooms.objects'].update({ room:'W7N4', type:'controller' }, { $set:{ level:4 } })
+# (optional) set controller progress:
+storage.db['rooms.objects'].update({ room:'W7N4', type:'controller' }, { $set:{ progress:10899000 } })
+
+# Raise a user's GCL / GPL (the kit's `bootstrap` already raises GCL via config gcl:):
+storage.db.users.update({ username:'ibex' }, { $set:{ gcl:38000000 } })
+storage.db.users.update({ username:'ibex' }, { $set:{ power:540000 } })
+
+# Run ticks faster while building up:
+system.setTickDuration(25)   # ms; or utils.setTickRate(25)
+```
+
+Note: setting `level` only **unlocks** the higher structure caps; energy capacity
+rises as the bot builds the extra extensions, so allow a few ticks before
+expecting full-size combat bodies. Worth wiring an optional RCL bump into the
+kit's `bootstrap` for combat testing.
+
 ## Offense soak recipe (validate attack tactics)
 
 1. Stack + bot: `server up` → `deploy --user ibex` (hot swap, same WFV = no reset).
 2. Confirm a scoutable target exists near our rooms:
    `storage.db['rooms.objects'].find({type:'invaderCore'},{room:1,level:1})` —
    else inject one: `strongholds.spawn('<adjacent room>', {templateName:'bunker3'})`.
-3. (Optional) `system.setTickDuration(100)` to fast-forward; `genInvaders` for creeps.
+3. Fast-forward to combat-capable: bump the home controller to RCL4+ (see
+   Fast-forward shortcuts above) and `system.setTickDuration(25)`; allow a few
+   ticks for extensions to build before expecting full-size combat bodies.
 4. Watch: `console --user ibex --grep "Dismantle|Secure|Squad|breach|War" --seconds 120`
    and the seg-57 cohesion canary. **Pass = a `Dismantle` objective is produced, a
    cohesive squad travels in, breaches the rampart, and the core is CLEARED**, with
