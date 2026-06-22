@@ -145,6 +145,16 @@ rises as the bot builds the extra extensions, so allow a few ticks before
 expecting full-size combat bodies. Worth wiring an optional RCL bump into the
 kit's `bootstrap` for combat testing.
 
+**CAUTION — bump RCL once, EARLY, on a small colony.** The `controller.level`
+record itself is not corrupted by a direct set, but **abruptly jumping multiple
+levels (e.g. 2→7→8) on a built-up colony** triggers a chaotic construction burst:
+the bot floods construction sites for all the newly-unlocked structures, and one
+can land on a spawn's output tile — the spawn then stalls/cycles, unable to
+release creeps (observed 2026-06-22: a constructionSite on Spawn1's output
+direction froze spawning). Combined with any halt period (e.g. a panic loop) that
+piles idle creeps around the spawn, the room ends up wedged. Prefer bumping a
+single level on a fresh/small colony and letting it stabilize.
+
 ## Offense soak recipe (validate attack tactics)
 
 1. Stack + bot: `server up` → `deploy --user ibex` (hot swap, same WFV = no reset).
