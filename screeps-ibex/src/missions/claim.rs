@@ -109,6 +109,10 @@ impl Mission for ClaimMission {
         }
     }
 
+    fn get_creeps(&self) -> Vec<Entity> {
+        self.claimers.iter().copied().collect()
+    }
+
     fn repair_entity_refs(&mut self, is_valid: &dyn Fn(Entity) -> bool) {
         // Without this, a dangling claimer entity (one removed outside the
         // creep-death path) would keep `claimers` non-empty forever, silently

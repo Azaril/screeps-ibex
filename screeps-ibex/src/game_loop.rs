@@ -322,6 +322,31 @@ fn repair_entity_integrity(world: &mut World) {
         }
     }
 
+    // ── MissionData: scrub dead creep references ──────────────────────
+    //
+    // The dominant dangling-ref source: a tracked creep entity is deleted
+    // (e.g. a failed spawn) without the mission being notified, leaving a
+    // dead `Entity` in the mission's creep list that panics specs
+    // `ConvertSaveload for Entity` at serialize time. `remove_creep` handles
+    // this on the cleanup path; this is the serialize-time backstop for any
+    // path that doesn't (and it NAMES the entity+mission, turning what was an
+    // opaque specs panic into a logged auto-repair).
+    {
+        let entities = world.entities();
+        let markers = world.read_storage::<SerializeMarker>();
+        let missions = world.read_storage::<MissionData>();
+
+        let is_valid = |e: Entity| -> bool { entities.is_alive(e) && markers.get(e).is_some() };
+
+        for (entity, md) in (&entities, &missions).join() {
+            let dead: Vec<Entity> = md.as_mission().get_creeps().into_iter().filter(|c| !is_valid(*c)).collect();
+            for creep in dead {
+                error!("INTEGRITY: dead creep entity {:?} removed from mission {:?}", creep, entity);
+                md.as_mission_mut().remove_creep(creep);
+            }
+        }
+    }
+
     // ── SquadContext: clean dangling member and heal_priority refs ────
     {
         let entities = world.entities();

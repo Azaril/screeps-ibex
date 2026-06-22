@@ -100,6 +100,10 @@ impl Mission for ReserveMission {
         self.reservers.retain(|e| *e != entity);
     }
 
+    fn get_creeps(&self) -> Vec<Entity> {
+        self.reservers.iter().copied().collect()
+    }
+
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!("Reserve - Reservers: {}", self.reservers.len())
     }

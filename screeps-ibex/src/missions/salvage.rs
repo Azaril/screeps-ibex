@@ -434,6 +434,15 @@ impl Mission for SalvageMission {
         self.declaimers.retain(|e| *e != entity);
     }
 
+    fn get_creeps(&self) -> Vec<Entity> {
+        self.raiders
+            .iter()
+            .chain(self.dismantlers.iter())
+            .chain(self.declaimers.iter())
+            .copied()
+            .collect()
+    }
+
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!(
             "Salvage - Raiders: {} Dismantlers: {} Declaimers: {}",

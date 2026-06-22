@@ -150,6 +150,10 @@ impl Mission for UpgradeMission {
         self.upgraders.retain(|e| *e != entity);
     }
 
+    fn get_creeps(&self) -> Vec<Entity> {
+        self.upgraders.iter().copied().collect()
+    }
+
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!("Upgrade - Upgraders: {}", self.upgraders.len())
     }

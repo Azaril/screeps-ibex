@@ -120,6 +120,10 @@ impl Mission for ScoutMission {
         self.scouts.retain(|e| *e != entity);
     }
 
+    fn get_creeps(&self) -> Vec<Entity> {
+        self.scouts.iter().copied().collect()
+    }
+
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         let next_spawn = self
             .next_spawn

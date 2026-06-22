@@ -170,6 +170,16 @@ pub trait Mission {
     /// entity from their tracking lists.
     fn remove_creep(&mut self, _entity: Entity) {}
 
+    /// Every creep entity this mission tracks. Used by
+    /// `repair_entity_integrity` (the pre-serialize backstop) to detect and
+    /// drop dead creep references that would otherwise panic specs
+    /// `ConvertSaveload` at serialize time. Missions that track creeps MUST
+    /// override this (mirroring the fields scrubbed by `remove_creep`); the
+    /// default of "no creeps" is correct only for missions that own none.
+    fn get_creeps(&self) -> Vec<Entity> {
+        Vec::new()
+    }
+
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, mission_entity: Entity) -> String;
 
     /// Produce a structured summary for the visualization overlay.

@@ -309,6 +309,10 @@ impl Mission for MineralMiningMission {
         self.container_miners.retain(|e| *e != entity);
     }
 
+    fn get_creeps(&self) -> Vec<Entity> {
+        self.container_miners.iter().copied().collect()
+    }
+
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!("Mineral Mining - Miners: {}", self.container_miners.len())
     }

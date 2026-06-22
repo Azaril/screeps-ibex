@@ -166,6 +166,10 @@ impl Mission for LocalBuildMission {
         self.builders.retain(|e| *e != entity);
     }
 
+    fn get_creeps(&self) -> Vec<Entity> {
+        self.builders.iter().copied().collect()
+    }
+
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!("Local Build - Builders: {}", self.builders.len())
     }

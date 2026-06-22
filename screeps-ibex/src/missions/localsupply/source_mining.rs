@@ -527,6 +527,15 @@ impl Mission for SourceMiningMission {
         self.link_miners.retain(|e| *e != entity);
     }
 
+    fn get_creeps(&self) -> Vec<Entity> {
+        self.harvesters
+            .iter()
+            .chain(self.container_miners.iter())
+            .chain(self.link_miners.iter())
+            .copied()
+            .collect()
+    }
+
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         format!(
             "Source Mining - Link: {} Container: {} Harvest: {}",

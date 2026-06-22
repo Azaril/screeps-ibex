@@ -122,6 +122,10 @@ impl Mission for RemoteBuildMission {
         self.builders.retain(|e| *e != entity);
     }
 
+    fn get_creeps(&self) -> Vec<Entity> {
+        self.builders.iter().copied().collect()
+    }
+
     fn describe_state(&self, system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
         let home_room_names = self
             .home_room_datas
