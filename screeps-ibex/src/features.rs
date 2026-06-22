@@ -363,7 +363,11 @@ impl Default for MilitaryFeatures {
     fn default() -> Self {
         Self {
             defense: true,
-            offense: false,
+            // ON by default: live MMO deploy runs offense (invader cores / strongholds
+            // / derelict raid+dismantle / SK). `attack_players` stays OFF (no PvP war
+            // until the W + identity tracks land). Override via `Memory._features` to
+            // disable live without a redeploy. See combat-overhaul-plan.md §4D.
+            offense: true,
             attack_players: false,
             attack_invaders: true,
             boost_military: false,
