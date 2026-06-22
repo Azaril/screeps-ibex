@@ -60,6 +60,36 @@ This table **supersedes** the phase-2.md Status columns (including the stale §2
 
 **Do-next ordering:** **The entire G workstream (incl. G4 offense migration) is DONE** — O7 deleted the legacy (WFV 12→13, deployed); all combat is objective-driven via the `SquadManager`. O5 (power-banks) + G4-HEAVY (heavy assault) are deferred future capabilities (§5(g)). **Remaining are the independent tracks: H4/H5 (harness), I1/I2 (SquadStore/SquadId), W2–W4 (war supervisor/escort/posture), S1/S2 (synchronized spawn), K2c-2/K-RECONCILE/K4 (SK), plus the validation/future items in §5(g).** Recommended next: validate the objective/manager combat path on the Docker soak (offense ON), then pick up **I1** (foundational — unblocks S1 + a future G4-HEAVY) or **H4** (unblocks the EXP-* tuning loop). Full dependency-ordered queue in §5.
 
+## 4D. Path to MMO deployment — whole-bot, offense-ready (2026-06-19)
+
+**Scope: the WHOLE master delta since the last MMO deploy — not any single ADR.** The delta is large: the entire Phase-2 combat overhaul (objective queue + `SquadManager` + EV tactics + unified positioning + Lanchester gate + self-play tournament; ADR 0008/0019/0020), derelict-rooms M1–M12 (salvage/raid/dismantle/declaim), market always-active seg-58, the `tower_dps` Some(0.0) + defend-gate fixes, statics→`Resource` M0–M6, and several WFV bumps (MMO is presumably <13). Treat as a major behavioral change → staged deploy + telemetry watch.
+
+**How "attack" is gated (verified in code):**
+- ALL offense (invader cores, strongholds, derelict raid/dismantle, SK, player) is behind ONE master runtime flag `Memory._features.military.offense` (default **FALSE**) — `war.rs:575` returns early when off. Sub-flags under it: `attack_invaders` (default TRUE → cores/strongholds), `attack_players` (default FALSE → PvP). Derelict `raid`/`dismantle` + `source_keeper.farming` are their own default-TRUE runtime flags.
+- Features load from `Memory._features` **every tick** (`features.rs:642/713`) ⇒ `offense` is a **live console toggle**: enable/disable with NO redeploy, instantly reversible.
+- ⇒ A **default MMO deploy runs DEFENSE + derelict salvage + SK only.** "Enabling attack" = set `Memory._features.military.offense = true` on the live server — no code, reversible. The offense pipeline is code-complete + **Docker-proven to FIRE** (offense=true produced core `Dismantle` objectives + fielded squads, 2026-06-19).
+
+**What "attack ready" actually requires (only #2 is new work):**
+1. **Whole-bot pre-deploy hygiene** (covers ALL the delta): `cargo build-wasm` + `clippy-wasm` + `cargo test` green; **WFV — VERIFIED SAFE at 13** (`git diff 3290c86..HEAD -- screeps-ibex/src` = only `squad_combat.rs`+`squad_manager.rs`, zero serde shape changes; MMO<13 = one intended loud reset); `screeps-pack check` + `--dryrun`; CPU headroom vs **MMO** limits (30→300/GCL, 10k bucket), not Docker's 100.
+2. **Offense-tactic validation (the new bar)** — the offense tactics have **never executed live** (every Docker capture hit a peaceful window). A Docker soak with `offense=true` must prove: a squad **breaches + CLEARS an invader core** (gap b), derelict raid/dismantle behave, and offense **doesn't starve defense under the static 4-cap** (concurrency, gap d). Fix whatever it surfaces — the most likely real gap is **structure-siege sustain** (a squad holding weapon range on a core/spawn long enough to finish the dismantle, vs drifting out — the managed path uses `Advance{range:1/3}` which *should* hold, but it's unproven for a structure focus).
+3. **Staged live enablement:** deploy master (defense-on by default) → stabilize a window → flip `offense=true` via console → watch the seg-57 canary + that cores get cleared + the cap isn't contended → revert instantly if bad.
+
+**Attack tiers (readiness, highest→lowest):**
+- **Defense + derelict salvage/raid/dismantle + SK farming** — most ready (derelict M1–M12 done + Docker-validated; default-on; own kill-switches). Ships on by default.
+- **Invader-core offense (`Dismantle`)** — pipeline proven to fire; needs the Docker breach+clear validation before flipping `offense` on. **This is the v1 "attack-ready" target.**
+- **Strongholds** — least ready (unscouted/unexercised; SK has a hard stronghold veto). A later tier; validate the tower/breach fight before relying on it.
+- **Player war (`attack_players`)** — DEFERRED: needs W2–W4 (supervisor/escort/WarDecl) + I1/I2 (identity). NOT part of attack-ready v1; keep `attack_players=false`.
+
+**Recommended path to deployed-with-attack-ready:**
+1. Whole-bot pre-deploy hygiene green.
+2. **Docker soak, offense=true** — force scenarios A (owned-room defense) / B (invader-core breach + **CLEAR**) / C (SK/stronghold cross-room flee) / D (concurrency vs the 4-cap). Fix offense bugs surfaced. *This soak is what makes attack "ready", not merely "enabled".*
+3. `screeps-pack check`/`--dryrun` → **operator go-ahead**.
+4. Deploy master (one loud WFV reset if MMO<13). Defense runs by default; watch `deser_failures` (one bump→flat), `vm_starts` (one bump), cpu/bucket trend, `segment_chunks<4`, the cohesion canary, and aliasing symptoms (no dangling-ref counter exists yet — I2 unstarted).
+5. **Flip attack on:** once stable, set `Memory._features.military.offense = true` (keep `attack_players=false`). Watch the canary + core-clears + cap contention (defense not starved). Revert via console if bad.
+6. Widen / enable strongholds / pursue `attack_players` only after the above is stable and the W + I tracks land.
+
+**Only code work for attack-ready is whatever the offense soak (step 2) surfaces** — offense is implemented + flaggable, not a code gap. If the soak passes, attack-ready is a flag flip. (Combat-specific remaining-build inventory: ADR 0020 §11.)
+
 ## 5. Remaining work (the execution plan)
 
 Dependency order. Each item: id · what · why · deps · gated_on · effort.
