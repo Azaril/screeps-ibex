@@ -33,7 +33,7 @@ use super::squad::{AttackTarget, SquadContext, SquadState, SquadTarget, TickMove
 use crate::combat::kite::{PositionLayers, SquadTacticParams, MAX_KITE_OPS};
 use crate::combat::{
     build_room_layers, decide_squad_with_pathing, CombatCreepDto, CombatStructureDto, SquadDecision, SquadMemberView,
-    SquadOrderState, SquadView,
+    SquadMovement, SquadOrderState, SquadView,
 };
 use std::collections::HashMap;
 use crate::creep::{spawning, CreepOwner};
@@ -631,10 +631,21 @@ fn apply_squad_decision(ctx: &mut SquadContext, decision: &SquadDecision, creep_
             for (i, member) in ctx.members.iter_mut().enumerate() {
                 let focus = decision.focus_assignments.get(i).copied().flatten().or(decision.focus);
                 let attack_target = focus.map(|f| f.id.map(AttackTarget::Creep).unwrap_or(AttackTarget::Structure(f.pos)));
+                // ADR 0019 §8: a member with its own goal (a pure-support healer's heal-coverage tile)
+                // moves to that tile instead of the shared block directive; everyone else follows the
+                // block. Only the anchorless `decide_movement` path reads `squad_movement`, so this is
+                // inert for a siege formation (which keeps its healers-back slots).
+                let squad_movement = decision
+                    .member_goals
+                    .get(i)
+                    .copied()
+                    .flatten()
+                    .map(|goal| SquadMovement::Advance { goal, range: 0 })
+                    .unwrap_or(decision.movement);
                 member.tick_orders = Some(TickOrders {
                     attack_target,
                     movement: TickMovement::Formation,
-                    squad_movement: decision.movement,
+                    squad_movement,
                     squad_center: decision.center,
                     squad_cohesion_radius: decision.cohesion_radius,
                     ..Default::default()
