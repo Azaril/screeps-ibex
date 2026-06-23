@@ -179,7 +179,8 @@ work; §11 holds the broader inventory it cross-references.
 | Phase | What | WFV | Status |
 |---|---|---|---|
 | **P1** | Healer heal-coverage positioning (ADR [0019](0019-combat-position-selection.md) §8/§8.1) | none (transient) | **DONE 2026-06-23** — submodule `eff9888`/`97cb152`, superproject `f51aebb`+`525202b` |
-| **P2** | EV force-sizing oracle (§12.2): winnability + composition sizing + tower-drain EV | **14→15** (RoomThreatData enrichment) | **DONE 2026-06-23** — `e6aa2db` (intel + WFV 15), `d74c262` (oracle), `1fc7364` (war.rs gate). Host 167, check-wasm + clippy-wasm clean. Live verify folds into P3. |
+| **P2a** | EV winnability **GATE** + tower-drain EV — the "can a single squad win?" half of §12.2 | **14→15** (RoomThreatData enrichment) | **DONE 2026-06-23** — `e6aa2db` (intel + WFV 15), `d74c262` (oracle), `1fc7364` (war.rs gate). Host 167, check-wasm + clippy-wasm clean. |
+| **P2b** | **Force-DRIVEN composition sizing** (§12.5) — size the squad to the Lanchester-favorable force; the "what composition wins" half of §12.2 | likely **none** (`SquadComposition` shape unchanged — different values of the same serialized type) | **NOT BUILT (status correction 2026-06-23).** The oracle's `required_heal_per_tick`/`required_dismantle_dps` are dead-ends (logging/ROI only); `war.rs` fields a fixed `siege_quad` and `queue_slot_spawn` sizes bodies to spawn ENERGY, not required force. **The next increment — see §12.5.** |
 | **P3** | Watch a winnable clear end-to-end (private server W7N5 L1) + force soak A–D (§10) | — | pending (the hard pre-deploy gate) |
 | **P4** | Re-prove WFV safety (`b29224f..HEAD`, §10 correction) + whole-bot hygiene + operator go-ahead → **MMO deploy v1** (defense + smart core offense, `offense` default-true, conservative, watch the seg-57 canary) | — | pending |
 | **P5** (fast-follow, post-v1) | identity **I1/I2** (SquadId; §11) → multi-squad **G4-HEAVY** for towered strongholds (the P2 oracle defers to this) → **S5** full blob auction (needs the cross-goal EV currency) → **S6** adaptivity (dynamic mixed-strategy vs adaptive players; `attack_players` stays OFF) | each bumps WFV (fold post-deploy) | remaining (see §11) |
@@ -187,6 +188,8 @@ work; §11 holds the broader inventory it cross-references.
 **Why this order:** P2 makes offense *safe + effective* live (it stops the bot fielding losing squads — the operator's original complaint) and is the headline "better combat" lever, so it ships before the first MMO window. P2's WFV 14→15 folds into the single loud reset an MMO deploy (<14) already incurs, so it costs nothing extra. G4-HEAVY/strongholds is a genuine *later tier* (v1 = single-tower cores) and is deferred to P5.
 
 ### 12.2 P2 — the force-sizing oracle (design)
+
+> **⚠ STATUS CORRECTION (2026-06-23).** This section designed BOTH (a) the winnability gate and (b) sizing the composition to the target. **Only (a) was built (P2a, `d74c262`/`1fc7364`).** (b) — the composition *sizing* that actually realizes the operator's "force composition driven by the assessment" — is **NOT built**: the oracle's `required_*` outputs are logging-only dead-ends, `war.rs` fields a fixed `siege_quad`, and `queue_slot_spawn` sizes bodies to spawn ENERGY (not required force). The loop runs backwards (composition → budget → gate), so an under-strength squad correctly retreats at runtime (`assess_engage`) → the engage/retreat cycle seen live (SK duo). **(b) is specified as the P2b increment in §12.5.**
 
 Invert the forward Lanchester (`assess_engage`, lib.rs:849-909) into a **required-force** model: given a target's defense profile, decide (a) **can a single squad win** and (b) **what composition wins** within an HP/time budget — replacing the tower-count proxy at `war.rs:899-905`.
 
@@ -216,3 +219,40 @@ So `rampart_hits` in the enriched intel = the hits of the **breach-corridor bloc
 - **`screeps-combat-decision/src/lib.rs`**: `assess_engage` 849-909 (forward model to invert); `heal_reaching` 250-275; `breach_redirect` 1203-1277 + the `breach_path_blockers` kernel (the §12.3 rampart-relevance source).
 - **`military/composition.rs` / `bodies.rs`**: the composition/body factories the oracle sizes.
 - **Build/test gate:** `cargo test` (decision/eval/ibex) + `check-wasm` + `clippy-wasm` warning-free; bump `WORLD_FORMAT_VERSION` 14→15 + update the `game_loop.rs` history block (one intended loud reset, folds into the MMO deploy reset).
+
+### 12.5 Force-driven composition sizing (P2b) — closing the open loop [the next increment]
+
+The unbuilt half of §12.2(b). Authored 2026-06-23 from a verified mapping (wf_b6af8d21); implementation pending operator go-ahead.
+
+**The problem (verified).** Three uses of one Lanchester model are disconnected:
+- the **gate** (`war.rs`) asks "does the *fixed* comp win?" — it builds a `ForceBudget` FROM the hardcoded `siege_quad`'s `capabilities()` and uses `assess()` only as go/no-go (composition → budget → verdict, **backwards**);
+- **sizing** is energy-driven (`queue_slot_spawn` → `body_definition(home_energy)`), with **zero coupling to enemy strength** — my `836f0e1` "size to the strongest home" change only swapped *which* energy, still a band-aid;
+- the **runtime retreat** (`assess_engage`, lib.rs:867-915) reacts to the squad's **actual spawned** strength.
+
+⇒ a squad fielded under-strength (spawned to *energy*, not to *win*) correctly computes "unwinnable" at runtime and retreats — the **engage/retreat cycle**, observed live: the SK duo trickles into W6N4 and bails, suppression never holds, mining never starts. The oracle's `required_heal_per_tick`/`required_dismantle_dps` already exist but are **dead-ends** (logging/ROI only).
+
+**The principle.** Size to the **smallest force whose Lanchester balance is favorable** (with a margin). That single computation yields all three needs at once: the **minimum size**, the **go/no-go gate** ("can an in-range home afford that force?"), and a **runtime that holds** (sized above the retreat band, so `assess_engage` won't bail). This **subsumes** the `836f0e1` best-home sizing — sizing-to-room "shouldn't be needed" (operator), and won't be.
+
+**Design — the inversion (`required-force → composition → spawn`):**
+1. **Required-capability solver.** Promote the oracle's outputs from diagnostics to contract: emit required `heal_per_tick`, `structure_dps`, `tank_ehp` + mode, sized so `our_strength ≥ killable_enemy_strength × (1 + ENGAGE_MARGIN)` using the **same Lanchester μ as `assess_engage`**, so the runtime gate is satisfied *by construction*.
+2. **Capabilities → part targets** (the inverse of `SquadComposition::capabilities()`, built in P2a): `heal_parts = ceil(req_heal / HEAL_POWER)`, `work|attack_parts = ceil(req_dps / DISMANTLE_POWER|ATTACK_POWER)`, tough/total from `req_ehp`. Per-role target part counts.
+3. **Part targets → body.** Decision **D1**: *(v1, recommended)* **energy-from-parts** — invert the template's repeat math (inverse of P2a's `part_count`) to find the energy budget that yields the target parts, then drive the existing `body_definition(budget)`/`create_body` path with THAT budget instead of `best_home_capacity` (reuses everything; constrained to the template's part RATIO). *(later)* a **dynamic body builder** targeting arbitrary role part-counts (MOVE-balanced, ≤50) — only if the required HEAL:DPS:TOUGH mix must diverge from the template ratio.
+4. **Member-count / role-mix.** v1 keeps the composition's role STRUCTURE (siege = tank + healer(s) + dismantler(s)) and sizes each member's parts; if the 50-part cap is hit, scale member COUNT within the structure. Full role re-allocation across a blob = **0020-S5** (needs the cross-goal EV currency) — out of scope here.
+5. **Consume it (`war.rs`/`SquadManager`).** Replace the hardcoded `siege_quad()` with `size_composition(assessment) -> SquadComposition`; the **gate becomes "can an in-range home afford the required force?"** (subsumes `best_force_budget` + `836f0e1`). Unaffordable ⇒ defer (G4-HEAVY / wait for RCL) — same conservatism, now for the right reason.
+6. **Runtime consistency (free).** Sized above the retreat band ⇒ `assess_engage` holds. No separate "hold posture" needed in the common case — correct sizing *is* the hold.
+
+**SK farming (the live failure this fixes).** The SK path has **zero keeper-strength coupling** today — the duo is sized by home energy, never vs the keepers, and runs the offense retreat gate (bails mid-suppression). P2b gives SK a `DefenseProfile` from the **keepers** (DPS/HP/count) and sizes the duo to out-heal/hold them; the affordability/ROI gate then = "can this home field a keeper-suppressing duo?" (if not, don't farm — correct). A distinct suppression *hold-posture* may still help, but correct sizing is the primary fix.
+
+**Structural blockers / open decisions:**
+- **D1 — body builder:** energy-from-parts (v1, reuse templates) vs dynamic part-targeting builder. Recommend v1; the `repeat_body: &'static [Part]` constraint is what makes part-targeting non-trivial.
+- **D2 — margin:** `ENGAGE_MARGIN` (how far above break-even to size) — a tunable seed; align with `assess_engage`'s retreat band so sizing and runtime agree.
+- **D3 — placement:** the pure capability/part math in `screeps-combat-decision` (or `military::force_sizing`); the body/composition synthesis bot-side (it touches `SquadComposition`).
+- **D4 — WFV:** likely **NONE** — `SquadComposition`/`ForceRequirement` shapes are unchanged (different VALUES of the same serialized types). Confirm no new fields before committing.
+- **D5 — SK keeper intel:** add keeper DPS/HP/count to the SK `DefenseProfile` (NPCs with known bodies — cheap to read when the room is visible).
+
+**Scope boundary.** P2b = size ONE squad to the required force for ONE objective (a single Lanchester balance), within the fixed role structure. The general version (role auction across a blob, multi-squad sequencing) is **0020-S5**, gated on the cross-goal EV currency — which P2b does **not** need, so P2b is buildable now.
+
+**Validation.**
+- Host: required-capability solver (defense → caps with margin); part-target mapping round-trips with `capabilities()`; `size_composition` yields a comp whose `capabilities() ≥ required`.
+- Sim/eval (EXP harness): a managed squad **sized to win holds** (no retreat) vs the defense it's sized for; an under-affordable scenario is **gated off** (not committed).
+- Live: the SK duo **holds + suppresses W6N4** (the regression that started this); a winnable core clear.
