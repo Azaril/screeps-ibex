@@ -256,3 +256,22 @@ The unbuilt half of §12.2(b). Authored 2026-06-23 from a verified mapping (wf_b
 - Host: required-capability solver (defense → caps with margin); part-target mapping round-trips with `capabilities()`; `size_composition` yields a comp whose `capabilities() ≥ required`.
 - Sim/eval (EXP harness): a managed squad **sized to win holds** (no retreat) vs the defense it's sized for; an under-affordable scenario is **gated off** (not committed).
 - Live: the SK duo **holds + suppresses W6N4** (the regression that started this); a winnable core clear.
+
+### 12.6 The ladder to the full auction (build order)
+
+P2b is built as **independently-shippable rungs** that each refine behavior AND build a primitive the full **0020-S5** auction reuses — so we get value early and S5 becomes "the last two rungs," not a from-scratch XL. Operator-chosen 2026-06-23. (Effort is relative T-shirt sizing.)
+
+| Rung | What | Ships (value) | The primitive it builds for S5 | Effort |
+|---|---|---|---|---|
+| **R1** | **Dynamic body builder** — `build_combat_body(part_spec, move_policy, max_energy)`: MOVE-balanced for the intended speed (off-road combat ≈ 1:1 MOVE:non-MOVE; roads/boosts looser), survivability-ordered (TOUGH front), ≤50 parts, cost-clamped. Pure, host-tested. | nothing yet (primitive, unwired) | the auction emits per-role part-specs → **this builds them** | M |
+| **R2** | **Required-force → part-spec** — promote the oracle's `required_heal/dps/ehp` to a contract; invert `SquadComposition::capabilities()` (P2a forward) into target part counts. Pure, tested. | nothing yet | the auction's per-role budget → part-spec via this map | S–M |
+| **R3** | **Wire single-squad sizing** — `size_composition(assessment)` = R2∘R1; `war.rs` fields it instead of the hardcoded `siege_quad`; gate becomes "can an in-range home afford the required force?" (subsumes the `836f0e1` best-home band-aid). | **offense squads sized to win** (first behavior change + live value) | the consume-point that S5's auction output plugs into | M |
+| **R4** | **P(win) model** — `assess_engage` balance → **P(win)** (logistic over the margin; distributional later). Sizing targets a P(win) threshold instead of a hard balance margin. | smoother, less brittle sizing | EV needs P(win), not a boolean | M |
+| **R5** | **Importance·P(win) investment** — size to maximize `importance·P(win) − cost` (importance from `OBJECTIVE_PRIORITY_*`). Scales the hammer to the target's value. | **proportional investment** (minimal force for marginal targets, overwhelming for strategic ones) | this IS the single-goal case of the EV the auction maximizes | M |
+| **R6** | **SK application** — keeper `DefenseProfile` (DPS/HP/count) + size the duo to *hold* the keepers; fixes the live SK-suppression failure. | **SK farming actually works** | force-sizing generalized to a non-breach goal (suppress) | S–M |
+| — | *(R1–R6 = P2b complete: single-squad, single-objective, EV-sized)* | | | |
+| **R7** | **Cross-goal EV currency** — a common "future net hits enabled" unit for `EV(focus)/EV(breach)/EV(drain)/EV(heal)/EV(screen)` (the S5 gating prereq). | — | the unit the auction allocates in | M–L |
+| **R8** | **Role→sub-goal auction** — greedy argmax-marginal-EV allocation of the part-budget across roles, using R1 (build) + R5 (EV) + R7 (currency). | adaptive blob composition | **the full auction** | L |
+| **R9** | **N-aware fragility cohesion + multi-squad sequencing** (needs I1/I2 SquadId) | blob cohesion at scale, G4-HEAVY | multi-squad coordination | L |
+
+**Start: R1** (the dynamic body builder) — foundational, isolated, host-testable, no behavior change, and every later rung depends on it. Then R2→R3 (first live value), R4→R5 (EV), R6 (SK). R7–R9 are S5, deferred until P2b is validated live.
