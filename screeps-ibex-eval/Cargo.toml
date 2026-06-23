@@ -8,11 +8,13 @@ description = "Evaluation POLICY for screeps-ibex: the smoke gates (ibex's pinne
 # for ibex" is defined — the panic/deser log-marker strings pinned from
 # the bot crate, the stats segment, the smoke loop. All mechanism
 # (Docker stack, bootstrap, deploy, capture) comes from screeps-server-kit.
-# Workspace-excluded like its dependency (decision D-1 lifecycle).
+# A workspace MEMBER like its dependency screeps-server-kit (single place to
+# pull/use; the root [patch] table gives clean local patching). Host-only, so
+# the wasm aliases in .cargo/config.toml --exclude it.
 
 [dependencies]
 # The generic private-server toolkit (P0.A14 mechanism/policy split).
-# Path dep while in-repo; becomes a git dep at the D-1 extraction.
+# Path dep to the sibling member crate.
 screeps-server-kit = { path = "../screeps-server-kit" }
 # The seg-57 metrics schema (P1.A2 reader side — same crate the bot
 # writes with, so the contract cannot drift).
@@ -25,13 +27,6 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# screeps-server-kit -> screeps-prospector -> screeps-foreman brings git
-# dependencies into this build graph; [patch] tables apply only from the
-# BUILD ROOT, and this crate is workspace-excluded (its own root) — so
-# the redirects must be repeated here (mirrors
-# ../screeps-prospector/Cargo.toml).
-[patch.'https://github.com/Azaril/screeps-cache']
-screeps-cache = { path = "../screeps-cache" }
-
-[patch.'https://github.com/Azaril/screeps-common']
-screeps-common = { path = "../screeps-common" }
+# No [patch] table: as a workspace member this crate inherits the root
+# Cargo.toml [patch] table, which redirects the transitive git deps (from
+# screeps-server-kit -> prospector -> foreman) to the local working tree.

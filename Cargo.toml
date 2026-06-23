@@ -28,11 +28,13 @@ members = [
     "screeps-pack",
     "screeps-prospector",
     "screeps-server-kit",
-]
-exclude = [
+    # Host-side bench + eval-harness crates (foreman-bench: rayon/image; ibex-eval:
+    # tokio-multithread + bollard via server-kit). Members too, for uniformity — the
+    # wasm aliases (.cargo/config.toml) --exclude every host-only crate.
     "screeps-foreman-bench",
     "screeps-ibex-eval",
 ]
+# No `exclude`: every crate directory in this repo is now a workspace member.
 
 [profile.release]
 panic = "abort"
