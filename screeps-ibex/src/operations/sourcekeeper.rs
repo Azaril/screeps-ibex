@@ -223,9 +223,16 @@ impl Operation for SourceKeeperOperation {
         system_data: &mut OperationExecutionSystemData,
         runtime_data: &mut OperationExecutionRuntimeData,
     ) -> Result<OperationResult, ()> {
-        // Master kill-switch (ADR 0018 §3.5) — default OFF until validated.
+        // Master kill-switch (ADR 0018 §3.5) — default TRUE (validated behaviors run on).
         let sk_features = system_data.features.source_keeper;
+        // Observability: the SK scan was previously silent unless the (exec-only) `diagnostics` flag was
+        // set, making "why isn't it farming?" undebuggable. Mirror the War scan — log the scan shape +
+        // per-candidate decision under the always-available `military.debug_log` toggle too.
+        let sk_debug = sk_features.diagnostics || system_data.features.military.debug_log;
         if !sk_features.farming {
+            if sk_debug {
+                info!("[SK] scan: farming feature OFF (Memory._features.source_keeper.farming)");
+            }
             return Ok(OperationResult::Running);
         }
         if game::time() % 50 != SK_SCAN_OFFSET {
@@ -243,10 +250,24 @@ impl Operation for SourceKeeperOperation {
 
         let home_rooms = gather_home_rooms(&gather_system_data, SK_HOME_MIN_RCL);
         if home_rooms.is_empty() {
+            if sk_debug {
+                info!("[SK] scan: no home rooms >= RCL{} -> no farming (need a higher-RCL colony room)", SK_HOME_MIN_RCL);
+            }
             return Ok(OperationResult::Running);
         }
 
         let gathered = gather_candidate_rooms(&gather_system_data, &home_rooms, sk_features.max_range, Self::gather_candidate_room_data);
+
+        if sk_debug {
+            info!(
+                "[SK] scan: {} home(s) >= RCL{}, range {}, {} viable candidate(s), {} unscouted frontier room(s)",
+                home_rooms.len(),
+                SK_HOME_MIN_RCL,
+                sk_features.max_range,
+                gathered.candidate_rooms().len(),
+                gathered.unknown_rooms().len()
+            );
+        }
 
         // Scout the frontier so unscouted ring rooms become viable candidates.
         for unknown_room in gathered.unknown_rooms().iter() {
@@ -328,10 +349,21 @@ impl Operation for SourceKeeperOperation {
             };
             let score = score_sk_farm(&inputs);
 
-            if sk_features.diagnostics {
+            if sk_debug {
                 info!(
-                    "SK farm candidate {}: {} sources @ {} tiles, gross {:.1} net {:.1} e/t -> {:?}",
-                    room_name, live_sources, inputs.haul_tiles, score.gross_per_tick, score.net_per_tick, score.decision
+                    "[SK] candidate {}: {} sources @ {} tiles, gross {:.1} net {:.1} e/t | affordable={} contested={} stronghold={} cpu_ok={} under_cap={} committed={} -> {:?}",
+                    room_name,
+                    live_sources,
+                    inputs.haul_tiles,
+                    score.gross_per_tick,
+                    score.net_per_tick,
+                    inputs.affordable,
+                    inputs.contested,
+                    inputs.stronghold_present,
+                    inputs.cpu_ok,
+                    inputs.under_farm_cap,
+                    inputs.already_committed,
+                    score.decision
                 );
             }
 
