@@ -619,10 +619,15 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// AttackReason removed — all offense now routes through Secure/Dismantle/Harass
 /// objectives on the CombatObjectiveQueue), reshaping both the MissionData and
 /// OperationData enums.
+/// 14 = road-connectivity room planner (ADR 0009c): the `Plan` struct gains
+/// `approach_tiles: Vec<(Location, Location)>` (per-structure road approach
+/// tiles) and `PlanScore` swaps the phantom `traffic_congestion` field for
+/// `road_transport` + `road_connectivity`. Both reshape the serialized `Plan`,
+/// which rides in the bincode world-save stream -- one loud reset on deploy.
 /// NOTE: bincode is positional and never signals early end-of-sequence, so a
 /// trailing #[serde(default)] field does NOT make old payloads decode safely --
 /// the version fingerprint is the only real gate, hence this bump.
-const WORLD_FORMAT_VERSION: u32 = 13;
+const WORLD_FORMAT_VERSION: u32 = 14;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode
