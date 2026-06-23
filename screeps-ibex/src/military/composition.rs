@@ -121,6 +121,32 @@ impl BodyType {
         (fixed_len as u32) + repeats * (def.repeat_body.len() as u32)
     }
 
+    /// Count of `part` in the expanded body at `max_energy` — the per-part-type input the force-sizing
+    /// oracle needs (ADR 0020 §12.2). Mirrors `estimated_part_count`'s repeat math but counts one type.
+    pub fn part_count(&self, max_energy: u32, part: Part) -> u32 {
+        let def = self.body_definition(max_energy);
+        let in_slice = |s: &[Part]| s.iter().filter(|p| **p == part).count() as u32;
+        let fixed = in_slice(def.pre_body) + in_slice(def.post_body);
+        let per_repeat = in_slice(def.repeat_body);
+        if per_repeat == 0 {
+            return fixed;
+        }
+
+        let repeat_cost: u32 = def.repeat_body.iter().map(|p| p.cost()).sum();
+        let pre_cost: u32 = def.pre_body.iter().map(|p| p.cost()).sum();
+        let post_cost: u32 = def.post_body.iter().map(|p| p.cost()).sum();
+        let fixed_cost = pre_cost + post_cost;
+        let fixed_len = def.pre_body.len() + def.post_body.len();
+        let max_by_cost = max_energy.saturating_sub(fixed_cost) / repeat_cost.max(1);
+        let max_by_size = (50usize.saturating_sub(fixed_len)) / def.repeat_body.len().max(1);
+        let repeats = max_by_cost.min(max_by_size as u32);
+        let repeats = match def.maximum_repeat {
+            Some(max) => repeats.min(max as u32),
+            None => repeats,
+        };
+        fixed + per_repeat * repeats
+    }
+
     /// List the boost compounds required for this body type (if boosted).
     pub fn required_boosts(&self) -> Vec<(ResourceType, u32)> {
         match self {
@@ -567,4 +593,38 @@ impl SquadComposition {
     pub fn member_count(&self) -> usize {
         self.slots.len()
     }
+
+    /// This composition's combat capabilities at a given spawn energy — the [`force_sizing`] oracle's
+    /// `ForceBudget` inputs (ADR 0020 §12.2). Bodies auto-size to `max_energy` (the same sizing the
+    /// spawner uses), so the assessment reflects what we'd actually field at this RCL. Unboosted (v1).
+    ///
+    /// [`force_sizing`]: super::force_sizing
+    pub fn capabilities(&self, max_energy: u32) -> SquadCapabilities {
+        let mut heal_per_tick = 0u32;
+        let mut structure_dps = 0u32;
+        let mut tank_effective_hp = 0u32;
+        for slot in &self.slots {
+            let bt = slot.body_type;
+            heal_per_tick += bt.part_count(max_energy, Part::Heal) * HEAL_POWER;
+            // Structure damage: WORK dismantles (50/part), ATTACK hits a structure (30/part). Both
+            // contribute to breaching ramparts and killing the core.
+            structure_dps += bt.part_count(max_energy, Part::Work) * DISMANTLE_POWER
+                + bt.part_count(max_energy, Part::Attack) * ATTACK_POWER;
+            // The tank is the toughest single member (most total HP = parts × 100, unboosted).
+            tank_effective_hp = tank_effective_hp.max(bt.estimated_part_count(max_energy) * 100);
+        }
+        SquadCapabilities { heal_per_tick, structure_dps, tank_effective_hp }
+    }
+}
+
+/// A composition's per-tick combat output + tank HP at a spawn energy — the force-sizing oracle's
+/// `ForceBudget` inputs (ADR 0020 §12.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SquadCapabilities {
+    /// Total heal/tick the squad can sustain (Σ HEAL parts × `HEAL_POWER`).
+    pub heal_per_tick: u32,
+    /// Structure damage/tick (Σ WORK × `DISMANTLE_POWER` + ATTACK × `ATTACK_POWER`) — breach + core-kill.
+    pub structure_dps: u32,
+    /// Effective HP of the toughest single member (the tank that soaks a tower drain).
+    pub tank_effective_hp: u32,
 }

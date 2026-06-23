@@ -1,6 +1,7 @@
 use super::data::*;
 use super::operationsystem::*;
 use crate::military::composition::SquadComposition;
+use crate::military::force_sizing::{assess, DefenseProfile, ForceBudget, TowerThreat};
 use crate::military::objective_queue::{
     ForceRequirement, ObjectiveKind, ObjectiveOwner, ObjectiveRequest, OBJECTIVE_PRIORITY_CRITICAL, OBJECTIVE_PRIORITY_HIGH,
     OBJECTIVE_PRIORITY_LOW, OBJECTIVE_PRIORITY_MEDIUM,
@@ -32,15 +33,6 @@ const DEFEND_OBJECTIVE_TTL: u32 = 60;
 /// pressure), so this comfortably outlives the re-assert gap — a cleared room
 /// (no core ⇒ no upsert) then lapses and the manager retires the siege squad.
 const OFFENSE_OBJECTIVE_TTL: u32 = 100;
-
-/// Max tower count of an invader stronghold a single (unboosted) siege quad is
-/// allowed to be sent against. Above this, a single squad is melted by focused
-/// tower fire on entry (≈600 dps/tower at the core) before it can retreat — the
-/// per-tick Lanchester gate is too late once inside. Higher-tower strongholds
-/// need the deferred heavy (tower-drain + multi-squad) assault, so we skip them
-/// rather than feed squads to their death. (Winnability belongs at target
-/// selection, not just per-tick.)
-const MAX_SINGLE_SQUAD_STRONGHOLD_TOWERS: u32 = 1;
 
 // ---------------------------------------------------------------------------
 // Target scoring
@@ -84,6 +76,9 @@ pub struct AttackCandidate {
     /// Target tile for objective-driven offense that needs a position
     /// (e.g. `InvaderCore` → `Dismantle { pos }`). `None` for room-level reasons.
     pub target_pos: Option<Position>,
+    /// The target's defense as the force-sizing oracle sees it (ADR 0020 §12) — built for `InvaderCore`
+    /// candidates from the room's threat intel + the core; `None` for sources the oracle doesn't gate.
+    pub defense: Option<DefenseProfile>,
 }
 
 /// Defense escalation level, replacing string-based "Solo"/"Duo"/"Quad".
@@ -630,6 +625,7 @@ impl WarOperation {
                     has_safe_mode: false,
                     estimated_roi: None,
                     target_pos: None,
+                    defense: None,
                 });
             }
         }
@@ -711,9 +707,9 @@ impl WarOperation {
                         .invader_cores()
                         .iter()
                         .max_by_key(|core| core.level())
-                        .map(|core| (core.level(), core.pos()))
+                        .map(|core| (core.level(), core.pos(), core.hits()))
                 });
-            let invader_core_level = invader_core.map(|(level, _)| level);
+            let invader_core_level = invader_core.map(|(level, _, _)| level);
 
             // Check for power banks.
             let power_bank_info = room_entity
@@ -749,7 +745,7 @@ impl WarOperation {
             // and the launch loop upserts a `Dismantle { room, pos }` instead of
             // launching an `AttackOperation` — see the launch loop's source→objective
             // mapping. The affordability/interest gate is preserved here.
-            if let Some((core_level, core_pos)) = invader_core {
+            if let Some((core_level, core_pos, core_hits)) = invader_core {
                 if features.military.attack_invaders {
                     let is_our_remote = room_entity
                         .and_then(|e| system_data.room_data.get(e))
@@ -770,6 +766,27 @@ impl WarOperation {
                         is_our_remote,
                         has_sources,
                     ) {
+                        // The defense the force-sizing oracle weighs (ADR 0020 §12). Tower ranges are
+                        // measured to the core (the assault tile) — conservative, since towers cluster
+                        // near it. Unknown per-tower energy (stale intel) ⇒ assume firing (a high value),
+                        // never under-estimating the threat.
+                        let towers: Vec<TowerThreat> = threat_data
+                            .hostile_tower_positions
+                            .iter()
+                            .enumerate()
+                            .map(|(i, tpos)| TowerThreat {
+                                range_to_assault: tpos.get_range_to(core_pos),
+                                energy: threat_data.tower_energy.get(i).copied().unwrap_or(1000),
+                            })
+                            .collect();
+                        let defense = DefenseProfile {
+                            towers,
+                            breach_hits: threat_data.breach_rampart_hits,
+                            objective_hits: core_hits,
+                            enemy_dps: threat_data.estimated_dps,
+                            repair_per_tick: threat_data.repair_per_tick as f32,
+                            safe_mode: threat_data.safe_mode_active,
+                        };
                         candidates.push(AttackCandidate {
                             room: room_name,
                             source: TargetSource::InvaderCore { level: core_level },
@@ -780,6 +797,7 @@ impl WarOperation {
                             has_safe_mode: false,
                             estimated_roi: None,
                             target_pos: Some(core_pos),
+                            defense: Some(defense),
                         });
                     }
                 }
@@ -829,6 +847,7 @@ impl WarOperation {
                             has_safe_mode,
                             estimated_roi: None,
                             target_pos: None,
+                            defense: None,
                         });
                     }
                 }
@@ -888,28 +907,44 @@ impl WarOperation {
             let objective: Option<(ObjectiveKind, f32, SquadComposition)> = match candidate.source {
                 // Invader core → siege the core tile (O1 travel + O2 orient + O3 breach).
                 //
-                // WINNABILITY GATE: a single unboosted siege quad cannot survive a
-                // multi-tower stronghold's focused fire — at the core, N towers do
-                // ~600·N dps, far beyond the quad's heal, so it dies crossing into
-                // tower range, long before the per-tick Lanchester retreat can fire
-                // (retreat is too late once inside). Heavy assault (tower-drain +
-                // multi-squad) for towered strongholds is deferred (G4-HEAVY); until
-                // then do NOT commit a doomed squad. Only single-squad a core with at
-                // most one tower; skip the rest (the higher-level genStrongholds).
-                TargetSource::InvaderCore { .. } if candidate.tower_count > MAX_SINGLE_SQUAD_STRONGHOLD_TOWERS => {
-                    info!(
-                        "[War]   Skip {} -- invader stronghold has {} towers (> {} single-squad limit); needs heavy assault (deferred), not committing a siege quad to its death",
-                        candidate.room, candidate.tower_count, MAX_SINGLE_SQUAD_STRONGHOLD_TOWERS
-                    );
-                    None
+                // WINNABILITY GATE (ADR 0020 §12): the force-sizing oracle replaces the old tower-count
+                // proxy. It weighs the real defense — energized towers (drained ones deal 0), tower
+                // damage at the core, the breach-corridor cost (§12.3, not a rampart sum), and out-heal
+                // feasibility — against what a single siege quad fields at our RCL within its on-site
+                // lifetime (CREEP_LIFE_TIME − spawn − travel). Winnable ⇒ siege (direct breach or
+                // tower-drain, the oracle decides); unwinnable ⇒ skip (defer to the multi-squad
+                // G4-HEAVY), so we never commit a squad to its death — but we now CORRECTLY take
+                // multi-tower cores that are drainable, not just ≤1-tower ones.
+                TargetSource::InvaderCore { .. } => {
+                    let comp = SquadComposition::siege_quad();
+                    match (candidate.target_pos, candidate.defense.as_ref()) {
+                        (Some(pos), Some(defense)) => {
+                            match best_force_budget(&comp, &home_rooms, candidate.room, system_data.pathfinder) {
+                                Some(budget) => {
+                                    let a = assess(defense, &budget);
+                                    if a.winnable {
+                                        info!(
+                                            "[War]   {} winnable via {:?} (~{} ticks): {}",
+                                            candidate.room, a.mode, a.est_ticks, a.reason
+                                        );
+                                        Some((ObjectiveKind::Dismantle { room: candidate.room, pos }, OBJECTIVE_PRIORITY_MEDIUM, comp))
+                                    } else {
+                                        info!(
+                                            "[War]   Skip {} -- force oracle: not winnable for one squad ({}); defer to G4-HEAVY",
+                                            candidate.room, a.reason
+                                        );
+                                        None
+                                    }
+                                }
+                                None => {
+                                    info!("[War]   Skip {} -- no home room can reach it within a creep lifetime", candidate.room);
+                                    None
+                                }
+                            }
+                        }
+                        _ => None,
+                    }
                 }
-                TargetSource::InvaderCore { .. } => candidate.target_pos.map(|pos| {
-                    (
-                        ObjectiveKind::Dismantle { room: candidate.room, pos },
-                        OBJECTIVE_PRIORITY_MEDIUM,
-                        SquadComposition::siege_quad(),
-                    )
-                }),
                 // Operator attack flag → clear the room (HIGH: explicit operator intent).
                 TargetSource::AttackFlag => Some((
                     ObjectiveKind::Secure { room: candidate.room },
@@ -1109,6 +1144,41 @@ fn invader_core_attack_score(
     let score = base_score - level_penalty - distance_penalty;
 
     (score > 0.0).then_some(score)
+}
+
+/// The best (longest on-site) [`ForceBudget`] for launching `comp` at `target` from any home room
+/// (ADR 0020 §12.2): on-site ticks = `CREEP_LIFE_TIME − spawn − travel` (the operator's "creep
+/// lifetime minus travel"), via [`SquadComposition::estimated_combat_time`]; capabilities auto-size to
+/// the launching room's energy. Picks the home that yields the most on-site time (the manager will
+/// likewise field from a viable in-range home). `None` if no home can reach the target.
+fn best_force_budget(
+    comp: &SquadComposition,
+    home_rooms: &[RoomName],
+    target: RoomName,
+    pathfinder: &mut crate::pathing::pathfinderservice::PathfinderService,
+) -> Option<ForceBudget> {
+    let mut best: Option<ForceBudget> = None;
+    for &home in home_rooms {
+        let Some(room) = game::rooms().get(home) else {
+            continue;
+        };
+        let energy_capacity = room.energy_capacity_available();
+        let spawns = room.find(find::MY_SPAWNS, None).len().max(1) as u32;
+        let Some(onsite) = comp.estimated_combat_time(pathfinder, home, target, energy_capacity, spawns) else {
+            continue;
+        };
+        let caps = comp.capabilities(energy_capacity);
+        let budget = ForceBudget {
+            max_heal_per_tick: caps.heal_per_tick as f32,
+            max_dismantle_dps: caps.structure_dps as f32,
+            tank_effective_hp: caps.tank_effective_hp as f32,
+            onsite_budget_ticks: onsite,
+        };
+        if best.map(|b| onsite > b.onsite_budget_ticks).unwrap_or(true) {
+            best = Some(budget);
+        }
+    }
+    best
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
