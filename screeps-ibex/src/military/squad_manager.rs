@@ -351,24 +351,38 @@ fn queue_slot_spawn(
     squad_entity: Entity,
     priority: f32,
 ) {
+    // Size the member's body ONCE to the STRONGEST in-range home (capped by the body's
+    // `maximum_repeat`) — the composition's intended size — NOT per-home. Per-home sizing let a cheaper
+    // idle home win the shared-token spawn and field an UNDERSIZED creep (e.g. a 3-repeat SK duo too
+    // weak to survive the keepers, even though the operation's affordability gate passed on the strong
+    // home's capacity). Because the spawn system skips any home whose capacity is below the body cost
+    // (`spawnsystem`: `body_cost > energy_capacity` → `continue`) and the shared token then routes the
+    // spawn to an affording home, queuing the one intended-size body on every in-range home is correct —
+    // no separate room-affordability filter is needed.
+    let best_capacity = homes
+        .iter()
+        .filter(|h| room_distance(h.name, target_room) <= MAX_SPAWN_DISTANCE)
+        .map(|h| h.energy_capacity)
+        .max();
+    let Some(best_capacity) = best_capacity else {
+        return;
+    };
+    let body = match spawning::create_body(&slot.body_type.body_definition(best_capacity)) {
+        Ok(body) => body,
+        // Even the strongest in-range home can't build the minimum body — don't field an undersized one.
+        Err(()) => return,
+    };
+
     let token = spawn_queue.token();
     for home in homes.iter().filter(|h| room_distance(h.name, target_room) <= MAX_SPAWN_DISTANCE) {
-        let body_def = slot.body_type.body_definition(home.energy_capacity);
-        match spawning::create_body(&body_def) {
-            Ok(body) => {
-                let request = SpawnRequest::new(
-                    format!("Squad-{:?} {}", slot.role, target_room),
-                    &body,
-                    priority,
-                    Some(token),
-                    create_spawn_callback(slot.role, slot_index, target_room, squad_entity),
-                );
-                spawn_queue.request(home.entity, request);
-            }
-            Err(()) => {
-                // This room can't build the body; try the next.
-            }
-        }
+        let request = SpawnRequest::new(
+            format!("Squad-{:?} {}", slot.role, target_room),
+            &body,
+            priority,
+            Some(token),
+            create_spawn_callback(slot.role, slot_index, target_room, squad_entity),
+        );
+        spawn_queue.request(home.entity, request);
     }
 }
 
