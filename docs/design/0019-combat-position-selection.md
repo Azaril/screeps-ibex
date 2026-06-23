@@ -280,3 +280,77 @@ Risk-free (behavior-preserving refactor with a byte-equality gate and a kill-swi
 - `screeps-ibex/src/military/squad.rs` — `SquadState` L14 (**serialized, do not touch**)
 - `screeps-ibex/src/game_loop.rs` — `WORLD_FORMAT_VERSION=13` (**no bump**)
 - `screeps-ibex/src/jobs/squad_combat.rs` — live adapter
+
+## 8. Increment — Healer positioning objective (heal-coverage vs danger) [PROPOSED, not started]
+
+Operator direction (2026-06-23): "pick a location that maximizes potential future
+healing, weighting healing output against danger." The squad healer should pick its
+tile with the SAME unified utility, under a healer objective preset — not the
+stopgap escort heuristic shipped in `squad_combat::fallback_movement` (healer moves
+to range 1 of the nearest damaged ally, else the nearest friendly combatant; the
+interim fix for "healer lags until it takes damage").
+
+Design (the principled version):
+- **New reward term in `score_tile` — heal coverage.** For a candidate tile, sum
+  over friendly combatants the healer can REACH (Chebyshev ≤ heal range: 1 `HEAL`,
+  3 `RANGED_HEAL`) of their **risk-weighted need** = (in the threat field) ×
+  (HP-deficit + a base in-combat weight). Rewards the tile covering the most
+  AT-RISK allies = "maximum potential future healing output." Subtract it from the
+  score like `w_dmg`, scaled by a new `w_heal`.
+- **New healer preset** (`KiteScoreParams` + `SquadTacticParams`): `w_heal` dominant,
+  `w_taken` moderate (the danger balance), `w_cohesion` to stay with the block,
+  `w_prox`/`w_dmg` ≈ 0 (a healer doesn't advance to deal damage). Hug-the-attacker
+  vs back-off emerges from the weights, like kite/engage.
+- **Plumbing:** add `allies: &[AllyNeed]` (pos + risk/HP-deficit) to `SquadKiteView`
+  (today it carries only `centroid`, not per-ally need); build it in the
+  `squad_combat` seam from friendly creeps + the threat field; route healers through
+  `decide_movement` with the healer preset (not the slot formation).
+- **Test (EXP-HEAL-POS):** healer prefers a tile covering 2 at-risk allies over a
+  safer tile covering 0; backs off a high-danger tile when coverage ties.
+
+Scope: a real ADR-0019 increment (view plumbing + term + preset + tests), not a
+one-liner. Stopgap escort is deployed in the meantime.
+
+## 9. Resume checkpoint — combat live soak (2026-06-23)
+
+A private-server offense soak turned into a high-yield bug hunt. **Six bugs fixed
+this session** (all on `master`, deployed to the private server, host 157 green,
+clippy + check-wasm clean, NO WFV bumps):
+
+| commit | fix |
+|---|---|
+| `1aee1ac` | deploy auth: `screepsmod-auth@2.9.0` load-crash → pin **2.8.3** via launcher `extraPackages` |
+| `97f4e91` | serialization dangling-ref panic: route failed-spawn deletion through `EntityCleanupQueue` |
+| `22398a4` | pre-serialize backstop scrubs mission creep lists (`Mission::get_creeps` + `repair_entity_integrity`) |
+| `70013cd` | enable `wasm-opt -g` → named wasm backtraces (+0.70 MiB, 4.08/5 MiB) |
+| `aaac0f7` | squad move-to-room border thrash (`tick_move_to_room` cross-room false arrival) |
+| `e6daacb` | squad Retreating↔Engaged ping-pong vs an unwinnable target |
+| `8295ea9` | winnability gate: don't field a siege quad vs a multi-tower stronghold (`MAX_SINGLE_SQUAD_STRONGHOLD_TOWERS=1`) |
+| `9a9c259` | healer escorts the attacker proactively (stopgap for §8) |
+
+Plus the **environment unblock** (docs only): neutral rooms default `active=false`
+and FREEZE on the private server (frozen keepers, inert cores, ghost creeps, no
+intel → offense never targets them). Fix = `storage.db.rooms.update({active:false},
+{$set:{active:true}},{multi:true})` + **restart** (the flag is read at boot;
+mid-run change / `roomsForceUpdate` / pause-resume don't take). See
+`docs/guides/private-server-commands.md`.
+
+**Live-server state (private-server / user `ibex`):** all rooms `active=true`; W7N5
+holds an injected **bunker1** core (1 tower — a WINNABLE soak target); W5N4 has a
+genStronghold **L5** core (6 towers — correctly SKIPPED by the gate); `debug_log`
+on; `offense` default-true; tick rate was set to 1000 ms (may reset to config 100 ms
+on restart). The colony is artificially RCL-bumped (RCL7, via the wiki controller
+`active`/`level` writes — see the RCL-bump caveat in the private-server guide).
+
+**Open items / WIP to resume:**
+1. **Implement §8** (healer heal-coverage objective) — the principled replacement for
+   the stopgap escort.
+2. **Watch a winnable clear end-to-end** — the offense pipeline now works + correctly
+   skips the L5; point the bot at the winnable W7N5 (L1) and observe travel → breach
+   → dismantle (or a correct Lanchester retreat). The original soak acceptance.
+3. **Winnability gate is a tower-count proxy** (`MAX_SINGLE_SQUAD_STRONGHOLD_TOWERS`);
+   principled follow-up = extend the ADR 0020 EV/Lanchester assessment to TARGET
+   SELECTION (force-vs-defense), and build the deferred G4-HEAVY (tower-drain +
+   multi-squad) for towered strongholds.
+4. **MMO deploy** still gated per ADR 0020 §10 (the combat work is now substantially
+   more live-hardened by these six fixes; re-read §10/§11 before deploying).
