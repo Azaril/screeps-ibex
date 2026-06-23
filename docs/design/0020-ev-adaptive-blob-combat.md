@@ -179,7 +179,7 @@ work; §11 holds the broader inventory it cross-references.
 | Phase | What | WFV | Status |
 |---|---|---|---|
 | **P1** | Healer heal-coverage positioning (ADR [0019](0019-combat-position-selection.md) §8/§8.1) | none (transient) | **DONE 2026-06-23** — submodule `eff9888`/`97cb152`, superproject `f51aebb`+`525202b` |
-| **P2** | EV force-sizing oracle (§12.2): winnability + composition sizing + tower-drain EV | **14→15** (RoomThreatData enrichment) | **IN PROGRESS** |
+| **P2** | EV force-sizing oracle (§12.2): winnability + composition sizing + tower-drain EV | **14→15** (RoomThreatData enrichment) | **DONE 2026-06-23** — `e6aa2db` (intel + WFV 15), `d74c262` (oracle), `1fc7364` (war.rs gate). Host 167, check-wasm + clippy-wasm clean. Live verify folds into P3. |
 | **P3** | Watch a winnable clear end-to-end (private server W7N5 L1) + force soak A–D (§10) | — | pending (the hard pre-deploy gate) |
 | **P4** | Re-prove WFV safety (`b29224f..HEAD`, §10 correction) + whole-bot hygiene + operator go-ahead → **MMO deploy v1** (defense + smart core offense, `offense` default-true, conservative, watch the seg-57 canary) | — | pending |
 | **P5** (fast-follow, post-v1) | identity **I1/I2** (SquadId; §11) → multi-squad **G4-HEAVY** for towered strongholds (the P2 oracle defers to this) → **S5** full blob auction (needs the cross-goal EV currency) → **S6** adaptivity (dynamic mixed-strategy vs adaptive players; `attack_players` stays OFF) | each bumps WFV (fold post-deploy) | remaining (see §11) |
