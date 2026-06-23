@@ -21,6 +21,13 @@ use crate::military::damage::tower_attack_damage_at_range;
 /// Energy a tower spends per shot — below this it cannot fire (engine `TOWER_ENERGY_COST`).
 const TOWER_ENERGY_COST: u32 = 10;
 
+/// HOLD margin (ADR 0020 §12.5/§12.6): size heal to out-heal the incoming damage by this factor, NOT
+/// break-even — so the squad HEALS THROUGH transient / approach / focused damage instead of tripping the
+/// runtime `assess_engage` retreat on the first hit, and so `assess_engage`'s `tower_dps > our_heal` veto
+/// stays clear. Also the commit gate: only field a squad whose margin-heal is affordable (never commit a
+/// fragile break-even squad). Seed; tuned by the SK/sim scenarios (R5 makes it importance·P(win)-driven).
+pub(crate) const HOLD_MARGIN: f32 = 1.3;
+
 /// One hostile tower's threat to the planned assault position.
 #[derive(Clone, Copy, Debug)]
 pub struct TowerThreat {
@@ -138,14 +145,16 @@ pub fn assess(profile: &DefenseProfile, budget: &ForceBudget) -> ForceAssessment
     let tower_dps = tower_dps_at_assault(&profile.towers);
     let incoming = tower_dps + profile.enemy_dps;
 
-    // Direct breach: out-heal towers + creeps the whole time, dismantle through.
-    if incoming <= budget.max_heal_per_tick {
+    // Direct breach: out-heal towers + creeps the whole time (with the HOLD margin so HP recovers
+    // through damage and the squad doesn't early-retreat), dismantle through.
+    let required_heal = incoming * HOLD_MARGIN;
+    if required_heal <= budget.max_heal_per_tick {
         let total = breach_ticks.saturating_add(kill_ticks);
         if total <= budget.onsite_budget_ticks {
             return ForceAssessment {
                 winnable: true,
                 mode: AssaultMode::Breach,
-                required_heal_per_tick: incoming,
+                required_heal_per_tick: required_heal,
                 required_dismantle_dps: net_dismantle.max(1.0),
                 est_ticks: total,
                 reason: "breach: out-heal the towers and dismantle through",
@@ -159,14 +168,16 @@ pub fn assess(profile: &DefenseProfile, budget: &ForceBudget) -> ForceAssessment
     let tank_sustain = budget.tank_effective_hp + budget.max_heal_per_tick * dt as f32;
     let drain_damage = tower_dps * dt as f32;
     if dt > 0 && tank_sustain >= drain_damage {
-        // After the drain only the enemy creeps remain — they must be out-healed for the breach phase.
-        if profile.enemy_dps <= budget.max_heal_per_tick {
+        // After the drain only the enemy creeps remain — they must be out-healed (with the HOLD margin)
+        // for the breach phase.
+        let required_heal = profile.enemy_dps.max(1.0) * HOLD_MARGIN;
+        if required_heal <= budget.max_heal_per_tick {
             let total = dt.saturating_add(breach_ticks).saturating_add(kill_ticks);
             if total <= budget.onsite_budget_ticks {
                 return ForceAssessment {
                     winnable: true,
                     mode: AssaultMode::Drain,
-                    required_heal_per_tick: profile.enemy_dps.max(1.0),
+                    required_heal_per_tick: required_heal,
                     required_dismantle_dps: net_dismantle.max(1.0),
                     est_ticks: total,
                     reason: "drain: soak the towers dry, then breach",
@@ -286,7 +297,9 @@ mod tests {
     /// test's outcome, not the budget.
     fn strong_budget() -> ForceBudget {
         ForceBudget {
-            max_heal_per_tick: 600.0,
+            // Heal headroom so the HOLD_MARGIN (1.3×) still affords a direct breach vs a 600-dps tower
+            // (600 × 1.3 = 780 ≤ 900) — the DEFENSE, not the budget, drives each test's outcome.
+            max_heal_per_tick: 900.0,
             max_dismantle_dps: 600.0,
             tank_effective_hp: 50_000.0,
             onsite_budget_ticks: 1400,

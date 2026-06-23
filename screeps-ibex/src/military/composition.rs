@@ -81,6 +81,16 @@ impl BodyType {
 
     /// Estimate the body cost at a given energy capacity.
     pub fn estimated_cost(&self, max_energy: u32) -> u32 {
+        if let BodyType::Sized(spec) = self {
+            let moves = bodies::MoveProfile::Plains.move_parts(spec.non_move_parts());
+            return spec.tough * Part::Tough.cost()
+                + spec.attack * Part::Attack.cost()
+                + spec.ranged_attack * Part::RangedAttack.cost()
+                + spec.work * Part::Work.cost()
+                + spec.carry * Part::Carry.cost()
+                + spec.heal * Part::Heal.cost()
+                + moves * Part::Move.cost();
+        }
         let def = self.body_definition(max_energy);
         let pre_cost: u32 = def.pre_body.iter().map(|p| p.cost()).sum();
         let post_cost: u32 = def.post_body.iter().map(|p| p.cost()).sum();
@@ -110,6 +120,9 @@ impl BodyType {
 
     /// Estimate the number of body parts at a given energy capacity.
     pub fn estimated_part_count(&self, max_energy: u32) -> u32 {
+        if let BodyType::Sized(spec) = self {
+            return spec.non_move_parts() + bodies::MoveProfile::Plains.move_parts(spec.non_move_parts());
+        }
         let def = self.body_definition(max_energy);
         let pre_cost: u32 = def.pre_body.iter().map(|p| p.cost()).sum();
         let post_cost: u32 = def.post_body.iter().map(|p| p.cost()).sum();
@@ -140,6 +153,18 @@ impl BodyType {
     /// Count of `part` in the expanded body at `max_energy` — the per-part-type input the force-sizing
     /// oracle needs (ADR 0020 §12.2). Mirrors `estimated_part_count`'s repeat math but counts one type.
     pub fn part_count(&self, max_energy: u32, part: Part) -> u32 {
+        if let BodyType::Sized(spec) = self {
+            return match part {
+                Part::Tough => spec.tough,
+                Part::Attack => spec.attack,
+                Part::RangedAttack => spec.ranged_attack,
+                Part::Work => spec.work,
+                Part::Carry => spec.carry,
+                Part::Heal => spec.heal,
+                Part::Move => bodies::MoveProfile::Plains.move_parts(spec.non_move_parts()),
+                _ => 0,
+            };
+        }
         let def = self.body_definition(max_energy);
         let in_slice = |s: &[Part]| s.iter().filter(|p| **p == part).count() as u32;
         let fixed = in_slice(def.pre_body) + in_slice(def.post_body);
@@ -707,5 +732,50 @@ mod tests {
         assert!(SquadComposition::siege_quad()
             .sized_for(RequiredForce { heal_parts: 200, dismantle_parts: 0, tough_parts: 0 }, 1300)
             .is_none());
+    }
+
+    /// SK-setup scenario across keeper strengths (operator ask): an open SK-like room (keepers doing
+    /// `keeper_dps`, no towers/walls). Run the end-to-end pipeline (assess → required force → size the
+    /// squad). The composition we actually FIELD must out-heal the keepers WITH the hold margin — so it
+    /// maintains/holds through damage and won't early-retreat — and when no single squad at this RCL can
+    /// (the heal need exceeds the budget OR a member's 50-part cap), it must DEFER, never field an
+    /// undersized squad that bails. Regression guard for the live SK failure that started P2b.
+    #[test]
+    fn sk_setup_fields_a_holding_composition_or_defers_never_undersizes() {
+        use crate::military::force_sizing::{assess, DefenseProfile, ForceBudget, HOLD_MARGIN};
+
+        // A strong RCL7-ish home's baseline budget (2 healers cap squad heal at ~600/tick, so very
+        // strong keeper sets correctly exceed what one siege quad can field).
+        let budget = ForceBudget {
+            max_heal_per_tick: 900.0,
+            max_dismantle_dps: 300.0,
+            tank_effective_hp: 30_000.0,
+            onsite_budget_ticks: 1400,
+        };
+        // The ACTUAL field decision is sized_for(): aggregate-winnable is necessary but not sufficient —
+        // a member's 50-part AND per-member energy cost cap can still force a defer.
+        let field = |keeper_dps: f32| -> Option<SquadComposition> {
+            let a = assess(&DefenseProfile { enemy_dps: keeper_dps, ..Default::default() }, &budget);
+            if a.winnable {
+                SquadComposition::siege_quad().sized_for(RequiredForce::from_assessment(&a), 5600)
+            } else {
+                None
+            }
+        };
+
+        // INVARIANT across keeper strengths: whatever we FIELD out-heals the keepers WITH the hold
+        // margin → it maintains/holds through damage instead of early-retreating.
+        for &keeper_dps in &[60.0f32, 180.0, 360.0, 600.0, 2000.0] {
+            if let Some(comp) = field(keeper_dps) {
+                assert!(
+                    comp.capabilities(5600).heal_per_tick as f32 >= keeper_dps * HOLD_MARGIN,
+                    "keeper dps {keeper_dps}: fielded composition must out-heal with the hold margin"
+                );
+            }
+        }
+        // Endpoints: a weak SK room IS fielded (the bot engages it); an overwhelming keeper set DEFERS
+        // (no single siege quad can out-heal it at RCL7) rather than fielding an undersized squad.
+        assert!(field(60.0).is_some(), "a weak SK room is fieldable");
+        assert!(field(2000.0).is_none(), "an overwhelming keeper set defers, not an undersized squad");
     }
 }
