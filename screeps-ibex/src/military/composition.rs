@@ -778,4 +778,32 @@ mod tests {
         assert!(field(60.0).is_some(), "a weak SK room is fieldable");
         assert!(field(2000.0).is_none(), "an overwhelming keeper set defers, not an undersized squad");
     }
+
+    /// R6: the SK suppression duo force-sizes its HEALER to out-heal a Source Keeper (168 melee DPS ×
+    /// the hold margin) at a high-energy home, and defers (→ template fallback at the call site) when
+    /// no home affords it. The ranged kiter always stays the proven template.
+    #[test]
+    fn sk_duo_sizes_healer_to_outheal_a_keeper() {
+        use crate::military::force_sizing::HOLD_MARGIN;
+        let required = RequiredForce {
+            heal_parts: crate::military::damage::defender_heal_parts_for_dps(168.0 * HOLD_MARGIN, false),
+            ..Default::default()
+        };
+        // RCL8 energy: the healer sizes up to out-heal the keeper with margin; the ranged kiter stays template.
+        let sized = SquadComposition::duo_sk_farmer()
+            .sized_for(required, 12_900)
+            .expect("RCL8 affords the sized SK healer");
+        let healer = sized.slots.iter().find(|s| s.role == SquadRole::Healer).unwrap();
+        match healer.body_type {
+            BodyType::Sized(spec) => assert!(
+                spec.heal as f32 * 12.0 >= 168.0 * HOLD_MARGIN,
+                "the sized SK healer out-heals a keeper with the hold margin"
+            ),
+            other => panic!("the SK healer should be force-sized, got {other:?}"),
+        }
+        let ranged = sized.slots.iter().find(|s| s.role == SquadRole::RangedDPS).unwrap();
+        assert_eq!(ranged.body_type, BodyType::SkRangedAttacker, "the ranged kiter stays the proven template");
+        // Too little energy → can't field the sized healer → defer (the mission falls back to the template duo).
+        assert!(SquadComposition::duo_sk_farmer().sized_for(required, 1_300).is_none(), "low RCL defers");
+    }
 }

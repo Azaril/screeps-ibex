@@ -41,6 +41,14 @@ use specs::*;
 /// `THREAT_FLEE_RANGE`.
 const KEEPER_DANGER_RANGE: u32 = 5;
 
+/// A Source Keeper deals **168 melee DPS** if it catches the kiter (see
+/// [`crate::military::bodies::sk_healer_body`]). The suppression duo kites at range 3
+/// to avoid this, but R6 (ADR 0020 §12.6) force-sizes the healer to OUT-HEAL it
+/// (×`HOLD_MARGIN`) so a kiting slip — cornered, swamp, or a re-pathing keeper —
+/// costs HP it recovers, not a death, instead of relying on the body template
+/// happening to reach `maximum_repeat` at a high-energy home.
+const SK_KEEPER_MELEE_DPS: f32 = 168.0;
+
 /// While a stronghold pauses the farm the room goes blind (no friendly creeps),
 /// so the persisted `hostile_structures` flag sticks at its last-observed value
 /// and the farm cannot learn the stronghold has cleared without an active probe.
@@ -355,12 +363,35 @@ impl Mission for SourceKeeperFarmMission {
         // TTL-lapses). The squad's `SquadCombatJob` self-drives to the SK room and
         // suppresses the keepers (job-owns-movement, ADR 0008 §5 ⚑). K3 source
         // mining + the per-source suppression signal remain the coordinator's to own.
-        let request = ObjectiveRequest::new(
-            farm_kind,
-            OBJECTIVE_PRIORITY_LOW,
-            ForceRequirement::single(SquadComposition::duo_sk_farmer()),
-        )
-        .owner(ObjectiveOwner::SourceKeeper);
+        // R6 (ADR 0020 §12.6): force-size the suppression duo's HEALER to out-heal a
+        // Source Keeper (168 melee DPS × the hold margin) at the strongest in-range
+        // home's energy — the same energy the `SquadManager` spawn path sizes a `Sized`
+        // body against — so a kiting slip costs HP it recovers, not a death. The ranged
+        // kiter stays the proven template. `sized_for` returns `None` when no home can
+        // afford the sized healer (low RCL) → fall back to the template duo (the spawn
+        // path still builds the largest healer that home affords). The SK suppression
+        // model is positional (mine when the keeper is away), so this sizes the duo to
+        // SURVIVE a keeper engagement, not to tank keepers continuously.
+        let required = crate::military::force_sizing::RequiredForce {
+            heal_parts: crate::military::damage::defender_heal_parts_for_dps(
+                SK_KEEPER_MELEE_DPS * crate::military::force_sizing::HOLD_MARGIN,
+                false,
+            ),
+            ..Default::default()
+        };
+        let home_energy = self
+            .home_room_datas
+            .iter()
+            .filter_map(|&e| system_data.room_data.get(e))
+            .filter_map(|rd| game::rooms().get(rd.name))
+            .map(|r| r.energy_capacity_available())
+            .max()
+            .unwrap_or(0);
+        let duo = SquadComposition::duo_sk_farmer();
+        let comp = duo.sized_for(required, home_energy).unwrap_or(duo);
+
+        let request = ObjectiveRequest::new(farm_kind, OBJECTIVE_PRIORITY_LOW, ForceRequirement::single(comp))
+            .owner(ObjectiveOwner::SourceKeeper);
         system_data.combat_objective_queue.request(request, game::time());
 
         // K3: own per-source mining + hauling, gated on per-source keeper liveness.
