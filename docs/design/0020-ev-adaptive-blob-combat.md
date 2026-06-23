@@ -99,6 +99,15 @@ Ranked by value/effort. Each notes the caveat that gates it.
 
 ## 10. Path to MMO deploy (deployability assessment, 2026-06-19)
 
+> **⚠ STALE-WFV CORRECTION (2026-06-23).** Everything below citing `WORLD_FORMAT_VERSION
+> = 13` and the `3290c86..HEAD` diff proof is **out of date**: `b29224f` later bumped WFV
+> **13→14** (the ADR 0009c road-connectivity planner — a non-combat part of the whole-bot
+> delta). The WFV-safety proof must be **re-run from `b29224f..HEAD`** at deploy time, not
+> `3290c86..HEAD`. P1 (ADR 0019 §8 healer) added no serialized shape (no bump); the planned
+> P2 EV force-sizing solver enriches the serialized `RoomThreatData` → **14→15**, which
+> folds into the same single intended loud reset an MMO deploy (server <14) already incurs.
+> Net: the deploy is still "one loud reset," just at WFV 15; the go/no-go logic is unchanged.
+
 Produced by an `ultracode` deployability workflow (status / deploy-readiness / deploy-mechanics / minimum-viable-combat / live-validation-gap surveys → synthesis → adversarial critique that independently verified every load-bearing fact).
 
 > **Scope note (2026-06-19):** deployment is a **whole-bot** decision over the entire master delta since the last MMO push (combat overhaul + derelict-rooms + market + fixes), and the operator wants **attack/offense ready**, not defense-only. The canonical, whole-bot, offense-ready deploy plan lives in [`combat-overhaul-plan.md` §4D](../plans/combat-overhaul-plan.md). This section is the **combat-slice** deploy-readiness detail that plan references; §11 is the combat resume inventory.

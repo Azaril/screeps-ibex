@@ -178,9 +178,16 @@ The ultracode design pass (wf_c4ad0572, 11 agents, ground-truthed the engine/har
 | G2 SquadManager | 9→10 |
 | K3 per-source mining | 10→11 |
 | G4 defense-half | 11→12 |
-| G4-O7 offense legacy removal | 12→13 (**current**) |
+| G4-O7 offense legacy removal | 12→13 |
+| ADR 0009c road-connectivity planner (`b29224f`, non-combat) | 13→14 (**current**) |
+| P2 EV force-sizing solver (RoomThreatData rampart-hits/tower-energy enrichment) | 14→15 (pending — folds into the MMO deploy reset) |
 | I2 (SquadId field) | pending |
-| O7 (removed enum variants) | pending |
+
+**⚠ Stale-WFV correction (2026-06-23):** ADR 0020 §10/§11 still cite WFV **13** and a
+`3290c86..HEAD` diff proof — both stale: `b29224f` bumped WFV 13→14 (the road planner,
+part of the whole-bot delta). The deploy WFV-safety proof must be re-run from
+`b29224f..HEAD` at deploy time (P4). P1 (ADR 0019 §8 healer) added no serialized shape
+→ no bump; P2 will bump 14→15 and that ride folds into the single intended MMO reset.
 
 **Standing rule:** `WORLD_FORMAT_VERSION` in `game_loop.rs` MUST bump on any serialized-shape change = one loud reset (reset-anytime policy).
 

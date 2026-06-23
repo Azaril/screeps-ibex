@@ -281,7 +281,7 @@ Risk-free (behavior-preserving refactor with a byte-equality gate and a kill-swi
 - `screeps-ibex/src/game_loop.rs` — `WORLD_FORMAT_VERSION=13` (**no bump**)
 - `screeps-ibex/src/jobs/squad_combat.rs` — live adapter
 
-## 8. Increment — Healer positioning objective (heal-coverage vs danger) [PROPOSED, not started]
+## 8. Increment — Healer positioning objective (heal-coverage vs danger) [IMPLEMENTED 2026-06-23]
 
 Operator direction (2026-06-23): "pick a location that maximizes potential future
 healing, weighting healing output against danger." The squad healer should pick its
@@ -310,6 +310,44 @@ Design (the principled version):
 
 Scope: a real ADR-0019 increment (view plumbing + term + preset + tests), not a
 one-liner. Stopgap escort is deployed in the meantime.
+
+### 8.1 As-built (2026-06-23)
+
+Landed across `screeps-combat-decision` + `screeps-ibex`, host-green (decision 71 /
+eval+agent 18 / ibex 157), `check-wasm` + `clippy-wasm` clean, **no WFV bump** (every
+touched struct is transient). Diverged from the sketch in one principled way: the
+heal-coverage **flood** lives in `decide_squad_with_pathing` (which holds the cost
+matrix + shared `PositionLayers` threat field + the survival veto), **not** in
+`decide_movement` — the latter is terrain-blind (it emits `MoveTo`/`Flee` and lets
+rover avoid walls), so a tile-by-tile heal score there could pick a wall. The healer
+goal is computed by the same scored search the block uses (no one-off algorithm) and
+routed per-member.
+
+- **`kite.rs`:** `KiteScoreParams.w_heal` (0 in kite/engage, dominant in the new
+  `KiteScoreParams::healer()` preset: `w_heal 2.0`, `w_taken 1.5`, `w_cohesion 0.6`,
+  `w_prox/w_dmg 0`); `pub struct AllyNeed { pos, need }`; `SquadKiteView.allies:
+  &[AllyNeed]`; the **HEAL-COVERAGE** reward term in `score_tile` — `Σ allies need ×
+  heal-efficacy(range)` (full at range ≤1 = HEAL 12/tick, ⅓ at 2–3 = RANGED_HEAL
+  4/tick, 0 beyond), normalized by `HEAL_COV_REF` and SUBTRACTED like `w_dmg`. 0 for
+  any non-healer search (empty `allies` or `w_heal == 0`) → byte-identical to pre-§8.
+- **`lib.rs`:** after the block movement, an engaged, non-kiting squad computes each
+  **pure-support** healer's goal via `plan_kite_anchor` over a healer view (allies =
+  the other members' `AllyNeed`; `need = HEALER_BASE_NEED + hp_deficit +
+  HEALER_RISK_LOOKAHEAD × incoming_damage_at(pos)`), and stores it in the new
+  `SquadDecision.member_goals: Vec<Option<Position>>`. `SquadTacticParams.healer` makes
+  the preset sweepable (Stage-4 seam).
+- **`squad_manager.rs`:** `apply_squad_decision` stamps a member's `member_goals[i]` as
+  its `squad_movement = Advance{goal, range:0}`; everyone else follows the block. Only
+  the **anchorless** `decide_movement` path reads `squad_movement`, so this is inert for
+  a siege formation (which keeps its healers-back slots) and active exactly for the
+  SK/skirmish duo the operator reported.
+- **EXP-HEAL-POS:** realized as two `kite.rs` term tests — `heal_coverage_prefers_
+  covering_more_at_risk_allies` (covers 2 vs 0, cohesion tied) and `heal_coverage_
+  backs_off_danger_when_coverage_ties` (the §8 acceptance, at the scorer level). A full
+  managed-sim healer-coverage EXP is an optional Stage-4 follow-up if tuning needs it.
+- **Live verification** (healer hugs the at-risk attacker in an engaged duad) folds into
+  the P3 winnable-clear soak — it needs an engaged squad anyway. Seeds (`w_heal`,
+  `HEALER_BASE_NEED`, `HEALER_RISK_LOOKAHEAD`, `HEAL_COV_REF`) are Stage-4-tunable.
 
 ## 9. Resume checkpoint — combat live soak (2026-06-23)
 
@@ -343,8 +381,12 @@ on restart). The colony is artificially RCL-bumped (RCL7, via the wiki controlle
 `active`/`level` writes — see the RCL-bump caveat in the private-server guide).
 
 **Open items / WIP to resume:**
-1. **Implement §8** (healer heal-coverage objective) — the principled replacement for
-   the stopgap escort.
+1. ~~**Implement §8** (healer heal-coverage objective).~~ **DONE 2026-06-23** — see §8.1
+   (host-green, no WFV bump; live verification folds into item 2's soak).
+   **NOTE:** `WORLD_FORMAT_VERSION` is now **14** (bumped 13→14 by `b29224f`, the ADR
+   0009c road planner — a *non-combat* change), so the WFV-13 references in ADR 0020
+   §10/§11 + plan §7 are stale; the deploy WFV-safety proof must be re-run from
+   `b29224f..HEAD` (see plan §7 / P4).
 2. **Watch a winnable clear end-to-end** — the offense pipeline now works + correctly
    skips the L5; point the bot at the winnable W7N5 (L1) and observe travel → breach
    → dismantle (or a correct Lanchester retreat). The original soak acceptance.
