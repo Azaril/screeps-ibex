@@ -33,6 +33,15 @@ const DEFEND_OBJECTIVE_TTL: u32 = 60;
 /// (no core ⇒ no upsert) then lapses and the manager retires the siege squad.
 const OFFENSE_OBJECTIVE_TTL: u32 = 100;
 
+/// Max tower count of an invader stronghold a single (unboosted) siege quad is
+/// allowed to be sent against. Above this, a single squad is melted by focused
+/// tower fire on entry (≈600 dps/tower at the core) before it can retreat — the
+/// per-tick Lanchester gate is too late once inside. Higher-tower strongholds
+/// need the deferred heavy (tower-drain + multi-squad) assault, so we skip them
+/// rather than feed squads to their death. (Winnability belongs at target
+/// selection, not just per-tick.)
+const MAX_SINGLE_SQUAD_STRONGHOLD_TOWERS: u32 = 1;
+
 // ---------------------------------------------------------------------------
 // Target scoring
 // ---------------------------------------------------------------------------
@@ -878,6 +887,22 @@ impl WarOperation {
             // objective-driven since O7 — there is no legacy launch fallback).
             let objective: Option<(ObjectiveKind, f32, SquadComposition)> = match candidate.source {
                 // Invader core → siege the core tile (O1 travel + O2 orient + O3 breach).
+                //
+                // WINNABILITY GATE: a single unboosted siege quad cannot survive a
+                // multi-tower stronghold's focused fire — at the core, N towers do
+                // ~600·N dps, far beyond the quad's heal, so it dies crossing into
+                // tower range, long before the per-tick Lanchester retreat can fire
+                // (retreat is too late once inside). Heavy assault (tower-drain +
+                // multi-squad) for towered strongholds is deferred (G4-HEAVY); until
+                // then do NOT commit a doomed squad. Only single-squad a core with at
+                // most one tower; skip the rest (the higher-level genStrongholds).
+                TargetSource::InvaderCore { .. } if candidate.tower_count > MAX_SINGLE_SQUAD_STRONGHOLD_TOWERS => {
+                    info!(
+                        "[War]   Skip {} -- invader stronghold has {} towers (> {} single-squad limit); needs heavy assault (deferred), not committing a siege quad to its death",
+                        candidate.room, candidate.tower_count, MAX_SINGLE_SQUAD_STRONGHOLD_TOWERS
+                    );
+                    None
+                }
                 TargetSource::InvaderCore { .. } => candidate.target_pos.map(|pos| {
                     (
                         ObjectiveKind::Dismantle { room: candidate.room, pos },
