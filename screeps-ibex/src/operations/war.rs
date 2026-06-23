@@ -671,25 +671,37 @@ impl WarOperation {
                 continue;
             }
 
-            // Skip stale data (older than 200 ticks).
-            if current_tick.saturating_sub(threat_data.last_seen) > 200 {
+            // Compute minimum distance from any home room.
+            let min_distance = self.min_distance_to_homes(room_name, &home_rooms, system_data.pathfinder, current_tick);
+
+            // Skip rooms that are too far away (> 10 hops) — not worth re-scouting either.
+            if min_distance > 10 {
                 if war_debug {
-                    info!(
-                        "[War]   Skip {} -- stale data (age={})",
-                        room_name,
-                        current_tick.saturating_sub(threat_data.last_seen)
-                    );
+                    info!("[War]   Skip {} -- too far (distance={})", room_name, min_distance);
                 }
                 continue;
             }
 
-            // Compute minimum distance from any home room.
-            let min_distance = self.min_distance_to_homes(room_name, &home_rooms, system_data.pathfinder, current_tick);
-
-            // Skip rooms that are too far away (> 10 hops).
-            if min_distance > 10 {
+            // Stale data (older than 200 ticks) on an in-range room we last saw long ago: REGISTER a
+            // re-scout on the central visibility queue (do NOT dispatch a scout ourselves), then skip
+            // this scan. So a core that deployed — or towers that energized — since our last visit get
+            // re-evaluated once fresh intel lands, instead of being silently abandoned (the W5N3 soak
+            // gap). Fulfillment is observer-preferred for free: an in-range RCL8 observer covers it with
+            // no creep; a scout is spawned only if no observer covers it and we're under the mission cap
+            // (and walled/defended rooms back off scouts but keep observer coverage). Mirrors
+            // salvage.rs::request_intel (register-don't-dispatch). FOLLOW-UP (deeper, not done here): an
+            // explicit per-tier re-scout *scheduler* owning the cadence + OBSERVE-only registration for
+            // rooms confirmed in observer range — see docs/design/0021-strategic-visibility.md.
+            if current_tick.saturating_sub(threat_data.last_seen) > 200 {
+                system_data
+                    .visibility
+                    .request(VisibilityRequest::new(room_name, VISIBILITY_PRIORITY_MEDIUM, VisibilityRequestFlags::ALL));
                 if war_debug {
-                    info!("[War]   Skip {} -- too far (distance={})", room_name, min_distance);
+                    info!(
+                        "[War]   Skip {} -- stale data (age={}); requested re-scout",
+                        room_name,
+                        current_tick.saturating_sub(threat_data.last_seen)
+                    );
                 }
                 continue;
             }
