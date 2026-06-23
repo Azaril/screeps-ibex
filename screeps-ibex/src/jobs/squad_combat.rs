@@ -679,8 +679,17 @@ impl Retreating {
             .map(|s| s == SquadState::Engaged || s == SquadState::Moving)
             .unwrap_or(false);
 
-        // Re-engage once HP recovers above 80%, or if squad signals engage.
-        if creep.hits() > creep.hits_max() * 4 / 5 || (squad_wants_engage && creep.hits() > creep.hits_max() * 3 / 5) {
+        // Re-engage once HP recovers above 80%, or if squad signals engage --
+        // but NEVER while the squad itself is signalling Retreat. Otherwise a
+        // healthy creep ping-pongs Engaged<->Retreating every tick (Engaged sees
+        // the squad retreat signal -> Retreating; Retreating sees HP>80% ->
+        // Engaged), hitting the 20-transition guard and never actually
+        // retreating. Stay retreating until the squad clears the signal (e.g.
+        // the Lanchester re-engage band against an unwinnable target).
+        let squad_retreating = squad_state.map(|s| s == SquadState::Retreating).unwrap_or(false);
+        if !squad_retreating
+            && (creep.hits() > creep.hits_max() * 4 / 5 || (squad_wants_engage && creep.hits() > creep.hits_max() * 3 / 5))
+        {
             return Some(SquadCombatState::engaged());
         }
 
