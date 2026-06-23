@@ -1,7 +1,9 @@
 use super::data::*;
 use super::operationsystem::*;
 use crate::military::composition::SquadComposition;
-use crate::military::force_sizing::{assess, DefenseProfile, ForceBudget, RequiredForce, TowerThreat};
+use crate::military::force_sizing::{
+    assess, importance_margin, win_probability, DefenseProfile, ForceBudget, RequiredForce, TowerThreat, HOLD_MARGIN,
+};
 use crate::military::objective_queue::{
     ForceRequirement, ObjectiveKind, ObjectiveOwner, ObjectiveRequest, OBJECTIVE_PRIORITY_CRITICAL, OBJECTIVE_PRIORITY_HIGH,
     OBJECTIVE_PRIORITY_LOW, OBJECTIVE_PRIORITY_MEDIUM,
@@ -932,12 +934,23 @@ impl WarOperation {
                                         // R3: SIZE the squad to the Lanchester-winning force (not the fixed
                                         // siege_quad), at the same energy the spawn path uses. `None` ⇒ a
                                         // home can't afford the required force ⇒ defer (G4-HEAVY).
-                                        let required = RequiredForce::from_assessment(&a);
+                                        //
+                                        // R5: over-invest by the objective's importance (a MEDIUM core lifts
+                                        // the base hold-margin force ~1.17×) so higher-value targets field a
+                                        // higher-P(win) squad. R4: log the fielded force's win confidence.
+                                        let importance = ((OBJECTIVE_PRIORITY_MEDIUM - OBJECTIVE_PRIORITY_LOW)
+                                            / (OBJECTIVE_PRIORITY_CRITICAL - OBJECTIVE_PRIORITY_LOW))
+                                            .clamp(0.0, 1.0);
+                                        let required = RequiredForce::from_assessment(&a).scaled(importance_margin(importance));
                                         match comp.sized_for(required, member_energy) {
                                             Some(sized) => {
+                                                let pwin = win_probability(
+                                                    required.heal_parts as f32 * 12.0,
+                                                    a.required_heal_per_tick / HOLD_MARGIN,
+                                                );
                                                 info!(
-                                                    "[War]   {} winnable via {:?} (~{} ticks): sized to {} heal + {} dismantle parts ({})",
-                                                    candidate.room, a.mode, a.est_ticks, required.heal_parts, required.dismantle_parts, a.reason
+                                                    "[War]   {} winnable via {:?} (~{} ticks): sized to {} heal + {} dismantle parts, P(win)~{:.0}% ({})",
+                                                    candidate.room, a.mode, a.est_ticks, required.heal_parts, required.dismantle_parts, pwin * 100.0, a.reason
                                                 );
                                                 Some((ObjectiveKind::Dismantle { room: candidate.room, pos }, OBJECTIVE_PRIORITY_MEDIUM, sized))
                                             }

@@ -239,7 +239,47 @@ impl RequiredForce {
             ..Default::default()
         }
     }
+
+    /// Scale every part count up by `factor` (ceil), keeping zeros at zero (R5 importance-weighted
+    /// investment). `factor >= 1.0` over-invests for high-value targets (more margin → higher P(win));
+    /// `factor == 1.0` is a no-op. Used to lift the base hold-margin force by [`importance_margin`].
+    pub fn scaled(self, factor: f32) -> RequiredForce {
+        let s = |n: u32| if n == 0 { 0 } else { (n as f32 * factor.max(1.0)).ceil() as u32 };
+        RequiredForce {
+            heal_parts: s(self.heal_parts),
+            dismantle_parts: s(self.dismantle_parts),
+            tough_parts: s(self.tough_parts),
+        }
+    }
 }
+
+/// R4 — probability we win/hold the engagement given our sustained `heal` vs the `incoming` damage.
+/// A logistic on the heal surplus (`heal/incoming - 1`): 0.5 at break-even, rising as heal exceeds
+/// incoming, → 1 when nothing hits us. This is the principled reading of the [`HOLD_MARGIN`]: a 1.3×
+/// margin (+30% surplus) lands ≈ 0.82, i.e. "field enough to win ~4 times in 5". Used to log the
+/// fielded force's confidence and (via [`importance_margin`]) to decide how hard to over-invest.
+pub fn win_probability(heal: f32, incoming: f32) -> f32 {
+    if incoming <= 0.0 {
+        return 1.0;
+    }
+    let surplus = heal / incoming - 1.0;
+    1.0 / (1.0 + (-WIN_PROB_STEEPNESS * surplus).exp())
+}
+
+/// Logistic steepness for [`win_probability`], tuned so break-even = 0.5 and the +30% [`HOLD_MARGIN`]
+/// surplus ≈ 0.82.
+const WIN_PROB_STEEPNESS: f32 = 5.0;
+
+/// R5 — extra force multiplier for objective `importance` ∈ [0,1]: over-invest (more margin, higher
+/// P(win)) for high-value targets, down to a no-op (1.0) for marginal ones. Multiplies the base
+/// hold-margin [`RequiredForce`] via [`RequiredForce::scaled`].
+pub fn importance_margin(importance: f32) -> f32 {
+    1.0 + importance.clamp(0.0, 1.0) * IMPORTANCE_MAX_EXTRA
+}
+
+/// Most a fully-important objective adds on top of the base hold margin (a CRITICAL target fields
+/// 1.5× the minimum winning force).
+const IMPORTANCE_MAX_EXTRA: f32 = 0.5;
 
 /// Parts to deliver `rate`/tick at `power`/part (ceil). 0 when nothing is required.
 fn parts_for_rate(rate: f32, power: u32) -> u32 {
@@ -399,5 +439,34 @@ mod tests {
         assert!(a.winnable);
         assert_eq!(a.mode, AssaultMode::Breach);
         assert_eq!(a.required_heal_per_tick, 0.0, "nothing is shooting us");
+    }
+
+    // ── R4: P(win) model ──
+    #[test]
+    fn win_probability_reads_the_hold_margin() {
+        assert_eq!(win_probability(100.0, 0.0), 1.0, "nothing hitting us → certain");
+        assert!((win_probability(100.0, 100.0) - 0.5).abs() < 1e-3, "break-even → coin-flip");
+        // The +30% HOLD_MARGIN is a ~0.82 win — the principled reading of the magic 1.3.
+        let p = win_probability(130.0, 100.0);
+        assert!(p > 0.80 && p < 0.85, "the 1.3 hold margin ≈ 0.82 P(win), got {p}");
+        // Monotone: more heal surplus is never less confidence.
+        assert!(win_probability(200.0, 100.0) > win_probability(130.0, 100.0));
+    }
+
+    // ── R5: importance-weighted investment ──
+    #[test]
+    fn importance_scales_the_invested_force() {
+        // A marginal target (importance 0) fields exactly the base hold-margin force …
+        assert_eq!(importance_margin(0.0), 1.0);
+        let base = RequiredForce { heal_parts: 10, dismantle_parts: 6, tough_parts: 0 };
+        assert_eq!(base.scaled(importance_margin(0.0)), base, "importance 0 → no over-invest");
+        // … a CRITICAL target (importance 1) over-invests by IMPORTANCE_MAX_EXTRA (1.5×), lifting P(win).
+        assert_eq!(importance_margin(1.0), 1.5);
+        let crit = base.scaled(importance_margin(1.0));
+        assert_eq!(crit.heal_parts, 15, "10 × 1.5");
+        assert_eq!(crit.dismantle_parts, 9, "6 × 1.5");
+        // Scaling never adds parts to a role that needs none, and never shrinks below the base.
+        assert_eq!(crit.tough_parts, 0, "zero stays zero");
+        assert!(crit.heal_parts >= base.heal_parts && base.scaled(0.5) == base, "factor < 1 is clamped to no-op");
     }
 }
