@@ -25,7 +25,7 @@ fn structure_is_walkable(structure: &StructureObject) -> bool {
 /// tile means clearing all of them — and any blocker we will never dismantle
 /// (engine-undismantlable, or past the hit-pool horizon) pins the tile
 /// impassable so the corridor routes around it.
-fn breach_blockers(structures: &[StructureObject], max_structure_hits: u32) -> HashMap<(u8, u8), BreachBlocker> {
+pub(crate) fn breach_blockers(structures: &[StructureObject], max_structure_hits: u32) -> HashMap<(u8, u8), BreachBlocker> {
     let mut result: HashMap<(u8, u8), BreachBlocker> = HashMap::new();
 
     for structure in structures {

@@ -1,4 +1,8 @@
+use crate::jobs::utility::dismantle::breach_path_total_hits;
+use crate::jobs::utility::dismantlebehavior::breach_blockers;
+use crate::room::data::{RoomData, RoomStructureData};
 use screeps::*;
+use screeps_foreman::terrain::FastRoomTerrain;
 use serde::{Deserialize, Serialize};
 use specs::prelude::*;
 use specs::Component;
@@ -87,6 +91,22 @@ pub struct RoomThreatData {
     /// Whether safe mode charges are available on the room's controller.
     #[serde(default)]
     pub safe_mode_available: bool,
+    /// Energy in each hostile tower, parallel to `hostile_tower_positions` (ADR 0020 §12.2). A drained
+    /// tower (< `TOWER_ENERGY_COST`) deals no damage → the force-sizing oracle counts only energized
+    /// towers for the out-heal requirement and sizes the tower-drain path from Σ energy. (`#[serde(default)]`
+    /// is forward-compat only; bincode is positional, so the `WORLD_FORMAT_VERSION` 14→15 bump is the gate.)
+    #[serde(default)]
+    pub tower_energy: Vec<u32>,
+    /// Rampart/wall hits on the BREACH CORRIDOR to the room's invader core — from `breach_path_blockers`,
+    /// counting ONLY the corridor blockers, NOT a room-wide rampart sum (ADR 0020 §12.3). The breach-time
+    /// input for the force-sizing oracle. 0 = no core / already reachable / not visible when last assessed.
+    #[serde(default)]
+    pub breach_rampart_hits: u32,
+    /// Estimated defensive repair/tick of the breach target (tower repair of ramparts + enemy WORK
+    /// repair), added to breach cost. 0 for invader cores (no repairers); computed for player targets in
+    /// a later phase (P5). Reserved now so adding player-repair modelling later needs no further WFV bump.
+    #[serde(default)]
+    pub repair_per_tick: u32,
 }
 
 /// Analyze a hostile creep's body to produce a `HostileCreepInfo`.
@@ -274,12 +294,15 @@ impl<'a> System<'a> for ThreatAssessmentSystem {
                 }
             }
 
-            // Gather hostile tower positions from structures.
+            // Gather hostile tower positions + energy from structures (ADR 0020 §12.2: a drained tower
+            // deals no damage, so the force oracle needs per-tower energy, not just positions).
             let mut hostile_tower_positions = Vec::new();
+            let mut tower_energy = Vec::new();
             if let Some(structures) = room_data.get_structures() {
                 for tower in structures.towers() {
                     if !tower.my() {
                         hostile_tower_positions.push(tower.pos());
+                        tower_energy.push(tower.store().get_used_capacity(Some(ResourceType::Energy)));
                     }
                 }
             }
@@ -309,6 +332,14 @@ impl<'a> System<'a> for ThreatAssessmentSystem {
             let has_nukes = !incoming_nukes.is_empty();
             let has_invader_core = room_data.get_structures().map(|s| !s.invader_cores().is_empty()).unwrap_or(false);
 
+            // Breach-corridor rampart hits to the invader core (ADR 0020 §12.3) — the breach-cost input
+            // for the force-sizing oracle. Bounded to core rooms (one Dijkstra, rare) so it stays cheap.
+            let breach_rampart_hits = if has_invader_core {
+                room_data.get_structures().map(|s| breach_rampart_hits_to_core(room_data, &s)).unwrap_or(0)
+            } else {
+                0
+            };
+
             let threat_level = classify_threat(&hostile_creep_infos, has_nukes, has_invader_core);
 
             // Persist when there are threats, nukes, invader cores, or an
@@ -328,6 +359,9 @@ impl<'a> System<'a> for ThreatAssessmentSystem {
                         threat_level,
                         hostile_creeps: hostile_creep_infos,
                         hostile_tower_positions,
+                        tower_energy,
+                        breach_rampart_hits,
+                        repair_per_tick: 0,
                         incoming_nukes,
                         last_seen: current_tick,
                         estimated_dps,
@@ -344,11 +378,59 @@ impl<'a> System<'a> for ThreatAssessmentSystem {
     }
 }
 
+/// Breach-corridor rampart hits to the room's invader core (ADR 0020 §12.3): the cheapest breach cost
+/// from the core's nearest room edge, counting ONLY the corridor blockers (the breach-relevant
+/// ramparts/walls), NOT a room-wide rampart sum. Reuses the shared `breach_path_blockers` Dijkstra
+/// kernel (no one-off scan). Returns 0 when there is no core, terrain is unavailable, or the core is
+/// already reachable. `u32::MAX` horizon so every dismantlable blocker stays on-corridor (the oracle,
+/// not the horizon, decides feasibility).
+fn breach_rampart_hits_to_core(room_data: &RoomData, structures: &RoomStructureData) -> u32 {
+    let core_pos = match structures.invader_cores().first() {
+        Some(core) => core.pos(),
+        None => return 0,
+    };
+    let room = match game::rooms().get(room_data.name) {
+        Some(room) => room,
+        None => return 0,
+    };
+    let terrain = FastRoomTerrain::new(room.get_terrain().get_raw_buffer().to_vec());
+    let is_wall = |x: u8, y: u8| terrain.is_wall(x, y);
+    let blockers = breach_blockers(structures.all(), u32::MAX);
+
+    let (gx, gy) = (core_pos.x().u8(), core_pos.y().u8());
+    let start = nearest_edge_tile(gx, gy);
+    breach_path_total_hits(&is_wall, &blockers, start, (gx, gy)).unwrap_or(0)
+}
+
+/// The room-edge tile closest to `(x, y)` — the shortest breach approach to a core (one representative
+/// entry; a core's rampart shell is ~symmetric so a single nearest-edge corridor is a sound estimate).
+fn nearest_edge_tile(x: u8, y: u8) -> (u8, u8) {
+    let (to_left, to_right, to_top, to_bottom) = (x, 49 - x, y, 49 - y);
+    let nearest = to_left.min(to_right).min(to_top).min(to_bottom);
+    if nearest == to_left {
+        (0, y)
+    } else if nearest == to_right {
+        (49, y)
+    } else if nearest == to_top {
+        (x, 0)
+    } else {
+        (x, 49)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::military::{NPC_INVADER, NPC_SOURCE_KEEPER};
     use screeps::RoomCoordinate;
+
+    #[test]
+    fn nearest_edge_tile_projects_to_the_closest_edge() {
+        assert_eq!(nearest_edge_tile(3, 25), (0, 25), "near the left edge");
+        assert_eq!(nearest_edge_tile(46, 25), (49, 25), "near the right edge");
+        assert_eq!(nearest_edge_tile(25, 4), (25, 0), "near the top edge");
+        assert_eq!(nearest_edge_tile(25, 45), (25, 49), "near the bottom edge");
+    }
 
     // Informational snapshot of current `classify_threat` behavior. This is
     // NOT a spec -- it pins what the classifier does today so behavioral

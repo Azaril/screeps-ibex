@@ -223,6 +223,26 @@ pub fn breach_path_blockers(
     )
 }
 
+/// Total hits to dismantle along the cheapest breach corridor from `start` to range 1 of `goal` — the
+/// breach-COST input for the force-sizing oracle (ADR 0020 §12). Sums ONLY the corridor blockers' hits
+/// (the breach-relevant ramparts/walls per §12.3 — never a room-wide rampart sum). `Some(0)` ⇒ the goal
+/// is reachable without dismantling; `None` ⇒ no corridor exists even through dismantlable blockers.
+pub fn breach_path_total_hits(
+    is_wall: &dyn Fn(u8, u8) -> bool,
+    blockers: &std::collections::HashMap<(u8, u8), BreachBlocker>,
+    start: (u8, u8),
+    goal: (u8, u8),
+) -> Option<u32> {
+    let corridor = breach_path_blockers(is_wall, blockers, start, goal)?;
+    Some(corridor.iter().fold(0u32, |acc, tile| {
+        let hits = match blockers.get(tile) {
+            Some(BreachBlocker::Dismantlable(h)) => *h,
+            _ => 0,
+        };
+        acc.saturating_add(hits)
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,6 +283,20 @@ mod tests {
         let blockers = wall_line_with_gaps(25, &[(25, 100_000), (5, 100)]);
         let result = breach_path_blockers(&NO_WALLS, &blockers, (5, 25), (45, 25)).expect("corridor should exist");
         assert_eq!(result, vec![(25, 5)]);
+    }
+
+    #[test]
+    fn breach_total_hits_is_the_cheapest_gap_not_the_rampart_sum() {
+        // ADR 0020 §12.3: breach cost = the hits on the cheapest corridor, NOT a room-wide rampart sum.
+        // A wall line with a cheap (100) and an expensive (5000) gap → the corridor takes the 100 gap.
+        let blockers = wall_line_with_gaps(25, &[(20, 100), (30, 5000)]);
+        let total = breach_path_total_hits(&NO_WALLS, &blockers, (5, 25), (45, 25)).expect("a corridor exists");
+        assert_eq!(total, 100, "breach cost is the cheapest gap's hits, not the sum of every rampart");
+    }
+
+    #[test]
+    fn breach_total_hits_zero_when_already_reachable() {
+        assert_eq!(breach_path_total_hits(&NO_WALLS, &HashMap::new(), (5, 25), (45, 25)), Some(0));
     }
 
     #[test]

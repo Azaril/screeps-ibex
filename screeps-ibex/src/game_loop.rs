@@ -627,7 +627,14 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// NOTE: bincode is positional and never signals early end-of-sequence, so a
 /// trailing #[serde(default)] field does NOT make old payloads decode safely --
 /// the version fingerprint is the only real gate, hence this bump.
-const WORLD_FORMAT_VERSION: u32 = 14;
+/// 15 = force-sizing intel (ADR 0020 §12.2): `RoomThreatData` gains `tower_energy`
+/// (per-tower energy), `breach_rampart_hits` (breach-corridor hits to the invader
+/// core, §12.3), and `repair_per_tick` -- the inputs the offense force-sizing oracle
+/// needs to replace the tower-count winnability proxy. `RoomThreatData` rides the
+/// bincode world-save stream, so the added fields reshape it -> one loud reset on
+/// deploy (the #[serde(default)]s are forward-compat only; bincode positional
+/// decoding makes the version fingerprint the real gate, per the note above).
+const WORLD_FORMAT_VERSION: u32 = 15;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode
