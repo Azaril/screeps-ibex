@@ -1,3 +1,0 @@
-# Fetched world data (regenerable from the API / bench seeds; can be
-# large on MMO shards). target/ is covered by the repo-root .gitignore.
-/cache/

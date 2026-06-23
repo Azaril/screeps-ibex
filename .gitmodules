@@ -34,3 +34,35 @@
 	path = screeps-common
 	url = https://github.com/Azaril/screeps-common.git
 	branch = master
+[submodule "screeps-rest-api"]
+	path = screeps-rest-api
+	url = https://github.com/Azaril/screeps-rest-api.git
+	branch = master
+[submodule "screeps-combat-engine"]
+	path = screeps-combat-engine
+	url = https://github.com/Azaril/screeps-combat-engine.git
+	branch = master
+[submodule "screeps-pack"]
+	path = screeps-pack
+	url = https://github.com/Azaril/screeps-pack.git
+	branch = master
+[submodule "screeps-prospector"]
+	path = screeps-prospector
+	url = https://github.com/Azaril/screeps-prospector.git
+	branch = master
+[submodule "screeps-combat-decision"]
+	path = screeps-combat-decision
+	url = https://github.com/Azaril/screeps-combat-decision.git
+	branch = master
+[submodule "screeps-server-kit"]
+	path = screeps-server-kit
+	url = https://github.com/Azaril/screeps-server-kit.git
+	branch = master
+[submodule "screeps-combat-agent"]
+	path = screeps-combat-agent
+	url = https://github.com/Azaril/screeps-combat-agent.git
+	branch = master
+[submodule "screeps-combat-eval"]
+	path = screeps-combat-eval
+	url = https://github.com/Azaril/screeps-combat-eval.git
+	branch = master

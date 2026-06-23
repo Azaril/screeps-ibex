@@ -58,5 +58,14 @@ screeps-visual = { path = "screeps-visual" }
 [patch.'https://github.com/Azaril/screeps-common']
 screeps-common = { path = "screeps-common" }
 
+[patch.'https://github.com/Azaril/screeps-combat-engine']
+screeps-combat-engine = { path = "screeps-combat-engine" }
+
+[patch.'https://github.com/Azaril/screeps-combat-decision']
+screeps-combat-decision = { path = "screeps-combat-decision" }
+
+[patch.'https://github.com/Azaril/screeps-combat-agent']
+screeps-combat-agent = { path = "screeps-combat-agent" }
+
 [patch.crates-io]
 screeps-game-api = { path = "../screeps-game-api" }

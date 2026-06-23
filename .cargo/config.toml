@@ -12,3 +12,13 @@ clippy-wasm = ["clippy", "--target", "wasm32-unknown-unknown"]
 check-wasm = ["check", "--target", "wasm32-unknown-unknown"]
 build-wasm = ["build", "--target", "wasm32-unknown-unknown"]
 test-host = ["test"]
+
+# Note on the workspace-EXCLUDED utility crates (screeps-rest-api / screeps-pack /
+# screeps-prospector / screeps-server-kit): their manifests declare git deps on
+# each other so each builds standalone (clone / `cargo install --git`). When
+# built inside this repo they resolve those siblings from the PUBLISHED repos,
+# not the local working tree. A cargo `paths` override was tried here to redirect
+# them locally, but cargo does not apply `paths` to git sources (verified), so it
+# was removed. To develop a sibling locally, push it first, or add a temporary
+# `[patch]` to the dependent's manifest. (Workspace MEMBERS, incl. the combat
+# crates, DO get local redirection via the root Cargo.toml [patch] table.)
