@@ -88,6 +88,109 @@ fn assemble_combat_body(budget: u32, offense_parts: u32, offense_kind: Part, hea
     body
 }
 
+// ─── Force-driven body builder (ADR 0020 §12.5/§12.6 R1) ─────────────────────
+//
+// The general successor to `assemble_combat_body`: build an ordered body from an arbitrary part SPEC
+// (any mix of TOUGH/ATTACK/RANGED/WORK/CARRY/HEAL) + a MOVE ratio for the intended travel terrain.
+// This is the primitive the force-sizing solver (R2/R3) targets — it emits a `CombatBodySpec` computed
+// to win the Lanchester balance, and this turns it into a creep body. (`assemble_combat_body` /
+// `sized_defender_body` already do force-matched sizing for DEFENSE via one offense kind + heal; this
+// generalizes that to the full part set + a configurable MOVE profile so OFFENSE and SK can reuse it.)
+
+/// Target part counts for a combat creep, BEFORE MOVE (which is derived from [`MoveProfile`]). The
+/// output of the force-sizing solver (R2); the input to [`build_combat_body`] (R1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CombatBodySpec {
+    pub tough: u32,
+    pub attack: u32,
+    pub ranged_attack: u32,
+    pub work: u32,
+    pub carry: u32,
+    pub heal: u32,
+}
+
+impl CombatBodySpec {
+    /// Fatigue-generating parts (everything except MOVE; CARRY counted conservatively as it may be
+    /// laden in transit) — the input to the MOVE-ratio calc.
+    pub fn non_move_parts(&self) -> u32 {
+        self.tough + self.attack + self.ranged_attack + self.work + self.carry + self.heal
+    }
+}
+
+/// MOVE provisioning for the intended travel terrain. Screeps fatigue: each non-MOVE (non-empty-CARRY)
+/// part adds `terrain` fatigue per tile (1 road / 2 plain / 10 swamp); each MOVE removes 2 — so the
+/// MOVE:non-MOVE ratio for 1 tile/tick is 1:2 (road), 1:1 (plain), 5:1 (swamp). Combat squads travel +
+/// fight off-road, so `Plains` (full plain speed) is the combat default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoveProfile {
+    Plains,
+    Road,
+    Swamp,
+}
+
+impl MoveProfile {
+    /// MOVE parts to move 1 tile/tick over this terrain with `non_move` fatigue-generating parts.
+    pub fn move_parts(&self, non_move: u32) -> u32 {
+        if non_move == 0 {
+            return 0;
+        }
+        match self {
+            MoveProfile::Plains => non_move,           // 1:1
+            MoveProfile::Road => non_move.div_ceil(2), // 1:2
+            MoveProfile::Swamp => non_move * 5,        // 5:1
+        }
+        .max(1)
+    }
+}
+
+/// Build an ordered creep body from a part `spec` + MOVE for `move_profile`, or `None` if it can't fit
+/// the 50-part cap or `max_energy` (R1, the force-sizing primitive). The caller (the force-sizing
+/// solver) chooses a spec that fits — `None` is its "can't afford the required force ⇒ defer" signal,
+/// NOT a scale-to-fit (sizing-to-budget is the solver's job, R2/R3). Order: TOUGH front (the meat
+/// shield — parts are destroyed front-to-back, so TOUGH absorbs first), then a round-robin of the
+/// remaining parts + MOVE so every capability (incl. mobility) degrades gracefully instead of dropping
+/// all at once.
+pub fn build_combat_body(spec: &CombatBodySpec, move_profile: MoveProfile, max_energy: u32) -> Option<Vec<Part>> {
+    let moves = move_profile.move_parts(spec.non_move_parts());
+    let total = spec.non_move_parts() + moves;
+    if total == 0 || total as usize > MAX_CREEP_SIZE {
+        return None;
+    }
+    let cost = spec.tough * Part::Tough.cost()
+        + spec.attack * Part::Attack.cost()
+        + spec.ranged_attack * Part::RangedAttack.cost()
+        + spec.work * Part::Work.cost()
+        + spec.carry * Part::Carry.cost()
+        + spec.heal * Part::Heal.cost()
+        + moves * Part::Move.cost();
+    if cost > max_energy {
+        return None;
+    }
+
+    let mut body = Vec::with_capacity(total as usize);
+    body.extend(std::iter::repeat_n(Part::Tough, spec.tough as usize));
+    // Round-robin the remaining buckets (incl. MOVE) so capabilities degrade evenly behind the TOUGH.
+    let mut buckets: [(Part, u32); 6] = [
+        (Part::Move, moves),
+        (Part::RangedAttack, spec.ranged_attack),
+        (Part::Attack, spec.attack),
+        (Part::Work, spec.work),
+        (Part::Carry, spec.carry),
+        (Part::Heal, spec.heal),
+    ];
+    let mut remaining: u32 = buckets.iter().map(|(_, n)| *n).sum();
+    while remaining > 0 {
+        for (part, n) in buckets.iter_mut() {
+            if *n > 0 {
+                body.push(*part);
+                *n -= 1;
+                remaining -= 1;
+            }
+        }
+    }
+    Some(body)
+}
+
 /// Threat-matched defender body sized to an energy `budget`. Offense
 /// (RANGED_ATTACK) is sized to kill the worst target within
 /// [`damage::KILL_WINDOW_TICKS`] net of the enemy's focused heal; HEAL is sized
@@ -616,6 +719,48 @@ pub fn hauler_body(max_energy: u32) -> SpawnBodyDefinition<'static> {
 mod tests {
     use super::*;
     use crate::creep::spawning::create_body;
+
+    // ── R1: build_combat_body (ADR 0020 §12.5/§12.6) ──
+    fn count(body: &[Part], part: Part) -> u32 {
+        body.iter().filter(|&&p| p == part).count() as u32
+    }
+
+    #[test]
+    fn move_profile_ratios() {
+        assert_eq!(MoveProfile::Plains.move_parts(10), 10, "plains = 1:1");
+        assert_eq!(MoveProfile::Road.move_parts(10), 5, "road = 1:2");
+        assert_eq!(MoveProfile::Swamp.move_parts(2), 10, "swamp = 5:1");
+        assert_eq!(MoveProfile::Plains.move_parts(0), 0, "no parts ⇒ no move");
+    }
+
+    #[test]
+    fn build_combat_body_matches_spec_and_fronts_tough() {
+        // A siege-ish duo member: 2 TOUGH + 6 WORK + 4 HEAL, plains move (1:1 → 12 move).
+        let spec = CombatBodySpec { tough: 2, work: 6, heal: 4, ..Default::default() };
+        let body = build_combat_body(&spec, MoveProfile::Plains, 5600).expect("fits");
+        assert_eq!(count(&body, Part::Tough), 2);
+        assert_eq!(count(&body, Part::Work), 6);
+        assert_eq!(count(&body, Part::Heal), 4);
+        assert_eq!(count(&body, Part::Move), 12, "1:1 move for 12 non-move parts");
+        assert_eq!(body.len(), 24);
+        assert!(body[0] == Part::Tough && body[1] == Part::Tough, "TOUGH is the front meat-shield");
+    }
+
+    #[test]
+    fn build_combat_body_rejects_over_50_parts() {
+        // 30 non-move parts × plains 1:1 = 60 parts > 50 → None (the solver must size smaller).
+        let spec = CombatBodySpec { ranged_attack: 30, ..Default::default() };
+        assert_eq!(build_combat_body(&spec, MoveProfile::Plains, 1_000_000), None);
+    }
+
+    #[test]
+    fn build_combat_body_rejects_over_budget() {
+        // 10 HEAL (2500) + 10 MOVE (500) = 3000 > a 1300 (RCL4) budget → None ("can't afford" signal).
+        let spec = CombatBodySpec { heal: 10, ..Default::default() };
+        assert_eq!(build_combat_body(&spec, MoveProfile::Plains, 1300), None);
+        // …but affordable at RCL7 (5600).
+        assert!(build_combat_body(&spec, MoveProfile::Plains, 5600).is_some());
+    }
 
     /// Regression (W11N57, live): a solo defender MUST build at RCL1/RCL2
     /// energy levels. The old body forced HEAL into a 500e minimum repeat unit,
