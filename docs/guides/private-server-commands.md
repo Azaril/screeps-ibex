@@ -155,6 +155,28 @@ direction froze spawning). Combined with any halt period (e.g. a panic loop) tha
 piles idle creeps around the spawn, the room ends up wedged. Prefer bumping a
 single level on a fresh/small colony and letting it stabilize.
 
+## Room activity — neutral rooms FREEZE (critical for combat soaks)
+
+The private server only **processes** rooms with `active=true` (owned/player-present
+rooms). **Neutral/NPC rooms default to `active=false` and are FROZEN** — keepers
+don't move, an injected invader core never deploys/acts, dead creeps never age out
+(they persist as "ghosts" with `ageTime` in the past), and the bot can't get live
+intel, so the offense scan never sees a target there. This silently blocks any soak
+whose target is a neutral room (observed 2026-06-23: W7N5/SK rooms frozen, 12 ghost
+creeps, W7N5 core inert, offense never targeted it).
+
+**Diagnose:** `storage.db['rooms'].find({_id:{$in:['W7N5','W6N4']}},{active:1})` →
+`active:false`; ghosts: `storage.db['rooms.objects'].count({type:'creep',ageTime:{$lt:<gameTime>}})` > 0.
+
+**Fix (the `active` flag is only read at BOOT for processor assignment — a mid-run
+flag change, `roomsForceUpdate`, and pause/resume do NOT take):**
+```
+storage.db.rooms.update({ active: false }, { $set: { active: true } }, { multi: true })
+```
+then **restart** the stack (`server down` && `server up`). After boot the now-active
+rooms are processed: keepers move, cores deploy, ghosts age out, targets become
+scoutable. Re-verify: ghosts → 0 and a frozen keeper changes position.
+
 ## Offense soak recipe (validate attack tactics)
 
 1. Stack + bot: `server up` → `deploy --user ibex` (hot swap, same WFV = no reset).
