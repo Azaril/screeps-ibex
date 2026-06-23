@@ -143,7 +143,7 @@ Nothing here blocks the deploy (all `blocks_deploy = false`); the live soak is w
 
 | ID | Item | Status | Where / next step |
 |----|------|--------|-------------------|
-| **0020-S5** | Blob role→sub-goal greedy auction + N-aware fragility-weighted cohesion | remaining | New auction layer above `decide_squad_with_pathing` + `squad_manager`. **Gating prereq (own task):** define the cross-goal EV currency — a common "future net hits enabled" unit for EV(focus)/EV(breach)/EV(drain) (ADR §2/§4.4) — *before* the auction. Then N-aware cohesion → role auction. **The next sequenced design+impl resume point.** |
+| **0020-S5** | Blob role→sub-goal greedy auction + N-aware fragility-weighted cohesion | remaining (full auction) | New auction layer above `decide_squad_with_pathing` + `squad_manager`. **Gating prereq (own task):** define the cross-goal EV currency — a common "future net hits enabled" unit for EV(focus)/EV(breach)/EV(drain) (ADR §2/§4.4) — *before* the auction. Then N-aware cohesion → role auction. **Note (2026-06-23):** the operator narrowed the *first* slice to **P2 — the force-SIZING oracle** (winnability + composition sizing + tower-drain EV; **§12**), which is the deploy-relevant subset and does NOT need the full cross-goal currency. The full role auction remains for after the MMO deploy (P5). |
 | **0020-S5-CAP** | `MAX_CONCURRENT_SQUADS` → CPU-governor-dynamic | remaining | `squad_manager.rs:53` (static 4 now). Implement only **after** live CPU-at-scale data; do NOT ship in the first combat deploy. |
 | **0020-S6** | Archetype classifier → preset selector + seeded mixed-strategy draw (consumes the step-4 meta-Nash mix) | remaining | New adaptivity module + `RoomThreatData` read. Ship LAST, behind a populated exploiter-gated tournament. Anti-counterability vs adaptive adversaries (MMO neighbours don't model us). |
 | **0020-S7** | Adversarial room-gen (minimax-regret + pairwise covering array) | remaining | `eval/scenario_gen.rs`. Continuous regression frontier; zero runtime impact. |
@@ -165,3 +165,54 @@ Nothing here blocks the deploy (all `blocks_deploy = false`); the live soak is w
 | **P2.L2** | Trait-based combat view | lead | Measure-first; only if a measured need appears. |
 | **P2.MULTIROOM** | Multi-room combat eval (U11/U12, XL engine rewrite) + HEAVY multi-squad player assault + POWER-BANK farming | remaining | Operator call on the XL rewrite; player assault needs I1/I2; power-bank needs its own ADR. All behind `attack_players` OFF / future ADRs. |
 | **CP-EXIT** | The 11 phase-2 M4 exit criteria (incl. #11 operator sign-off) | remaining | Criteria 1/5/6/7 get first real evidence from the live soak (M2-LIVE); CP-H/CP-M close via forced combat; CP-I via I1/I2; #11 = operator sign-off after the soak. |
+
+## 12. Force-sizing solver (P2) + the locked MMO-deploy roadmap (2026-06-23)
+
+The resume-from-here capture for the live MMO combat deploy. An `ultracode` mapping
+workflow (force-composition / target-selection / EV-Lanchester engine / healer /
+multi-squad-identity) grounded a phased roadmap; the operator locked **force-intelligence
+-first** + **sizing-solver depth**. This section is the durable home for the not-yet-built
+work; §11 holds the broader inventory it cross-references.
+
+### 12.1 Roadmap (locked)
+
+| Phase | What | WFV | Status |
+|---|---|---|---|
+| **P1** | Healer heal-coverage positioning (ADR [0019](0019-combat-position-selection.md) §8/§8.1) | none (transient) | **DONE 2026-06-23** — submodule `eff9888`/`97cb152`, superproject `f51aebb`+`525202b` |
+| **P2** | EV force-sizing oracle (§12.2): winnability + composition sizing + tower-drain EV | **14→15** (RoomThreatData enrichment) | **IN PROGRESS** |
+| **P3** | Watch a winnable clear end-to-end (private server W7N5 L1) + force soak A–D (§10) | — | pending (the hard pre-deploy gate) |
+| **P4** | Re-prove WFV safety (`b29224f..HEAD`, §10 correction) + whole-bot hygiene + operator go-ahead → **MMO deploy v1** (defense + smart core offense, `offense` default-true, conservative, watch the seg-57 canary) | — | pending |
+| **P5** (fast-follow, post-v1) | identity **I1/I2** (SquadId; §11) → multi-squad **G4-HEAVY** for towered strongholds (the P2 oracle defers to this) → **S5** full blob auction (needs the cross-goal EV currency) → **S6** adaptivity (dynamic mixed-strategy vs adaptive players; `attack_players` stays OFF) | each bumps WFV (fold post-deploy) | remaining (see §11) |
+
+**Why this order:** P2 makes offense *safe + effective* live (it stops the bot fielding losing squads — the operator's original complaint) and is the headline "better combat" lever, so it ships before the first MMO window. P2's WFV 14→15 folds into the single loud reset an MMO deploy (<14) already incurs, so it costs nothing extra. G4-HEAVY/strongholds is a genuine *later tier* (v1 = single-tower cores) and is deferred to P5.
+
+### 12.2 P2 — the force-sizing oracle (design)
+
+Invert the forward Lanchester (`assess_engage`, lib.rs:849-909) into a **required-force** model: given a target's defense profile, decide (a) **can a single squad win** and (b) **what composition wins** within an HP/time budget — replacing the tower-count proxy at `war.rs:899-905`.
+
+- **Intel enrichment (the WFV 14→15 bump).** The serialized `RoomThreatData` (threatmap.rs:56-90) gains: **breach-relevant rampart hits** (NOT all ramparts — see §12.3), **per-tower energy**, and a **repair-rate estimate** (tower self-repair + enemy WORK repair). `ThreatAssessmentSystem` (threatmap.rs:238-344) populates them when the room is visible. Bump `WORLD_FORMAT_VERSION` 14→15 + the `game_loop.rs` history block.
+- **The oracle (pure, decision/eval crate, live==sim — no fork):**
+  - **Tower damage at the assault tile** = Σ over *energized* towers of `tower_attack_damage_at_range(range from assault tile)` → the HEAL/tick the squad must out-heal at that position.
+  - **Out-heal feasibility** sizes HEAL parts; if no single-squad HEAL load out-heals it → take the **drain path**.
+  - **Breach time** = breach-relevant rampart hits ÷ squad dismantle DPS; must finish inside the squad's heal-sustained effective-HP budget AND a tick budget.
+  - **Tower-drain EV (NEW — replaces today's "towers unkillable ⇒ veto").** A tank soaks tower fire at the edge; each shot costs the tower 10 energy; drain time ≈ Σ `tower_energy` ÷ (10 × shots/tick), bounded by the tank's heal-sustained survival. Positive-EV when `drain_time + breach_time < budget` and the tank survives — then assault the drained base. This is the principled successor to the `MAX_SINGLE_SQUAD_STRONGHOLD_TOWERS` heuristic.
+  - **Composition sizing** → pick + size the `SquadComposition` (HEAL / WORK-dismantle / TOUGH counts, capped at RCL energy). If no single-squad force wins → **defer to G4-HEAVY (P5)** — but now via a real force calc, not a tower count.
+- **Wiring (`war.rs`).** A new `assess_required_force(defense_profile) -> ForceAssessment { winnable, composition, est_ticks }` (decision/eval crate, pure + tested). Replace the proxy gate (`war.rs:899-905`) with `!winnable ⇒ skip`; feed `assessment.composition` into `ForceRequirement::single(...)` (war.rs:943-947) instead of the hardcoded `siege_quad`. `AttackCandidate` (war.rs:72-87) is transient → free to carry the profile.
+- **Dynamic vs players.** The oracle is a pure function of the *observed* defense, recomputed each scan as intel refreshes, with **no opponent-specific constants** — so it scales to any defender including players whose defense changes. The full adaptive mixed-strategy (anti-exploitation vs an adversary modelling us) is **S6/P5**; `attack_players` stays OFF for v1.
+
+### 12.3 Rampart relevance — ONLY objective/tower-gating ramparts count (operator, 2026-06-23)
+
+**Not all ramparts are equal.** A base has many ramparts; summing them all would massively *overestimate* breach cost and falsely mark winnable targets unwinnable. Only the ramparts that actually gate the assault matter:
+
+1. **Ramparts on the breach corridor to the objective** (the dismantle target) — already isolated by the existing **`breach_path_blockers` Dijkstra kernel** (the same one driving controller breach-corridor dismantle priority).
+2. **Ramparts shielding the towers** we must remove on the **drain/kill path** (only when that path requires breaching a tower's rampart).
+
+So `rampart_hits` in the enriched intel = the hits of the **breach-corridor blockers to the objective** (+ for the drain path, the **tower-guarding ramparts**) — **never a room-wide rampart sum**. Interior/decorative/peripheral ramparts and ramparts over unrelated structures are irrelevant to the breach-cost estimate. Reuse `breach_path_blockers` (lib.rs breach kernel) as the source of truth; do not re-derive a one-off rampart scan (see [[no-one-off-pathfinding-algorithms]]).
+
+### 12.4 Seams (verified by the 2026-06-23 mapping)
+
+- **`war.rs`** (operations): `AttackCandidate` 72-87 (transient, extend freely); `tower_count` from `hostile_tower_positions.len()` :733 (today counts *drained* towers — fix via the per-tower energy); `estimated_dps/heal` :778-779; **the proxy gate to replace** :899-905; the composition match :884-926; `ForceRequirement::single` :943-947.
+- **`military/threatmap.rs`**: `RoomThreatData` 56-90 (**serialized — enrich here ⇒ WFV bump**); `HostileCreepInfo` 92-159 (bodies already captured); `ThreatAssessmentSystem` 238-344 (populate the new fields when visible).
+- **`screeps-combat-decision/src/lib.rs`**: `assess_engage` 849-909 (forward model to invert); `heal_reaching` 250-275; `breach_redirect` 1203-1277 + the `breach_path_blockers` kernel (the §12.3 rampart-relevance source).
+- **`military/composition.rs` / `bodies.rs`**: the composition/body factories the oracle sizes.
+- **Build/test gate:** `cargo test` (decision/eval/ibex) + `check-wasm` + `clippy-wasm` warning-free; bump `WORLD_FORMAT_VERSION` 14→15 + update the `game_loop.rs` history block (one intended loud reset, folds into the MMO deploy reset).
