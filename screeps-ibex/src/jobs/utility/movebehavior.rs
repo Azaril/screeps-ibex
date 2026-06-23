@@ -138,13 +138,45 @@ pub fn tick_move_to_room<F, R>(
 where
     F: Fn() -> R,
 {
+    let creep = tick_context.runtime_data.owner;
+
+    // Arrived once we are actually IN the target room.
+    //
+    // Do NOT use an `in_range_to(room_center, range)` check for arrival:
+    // `in_range_to` is GLOBAL (cross-room), so a creep still in an ADJACENT room
+    // but within `range` tiles of the target room's center satisfies it and
+    // falsely "arrives" — without ever issuing a move. A caller that re-checks
+    // room membership (e.g. squad-combat's `Engaged`, which bounces back to
+    // `MoveToRoom` when `room_name() != target_room`) then ping-pongs every tick
+    // and the creep is wedged at the room border (state machine hits the
+    // 20-transition guard). Room membership is the correct, edge-safe arrival
+    // signal (it matches the squad formation-travel path).
+    if creep.pos().room_name() == room_name {
+        return Some(next_state());
+    }
+
+    // Not there yet — head for the room center (range keeps us off the exit ring
+    // so we don't immediately bounce back across the border).
     let room_half_width = ROOM_WIDTH as u32 / 2;
     let room_half_height = ROOM_HEIGHT as u32 / 2;
     let range = room_half_width.max(room_half_height) - 2;
 
     let target_pos = RoomPosition::new(room_half_width as u8, room_half_height as u8, room_name);
 
-    tick_move_to_position(tick_context, target_pos, range, room_options, next_state)
+    if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
+        let mut builder = tick_context
+            .runtime_data
+            .movement
+            .move_to(tick_context.runtime_data.creep_entity, target_pos.into());
+
+        builder.range(range);
+
+        if let Some(room_options) = room_options {
+            builder.room_options(room_options);
+        }
+    }
+
+    None
 }
 
 /// Stay at least this Chebyshev distance from a dangerous remote hostile.
