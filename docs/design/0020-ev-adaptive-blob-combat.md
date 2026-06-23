@@ -278,4 +278,39 @@ P2b is built as **independently-shippable rungs** that each refine behavior AND 
 
 **Key finding (2026-06-23): force-matched sizing already exists for DEFENSE.** `military/bodies.rs::sized_defender_body` already sizes offense to `damage::attack_parts_to_kill(target_hp, enemy_heal, window, dmg)` and heal to `damage::defender_heal_parts_for_dps(incoming_dps)`, assembled by `assemble_combat_body` (budget-degrading, TOUGH-front). The OFFENSE/SK paths just don't use it — they field fixed templates. So P2b is mostly *wiring the existing defense primitives to offense/SK*, not building from scratch: **R1** generalizes `assemble_combat_body` → `build_combat_body` (full part spec + `MoveProfile`); **R2** reuses the `damage::*_parts_*` helpers to turn the oracle's `required_*` into a `CombatBodySpec`; **R3** wires it. (`damage::drain_heal_parts_for_dps` already exists for the SK/drain case too.)
 
-**Status:** **R1 DONE 2026-06-23** — `build_combat_body(CombatBodySpec, MoveProfile, max_energy) -> Option<Vec<Part>>` in `bodies.rs` (TOUGH-front + round-robin; MOVE ratio per terrain, combat default Plains 1:1; `None` = doesn't fit 50/energy = the solver's "can't afford" signal). 4 host tests, clippy-wasm clean, unwired (no behavior change). **Next: R2.**
+**Status:** **R1 + R2 DONE 2026-06-23** (unwired, no behavior change):
+- **R1** — `bodies::build_combat_body(CombatBodySpec, MoveProfile, max_energy) -> Option<Vec<Part>>` (TOUGH-front + round-robin; MOVE ratio per terrain, combat default Plains 1:1; `None` = doesn't fit 50/energy = the solver's "can't afford" signal). 4 host tests.
+- **R2** — `force_sizing::RequiredForce::from_assessment()` (the inverse of `capabilities()`): the oracle's `required_heal/dps` → total `{heal_parts, dismantle_parts, tough_parts}`, reusing `damage::defender_heal_parts_for_dps` for heal; `as_solo_spec()` bridges to R1. `tough_parts` = 0 in v1 (EHP margin is R5). 3 host tests incl. the R1∘R2 round-trip. clippy-wasm clean.
+
+**Next: R3** — `size_composition(assessment)` distributes `RequiredForce` across the composition's roles, builds bodies via R1, and `war.rs` fields it instead of the hardcoded `siege_quad` (gate → "afford the required force?"; subsumes the `836f0e1` best-home band-aid). First live behavior change.
+
+### 12.7 Beyond sizing — archetype selection + the full input model (design note, 2026-06-23)
+
+Forward-looking; R2–R6 deliver fixed-structure sizing first, this is where the ladder grows next.
+
+**(A) Archetype selection — *which* roles/body types, not just how many parts.** P2b sizes a FIXED role structure (siege = tank + heal + dismantle; SK = ranged + heal). But the right ARCHETYPE is itself a function of the objective + the opposing force:
+- **structure** target (breach/dismantle) → WORK dismantlers + heal (boosted vs deep walls);
+- **creep** target (defend/secure/harass) → RANGED kiters (kite the fight) or melee brawlers (cheap / when cornering is fine);
+- **towers** (drain) → high-TOUGH tank + heal (soak, don't trade);
+- **SK keepers** (suppress) → ranged + heal sized to *out-heal and hold*, not to win-and-leave;
+- **mobile player squad** → counter their composition (ranged vs their melee; extra heal vs burst; TOUGH vs sustained dps).
+
+So a rung sits **between R5 (size a structure) and R8 (full role auction): an archetype SELECTOR** — `(objective, force-profile) → role set` — then R2–R5 size it. This SELECTION axis ("right tool for the job") is **distinct from 0020-S6's mixed-strategy axis** ("don't be predictable / anti-exploitation"); both read the same inputs. R8's role auction is the general form (it picks roles by marginal EV, subsuming the selector); a hand-rolled classifier is the heuristic precursor for the common cases. Provisionally **R5.5** (heuristic selector) → folded into **R8**.
+
+**(B) The full input model — what the solver needs, by source + what it drives.** The solver should be a pure function of two input groups — the **OBJECTIVE** (what we're trying to do) and the **EXPECTED OPPOSING FORCE** (what resists us) — so archetype, size, mode, margin, and engage policy all derive from the same inputs rather than ad-hoc per call site:
+
+| Input | Source | Drives |
+|---|---|---|
+| Objective kind (Dismantle/Secure/Harass/Farm/Defend) + goal (kill/breach/suppress/hold/deny) | `CombatObjective` | **archetype**, mode (breach/drain) |
+| Target type (structure/creeps/controller/keeper) + hits | RoomData / `DefenseProfile` | archetype, structure-dps need, kill-time |
+| Importance / priority | `OBJECTIVE_PRIORITY_*` | **investment scale** (R5: importance·P(win)) |
+| Time budget (`CREEP_LIFE_TIME − spawn − travel`) | `estimated_combat_time` | feasibility, breach-vs-drain choice |
+| Tower threat (positions + energy + range-to-assault) | `RoomThreatData` (P2a) | heal need, drain mode, tank EHP |
+| Breach cost (corridor rampart hits) | `breach_path_blockers` (§12.3) | dismantle-dps need, breach-time |
+| Enemy creep force (bodies → DPS/heal/TOUGH, count) | `RoomThreatData.hostile_creeps` / keeper bodies | **archetype (counter)**, kill-time, our heal need, P(win) |
+| Repair rate (tower/creep rampart repair) | `DefenseProfile` (P2b D5) | net breach-dps need |
+| Safe-mode | `RoomThreatData` | hard veto |
+| Expected reinforcement / escalation (players: predicted incoming; NPCs: keeper respawn 300t, invader waves) | intel + heuristics (**FUTURE**) | margin, archetype, commit-at-all |
+| Our boosts available | lab/mineral state (0020-TOUGH/S2, **FUTURE**) | effective part power → smaller bodies, archetype |
+
+Most inputs exist (P2a/P2b); the FUTURE rows (expected reinforcement/escalation, our boosts) are S6/S2. **Design implication:** the solver's signature should take an `ObjectiveContext` + a `DefenseProfile` (the expected opposing force), not just a defense snapshot — the same two inputs feed archetype selection, sizing, mode, margin, and the engage policy.

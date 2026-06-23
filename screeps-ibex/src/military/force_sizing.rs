@@ -180,9 +180,107 @@ pub fn assess(profile: &DefenseProfile, budget: &ForceBudget) -> ForceAssessment
     unwinnable("towers out-damage a single squad — needs heavy assault (G4-HEAVY)")
 }
 
+// ─── R2: required-force → part counts (ADR 0020 §12.6) ───────────────────────
+//
+// The inverse of `SquadComposition::capabilities()` (P2a, forward): turn the oracle's required
+// CAPABILITIES into the total PARTS a squad must field. R3 distributes these across the role structure
+// and builds member bodies via `bodies::build_combat_body` (R1); the gate then becomes "can an in-range
+// home afford these parts?". Reuses the existing defense-path part math (`defender_heal_parts_for_dps`)
+// so heal sizing is consistent across defense and offense.
+
+/// WORK dismantle per part/tick (engine `DISMANTLE_POWER`).
+const DISMANTLE_POWER: u32 = 50;
+
+/// Total parts a squad must field to satisfy a [`ForceAssessment`] (R2). R3 splits these across the
+/// composition's roles + builds bodies (R1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RequiredForce {
+    /// Σ HEAL parts — out-heal the assault position (`required_heal_per_tick`).
+    pub heal_parts: u32,
+    /// Σ WORK parts — breach + kill the structure (`required_dismantle_dps`).
+    pub dismantle_parts: u32,
+    /// Σ TOUGH parts — the effective-HP buffer. v1 = 0 (role bodies carry their own HP); the
+    /// margin-driven EHP buffer is R5/D2.
+    pub tough_parts: u32,
+}
+
+impl RequiredForce {
+    /// Map a winnable assessment to total part counts. Reuses `defender_heal_parts_for_dps` (incoming-
+    /// dps → HEAL parts) so heal sizing matches the defense path. Unwinnable ⇒ all-zero (nothing to field).
+    pub fn from_assessment(a: &ForceAssessment) -> Self {
+        if !a.winnable {
+            return Self::default();
+        }
+        RequiredForce {
+            heal_parts: crate::military::damage::defender_heal_parts_for_dps(a.required_heal_per_tick, false),
+            dismantle_parts: parts_for_rate(a.required_dismantle_dps, DISMANTLE_POWER),
+            tough_parts: 0,
+        }
+    }
+
+    /// As a single-creep [`CombatBodySpec`] — the solo case + the R1 round-trip seam. R3 splits the
+    /// totals across the squad's members instead of stacking them on one creep.
+    pub fn as_solo_spec(&self) -> crate::military::bodies::CombatBodySpec {
+        crate::military::bodies::CombatBodySpec {
+            heal: self.heal_parts,
+            work: self.dismantle_parts,
+            tough: self.tough_parts,
+            ..Default::default()
+        }
+    }
+}
+
+/// Parts to deliver `rate`/tick at `power`/part (ceil). 0 when nothing is required.
+fn parts_for_rate(rate: f32, power: u32) -> u32 {
+    if rate <= 0.0 || power == 0 {
+        0
+    } else {
+        (rate / power as f32).ceil() as u32
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── R2: RequiredForce (capability → parts) ──
+    fn assessment(winnable: bool, heal: f32, dps: f32) -> ForceAssessment {
+        ForceAssessment {
+            winnable,
+            mode: AssaultMode::Breach,
+            required_heal_per_tick: heal,
+            required_dismantle_dps: dps,
+            est_ticks: 50,
+            reason: "test",
+        }
+    }
+
+    #[test]
+    fn required_force_inverts_capabilities_with_ceil() {
+        let rf = RequiredForce::from_assessment(&assessment(true, 120.0, 300.0));
+        assert_eq!(rf.heal_parts, 10, "120 dmg/tick ÷ 12 HEAL/part");
+        assert_eq!(rf.dismantle_parts, 6, "300 dps ÷ 50 DISMANTLE/part");
+        // Round-trip: the fielded parts meet-or-exceed the requirement (ceil, never under).
+        assert!(rf.heal_parts * 12 >= 120 && rf.dismantle_parts * DISMANTLE_POWER >= 300);
+    }
+
+    #[test]
+    fn required_force_is_zero_when_unwinnable() {
+        assert_eq!(RequiredForce::from_assessment(&assessment(false, 999.0, 999.0)), RequiredForce::default());
+    }
+
+    #[test]
+    fn required_force_spec_is_buildable_by_r1() {
+        // R1∘R2 seam: the spec R2 produces builds into a real body at RCL7 energy.
+        let rf = RequiredForce::from_assessment(&assessment(true, 120.0, 300.0));
+        let spec = rf.as_solo_spec();
+        assert_eq!(spec.heal, 10);
+        assert_eq!(spec.work, 6);
+        assert!(
+            crate::military::bodies::build_combat_body(&spec, crate::military::bodies::MoveProfile::Plains, 5600).is_some(),
+            "the required-force spec is affordable + fits at RCL7"
+        );
+    }
 
     /// A budget that can heal/dismantle a lot with a long on-site window — so the DEFENSE drives each
     /// test's outcome, not the budget.
