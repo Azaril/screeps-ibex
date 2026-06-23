@@ -642,16 +642,29 @@ impl Engaged {
                 }
             }
         } else if has_heal && !hostiles.is_empty() {
-            // Pure healer: follow nearest damaged friendly.
+            // Pure healer: escort the squad PROACTIVELY. Move to range 1 of the
+            // nearest damaged friendly if any are hurt, otherwise the nearest
+            // friendly COMBATANT (our attacker). Escorting the attacker even when
+            // nobody is damaged keeps the healer travelling WITH it and already
+            // adjacent when it takes fire — instead of lagging behind and only
+            // closing the gap after the attacker is already hurt.
             let my_creeps = get_friendly_creeps(creep_pos.room_name(), tick_context);
-            let damaged = my_creeps
+            let escort_target = my_creeps
                 .iter()
-                .filter(|c| c.hits() < c.hits_max() && c.pos() != creep_pos)
-                .min_by_key(|c| creep_pos.get_range_to(c.pos()));
+                .filter(|c| c.pos() != creep_pos && c.hits() < c.hits_max())
+                .min_by_key(|c| creep_pos.get_range_to(c.pos()))
+                .or_else(|| {
+                    my_creeps
+                        .iter()
+                        .filter(|c| {
+                            c.pos() != creep_pos
+                                && c.body().iter().any(|p| p.hits() > 0 && matches!(p.part(), Part::Attack | Part::RangedAttack))
+                        })
+                        .min_by_key(|c| creep_pos.get_range_to(c.pos()))
+                });
 
-            if let Some(target) = damaged {
-                let range = creep_pos.get_range_to(target.pos());
-                if range > 1 {
+            if let Some(target) = escort_target {
+                if creep_pos.get_range_to(target.pos()) > 1 {
                     tick_context
                         .runtime_data
                         .movement
