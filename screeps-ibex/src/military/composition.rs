@@ -1,6 +1,7 @@
 use super::bodies;
 use super::squad::SquadRole;
 use crate::creep::SpawnBodyDefinition;
+use crate::military::force_sizing::RequiredForce;
 use crate::pathing::pathfinderservice::PathfinderService;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,10 @@ pub enum BodyType {
     BoostedDuoHealer,
     BoostedDuoRangedAttacker,
     BoostedTank,
+    /// A force-SIZED body (R3, ADR 0020 §12.6): explicit part counts from the force-sizing solver,
+    /// built via `bodies::build_combat_body` rather than a static template. APPENDED LAST so existing
+    /// serialized variant discriminants are unchanged (forward-compatible decode).
+    Sized(bodies::CombatBodySpec),
 }
 
 impl BodyType {
@@ -60,6 +65,17 @@ impl BodyType {
             BodyType::BoostedDuoHealer => bodies::boosted_duo_healer_body(max_energy),
             BodyType::BoostedDuoRangedAttacker => bodies::boosted_duo_ranged_attacker_body(max_energy),
             BodyType::BoostedTank => bodies::boosted_tank_body(max_energy),
+            BodyType::Sized(_) => unreachable!("Sized bodies build via BodyType::build_body, not body_definition"),
+        }
+    }
+
+    /// Build the spawn body for this body type at `max_energy` over `move_profile`: a `Sized` spec via
+    /// the dynamic builder (R1), else the static template through `create_body`. `None` ⇒ can't build /
+    /// can't afford. The single body-producing entry point for the spawn path (handles both kinds).
+    pub fn build_body(&self, max_energy: u32, move_profile: bodies::MoveProfile) -> Option<Vec<Part>> {
+        match self {
+            BodyType::Sized(spec) => bodies::build_combat_body(spec, move_profile, max_energy),
+            other => crate::creep::spawning::create_body(&other.body_definition(max_energy)).ok(),
         }
     }
 
@@ -615,6 +631,38 @@ impl SquadComposition {
         }
         SquadCapabilities { heal_per_tick, structure_dps, tank_effective_hp }
     }
+
+    /// Force-DRIVEN sizing (R3, ADR 0020 §12.6): return a copy of this composition with each
+    /// role-relevant slot's body replaced by a `Sized` spec meeting its even share of `force`, or
+    /// `None` if any such slot can't fit `max_member_energy` (the "can't afford the required force ⇒
+    /// defer" signal). Slots whose role isn't covered by `force` keep their template body. This closes
+    /// the loop: the squad is built to the Lanchester-winning force, so the runtime engage gate holds
+    /// instead of retreating. (v1 distributes evenly across same-role slots + keeps the fixed member
+    /// count; member-count scaling + the EHP/margin buffer are R5; full role re-allocation is R8.)
+    pub fn sized_for(&self, force: RequiredForce, max_member_energy: u32) -> Option<SquadComposition> {
+        let count_role = |r: SquadRole| self.slots.iter().filter(|s| s.role == r).count() as u32;
+        let share = |total: u32, n: u32| if n == 0 { 0 } else { total.div_ceil(n) };
+
+        let heal_each = share(force.heal_parts, count_role(SquadRole::Healer));
+        let work_each = share(force.dismantle_parts, count_role(SquadRole::Dismantler));
+        let tough_each = share(force.tough_parts, count_role(SquadRole::Tank));
+
+        let mut sized = self.clone();
+        for slot in sized.slots.iter_mut() {
+            let spec = match slot.role {
+                SquadRole::Healer if heal_each > 0 => bodies::CombatBodySpec { heal: heal_each, ..Default::default() },
+                SquadRole::Dismantler if work_each > 0 => bodies::CombatBodySpec { work: work_each, ..Default::default() },
+                SquadRole::Tank if tough_each > 0 => bodies::CombatBodySpec { tough: tough_each, ..Default::default() },
+                // Role not covered by this force (or a zero share) → keep the static template.
+                _ => continue,
+            };
+            // The sized member must build at the strongest in-range home's energy (= what the spawn
+            // path uses); if it can't, the squad can't be fielded at this RCL → defer.
+            bodies::build_combat_body(&spec, bodies::MoveProfile::Plains, max_member_energy)?;
+            slot.body_type = BodyType::Sized(spec);
+        }
+        Some(sized)
+    }
 }
 
 /// A composition's per-tick combat output + tank HP at a spawn energy — the force-sizing oracle's
@@ -627,4 +675,37 @@ pub struct SquadCapabilities {
     pub structure_dps: u32,
     /// Effective HP of the toughest single member (the tank that soaks a tower drain).
     pub tank_effective_hp: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::military::force_sizing::RequiredForce;
+
+    // ── R3: SquadComposition::sized_for (force-driven sizing) ──
+    #[test]
+    fn sized_for_distributes_required_force_across_roles() {
+        // siege_quad = 2 Dismantler + 2 Healer. 20 heal + 12 dismantle parts, even split, fits RCL7.
+        let sized = SquadComposition::siege_quad()
+            .sized_for(RequiredForce { heal_parts: 20, dismantle_parts: 12, tough_parts: 0 }, 5600)
+            .expect("affordable at RCL7");
+        let dismantler = sized.slots.iter().find(|s| s.role == SquadRole::Dismantler).unwrap();
+        assert!(
+            matches!(dismantler.body_type, BodyType::Sized(spec) if spec.work == 6 && spec.heal == 0),
+            "dismantler sized to 12/2 = 6 WORK"
+        );
+        let healer = sized.slots.iter().find(|s| s.role == SquadRole::Healer).unwrap();
+        assert!(
+            matches!(healer.body_type, BodyType::Sized(spec) if spec.heal == 10 && spec.work == 0),
+            "healer sized to 20/2 = 10 HEAL"
+        );
+    }
+
+    #[test]
+    fn sized_for_defers_when_a_member_cannot_fit() {
+        // 200 heal parts → 100/healer → > the 50-part cap → can't field → None (defer, not undersize).
+        assert!(SquadComposition::siege_quad()
+            .sized_for(RequiredForce { heal_parts: 200, dismantle_parts: 0, tough_parts: 0 }, 1300)
+            .is_none());
+    }
 }

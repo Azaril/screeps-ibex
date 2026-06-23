@@ -98,8 +98,9 @@ fn assemble_combat_body(budget: u32, offense_parts: u32, offense_kind: Part, hea
 // generalizes that to the full part set + a configurable MOVE profile so OFFENSE and SK can reuse it.)
 
 /// Target part counts for a combat creep, BEFORE MOVE (which is derived from [`MoveProfile`]). The
-/// output of the force-sizing solver (R2); the input to [`build_combat_body`] (R1).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// output of the force-sizing solver (R2); the input to [`build_combat_body`] (R1). Serializable because
+/// the sized body rides in a `BodyType::Sized` slot on the (persisted) `SquadComposition` (R3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CombatBodySpec {
     pub tough: u32,
     pub attack: u32,

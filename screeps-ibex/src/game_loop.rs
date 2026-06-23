@@ -634,7 +634,13 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// bincode world-save stream, so the added fields reshape it -> one loud reset on
 /// deploy (the #[serde(default)]s are forward-compat only; bincode positional
 /// decoding makes the version fingerprint the real gate, per the note above).
-const WORLD_FORMAT_VERSION: u32 = 15;
+/// 16 = force-DRIVEN composition sizing (ADR 0020 §12.6 R3): `BodyType` gains a
+/// `Sized(CombatBodySpec)` variant so the force-sizing solver's output rides on the
+/// (persisted) `SquadComposition` in the objective queue. The variant is APPENDED, so
+/// existing variant discriminants are unchanged and old payloads decode (bincode is
+/// safe for appended enum variants — unlike struct fields) — but we bump anyway to be
+/// conservative + force one clean reset, folding into the MMO deploy reset.
+const WORLD_FORMAT_VERSION: u32 = 16;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode

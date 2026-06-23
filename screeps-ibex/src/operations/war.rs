@@ -1,7 +1,7 @@
 use super::data::*;
 use super::operationsystem::*;
 use crate::military::composition::SquadComposition;
-use crate::military::force_sizing::{assess, DefenseProfile, ForceBudget, TowerThreat};
+use crate::military::force_sizing::{assess, DefenseProfile, ForceBudget, RequiredForce, TowerThreat};
 use crate::military::objective_queue::{
     ForceRequirement, ObjectiveKind, ObjectiveOwner, ObjectiveRequest, OBJECTIVE_PRIORITY_CRITICAL, OBJECTIVE_PRIORITY_HIGH,
     OBJECTIVE_PRIORITY_LOW, OBJECTIVE_PRIORITY_MEDIUM,
@@ -920,20 +920,35 @@ impl WarOperation {
                     match (candidate.target_pos, candidate.defense.as_ref()) {
                         (Some(pos), Some(defense)) => {
                             match best_force_budget(&comp, &home_rooms, candidate.room, system_data.pathfinder) {
-                                Some(budget) => {
+                                Some((budget, member_energy)) => {
                                     let a = assess(defense, &budget);
-                                    if a.winnable {
-                                        info!(
-                                            "[War]   {} winnable via {:?} (~{} ticks): {}",
-                                            candidate.room, a.mode, a.est_ticks, a.reason
-                                        );
-                                        Some((ObjectiveKind::Dismantle { room: candidate.room, pos }, OBJECTIVE_PRIORITY_MEDIUM, comp))
-                                    } else {
+                                    if !a.winnable {
                                         info!(
                                             "[War]   Skip {} -- force oracle: not winnable for one squad ({}); defer to G4-HEAVY",
                                             candidate.room, a.reason
                                         );
                                         None
+                                    } else {
+                                        // R3: SIZE the squad to the Lanchester-winning force (not the fixed
+                                        // siege_quad), at the same energy the spawn path uses. `None` ⇒ a
+                                        // home can't afford the required force ⇒ defer (G4-HEAVY).
+                                        let required = RequiredForce::from_assessment(&a);
+                                        match comp.sized_for(required, member_energy) {
+                                            Some(sized) => {
+                                                info!(
+                                                    "[War]   {} winnable via {:?} (~{} ticks): sized to {} heal + {} dismantle parts ({})",
+                                                    candidate.room, a.mode, a.est_ticks, required.heal_parts, required.dismantle_parts, a.reason
+                                                );
+                                                Some((ObjectiveKind::Dismantle { room: candidate.room, pos }, OBJECTIVE_PRIORITY_MEDIUM, sized))
+                                            }
+                                            None => {
+                                                info!(
+                                                    "[War]   Skip {} -- can't afford the required force ({} heal + {} dismantle parts) at {} energy; defer",
+                                                    candidate.room, required.heal_parts, required.dismantle_parts, member_energy
+                                                );
+                                                None
+                                            }
+                                        }
                                     }
                                 }
                                 None => {
@@ -1156,8 +1171,8 @@ fn best_force_budget(
     home_rooms: &[RoomName],
     target: RoomName,
     pathfinder: &mut crate::pathing::pathfinderservice::PathfinderService,
-) -> Option<ForceBudget> {
-    let mut best: Option<ForceBudget> = None;
+) -> Option<(ForceBudget, u32)> {
+    let mut best: Option<(ForceBudget, u32)> = None;
     for &home in home_rooms {
         let Some(room) = game::rooms().get(home) else {
             continue;
@@ -1174,8 +1189,10 @@ fn best_force_budget(
             tank_effective_hp: caps.tank_effective_hp as f32,
             onsite_budget_ticks: onsite,
         };
-        if best.map(|b| onsite > b.onsite_budget_ticks).unwrap_or(true) {
-            best = Some(budget);
+        // Return the chosen home's energy too — R3 sizes the fielded composition at the SAME energy the
+        // spawn path will use, so the affordability check and the actual spawn agree.
+        if best.map(|(b, _)| onsite > b.onsite_budget_ticks).unwrap_or(true) {
+            best = Some((budget, energy_capacity));
         }
     }
     best

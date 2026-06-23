@@ -282,7 +282,12 @@ P2b is built as **independently-shippable rungs** that each refine behavior AND 
 - **R1** — `bodies::build_combat_body(CombatBodySpec, MoveProfile, max_energy) -> Option<Vec<Part>>` (TOUGH-front + round-robin; MOVE ratio per terrain, combat default Plains 1:1; `None` = doesn't fit 50/energy = the solver's "can't afford" signal). 4 host tests.
 - **R2** — `force_sizing::RequiredForce::from_assessment()` (the inverse of `capabilities()`): the oracle's `required_heal/dps` → total `{heal_parts, dismantle_parts, tough_parts}`, reusing `damage::defender_heal_parts_for_dps` for heal; `as_solo_spec()` bridges to R1. `tough_parts` = 0 in v1 (EHP margin is R5). 3 host tests incl. the R1∘R2 round-trip. clippy-wasm clean.
 
-**Next: R3** — `size_composition(assessment)` distributes `RequiredForce` across the composition's roles, builds bodies via R1, and `war.rs` fields it instead of the hardcoded `siege_quad` (gate → "afford the required force?"; subsumes the `836f0e1` best-home band-aid). First live behavior change.
+**R3 DONE 2026-06-23 (first live behavior change; WFV 15→16):**
+- `BodyType::Sized(CombatBodySpec)` — an APPENDED enum variant carrying a force-sized body (bincode-safe for appended variants; bumped WFV anyway to be conservative). `BodyType::build_body(energy, MoveProfile)` is the single spawn entry (Sized → R1 builder; template → `create_body`); `queue_slot_spawn` uses it.
+- `SquadComposition::sized_for(RequiredForce, max_member_energy)` — distributes the required parts across role slots (Healer→heal, Dismantler→work, Tank→tough; even split), sets each to `Sized`, returns `None` if any member can't fit (the "can't afford ⇒ defer" signal). Unsized roles keep their template.
+- `war.rs`: the InvaderCore arm now **sizes** the comp via `sized_for` at the strongest-home energy (`best_force_budget` returns that energy) instead of fielding the fixed `siege_quad`; gate = "afford the required force?" (subsumes the `836f0e1` best-home band-aid). 2 host tests; check-wasm + clippy-wasm clean; host 176.
+
+**So offense squads are now sized to the Lanchester-winning force** — the loop is closed for the InvaderCore path. **Next: R4** (P(win) model — `assess_engage` balance → probability, sizing targets a P(win) threshold), then **R5** (importance·P(win) investment), then **R6** (SK keeper sizing — wire the same path to the SK duo so it holds).
 
 ### 12.7 Beyond sizing — archetype selection + the full input model (design note, 2026-06-23)
 
