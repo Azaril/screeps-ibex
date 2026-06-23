@@ -19,14 +19,19 @@ members = [
     # The combat policy layer (H5): the EXP-* experiment register over the sim. Member like agent —
     # deps only on the combat members + game-api.
     "screeps-combat-eval",
+    # Host-side tool crates (tokio/bollard/reqwest — host-only, NOT wasm-buildable):
+    # members so the workspace is the single place to pull/use this code, and the root
+    # [patch] table below redirects their inter-crate git deps to the local working tree
+    # (edit one, rebuild a dependent, no push needed). They cannot build for wasm32, so
+    # the wasm aliases in .cargo/config.toml --exclude these four.
+    "screeps-rest-api",
+    "screeps-pack",
+    "screeps-prospector",
+    "screeps-server-kit",
 ]
 exclude = [
     "screeps-foreman-bench",
-    "screeps-server-kit",
     "screeps-ibex-eval",
-    "screeps-prospector",
-    "screeps-rest-api",
-    "screeps-pack",
 ]
 
 [profile.release]
@@ -66,6 +71,18 @@ screeps-combat-decision = { path = "screeps-combat-decision" }
 
 [patch.'https://github.com/Azaril/screeps-combat-agent']
 screeps-combat-agent = { path = "screeps-combat-agent" }
+
+# Host-side tool crates: redirect their inter-crate git deps to the local member
+# paths so cross-crate edits are picked up without a push (server-kit is not a
+# dependency of any member, so it needs no patch entry).
+[patch.'https://github.com/Azaril/screeps-rest-api']
+screeps-rest-api = { path = "screeps-rest-api" }
+
+[patch.'https://github.com/Azaril/screeps-pack']
+screeps-pack = { path = "screeps-pack" }
+
+[patch.'https://github.com/Azaril/screeps-prospector']
+screeps-prospector = { path = "screeps-prospector" }
 
 [patch.crates-io]
 screeps-game-api = { path = "../screeps-game-api" }

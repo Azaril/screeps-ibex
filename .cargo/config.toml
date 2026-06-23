@@ -1,24 +1,19 @@
-# The bot crates deploy as wasm, but NO [build].target default is set:
-# wasm-pack (the legacy js_tools/deploy.js path; screeps-pack is the primary
-# deploy tool since P0.A13) always passes --target
-# wasm32-unknown-unknown to cargo itself, and a global default forces
-# every excluded host-side tool crate (screeps-server-kit, screeps-ibex-eval, screeps-prospector,
-# screeps-rest-api, screeps-foreman-bench) to carry or fake a
-# machine-specific override. Install once: rustup target add
-# wasm32-unknown-unknown. Wasm-target checks for the bot crates go
-# through these aliases:
+# The bot deploys as wasm, but NO [build].target default is set: a global wasm
+# default would force every host-side tool crate (tokio/bollard/reqwest-based) to
+# carry or fake a machine-specific override. Install once:
+# rustup target add wasm32-unknown-unknown.
+#
+# The host-side tool crates (screeps-rest-api / pack / prospector / server-kit) are
+# now workspace MEMBERS — so the workspace is the single place to pull/use this code
+# and the root Cargo.toml [patch] table redirects their inter-crate deps to the local
+# tree — but they CANNOT build for wasm32, so the wasm aliases build the whole
+# workspace EXCEPT them. (screeps-ibex-eval / screeps-foreman-bench stay
+# workspace-excluded, so they are not in --workspace at all.)
 [alias]
-clippy-wasm = ["clippy", "--target", "wasm32-unknown-unknown"]
-check-wasm = ["check", "--target", "wasm32-unknown-unknown"]
-build-wasm = ["build", "--target", "wasm32-unknown-unknown"]
+clippy-wasm = ["clippy", "--workspace", "--exclude", "screeps-rest-api", "--exclude", "screeps-pack", "--exclude", "screeps-prospector", "--exclude", "screeps-server-kit", "--target", "wasm32-unknown-unknown"]
+check-wasm = ["check", "--workspace", "--exclude", "screeps-rest-api", "--exclude", "screeps-pack", "--exclude", "screeps-prospector", "--exclude", "screeps-server-kit", "--target", "wasm32-unknown-unknown"]
+build-wasm = ["build", "--workspace", "--exclude", "screeps-rest-api", "--exclude", "screeps-pack", "--exclude", "screeps-prospector", "--exclude", "screeps-server-kit", "--target", "wasm32-unknown-unknown"]
 test-host = ["test"]
 
-# Note on the workspace-EXCLUDED utility crates (screeps-rest-api / screeps-pack /
-# screeps-prospector / screeps-server-kit): their manifests declare git deps on
-# each other so each builds standalone (clone / `cargo install --git`). When
-# built inside this repo they resolve those siblings from the PUBLISHED repos,
-# not the local working tree. A cargo `paths` override was tried here to redirect
-# them locally, but cargo does not apply `paths` to git sources (verified), so it
-# was removed. To develop a sibling locally, push it first, or add a temporary
-# `[patch]` to the dependent's manifest. (Workspace MEMBERS, incl. the combat
-# crates, DO get local redirection via the root Cargo.toml [patch] table.)
+# (An earlier `paths` override here was removed — cargo does not apply `paths`
+# overrides to git sources; the [patch] table on members is the working mechanism.)
