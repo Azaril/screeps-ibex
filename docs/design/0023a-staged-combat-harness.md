@@ -107,32 +107,41 @@ Validators (independent of the generator):
 generator offers with the validator and aggregates. Generation ⊥ validation ⊥ run-until — any triple
 composes.
 
-### 4. Visualization — *render a recording (+ static terrain) as an animated, multi-room replay*
-The operator-facing **visual validation** layer: turn a `CombatRecording` + the scenario's per-room
-terrain into a self-contained replay the operator can open and scrub, to eyeball both tournament
-*outcomes* and the *variety* of generated permutations.
+### 4. Visualization — *render a recording (+ metadata) as an interactive, multi-room HTML replay*
+The operator-facing **visual validation** layer: turn a `CombatRecording` + scenario metadata into a
+self-contained **interactive HTML** replay the operator opens and scrubs, to eyeball both tournament
+*outcomes* and the *variety* of generated permutations. **Operator decisions (2026-06-24):**
+*interactive HTML player ONLY — no SVG rendering (the agent's `replay.rs` SVG filmstrip is REMOVED)*;
+the renderer *takes a replay output + metadata*; it lives in a *host-only crate/module, never in live
+bot code*.
 ```rust
-/// Render a recording + the scenario's room layouts to a self-contained HTML replay player.
-pub fn replay_to_html(rec: &CombatRecording, layout: &ReplayLayout) -> String;
-/// A lighter self-contained animated SVG (SMIL) for embedding/preview.
-pub fn replay_to_svg(rec: &CombatRecording, layout: &ReplayLayout) -> String;
+/// Render a recording + scenario metadata to a self-contained interactive HTML replay player.
+pub fn replay_to_html(rec: &CombatRecording, meta: &ReplayMeta) -> String;
 ```
-- **Multi-room**: tile each room's 50×50 grid into a labeled grid (room name per panel); a creep/
-  structure draws in its room's panel. Requires the engine recording to carry the **room** per entity
-  (the one gap — see the engine extension below).
-- **Terrain + buildings**: static backdrop per room — plain/swamp/wall terrain tiles; buildings drawn
-  **typed**: Spawn (filled square), Tower (square + an energy ring/bar that animates as it drains),
-  Rampart (translucent shield over its tile, opacity ∝ hits), constructed Wall (solid), distinct from
-  terrain wall. Creeps = owner-coloured discs, radius ∝ HP, role hinted by part mix (dismantler/healer/
-  attacker), with a per-tick attack/heal flash from the frame intents.
-- **Animation + per-frame data**: the HTML player has a tick scrubber + play/pause and a data panel
-  (tick, per-creep HP / intent / "why" reason, tower energy, deaths, destroyed structures) — satisfies
-  "animated to show each tick AND/OR per-frame data". The SVG variant uses SMIL keyframes for a
-  no-JS preview. The harness writes one file per scenario (or a contact-sheet index) under a run dir;
-  `show_widget` can surface one inline for a quick look.
-- **Supersedes** the agent's `replay.rs` (a static single-room filmstrip, no terrain/typed buildings).
-  The richer renderer is **policy** → it lives in `combat-eval` (per the engine `record.rs` note "a
-  richer SVG/scrubber renderer is policy and lives in screeps-combat-eval").
+- **Home**: a host-only module in `combat-eval` (the harness crate — it's `--workspace --exclude`'d from
+  the wasm build, so it can NEVER reach live bot code). The engine `record.rs` note already says "a
+  richer renderer is policy and lives in screeps-combat-eval". (Extractable to its own crate later, like
+  the other Azaril crates, if desired.)
+- **`ReplayMeta`**: the scenario label/seed, the room layouts (per-room terrain: plain/swamp/wall) and
+  static buildings, owner→side legend, the objectives, and the validator verdict — everything the player
+  needs beyond the per-tick frames.
+- **Interactive HTML player** (single self-contained file, frames embedded as JSON, vanilla JS — no
+  external deps): a tick **scrubber + play/pause/step**, a **per-frame data panel** (tick, per-creep
+  HP / role / intent + "why" reason, tower energy, deaths, destroyed structures), and the verdict.
+- **Multi-room**: rooms tiled into a labeled grid (room name per panel); each entity drawn in its room's
+  panel. Requires the engine recording to carry the **room** per entity (the one gap — see below).
+- **Terrain + buildings**: per-room backdrop (plain/swamp/wall tiles) + **typed** buildings: Spawn
+  (filled square), Tower (square + an energy bar that tracks the drain), Rampart (translucent shield,
+  opacity ∝ hits), constructed Wall (solid, distinct from terrain wall). Creeps = owner-coloured discs,
+  radius ∝ HP, role hinted by part mix, with a per-tick attack/heal flash from the frame intents.
+- The runner writes one HTML file per scenario (+ a contact-sheet index linking them) under a run dir;
+  the operator opens them to validate outcomes + permutation variety.
+- **Reuse `screeps-visual`** (operator 2026-06-24): the backend-agnostic primitives crate
+  (`VisualBackend` circle/rect/poly/line + `render_structure`/`structure_primitives` per
+  `StructureType`, dep = just `screeps-game-api`). Implement a `VisualBackend` that captures each
+  structure type's primitive template once; the player's JS instances the template at every building's
+  room position so typed buildings match the bot's own rendering. `combat-eval` adds `screeps-visual` as
+  a (host-only) dep.
 
 **Engine extension (multi-room recording).** `CreepFrame`/`StructureFrame`/`TowerFrame` carry only
 `x,y`; add the **room** (store the entity's `Position` or a `RoomName`/compact room id) so the
