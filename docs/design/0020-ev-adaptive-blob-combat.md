@@ -99,6 +99,8 @@ Ranked by value/effort. Each notes the caveat that gates it.
 
 ## 10. Path to MMO deploy (deployability assessment, 2026-06-19)
 
+> **➤ SUPERSEDED FOR SEQUENCING (2026-06-23).** The phase *ordering* below (P1–P5 / the R-ladder) is superseded by **[ADR 0022](0022-combat-mmo-v1-roadmap.md)** — the operator-driven end-state re-plan (P0→P-MOVE/P-OBJ/P-ID→P-SPAWN→P-CORE→P-SOAK→P-DEPLOY→P5). The sizing *design* in §12 still stands and is referenced by 0022's P-CORE. Read 0022 for the authoritative plan + the D1–D15 decisions.
+
 > **⚠ STALE-WFV CORRECTION (2026-06-23).** Everything below citing `WORLD_FORMAT_VERSION
 > = 13` and the `3290c86..HEAD` diff proof is **out of date**: `b29224f` later bumped WFV
 > **13→14** (the ADR 0009c road-connectivity planner — a non-combat part of the whole-bot
