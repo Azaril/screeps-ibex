@@ -980,15 +980,31 @@ impl WarOperation {
                                         let required = RequiredForce::from_assessment(&a).scaled(importance_margin(importance));
                                         match comp.sized_for(required, member_energy) {
                                             Some(sized) => {
-                                                let pwin = win_probability(
-                                                    required.heal_parts as f32 * 12.0,
-                                                    a.required_heal_per_tick / HOLD_MARGIN,
-                                                );
-                                                info!(
-                                                    "[War]   {} winnable via {:?} (~{} ticks): ranged quad, healers sized to {} heal parts (out-heal towers), P(win)~{:.0}% ({})",
-                                                    candidate.room, a.mode, a.est_ticks, required.heal_parts, pwin * 100.0, a.reason
-                                                );
-                                                Some((ObjectiveKind::Dismantle { room: candidate.room, pos }, OBJECTIVE_PRIORITY_MEDIUM, sized))
+                                                // ROI gate (blocker #3): never field a squad the colony can't afford to
+                                                // SPAWN. Member-count scaling (D3) can make a winnable squad large, so a
+                                                // per-tick-affordable composition can still be globally unsustainable —
+                                                // the economy death-spiral. Defer if the spawn cost exceeds the
+                                                // reserve-protected military surplus. (v1 is single-squad / one creep
+                                                // lifetime, so this is one generation's spend; the cumulative
+                                                // multi-generation bound lands with the G4-HEAVY siege path, P5.)
+                                                let spawn_cost = sized.estimated_cost(member_energy);
+                                                if !system_data.economy.can_afford_military(spawn_cost) {
+                                                    info!(
+                                                        "[War]   Skip {} -- ROI: squad spawn cost {} exceeds affordable military surplus; defer",
+                                                        candidate.room, spawn_cost
+                                                    );
+                                                    None
+                                                } else {
+                                                    let pwin = win_probability(
+                                                        required.heal_parts as f32 * 12.0,
+                                                        a.required_heal_per_tick / HOLD_MARGIN,
+                                                    );
+                                                    info!(
+                                                        "[War]   {} winnable via {:?} (~{} ticks): ranged quad, healers sized to {} heal parts (out-heal towers), P(win)~{:.0}% (cost {}, {})",
+                                                        candidate.room, a.mode, a.est_ticks, required.heal_parts, pwin * 100.0, spawn_cost, a.reason
+                                                    );
+                                                    Some((ObjectiveKind::Dismantle { room: candidate.room, pos }, OBJECTIVE_PRIORITY_MEDIUM, sized))
+                                                }
                                             }
                                             None => {
                                                 info!(
