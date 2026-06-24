@@ -11,6 +11,20 @@ Operator decisions (AskUserQuestion, 2026-06-24): **(1)** move scope = **sizing 
 
 Vetted by mapping workflow `wf_ad62f826-c67` (4 agents: closure/purity, call-sites, shims, tournament).
 
+## CURRENT STATE (2026-06-24) — Moves 1–2 + tower curve DONE; Move 3 + Move B remain
+`decision` now owns the sizing core: modules `spawning`, `damage`, `bodies`, `force_sizing`
+(95 host tests). The bot uses them (no duplicate defs); deleted bot files: `military/force_sizing.rs`.
+All green, full `clippy-wasm` clean, working tree clean. Commits:
+- Move 1 (spawning): decision `1a99fb9` / super `21db86e`.
+- Move 2 (sizing core: bodies primitives + force_sizing): decision `c7e092f` / super `521a232` (added `serde` dep to decision).
+- Tower-curve consolidation: decision `f1a1db6` / super `b86a032` (bot's duplicate f32 curve deleted; `decision::damage` re-exports the engine's canonical curve; bot reaches it via decision — no bot→engine dep).
+- Plan/doc commits: `ea0161e` (plan), `98bc372` (Move 1 done).
+
+**Remaining: Move 3 (the composition hub) + Move B (the tournament — the WIN).** WFV unchanged (17);
+serialization may break freely per operator (one reset at the very end). Layering verdict (applied):
+mechanics → `engine`; combat policy (sizing/composition/bodies/tactics) → `decision`; the bot reaches
+engine mechanics *through* decision.
+
 ## Why / end-state
 `assess` + `RequiredForce` + `SquadComposition::sized_for` + `build_combat_body` are pure but bot-internal,
 so the sim (`screeps-combat-agent`) and eval (`screeps-combat-eval`) — siblings of the bot, both depending
@@ -66,8 +80,9 @@ Consumer files (must keep compiling via the above): game_loop (comments only —
 ## Sub-commit order (each GREEN: combat-decision builds+tests, bot clippy-wasm+tests, then super pointer bump)
 - **Move 1 — spawning** (Shim B): ✅ **DONE** (decision `1a99fb9` / super `21db86e`). `SpawnBodyDefinition`+`create_body`+`clamp`+5 tests → `combat-decision::spawning`; creep.rs re-exports (kept `spawning::build`). clippy-wasm clean.
 - **Move 2 — sizing core**: ✅ **DONE** (decision `c7e092f` + the bot switch). Relocated to `decision::{bodies, force_sizing}`: `CombatBodySpec`/`MoveProfile`/`build_combat_body` + `defender_heal_parts_for_dps` (using the engine's `HEAL_POWER`, not a dup) + all of `force_sizing` (using `screeps_combat_engine::{constants, damage}` — the canonical tower curve, NOT a duplicated f32 copy; added `serde` derive dep). Bot `force_sizing.rs` DELETED; `bodies.rs` re-exports the 3 primitives + the heal helper (transitional — `bodies.rs` fully moves in Move 3); `damage.rs` lost `defender_heal_parts_for_dps` (kept its tower-over-Position fns); call sites (war/sourcekeeperfarm/composition) import from decision. 39 bot + 95 decision host tests; clippy-wasm clean. **Constraint honored:** force-sizing = pure POLICY in decision, on engine MECHANICS (no curve dup). The part-sizing helpers `attack_parts_to_kill`/`KILL_WINDOW_TICKS`/`MAX_OFFENSE_PARTS`/`drain_heal_parts_for_dps` stay in bot `damage.rs` for Move 3 (used by the template `sized_defender_body`/`drain_body` that move with composition).
-- **Move 3 — composition**: `SquadRole` + `BodyType` + the template body fns + `SquadComposition`/`SquadSlot`/`FormationShape`/`FormationMode`/`SquadCapabilities`/`sized_for`/`capabilities` + Shim A → `combat-decision::composition`. Depends on Moves 1+2. bot re-exports + the war.rs Shim A hoist.
-- **Move B — tournament** (the WIN): `combat-eval/src/oracle_calibration.rs`.
+- **Tower-curve consolidation**: ✅ **DONE** (decision `f1a1db6` / super `b86a032`). `decision::damage` re-exports the engine's canonical tower attack/heal/repair curve; bot `military/damage.rs` deleted its duplicate f32 trio (attack used only internally; heal/repair were dead) and reaches the curve through decision (no bot→engine dep). Behavior-neutral (value-identical curves). force_sizing uses `crate::damage` (one internal path).
+- **Move 3 — composition (NEXT — the hub; do as ONE coherent green push)**: move into `decision::composition`: `SquadRole` + `BodyType` (+ all its methods) + `SquadComposition`/`SquadSlot`/`FormationShape`/`FormationMode`/`SquadCapabilities`/`sized_for`/`capabilities` + **Shim A** (drop `estimated_travel_time`; `estimated_combat_time`/`is_viable_from` take `travel_ticks: u32`, return `u32`). Also move the remaining `bodies` templates + the part-sizing cluster (`attack_parts_to_kill`/`KILL_WINDOW_TICKS`/`MAX_OFFENSE_PARTS`/`drain_heal_parts_for_dps` + `assemble_combat_body`/`sized_defender_body`/`sized_healer_body`/`boosts`) into `decision::bodies` (`BodyType::body_definition` references the templates, so they must be co-located). **`composition.rs` is the HUB** (`BodyType::body_definition` pulls in every template) — so it does NOT split into safe sub-commits without churning the hub or leaving transient dup. **Execute as ONE push:** relocate the files wholesale (prefer `git`-level move/copy + import fixups over re-transcription — keep it exact), fix imports (`super::bodies`→`crate::bodies`, `super::squad::SquadRole`→local, `crate::pathing`→Shim A, `crate::military::damage::*`→engine/local), then the bot switch: DELETE bot `military/{bodies,composition}.rs`, drop `SquadRole` from `squad.rs` (+ re-point its internal uses), drop the part-sizing cluster from `damage.rs`, the **one** `best_force_budget` (war.rs ~1247) `travel_ticks` hoist, and update all call sites to `screeps_combat_decision::{composition,bodies}::…`. WFV: serialization may break freely (one reset at end) — don't fuss over `BodyType`/`SquadComposition` shape. Exit: 0 bot `military::{bodies,composition,force_sizing}` modules remain (force_sizing already gone); decision owns it all; `clippy-wasm` clean; bot + decision host tests green.
+- **Move B — tournament (the WIN)**: `combat-eval/src/oracle_calibration.rs` — see the design below.
 
 ## Move B — oracle-calibration tournament (combat-eval)
 - New `pub mod oracle_calibration;` next to `tournament`. Reuse `room()`/`pos()`, `ScenarioBuilder`,
