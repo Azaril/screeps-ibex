@@ -51,6 +51,18 @@ Generators (all `impl Generator`, freely swapped into the runner):
   outpost). Regression anchors with known-correct verdicts.
 - **`MultiRoom`** — composes per-room sub-beds via `ScenarioBuilder::in_room` (the engine is already
   N-room — ADR 0023 S3 / task P-ENGINE), with objectives carrying their room.
+- **`ForemanGenerator`** (operator 2026-06-24) — **realistic rooms from the bot's own planner.** Run
+  `screeps-foreman`'s room layout / base generation over seeded terrain to get a REAL base plan
+  (spawn/towers/ramparts/walls in believable positions), then realize the plan's structures + terrain
+  into a `CombatWorld` + an `Objective` (the spawn/core, breach corridor from the plan's rampart ring).
+  Replaces hand-authored terrain with layouts the bot would actually build/face — the realism the
+  operator wants to validate against. (Foreman is a host crate; `combat-eval` can dep it.)
+- **`ImportedRoom`** (operator 2026-06-24) — **a live world/shard import tool.** Fetch a real room's
+  terrain + structures from a shard (via the `screeps-rest-api` crate / the game API) and realize them
+  into a `CombatWorld`; then SEED attacker/defender forces (a `ForceSpec`) to make a sim scenario from a
+  real target. Lets us replay-validate the bot's sizing/tactics against actual MMO rooms. The fetch is a
+  separate offline tool (writes a captured-room JSON the generator loads) so the harness itself stays
+  deterministic + offline; needs operator go-ahead + credentials for live fetches (never auto-run).
 
 **Opponent forces** — a `ForceSpec` (archetype + count + placement) realized into defender `SimCreep`s:
 `Turtle` (HEAL walls), `Rush` (melee), `Drain`, `SiegeDefenders` (ATTACK/RANGED behind ramparts),
@@ -175,9 +187,18 @@ workstream's gate). Same scenarios, two lenses — exactly what the swap buys.
 - **Phase C — opponent forces + multi-room objectives:** `ForceSpec` archetypes (random + designed,
   single & multi-squad) → defender creeps; wire `enemy_dps` into the derived profile; multi-room
   objective lists; the `ManagedSquadIntegration` validator for the traversal lens.
-- **Phase D — more validators + scale:** `SizingWins`, `Metrics`; widen the seed count / enumerate the
-  permutation grid; a report dashboard linking the per-scenario replays (`run_suite` already returns
-  per-scenario verdicts to link).
+- **Phase C — opponent forces + traversal lens:** ✅ **DONE** (eval `978f92d`). `ForceSpec`
+  (None/Skirmishers/Guard) → defender creeps (enemy_dps into the oracle; combat for the assault, wired
+  into the Designed fixtures), and the `ManagedSquadIntegration` validator (fields a ranged+heal quad
+  at the entry, drives the real `decide_squad_with_pathing` to engage → movement-rich replays). Kept
+  off `RandomDefendedBase` to preserve the 0-FP calibration.
+- **Phase D — more validators + scale (NEXT):** `SizingWins`, `Metrics`; widen the seed count /
+  enumerate the permutation grid; a report dashboard (a contact-sheet index linking the per-scenario
+  replays — `run_suite` already returns per-scenario verdicts).
+- **Phase F — realistic rooms (`ForemanGenerator`):** generate beds from `screeps-foreman` base plans
+  (operator-requested realism). Lands after D so the dashboard + managed lens render real layouts.
+- **Phase G — live import (`ImportedRoom`):** the offline shard-capture tool + the generator that
+  replays the bot's force against real MMO rooms (operator go-ahead + credentials required).
 
 ## Constraints (carried)
 Deterministic (SplitMix64 by index — no `Date`/`Math.random`); host-only in `combat-eval`; the engine is
