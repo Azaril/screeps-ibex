@@ -721,9 +721,9 @@ impl WarOperation {
                         .invader_cores()
                         .iter()
                         .max_by_key(|core| core.level())
-                        .map(|core| (core.level(), core.pos(), core.hits()))
+                        .map(|core| (core.level(), core.pos(), core.hits(), core.ticks_to_deploy()))
                 });
-            let invader_core_level = invader_core.map(|(level, _, _)| level);
+            let invader_core_level = invader_core.map(|(level, _, _, _)| level);
 
             // Check for power banks.
             let power_bank_info = room_entity
@@ -759,8 +759,25 @@ impl WarOperation {
             // and the launch loop upserts a `Dismantle { room, pos }` instead of
             // launching an `AttackOperation` — see the launch loop's source→objective
             // mapping. The affordability/interest gate is preserved here.
-            if let Some((core_level, core_pos, core_hits)) = invader_core {
-                if features.military.attack_invaders {
+            if let Some((core_level, core_pos, core_hits, ticks_to_deploy)) = invader_core {
+                // D13: a deploying invader core carries the Invulnerability natural effect during its
+                // `ticks_to_deploy` window — ZERO damage is possible, so fielding a squad against it
+                // just chips nothing until it deploys (a real "combat does nothing" trap). Skip it and
+                // keep eyes on it (register a re-scout) so it is re-assessed the moment it deploys,
+                // never permanently abandoned (mirrors the stale-data re-scout above / ADR 0021).
+                if features.military.attack_invaders && ticks_to_deploy > 0 {
+                    system_data.visibility.request(VisibilityRequest::new(
+                        room_name,
+                        VISIBILITY_PRIORITY_MEDIUM,
+                        VisibilityRequestFlags::ALL,
+                    ));
+                    if war_debug {
+                        info!(
+                            "[War]   Skip {} -- invader core deploying ({} ticks to deploy; invulnerable)",
+                            room_name, ticks_to_deploy
+                        );
+                    }
+                } else if features.military.attack_invaders {
                     let is_our_remote = room_entity
                         .and_then(|e| system_data.room_data.get(e))
                         .and_then(|rd| rd.get_dynamic_visibility_data())
