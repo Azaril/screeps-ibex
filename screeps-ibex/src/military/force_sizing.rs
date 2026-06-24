@@ -433,6 +433,25 @@ mod tests {
     }
 
     #[test]
+    fn repair_locked_breach_target_defers() {
+        // Blocker #1 (now wired, threatmap.rs emits real repair): a breach target whose defensive
+        // repair MEETS-OR-EXCEEDS our dismantle DPS can never be breached → the oracle defers
+        // (repair-locked stalemate) instead of feeding a squad to a wall it can't dent.
+        let repair_locked = DefenseProfile {
+            breach_hits: 50_000,
+            objective_hits: 100_000,
+            repair_per_tick: 700.0, // ≥ strong_budget's 600 max_dismantle_dps
+            ..Default::default()
+        };
+        let a = assess(&repair_locked, &strong_budget());
+        assert!(!a.winnable);
+        assert!(a.reason.contains("repair out-paces"), "reason: {}", a.reason);
+        // …but a repair rate our dismantle out-paces is winnable (net-positive breach progress).
+        let out_paced = DefenseProfile { repair_per_tick: 200.0, ..repair_locked.clone() };
+        assert!(assess(&out_paced, &strong_budget()).winnable, "600 dismantle out-paces 200 repair");
+    }
+
+    #[test]
     fn undefended_room_is_a_no_breach_win() {
         let profile = DefenseProfile { objective_hits: 50_000, ..Default::default() };
         let a = assess(&profile, &strong_budget());
