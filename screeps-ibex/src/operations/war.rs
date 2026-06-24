@@ -1,7 +1,7 @@
 use super::data::*;
 use super::operationsystem::*;
 use crate::military::composition::SquadComposition;
-use crate::military::force_sizing::{
+use screeps_combat_decision::force_sizing::{
     assess, importance_margin, win_probability, DefenseProfile, ForceBudget, RequiredForce, TowerThreat, HOLD_MARGIN,
 };
 use crate::military::objective_queue::{

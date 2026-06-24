@@ -3,7 +3,6 @@ pub mod boostqueue;
 pub mod composition;
 pub mod damage;
 pub mod economy;
-pub mod force_sizing;
 pub mod formation;
 pub mod objective_queue;
 pub mod squad;

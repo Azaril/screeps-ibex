@@ -19,11 +19,22 @@ on `screeps-combat-decision` — cannot field the *real* force. Move the pure si
 not the whole bot"). Then combat-eval runs the REAL `assess`→`sized_for` over randomized scenarios and
 proves the oracle is calibrated against the engine ground truth.
 
-## Serde / WFV
-**No WFV bump.** bincode is positional/structural, NOT crate-path-keyed. The persisted types
-(`SquadRole`, `BodyType`, `CombatBodySpec`, `SquadSlot`, `FormationShape`, `FormationMode`,
-`SquadComposition`) move with derives + field/variant order byte-identical → serialized shape unchanged.
-Keep `BodyType::Sized` LAST. WFV stays **17**. (`DefenseProfile`/`force_sizing` types are NOT serde — ephemeral.)
+## Serde / WFV — break it freely (operator 2026-06-24)
+**Operator directive:** *"We can break serialization at any point in the current work — we'll get to
+fully working/complete and then do the reset. I'd rather get to final/clean code than carry debt."* So:
+do NOT preserve serde shape or add forward-compat shims; if a clean restructure changes a persisted
+type, just bump `WORLD_FORMAT_VERSION` (folds into the one end-of-work reset). A straight relocation
+happens to be shape-neutral anyway, but don't contort for it.
+
+## CLEAN end-state — no re-export husks (operator 2026-06-24)
+Same directive ("final/clean over debt") overrides the map's re-export-shim approach. The fully-moved
+bot modules (`military/force_sizing.rs`, `military/bodies.rs`, `military/composition.rs`) are **DELETED**,
+not left as `pub use` husks; call sites import from `screeps_combat_decision::...` directly. Modules that
+retain bot-specific code keep it and import the moved pieces: `military/damage.rs` keeps its
+game-coupled fns (`tower_dps_at_room_edge`/`net_tower_damage`/… over `Position`) and imports the pure
+slice; `military/squad.rs` keeps everything except `SquadRole`; `creep.rs` keeps `spawning::build`
+(Move 1 already re-exports `create_body`/`SpawnBodyDefinition` there — acceptable, creep.rs retains real
+code). The re-export surface in the section below becomes a **call-site-edit** surface instead.
 
 ## Constants — import, don't re-declare
 The moved code currently re-declares constants that already exist in `screeps_combat_engine::constants`
@@ -54,7 +65,7 @@ Consumer files (must keep compiling via the above): game_loop (comments only —
 
 ## Sub-commit order (each GREEN: combat-decision builds+tests, bot clippy-wasm+tests, then super pointer bump)
 - **Move 1 — spawning** (Shim B): ✅ **DONE** (decision `1a99fb9` / super `21db86e`). `SpawnBodyDefinition`+`create_body`+`clamp`+5 tests → `combat-decision::spawning`; creep.rs re-exports (kept `spawning::build`). clippy-wasm clean.
-- **Move 2 — sizing core**: the pure `damage` slice (`tower_attack_damage_at_range` f32 + `defender_heal_parts_for_dps` + `HEAL_PER_PART_ADJACENT`/`KILL_WINDOW_TICKS`/`MAX_OFFENSE_PARTS`/`attack_parts_to_kill`/`drain_heal_parts_for_dps`) + `CombatBodySpec`/`MoveProfile`/`build_combat_body`/`assemble_combat_body` + all of `force_sizing` → `combat-decision::{tower,bodies,force_sizing}` (or one `force` module). bot re-exports. Independent of Move 1.
+- **Move 2 — sizing core**: ✅ **DONE** (decision `c7e092f` + the bot switch). Relocated to `decision::{bodies, force_sizing}`: `CombatBodySpec`/`MoveProfile`/`build_combat_body` + `defender_heal_parts_for_dps` (using the engine's `HEAL_POWER`, not a dup) + all of `force_sizing` (using `screeps_combat_engine::{constants, damage}` — the canonical tower curve, NOT a duplicated f32 copy; added `serde` derive dep). Bot `force_sizing.rs` DELETED; `bodies.rs` re-exports the 3 primitives + the heal helper (transitional — `bodies.rs` fully moves in Move 3); `damage.rs` lost `defender_heal_parts_for_dps` (kept its tower-over-Position fns); call sites (war/sourcekeeperfarm/composition) import from decision. 39 bot + 95 decision host tests; clippy-wasm clean. **Constraint honored:** force-sizing = pure POLICY in decision, on engine MECHANICS (no curve dup). The part-sizing helpers `attack_parts_to_kill`/`KILL_WINDOW_TICKS`/`MAX_OFFENSE_PARTS`/`drain_heal_parts_for_dps` stay in bot `damage.rs` for Move 3 (used by the template `sized_defender_body`/`drain_body` that move with composition).
 - **Move 3 — composition**: `SquadRole` + `BodyType` + the template body fns + `SquadComposition`/`SquadSlot`/`FormationShape`/`FormationMode`/`SquadCapabilities`/`sized_for`/`capabilities` + Shim A → `combat-decision::composition`. Depends on Moves 1+2. bot re-exports + the war.rs Shim A hoist.
 - **Move B — tournament** (the WIN): `combat-eval/src/oracle_calibration.rs`.
 

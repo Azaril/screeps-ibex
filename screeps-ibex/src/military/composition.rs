@@ -1,7 +1,7 @@
 use super::bodies;
 use super::squad::SquadRole;
 use crate::creep::SpawnBodyDefinition;
-use crate::military::force_sizing::RequiredForce;
+use screeps_combat_decision::force_sizing::RequiredForce;
 use crate::pathing::pathfinderservice::PathfinderService;
 use screeps::*;
 use serde::{Deserialize, Serialize};
@@ -775,7 +775,7 @@ pub struct SquadCapabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::military::force_sizing::RequiredForce;
+    use screeps_combat_decision::force_sizing::RequiredForce;
 
     // ── R3: SquadComposition::sized_for (force-driven sizing) ──
     #[test]
@@ -829,7 +829,7 @@ mod tests {
     /// undersized squad that bails. Regression guard for the live SK failure that started P2b.
     #[test]
     fn sk_setup_fields_a_holding_composition_or_defers_never_undersizes() {
-        use crate::military::force_sizing::{assess, DefenseProfile, ForceBudget, HOLD_MARGIN};
+        use screeps_combat_decision::force_sizing::{assess, DefenseProfile, ForceBudget, HOLD_MARGIN};
 
         // A strong RCL7-ish home's baseline budget (2 healers cap squad heal at ~600/tick, so very
         // strong keeper sets correctly exceed what one siege quad can field).
@@ -871,9 +871,9 @@ mod tests {
     /// no home affords it. The ranged kiter always stays the proven template.
     #[test]
     fn sk_duo_sizes_healer_to_outheal_a_keeper() {
-        use crate::military::force_sizing::HOLD_MARGIN;
+        use screeps_combat_decision::force_sizing::HOLD_MARGIN;
         let required = RequiredForce {
-            heal_parts: crate::military::damage::defender_heal_parts_for_dps(168.0 * HOLD_MARGIN, false),
+            heal_parts: crate::military::bodies::defender_heal_parts_for_dps(168.0 * HOLD_MARGIN, false),
             ..Default::default()
         };
         // RCL8 energy: the healer sizes up to out-heal the keeper with margin; the ranged kiter stays template.

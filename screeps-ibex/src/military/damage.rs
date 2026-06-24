@@ -152,21 +152,8 @@ pub const WAIT_REFILL_FRACTION: f32 = 0.85;
 /// building an ever-larger solo that still can't out-damage the enemy heal.
 pub const MAX_OFFENSE_PARTS: u32 = 25;
 
-/// HEAL parts needed to sustain `incoming_dps` of damage (adjacent self/ally
-/// heal). Returns 0 at zero DPS — unlike [`drain_heal_parts_for_dps`], which
-/// floors at 1 — so a defender facing an unarmed threat (CLAIM creep, scout)
-/// is never given a wasted HEAL part. `boosted` ⇒ 48 HP/part (T3 XLHO2, ×4).
-pub fn defender_heal_parts_for_dps(incoming_dps: f32, boosted: bool) -> u32 {
-    if incoming_dps <= 0.0 {
-        return 0;
-    }
-    let per = if boosted {
-        HEAL_PER_PART_ADJACENT * 4.0
-    } else {
-        HEAL_PER_PART_ADJACENT
-    };
-    (incoming_dps / per).ceil().max(1.0) as u32
-}
+// `defender_heal_parts_for_dps` moved to `screeps_combat_decision::bodies` (force-sizing core);
+// re-exported by `military::bodies`.
 
 /// Offense parts for ONE defender to kill a hostile of `target_hp` effective HP
 /// within `window_ticks`, net of `enemy_focus_heal` — the AGGREGATE enemy HEAL
@@ -234,18 +221,7 @@ pub fn defender_spawn_readiness(
 mod sizing_tests {
     use super::*;
 
-    #[test]
-    fn heal_parts_zero_at_zero_dps() {
-        // The CLAIM-creep / scout case: no incoming damage ⇒ no wasted HEAL.
-        assert_eq!(defender_heal_parts_for_dps(0.0, false), 0);
-        assert_eq!(defender_heal_parts_for_dps(-5.0, false), 0);
-    }
-
-    #[test]
-    fn heal_parts_scale_with_dps_and_boost() {
-        assert_eq!(defender_heal_parts_for_dps(90.0, false), 8); // ceil(90/12)
-        assert_eq!(defender_heal_parts_for_dps(900.0, true), 19); // ceil(900/48)
-    }
+    // (defender_heal_parts_for_dps tests moved to `screeps_combat_decision::bodies`.)
 
     #[test]
     fn attack_parts_basic_and_focus_heal() {

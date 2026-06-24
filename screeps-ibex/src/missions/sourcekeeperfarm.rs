@@ -372,9 +372,9 @@ impl Mission for SourceKeeperFarmMission {
         // path still builds the largest healer that home affords). The SK suppression
         // model is positional (mine when the keeper is away), so this sizes the duo to
         // SURVIVE a keeper engagement, not to tank keepers continuously.
-        let required = crate::military::force_sizing::RequiredForce {
-            heal_parts: crate::military::damage::defender_heal_parts_for_dps(
-                SK_KEEPER_MELEE_DPS * crate::military::force_sizing::HOLD_MARGIN,
+        let required = screeps_combat_decision::force_sizing::RequiredForce {
+            heal_parts: crate::military::bodies::defender_heal_parts_for_dps(
+                SK_KEEPER_MELEE_DPS * screeps_combat_decision::force_sizing::HOLD_MARGIN,
                 false,
             ),
             ..Default::default()
