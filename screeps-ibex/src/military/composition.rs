@@ -647,10 +647,15 @@ impl SquadComposition {
         for slot in &self.slots {
             let bt = slot.body_type;
             heal_per_tick += bt.part_count(max_energy, Part::Heal) * HEAL_POWER;
-            // Structure damage: WORK dismantles (50/part), ATTACK hits a structure (30/part). Both
-            // contribute to breaching ramparts and killing the core.
+            // Structure damage: WORK dismantles (50/part), ATTACK hits a structure (30/part),
+            // RANGED_ATTACK hits a structure (10/part at range ≤3). All contribute to breaching
+            // ramparts and killing the core. RANGED_ATTACK MUST be counted: invader cores are
+            // dismantle-IMMUNE, so a ranged comp is what actually kills them — without this the oracle
+            // sees a `quad_ranged` core-attacker as 0 structure-DPS and defers every core as "breach
+            // too slow".
             structure_dps += bt.part_count(max_energy, Part::Work) * DISMANTLE_POWER
-                + bt.part_count(max_energy, Part::Attack) * ATTACK_POWER;
+                + bt.part_count(max_energy, Part::Attack) * ATTACK_POWER
+                + bt.part_count(max_energy, Part::RangedAttack) * RANGED_ATTACK_POWER;
             // The tank is the toughest single member (most total HP = parts × 100, unboosted).
             tank_effective_hp = tank_effective_hp.max(bt.estimated_part_count(max_energy) * 100);
         }
@@ -696,7 +701,8 @@ impl SquadComposition {
 pub struct SquadCapabilities {
     /// Total heal/tick the squad can sustain (Σ HEAL parts × `HEAL_POWER`).
     pub heal_per_tick: u32,
-    /// Structure damage/tick (Σ WORK × `DISMANTLE_POWER` + ATTACK × `ATTACK_POWER`) — breach + core-kill.
+    /// Structure damage/tick (Σ WORK × `DISMANTLE_POWER` + ATTACK × `ATTACK_POWER` + RANGED_ATTACK ×
+    /// `RANGED_ATTACK_POWER`) — breach + core-kill (cores are dismantle-immune, so ranged/melee is what kills them).
     pub structure_dps: u32,
     /// Effective HP of the toughest single member (the tank that soaks a tower drain).
     pub tank_effective_hp: u32,
@@ -805,5 +811,18 @@ mod tests {
         assert_eq!(ranged.body_type, BodyType::SkRangedAttacker, "the ranged kiter stays the proven template");
         // Too little energy → can't field the sized healer → defer (the mission falls back to the template duo).
         assert!(SquadComposition::duo_sk_farmer().sized_for(required, 1_300).is_none(), "low RCL defers");
+    }
+
+    /// The oracle's structure-DPS must count RANGED_ATTACK: invader cores are dismantle-immune, so a
+    /// ranged comp is what kills them. Without this the force oracle reads `quad_ranged` as 0
+    /// structure-DPS and defers every core as "breach too slow" (the soak regression).
+    #[test]
+    fn quad_ranged_deals_structure_damage_via_ranged() {
+        let caps = SquadComposition::quad_ranged().capabilities(5600);
+        assert!(
+            caps.structure_dps > 0,
+            "quad_ranged must contribute structure damage through RANGED_ATTACK (got {})",
+            caps.structure_dps
+        );
     }
 }
