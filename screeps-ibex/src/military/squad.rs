@@ -27,6 +27,41 @@ pub enum SquadState {
     Complete,
 }
 
+/// A serialize-safe, generation-checked reference to a squad entity.
+///
+/// Stores the entity's index AND generation as plain data — NOT a `ConvertSaveload`-serialized
+/// bare `Entity` (which unwraps on a deleted entity at serialize → wasm halt; see
+/// [[ecs-dangling-ref-serialize]]). [`resolve`](SquadRef::resolve) returns `Some` ONLY when the
+/// original entity is still alive at that slot (the stored generation matches the live one); a
+/// recycled ECS slot resolves to `None` instead of silently aliasing a *different* squad's state.
+/// Replaces the bare-`u32` squad id that resolved via `entities.entity(id)` (which returns whatever
+/// live entity now occupies the index — the recycled-slot aliasing bug).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SquadRef {
+    index: u32,
+    generation: i32,
+}
+
+impl SquadRef {
+    /// Capture an entity as a generation-carrying, serialize-safe reference.
+    pub fn from_entity(entity: Entity) -> Self {
+        SquadRef {
+            index: entity.id(),
+            generation: entity.gen().id(),
+        }
+    }
+
+    /// Validate-on-access: the live squad entity, or `None` if its slot was freed or recycled.
+    pub fn resolve(&self, entities: &specs::world::EntitiesRes) -> Option<Entity> {
+        let current = entities.entity(self.index);
+        if entities.is_alive(current) && current.gen().id() == self.generation {
+            Some(current)
+        } else {
+            None
+        }
+    }
+}
+
 /// Role a creep plays within a squad.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SquadRole {
@@ -996,6 +1031,29 @@ impl<'a> System<'a> for RunSquadUpdateSystem {
 mod tests {
     use super::*;
     use crate::military::composition::SquadComposition;
+    use specs::{Builder, World, WorldExt};
+
+    /// Blocker #2 (ADR 0022 P-ID): a `SquadRef` must validate the generation on access so a recycled
+    /// ECS slot resolves to `None` — never silently aliases the different squad that now occupies the
+    /// index (the bug behind the bare-`u32` + `entities.entity(id)` pattern).
+    #[test]
+    fn squad_ref_does_not_alias_a_recycled_slot() {
+        let mut world = World::new();
+        let e1 = world.create_entity().build();
+        let r = SquadRef::from_entity(e1);
+        assert_eq!(r.resolve(&world.entities()), Some(e1), "live entity resolves to itself");
+
+        // Free the slot.
+        world.delete_entity(e1).unwrap();
+        world.maintain();
+        assert_eq!(r.resolve(&world.entities()), None, "a freed slot resolves to None");
+
+        // Recycle the slot (a new entity reuses e1's index with a bumped generation).
+        let e2 = world.create_entity().build();
+        world.maintain();
+        assert_ne!(r.resolve(&world.entities()), Some(e2), "a stale ref never aliases a recycled slot");
+        assert_eq!(r.resolve(&world.entities()), None, "a stale ref still resolves to None after recycle");
+    }
 
     /// O2: the formation faces the threat — `slots_front_to_back` puts the slots toward the threat
     /// direction first, so `reassign_slots` lands tanks/high-HP at the front. (Pure: layout offsets

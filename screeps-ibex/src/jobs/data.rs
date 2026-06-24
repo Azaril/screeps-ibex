@@ -41,9 +41,9 @@ impl JobData {
         }
     }
 
-    /// Extract the squad entity id if this job is associated with a squad.
+    /// Extract a generation-safe reference to this job's squad, if any.
     /// Returns `None` for non-squad jobs.
-    pub fn squad_entity_id(&self) -> Option<u32> {
+    pub fn squad_ref(&self) -> Option<crate::military::squad::SquadRef> {
         match self {
             JobData::SquadCombat(ref data) => data.context.squad_entity,
             _ => None,

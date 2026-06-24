@@ -143,12 +143,11 @@ impl<'a> System<'a> for EntityCleanupSystem {
             // job references a squad entity). This is read from the creep's
             // JobData component before the entity is deleted.
             for creep in &creep_entries {
-                if let Some(squad_id) = jobs.get(creep.entity).and_then(|j| j.squad_entity_id()) {
-                    let squad_entity = entities.entity(squad_id);
-                    if entities.is_alive(squad_entity) {
-                        if let Some(sc) = squad_contexts.get_mut(squad_entity) {
-                            sc.members.retain(|m| m.entity != creep.entity);
-                        }
+                // Generation-safe resolve: a recycled squad slot resolves to None (don't notify a
+                // different squad that now occupies the index).
+                if let Some(squad_entity) = jobs.get(creep.entity).and_then(|j| j.squad_ref()).and_then(|s| s.resolve(&entities)) {
+                    if let Some(sc) = squad_contexts.get_mut(squad_entity) {
+                        sc.members.retain(|m| m.entity != creep.entity);
                     }
                 }
             }

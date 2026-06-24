@@ -640,7 +640,13 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// existing variant discriminants are unchanged and old payloads decode (bincode is
 /// safe for appended enum variants — unlike struct fields) — but we bump anyway to be
 /// conservative + force one clean reset, folding into the MMO deploy reset.
-const WORLD_FORMAT_VERSION: u32 = 16;
+/// 17 = generation-safe squad identity (ADR 0022 P-ID, blocker #2): the `SquadCombatJob`'s
+/// `squad_entity` changes from a bare `u32` index to `SquadRef { index, generation }` so a
+/// recycled ECS slot resolves to `None` (validate-on-access) instead of silently aliasing a
+/// different squad. This reshapes the persisted `JobData` (struct field type change → bincode
+/// positional shape change), so it needs a reset. Reset-freedom (private-server dev) — bump
+/// freely; this folds into the single MMO deploy reset.
+const WORLD_FORMAT_VERSION: u32 = 17;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode

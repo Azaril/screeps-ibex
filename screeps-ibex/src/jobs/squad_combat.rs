@@ -15,7 +15,7 @@ pub struct SquadCombatJobContext {
     target_room: RoomName,
     /// Squad entity ID for coordinated behavior.
     #[serde(default)]
-    pub(crate) squad_entity: Option<u32>,
+    pub(crate) squad_entity: Option<SquadRef>,
     /// Tick when we entered the combat response state (for timeout).
     #[serde(default)]
     combat_response_start: Option<u32>,
@@ -896,13 +896,12 @@ fn execute_formation_movement(
 /// after spawn or before PreRunSquadUpdate has synced this member's position)
 /// so that all squad members get a valid formation target and move together.
 fn get_formation_target(
-    squad_entity_id: Option<u32>,
+    squad: Option<SquadRef>,
     creep_entity: Entity,
     tick_context: &JobTickContext,
     creep_pos_fallback: Position,
 ) -> Option<Position> {
-    let id = squad_entity_id?;
-    let entity = tick_context.system_data.entities.entity(id);
+    let entity = squad?.resolve(tick_context.system_data.entities)?;
     let squad_ctx = tick_context.system_data.squad_contexts.get(entity)?;
     let member = squad_ctx.get_member(creep_entity)?;
     let virtual_pos = squad_ctx.squad_path.as_ref().map(|p| p.anchor.virtual_pos)?;
@@ -992,7 +991,7 @@ impl SquadCombatJob {
         SquadCombatJob {
             context: SquadCombatJobContext {
                 target_room,
-                squad_entity: Some(squad_entity.id()),
+                squad_entity: Some(SquadRef::from_entity(squad_entity)),
                 combat_response_start: None,
             },
             state: SquadCombatState::move_to_room(),
@@ -1001,9 +1000,8 @@ impl SquadCombatJob {
 }
 
 /// Look up the squad state for a job that may or may not be in a squad.
-fn get_squad_state(squad_entity_id: Option<u32>, tick_context: &JobTickContext) -> Option<SquadState> {
-    let id = squad_entity_id?;
-    let entity = tick_context.system_data.entities.entity(id);
+fn get_squad_state(squad: Option<SquadRef>, tick_context: &JobTickContext) -> Option<SquadState> {
+    let entity = squad?.resolve(tick_context.system_data.entities)?;
     let squad_ctx = tick_context.system_data.squad_contexts.get(entity)?;
     Some(squad_ctx.state)
 }
@@ -1011,9 +1009,9 @@ fn get_squad_state(squad_entity_id: Option<u32>, tick_context: &JobTickContext) 
 /// Whether the squad has a populated anchor path (`SquadPath`). Anchor-driven
 /// formation movement only applies when one exists; manager-fielded squads
 /// (P2.G3) have none and own their movement via the job (kiting).
-fn squad_has_anchor(squad_entity_id: Option<u32>, tick_context: &JobTickContext) -> bool {
-    squad_entity_id
-        .map(|id| tick_context.system_data.entities.entity(id))
+fn squad_has_anchor(squad: Option<SquadRef>, tick_context: &JobTickContext) -> bool {
+    squad
+        .and_then(|s| s.resolve(tick_context.system_data.entities))
         .and_then(|e| tick_context.system_data.squad_contexts.get(e))
         .map(|ctx| ctx.squad_path.is_some())
         .unwrap_or(false)
@@ -1071,9 +1069,8 @@ fn get_hostile_structures(room_name: RoomName, tick_context: &JobTickContext) ->
 }
 
 /// Look up tick orders for a specific creep from the squad context.
-fn get_tick_orders(squad_entity_id: Option<u32>, creep_entity: Entity, tick_context: &JobTickContext) -> Option<TickOrders> {
-    let id = squad_entity_id?;
-    let entity = tick_context.system_data.entities.entity(id);
+fn get_tick_orders(squad: Option<SquadRef>, creep_entity: Entity, tick_context: &JobTickContext) -> Option<TickOrders> {
+    let entity = squad?.resolve(tick_context.system_data.entities)?;
     let squad_ctx = tick_context.system_data.squad_contexts.get(entity)?;
     let member = squad_ctx.get_member(creep_entity)?;
     member.tick_orders.clone()

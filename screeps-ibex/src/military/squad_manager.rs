@@ -113,25 +113,37 @@ fn create_spawn_callback(
     target_room: RoomName,
     squad_entity: Entity,
 ) -> SpawnQueueCallback {
-    let squad_entity_id = squad_entity.id();
     Box::new(move |system_data, name| {
         let name = name.to_string();
         system_data.updater.exec_mut(move |world| {
-            let sq_entity = world.entities().entity(squad_entity_id);
+            // Generation-safe: the squad may have died during the spawn delay and its ECS slot been
+            // recycled. `is_alive` on the FULL entity (generation included) rejects a recycled slot,
+            // so we never register the fresh creep onto a *different* squad that now occupies the
+            // index (the recycled-slot aliasing bug). `squad_entity` is captured whole — not as a
+            // bare `.id()` reconstructed via `entity(id)`, which would alias.
+            if !world.entities().is_alive(squad_entity) {
+                log::warn!(
+                    "[SquadManager] Spawn callback: squad {:?} no longer alive; creep {} (slot {}) not registered",
+                    squad_entity,
+                    name,
+                    slot_index
+                );
+                return;
+            }
 
             let creep_job = crate::jobs::data::JobData::SquadCombat(crate::jobs::squad_combat::SquadCombatJob::new_with_squad(
                 target_room,
-                sq_entity,
+                squad_entity,
             ));
 
             let creep_entity = spawning::build(world.create_entity(), &name).with(creep_job).build();
 
-            if let Some(squad_ctx) = world.write_storage::<SquadContext>().get_mut(sq_entity) {
+            if let Some(squad_ctx) = world.write_storage::<SquadContext>().get_mut(squad_entity) {
                 squad_ctx.add_member(creep_entity, role, slot_index);
             } else {
                 log::warn!(
                     "[SquadManager] Spawn callback: SquadContext missing for {:?}, creep {} (slot {}) not registered",
-                    sq_entity,
+                    squad_entity,
                     name,
                     slot_index
                 );
