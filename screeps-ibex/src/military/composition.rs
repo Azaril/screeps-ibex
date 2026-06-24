@@ -10,6 +10,17 @@ use serde::{Deserialize, Serialize};
 const CREEP_LIFE_TIME: u32 = 1500;
 const CREEP_SPAWN_TIME: u32 = 3;
 
+/// Most members a single force-sized squad may grow to (D3 member-count scaling). Beyond this the
+/// target needs the multi-squad **G4-HEAVY** path (P5), so [`SquadComposition::sized_for`] defers
+/// rather than field an unmanageable blob. 2× a quad — enough to out-heal an L1-2 stronghold /
+/// multi-keeper SK at RCL7+, bounded for formation + CPU sanity.
+const MAX_SIZED_MEMBERS: usize = 8;
+
+/// Most parts of ONE role-type a single sized member can carry: a pure single-part body on plains
+/// (1:1 MOVE) is `2n` parts, so the 50-part engine cap bounds `n` at 25. The upper bound of the
+/// per-member capacity search in [`SquadComposition::sized_for`].
+const MAX_SINGLE_ROLE_PARTS: u32 = 25;
+
 /// Enum of body definition selectors (maps to functions in bodies.rs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BodyType {
@@ -662,34 +673,87 @@ impl SquadComposition {
         SquadCapabilities { heal_per_tick, structure_dps, tank_effective_hp }
     }
 
-    /// Force-DRIVEN sizing (R3, ADR 0020 §12.6): return a copy of this composition with each
-    /// role-relevant slot's body replaced by a `Sized` spec meeting its even share of `force`, or
-    /// `None` if any such slot can't fit `max_member_energy` (the "can't afford the required force ⇒
-    /// defer" signal). Slots whose role isn't covered by `force` keep their template body. This closes
-    /// the loop: the squad is built to the Lanchester-winning force, so the runtime engage gate holds
-    /// instead of retreating. (v1 distributes evenly across same-role slots + keeps the fixed member
-    /// count; member-count scaling + the EHP/margin buffer are R5; full role re-allocation is R8.)
+    /// Force-DRIVEN sizing (R3 + D3 member-count scaling, ADR 0020 §12.6 / ADR 0022 D3): return a copy
+    /// of this composition sized to deliver `force`. Each role covered by `force` (Healer→HEAL,
+    /// Dismantler→WORK, Tank→TOUGH) is sized to its even share of the required parts; when one member
+    /// can't carry that share (the 50-part cap or `max_member_energy`), the role's member COUNT is
+    /// GROWN (`ceil(parts / per-member-cap)`, never below the template count) and the parts
+    /// re-distributed evenly across the grown count — so an UNDER-strength squad is never fielded and
+    /// the runtime engage gate holds instead of retreating (the direct fix for the P2b / SK-trickle
+    /// engage-retreat bug; size to hold from one calc). Returns `None` only when a required role can't
+    /// field even ONE member at this energy, or the squad would exceed [`MAX_SIZED_MEMBERS`] (→ defer
+    /// to the multi-squad G4-HEAVY path, P5). Roles not in `force` keep their template body; per-member
+    /// MOVE is applied by [`bodies::build_combat_body`]. (Full role re-allocation across a blob is
+    /// R8/0020-S5.)
     pub fn sized_for(&self, force: RequiredForce, max_member_energy: u32) -> Option<SquadComposition> {
-        let count_role = |r: SquadRole| self.slots.iter().filter(|s| s.role == r).count() as u32;
-        let share = |total: u32, n: u32| if n == 0 { 0 } else { total.div_ceil(n) };
+        // A single-role part SPEC (the only roles `force` covers: HEAL / WORK / TOUGH).
+        let spec_for = |role: SquadRole, n: u32| -> bodies::CombatBodySpec {
+            match role {
+                SquadRole::Healer => bodies::CombatBodySpec { heal: n, ..Default::default() },
+                SquadRole::Dismantler => bodies::CombatBodySpec { work: n, ..Default::default() },
+                SquadRole::Tank => bodies::CombatBodySpec { tough: n, ..Default::default() },
+                _ => bodies::CombatBodySpec::default(),
+            }
+        };
+        // Largest single-role part count one member can carry at this energy — reuses the real builder
+        // (incl. the per-member MOVE ratio + 50-part cap) so the cap can't drift from what actually
+        // spawns. 0 ⇒ can't field even one member of this role at this energy.
+        let cap_for = |role: SquadRole| -> u32 {
+            (1..=MAX_SINGLE_ROLE_PARTS)
+                .rev()
+                .find(|&n| bodies::build_combat_body(&spec_for(role, n), bodies::MoveProfile::Plains, max_member_energy).is_some())
+                .unwrap_or(0)
+        };
+        let template_count = |r: SquadRole| self.slots.iter().filter(|s| s.role == r).count() as u32;
 
-        let heal_each = share(force.heal_parts, count_role(SquadRole::Healer));
-        let work_each = share(force.dismantle_parts, count_role(SquadRole::Dismantler));
-        let tough_each = share(force.tough_parts, count_role(SquadRole::Tank));
+        // Decide member count + per-member spec for each required role present in the template.
+        let roles: [(SquadRole, u32); 3] = [
+            (SquadRole::Healer, force.heal_parts),
+            (SquadRole::Dismantler, force.dismantle_parts),
+            (SquadRole::Tank, force.tough_parts),
+        ];
+        let mut sized_roles: Vec<(SquadRole, u32, bodies::CombatBodySpec)> = Vec::new();
+        for (role, total) in roles {
+            if total == 0 || template_count(role) == 0 {
+                continue; // role not required by this force, or no slot to size → keep template
+            }
+            let cap = cap_for(role);
+            if cap == 0 {
+                return None; // can't field even one member of this role at this energy → defer
+            }
+            // Grow the member count so each member's even share fits; never below the template count.
+            let count = total.div_ceil(cap).max(template_count(role));
+            let per_member = total.div_ceil(count); // ceil ⇒ Σ over members ≥ total (never under-sizes)
+            sized_roles.push((role, count, spec_for(role, per_member)));
+        }
 
+        // Total members = kept (non-sized-role) slots + the grown sized-role counts; bound the blob to
+        // one squad (a bigger force is the multi-squad G4-HEAVY path, P5).
+        let sized_set: Vec<SquadRole> = sized_roles.iter().map(|(r, _, _)| *r).collect();
+        let kept = self.slots.iter().filter(|s| !sized_set.contains(&s.role)).count();
+        let grown: usize = sized_roles.iter().map(|(_, n, _)| *n as usize).sum();
+        if kept + grown > MAX_SIZED_MEMBERS {
+            return None;
+        }
+
+        // Rebuild: size each role's existing slots in place (order-preserving), append the grown extras
+        // by cloning the role's template slot.
         let mut sized = self.clone();
-        for slot in sized.slots.iter_mut() {
-            let spec = match slot.role {
-                SquadRole::Healer if heal_each > 0 => bodies::CombatBodySpec { heal: heal_each, ..Default::default() },
-                SquadRole::Dismantler if work_each > 0 => bodies::CombatBodySpec { work: work_each, ..Default::default() },
-                SquadRole::Tank if tough_each > 0 => bodies::CombatBodySpec { tough: tough_each, ..Default::default() },
-                // Role not covered by this force (or a zero share) → keep the static template.
-                _ => continue,
-            };
-            // The sized member must build at the strongest in-range home's energy (= what the spawn
-            // path uses); if it can't, the squad can't be fielded at this RCL → defer.
-            bodies::build_combat_body(&spec, bodies::MoveProfile::Plains, max_member_energy)?;
-            slot.body_type = BodyType::Sized(spec);
+        for (role, count, spec) in &sized_roles {
+            let mut placed = 0u32;
+            for slot in sized.slots.iter_mut() {
+                if slot.role == *role && placed < *count {
+                    slot.body_type = BodyType::Sized(*spec);
+                    placed += 1;
+                }
+            }
+            let template = self.slots.iter().find(|s| s.role == *role).expect("required role present (guarded above)");
+            while placed < *count {
+                let mut slot = template.clone();
+                slot.body_type = BodyType::Sized(*spec);
+                sized.slots.push(slot);
+                placed += 1;
+            }
         }
         Some(sized)
     }
@@ -733,11 +797,28 @@ mod tests {
     }
 
     #[test]
-    fn sized_for_defers_when_a_member_cannot_fit() {
-        // 200 heal parts → 100/healer → > the 50-part cap → can't field → None (defer, not undersize).
+    fn sized_for_defers_when_force_exceeds_one_squad() {
+        // 200 heal parts at RCL4 (1300e ⇒ ≤4 HEAL/member) would need ~50 healer members — far past
+        // MAX_SIZED_MEMBERS, so it defers to the multi-squad G4-HEAVY path rather than under-size.
         assert!(SquadComposition::siege_quad()
             .sized_for(RequiredForce { heal_parts: 200, dismantle_parts: 0, tough_parts: 0 }, 1300)
             .is_none());
+    }
+
+    #[test]
+    fn sized_for_grows_member_count_when_template_count_is_insufficient() {
+        // D3 (ADR 0022): a force needing more HEAL than the template's 2 healers can carry GROWS the
+        // healer count instead of deferring. 65 heal parts at RCL7 (≤18 HEAL/member) ⇒ ceil(65/18)=4
+        // healers, each ~17 HEAL — the squad is fielded (not deferred) and out-heals the requirement.
+        let sized = SquadComposition::siege_quad()
+            .sized_for(RequiredForce { heal_parts: 65, dismantle_parts: 12, tough_parts: 0 }, 5600)
+            .expect("grows healers to meet the force at RCL7");
+        let healers = sized.slots.iter().filter(|s| s.role == SquadRole::Healer).count();
+        assert_eq!(healers, 4, "the 2-healer template grew to 4 to carry 65 HEAL parts");
+        // The fielded force meets-or-exceeds the requirement (ceil distribution never under-sizes).
+        assert!(sized.capabilities(5600).heal_per_tick >= 65 * 12, "fielded HEAL ≥ required (12 HEAL/part)");
+        // Dismantlers stay at the template count (12 WORK fits 2 dismantlers at RCL7).
+        assert_eq!(sized.slots.iter().filter(|s| s.role == SquadRole::Dismantler).count(), 2);
     }
 
     /// SK-setup scenario across keeper strengths (operator ask): an open SK-like room (keepers doing
@@ -809,8 +890,10 @@ mod tests {
         }
         let ranged = sized.slots.iter().find(|s| s.role == SquadRole::RangedDPS).unwrap();
         assert_eq!(ranged.body_type, BodyType::SkRangedAttacker, "the ranged kiter stays the proven template");
-        // Too little energy → can't field the sized healer → defer (the mission falls back to the template duo).
-        assert!(SquadComposition::duo_sk_farmer().sized_for(required, 1_300).is_none(), "low RCL defers");
+        // Very low energy (RCL2, ~1 HEAL/member) → the keeper-holding heal needs more members than one
+        // squad can field → defer (the mission falls back to the template duo). (At RCL4+ D3 instead
+        // GROWS the healer count rather than deferring — see sized_for_grows_member_count_*.)
+        assert!(SquadComposition::duo_sk_farmer().sized_for(required, 550).is_none(), "RCL2 defers (force > one squad)");
     }
 
     /// The oracle's structure-DPS must count RANGED_ATTACK: invader cores are dismantle-immune, so a
