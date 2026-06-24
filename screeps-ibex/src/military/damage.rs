@@ -1,53 +1,7 @@
 use screeps::*;
-
-/// Tower attack damage at a given range.
-///
-/// - Range 0..=5: 600 damage (maximum)
-/// - Range 6..=20: linear falloff from 600 to 150
-/// - Range 21+: 150 damage (minimum)
-pub fn tower_attack_damage_at_range(range: u32) -> f32 {
-    if range <= 5 {
-        600.0
-    } else if range >= 20 {
-        150.0
-    } else {
-        // Linear interpolation between range 5 (600) and range 20 (150).
-        let t = (range - 5) as f32 / 15.0;
-        600.0 - t * 450.0
-    }
-}
-
-/// Tower heal power at a given range.
-///
-/// - Range 0..=5: 400 heal (maximum)
-/// - Range 6..=20: linear falloff from 400 to 100
-/// - Range 21+: 100 heal (minimum)
-pub fn tower_heal_at_range(range: u32) -> f32 {
-    if range <= 5 {
-        400.0
-    } else if range >= 20 {
-        100.0
-    } else {
-        let t = (range - 5) as f32 / 15.0;
-        400.0 - t * 300.0
-    }
-}
-
-/// Tower repair power at a given range.
-///
-/// - Range 0..=5: 800 repair (maximum)
-/// - Range 6..=20: linear falloff from 800 to 200
-/// - Range 21+: 200 repair (minimum)
-pub fn tower_repair_at_range(range: u32) -> f32 {
-    if range <= 5 {
-        800.0
-    } else if range >= 20 {
-        200.0
-    } else {
-        let t = (range - 5) as f32 / 15.0;
-        800.0 - t * 600.0
-    }
-}
+// The tower attack/heal/repair falloff curve is engine MECHANICS (the ground truth); reached through
+// the decision crate (single source — no duplicated f32 copy). The engine returns u32; cast at use.
+use screeps_combat_decision::damage::tower_attack_damage_at_range;
 
 /// HEAL part output per tick when adjacent (used for sizing drain bodies).
 pub const HEAL_PER_PART_ADJACENT: f32 = 12.0;
@@ -74,7 +28,7 @@ pub fn total_tower_damage(tower_positions: &[Position], target_pos: Position) ->
         .iter()
         .map(|tp| {
             let range = tp.get_range_to(target_pos);
-            tower_attack_damage_at_range(range)
+            tower_attack_damage_at_range(range) as f32
         })
         .sum()
 }
