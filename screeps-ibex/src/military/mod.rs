@@ -1,6 +1,4 @@
-pub mod bodies;
 pub mod boostqueue;
-pub mod composition;
 pub mod damage;
 pub mod economy;
 pub mod formation;

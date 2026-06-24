@@ -1,6 +1,6 @@
 use super::data::*;
 use super::operationsystem::*;
-use crate::military::composition::SquadComposition;
+use screeps_combat_decision::composition::SquadComposition;
 use screeps_combat_decision::force_sizing::{
     assess, importance_margin, win_probability, DefenseProfile, ForceBudget, RequiredForce, TowerThreat, HOLD_MARGIN,
 };
@@ -1244,9 +1244,12 @@ fn best_force_budget(
         };
         let energy_capacity = room.energy_capacity_available();
         let spawns = room.find(find::MY_SPAWNS, None).len().max(1) as u32;
-        let Some(onsite) = comp.estimated_combat_time(pathfinder, home, target, energy_capacity, spawns) else {
+        // The route lookup is the bot's (the `PathfinderService`); the composition's on-site calc is a
+        // pure scalar over the precomputed travel ticks (Shim A — so the sim/eval can drive it too).
+        let Some(travel) = pathfinder.travel_ticks(home, target, game::time()) else {
             continue;
         };
+        let onsite = comp.estimated_combat_time(travel, energy_capacity, spawns);
         let caps = comp.capabilities(energy_capacity);
         let budget = ForceBudget {
             max_heal_per_tick: caps.heal_per_tick as f32,

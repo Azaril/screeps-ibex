@@ -1,6 +1,6 @@
 use crate::creep::{CreepOwner, CreepSpawning};
-use crate::military::composition::*;
 use crate::serialize::*;
+use screeps_combat_decision::composition::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 #[allow(deprecated)]
@@ -60,24 +60,6 @@ impl SquadRef {
             None
         }
     }
-}
-
-/// Role a creep plays within a squad.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SquadRole {
-    /// Front-line damage sponge with TOUGH + ATTACK.
-    Tank,
-    /// Dedicated healer with HEAL parts.
-    Healer,
-    /// Ranged damage dealer with RANGED_ATTACK.
-    #[default]
-    RangedDPS,
-    /// Melee damage dealer with ATTACK.
-    MeleeDPS,
-    /// Structure destroyer with WORK (dismantle).
-    Dismantler,
-    /// Resource hauler with CARRY.
-    Hauler,
 }
 
 /// What the squad is trying to accomplish.
@@ -1030,7 +1012,6 @@ impl<'a> System<'a> for RunSquadUpdateSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::military::composition::SquadComposition;
     use specs::{Builder, World, WorldExt};
 
     /// Blocker #2 (ADR 0022 P-ID): a `SquadRef` must validate the generation on access so a recycled

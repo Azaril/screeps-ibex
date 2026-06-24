@@ -30,8 +30,8 @@
 //! `SquadStore`/`SquadId` lands (P2.I1) the claim key becomes a `SquadId`; until
 //! then the runtime `Entity` handle is the natural ephemeral key.
 
-use super::composition::SquadComposition;
 use crate::serialize::*;
+use screeps_combat_decision::composition::SquadComposition;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::prelude::*;

@@ -22,8 +22,8 @@ use super::haul::HaulMission;
 use super::localsupply::source_mining::SourceMiningMission;
 use super::missionsystem::*;
 use super::utility::*;
-use crate::military::composition::SquadComposition;
 use crate::military::objective_queue::*;
+use screeps_combat_decision::composition::SquadComposition;
 use crate::remoteobjectid::*;
 use crate::room::data::RoomData;
 use crate::room::visibilitysystem::*;
@@ -42,7 +42,7 @@ use specs::*;
 const KEEPER_DANGER_RANGE: u32 = 5;
 
 /// A Source Keeper deals **168 melee DPS** if it catches the kiter (see
-/// [`crate::military::bodies::sk_healer_body`]). The suppression duo kites at range 3
+/// [`screeps_combat_decision::bodies::sk_healer_body`]). The suppression duo kites at range 3
 /// to avoid this, but R6 (ADR 0020 §12.6) force-sizes the healer to OUT-HEAL it
 /// (×`HOLD_MARGIN`) so a kiting slip — cornered, swamp, or a re-pathing keeper —
 /// costs HP it recovers, not a death, instead of relying on the body template
@@ -373,7 +373,7 @@ impl Mission for SourceKeeperFarmMission {
         // model is positional (mine when the keeper is away), so this sizes the duo to
         // SURVIVE a keeper engagement, not to tank keepers continuously.
         let required = screeps_combat_decision::force_sizing::RequiredForce {
-            heal_parts: crate::military::bodies::defender_heal_parts_for_dps(
+            heal_parts: screeps_combat_decision::bodies::defender_heal_parts_for_dps(
                 SK_KEEPER_MELEE_DPS * screeps_combat_decision::force_sizing::HOLD_MARGIN,
                 false,
             ),

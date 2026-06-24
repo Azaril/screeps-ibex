@@ -1,5 +1,5 @@
-use super::composition::*;
 use super::squad::*;
+use screeps_combat_decision::composition::*;
 use screeps::*;
 use screeps_rover::*;
 use specs::Entity;

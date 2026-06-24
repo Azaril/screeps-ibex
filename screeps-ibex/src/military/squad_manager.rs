@@ -27,8 +27,8 @@
 //! `SquadCombatJob` fallback (no dangling `SquadContext` — no leak) until the general
 //! `Recall` terminal state (P2.M0) lands.
 
-use super::composition::{SquadComposition, SquadSlot};
 use super::objective_queue::{CombatObjectiveQueue, ObjectiveId, ObjectiveKind, OBJECTIVE_PRIORITY_HIGH};
+use screeps_combat_decision::composition::{SquadComposition, SquadSlot};
 use super::squad::{AttackTarget, SquadContext, SquadState, SquadTarget, TickMovement, TickOrders};
 use crate::combat::kite::{PositionLayers, SquadTacticParams, MAX_KITE_OPS};
 use crate::combat::{
@@ -108,7 +108,7 @@ fn objective_target(kind: &ObjectiveKind) -> (SquadTarget, RoomName) {
 /// `SquadCombatJob` and registers it on the `SquadContext`. Mirrors
 /// `AttackMission::create_spawn_callback`.
 fn create_spawn_callback(
-    role: crate::military::squad::SquadRole,
+    role: screeps_combat_decision::composition::SquadRole,
     slot_index: usize,
     target_room: RoomName,
     squad_entity: Entity,
@@ -381,7 +381,7 @@ fn queue_slot_spawn(
     };
     // Build via `build_body` so a force-SIZED slot (BodyType::Sized, R3) goes through the dynamic
     // builder and a template slot through create_body — both at the strongest in-range home's energy.
-    let body = match slot.body_type.build_body(best_capacity, crate::military::bodies::MoveProfile::Plains) {
+    let body = match slot.body_type.build_body(best_capacity, screeps_combat_decision::bodies::MoveProfile::Plains) {
         Some(body) => body,
         // Even the strongest in-range home can't build it (template min OR the sized spec) — don't field
         // an undersized one. (A sized slot that doesn't fit was already vetoed upstream by sized_for.)
