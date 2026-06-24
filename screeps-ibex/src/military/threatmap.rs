@@ -284,12 +284,19 @@ impl<'a> System<'a> for ThreatAssessmentSystem {
             let mut hostile_creep_infos = Vec::new();
             let mut estimated_dps: f32 = 0.0;
             let mut estimated_heal: f32 = 0.0;
+            let mut estimated_repair: u32 = 0;
 
             if let Some(creeps) = room_data.get_creeps() {
                 for hostile in creeps.hostile() {
                     let info = analyze_hostile_creep(hostile);
                     estimated_dps += info.melee_dps + info.ranged_dps;
                     estimated_heal += info.heal_per_tick;
+                    // Defenders repair the breach target (e.g. invader-stronghold creeps repairing
+                    // ramparts). Conservative proxy: all hostile WORK repairs at REPAIR_POWER/part
+                    // (over-estimating repair makes the breach oracle defer rather than feed a losing
+                    // squad). 0 for level-0 cores (no defenders → trivial). The richer "which creeps
+                    // actually repair the breach target + tower-heal-of-defenders" model is P-FORCE D5b.
+                    estimated_repair += info.work_parts * REPAIR_POWER;
                     hostile_creep_infos.push(info);
                 }
             }
@@ -361,7 +368,7 @@ impl<'a> System<'a> for ThreatAssessmentSystem {
                         hostile_tower_positions,
                         tower_energy,
                         breach_rampart_hits,
-                        repair_per_tick: 0,
+                        repair_per_tick: estimated_repair,
                         incoming_nukes,
                         last_seen: current_tick,
                         estimated_dps,
