@@ -572,6 +572,11 @@ fn compute_squad_orders(
         retreat_threshold,
         current_state,
         enemy_safe_mode,
+        // Offense closes in and finishes the enemy (the close-to-kill gradient is now live). `Hold` is
+        // for a future pin/harass objective. enemy_stalled stays false until SquadContext tracks the
+        // no-progress counter (a fast-follow; the sim already validates the stalemate-disengage path).
+        engage_objective: screeps_combat_decision::EngageObjective::Destroy,
+        enemy_stalled: false,
     };
 
     // Build the target room's movement cost matrix (terrain walls baked in — the headless
