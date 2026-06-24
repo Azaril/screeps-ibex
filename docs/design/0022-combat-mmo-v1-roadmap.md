@@ -17,6 +17,8 @@ Verified in code; these matter more than anything in the original plan:
 2. **`squad_entity` is a bare `u32` resolved without a generation check** (`squad_combat.rs:18` + ~8 hot paths via `entities.entity(id)`). specs returns whatever *live* entity now occupies that index, so a recycled slot silently resolves to a **different squad's** `SquadState`/orders — a live aliasing bug and a likely hidden cause of "creeps do weird things."
 3. **No combat energy-ROI gate.** `war.rs` offense never consults `economy.can_rooms_afford_military`; cumulative-siege spans creep *generations* with effectively unbounded re-spawn → a correctly-sized squad the colony can't sustain = the economy death-spiral.
 
+> **Foundation progress (2026-06-23):** blocker #1 (repair_per_tick wiring, `d07afc7`), blocker #2 (squad-id validate-on-access, `47b2b0a`, WFV 16→17), and the anchor multi-room fix (rover `fd977f2` / super `2ed1cc2`) are landed + tested. **Blocker #3 (energy-ROI gate) is DEFERRED to P-FORCE** (task #29): its meaningful form bounds *cumulative-siege* spend across generations, and cumulative-siege isn't built yet; a standalone "afford one squad" gate now would be redundant with the existing free-spawn + energy-tier gating and is exactly the incremental-piece pattern this re-plan rejects. It lands with cumulative-siege in P-FORCE.
+
 ## Decisions
 
 ★ = interview answer; ⚑ = operator override of the analysis recommendation; ▲ = refined this revision.
