@@ -114,6 +114,13 @@ Validators (independent of the generator):
   gate, re-expressed on the seams.
 - **`SizingWins`** — the simple "size our real force, field it, did we win?" pass/fail.
 - **`Metrics`** — cohesion / positioning / EV (the EXP-register instruments) over the outcome.
+- **`SelfPlay`** (operator-requested realism, DONE) — BOTH sides run the real `ManagedSimSquad` brain
+  (`decide_squad_with_pathing`) + the defender's towers fire; the opposing side MOVES + fights (not a
+  static `defense_intents` line). The realistic engagement; pairs with the agent's `ManagedSimSquad`
+  **cross-room travel mode** (a squad whose members are in another room paths to the objective room via
+  the rover before engaging — fixes the room-scoped-view "no cross-room movement"). Stage a cross-room
+  assault near the border (the rover's per-call search is range-bounded).
+- **`SizingWins`** (DONE) — the at-a-glance win-rate lens over the same generators.
 
 **Runner**: `run_suite(&mut dyn Generator, &mut dyn Validator) -> SuiteReport` crosses every scenario the
 generator offers with the validator and aggregates. Generation ⊥ validation ⊥ run-until — any triple
