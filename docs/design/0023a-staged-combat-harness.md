@@ -158,23 +158,26 @@ validator drives the real `decide_squad_with_pathing` across rooms and grades en
 workstream's gate). Same scenarios, two lenses — exactly what the swap buys.
 
 ## Phased build plan
-- **Phase A — foundation (extract the seams):** introduce `Scenario`/`Objective`/`Generator`,
-  `evaluate`/`RunUntil`/`StopReason`, `Validator`/`Verdict` in `combat-eval`; re-land the *current*
-  single-room calibration as `RandomDefendedBase` (generator) + `OracleCalibration` (validator) on the
-  new seams — **behavior-identical** (gate still 0 FP / ≤20% FN). De-risks the seams before any new
-  variety. (Modules: `harness/{scenario,generate,evaluate,validate,visualize}.rs`.)
-- **Phase V — visualization (early, so variety is eyeballable as it grows):** the engine recording
-  multi-room extension (room per frame entity) + `replay_to_html`/`replay_to_svg` in `combat-eval`;
-  wire the runner to emit a replay per scenario (+ a contact-sheet index). Land it right after the
-  foundation so every later phase is visually inspectable.
-- **Phase B — layout variety:** rich single-room permutations (wall/rampart/tower/cwall configs, multiple
-  breach corridors) + `Designed` fixtures + the `Permutations` enumerator. Multi-room layouts via
-  `MultiRoom`. (Now visually validated via Phase V.)
+- **Phase A — foundation (extract the seams):** ✅ **DONE** (eval `12b19c0` / super `8189383`).
+  `Scenario`/`Objective`/`Generator`, `evaluate`/`RunUntil`/`StopReason`, `Validator`/`Verdict` under
+  `combat-eval/src/harness/`; the single-room calibration re-landed as `RandomDefendedBase` +
+  `OracleCalibration` on the seams — **behavior-identical** (69 fielded / 0 FP / 131 deferred / 14 FN =
+  0.107). Deleted the `oracle_calibration.rs` monolith.
+- **Phase V — visualization:** ✅ **DONE** (engine `0d67830` + agent `c56ad6e` + eval `5427dff` / super
+  `dafcd73`). Engine recording carries room per frame entity; `harness/visualize.rs::replay_to_html`
+  is the self-contained interactive player (scrubber/play/step + per-frame data panel, multi-room
+  grid, terrain + `screeps-visual` typed buildings, owner-coloured HP discs); `evaluate_recorded` +
+  `render_calibration_replay` + `calibration_replay(index)` wire the full chain. The agent SVG
+  filmstrip is removed (operator: HTML-only). **Interactive HTML only**, host-only in `combat-eval`.
+- **Phase B — layout variety (NEXT):** rich single-room permutations (wall/rampart/tower/cwall configs,
+  multiple breach corridors) + `Designed` fixtures + the `Permutations` enumerator. Multi-room layouts
+  via `MultiRoom`. (Visually validated via Phase V.)
 - **Phase C — opponent forces + multi-room objectives:** `ForceSpec` archetypes (random + designed,
   single & multi-squad) → defender creeps; wire `enemy_dps` into the derived profile; multi-room
   objective lists; the `ManagedSquadIntegration` validator for the traversal lens.
 - **Phase D — more validators + scale:** `SizingWins`, `Metrics`; widen the seed count / enumerate the
-  permutation grid; a report dashboard linking the per-scenario replays.
+  permutation grid; a report dashboard linking the per-scenario replays (`run_suite` already returns
+  per-scenario verdicts to link).
 
 ## Constraints (carried)
 Deterministic (SplitMix64 by index — no `Date`/`Math.random`); host-only in `combat-eval`; the engine is
