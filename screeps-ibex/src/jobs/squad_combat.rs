@@ -906,13 +906,34 @@ fn get_formation_target(
     let squad_ctx = tick_context.system_data.squad_contexts.get(entity)?;
     let member = squad_ctx.get_member(creep_entity)?;
     let virtual_pos = squad_ctx.squad_path.as_ref().map(|p| p.anchor.virtual_pos)?;
+    let dest_room = squad_ctx.squad_path.as_ref().map(|p| p.anchor.destination.room_name());
     let layout = squad_ctx.layout.as_ref()?;
     let target = virtual_anchor_target(virtual_pos, layout, member.formation_slot)?;
 
     // Prefer cached position; use live creep position when not yet synced (e.g. second of duo).
     let creep_pos = member.position.unwrap_or(creep_pos_fallback);
+    cross_room_formation_target(creep_pos, target, dest_room)
+}
+
+/// Resolve a member's per-tick formation move target given its slot `target` (derived from the
+/// anchor's `virtual_pos`) and the squad's `dest_room` (the anchor's destination room).
+///
+/// - **Same room as the slot** → move to the slot.
+/// - **Already crossed into `dest_room` while the anchor still lags in the rear room** → HOLD in
+///   place (`creep_pos`). This is the W7N3 border-ping-pong fix: while the boundary-hold quorum gate
+///   freezes `virtual_pos` in the rear room, every slot resolves to the rear room, so a member that
+///   has already entered the destination room would otherwise be sent back to its own room's exit
+///   ring — where the engine bounces it across the boundary, in and out, forever. Holding lets the
+///   laggards/anchor close up; normal slot-following resumes the moment the anchor advances into the
+///   destination room (then the same-room branch above fires).
+/// - **Otherwise** → head to the current room's edge toward the slot's room (world-coord direction).
+fn cross_room_formation_target(creep_pos: Position, target: Position, dest_room: Option<RoomName>) -> Option<Position> {
     if creep_pos.room_name() == target.room_name() {
         return Some(target);
+    }
+    if Some(creep_pos.room_name()) == dest_room {
+        // Crossed into the destination room ahead of the anchor — wait here, don't get expelled.
+        return Some(creep_pos);
     }
 
     // The target is in a different room. Guide the creep toward the room
@@ -1078,5 +1099,59 @@ impl Job for SquadCombatJob {
         crate::machine_tick::run_state_machine(&mut self.state, "SquadCombatJob", |state| {
             state.tick(&mut self.context, &mut tick_context)
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cross_room_formation_target;
+    use screeps::{Position, RoomCoordinate, RoomName};
+
+    fn pos(x: u8, y: u8, room: &str) -> Position {
+        Position::new(
+            RoomCoordinate::new(x).unwrap(),
+            RoomCoordinate::new(y).unwrap(),
+            room.parse::<RoomName>().unwrap(),
+        )
+    }
+
+    /// Regression for the W7N3 border ping-pong: a formation member that has already crossed into the
+    /// squad's destination room while the anchor is still held in the rear room must HOLD in place,
+    /// NOT be handed an exit-edge tile (which the engine bounces back across the boundary).
+    #[test]
+    fn crossed_member_holds_instead_of_being_expelled() {
+        // Lead member is inside the destination room (W7N3) at its top edge; the anchor/slot is still
+        // frozen in the rear room (W7N4).
+        let lead = pos(36, 0, "W7N3");
+        let slot_in_rear = pos(25, 25, "W7N4");
+        let dest = Some("W7N3".parse::<RoomName>().unwrap());
+        assert_eq!(
+            cross_room_formation_target(lead, slot_in_rear, dest),
+            Some(lead),
+            "a member already in the destination room must hold, not be expelled to the exit ring"
+        );
+    }
+
+    #[test]
+    fn member_follows_its_slot_when_in_the_slot_room() {
+        let lead = pos(36, 5, "W7N3");
+        let slot = pos(30, 30, "W7N3");
+        assert_eq!(
+            cross_room_formation_target(lead, slot, Some("W7N3".parse().unwrap())),
+            Some(slot),
+            "same room as the slot -> go to the slot"
+        );
+    }
+
+    #[test]
+    fn laggard_in_rear_room_heads_for_the_edge() {
+        // A laggard still in the rear room (W7N4) with its slot in the destination room (W7N3) heads
+        // for an edge tile of its OWN room (not held, not the slot).
+        let laggard = pos(25, 40, "W7N4");
+        let slot = pos(30, 30, "W7N3");
+        let r = cross_room_formation_target(laggard, slot, Some("W7N3".parse().unwrap())).unwrap();
+        assert_eq!(r.room_name(), laggard.room_name(), "edge tile is on the creep's own room");
+        let on_edge = r.x().u8() == 0 || r.x().u8() == 49 || r.y().u8() == 0 || r.y().u8() == 49;
+        assert!(on_edge, "laggard is routed to a room-edge tile toward the destination");
     }
 }
