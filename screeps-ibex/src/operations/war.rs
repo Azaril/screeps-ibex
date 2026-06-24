@@ -919,18 +919,23 @@ impl WarOperation {
             // + priority. Any source without a mapping is skipped (all offense is
             // objective-driven since O7 — there is no legacy launch fallback).
             let objective: Option<(ObjectiveKind, f32, SquadComposition)> = match candidate.source {
-                // Invader core → siege the core tile (O1 travel + O2 orient + O3 breach).
+                // Invader core → ATTACK the core tile. A `StructureInvaderCore` is IMMUNE to dismantle
+                // (the engine dismantle intent no-ops on any structure without a `CONSTRUCTION_COST`),
+                // so it must be hit with ATTACK/RANGED_ATTACK. We field a ranged quad (`quad_ranged`),
+                // NOT the WORK `siege_quad` whose dismantlers cannot damage the core. The squad's Engaged
+                // seam (`decide_combat`) targets the core as a Hostile structure and shoots it; for a
+                // deployed stronghold the ranged attackers also shoot down the ramparts before the core.
                 //
-                // WINNABILITY GATE (ADR 0020 §12): the force-sizing oracle replaces the old tower-count
-                // proxy. It weighs the real defense — energized towers (drained ones deal 0), tower
-                // damage at the core, the breach-corridor cost (§12.3, not a rampart sum), and out-heal
-                // feasibility — against what a single siege quad fields at our RCL within its on-site
-                // lifetime (CREEP_LIFE_TIME − spawn − travel). Winnable ⇒ siege (direct breach or
-                // tower-drain, the oracle decides); unwinnable ⇒ skip (defer to the multi-squad
-                // G4-HEAVY), so we never commit a squad to its death — but we now CORRECTLY take
-                // multi-tower cores that are drainable, not just ≤1-tower ones.
+                // WINNABILITY GATE (ADR 0020 §12): the force-sizing oracle weighs the real defense —
+                // energized towers (drained ones deal 0), tower damage at the core, and out-heal
+                // feasibility — against what one squad fields at our RCL within its on-site lifetime.
+                // Winnable ⇒ engage (the oracle force-SIZES the HEALERS to out-heal the towers; the
+                // ranged attackers stay template); unwinnable ⇒ skip (defer to G4-HEAVY) so we never
+                // feed a squad to its death. FOLLOW-UP (docs/design/0020 §12.6 R-attack): force-size the
+                // RANGED attack parts to the core's hits (the deferred R6 `ranged_parts`) so kill-time is
+                // sized, not template.
                 TargetSource::InvaderCore { .. } => {
-                    let comp = SquadComposition::siege_quad();
+                    let comp = SquadComposition::quad_ranged();
                     match (candidate.target_pos, candidate.defense.as_ref()) {
                         (Some(pos), Some(defense)) => {
                             match best_force_budget(&comp, &home_rooms, candidate.room, system_data.pathfinder) {
@@ -943,9 +948,11 @@ impl WarOperation {
                                         );
                                         None
                                     } else {
-                                        // R3: SIZE the squad to the Lanchester-winning force (not the fixed
-                                        // siege_quad), at the same energy the spawn path uses. `None` ⇒ a
-                                        // home can't afford the required force ⇒ defer (G4-HEAVY).
+                                        // R3: force-SIZE the squad's HEALERS to the Lanchester-winning
+                                        // out-heal (the ranged attackers stay the `quad_ranged` template
+                                        // until the R-attack follow-up sizes ranged parts), at the same
+                                        // energy the spawn path uses. `None` ⇒ a home can't afford the
+                                        // required heal ⇒ defer (G4-HEAVY).
                                         //
                                         // R5: over-invest by the objective's importance (a MEDIUM core lifts
                                         // the base hold-margin force ~1.17×) so higher-value targets field a
@@ -961,15 +968,15 @@ impl WarOperation {
                                                     a.required_heal_per_tick / HOLD_MARGIN,
                                                 );
                                                 info!(
-                                                    "[War]   {} winnable via {:?} (~{} ticks): sized to {} heal + {} dismantle parts, P(win)~{:.0}% ({})",
-                                                    candidate.room, a.mode, a.est_ticks, required.heal_parts, required.dismantle_parts, pwin * 100.0, a.reason
+                                                    "[War]   {} winnable via {:?} (~{} ticks): ranged quad, healers sized to {} heal parts (out-heal towers), P(win)~{:.0}% ({})",
+                                                    candidate.room, a.mode, a.est_ticks, required.heal_parts, pwin * 100.0, a.reason
                                                 );
                                                 Some((ObjectiveKind::Dismantle { room: candidate.room, pos }, OBJECTIVE_PRIORITY_MEDIUM, sized))
                                             }
                                             None => {
                                                 info!(
-                                                    "[War]   Skip {} -- can't afford the required force ({} heal + {} dismantle parts) at {} energy; defer",
-                                                    candidate.room, required.heal_parts, required.dismantle_parts, member_energy
+                                                    "[War]   Skip {} -- can't afford the required {} heal parts (out-heal towers) at {} energy; defer",
+                                                    candidate.room, required.heal_parts, member_energy
                                                 );
                                                 None
                                             }

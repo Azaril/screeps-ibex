@@ -301,7 +301,13 @@ P2b is built as **independently-shippable rungs** that each refine behavior AND 
 
 Deferred: `RequiredForce::ranged_parts` + RangedDPS sizing in `sized_for` (would let R6 also size the kiter's RANGED to kill keepers faster) — needs a keeper self-heal model to set the kill target, so it stays a refinement; the template kiter (100 ranged) is the proven suppressor.
 
-**Next: the soak (P3)** — watch a force-sized squad hold + clear live (offense + SK), then MMO deploy prep (P4).
+**SOAK FINDINGS (2026-06-23) — two offense bugs fixed; one R-attack follow-up open.** Deployed the force-sizing build + soaked against injected level-0 invader cores. The oracle fires live (`W7N3/W4N2 winnable via Breach ... P(win)~100%` → `Dismantle` objectives), validating R3/R4/Step-1 in production. But the fielded squads did **nothing but ping-pong** at the target-room border. Root-caused (workflow + adversarial verify) to two distinct bugs:
+- **Border ping-pong (FIXED `24f5494`)** — a formation squad split across a room boundary had its anchor `virtual_pos` frozen in the rear room by the boundary-hold quorum gate, so `get_formation_target` handed a member that had already crossed back an exit-edge tile → the engine bounced it out → in/out forever. Fix: hold a crossed member in place until the anchor advances. General cross-room-squad fix; 3 unit tests; no WFV bump.
+- **Invader cores were routed to *dismantle* (FIXED — attack-not-dismantle, operator-caught)** — a `StructureInvaderCore` is immune to dismantle (engine no-ops on non-`CONSTRUCTION_COST` structures); it must be ATTACKED. The `InvaderCore` offense path used `siege_quad` (WORK dismantlers, useless on a core). Fixed: route to `quad_ranged` (RANGED_ATTACK + healers); the Engaged seam `decide_combat` targets the core as a Hostile structure and shoots it. The oracle still force-sizes the HEALERS (out-heal towers); the winnability gate still defers un-out-healable strongholds.
+
+**OPEN FOLLOW-UP — R-attack (force-size the ranged attack parts).** Today the core-attack ranged members stay the `quad_ranged` template (fixed DPS), so kill-time isn't sized to the core's `hits`. The proper fix is the deferred **R6 `RequiredForce::ranged_parts`** + `sized_for` sizing the `RangedDPS` slots + the oracle's objective-kill computing required *attack* DPS (not dismantle) from the core hits. This unifies the SK-keeper-kill (also deferred) and the core-kill under one ranged-sizing path. WFV: none expected.
+
+**Next: re-soak (P3)** — redeploy both fixes, watch a force-sized squad actually clear a level-0 core end-to-end (hold + attack), then MMO deploy prep (P4).
 
 ### 12.7 Beyond sizing — archetype selection + the full input model (design note, 2026-06-23)
 
