@@ -1,0 +1,283 @@
+# ADR 0025 — Unified EV-of-(Position × Action) Per-Creep Combat Decision
+
+- **Status:** Accepted (clean build, operator-approved 2026-06-24)
+- **Date:** 2026-06-24
+- **Supersedes (mechanism):** the role/`MemberCaps`-driven positioning in ADR 0024; the separate `decide_combat` action pipeline; `assign_focus_fire` + `assign_heals` + the `score_tile` engage/healer presets as the layout mechanism. These are **deleted**, not flagged off.
+- **Builds on (kept):** ADR 0019 (`score_tile` term math, as `mhp` scalars), ADR 0020 (Lanchester engage gate, EV target kill-budget + spill, force sizing), ADR 0024 (hierarchical positioning: shared threat field + reachability flood + one target-flood).
+- **Crates:** `screeps-combat-decision` (kernel), `screeps-combat-agent` (adapter), `screeps-combat-eval` (harness).
+
+### Build directives (operator, 2026-06-24)
+
+This is a **clean replacement**, optimized for the best-designed system with the least technical debt — not a backward-compatible migration:
+
+1. **No incremental migration / feature flags / legacy path.** Build the kernel, swap it in, delete the old machinery in the same change. The harness suite is the correctness gate; we do **not** preserve byte-identity with the old path, the live-vs-old IntentRecorder digest, or any serialized shape (no `WORLD_FORMAT_VERSION` concern — positioning is per-tick). "Parity" that still matters is **sim-vs-real-engine** correctness (so the harness is a faithful oracle), not back-compat.
+2. **Structure / breach / declaim value is IN v1** (§2.4), not deferred. Without it the squad cannot break ramparts, breach into rooms, or raze bunkered spawns/towers — the whole point of an offensive combat system.
+3. **Seed constants only; the tournament tunes.** Every `mhp` scalar is a tournament-tunable seam. We do **not** hand-tune in this build — get to a fully clean, correct, working system; then tune the complete system with the self-play tournament.
+
+## 1. Context
+
+The combat decision still uses a **fixed layout** mechanism, just expressed in capability terms instead of role labels. Today a creep is classified by `MemberCaps` (`can_melee` / `can_range` / `can_heal`) → handed a `desired_range` (melee→1, ranged→3, support→back-line) → marched to that ring by `score_tile` with a role-selected preset (`engage` / `healer`) → and then, *separately*, `decide_combat` picks attack-vs-heal intents once it is standing.
+
+The operator rejects this:
+
+> "this is STILL a fixed layout by trying to identify role by capabilities and then ordering. **Calculation for what the creep CAN DO IN THE SLOT they'll be in and positioning to get highest EXPECTED VALUE outcome is more important.**"
+>
+> "Are you just updating the movement formation? Or actual full layout AND action?"
+
+The answer this ADR commits to: **full layout AND action, jointly.** A creep's value at a tile *is* the expected value of the best engine-legal set of intents it can actually fire from that tile this tick (real working parts, real targets/allies/threats in range, engine intent-exclusion respected), netted against the incoming-damage risk at that tile. The creep goes to the `(tile, action-set)` pair of highest EV. **No role archetype, no per-role `desired_range`, no claim-priority ordering as the mechanism.** Formation *emerges* because each creep maximizes its **marginal** contribution to one squad win-probability currency, and the squad coordinates only through **shared residual budgets** (don't double-count a kill, don't over-heal) — never through a role sort.
+
+This unifies what ADR 0019/0020/0024 left split: position utility and action choice now share **one currency** and are chosen in **one argmax**.
+
+## 2. Decision
+
+### 2.1 The one currency — `mhp` (milli-hits of squad win-probability swing)
+
+Every term — offense, denial, heal, survival, cohesion — is converted to a single signed integer in **`mhp`** (thousandths of one hit-point of *squad fighting-strength margin*). Integer-only on the hot path (the proposals' "no floats" promise is honored here as a real, scoped rewrite — see §2.6 and §7, not as the impossible "byte-identical re-expression of the f32 `score_tile`" the source proposals hand-waved).
+
+We do **not** invent a new exchange rate between damage, deaths-prevented, and risk. We reuse the **Lanchester fighting-strength model already in `assess_engage`** (lib.rs:937–1008) as the win-probability functional, and price each action delta as its signed contribution to that margin. This is proposal **D**'s core insight grafted onto proposal **A**'s per-tile kernel.
+
+**The functional `W`.** Per squad per tick `assess_engage` already computes:
+
+- `our_strength   = fighting_strength(our_dps, our_ehp, n=2) = our_dps * our_ehp`
+- `enemy_strength = fighting_strength(killable_dps, killable_ehp, n=2)`
+- `μ = clamp((our_strength − enemy_strength) * 1000 / enemy_strength, −1000, 1000)`  (permille, i128 math, lib.rs:1003–1005)
+
+`W` maps `μ` to a `[0,1000]` win-permille via a **41-entry integer sigmoid LUT** baked at build time (monotone, no `powf`, deterministic). `W` is strictly increasing in `our_strength`, strictly decreasing in `enemy_strength`, so the sign of every term below is correct by construction.
+
+**Sensitivities (the exchange rate, computed ONCE per squad per tick).** Rather than re-evaluate `W` per candidate, take two integer scalars from the LUT's local slope at the current `μ`:
+
+```
+g_us   = W'(μ) · dμ/d(our_strength)      // mhp gained per unit of our fighting-strength preserved
+g_them = W'(μ) · dμ/d(enemy_strength)    // mhp gained per unit of enemy fighting-strength removed
+```
+
+These two numbers are the entire calibration surface between "deal damage", "prevent a death", and "take risk". They are derived from the *existing* tuned model, not new magic constants. (Degeneracy fix for blowouts is in §7.)
+
+### 2.2 The per-`(tile, action-set)` EV kernel
+
+The whole decision collapses to one pure function:
+
+```
+tile_action_ev(member, tile, residuals, layers, g_us, g_them) -> (ev: i64 mhp, ActionSet)
+```
+
+For a candidate `tile` it (1) enumerates the engine-legal action-sets the member's working parts permit from that tile (§3), (2) for each set picks the best in-range target(s)/ally and prices the combo against the **live shared residual budgets**, (3) nets incoming-damage risk and melee attack-back, and (4) returns the argmax set and its EV. The EV of a member at `tile` with chosen legal `ActionSet A`:
+
+```
+EV(m, t, A) =  OFFENSE(A,t) + DENIAL(A,t) + HEAL(A,t)
+             − RISK(m,t)    − SELF_RISK_MELEE(A,t)
+             − DISCOHESION(t) − APPROACH_DEFICIT(m,t)
+```
+
+All terms in `mhp`:
+
+| Term | Definition | Provenance |
+|---|---|---|
+| **OFFENSE** | `g_them · Σ_targets min(damage_landed(A,t,target), residual_kill[target])`. `damage_landed` respects rampart-redirect (0 credit for a single-target hit redirected to a rampart, resolve.rs) and the engine net (an out-healed target has residual 0). The `min` against the live residual is what kills overkill. | `ev_target_order` budget (lib.rs:318); `assign_focus_fire` spill (lib.rs:332-359) |
+| **DENIAL** | When cumulative committed squad damage on a target **crosses its budget this tick** (it dies), add `g_them · threat_value(target) · KILL_HORIZON` (small `~3`). Removing a healer's future output thereby beats chipping a tank. Granted **once per target** (the budget-crossing member books it), so no two creeps both claim the kill swing. | `threat_value`/`ttk` (lib.rs:294,316) |
+| **HEAL** | `g_us · Σ_allies min(heal_output(A,t,ally), residual_heal_need[ally])`, with the **MORTAL** case (`projected_incoming ≥ ally.hits`) crediting the ally's **whole** remaining fighting-strength (a prevented death is the max swing). "Mortal" is thus a *region of the continuous curve*, not a boolean veto. | `best_heal_target` mortal-first (lib.rs:482); `assign_heals` deficit+risk (lib.rs:1138) |
+| **RISK** | `g_us · (net_incoming_at(t) lost from THIS member)` where `net = max(0, ThreatField.raw_at(t) − reaching_squad_heal)`, scaled by how close it is to killing this member over `SURVIVAL_HORIZON`. Plus a hard **`LETHAL_TILE_PENALTY`** backstop (astronomical, dominates all EV) when `net · SURVIVAL_HORIZON > member.hits` — the binary survival veto (kite.rs:701) is **kept as a floor** under the graduated curve. | `incoming_damage_at` / `ThreatField` |
+| **SELF_RISK_MELEE** | Expected melee attack-back if `A` lands a melee `Attack`, the target has `ATTACK` parts, and we are **not on a rampart** (resolve.rs:317-321). **New EV the current model ignores** — and the cleanest proof that joint position+action matters (a near-dead melee+ranged creep should often *not* melee). | resolve.rs:317-321 (verified) |
+| **DISCOHESION** | Wall-aware distance-from-centroid penalty past `K`, converted to `mhp` by one scale constant. Holds a forming/no-target blob together. | `score_tile` cohesion term |
+| **APPROACH_DEFICIT** | When **no** action lands from `t` (out of every weapon/heal range): `−` (scaled) safe-path distance `D[t]` from the shared target-flood, giving an out-of-range creep a continuous downhill gradient toward where it *would* have EV. Replaces the `LAYOUT_DOABLE_BONUS` step-function with a gradient. | target-flood `D[]` (lib.rs:883) |
+
+`OPENNESS` / `EDGE` / `FUTURE` survive as small additive `mhp` terms reusing the existing layers (a short-horizon `FUTURE` is the deferred extension in §10, *not* in v1).
+
+**Squad win-probability is the sum of member EVs by construction.** Because OFFENSE/HEAL are capped by the *shared* residuals already consumed by earlier-committed members, each member is scored on what the rest left uncovered — its **marginal** contribution. This is a greedy submodular maximization (proposal B's framing): the two coverage terms are submodular (the k-th shooter on a target / k-th healer on an ally has diminishing return as the budget fills), which is exactly why a one-pass greedy + bounded re-pass is near-optimal and we never need Hungarian matching.
+
+### 2.3 The joint selection algorithm
+
+Per engaged squad per tick (the engage/retreat **gate runs first**, unchanged — `assess_engage` + `ENGAGE_BALANCE_BAND` hysteresis, lib.rs:935; this layer only decides *how* to fight once committed):
+
+**STAGE 0 — shared, once (no new cost vs today):**
+- Build `PositionLayers` (`ThreatField` + reachability flood) — build-once-per-room, reused across squads (unchanged).
+- Run the **one** target-flood Dijkstra `D[]` from the focus over the threat-weighted matrix (`TARGET_FLOOD_OPS = 2500`, unchanged, kite.rs:887).
+- Compute `μ`, `W`, `g_us`, `g_them` from `assess_engage`'s existing strengths (~20 ops).
+- Build the **residual budget ledgers** (Vec-indexed, integer):
+  - `residual_kill[e] = e.hits + heal_reaching(e)` for each killable enemy (the `ev_target_order` budget verbatim).
+  - `residual_heal_need[a] = max(0, projected_incoming(a) − a.hits)` (+ a deficit top-up) per ally.
+
+**STAGE 1 — per member, in a deterministic commit order:**
+- Candidate tiles = the member's Moore neighbourhood (current ±1) ∩ walkable, **plus** its current tile (incumbency). This is the **same local 9-tile window** `plan_squad_layout` already scans (kite.rs:927). **No per-member flood is added** — the shared `D[]` supplies the long-range gradient.
+- For each candidate tile `t`: enumerate engine-legal `ActionSet`s (§3), price each via `tile_action_ev` against the **current** residual ledgers, keep the max-EV `(t, A)`.
+- Apply the **incumbency dead-band** (`LAYOUT_DEAD_BAND`) to the **joint `(tile, ActionSet)` pair** and the **spacing penalty** against already-committed tiles. Member commits to its argmax.
+
+**STAGE 2 — commit + drain (the coordination):**
+- Subtract the committed OFFENSE from `residual_kill[targets]` and the committed HEAL from `residual_heal_need[ally]`. The next member sees reduced budgets → naturally spills to the next-best target / next at-risk ally. This *is* `assign_focus_fire` + `assign_heals`, re-expressed as one greedy drain, preserving the same no-overkill / no-over-heal guarantee.
+- Emit `member_goal = chosen tile` (flows through the existing `member_goals → decide_movement → rover-validates` seam) and the `ActionSet` as the per-creep `CombatIntent` vector directly (**no second `decide_combat` pass**).
+
+**The commit order is value-derived, NOT role-derived.** Sort members by `(descending best-achievable single-tile EV, then ascending hits, then idx)`. The pre-pass best-tile-ignoring-others is `O(members × 9)`, negligible. Highest-leverage members claim scarce high-value tiles first; a creep that *loses* a range-1 tile finds its next-best neighbour now has the higher EV and self-demotes **by EV**, with no melee→ranged→healer rule. (Honest note for review: in a target-rich fight a melee+ranged creep's best single-tile EV systematically exceeds a ranged-only creep's, which exceeds a pure healer's — so the *order* correlates with the old buckets. That is acceptable and arguably correct: it is value-correlated, not label-driven, and it sets *who picks first under contention*, not *what range anyone holds*. We reject re-introducing a hard role sort; see §9 for the rejected "contestedness sort" variant and why a single optional swap-pass is the escape hatch instead.)
+
+**Optional STAGE 3 — one bounded re-pass (added only if measured):** any committed member whose chosen target/ally was depleted by a later committer re-picks against final residuals; switch only if it beats the held slot by `> LAYOUT_DEAD_BAND`. Bounded to **1 sweep** for determinism and CPU. Catches the "A aimed at a target B finished" case. Greedy + incumbency is expected to be at a fixed point in the common case; ship STAGE 3 only if the harness shows EV left on the table.
+
+### 2.4 Structures, breach, and declaim — objective EV (IN v1)
+
+Breaking a base is the point of an offensive system, so enemy **structures** and the **controller** are first-class targets in the *same* `mhp` currency and the *same* kernel — not a special phase. The only additions are more entries in the residual ledger and two more legal actions in the enumerator.
+
+**Structure value `V_struct(kind)` (seed, tournament-tunable), priced in the `g_them` currency** — destroying it removes enemy fighting capability or unlocks the win condition:
+
+| Structure | Why it has value | Seed `V_struct` |
+|---|---|---|
+| Tower (energized) | Its `tower_dps` is literally a term in `enemy_strength`/the `μ` the gate already computes; razing it *directly* raises `W`. Also kills enemy heal-reaching. | highest |
+| Spawn / InvaderCore | Denies reinforcement / is the room's heart (the objective the `CombatObjective` usually names). | high |
+| Rampart / Wall **on the breach corridor** | Inherited value: it is the gate to a shielded high-value structure (below). | derived, not intrinsic |
+| Container / road / other | Negligible. | ~0 |
+
+**OFFENSE against a structure** is the same term as against a creep: a member in range with a legal damaging intent (`Attack`/`RangedAttack` melee/ranged, or `Dismantle` with WORK parts — 2× structure damage) adds `g_them · min(damage_landed, residual_struct[s]) · (V_struct / s.hits_max)` — progress toward removing `V_struct`. **DENIAL** books the full `g_them · V_struct` on the tick the structure dies (for a tower this is exactly the `tower_dps` drop the gate will see next tick — self-consistent).
+
+**Breach (reuse the existing machinery, recast as inherited value).** Ramparts/walls shield the valuable structures; you must break them to reach the objective. The kernel reuses ADR 0024's breach search verbatim — `breach_redirect` + `breach_path_blockers` Dijkstra priced by hits (`BREACH_HIT_WEIGHT`, lib.rs) — but instead of *redirecting the focus* (the current hack), it **assigns inherited value** to the blocker tiles: the first rampart/wall on the cheapest corridor to a shielded objective `O` gets `V_struct = V(O) · (remaining corridor discount)`, so dismantling/attacking it has real, monotone EV (each hit is progress toward opening `V(O)`). A member with WORK at the breach tile finds `{Dismantle}` is its highest-EV `(tile, action-set)` — a "siege role" with no taxonomy. Behind a breach, the next blocker lights up once the first is gone. This makes "tank-and-dismantle through a rampart to the spawn" fall out of the EV, and replaces `breach_redirect`'s focus-rewrite with a priced term.
+
+**Declaim** (take/neutralize the room — the live `SalvageMission`/`DeclaimJob` objective): a member with CLAIM parts at range 1 of a strategic enemy **controller** can `AttackController` (engine `CombatAction::AttackController`, already in the sim engine). It is just another target in the ledger: `residual = attack-to-neutral`, `V = V_controller` (high, discrete — room neutralization), enumerated as the legal singleton `{AttackController}` (drops melee, per the engine table §3). No separate declaim path.
+
+So one kernel prices: kill a creep, raze a tower/spawn, breach a rampart toward a shielded objective, and declaim a controller — all in `mhp`, all chosen jointly with position. `select_focus_target`/`breach_redirect` (kept) seed *which* structures are valuable and *where* the corridor is; the kernel decides each creep's best `(tile, action)` toward them.
+
+## 3. Engine-legality table (ground truth)
+
+Verified this session against `C:/code/screeps-engine/src/processor/intents/creeps/intents.js` (the canonical priority table) and the sim mirror `screeps-combat-engine/src/resolve.rs:142-164`.
+
+The canonical table (`intents.js:3-13`):
+
+```
+rangedHeal:        ['heal']
+dismantle:         ['attackController','rangedHeal','heal']
+attack:            ['build','repair','dismantle','attackController','rangedHeal','heal']
+rangedMassAttack:  ['build','repair','rangedHeal']
+rangedAttack:      ['rangedMassAttack','build','repair','rangedHeal']
+```
+
+`checkPriorities` (intents.js:21-23): an intent fires iff it is queued AND none of its listed higher-priority conflicts are also queued. So the **drop rules for the combat subset** are:
+
+| Intent | Dropped when ALSO queued | Consequence |
+|---|---|---|
+| `move` | — | **Composes with everything** (it IS the position choice). |
+| `attack` (melee) | `dismantle`, `rangedHeal`, `heal` | Melee `Attack` dropped if any heal **or** dismantle present. |
+| `rangedAttack` | `rangedMassAttack`, `rangedHeal` | Dropped if RMA **or** `rangedHeal` present. |
+| `rangedMassAttack` | `rangedHeal` | **Dropped if `rangedHeal` present.** RMA is NOT dropped by plain `heal`. |
+| `rangedHeal` | `heal` | Use one heal flavour at a time. |
+| `dismantle` | — (within combat subset) | Drops melee `attack` (as the inverse of the row above). |
+
+**Composition closure (what a creep may emit together):**
+
+| Combo | Legal? | Note |
+|---|---|---|
+| `{Attack, RangedAttack}` | ✅ | Both weapons at range 1 — the canonical front-line slot. |
+| `{Attack, RangedMassAttack}` | ✅ | Melee + RMA compose. |
+| `{Attack, Heal}` | ❌ | Heal drops melee Attack. |
+| `{RangedAttack, Heal}` | ✅ | **Plain `heal` does not drop `rangedAttack`.** Heal-capable ranged creep fires + heals. |
+| `{RangedAttack, RangedHeal}` | ❌ | **`rangedHeal` drops `rangedAttack`.** |
+| `{RangedMassAttack, Heal}` | ✅ | Plain `heal` does not drop RMA. |
+| `{RangedMassAttack, RangedHeal}` | ❌ | **`rangedHeal` drops RMA.** |
+| `{RangedAttack, RangedMassAttack}` | ❌ | RMA drops `rangedAttack` — emit one, never both. |
+| `{Dismantle, anything-melee}` | ❌ | Dismantle drops melee Attack. |
+| `{Heal}`, `{RangedHeal}`, `{}` | ✅ | Singletons / idle always legal. |
+
+**This corrects the fatal flaw in source proposals A and D**, both of which listed `{RMA, RangedHeal}` (and A also `{RangedAttack, RangedHeal}`) as legal "maximal sets". They are **engine-illegal** — `rangedHeal` is in both `rangedMassAttack`'s and `rangedAttack`'s conflict lists. The enumerator MUST encode: `rangedHeal` drops both ranged-offense intents; plain `heal` drops neither. The asymmetry (`{RMA,Heal}` legal, `{RMA,RangedHeal}` not) must be exact.
+
+**Sim/live parity hole (must fix before any deploy).** `resolve.rs:142-164` (verified) only drops `rangedAttack` on `has_rma`, and only drops melee `Attack` on heal/rangedHeal/dismantle. It does **NOT** model `rangedHeal` dropping `rangedAttack`/`rangedMassAttack`. So a combo that is illegal on live (`{RangedAttack, RangedHeal}`) would be *accepted* by the sim, and the harness "every emitted set passes `filtered_actions`" gate would NOT catch it. **Decision:** the enumerator enforces the **strict live rule** (conservative: never emit `rangedHeal` with any ranged offense). The sim slightly under-uses `rangedHeal`+ranged vs a hypothetical permissive engine — acceptable. Additionally, **`resolve.rs::filtered_actions` MUST be patched** to mirror the live `rangedHeal` drops, with a parity unit test asserting the Rust mirror matches `intents.js` for every `(parts, queued-set)` case. This is migration Stage 1.
+
+**The enumerator is a tiny fixed menu, not a powerset.** `enumerate_legal_sets(member, tile)` = `choose-one-of {none, Attack}` × `choose-one-of {none, RangedAttack, RMA}` × `choose-one-of {none, Heal, RangedHeal}`, then delete any illegal pairing per the table above (≤ 6 surviving candidates per creep, mostly pruned by in-range targets). RMA-vs-`RangedAttack` is itself an EV choice inside the enumerator (RMA when `Σ min(rma_dmg_at_range, residual)` over clustered hostiles beats single-target fire), replacing the hardcoded `≥3-in-range` heuristic (lib.rs:540). The melee-vs-heal exclusion becomes a **priced choice** (`{Attack,RangedAttack}` vs `{RangedAttack,Heal}`), replacing the `apply_heal` mortal-only veto (lib.rs:413-429). No intent the engine would drop is ever emitted, so no decision cycle is wasted (fixing a real current silent-drop bug).
+
+## 4. How formation EMERGES (worked examples)
+
+No example uses a role label. Each creep runs the *same* `tile_action_ev` argmax.
+
+**(a) Melee + ranged + heal creep ("triple"), allies healthy, enemy block in front.**
+At a **range-1** tile, `enumerate_legal_sets` offers `{Attack, RangedAttack}` (both weapons land — they compose). OFFENSE is high (`melee + ranged` net hits, capped by residual), but `SELF_RISK_MELEE` deducts the target's attack-back and `RISK` deducts the higher incoming at the front. At a **range-3** tile, only `{RangedAttack}` lands (lower OFFENSE) but `RISK`/`SELF_RISK_MELEE` are lower. If allies are healthy, `{RangedAttack, Heal}` scores `HEAL ≈ 0` (no residual need), so the heal option is dominated. The argmax is **range 1 with both weapons** whenever `(melee OFFENSE gain) > (attack-back + extra incoming)` — i.e. the creep closes *because that is where its priced output peaks*, not because it was labelled melee. Drop one ally to mortal and `{RangedAttack, Heal}` (heal composes with ranged) suddenly books the ally's **whole** fighting-strength via `g_us` — the argmax flips to fire-and-heal **without** surrendering the ranged weapon, and **without** the engine dropping anything. The melee `Attack` is the only thing sacrificed, and only because the EV says so.
+
+**(b) Pure healer (HEAL parts only).** OFFENSE = DENIAL = 0 at every tile (no weapon). Its EV is dominated by `HEAL − RISK − DISCOHESION`. The argmax is the tile that maximizes `Σ min(heal_output_at_range, residual_heal_need)` while staying out of lethal incoming and near the centroid — i.e. it hugs the at-risk cluster from the safest covering tile. No `is_support` branch, no separate healer preset search — the **same** kernel produces "back-line healer" as a byproduct of where heal value is. Two healers don't over-heal the same ally because the first drains `residual_heal_need[a]`; the second's HEAL on `a` is then `0` and it triages the next ally.
+
+**(c) Siege / dismantle creep, tower-drain room.** Against a wall/rampart blocking the focus, `{Dismantle}` (drops melee, legal alone) scores OFFENSE against the **structure** (breach progress) priced via the same `g_them`; `DENIAL` fires when the rampart breaks and the focus behind it becomes killable. `RISK` from energized towers is the `assess_engage` `tower_dps` drain folded into the threat field. The creep picks the breach tile + `Dismantle` because that is the highest-EV `(tile, action-set)` — a "siege role" emerges with no taxonomy. (Caveat: full structure/breach/declaim pricing is the §10 extension; v1 ships creep-vs-creep + a basic breach term, see Open Questions.)
+
+In all three, **who gets the scarce range-1 tile** is decided by the value-sorted commit order + spacing + residual drain — not by a melee→ranged→healer sequence.
+
+## 5. What it SUBSUMES (replaced vs kept)
+
+| Current piece | Fate | How |
+|---|---|---|
+| `MemberCaps::desired_range()` (kite.rs:756) | **REPLACED** | Range emerges from where the member's priced OFFENSE/HEAL peaks net of RISK. |
+| `MemberCaps::order()` claim priority (kite.rs:765) | **REPLACED** | Value-sorted commit order (EV desc, hits asc, idx) + shared-residual drain. Not a role sort. |
+| `MemberCaps::is_support()` + separate healer search (kite.rs:750, 908) | **REPLACED** | One kernel; a pure healer just has OFFENSE=0, HEAL>0. |
+| `KiteScoreParams` `engage`/`healer` presets as role mechanism (kite.rs:195) | **REPLACED** | Weights survive only as scalar `mhp` mixing constants (EXP-* tunable); no preset chosen by classification. |
+| `decide_combat` attack/heal pipeline + `apply_heal` mortal veto (lib.rs:375-430) | **REPLACED** | Heal-vs-attack is a priced choice between legal action-sets; `decide_combat` becomes "emit my committed slot's intents + MoveTo". |
+| `attack_with_orders` / `fallback_attack` + RMA `≥3` heuristic (lib.rs:514-589, 540) | **REPLACED** | Target/weapon = enumerator argmax; RMA-vs-single is an EV choice. |
+| `LAYOUT_DOABLE_BONUS` approach step (kite.rs:804) | **REPLACED** | Continuous `APPROACH_DEFICIT` gradient over the existing `D[]`. |
+| `MemberCaps` (parts-presence bits) | **KEPT (demoted)** | Only feeds `enumerate_legal_sets`; no longer drives position/order. |
+| `ev_target_order` kill-budget + `threat_value`/`ttk` (lib.rs:305) | **KEPT** | Seeds `residual_kill` and the OFFENSE/DENIAL currency. |
+| `assign_focus_fire` spill (lib.rs:332) | **SUBSUMED** | Becomes the `residual_kill` drain side-effect. Run in parallel as a debug-build cross-check during migration. |
+| `assign_heals` mortal-first + deficit (lib.rs:1112) | **SUBSUMED** | Becomes the `residual_heal_need` drain + MORTAL credit. Debug cross-check during migration. |
+| `best_heal_target` mortal-first (lib.rs:458) | **KEPT (recast)** | The HEAL term + MORTAL whole-fighting-strength credit. |
+| `ThreatField` / `incoming_damage_at` / survival veto (kite.rs:43, 701) | **KEPT** | RISK input + the `LETHAL_TILE_PENALTY` floor. |
+| target-flood `D[]` + `PositionLayers` build-once sharing (kite.rs:887, 339) | **KEPT VERBATIM** | The dominant shared cost; consumed by APPROACH_DEFICIT and the local window. |
+| incumbency dead-band + spacing penalty (kite.rs:813, 828) | **KEPT** | Anti-oscillation, now on the joint `(tile, ActionSet)`. |
+| `assess_engage` / Lanchester gate / `force_sizing` (lib.rs:960) | **KEPT UNCHANGED** | Outer "fight or retreat" gate AND now the `W`/`g_us`/`g_them` source. |
+| `select_focus_target` (lib.rs:230) | **KEPT** | Shared stable focus for orientation + the unengaged/solo fallback; also seeds focus stability so the squad concentrates below the kill boundary (see §11 chipping risk); seeds *which structure* is the objective for §2.4. |
+| `breach_redirect` + `breach_path_blockers` Dijkstra (lib.rs) | **KEPT (recast)** | No longer *rewrites the focus*; instead seeds the breach corridor so the first blocker tiles get **inherited `V_struct`** (§2.4). Breaching becomes a priced OFFENSE term, not a focus hack. |
+| structure `Attack`/`RangedAttack`/`Dismantle` targeting + `AttackController` declaim | **NEW (core)** | Structures + controller are targets in the same ledger/kernel with `V_struct`/`V_controller` value (§2.4) — so razing towers/spawns, breaching ramparts, and declaiming rooms are EV-chosen jointly with position. |
+| `SquadDecision` output shape (focus, movement, `member_goals`, intents) | **KEPT** | `member_goals` now populated for ALL members; `focus_assignments`/`heal_assignments` become outputs for telemetry. Agent/host seams untouched. |
+
+## 6. Tractability
+
+**Shared (unchanged):** one `PositionLayers` build + one target-flood Dijkstra (`TARGET_FLOOD_OPS = 2500`) per engaged squad per tick, build-once-per-room, amortized across members. This dominates wall-time and is **not increased**.
+
+**New local stage** = `O(members × 9 tiles × ≤6 action-sets × per-set work)`. Per-set work = best in-range target scan (capped at **top-K=4 by kill-budget** — spill beyond 4 is vanishingly rare) + best in-range ally scan (≤ N). For a typical N=8 squad with H≤10 in-range hostiles: `8 × 9 × 6 × (4 + 8) ≈ 5,200` cheap integer ops on top of the 2500 flood. Each op is array reads (`ThreatField.raw_at` is `O(1)`) + clips + a multiply; no pathfinding, no allocation (fixed-size action-set array, Vec-indexed ledgers).
+
+**End-to-end:** `~2500 (flood, shared) + ~5,200 (local)` vs today's `~2500 + plan_squad_layout O(members×9×score_tile) + a separate decide_combat per member`. The new local stage **fuses** the layout re-score and `decide_combat` into one pass, so the ≤6× action factor is offset by deleting the second pass. Net is `~1.5–2×` the per-squad *non-flood* cost, which is the smaller term — within the brief's "keep it in that ballpark" constraint, and matching the architecture note's own `O(2500 + N×36)` estimate.
+
+**Worst case (20-creep blob, many in-range hostiles):** the K-cap on the target scan keeps the inner factor constant; `20 × 9 × 6 × (4 + 20) ≈ 26k` local ops. Mitigations, in order: (1) K-cap (above); (2) cap candidate tiles to the 5 best by `D[]` pre-rank when `N > N_BIG`; (3) the optional STAGE-3 re-pass is bounded to 1 sweep. The flood remains the dominant per-squad cost; if a hard ceiling is hit on MMO, the orthogonal lever is share-the-flood-per-target (ADR 0024 Future-work #6), not changing this kernel. **CPU gate:** `cpu_bench_compound_worst_case_is_bounded` must stay green before any K or sweep increase ships.
+
+**Memory:** residual ledgers `O(targets + allies)`, per-member best-bid cache `O(N)` — tick-scoped, no persistent state. **No `WORLD_FORMAT_VERSION` bump** (pure per-tick decision, serialized shape unchanged) — confirm at Stage 4.
+
+## 7. Anti-oscillation + determinism
+
+**Determinism.** Per the build directives we do **not** preserve byte-identity with the old path or worry about a live-vs-old digest — the old `score_tile`/`decide_combat` machinery is deleted, and the *only* parity that matters is **sim-vs-real-engine intent legality** (§3), which both the sim and the bot honour because they run the same kernel. We still want the kernel itself **deterministic** (reproducible replays, stable behaviour, tournament-comparable):
+
+- The `mhp` kernel is **integer/fixed-point throughout** (sigmoid LUT, `g_us`/`g_them`, all term sums) — no f32 on the hot path, so no IEEE-ordering subtleties. (The old `score_tile` was fixed-order f32; this is a real integer rewrite, simpler and cheaper, and we delete the f32 path rather than keep it byte-compatible.)
+- Tie-breaks are total and explicit: `(EV desc, then x, then y, then ActionSet rank, then idx)`. Residual ledgers are `Vec`-indexed (no `HashMap` iteration-order nondeterminism). The shared target-flood result is iterated in sorted-key order. A determinism unit test asserts identical output on repeated runs (as `layout_is_deterministic` does today).
+
+**Anti-oscillation (must not regress single-room ~0.5%).** Two new degrees of freedom vs the positional baseline: action choice, and the commit order.
+
+1. **Joint dead-band.** The `LAYOUT_DEAD_BAND` incumbency bonus applies to the **joint `(tile, ActionSet)` pair**: last tick's chosen pair gets a `−band` cost, so neither the tile nor the action flips unless beaten by `> band`.
+2. **Mortal-flag hysteresis (the multiplicative-threshold fix).** A fixed-cost band does **not** damp a *multiplicative* swing: when an ally's HP crosses the MORTAL threshold the HEAL credit jumps by the whole-fighting-strength factor, easily exceeding any fixed band → a healer-capable fighter flips `{Attack,RangedAttack} ↔ {RangedAttack,Heal}` on a knife-edge ally. Mitigation: apply hysteresis to the **MORTAL flag itself** (the ally is "mortal" for `assign`/credit purposes with a small HP dead-zone around `incoming = hits`), not only to the resulting EV. This is the explicit fix the adversarial review flagged that the source proposals missed.
+3. **Order stability.** The value-sorted commit order can churn if a creep flips across the sort comparator tick-to-tick. Mitigation: the order key includes the incumbent EV (which carries the dead-band), so a stable creep stays stable in the order. (The rejected "contestedness sort" — §9 — is *more* churn-prone because the contested/uncontested boundary is a hard threshold; that is one reason it is rejected in favour of value-sort + optional swap.)
+4. **New metric.** `oscillation_rate` (metrics.rs:291) is **purely positional** and cannot see action-thrash (a creep standing still while flipping Attack↔Heal scores 0.0). We therefore **add an `action_oscillation_rate` metric** (A-B-A on the emitted `ActionSet` per creep) and gate Stage 3+ on it ≤ a baseline-derived threshold. Gating only on positional oscillation would be blind to the regression this design is most likely to cause.
+
+**Blowout degeneracy (proposal D's real weakness, fixed here).** At `|μ|` extremes the sigmoid flattens, `W'(μ) → 0`, so `g_us`/`g_them` shrink and *all* EV terms collapse toward noise — the squad stops fighting intelligently exactly when winning/losing hard. Mitigation: **floor `g_us`/`g_them`** at a minimum slope, so even in a blowout the relative ordering of (kill A vs kill B vs heal vs safe tile) is preserved. The floor is a single EXP-* constant; the Lanchester gate still prevents committing to a losing fight, so the floor only governs *how* a decided fight is fought, never *whether*.
+
+**Cross-room (out of scope, must-not-worsen).** `ThreatField` and the flood are room-scoped. Cross-room positioning is the known **93% oscillation** open problem (Designed#4); it is independent of this kernel. The kernel degrades to the existing `MoveToRoom` handoff at room borders (it does not score across the edge), so it neither helps nor worsens cross-room. The single-room gate is `≤ 0.5%`; Designed#4 may stay at its known value.
+
+## 8. Build plan (clean replacement — no migration stages)
+
+Per the build directives, this ships as one coherent replacement, not a flagged migration. Development still proceeds in **verifiable build steps** (each leaves the workspace compiling + the relevant tests green so the harness stays a usable gate), but the **end state is a single path with the old machinery deleted** — no feature flag, no legacy fallback, no back-compat parity. Gates throughout: `cargo clippy-wasm` clean, `cargo test -p screeps-combat-decision`/`-agent`, and `cargo test -p screeps-combat-eval --lib harness` (the ADR-0023a validators incl. **Designed#1/#3 bunker+guard breach and #4 cross-room must pass**, OracleCalibration FP/FN, PositioningOscillation single-room ≤ 0.5%, plus the new `action_oscillation_rate`).
+
+Build steps (each a green checkpoint commit):
+
+1. **Sim engine-correctness.** Patch `resolve.rs::filtered_actions` so the sim mirrors the real engine table (rangedHeal drops `rangedAttack`+`rangedMassAttack`; confirm dismantle/attackController drops) + a parity unit test vs `intents.js`. This makes the harness a faithful oracle for the kernel; it is sim-correctness, not back-compat.
+2. **Kernel + currency (pure, with unit tests).** `enumerate_legal_sets` (incl. Dismantle + AttackController), `tile_action_ev`, the sigmoid-LUT `W` + `g_us`/`g_them`, the residual ledgers (creep kill-budget + structure value/breach-inherited + heal-need + controller). Unit tests: every emitted set passes the patched `filtered_actions`; `μ→W` monotone; worked examples (§4) pick the expected `(tile, action)`.
+3. **Swap in + delete old.** `decide_squad_with_pathing` computes per-member `(goal, action-set)` via the kernel and returns them on `SquadDecision` (`member_goals` for all + a new `member_intents`). The agent (`ManagedSimSquad.step`) and the bot (`SquadManager`/`squad_combat`) consume `member_intents` directly — **no per-creep `decide_combat` pass for managed creeps** (`decide_combat` is kept only for the unmanaged/solo creep, itself a 1-member kernel call). Delete `MemberCaps::desired_range`/`order`/`is_support` + the healer preset path, `plan_squad_layout`'s role ordering, `apply_heal`'s veto + the attack pipelines, `assign_focus_fire`, `assign_heals`, and the now-dead `score_tile` presets. Green the full harness.
+4. **Metric + validation.** Add `action_oscillation_rate` (A-B-A on the emitted `ActionSet`); confirm single-room positional oscillation ≤ 0.5% and the action metric ≤ its baseline; confirm bunker/breach (Designed#1/#3) and cross-room (#4) pass; spot-check replays.
+
+**Tuning is out of scope for the build** (directive 3): land seed constants marked tournament-tunable, get the system fully clean + correct + green, then run the self-play tournament to tune the *complete* system. The ADR-0020 §10 Docker-soak → operator-go-ahead path still gates any MMO deploy; never deploy MMO without explicit go-ahead.
+
+## 9. Alternatives considered
+
+All four source proposals share the same spine (per-`(tile, action-set)` EV with shared residual budgets) and were judged *viable*. This ADR takes **A** as the spine and grafts the best of the others.
+
+- **A — Per-tile action-EV greedy (CHOSEN spine).** Cleanest seam fit; the per-tile kernel + shared-residual drain is exactly the operator's "what the creep CAN DO in the slot". **Grafted as-is**: the kernel, `SELF_RISK_MELEE` (its strongest unique idea), the priced melee-vs-heal choice, `APPROACH_DEFICIT` over the flood. **Fixed**: its `{RMA,RangedHeal}` / `{RangedAttack,RangedHeal}` engine-illegal sets (§3); its integer-only claim (§7); the mortal-flag hysteresis gap (§7).
+- **B — Joint-assignment auction.** Best engine-correctness write-up and the submodularity justification (grafted into §2.2). The full epsilon-auction with re-bid sweeps and lazy dirty-set recompute is **rejected as the default mechanism**: it is the lowest-simplicity, lowest-anti-oscillation option (a 2D `(tile, action)` re-bid over per-tick-churning residuals can re-aim every tick through no squad action), and its determinism story (lazy recompute order) is fragile. We adopt its *one bounded re-pass* (STAGE 3) and *spacing-as-constraint* framing, not the multi-round auction.
+- **C — Short-horizon rollout.** The strongest win-probability fidelity and the "approach-under-fire / caught-en-route" cases are real. **Rejected for v1, kept as the §10 extension.** Reasons: (1) its load-bearing "future ThreatField" (offset enemy melee-reach inward by `t`) is an undefined operation on the static stamp, mishandles ranged (range-3) and towers (immobile — must NOT shift), so the horizon tail rests on the weakest input; (2) CPU `~21k–43k`/squad at K=2–3 is the worst tractability of the four; (3) it adds the same action-thrash axis with more surface. We adopt its cleanest idea — **`score_tile`/this-tick EV as the K=0 slice of a horizon function** — as the *structural framing* so a tail can be added later without a rewrite, and its `{A,RA}`-vs-`{H,RA}` priced heal comparison (already in A).
+- **D — Marginal win-probability.** The **win-probability currency itself** — promoting `assess_engage`'s `μ` into the per-tile objective via a sigmoid LUT + `g_us`/`g_them` sensitivities — is the single best framing and is **grafted as §2.1** (it removes the "what is 1 mHP worth?" hand-wave that A left open: the answer is `g_us`/`g_them` from the *existing* tuned Lanchester model, introducing zero new exchange-rate constants). **Rejected from D**: its same `{RMA,RangedHeal}` engine-illegal combo (§3); its "contestedness sort" (members with fewest high-EV tiles first) — it is just claim-ordering with a different, *more* churn-prone sort key, so we use value-sort + optional swap instead; its un-floored sigmoid blowout degeneracy (fixed in §7); its linearized partial-kill chipping risk (mitigated by keeping `select_focus_target` as a concentration anchor, §11).
+
+## 10. Future work / extensions (NOT in v1)
+
+- **Short-horizon tail (graft C properly).** Add `FUTURE_K` discounted ticks to the kernel once a *correct* forward threat model exists: re-stamp chasers at their projected positions (not the hand-wavy inward-offset), keep towers immobile, keep ranged at range 3. Structural framing (this-tick = K=0 slice) is already in place.
+- **Multi-squad shared residuals.** Residuals are per-squad. Two squads on one focus may under-fire (safe direction — never over-commit). Cross-squad ledgers are a P5 item.
+- **Boosted-TOUGH threat field.** `ThreatField` stamps unboosted output; a win-probability currency compounds the mis-estimate through `W`. May need the boost field sooner than the weighted model did.
+
+## 11. Open questions
+
+1. **Chipping vs concentration.** Linearized partial-kill OFFENSE credit can let N creeps each chip a different high-threat enemy for fractional EV instead of concentrating to finish one (the square law's whole point). The residual budget bounds *overkill* but not *under-concentration*. v1 mitigation: keep `select_focus_target` as a soft concentration anchor (a small EV bonus for firing the shared focus) and consider super-linear OFFENSE near the kill boundary. Validate on the blob scenarios; decide whether the focus anchor stays or super-linear suffices.
+2. **`g_us`/`g_them` staleness.** Computed once per squad per tick from the current `μ`; the within-pass residual drain shifts `μ` slightly. Once-per-squad is proposed (cheap); validate the staleness is harmless vs per-member refresh (`~N×` the sensitivity cost).
+3. **Is STAGE 3 (re-pass) ever needed?** Greedy + incumbency is expected at a fixed point. Measure on the 50-scenario suite whether single-pass leaves measurable EV on the table before adding the swap.
+4. **`KILL_HORIZON` and MORTAL multiplier magnitudes.** Seeds: `KILL_HORIZON ≈ 3`; a prevented death credits the ally's whole `dps × ehp`. The EXP-* sweep must calibrate the kill-vs-save symmetry (a kill removes enemy future strength; a save keeps ours — Lanchester suggests near-symmetry).
+5. **Action dead-band magnitude** — does the joint `(tile, ActionSet)` band need a separate action-component magnitude, or does one band + mortal-flag hysteresis suffice without action-thrash? Settle via `action_oscillation_rate`.
+6. **`our_dps` double-count audit.** `assess_engage` sums `melee_power + ranged_power` per member (lib.rs:968) then squares into `our_strength`. This is inherited unchanged, but the entire `W`/sensitivity surface now sits on top of it — audit whether the square law over an already-summed dps biases `g_us`/`g_them` before locking the sweep.
