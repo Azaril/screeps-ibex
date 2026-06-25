@@ -30,10 +30,10 @@
 use super::objective_queue::{CombatObjectiveQueue, ObjectiveId, ObjectiveKind, OBJECTIVE_PRIORITY_HIGH};
 use screeps_combat_decision::composition::{SquadComposition, SquadSlot};
 use super::squad::{AttackTarget, SquadContext, SquadState, SquadTarget, TickMovement, TickOrders};
-use crate::combat::kite::{PositionLayers, SquadTacticParams, MAX_KITE_OPS};
+use crate::combat::kite::{PositionLayers, SquadTacticParams, ThreatField, MAX_KITE_OPS};
 use crate::combat::{
-    build_room_layers, decide_squad_with_pathing, CombatCreepDto, CombatStructureDto, SquadDecision, SquadMemberView,
-    SquadMovement, SquadOrderState, SquadView,
+    build_room_layers, build_room_threat_field, decide_squad_with_pathing, CombatCreepDto, CombatStructureDto,
+    SquadDecision, SquadMemberView, SquadMovement, SquadOrderState, SquadView,
 };
 use std::collections::HashMap;
 use crate::creep::{spawning, CreepOwner};
@@ -472,13 +472,27 @@ fn build_room_combat_dtos(
     (hostiles, structures)
 }
 
+/// ADR 0024 Stage 1 (live mirror of `screeps_combat_agent::pathing`): scales the [`ThreatField`]'s
+/// raw incoming hits/tick into a small ADDITIVE per-tile traversal penalty — `add = (raw / DIV) cap
+/// CAP` — kept tiny + HARD-CAPPED so a threatened tile is *preferred against* but always cheaply
+/// PASSABLE (never impassable): a fully-threatened approach must stay traversable or the squad can
+/// never close. Seed values; the EXP-*/`SquadTacticParams` sweep is the sanctioned tuner.
+const THREAT_PATH_DIV: i32 = 150;
+const THREAT_PATH_CAP: i32 = 8;
+
 /// Build a room's movement cost matrix with terrain walls overlaid (the headless `LocalPathfinder`
 /// reads walls from the matrix, so the `Terrain::Wall` overlay is mandatory). Extracted so the
 /// per-room `PositionLayers` cache (build-once-per-room) and the kite search share one matrix build.
+///
+/// When `threat` is `Some`, the field is folded into the traversal cost (ADR 0024 Stage 1, "the
+/// safest route") so live paths route AROUND tower/enemy kill-zones — the penalty is added ON TOP of
+/// the live matrix (preserving road discounts / structure costs), skips impassable tiles, and clamps
+/// below `u8::MAX` so no tile is ever sealed. Inert (byte-identical) when there are no threats.
 fn build_target_matrix(
     cms: &mut CostMatrixSystem,
     opts: &CostMatrixOptions,
     room: RoomName,
+    threat: Option<&ThreatField>,
 ) -> Option<LocalCostMatrix> {
     let mut matrix = cms.build_local_cost_matrix(room, opts).ok()?;
     if let Some(terrain) = game::map::get_room_terrain(room) {
@@ -488,6 +502,28 @@ fn build_target_matrix(
                     if let Ok(xy) = RoomXY::checked_new(x, y) {
                         matrix.set(xy, u8::MAX);
                     }
+                }
+            }
+        }
+    }
+    if let Some(tf) = threat {
+        for x in 0..50u8 {
+            for y in 0..50u8 {
+                let xy = match RoomXY::checked_new(x, y) {
+                    Ok(xy) => xy,
+                    Err(_) => continue,
+                };
+                let cur = matrix.get(xy);
+                if cur == u8::MAX {
+                    continue; // wall / impassable structure — never weaken it
+                }
+                let raw = tf.raw_at(Position::new(xy.x, xy.y, room));
+                if raw <= 0 {
+                    continue;
+                }
+                let add = (raw / THREAT_PATH_DIV).min(THREAT_PATH_CAP);
+                if add > 0 {
+                    matrix.set(xy, (cur as i32 + add).min(254) as u8);
                 }
             }
         }
@@ -589,7 +625,11 @@ fn compute_squad_orders(
         let mut cache = CostMatrixCache::default();
         let mut cms = CostMatrixSystem::new(&mut cache, Box::new(screeps_rover::screeps_impl::ScreepsCostMatrixDataSource));
         let opts = CostMatrixOptions::default();
-        if let Some(matrix) = build_target_matrix(&mut cms, &opts, target_room) {
+        // ADR 0024 Stage 1: the same field `build_room_layers` prices, folded into the movement matrix
+        // so the kite/strategic path routes around exposure (the layers' own threat field is rebuilt
+        // internally — identical inputs).
+        let threat = build_room_threat_field(&hostiles, &structures);
+        if let Some(matrix) = build_target_matrix(&mut cms, &opts, target_room, Some(&threat)) {
             let layers = build_room_layers(&hostiles, &structures, target_room, &matrix, MAX_KITE_OPS);
             slot.insert((matrix, layers));
         }
