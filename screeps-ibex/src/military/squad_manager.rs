@@ -552,24 +552,33 @@ fn compute_squad_orders(
             ctx.members
                 .iter()
                 .map(|m| {
-                    // Resolve the body ONCE for has_ranged + the per-tick attack output (the engage
-                    // DMG reward's melee/ranged power, ADR 0019 focus_damage richness).
-                    let (has_ranged, melee_power, ranged_power) = creep_owner
+                    // Resolve the body ONCE for has_ranged + per-tick outputs (the engage DMG reward's
+                    // melee/ranged power, ADR 0019; + ADR 0025 dismantle/claim caps) and the creep id (so
+                    // the EV kernel's heal intent can target this ally).
+                    let (id, has_ranged, melee_power, ranged_power, dismantle_power, claim_power) = creep_owner
                         .get(m.entity)
                         .and_then(|co| co.owner.resolve())
                         .map(|c| {
-                            let mut atk = 0u32;
-                            let mut rng = 0u32;
+                            let (mut atk, mut rng, mut work, mut claim) = (0u32, 0u32, 0u32, 0u32);
                             for p in c.body().iter().filter(|p| p.hits() > 0) {
                                 match p.part() {
                                     Part::Attack => atk += 1,
                                     Part::RangedAttack => rng += 1,
+                                    Part::Work => work += 1,
+                                    Part::Claim => claim += 1,
                                     _ => {}
                                 }
                             }
-                            (rng > 0, atk * screeps::constants::ATTACK_POWER, rng * screeps::constants::RANGED_ATTACK_POWER)
+                            (
+                                c.try_raw_id(),
+                                rng > 0,
+                                atk * screeps::constants::ATTACK_POWER,
+                                rng * screeps::constants::RANGED_ATTACK_POWER,
+                                work * screeps::constants::DISMANTLE_POWER,
+                                claim * 300, // CONTROLLER_ATTACK_PER_PART (engine const; declaim is deferred in v1)
+                            )
                         })
-                        .unwrap_or((false, 0, 0));
+                        .unwrap_or((None, false, 0, 0, 0, 0));
                     SquadMemberView {
                         hits: m.current_hits,
                         hits_max: m.max_hits,
@@ -579,6 +588,9 @@ fn compute_squad_orders(
                         melee_power,
                         ranged_power,
                         damage_taken_last_tick: m.damage_taken_last_tick,
+                        id,
+                        dismantle_power,
+                        claim_power,
                     }
                 })
                 .collect::<Vec<_>>(),
