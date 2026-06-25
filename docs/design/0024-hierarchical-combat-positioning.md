@@ -165,16 +165,22 @@ the oscillation metric.
 
 What landed is the *positioning* skeleton; these are the operator-flagged next refinements:
 
-1. **Capabilities over role archetypes (operator-flagged 2026-06-24).** *Intent side ✅ done; positioning
-   side still open.* The melee-vs-heal **action** choice is now EV-driven, not archetype-driven: the rigid
-   "fighter-first" hack is gone — `decide_combat` compares the EV of dealing melee damage vs healing and
-   drops the (engine-vetoed) melee attack only when the heal **averts a death** (see #2). What remains is
-   the **positioning** side: the layout still buckets each member into a single `LayoutRole` (Melee /
-   Ranged / Healer via `is_pure_healer` / `has_ranged` / else), so weapon-range / desired-distance is set
-   by a label, not by the union of capabilities a creep is using this tick. Replace `LayoutRole` with a
-   capability set (can-melee / can-range / can-heal / can-dismantle, from `SquadCapabilities`) so a
-   multi-capability creep's desired distance is derived from the capability it will actually use. (Per the
-   operator: doing this may further change melee/heal positioning as it becomes "less rigid".)
+1. **Capabilities over role archetypes — ✅ LANDED 2026-06-24** (decision; super pointer-bumped). Both
+   sides are now capability-derived, not archetype-labelled:
+   - *Intent side:* the melee-vs-heal **action** choice is EV-driven (the rigid "fighter-first" hack is
+     gone — `decide_combat` drops the engine-vetoed melee attack only when the heal **averts a death**,
+     see #2).
+   - *Positioning side:* `LayoutRole` (Melee/Ranged/Healer) is replaced by `MemberCaps { can_melee,
+     can_range, can_heal }` on `MemberLayoutSpec`. Desired engagement distance + claim-priority derive
+     from the capabilities a creep actually has: a **melee+ranged** creep now has `desired_range == 1` and
+     **closes to melee** (uses both weapons — they compose) instead of being frozen at the range-3 ring
+     where its ATTACK parts never fired; a **melee+heal** creep positions as a fighter (range 1), its heal
+     being the opportunistic EV heal; only a **pure** healer (heal, no offense) is a back-line support
+     slot (healer preset + §8 coverage). Tests: `member_caps_drive_distance_and_role`,
+     `a_melee_ranged_creep_approaches_to_melee_range`. Single-room oscillation unchanged (0.52%),
+     designed-4 still passes. (`SquadCapabilities` in `composition.rs` is the squad-level sizing aggregate
+     — distinct from this per-member `MemberCaps`.) Remaining nicety: a `can_dismantle` (WORK) capability
+     for siege creeps when the engine sim models dismantle bodies.
 2. **Preemptive, win-probability heal objective — ✅ LANDED 2026-06-24** (decision; super pointer-bumped).
    Healing was reactive (`heal_best_nearby` targeted only *damaged* creeps). It now heals **preemptively**
    on ANTICIPATED incoming damage (the `ThreatField` via `incoming_damage_at`): `best_heal_target` ranks
