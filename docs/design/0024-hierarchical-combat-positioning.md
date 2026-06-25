@@ -1,6 +1,12 @@
 # ADR 0024 — Hierarchical Combat Positioning (strategic goal + threat-aware tactical step)
 
-- **Status:** Proposed
+- **Status:** Accepted; **Stages 1 + 2-3 LANDED 2026-06-24** (host-validated, NOT deployed). Stage 1 =
+  threat-weighted path cost (agent `a145462`). Stage 2-3 = the **target-flood** realization (decision
+  `6c4e0ba`): each member takes a LOCAL next-step toward the focus DOWNHILL on a safe-path-distance field
+  (a near-whole-room Dijkstra seeded at the focus over the threat-weighted matrix) — non-myopic, so it
+  reaches guarded objectives where the local-greedy/Chebyshev attempts wandered. Results: self-play
+  oscillation ~10-18%→6.2%; designed-4 guarded cross-room assault reaches + wins; all 14 harness gates +
+  116 decision tests green. Weights are tunable seams for the EXP-*/tournament sweep. See §Future work.
 - **Date:** 2026-06-24
 - **Deciders:** operator + combat-AI
 - **Related:** [ADR 0019](0019-combat-position-selection.md) (the unified position utility this refines), [ADR 0020](0020-ev-adaptive-blob-combat.md), [ADR 0023a](0023a-staged-combat-harness.md) (the harness that surfaced the failures)
@@ -154,3 +160,35 @@ the oscillation metric.
 - **Multi-room strategic paths** — the rover search is already multi-room; the threat field is
   per-room. Cross-room strategic goals (the twin-room case) need the path cost stitched across the
   seam (ties into the operator's "cross-room edge/flee awareness" follow-up).
+
+## Future work (flagged follow-ups, not yet built)
+
+What landed is the *positioning* skeleton; these are the operator-flagged next refinements:
+
+1. **Capabilities over role archetypes (operator-flagged 2026-06-24).** The layout buckets each member
+   into a single `LayoutRole` (Melee / Ranged / Healer via `is_pure_healer` / `has_ranged` / else). That
+   archetype is too rigid: a creep should act on the union of what its PARTS can do (a melee+ranged+heal
+   creep fills several capabilities at once; the melee+heal fix already had to special-case
+   "fighter-first"). Replace the discrete role with a **capability set** (can-melee / can-range /
+   can-heal / can-dismantle, from `SquadCapabilities`) and let positioning + intents derive from the
+   capabilities + the situation, not a label. The weapon-range / desired-distance becomes a function of
+   the capabilities a creep is using this tick.
+2. **Preemptive, win-probability heal objective (operator-flagged 2026-06-24).** Healing is currently
+   reactive — `heal_best_nearby` only targets *damaged* creeps. It should heal **preemptively** based on
+   ANTICIPATED incoming damage (the `ThreatField`), so a full-HP creep about to eat a tower volley is
+   topped up before it drops. The objective function is **manage incoming damage to maximize win
+   probability** — direct heal where it most prevents a death (current HP − projected incoming + sustain,
+   over the next few ticks), not merely top up the lowest-HP. The §8 heal-coverage *positioning* already
+   risk-weights by incoming (`HEALER_RISK_LOOKAHEAD × incoming_damage_at`); extend the same anticipation
+   to the per-tick heal *target* selection (`heal_with_orders` / `heal_best_nearby` / `decide_combat`).
+   This is the heal side of the ADR 0020 EV framing.
+3. **Live threat-cost recipe** — Stage 1 threat-weighting is in the sim cost sources; mirror it in the
+   bot's `squad_manager::build_target_matrix` so live paths route around exposure too (bot undeployed).
+4. **EXP/tournament weight sweep** — `LAYOUT_DOABLE_BONUS`, `LAYOUT_SPACING_*`, `LAYOUT_DEAD_BAND`,
+   `TARGET_FLOOD_OPS`, `THREAT_PATH_DIV/CAP` + the kite/engage presets are tunable seams; tune via the
+   self-play tournament once scenario diversity is sufficient (operator's plan).
+5. **designed-2 swamp-approach timeout** — the squad reaches but doesn't destroy the objective in time
+   (terrain-advance speed; oscillation already dropped 33%→7%, so it's an advance-rate issue, not the
+   pile-up).
+6. **CPU of the 2500-op target-flood** per engaged squad per tick — fine for the sim/harness; share
+   per-target / cap before MMO deploy.
