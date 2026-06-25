@@ -165,25 +165,32 @@ the oscillation metric.
 
 What landed is the *positioning* skeleton; these are the operator-flagged next refinements:
 
-1. **Capabilities over role archetypes (operator-flagged 2026-06-24).** The layout buckets each member
-   into a single `LayoutRole` (Melee / Ranged / Healer via `is_pure_healer` / `has_ranged` / else). That
-   archetype is too rigid: a creep should act on the union of what its PARTS can do (a melee+ranged+heal
-   creep fills several capabilities at once; the melee+heal fix already had to special-case
-   "fighter-first"). Replace the discrete role with a **capability set** (can-melee / can-range /
-   can-heal / can-dismantle, from `SquadCapabilities`) and let positioning + intents derive from the
-   capabilities + the situation, not a label. The weapon-range / desired-distance becomes a function of
-   the capabilities a creep is using this tick.
-2. **Preemptive, win-probability heal objective (operator-flagged 2026-06-24).** Healing is currently
-   reactive — `heal_best_nearby` only targets *damaged* creeps. It should heal **preemptively** based on
-   ANTICIPATED incoming damage (the `ThreatField`), so a full-HP creep about to eat a tower volley is
-   topped up before it drops. The objective function is **manage incoming damage to maximize win
-   probability** — direct heal where it most prevents a death (current HP − projected incoming + sustain,
-   over the next few ticks), not merely top up the lowest-HP. The §8 heal-coverage *positioning* already
-   risk-weights by incoming (`HEALER_RISK_LOOKAHEAD × incoming_damage_at`); extend the same anticipation
-   to the per-tick heal *target* selection (`heal_with_orders` / `heal_best_nearby` / `decide_combat`).
-   This is the heal side of the ADR 0020 EV framing.
-3. **Live threat-cost recipe** — Stage 1 threat-weighting is in the sim cost sources; mirror it in the
-   bot's `squad_manager::build_target_matrix` so live paths route around exposure too (bot undeployed).
+1. **Capabilities over role archetypes (operator-flagged 2026-06-24).** *Intent side ✅ done; positioning
+   side still open.* The melee-vs-heal **action** choice is now EV-driven, not archetype-driven: the rigid
+   "fighter-first" hack is gone — `decide_combat` compares the EV of dealing melee damage vs healing and
+   drops the (engine-vetoed) melee attack only when the heal **averts a death** (see #2). What remains is
+   the **positioning** side: the layout still buckets each member into a single `LayoutRole` (Melee /
+   Ranged / Healer via `is_pure_healer` / `has_ranged` / else), so weapon-range / desired-distance is set
+   by a label, not by the union of capabilities a creep is using this tick. Replace `LayoutRole` with a
+   capability set (can-melee / can-range / can-heal / can-dismantle, from `SquadCapabilities`) so a
+   multi-capability creep's desired distance is derived from the capability it will actually use. (Per the
+   operator: doing this may further change melee/heal positioning as it becomes "less rigid".)
+2. **Preemptive, win-probability heal objective — ✅ LANDED 2026-06-24** (decision; super pointer-bumped).
+   Healing was reactive (`heal_best_nearby` targeted only *damaged* creeps). It now heals **preemptively**
+   on ANTICIPATED incoming damage (the `ThreatField` via `incoming_damage_at`): `best_heal_target` ranks
+   reachable allies (incl. self) by **mortal danger first** (incoming ≥ current hits → dies to the volley
+   unaided), then by *useful heal* = `min(output, deficit + incoming)` — so a full-HP creep about to eat a
+   tower/ranged volley is topped up before it drops, and the squad spends heal where it most prevents a
+   death (objective = manage incoming damage to maximize win probability). The squad-level `assign_heals`
+   got the same anticipation (mortal-first, urgency = deficit + max(observed, predicted incoming)). With no
+   threats the ranking reduces to the prior "most-wounded, adjacent-before-ranged" (byte-identical). Tests:
+   `preemptive_heal_tops_up_a_full_hp_ally_about_to_take_a_volley`,
+   `melee_heal_creep_drops_its_attack_to_save_a_dying_ally`,
+   `melee_heal_creep_keeps_attacking_when_the_ally_is_merely_wounded`. This is the heal side of ADR 0020 EV.
+3. **Live threat-cost recipe** — ✅ **LANDED 2026-06-24** (super `659dad6` / decision `cdcf427`). The
+   bot's `squad_manager::build_target_matrix` now folds the room `ThreatField` (via the new
+   `build_room_threat_field`) into the live movement matrix as the same hard-capped additive penalty the
+   sim uses, so live paths route around exposure. Inert with no threats (bot still undeployed).
 4. **EXP/tournament weight sweep** — `LAYOUT_DOABLE_BONUS`, `LAYOUT_SPACING_*`, `LAYOUT_DEAD_BAND`,
    `TARGET_FLOOD_OPS`, `THREAT_PATH_DIV/CAP` + the kite/engage presets are tunable seams; tune via the
    self-play tournament once scenario diversity is sufficient (operator's plan).
@@ -192,3 +199,13 @@ What landed is the *positioning* skeleton; these are the operator-flagged next r
    pile-up).
 6. **CPU of the 2500-op target-flood** per engaged squad per tick — fine for the sim/harness; share
    per-target / cap before MMO deploy.
+7. **Cross-room positioning oscillation (surfaced 2026-06-24 by the new durable metric).** A durable Rust
+   A-B-A metric now exists — `metrics::oscillation_rate` (period-2 ping-pong over each creep's tile
+   trajectory) + the `positioning_oscillation_stays_low_across_designed` harness gate, replacing the
+   ad-hoc node script. It confirms the **single-room** assaults are stable (mean **0.52%**, all ≤1.6%
+   across Designed#0-3,5 — the positioning fix holds) but the **cross-room** twin-room siege (Designed#4)
+   ping-pongs on ~**93%** of its move-steps in the engaged breach phase: the strategic path is *not*
+   stitched across the room seam (see Open Questions), so the member's downhill step flips at the border.
+   It still reaches + wins (grinds through), but the jitter is wasteful + would read badly live. This is
+   the concrete instance of the "cross-room edge/flee awareness / multi-room strategic path" follow-up;
+   the gate excludes Designed#4 from the strict bound and reports it as the tracked baseline.
