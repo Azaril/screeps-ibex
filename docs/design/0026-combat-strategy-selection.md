@@ -287,3 +287,148 @@ Ordered, minimal-debt increments. Each leaves the workspace compiling with the r
 | StructureBreach | + safe mode | `open_combat()` (veto) | a shielded base takes zero damage — never spend approach risk | ✅ |
 
 > **Why approach stays LOW (thorough re-tune, ADR 0025 §12):** the original approach=4 `breach_hot` seed (a 6-config quick run) did NOT replicate at 48-config scale — with a winnable-sized force, base-attack is weakly discriminating and a hot approach just bleeds creeps. The open-combat optimum is low-approach/high-incumbency/tight (`a1-i6-tight`, unexploitable). Base-attack absolute scores carried a ~1% cross-process noise floor WHEN the breach profile was chosen, so it is NOT chosen by a base-attack lead — it is the principled "move in to dismantle" variant of the open winner. **The determinism follow-on LANDED (2026-06-26):** the noise was two seed-ordered hash iterations in `screeps-rover`'s resolver (topological move-order budget + `current_pos_to_entity` tile-stack collision); both fixed, sim now bit-deterministic (`sim_is_deterministic_over_rounds`), so a clean base-attack re-tune is now possible.
+
+---
+
+## 9. Extension — objective & force-composition selection (the *doctrine* registry)
+
+- **Status:** DESIGN (2026-06-26, operator-requested). The two **built** doctrines below are the current sized arms re-expressed; the rest are the build surface. Mirrors §3–§8's pattern one layer up.
+
+### 9.1 Motivation — the same activator-registry, one layer up
+
+§3–§8 select the kernel **weight profile** (*how* a squad fights) from a pluggable `CombatStrategy` registry. Two adjacent decisions are still **hardcoded**; the operator's ask is to give them the same treatment:
+
+1. **Objective selection** — *what* to do in a target room (clear / breach / suppress / harass / deny / hold). Today `war.rs`'s offense loop `match`es `TargetSource` → an `ObjectiveKind` + priority inline.
+2. **Force-composition selection** — *who* fights (solo / duo / quad / blob) and at *what size*. Today the same `match` returns a hardcoded `SquadComposition`; only the `InvaderCore` arm runs the force-sizing oracle (ADR 0020 §12). `DefenseEscalation::from_threat` (`war.rs:101`) is a coarse threshold precursor on the defense side (dps/heal/count → Solo/Duo/Quad — a rule, but un-sized, three-bucket, enemy-blind).
+
+This is **ADR 0020 §12.7(A)** ("archetype selector — *which* roles, not just how many parts") made concrete, and it carries the **one axis §12.7 does not yet model: how the enemy fights.** The current oracle *aggregates* `enemy_dps` — correct for a player whose creeps focus-fire **together**, but it over-sizes against NPCs (invaders, three SK keepers) that are fought **individually, one at a time**. The sizing math must branch on that — it is the crux of this section.
+
+### 9.2 Three sibling registries, one chain
+
+The doctrine registry is a structural **twin** of the strategy registry — same activator-first-match shape, same pure-decision-crate home, same bot-agnostic context projection. It runs **cold** (once per target/candidate), and its output's objective class **feeds** the strategy registry's per-tick `class` input:
+
+```
+intel ─► decide_doctrine(EngagementContext) ─► ForcePlan { objective, sized composition, winnable }
+                                                     │ objective class
+            manager spawns the sized composition     ▼
+            each tick:  decide_strategy(StrategyContext{class}) ─► weight profile ─► kernel
+```
+
+No layer re-enters another's hot loop: doctrine = once per target (cold, may run the oracle), strategy = once per squad per tick (hot, O(1)), kernel = per creep per tick. The doctrine is the missing *first* link — today the offense `match` hardcodes what it should decide.
+
+### 9.3 The doctrine trait (mirror of `CombatStrategy`)
+
+```rust
+// screeps-combat-decision/src/doctrine.rs  (new — pure, host-shared so bot + tournament decide identically)
+
+/// How the opposing force fights — the axis that selects the sizing math (operator 2026-06-26).
+pub enum EnemyCoordination {
+    /// NPCs (invaders, SK keepers) + scattered defenders: engaged ONE AT A TIME. The binding
+    /// constraint is the WORST SINGLE unit (out-heal its dps, out-last its hits); the squad never
+    /// faces the SUM of their dps at once. Sizing target = max-single; kill-time = serial.
+    Individual,
+    /// A player's combat creeps fight TOGETHER (focus-fire + mutual heal). The binding constraint is
+    /// the AGGREGATE under a square-law Lanchester — our force must OVER-match theirs (the ratio
+    /// counts quadratically), not merely match it. Sizing target = Σ dps / Σ heal.
+    Coordinated,
+}
+
+/// What a doctrine activator reads — the objective intent + expected opposing force + budget. Bot-
+/// agnostic (the bot projects its enums/intel into this, §9.6), exactly as StrategyContext is.
+pub struct EngagementContext {
+    pub objective: CombatObjectiveClass,    // §3.4 — extended to the full ObjectiveKind projection
+    pub coordination: EnemyCoordination,    // ← the new axis
+    pub defense: DefenseProfile,            // towers/breach_hits/objective_hits/enemy_dps/heal/safe_mode (§12)
+    pub worst_single: Option<UnitThreat>,   // for Individual: the strongest single enemy (dps/heal/hits)
+    pub importance: u8,                     // OBJECTIVE_PRIORITY_* → investment scale (R5)
+    pub home_energy: u32,                   // strongest in-range spawn energy (the sizing ceiling)
+    pub time_budget: u32,                   // CREEP_LIFE_TIME − spawn − travel
+}
+
+/// A pluggable engagement doctrine: a named ACTIVATOR + the FORCE PLAN it fields. Add/remove = one
+/// entry in the decide_doctrine collection (order = priority). Pure, deterministic, Sync — so the
+/// tournament can rank a collection across parallel matches.
+pub trait ForceDoctrine: Sync {
+    fn name(&self) -> &'static str;
+    fn applies(&self, ctx: &EngagementContext) -> bool;     // the classifier
+    fn plan(&self, ctx: &EngagementContext) -> ForcePlan;   // runs the oracle + sizing internally
+}
+
+pub struct ForcePlan {
+    pub objective: CombatObjectiveClass,
+    pub composition: Option<SquadComposition>,  // already sized (assess → sized_for at ctx.home_energy); None = defer
+    pub winnable: bool,                         // oracle go/no-go — skip if false, like the InvaderCore gate
+}
+
+/// First doctrine whose activator fires (collection order = priority) — the twin of decide_strategy.
+pub fn decide_doctrine<'a>(ctx: &EngagementContext, doctrines: &'a [Box<dyn ForceDoctrine>])
+    -> Option<&'a dyn ForceDoctrine> { doctrines.iter().map(|d| d.as_ref()).find(|d| d.applies(ctx)) }
+```
+
+`plan()` is self-contained (it calls `assess` + `sized_for` with `ctx.home_energy`), so a doctrine is a pure `ctx → ForcePlan` function — host-unit-testable and tournament-rankable with no ECS, exactly like a strategy's `profile()`.
+
+### 9.4 The coordination-driven sizing math (what `assess` branches on)
+
+The oracle gains a coordination branch — the SAME inputs, two aggregation rules:
+
+| | **Individual** (NPC) | **Coordinated** (player) |
+|---|---|---|
+| DPS to out-heal | `worst_single.dps` (one at a time) | `Σ enemy_dps` (all at once) |
+| Their HP to grind | serial → kill-time `Σ hits / our_dps`, heal need bounded by the single | concentrated under their focus-fire |
+| Win condition | beat the strongest single + survive serial attrition | square law: our combat power must **exceed** theirs by a `√margin` factor (ratio counts quadratically), not just match |
+| Typical output | the *minimum favorable* force (cheap: SK duo, core quad) | the *over-matching* force (quad → blob with margin) |
+
+So three SK keepers size a **duo** (beat one 168-dps / 5000-hp keeper — R6 + R-attack, already built), where a naïve `Σ` would size a needless trio+. A player's 4-creep focus-fire squad sizes a **quad/blob with square-law margin**, where `worst_single` would fatally under-size. **That divergence is the whole reason the axis exists.** `DefenseProfile` already carries the aggregate; the only new data are `EnemyCoordination` + (for Individual) `worst_single` — both cheap bot-side from `RoomThreatData.hostile_creeps` / the keeper body / the core.
+
+### 9.5 The starter doctrine set (the named rules)
+
+Collection order = priority; first activator wins (the §8 registry shape):
+
+| Doctrine | `applies` (classifier) | Coordination | ForcePlan | Status |
+|---|---|---|---|---|
+| `SafeModeSkip` | `defense.safe_mode` | — | not winnable → skip (hard veto; mirrors `SafeModeHold`) | design |
+| `SkSuppression` | `Farm{SourceKeeper}` | Individual | sized `duo_sk_farmer` (heal out-heals one keeper; ranged kills it) | ✅ built (R6 + R-attack) |
+| `NpcCore` | `InvaderCore{level}` | Individual | oracle-sized `quad_ranged` (ranged ceiling kills the dismantle-immune core) | ✅ built (R-attack) |
+| `InvaderCreeps` | `InvaderCreeps` | Individual | sized duo/solo vs the worst single wave creep | partial (templated) |
+| `PowerBankFarm` | `PowerBank` | Individual (bank is inert) | ROI-gated duo + hauler(s) | existing mission |
+| `ResourceDenial` | `ResourceDenial` | — | opportunistic `solo_harasser`, LOW priority, no gate (throwaway) | ✅ built (hardcoded) |
+| `PlayerRaid` | `AttackFlag` / `Expansion` vs an owned base | **Coordinated** | quad → blob, oracle-sized to the aggregate with square-law margin; objective = `Secure` (clear creeps) or `Dismantle` (raze) by what's present | **NEW — value** |
+| `PlayerDefend` | `Defend` / `ThreatResponse` | **Coordinated** | sized defender squad — **subsumes `DefenseEscalation::from_threat`** | design (replaces from_threat) |
+
+The two ✅ rows are the current sized arms re-expressed as doctrines (so they land first as a **no-op refactor**); `ResourceDenial` is the current hardcoded arm. `PlayerRaid` / `PlayerDefend` are the new value — and the reason the coordination axis is needed. **`PlayerRaid` requires the §12.7(B) creep-target oracle path** (an `enemy_creep_hits` field + a `clear_creeps` Lanchester branch) that the AttackFlag/Harass re-adjudication (ADR 0020 §12.6, 2026-06-26) deferred to R8 — this section is its design home, and the deferral's stated reason (the oracle is structure-shaped and `candidate.defense` is `None` for those arms) is exactly what `EngagementContext` + the Coordinated branch fix.
+
+### 9.6 The seam
+
+`war.rs`'s offense `match` (and the SK / defense producers) become: project the candidate's intel into an `EngagementContext`, call `decide_doctrine`, field the `ForcePlan`. One adapter per producer (bot enums stay out of the pure crate, exactly like `classify` in §3.4):
+
+```rust
+// screeps-ibex/src/military/doctrine.rs (new) — project a candidate into the pure context
+pub fn engagement_context(c: &AttackCandidate, threat: &RoomThreatData, home_energy: u32) -> EngagementContext { … }
+```
+
+`decide_doctrine` replaces the hardcoded `(objective, priority, composition)` tuple the offense loop returns today; `DefenseEscalation::from_threat` is replaced by the `PlayerDefend` doctrine. Adding / retiring a doctrine = one collection entry — no `war.rs` surgery, the §2 win the operator asked to extend.
+
+### 9.7 Files / rungs / gating
+
+| File | Change |
+|---|---|
+| `screeps-combat-decision/src/doctrine.rs` | **NEW.** `EnemyCoordination`, `EngagementContext`, `UnitThreat`, `ForceDoctrine`, `ForcePlan`, `decide_doctrine`, the starter doctrines. Pure, unit-tested. |
+| `screeps-combat-decision/src/force_sizing.rs` | `assess` gains the Individual/Coordinated branch (§9.4); `DefenseProfile` (or `EngagementContext`) carries `worst_single`. For `PlayerRaid`: the §12.7(B) `enemy_creep_hits` + `clear_creeps` branch (R8). |
+| `screeps-combat-decision/src/lib.rs` | `pub mod doctrine;`. |
+| `screeps-ibex/src/military/doctrine.rs` | **NEW.** `engagement_context()` adapter (projects `AttackCandidate` + `RoomThreatData` + home energy; derives `EnemyCoordination` from owner/body signals). |
+| `screeps-ibex/src/operations/war.rs` | Offense `match` → `decide_doctrine`; delete `DefenseEscalation::from_threat` once `PlayerDefend` lands. |
+| `screeps-combat-eval/src/tournament.rs` | Per-doctrine beds (an Individual NPC bed + a Coordinated player-squad bed) + the `doctrines_are_each_best_in_class` gate. |
+
+**Rungs** (map onto ADR 0020 §12.7 R5.5 → R8):
+1. **Refactor-to-registry (no-op).** Re-express `SafeModeSkip` + `NpcCore` + `SkSuppression` + `ResourceDenial` as doctrines; swap the offense `match` for `decide_doctrine`. Behavior byte-identical (the built sizing is unchanged); the win is the seam. Kill-switch `features.military.doctrine_selection` (default true), `default()`-equivalent off. **No WFV.**
+2. **`PlayerDefend`.** Replace `from_threat`'s 3-bucket escalation with a Coordinated-sized defender; gate on a Coordinated defense bed.
+3. **`PlayerRaid` (R8).** Build the §12.7(B) creep-target oracle path, then the doctrine; gate on a Coordinated raid bed. This is the deferred AttackFlag/Harass work, now with a home.
+
+**Serialization:** none — `ForcePlan` is a per-target decision, recomputed, never stored (like §6). **No `WORLD_FORMAT_VERSION` bump** at any rung. **Deploy gating:** ADR 0020 §10 Docker-soak → operator go-ahead; never MMO without it.
+
+### 9.8 Tuning + open questions
+
+- **Tournament-rankable like strategies.** A doctrine that mis-classifies coordination or under-sizes *loses self-play* — the eval already fields oracle-sized comps; add the two beds above and gate each doctrine best-in-class on its bed (mirrors `per_objective_profiles_are_each_best_in_class`).
+- **Open Q1 — asymmetric mis-classification (recommend a default).** Calling a player "Individual" *under-sizes and loses creeps*; calling an NPC "Coordinated" merely *over-spends*. ⇒ default unknown/mixed to **Coordinated** (safe), assert `Individual` only on a positive NPC signal (owner ∈ {Invader, SourceKeeper, unowned}). Confirm.
+- **Open Q2 — blob vs quad for a Coordinated raid.** Does the square-law margin justify > 4 creeps (a spacing-2 blob, ADR 0026a), or is one sized quad the cap? Resolve on the player-squad bed before building `PlayerRaid`.
+- **Open Q3 — mixed rooms.** A player base *with* an NPC core: the core and the base are separate candidates/objectives, so one doctrine per candidate suffices and the registry stays per-candidate. Confirm no single room needs a *blended* coordination value.
