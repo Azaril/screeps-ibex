@@ -292,7 +292,7 @@ Ordered, minimal-debt increments. Each leaves the workspace compiling with the r
 
 ## 9. Extension — objective & force-composition selection (the *doctrine* registry)
 
-- **Status:** DESIGN (2026-06-26, operator-requested). The two **built** doctrines below are the current sized arms re-expressed; the rest are the build surface. Mirrors §3–§8's pattern one layer up.
+- **Status:** DESIGN — LOCKED (2026-06-26, operator-requested; all of §9.9 Q1–Q3 resolved). The two **built** doctrines below are the current sized arms re-expressed; the rest are the build surface. Mirrors §3–§8's pattern one layer up. **Next build = rung 1** (§9.7): re-express the built arms as doctrines behind the `doctrine_selection` kill-switch — a no-op refactor, no WFV.
 
 ### 9.1 Motivation — the same activator-registry, one layer up
 
@@ -457,8 +457,8 @@ The tournament sweeps `DoctrineParams` over each bed and adopts the payoff-maxim
 
 A concrete near-term win: `PlayerDefend`'s `defend_size_curve` replaces `from_threat`'s three magic thresholds (`200`/`150`/`60` dps etc.) with a curve the Coordinated bed tunes — the first hand-set combat constants this layer retires.
 
-### 9.9 Open questions
+### 9.9 Open questions — all resolved (design locked 2026-06-26)
 
-- **Q1 — the coordination default = the sweep's prior.** Mis-classification is asymmetric: calling a player "Individual" *under-sizes and loses creeps*; calling an NPC "Coordinated" merely *over-spends*. ⇒ the prior is **Coordinated unless a positive NPC signal** (owner ∈ {Invader, SourceKeeper, unowned}); `coordination_dps_threshold` (§9.8) is swept *from* that prior and must beat it. Confirm the prior.
+- **Q1 — RESOLVED ✅ (operator 2026-06-26): coordinated unless a positive NPC signal.** Mis-classification is asymmetric: calling a player "Individual" *under-sizes and loses creeps*; calling an NPC "Coordinated" merely *over-spends*. ⇒ the prior is **`Coordinated` unless a positive NPC signal** (owner ∈ {Invader, SourceKeeper, unowned}), and `coordination_dps_threshold` (§9.8) is swept *from* that prior and must beat it. The classifier defaults to the safe (over-spend) side and only asserts `Individual` on a definite NPC owner.
 - **Q2 — RESOLVED → tunable.** Blob vs quad for a Coordinated raid is `blob_escalation_parts`, swept on the player-squad bed — not a hand decision.
 - **Q3 — RESOLVED → independent objectives, guarded against bleed.** A player base *with* an NPC core is separate candidates → separate doctrines/objectives (the registry stays per-candidate; no blended coordination value). The operator's one condition (2026-06-26): independence must not *bleed energy when a call is wrong*. That guard is **existing mechanism, not new** — each objective is held by the **winnability gate** (`plan().winnable == false` → skip, the InvaderCore-arm pattern) **+** the `ObjectiveKind` **give-up backoff** (`objective_queue` proximity/backoff), so a mis-sized or mis-classified engagement *backs off and stops re-spawning* rather than feeding creeps into a continued loss. A wrong independent call costs at most one bounded, backed-off attempt — acceptable per the condition.
