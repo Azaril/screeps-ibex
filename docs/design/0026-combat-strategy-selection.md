@@ -279,8 +279,8 @@ Ordered, minimal-debt increments. Each leaves the workspace compiling with the r
 
 | Objective class | Mode | Profile | `KernelParams` | Per-objective score | Cross-objective robustness | Adopted |
 |---|---|---|---|---|---|---|
-| OpenCombat | — | `default()` | a2/i3/d10/K3/s1 | exploitability 431 ≪ GROSS 1500 | (is the open-combat baseline) | ✅ (ADR 0025 §12) |
-| StructureBreach | Breach | `breach_hot()` | a**4**/i3/d10/K3/s1 (seed) | +21154 assault (vs ~−25k default) | open-combat exploitability: _TBD Step 4_ | ⏳ pending Step 4 |
+| OpenCombat | — | `default()` / candidate | a2/i3 (default) → candidate **a1-i6-tight** (exploit 0) or balanced **a2-i4-tight** | thorough: default middling (#21/48, exploit 313); `a1-i6-tight` #0 exploit 0 | (is the open-combat baseline) | ⏳ candidate, pending Step 4 |
+| StructureBreach | Breach | `breach_hot()` | ~~a4 (quick-run seed — SUPERSEDED)~~ → sweep **incumbency/cohesion with approach LOW (1–2)**; balanced **a2-i4-tight** | thorough: a4 middling-poor; winners are approach 1–2 + tight cohesion | _TBD Step 4_ | ⏳ pending Step 4 |
 | StructureBreach | Drain | `breach_drain()` | = default (seed) | _TBD (needs drain scenario)_ | _TBD_ | ⏳ deferred |
 
-> Seeds are the re-tune findings (`0025-ev-position-action.md:333`); the Step-4 tournament run replaces them with adopted constants and fills the robustness/score columns.
+> **Seed correction (thorough re-tune, ADR 0025 §12):** the original approach=4 `breach_hot` seed (from a 6-config quick run) **did NOT replicate** at scale (48 configs × 56 beds × 52 Raze+Breach bases). With a winnable-sized force, base-attack is weakly discriminating and approach stays LOW (1–2); the real levers are **incumbency + cohesion (tight)**. The open-combat optimum is also low-approach/high-incumbency/tight (`a1-i6-tight`, unexploitable), and `a2-i4-tight` is the best balanced all-rounder. Step 4's per-objective tournament fills the adopted constants; the breach profile should sweep incumbency/cohesion, not approach.
