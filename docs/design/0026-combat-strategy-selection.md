@@ -292,7 +292,7 @@ Ordered, minimal-debt increments. Each leaves the workspace compiling with the r
 
 ## 9. Extension — objective & force-composition selection (the *doctrine* registry)
 
-- **Status:** DESIGN — LOCKED (2026-06-26, operator-requested; all of §9.9 Q1–Q3 resolved). The two **built** doctrines below are the current sized arms re-expressed; the rest are the build surface. Mirrors §3–§8's pattern one layer up. **Next build = rung 1** (§9.7): re-express the built arms as doctrines behind the `doctrine_selection` kill-switch — a no-op refactor, no WFV.
+- **Status:** RUNG 1 IMPLEMENTED (2026-06-26) — `screeps-combat-decision/src/doctrine.rs` (`ForceDoctrine` trait registry + `decide_doctrine` + the `NpcCore`/`SiegeBreach`/`SecureRoom`/`HarassRemote` doctrines + `EngagementContext`/`EnemyCoordination`/`ForcePlan`); the bot's `war.rs` offense `match` and the eval's 3 `assess`+`siege_quad().sized_for` sites BOTH route through `decide_doctrine` → `plan` (the **parity** the operator required — one selection+sizing path, shared budget via `SquadComposition::force_budget`). Behaviorally a no-op (same compositions, same sizing); decision 138 / bot 150 / eval 48 green, wasm clippy clean, sim still bit-deterministic (spread 0), **no WFV**. **No kill-switch** — shipped to the final state per the operator's strategy-layer precedent (a verified no-op). Rungs 2–3 (`PlayerDefend`/`PlayerRaid` + the `Coordinated` square-law) are next. Design + Q1–Q3 resolved below.
 
 ### 9.1 Motivation — the same activator-registry, one layer up
 

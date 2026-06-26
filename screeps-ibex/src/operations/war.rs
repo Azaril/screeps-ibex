@@ -1,9 +1,8 @@
 use super::data::*;
 use super::operationsystem::*;
 use screeps_combat_decision::composition::SquadComposition;
-use screeps_combat_decision::force_sizing::{
-    assess, importance_margin, win_probability, DefenseProfile, ForceBudget, RequiredForce, TowerThreat, HOLD_MARGIN,
-};
+use screeps_combat_decision::doctrine::{decide_doctrine, default_doctrines, DoctrineObjective, EnemyCoordination, EngagementContext};
+use screeps_combat_decision::force_sizing::{win_probability, DefenseProfile, ForceBudget, TowerThreat, HOLD_MARGIN};
 use crate::military::objective_queue::{
     ForceRequirement, ObjectiveKind, ObjectiveOwner, ObjectiveRequest, OBJECTIVE_PRIORITY_CRITICAL, OBJECTIVE_PRIORITY_HIGH,
     OBJECTIVE_PRIORITY_LOW, OBJECTIVE_PRIORITY_MEDIUM,
@@ -932,110 +931,128 @@ impl WarOperation {
             .count() as u32;
 
         for candidate in candidates {
-            // Map the candidate's reason to an offense objective kind + composition
-            // + priority. Any source without a mapping is skipped (all offense is
-            // objective-driven since O7 — there is no legacy launch fallback).
-            let objective: Option<(ObjectiveKind, f32, SquadComposition)> = match candidate.source {
-                // Invader core → ATTACK the core tile. A `StructureInvaderCore` is IMMUNE to dismantle
-                // (the engine dismantle intent no-ops on any structure without a `CONSTRUCTION_COST`),
-                // so it must be hit with ATTACK/RANGED_ATTACK. We field a ranged quad (`quad_ranged`),
-                // NOT the WORK `siege_quad` whose dismantlers cannot damage the core. The squad's Engaged
-                // seam (`decide_combat`) targets the core as a Hostile structure and shoots it; for a
-                // deployed stronghold the ranged attackers also shoot down the ramparts before the core.
-                //
-                // WINNABILITY GATE (ADR 0020 §12): the force-sizing oracle weighs the real defense —
-                // energized towers (drained ones deal 0), tower damage at the core, and out-heal
-                // feasibility — against what one squad fields at our RCL within its on-site lifetime.
-                // Winnable ⇒ engage (the oracle force-SIZES the HEALERS to out-heal the towers AND the
-                // RANGED attackers to the core's kill rate — R-attack §12.6, so kill-time is sized, not
-                // the balanced template's few ranged parts that deferred every core); unwinnable ⇒ skip
-                // (defer to G4-HEAVY) so we never feed a squad to its death.
-                TargetSource::InvaderCore { .. } => {
-                    let comp = SquadComposition::quad_ranged();
-                    match (candidate.target_pos, candidate.defense.as_ref()) {
-                        (Some(pos), Some(defense)) => {
-                            match best_force_budget(&comp, &home_rooms, candidate.room, system_data.pathfinder) {
-                                Some((budget, member_energy)) => {
-                                    let a = assess(defense, &budget);
-                                    if !a.winnable {
-                                        info!(
-                                            "[War]   Skip {} -- force oracle: not winnable for one squad ({}); defer to G4-HEAVY",
-                                            candidate.room, a.reason
-                                        );
-                                        None
-                                    } else {
-                                        // R3 + R-attack: force-SIZE the squad's HEALERS to the Lanchester-
-                                        // winning out-heal AND the RangedDPS attackers to the core's kill
-                                        // rate (§12.6), at the same energy the spawn path uses. `None` ⇒ a
-                                        // home can't afford the required force ⇒ defer (G4-HEAVY).
-                                        //
-                                        // R5: over-invest by the objective's importance (a MEDIUM core lifts
-                                        // the base hold-margin force ~1.17×) so higher-value targets field a
-                                        // higher-P(win) squad. R4: log the fielded force's win confidence.
-                                        let importance = ((OBJECTIVE_PRIORITY_MEDIUM - OBJECTIVE_PRIORITY_LOW)
-                                            / (OBJECTIVE_PRIORITY_CRITICAL - OBJECTIVE_PRIORITY_LOW))
-                                            .clamp(0.0, 1.0);
-                                        let required = RequiredForce::from_assessment(&a).scaled(importance_margin(importance));
-                                        match comp.sized_for(required, member_energy) {
-                                            Some(sized) => {
-                                                // ROI gate (blocker #3): never field a squad the colony can't afford to
-                                                // SPAWN. Member-count scaling (D3) can make a winnable squad large, so a
-                                                // per-tick-affordable composition can still be globally unsustainable —
-                                                // the economy death-spiral. Defer if the spawn cost exceeds the
-                                                // reserve-protected military surplus. (v1 is single-squad / one creep
-                                                // lifetime, so this is one generation's spend; the cumulative
-                                                // multi-generation bound lands with the G4-HEAVY siege path, P5.)
-                                                let spawn_cost = sized.estimated_cost(member_energy);
-                                                if !system_data.economy.can_afford_military(spawn_cost) {
-                                                    info!(
-                                                        "[War]   Skip {} -- ROI: squad spawn cost {} exceeds affordable military surplus; defer",
-                                                        candidate.room, spawn_cost
-                                                    );
-                                                    None
-                                                } else {
-                                                    let pwin = win_probability(
-                                                        required.heal_parts as f32 * 12.0,
-                                                        a.required_heal_per_tick / HOLD_MARGIN,
-                                                    );
-                                                    info!(
-                                                        "[War]   {} winnable via {:?} (~{} ticks): ranged quad sized to {} ranged + {} heal parts (kill core + out-heal towers), P(win)~{:.0}% (cost {}, {})",
-                                                        candidate.room, a.mode, a.est_ticks, required.ranged_parts, required.heal_parts, pwin * 100.0, spawn_cost, a.reason
-                                                    );
-                                                    Some((ObjectiveKind::Dismantle { room: candidate.room, pos }, OBJECTIVE_PRIORITY_MEDIUM, sized))
-                                                }
-                                            }
-                                            None => {
-                                                info!(
-                                                    "[War]   Skip {} -- can't afford the required {} heal parts (out-heal towers) at {} energy; defer",
-                                                    candidate.room, required.heal_parts, member_energy
-                                                );
-                                                None
-                                            }
-                                        }
-                                    }
-                                }
-                                None => {
-                                    info!("[War]   Skip {} -- no home room can reach it within a creep lifetime", candidate.room);
-                                    None
-                                }
-                            }
-                        }
-                        _ => None,
-                    }
-                }
+            // Project the candidate into the doctrine registry's bot-agnostic engagement context (ADR
+            // 0026 §9.6) and let it pick the objective's sized composition — the SAME selection + sizing
+            // the eval runs (parity; no divergent inline logic). The bot keeps the two concerns the pure
+            // crate can't model: the source → `ObjectiveKind`/priority mapping (bot enums) and the ROI
+            // economy gate (colony surplus). Any source without a mapping is skipped (offense is
+            // objective-driven since O7 — no legacy launch fallback).
+            let mapped: Option<(DoctrineObjective, ObjectiveKind, f32, f32)> = match candidate.source {
+                // Invader core → kill the dismantle-IMMUNE core (the `NpcCore` doctrine fields a RANGED
+                // quad, not WORK siege — the engine dismantle intent no-ops on a `StructureInvaderCore`).
+                // MEDIUM; R5 importance over-invests a MEDIUM core ~1.17×. Needs a target tile.
+                TargetSource::InvaderCore { .. } => candidate.target_pos.map(|pos| {
+                    let importance = ((OBJECTIVE_PRIORITY_MEDIUM - OBJECTIVE_PRIORITY_LOW)
+                        / (OBJECTIVE_PRIORITY_CRITICAL - OBJECTIVE_PRIORITY_LOW))
+                        .clamp(0.0, 1.0);
+                    (
+                        DoctrineObjective::KillImmuneStructure,
+                        ObjectiveKind::Dismantle { room: candidate.room, pos },
+                        OBJECTIVE_PRIORITY_MEDIUM,
+                        importance,
+                    )
+                }),
                 // Operator attack flag → clear the room (HIGH: explicit operator intent).
                 TargetSource::AttackFlag => Some((
+                    DoctrineObjective::ClearCreeps,
                     ObjectiveKind::Secure { room: candidate.room },
                     OBJECTIVE_PRIORITY_HIGH,
-                    SquadComposition::quad_ranged(),
+                    0.0,
                 )),
                 // Resource denial → harass a hostile player's remote (LOW: opportunistic).
                 TargetSource::ResourceDenial => Some((
+                    DoctrineObjective::Harass,
                     ObjectiveKind::Harass { room: candidate.room },
                     OBJECTIVE_PRIORITY_LOW,
-                    SquadComposition::solo_harasser(),
+                    0.0,
                 )),
                 _ => None,
+            };
+            let Some((doc_obj, kind, priority, importance)) = mapped else {
+                continue;
+            };
+
+            // `coordination` records the Q1-confirmed prior (Coordinated unless a positive NPC signal);
+            // rung-1 doctrines are all Individual, so it is forward context. `member_energy` is filled
+            // from the chosen home below for a sized doctrine.
+            let base_ctx = EngagementContext {
+                objective: doc_obj,
+                coordination: classify_coordination(&candidate),
+                defense: candidate.defense.clone().unwrap_or_default(),
+                worst_single: None,
+                importance,
+                member_energy: 0,
+            };
+            let doctrines = default_doctrines();
+            let Some(doctrine) = decide_doctrine(&base_ctx, &doctrines) else {
+                continue;
+            };
+
+            // WINNABILITY GATE (ADR 0020 §12): a SIZED doctrine (core / siege) runs the force-sizing
+            // oracle against the real defense at the best in-range home's budget, force-sizes the squad
+            // (R3 + R-attack: out-heal the towers AND size the ranged kill parts — kill-time is sized,
+            // not the balanced template's few ranged parts that deferred every core), and the bot adds
+            // the ROI gate. Unwinnable / unaffordable / unreachable ⇒ skip (defer to G4-HEAVY) so we
+            // never feed a squad to its death. A FIXED doctrine (secure / harass) fields its template
+            // unconditionally (the prior hardcoded arms).
+            let objective: Option<(ObjectiveKind, f32, SquadComposition)> = if doctrine.is_sized() {
+                // A sized doctrine needs the scouted defense; without it skip silently (the prior
+                // InvaderCore `(Some(pos), Some(defense))` guard).
+                if candidate.defense.is_none() {
+                    None
+                } else {
+                    match best_force_budget(&doctrine.template(), &home_rooms, candidate.room, system_data.pathfinder) {
+                        None => {
+                            info!("[War]   Skip {} -- no home room can reach it within a creep lifetime", candidate.room);
+                            None
+                        }
+                        Some((budget, member_energy)) => {
+                            let ctx = EngagementContext { member_energy, ..base_ctx.clone() };
+                            let plan = doctrine.plan(&ctx, Some(budget));
+                            if !plan.winnable() {
+                                info!(
+                                    "[War]   Skip {} -- force oracle: not winnable for one squad ({}); defer to G4-HEAVY",
+                                    candidate.room, plan.assessment.reason
+                                );
+                                None
+                            } else if let Some(sized) = plan.composition {
+                                // ROI gate (blocker #3): never field a squad the colony can't afford to SPAWN.
+                                // Member-count scaling (D3) can make a winnable squad large, so a per-tick-
+                                // affordable composition can still be globally unsustainable. Defer if the spawn
+                                // cost exceeds the reserve-protected military surplus.
+                                let spawn_cost = sized.estimated_cost(member_energy);
+                                if !system_data.economy.can_afford_military(spawn_cost) {
+                                    info!(
+                                        "[War]   Skip {} -- ROI: squad spawn cost {} exceeds affordable military surplus; defer",
+                                        candidate.room, spawn_cost
+                                    );
+                                    None
+                                } else {
+                                    // R4: log the fielded force's win confidence.
+                                    let pwin = win_probability(
+                                        plan.required.heal_parts as f32 * 12.0,
+                                        plan.assessment.required_heal_per_tick / HOLD_MARGIN,
+                                    );
+                                    info!(
+                                        "[War]   {} winnable via {:?} (~{} ticks): {} sized to {} ranged + {} heal parts, P(win)~{:.0}% (cost {}, {})",
+                                        candidate.room, plan.assessment.mode, plan.assessment.est_ticks, doctrine.name(),
+                                        plan.required.ranged_parts, plan.required.heal_parts, pwin * 100.0, spawn_cost, plan.assessment.reason
+                                    );
+                                    Some((kind, priority, sized))
+                                }
+                            } else {
+                                info!(
+                                    "[War]   Skip {} -- can't afford the required {} heal parts (out-heal towers) at {} energy; defer",
+                                    candidate.room, plan.required.heal_parts, member_energy
+                                );
+                                None
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Fixed arm — field the template (the prior AttackFlag / ResourceDenial behavior; no gate).
+                doctrine.plan(&base_ctx, None).composition.map(|comp| (kind, priority, comp))
             };
 
             let Some((kind, priority, composition)) = objective else {
@@ -1222,6 +1239,17 @@ fn invader_core_attack_score(
     let score = base_score - level_penalty - distance_penalty;
 
     (score > 0.0).then_some(score)
+}
+
+/// Classify the enemy's coordination for the doctrine sizing math (ADR 0026 §9.4, Q1 confirmed
+/// 2026-06-26): `Coordinated` UNLESS a positive NPC signal — the safe over-spend default, since
+/// under-sizing a real player loses creeps while over-sizing an NPC only spends. Rung-1 doctrines are all
+/// `Individual` so this is forward context; the richer owner/body classification is rungs 2–3.
+fn classify_coordination(candidate: &AttackCandidate) -> EnemyCoordination {
+    match candidate.source {
+        TargetSource::InvaderCore { .. } | TargetSource::InvaderCreeps | TargetSource::PowerBank { .. } => EnemyCoordination::Individual,
+        _ => EnemyCoordination::Coordinated,
+    }
 }
 
 /// The best (longest on-site) [`ForceBudget`] for launching `comp` at `target` from any home room
