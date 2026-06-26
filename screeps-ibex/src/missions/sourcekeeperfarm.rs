@@ -49,6 +49,17 @@ const KEEPER_DANGER_RANGE: u32 = 5;
 /// happening to reach `maximum_repeat` at a high-energy home.
 const SK_KEEPER_MELEE_DPS: f32 = 168.0;
 
+/// Σ RANGED parts the kiter must field to KILL a keeper promptly (operator 2026-06-26: the kiter must
+/// take out the SK creeps so the miner is safe — a *dead* keeper clears the source for the ~300t respawn,
+/// where a *kited* one returns and the miner flees). A keeper has ~5000 HP and does NOT self-heal (engine
+/// `keeper-lairs/tick.js` builds it from TOUGH/MOVE/ATTACK/RANGED_ATTACK only), so net kill rate == gross
+/// ranged DPS: `5000 HP ÷ ~34 t ÷ RANGED_ATTACK_POWER(10) ≈ 15` parts (≈150 DPS — the proven full-template
+/// suppression rate). At a low-energy home where the `SkRangedAttacker` template caps BELOW this (the same
+/// `maximum_repeat`-not-reached gap R6 fixed for the healer), `sized_for` grows the kiter to hit it (or
+/// falls back to the template). The healer (R6) already out-heals the keeper's melee, so the kiter survives
+/// while it kills.
+const SK_KEEPER_KILL_RANGED_PARTS: u32 = 15;
+
 /// While a stronghold pauses the farm the room goes blind (no friendly creeps),
 /// so the persisted `hostile_structures` flag sticks at its last-observed value
 /// and the farm cannot learn the stronghold has cleared without an active probe.
@@ -363,20 +374,21 @@ impl Mission for SourceKeeperFarmMission {
         // TTL-lapses). The squad's `SquadCombatJob` self-drives to the SK room and
         // suppresses the keepers (job-owns-movement, ADR 0008 §5 ⚑). K3 source
         // mining + the per-source suppression signal remain the coordinator's to own.
-        // R6 (ADR 0020 §12.6): force-size the suppression duo's HEALER to out-heal a
-        // Source Keeper (168 melee DPS × the hold margin) at the strongest in-range
-        // home's energy — the same energy the `SquadManager` spawn path sizes a `Sized`
-        // body against — so a kiting slip costs HP it recovers, not a death. The ranged
-        // kiter stays the proven template. `sized_for` returns `None` when no home can
-        // afford the sized healer (low RCL) → fall back to the template duo (the spawn
-        // path still builds the largest healer that home affords). The SK suppression
-        // model is positional (mine when the keeper is away), so this sizes the duo to
-        // SURVIVE a keeper engagement, not to tank keepers continuously.
+        // R6 + R-attack (ADR 0020 §12.6): force-size the suppression duo at the strongest in-range home's
+        // energy — the same energy the `SquadManager` spawn path sizes a `Sized` body against — so it both
+        // SURVIVES and CLEARS the keeper instead of relying on the body template happening to reach
+        // `maximum_repeat`. (a) HEALER → out-heal the keeper's 168 melee DPS × the hold margin (a kiting
+        // slip costs HP it recovers, not a death). (b) KITER (R-attack) → enough RANGED to KILL the keeper
+        // promptly (operator: take out the SK creeps so the miner is safe) — a dead keeper clears the
+        // source for the ~300t respawn (the positional mining gate stays open), vs a kited one that returns
+        // and the miner flees. `sized_for` grows member count / defers + falls back to the template duo
+        // (the spawn path still builds the largest bodies that home affords).
         let required = screeps_combat_decision::force_sizing::RequiredForce {
             heal_parts: screeps_combat_decision::bodies::defender_heal_parts_for_dps(
                 SK_KEEPER_MELEE_DPS * screeps_combat_decision::force_sizing::HOLD_MARGIN,
                 false,
             ),
+            ranged_parts: SK_KEEPER_KILL_RANGED_PARTS,
             ..Default::default()
         };
         let home_energy = self
