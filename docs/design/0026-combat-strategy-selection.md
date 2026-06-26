@@ -367,6 +367,14 @@ pub fn decide_doctrine<'a>(ctx: &EngagementContext, doctrines: &'a [Box<dyn Forc
 
 `plan()` is self-contained (it calls `assess` + `sized_for` with `ctx.home_energy`), so a doctrine is a pure `ctx → ForcePlan` function — host-unit-testable and tournament-rankable with no ECS, exactly like a strategy's `profile()`.
 
+**Special-case to *select*, size from *observed* intel (operator 2026-06-26).** A doctrine's `applies` may key on owner type (Invader / SourceKeeper) to *select* the coordination class + archetype — that is cheap and unambiguous. But `plan()` must *size* from the **observed force** in `ctx` (creep bodies/parts → dps/heal/hits; structures → breach/objective hits), never from type-keyed magic numbers — so the same doctrine is robust to boosted / modded / variant enemies and shares **one** sizing path with the player doctrines. `worst_single` and `defense` are therefore *derived from live intel*, not looked up by type. (The just-landed `SK_KEEPER_HP` / `SK_KEEPER_MELEE_DPS` constants are an acceptable shortcut *only* because NPC bodies are engine-fixed; **rung 1 derives them from the observed keeper body** so no sizing is type-pinned and the SK path is the same code as a player kiter duel.)
+
+**Composition is *computed*, and an N-blob is first-class (operator 2026-06-26).** `ForcePlan.composition` is not a fixed registry pick — the registry templates (`quad_ranged`, `duo_sk_farmer`, …) are *seeds*; `sized_for` already grows the member **count** when one creep can't hold the required parts, and that growth **is** a blob. So the output is a *blob of N sized creeps* whenever the force demands it — a quad is just the N = 4 **efficient-formation** case (the 2×2 that paths and holds as one unit), **not a cap**. N is dynamic on **both** sides of the fight:
+- we **spawn** an N-blob when sizing calls for it (the `SquadManager` + the agent formation must support arbitrary N, not just the quad layout — a build requirement, not just a sizing one);
+- we **size against** an enemy N-blob — the Coordinated square-law (§9.4) scales with *their* N, read from the observed creep set.
+
+R8's role auction is the limit form — *compute* the best (role-mix × N) by marginal EV — with the templates as its warm start (the §12.7 R5.5 → R8 ladder). The doctrine layer is the heuristic precursor; the blob-of-N is the shape that makes "the best composition" expressible at both rungs.
+
 ### 9.4 The coordination-driven sizing math (what `assess` branches on)
 
 The oracle gains a coordination branch — the SAME inputs, two aggregation rules:
@@ -422,7 +430,7 @@ pub fn engagement_context(c: &AttackCandidate, threat: &RoomThreatData, home_ene
 **Rungs** (map onto ADR 0020 §12.7 R5.5 → R8):
 1. **Refactor-to-registry (no-op).** Re-express `SafeModeSkip` + `NpcCore` + `SkSuppression` + `ResourceDenial` as doctrines; swap the offense `match` for `decide_doctrine`. Behavior byte-identical (the built sizing is unchanged); the win is the seam. Kill-switch `features.military.doctrine_selection` (default true), `default()`-equivalent off. **No WFV.**
 2. **`PlayerDefend`.** Replace `from_threat`'s 3-bucket escalation with a Coordinated-sized defender; gate on a Coordinated defense bed.
-3. **`PlayerRaid` (R8).** Build the §12.7(B) creep-target oracle path, then the doctrine; gate on a Coordinated raid bed. This is the deferred AttackFlag/Harass work, now with a home.
+3. **`PlayerRaid` (R8).** Build the §12.7(B) creep-target oracle path, then the doctrine; gate on a Coordinated raid bed. This is the deferred AttackFlag/Harass work, now with a home. **Prerequisite — N-blob spawning + formation:** the `SquadManager` spawn path and the agent formation/movement must field an **arbitrary-N** blob (not just the quad 2×2 layout), since `sized_for` can grow past 4 and the square-law raid wants it. Quad stays the efficient-formation special case; the blob is the general one.
 
 **Serialization:** none — `ForcePlan` is a per-target decision, recomputed, never stored (like §6). **No `WORLD_FORMAT_VERSION` bump** at any rung. **Deploy gating:** ADR 0020 §10 Docker-soak → operator go-ahead; never MMO without it.
 
@@ -453,4 +461,4 @@ A concrete near-term win: `PlayerDefend`'s `defend_size_curve` replaces `from_th
 
 - **Q1 — the coordination default = the sweep's prior.** Mis-classification is asymmetric: calling a player "Individual" *under-sizes and loses creeps*; calling an NPC "Coordinated" merely *over-spends*. ⇒ the prior is **Coordinated unless a positive NPC signal** (owner ∈ {Invader, SourceKeeper, unowned}); `coordination_dps_threshold` (§9.8) is swept *from* that prior and must beat it. Confirm the prior.
 - **Q2 — RESOLVED → tunable.** Blob vs quad for a Coordinated raid is `blob_escalation_parts`, swept on the player-squad bed — not a hand decision.
-- **Q3 — mixed rooms.** A player base *with* an NPC core: the core and the base are separate candidates/objectives, so one doctrine per candidate suffices and the registry stays per-candidate. Confirm no single room needs a *blended* coordination value.
+- **Q3 — RESOLVED → independent objectives, guarded against bleed.** A player base *with* an NPC core is separate candidates → separate doctrines/objectives (the registry stays per-candidate; no blended coordination value). The operator's one condition (2026-06-26): independence must not *bleed energy when a call is wrong*. That guard is **existing mechanism, not new** — each objective is held by the **winnability gate** (`plan().winnable == false` → skip, the InvaderCore-arm pattern) **+** the `ObjectiveKind` **give-up backoff** (`objective_queue` proximity/backoff), so a mis-sized or mis-classified engagement *backs off and stops re-spawning* rather than feeding creeps into a continued loss. A wrong independent call costs at most one bounded, backed-off attempt — acceptable per the condition.
