@@ -281,7 +281,7 @@ Ordered, minimal-debt increments. Each leaves the workspace compiling with the r
 
 | Objective class | Mode | Profile (`KernelParams`: approach/incumbency/discoh/K/spacing) | Basis | Adopted |
 |---|---|---|---|---|
-| OpenCombat | — | `open_combat()` = **a1/i6/d20/K2/s1** (`a1-i6-tight`) | thorough re-tune open winner — **exploitability 0** (reproduces); robustly beats `breach()` in open self-play | ✅ |
+| OpenCombat | — | `open_combat()` = **a1/i6/d20/K2/s2** (`a1-i6-tight-s2`) | spacing re-tune (2026-06-26) winner: +169 vs the real-opponent field, beats the old spacing-1 (+135) at equal exploit. The original grid fixed spacing=1, so its "exploit 0" was a blind spot — Screeps AoE is pure Chebyshev, so a tight blob eats stacked RMA/tower fire; spacing 2 sheds it (see ADR 0026a) | ✅ |
 | StructureBreach | Breach / unknown | `breach()` = **a1/i4/d10/K3/s1** (`a1-i4-def`) | low approach (don't over-commit — winnable force breaches anyway) + LOWER incumbency than open ⇒ move in to range-1 and dismantle. Rests on the dismantle PRINCIPLE + the open win (base-attack was noise-dominated when chosen; now bit-deterministic, re-tunable) | ✅ |
 | StructureBreach | Drain | `breach_drain()` = **a1/i6/d10/K3/s1** | breach + hold longer through the tower-drain soak (incumbency 6) | ✅ seed |
 | StructureBreach | + safe mode | `open_combat()` (veto) | a shielded base takes zero damage — never spend approach risk | ✅ |
