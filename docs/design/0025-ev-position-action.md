@@ -322,6 +322,8 @@ All four source proposals share the same spine (per-`(tile, action-set)` EV with
 
 Turns §11 #8's "realistic simulation worlds" into a four-stage build, grounded in real harness/engine/foreman/rest-api seams. Spine: real **terrain** into a host `CombatWorld` → **single+multi-room × objective × comp** scenarios → **offline-cached foreman base plans** → **re-tune** + adopt a `KernelParams` winner.
 
+**Build status (running ledger):** Stage 1 **LANDED** (eval `7a5b312`) — `harness/terrain_import.rs` decoder + `resources/real-terrain.json` (5 real mmo:shard3 rooms). Stage 2 **LANDED** (eval `287a689`) — `ObjectiveKind` + kind-driven `run_until_for` + `ImportedRoom` generator (single+multi-room × 5 kinds × comps; 4 tests). **Caveat carried:** the bench dump's object coords aren't aligned to its terrain index, so base placement is derived from the decoded terrain itself (BFS to a navigable open component), not the fixture controller/sources — that alignment is re-done in Stage 3 when the foreman planner needs the real controller/source positions. **Next = Stage 3** (offline foreman capture tool → cached `CapturedBase` → `ForemanGenerator`).
+
 **Global constraints:** host-only (everything in `screeps-combat-eval`, wasm-excluded; no live `game::*` at sim time). Deterministic (`Rng::seeded(index)`; no Date/random/network/fs inside `generate()`). **Foreman is SLOW** (~3.6s typical, up to 55s; docs/0009a §2) → runs **offline once → cached JSON**, never in `generate()`/`validate()`/a tournament loop. No new engine types needed except the Stage-2 objective tag (`CombatTerrain`/`CombatWorld.rooms`/`SimStructure`/`SimTower`/`SimController` exist, engine `state.rs:11-176`).
 
 ### Stage 1 — Terrain import only
