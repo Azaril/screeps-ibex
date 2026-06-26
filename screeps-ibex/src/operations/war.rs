@@ -946,11 +946,10 @@ impl WarOperation {
                 // WINNABILITY GATE (ADR 0020 §12): the force-sizing oracle weighs the real defense —
                 // energized towers (drained ones deal 0), tower damage at the core, and out-heal
                 // feasibility — against what one squad fields at our RCL within its on-site lifetime.
-                // Winnable ⇒ engage (the oracle force-SIZES the HEALERS to out-heal the towers; the
-                // ranged attackers stay template); unwinnable ⇒ skip (defer to G4-HEAVY) so we never
-                // feed a squad to its death. FOLLOW-UP (docs/design/0020 §12.6 R-attack): force-size the
-                // RANGED attack parts to the core's hits (the deferred R6 `ranged_parts`) so kill-time is
-                // sized, not template.
+                // Winnable ⇒ engage (the oracle force-SIZES the HEALERS to out-heal the towers AND the
+                // RANGED attackers to the core's kill rate — R-attack §12.6, so kill-time is sized, not
+                // the balanced template's few ranged parts that deferred every core); unwinnable ⇒ skip
+                // (defer to G4-HEAVY) so we never feed a squad to its death.
                 TargetSource::InvaderCore { .. } => {
                     let comp = SquadComposition::quad_ranged();
                     match (candidate.target_pos, candidate.defense.as_ref()) {
@@ -965,11 +964,10 @@ impl WarOperation {
                                         );
                                         None
                                     } else {
-                                        // R3: force-SIZE the squad's HEALERS to the Lanchester-winning
-                                        // out-heal (the ranged attackers stay the `quad_ranged` template
-                                        // until the R-attack follow-up sizes ranged parts), at the same
-                                        // energy the spawn path uses. `None` ⇒ a home can't afford the
-                                        // required heal ⇒ defer (G4-HEAVY).
+                                        // R3 + R-attack: force-SIZE the squad's HEALERS to the Lanchester-
+                                        // winning out-heal AND the RangedDPS attackers to the core's kill
+                                        // rate (§12.6), at the same energy the spawn path uses. `None` ⇒ a
+                                        // home can't afford the required force ⇒ defer (G4-HEAVY).
                                         //
                                         // R5: over-invest by the objective's importance (a MEDIUM core lifts
                                         // the base hold-margin force ~1.17×) so higher-value targets field a
@@ -1000,8 +998,8 @@ impl WarOperation {
                                                         a.required_heal_per_tick / HOLD_MARGIN,
                                                     );
                                                     info!(
-                                                        "[War]   {} winnable via {:?} (~{} ticks): ranged quad, healers sized to {} heal parts (out-heal towers), P(win)~{:.0}% (cost {}, {})",
-                                                        candidate.room, a.mode, a.est_ticks, required.heal_parts, pwin * 100.0, spawn_cost, a.reason
+                                                        "[War]   {} winnable via {:?} (~{} ticks): ranged quad sized to {} ranged + {} heal parts (kill core + out-heal towers), P(win)~{:.0}% (cost {}, {})",
+                                                        candidate.room, a.mode, a.est_ticks, required.ranged_parts, required.heal_parts, pwin * 100.0, spawn_cost, a.reason
                                                     );
                                                     Some((ObjectiveKind::Dismantle { room: candidate.room, pos }, OBJECTIVE_PRIORITY_MEDIUM, sized))
                                                 }
