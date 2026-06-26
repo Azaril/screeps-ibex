@@ -1,6 +1,6 @@
 # ADR 0026 — Objective/Information-Dependent Combat Strategy-Selection Layer
 
-- **Status:** Proposed (2026-06-26)
+- **Status:** IMPLEMENTED (2026-06-26) — pluggable `CombatStrategy` trait registry + `decide_strategy(ctx, &collection)` in `screeps-combat-decision/src/strategy.rs`; wired into the bot at the one seam (`compute_squad_orders`, `squad_manager.rs`) via `classify_objective` + `StrategyInfo`; per-objective gate in `tournament.rs`. NO kill-switch (operator: target the final state). **Implementation finding:** base-attack absolute scoring is noise-dominated (~1% cross-process — the sim's `HashMap` iteration), so it cannot robustly tune/separate low-approach profiles; the objective split rests on the ROBUST open-combat self-play win (`open_combat()` = `a1-i6-tight`, exploitability 0) + the dismantle-needs-range-1 PRINCIPLE, not a measured base-attack lead. (A deterministic-sim-map follow-on would make base-attack a reliable tuning signal.)
 - **Builds on (unchanged):** ADR 0008/0008a (squad FSM + `SquadManager` lifecycle), ADR 0019 (`KiteScoreParams` term math), ADR 0020 §12 (force-sizing oracle, `DefenseProfile`/`assess`), ADR 0025 (the EV-of-(position×action) kernel + `KernelParams` tuning seam), ADR 0025 §12 (the realistic re-tune that motivates this ADR).
 - **Crates touched:** `screeps-ibex` (bot: `military/squad_manager.rs`, a new `military/strategy.rs`), `screeps-combat-decision` (a single pure `strategy_for` selector + its input enum — host-shared), `screeps-combat-eval` (`tournament.rs` per-objective profile harness).
 - **Serialization:** none (per-tick decision; no `WORLD_FORMAT_VERSION` bump — see §6).
@@ -277,10 +277,13 @@ Ordered, minimal-debt increments. Each leaves the workspace compiling with the r
 
 ## 8. Adoption ledger (filled at Step 4)
 
-| Objective class | Mode | Profile | `KernelParams` | Per-objective score | Cross-objective robustness | Adopted |
-|---|---|---|---|---|---|---|
-| OpenCombat | — | `default()` / candidate | a2/i3 (default) → candidate **a1-i6-tight** (exploit 0) or balanced **a2-i4-tight** | thorough: default middling (#21/48, exploit 313); `a1-i6-tight` #0 exploit 0 | (is the open-combat baseline) | ⏳ candidate, pending Step 4 |
-| StructureBreach | Breach | `breach_hot()` | ~~a4 (quick-run seed — SUPERSEDED)~~ → sweep **incumbency/cohesion with approach LOW (1–2)**; balanced **a2-i4-tight** | thorough: a4 middling-poor; winners are approach 1–2 + tight cohesion | _TBD Step 4_ | ⏳ pending Step 4 |
-| StructureBreach | Drain | `breach_drain()` | = default (seed) | _TBD (needs drain scenario)_ | _TBD_ | ⏳ deferred |
+**Implementation note:** §3.3 specified a `match`-based table; the shipped implementation is a **pluggable `CombatStrategy` trait registry** (operator refinement) — each strategy is an activator + a profile, `decide_strategy(ctx, &collection)` takes the collection (first-match-by-priority), so strategies are added/removed by editing the collection. Standard registry: `SafeModeHold` (veto) → `DrainBreach` → `Breach` → `OpenCombat`.
 
-> **Seed correction (thorough re-tune, ADR 0025 §12):** the original approach=4 `breach_hot` seed (from a 6-config quick run) **did NOT replicate** at scale (48 configs × 56 beds × 52 Raze+Breach bases). With a winnable-sized force, base-attack is weakly discriminating and approach stays LOW (1–2); the real levers are **incumbency + cohesion (tight)**. The open-combat optimum is also low-approach/high-incumbency/tight (`a1-i6-tight`, unexploitable), and `a2-i4-tight` is the best balanced all-rounder. Step 4's per-objective tournament fills the adopted constants; the breach profile should sweep incumbency/cohesion, not approach.
+| Objective class | Mode | Profile (`KernelParams`: approach/incumbency/discoh/K/spacing) | Basis | Adopted |
+|---|---|---|---|---|
+| OpenCombat | — | `open_combat()` = **a1/i6/d20/K2/s1** (`a1-i6-tight`) | thorough re-tune open winner — **exploitability 0** (reproduces); robustly beats `breach()` in open self-play | ✅ |
+| StructureBreach | Breach / unknown | `breach()` = **a1/i4/d10/K3/s1** (`a1-i4-def`) | low approach (don't over-commit — winnable force breaches anyway) + LOWER incumbency than open ⇒ move in to range-1 and dismantle. Rests on the dismantle PRINCIPLE + the open win (base-attack is noise-dominated, can't measure the gap) | ✅ |
+| StructureBreach | Drain | `breach_drain()` = **a1/i6/d10/K3/s1** | breach + hold longer through the tower-drain soak (incumbency 6) | ✅ seed |
+| StructureBreach | + safe mode | `open_combat()` (veto) | a shielded base takes zero damage — never spend approach risk | ✅ |
+
+> **Why approach stays LOW (thorough re-tune, ADR 0025 §12):** the original approach=4 `breach_hot` seed (a 6-config quick run) did NOT replicate at 48-config scale — with a winnable-sized force, base-attack is weakly discriminating and a hot approach just bleeds creeps. The open-combat optimum is low-approach/high-incumbency/tight (`a1-i6-tight`, unexploitable). Base-attack absolute scores carry a ~1% cross-process noise floor, so the breach profile is NOT chosen by a base-attack lead — it is the principled "move in to dismantle" variant of the open winner. A deterministic-sim-map fix would make base-attack a reliable tuning signal (follow-on).

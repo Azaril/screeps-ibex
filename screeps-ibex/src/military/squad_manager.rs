@@ -30,11 +30,14 @@
 use super::objective_queue::{CombatObjectiveQueue, ObjectiveId, ObjectiveKind, OBJECTIVE_PRIORITY_HIGH};
 use screeps_combat_decision::composition::{SquadComposition, SquadSlot};
 use super::squad::{AttackTarget, SquadContext, SquadState, SquadTarget, TickMovement, TickOrders};
-use crate::combat::kite::{PositionLayers, SquadTacticParams, ThreatField, MAX_KITE_OPS};
+use crate::combat::kite::{PositionLayers, ThreatField, MAX_KITE_OPS};
 use crate::combat::{
     build_room_layers, build_room_threat_field, decide_squad_with_pathing, CombatCreepDto, CombatStructureDto,
     SquadDecision, SquadMemberView, SquadMovement, SquadOrderState, SquadView,
 };
+// ADR 0026 — the objective/information-dependent strategy-selection layer: pick the per-squad weight
+// profile by objective class + room information, instead of the one fixed `SquadTacticParams::default()`.
+use crate::combat::strategy::{decide_strategy, default_strategies, CombatObjectiveClass, StrategyContext, StrategyInfo};
 use std::collections::HashMap;
 use crate::creep::{spawning, CreepOwner};
 use crate::entitymappingsystem::EntityMappingData;
@@ -88,6 +91,18 @@ fn squad_is_wiped(total_members_added: u32, living_members: usize) -> bool {
 /// harass kite. (Offense `Secure`'s style is decided when its producer lands — P2.G4-O6.)
 fn is_formation_objective(kind: &ObjectiveKind) -> bool {
     matches!(kind, ObjectiveKind::Dismantle { .. })
+}
+
+/// ADR 0026 — classify a squad's objective for the strategy-selection layer. `StructureBreach` = an
+/// explicit dismantle objective (`formation`), OR a room whose only remaining hostiles are STRUCTURES
+/// (creeps cleared ⇒ switch to breaching the ring); everything else is open-creep combat. Recomputed each
+/// tick, so a squad self-corrects as the room state changes (clears the creeps → flips to breach).
+fn classify_objective(formation: bool, has_structures: bool, has_live_hostiles: bool) -> CombatObjectiveClass {
+    if formation || (has_structures && !has_live_hostiles) {
+        CombatObjectiveClass::StructureBreach
+    } else {
+        CombatObjectiveClass::OpenCombat
+    }
 }
 
 /// Map an objective to the squad's target + the room its members travel to.
@@ -647,14 +662,23 @@ fn compute_squad_orders(
         }
     }
 
+    // ADR 0026 — pick the weight profile by objective class + room information (instead of one fixed
+    // default). StructureBreach = an explicit dismantle objective OR a room whose only remaining hostiles
+    // are structures (creeps cleared → switch to breaching the ring); everything else is open-creep
+    // combat. v1 keys on `enemy_safe_mode` (the in-scope safe-mode veto); `assault_mode` is the
+    // force-sizing follow-on (None ⇒ a towered base defaults to a straight breach).
+    let class = classify_objective(formation, !structures.is_empty(), !hostiles.is_empty());
+    let strat_ctx = StrategyContext { class, info: StrategyInfo { enemy_safe_mode, assault_mode: None } };
+    let tactics = decide_strategy(&strat_ctx, &default_strategies());
+
     let decision = match room_layers.get(&target_room) {
         Some((matrix, layers)) => {
             let mut room_cb = |_r: RoomName| Some(matrix.clone());
-            decide_squad_with_pathing(&view, Some(layers), SquadTacticParams::default(), &mut room_cb, MAX_KITE_OPS)
+            decide_squad_with_pathing(&view, Some(layers), tactics, &mut room_cb, MAX_KITE_OPS)
         }
         None => {
             let mut room_cb = |_r: RoomName| None;
-            decide_squad_with_pathing(&view, None, SquadTacticParams::default(), &mut room_cb, MAX_KITE_OPS)
+            decide_squad_with_pathing(&view, None, tactics, &mut room_cb, MAX_KITE_OPS)
         }
     };
 
@@ -828,5 +852,20 @@ mod tests {
         assert!(!is_formation_objective(&ObjectiveKind::Farm { kind: FarmKind::SourceKeeper, room: r }));
         assert!(!is_formation_objective(&ObjectiveKind::Harass { room: r }));
         assert!(!is_formation_objective(&ObjectiveKind::Secure { room: r }));
+    }
+
+    #[test]
+    fn classify_objective_routes_breach_vs_open() {
+        use CombatObjectiveClass::*;
+        // Explicit dismantle objective → breach, regardless of room contents.
+        assert_eq!(classify_objective(true, false, false), StructureBreach);
+        assert_eq!(classify_objective(true, false, true), StructureBreach);
+        // Non-formation: structures present + NO live hostiles → breach (creeps cleared, raze the ring).
+        assert_eq!(classify_objective(false, true, false), StructureBreach);
+        // Non-formation with live hostiles → open creep combat (kill the creeps first).
+        assert_eq!(classify_objective(false, true, true), OpenCombat);
+        assert_eq!(classify_objective(false, false, true), OpenCombat);
+        // Empty room (no structures, no hostiles) → open (nothing to breach).
+        assert_eq!(classify_objective(false, false, false), OpenCombat);
     }
 }
