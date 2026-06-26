@@ -1,107 +1,77 @@
-# ADR 0025a — Terrain/object coordinate-offset anomaly (SUSPECT — revisit)
+# ADR 0025a — Terrain coordinate convention (RESOLVED) + residual object anomaly (open)
 
-**Status:** Open anomaly, mitigated by a workaround. Flagged 2026-06-26 during ADR 0025 §12 Stage 3
-(realistic foreman bases). The fix in place (`snap_to_open`) is sound for the harness, but the *root
-cause of the offset is not understood* and the dump data is suspect — **this doc exists so we come back
-to it.**
+**Status:** The primary "coordinate mismatch" is **RESOLVED** (2026-06-26): it was a terrain-decode
+**transpose** (row-major vs column-major), now fixed. A smaller **residual anomaly** remains open (~15–20%
+of objects read as wall under the corrected decode, with no global transform fixing them) — under
+investigation; mitigated by `snap_to_open`.
 
-## 1. The anomaly
+## 1. Resolution: the terrain string is COLUMN-MAJOR
 
-The committed map dump `screeps-foreman-bench/resources/map-mmo-shard3.json` (14,884 rooms) has, per room,
-a `terrain` string (2500 chars) and an `objects` array (controllers / sources / minerals / … with `x,y`).
-Under the **correct** terrain decode, **every object sits on a wall tile, exactly one tile from open**:
+The screeps `/api/game/room-terrain?encoded=1` string is **column-major** (`index = x*50 + y`), matching
+the `screeps-game-api` `LocalCostMatrix` `xy_to_linear_index` — **not** row-major (`y*50+x`) as the
+rest-api comment and python-screeps docs claim. My `decode_terrain`/`decode_fast`/`encode_terrain` had it
+row-major, so every imported room was silently **transposed**, and the `snap_to_open` step was
+compensating by moving the (now-misplaced) objects to adjacent open tiles in the transposed frame.
 
-- Across 3000 sampled rooms, **7883 / 7883** controller+source+mineral objects are on a wall tile under
-  the row-major `y*50+x` decode — **100%**, deterministically (a 15–40% base wall rate makes this ~0
-  probability by chance).
-- Each object is **exactly Chebyshev-distance 1** from the nearest open tile (histogram: `{1: 7883}` —
-  not a spread). So objects are uniformly nudged *one tile into wall-edges*, in a per-object direction.
-- **No rigid transform recovers alignment.** Identity (`y*50+x`) → 100% on-wall; all 8 dihedral
-  symmetries (flips/rotations/transpose) → ~28–37% (≈ the random base rate, i.e. *uncorrelated*); all
-  25 translations in `[-2,2]²` → ≥42% (worse than chance). So it is **not** a flip, rotation, transpose,
-  or uniform shift.
+**How it was settled (definitive cross-check):** using the prospector CLI (`fetch`, auto-loads the root
+`.screeps.yaml` token) against the **official** `screeps.com/shard3`:
+- The screeps+ dump's terrain string for E11N1 is **byte-identical** to the official API, and the object
+  coords match exactly — so **the dump is NOT corrupt** (this reverses the earlier "dump objects are the
+  bug" conclusion).
+- Under **column-major**, E11N1 renders as a coherent room with **all four objects on open tiles**; under
+  row-major, **100% of objects (across 3000 rooms) sit on walls**. The 100%-on-wall "anomaly" was just the
+  transpose viewed through the wrong index.
 
-## 2. Why the TERRAIN decode is correct (not the suspect side)
+Fix (eval `<pending>`): `decode_terrain`/`decode_fast`/`encode_terrain` use `x*50+y`. `decode_fast`
+transposes into the `FastRoomTerrain` row-major buffer (`buffer[y*50+x] = string[x*50+y]`) so the foreman
+planner and the sim agree. Foreman bases were re-captured on the corrected terrain.
 
-Verified from first principles against the screeps Rust bindings — the offset is in the **objects**, not
-the terrain:
+## 2. Residual anomaly (OPEN — the "other anomaly")
 
-- `screeps-game-api-0.23.1` `LocalRoomTerrain` is **row-major** (`bits[y*50+x]`), proven by its own test
-  `addresses_data_in_row_major_order` (sets index 1 → reads tile `(1,0)`). Only `LocalCostMatrix` is
-  column-major (`xy_to_linear_index = x*50+y`) — the trap, but not what terrain uses.
-- `screeps-rest-api` `TerrainEntry` documents the API string as row-major `y*50+x`, "the exact encoding
-  the foreman-bench map JSON stores."
-- The decoded terrain shows authentic natural-room structure: border walls **with exit gaps** (e.g.
-  `111…1110000000000011` on a top edge, fully-walled opposite edges), coherent wall masses + swamp
-  patches. A wrong (transposed/flipped) decode would not produce a sensible exit pattern.
-- `screeps-foreman`'s `FastRoomTerrain` indexes `Location::to_index = y*50+x` — same convention; the
-  foreman planner consumes the dump on this basis.
+Even under the correct column-major decode, **~15–20% of objects still read as wall**, and crucially
+**no single global transform fixes them** (tested: 8 dihedral symmetries × ±2 translations, on authoritative
+data). It is not even per-room consistent:
 
-Conclusion: terrain is right; the dump's **object coordinates** are systematically off by one tile in a
-content-dependent direction. Most likely a **dump-generation-tool bug** (provenance of
-`map-mmo-shard3.json` unknown — see §5).
+- **E11N1:** all 4 objects open under column-major. ✓
+- **E5N8:** controller (33,31) + mineral (7,3) align column-major (open), but **both sources (19,13),
+  (41,13) sit deep inside wall masses** under *every* transform — yet a source must have an adjacent
+  harvest tile, so those tiles cannot truly be walls.
 
-## 3. Where the data comes from / where it is used (data flow)
+So within one room, some objects align under column-major and others don't — which rules out a pure
+convention/transform. Candidate explanations to chase (§ next):
+1. **Source-keeper / special rooms** encode or place objects differently (W5N5 was an SK room straggler).
+2. **Stale object snapshots** in the dump/API for some rooms (terrain immutable, objects drift).
+3. A **screeps quirk for specific object types** (the E5N8 *sources* misalign while controller/mineral don't).
+4. The operator's lead: **engine-placed border walls vs player walls** — engine border walls are natural
+   terrain; player walls are `StructureWall` objects, never in the terrain string. (Not yet shown to
+   explain *interior* straggler sources like E5N8's, which are nowhere near the border.)
+
+**Mitigation in place:** `terrain_import.rs::snap_to_open` snaps each object to its nearest open tile at
+load. Under column-major this is a **no-op for the majority** and a small nudge for the residual — so the
+foreman planner always gets valid, non-wall seed positions. The residual does not corrupt scenarios:
+terrain is correct and foreman-planned structures are derived from the terrain.
+
+## 3. Data flow (where coords come from / where used)
 
 ```
-screeps-foreman-bench/resources/map-mmo-shard3.json   ← SOURCE (provenance unknown — §5)
-  per room: terrain (2500-char y*50+x string)  +  objects[{type,x,y}]   ← x,y are the SUSPECT coords
-        │ (offline extraction: node, picks 13 varied rooms, RAW coords, no transform)
+screeps+ dump (screepspl.us) == official screeps.com API  (terrain byte-identical, objects match)
+   per room: terrain (2500-char COLUMN-MAJOR string)  +  objects[{type,x,y}]
+        │  offline node extraction → 13 varied rooms (raw coords)
         ▼
-screeps-combat-eval/resources/real-terrain.json       ← committed fixtures (raw dump coords)
+screeps-combat-eval/resources/real-terrain.json
+        │  terrain_import.rs
+        ├─ decode_terrain / decode_fast  → x*50+y  [CORRECT — column-major]
+        └─ fixtures(): snap_to_open(objects)  ← safety net for the §2 residual (no-op for most)
         │
-        ▼  terrain_import.rs
-   decode_terrain(terrain)  → CombatTerrain        [y*50+x — VERIFIED CORRECT]
-   fixtures(): snap_to_open(controller/sources/mineral)  ← THE WORKAROUND (snaps each suspect coord
-                                                            to its nearest open tile; dist-1 ⇒ recovers
-                                                            the true adjacent tile; keeps them distinct)
-        │
-        ├─► Stage 2  ImportedRoom (generate.rs): base anchored from the TERRAIN (open-component BFS),
-        │            NOT from object coords — so the suspect coords don't even reach the Stage-2 sim.
-        │
-        └─► Stage 3  foreman_capture.rs::capture(): feeds the SNAPPED controller/sources to
-                     screeps_foreman::planner::plan_room → CapturedBase{terrain, structures}.
-                     The planner computes structure positions FROM the terrain it is given, so the
-                     captured base's structures are terrain-aligned BY CONSTRUCTION.
-                       → resources/captured-bases.json (committed cache)
-                       → generate.rs ForemanGenerator/realize_base places terrain-aligned structures.
+        ├─► Stage 2 ImportedRoom: base anchored from the (now correctly-oriented) terrain
+        └─► Stage 3 foreman_capture → plan_room(seed objects) → captured-bases.json → ForemanGenerator
 ```
 
-**Blast radius is narrow.** The only place the suspect coords enter is the *seed* controller/source/
-mineral positions handed to the foreman planner (and they're snapped to valid open tiles first, within 1
-tile of the dump position). The **terrain is correct**, and the **planned base structures are correct**
-(the planner derives them from the terrain). So combat scenarios are not corrupted by the offset; at
-worst a base is planned around a controller/source seeded one tile from its true shard location — which is
-irrelevant for combat tuning (we want *realistic* bases on *real* terrain, not a byte-exact replica of a
-specific shard base).
+## 4. Cross-check tool (reproducible)
 
-## 4. Current workaround (in place)
-
-`terrain_import.rs::snap_to_open(terrain, x, y, taken)` — 8-connected BFS to the nearest non-wall tile not
-already taken. Applied to controller/sources/mineral in `fixtures()`. Tested: objects land on clear,
-distinct tiles, and the snap moves each ≤ 1 tile (`snap_recovers_objects_within_one_tile`). Sound for the
-harness; does **not** explain or fix the underlying dump offset.
-
-## 5. To revisit — hypotheses + what would crack it
-
-Untested leads (deliberately not chased now — flagged for a focused revisit):
-
-1. **Dump provenance — KNOWN (2026-06-26):** the dump was **downloaded from the screeps+ website**
-   (screepspl.us, a third-party), NOT produced by our tooling. So the off-by-one is in **screeps+'s map
-   export format** (their object-position or terrain-serialization step), which we don't control. That
-   makes the live-API cross-check (below) the right way to root-cause: diff screeps+ vs the *authoritative*
-   official server.
-2. **Live-API cross-check (definitive — PLANNED, operator providing token).** Fetch ONE room (e.g.
-   `E11N1`) from the **official** server (`https://screeps.com`, `shard3`) via `screeps-rest-api`
-   `room_terrain_encoded` + `room_objects`, decode terrain `y*50+x`, and diff each object's tile against
-   the screeps+ dump. This shows exactly which side is shifted and by how much. Auth = a screeps.com
-   long-lived token (`AuthMode::Token`, `X-Token` header); pass it via env (`SCREEPS_TOKEN`) so it never
-   enters code/logs/history. The dump is mmo:shard3, so the official server is the ground truth.
-3. **String-index shift (cheap fallback test).** A shift of the terrain string by *k* chars *with
-   row-wraparound* differs from a coordinate translation only at row edges (translations were tested and
-   fail). Worth testing `±1`, `±50`, `±51` char shifts of the raw string if the cross-check is delayed.
-4. **Half-tile / inclusive-bound artifact** in whatever coordinate conversion the dump tool used
-   (e.g. a `RoomPosition` → local-xy step that floors toward an adjacent tile).
-
-When resolved: replace `snap_to_open` with the correct decode (or regenerate the fixtures from an
-authoritative source), and delete this anomaly note.
+```
+cargo run --release -p screeps-prospector -- --config .screeps.yaml --server-name mmo --shard shard3 \
+  --cache-file target/xcheck-shard3.json fetch --rooms <ROOM[,ROOM...]>
+```
+Writes `{rooms:[{room, terrain, objects}]}` (same shape as the dump). Diff terrain/objects + test the
+decode convention. (Auth token auto-loads from the root `.screeps.yaml`; read-only.)
