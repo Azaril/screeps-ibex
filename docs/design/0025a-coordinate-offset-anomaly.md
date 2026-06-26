@@ -26,6 +26,22 @@ Fix (eval `<pending>`): `decode_terrain`/`decode_fast`/`encode_terrain` use `x*5
 transposes into the `FastRoomTerrain` row-major buffer (`buffer[y*50+x] = string[x*50+y]`) so the foreman
 planner and the sim agree. Foreman bases were re-captured on the corrected terrain.
 
+### 1a. Engine ground truth — the conventions are genuinely MIXED
+
+Confirmed in the screeps engine source (`C:\code\screeps-engine`):
+- `utils.js:262 encodeTerrain` writes the terrain string **row-major** (`y` outer, `x` inner →
+  `string[y*50+x] = tile(x,y)`). This is the serialization convention.
+- BUT object spatial indexing (`game/game.js:41` `objectRaw.x*50 + objectRaw.y`), the pathfinder
+  (`game/path-finder.js:25` `_bits[xx*50+yy]`), and the bindings' `LocalCostMatrix`
+  (`xy_to_linear_index = x*50+y`) are all **column-major**.
+
+So the engine itself uses **row-major for the terrain string and column-major for everything
+positional** (objects / pathing / cost matrices). The sim is about positioning, walls-in-pathing, and
+object placement — so the **column-major** convention is the principled one to decode terrain into, and
+that is what `decode_terrain` now does. (This is also why a naive row-major decode put 100% of objects on
+"walls": it read the serialization order into a positional grid.) Empirically the official API's objects
+align column-major for the majority, matching this.
+
 ## 2. Residual anomaly (OPEN — the "other anomaly")
 
 Even under the correct column-major decode, **~15–20% of objects still read as wall**, and crucially
@@ -36,6 +52,15 @@ data). It is not even per-room consistent:
 - **E5N8:** controller (33,31) + mineral (7,3) align column-major (open), but **both sources (19,13),
   (41,13) sit deep inside wall masses** under *every* transform — yet a source must have an adjacent
   harvest tile, so those tiles cannot truly be walls.
+
+Across 23 authoritative rooms, **no single transform aligns all objects** (best is `rot180` at ~74%
+per-object-open, then column-major ~64%; `row` is 0%). Some rooms (e.g. **E22N9**: controller+mineral at
+dist-99) are unsolvable under *every* one of the 8 dihedral transforms. And the "best transform" varies
+per room (E11N1↔column-major/rot180, E5N8↔rot180-only) — but that variance is largely **coincidental**:
+open rooms admit many transforms (E11N1's objects are open under 5 of 8), so a room with lots of open
+space "passes" several. The principled convention is column-major (§1a — the engine's positional axis);
+the residual is best read as **per-room source-data inconsistency** (stale objects, or objects genuinely
+one tile off the terrain the API returns), not a missed global transform.
 
 So within one room, some objects align under column-major and others don't — which rules out a pure
 convention/transform. Candidate explanations to chase (§ next):
