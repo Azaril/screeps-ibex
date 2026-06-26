@@ -86,16 +86,20 @@ harness; does **not** explain or fix the underlying dump offset.
 
 Untested leads (deliberately not chased now — flagged for a focused revisit):
 
-1. **Dump provenance.** What tool/script generated `map-mmo-shard3.json`? The off-by-one is almost
-   certainly in *its* terrain-serialization or object-capture step. This is the highest-value unknown —
-   knowing the generator likely pinpoints the bug. **(Operator can help here.)**
-2. **String-index shift (not a coordinate transform).** A shift of the terrain string by *k* chars *with
+1. **Dump provenance — KNOWN (2026-06-26):** the dump was **downloaded from the screeps+ website**
+   (screepspl.us, a third-party), NOT produced by our tooling. So the off-by-one is in **screeps+'s map
+   export format** (their object-position or terrain-serialization step), which we don't control. That
+   makes the live-API cross-check (below) the right way to root-cause: diff screeps+ vs the *authoritative*
+   official server.
+2. **Live-API cross-check (definitive — PLANNED, operator providing token).** Fetch ONE room (e.g.
+   `E11N1`) from the **official** server (`https://screeps.com`, `shard3`) via `screeps-rest-api`
+   `room_terrain_encoded` + `room_objects`, decode terrain `y*50+x`, and diff each object's tile against
+   the screeps+ dump. This shows exactly which side is shifted and by how much. Auth = a screeps.com
+   long-lived token (`AuthMode::Token`, `X-Token` header); pass it via env (`SCREEPS_TOKEN`) so it never
+   enters code/logs/history. The dump is mmo:shard3, so the official server is the ground truth.
+3. **String-index shift (cheap fallback test).** A shift of the terrain string by *k* chars *with
    row-wraparound* differs from a coordinate translation only at row edges (translations were tested and
-   fail). Worth testing `±1`, `±50`, `±51` char shifts of the raw string.
-3. **Live-API cross-check (definitive).** Fetch ONE room's terrain + objects from the live API
-   (`screeps-rest-api` `room_terrain_encoded` + `room_objects`) and diff against the dump — this directly
-   shows which side is shifted and by what. Needs the operator's credential/token (offered). This is the
-   clean way to root-cause without guessing.
+   fail). Worth testing `±1`, `±50`, `±51` char shifts of the raw string if the cross-check is delayed.
 4. **Half-tile / inclusive-bound artifact** in whatever coordinate conversion the dump tool used
    (e.g. a `RoomPosition` → local-xy step that floors toward an adjacent tile).
 
