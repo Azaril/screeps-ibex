@@ -426,9 +426,31 @@ pub fn engagement_context(c: &AttackCandidate, threat: &RoomThreatData, home_ene
 
 **Serialization:** none — `ForcePlan` is a per-target decision, recomputed, never stored (like §6). **No `WORLD_FORMAT_VERSION` bump** at any rung. **Deploy gating:** ADR 0020 §10 Docker-soak → operator go-ahead; never MMO without it.
 
-### 9.8 Tuning + open questions
+### 9.8 Tuning integration — the dynamic weights
 
-- **Tournament-rankable like strategies.** A doctrine that mis-classifies coordination or under-sizes *loses self-play* — the eval already fields oracle-sized comps; add the two beds above and gate each doctrine best-in-class on its bed (mirrors `per_objective_profiles_are_each_best_in_class`).
-- **Open Q1 — asymmetric mis-classification (recommend a default).** Calling a player "Individual" *under-sizes and loses creeps*; calling an NPC "Coordinated" merely *over-spends*. ⇒ default unknown/mixed to **Coordinated** (safe), assert `Individual` only on a positive NPC signal (owner ∈ {Invader, SourceKeeper, unowned}). Confirm.
-- **Open Q2 — blob vs quad for a Coordinated raid.** Does the square-law margin justify > 4 creeps (a spacing-2 blob, ADR 0026a), or is one sized quad the cap? Resolve on the player-squad bed before building `PlayerRaid`.
-- **Open Q3 — mixed rooms.** A player base *with* an NPC core: the core and the base are separate candidates/objectives, so one doctrine per candidate suffices and the registry stays per-candidate. Confirm no single room needs a *blended* coordination value.
+Doctrine **selection** stays discrete (the §3.3/§5 categorical decision stands — `applies` is a classifier, not a continuous/learned policy). But the **weights inside each doctrine's sizing are continuous, and the tournament tunes them** — exactly the §4 pattern (discrete named profiles, tuned `KernelParams` *within*). So "dynamic" here = tuned boundaries + margins, **not** a learned end-to-end policy; §5's rejection of a continuous *selection* policy is untouched. This is the operator's point (2026-06-26): wherever squad selection needs a continuous knob, the harness should *discover* its value, not have it hand-set.
+
+**The tuning surface** — a `DoctrineParams` constant set (the twin of `KernelParams` / `SquadTacticParams`), pure + host-shared so the bot and the tournament read identically:
+
+| Weight | Drives | Replaces (hand-set today) |
+|---|---|---|
+| `coordination_dps_threshold` | the Individual ↔ Coordinated boundary | Q1's hand default (the safety prior becomes the *floor*, not the value) |
+| `coordinated_margin` (square-law over-match) | Coordinated force size | a slice of the single `HOLD_MARGIN` |
+| `individual_margin` (out-heal / out-last the single) | Individual force size | the other slice of `HOLD_MARGIN` |
+| `blob_escalation_parts` | quad → blob escalation for a Coordinated raid | Q2's hand cap |
+| `investment_scale` (importance · P(win) curve) | force vs objective priority | R5's fixed scale |
+| `defend_size_curve` | `PlayerDefend` sizing | `DefenseEscalation::from_threat`'s three hardcoded thresholds (`war.rs:101`) |
+
+**The harness** (mirror §4 — build no new mechanism). Two beds, each **near the winnability boundary** — §8's lesson that trivially-winnable beds don't discriminate, so they can't tune:
+- an **Individual NPC bed** (cores / keepers / invader waves at graded strength) — confirms the cheap min-favorable sizing holds (no over-spend);
+- a **Coordinated player-squad bed** (player comps at graded strength + composition) — the bed that actually exercises the square-law margin + the blob escalation.
+
+The tournament sweeps `DoctrineParams` over each bed and adopts the payoff-maximizing set (won objectives − creeps lost − energy spent — the EV currency, ADR 0020-S5), the same per-regime adoption as §4 / §8. The **bit-deterministic sim (2026-06-26)** makes these margins cleanly tunable — the same enablement that unblocked the base-attack re-tune (§8) — so the boundaries are *discovered*, not ideated (the "tournament-discovery beat ideation" finding, [[sim-determinism-fence]]). **Gate:** `doctrines_are_each_best_in_class` **plus** the tuned weights beat their hand-set priors on both beds. A doctrine that mis-classifies coordination or under-sizes *loses self-play*, so the gate is self-policing.
+
+A concrete near-term win: `PlayerDefend`'s `defend_size_curve` replaces `from_threat`'s three magic thresholds (`200`/`150`/`60` dps etc.) with a curve the Coordinated bed tunes — the first hand-set combat constants this layer retires.
+
+### 9.9 Open questions
+
+- **Q1 — the coordination default = the sweep's prior.** Mis-classification is asymmetric: calling a player "Individual" *under-sizes and loses creeps*; calling an NPC "Coordinated" merely *over-spends*. ⇒ the prior is **Coordinated unless a positive NPC signal** (owner ∈ {Invader, SourceKeeper, unowned}); `coordination_dps_threshold` (§9.8) is swept *from* that prior and must beat it. Confirm the prior.
+- **Q2 — RESOLVED → tunable.** Blob vs quad for a Coordinated raid is `blob_escalation_parts`, swept on the player-squad bed — not a hand decision.
+- **Q3 — mixed rooms.** A player base *with* an NPC core: the core and the base are separate candidates/objectives, so one doctrine per candidate suffices and the registry stays per-candidate. Confirm no single room needs a *blended* coordination value.
