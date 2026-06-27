@@ -172,46 +172,76 @@ emitter (the on-site-budget term), not a stored field. **Anti-creep-creep kill (
 behavioral addition; everything else is a rename or a re-route.** `RequiredForce` is *not* `Serialize` (it lives
 on `ForcePlan`, which is computed each tick) — so the rename and the new field cost **no** WFV bump.
 
-### 2.2 T2 — the assembler (`assemble_force`)
+### 2.2 T2 — the composition OPTIMIZER (`optimize_composition`) — EV-maximizing, tournament-tunable (operator 2026-06-27, D16)
 
-One function replaces `template() + sized_for`:
+> **Supersedes the earlier "marginal-fill `assemble_force`" + the `force_ceiling` budget.** Operator critique:
+> both PRESUMED a composition — `force_ceiling`'s 3-fighter+5-healer shape (inherited from the eval's
+> `siege_ceiling`) is just another hardcoded template judging winnability, and the fixed `ceil(demand/cap)`
+> marginal fill presumes a 1:1 role↔dimension shape. Neither OPTIMIZES; both assume the answer. The real
+> problem is **multi-dimensional** — body parts, creep count, energy/spawn availability — and the best squad is
+> **the highest expected value, most efficient one, with a margin for a hostile force that changes/grows.** The
+> parameters of that trade-off are **tournament-tuned**.
+
+One function replaces `template() + sized_for` AND `force_ceiling` (there is NO presumed reference squad):
 
 ```rust
 // composition.rs
-pub fn assemble_force(req: &RequiredForce, member_energy: u32) -> Option<SquadComposition>
+pub fn optimize_composition(
+    req: &RequiredForce,        // the capabilities to win WITH MARGIN (from emit_requirement; T1 survives)
+    defense: &DefenseProfile, enemy: Option<EnemyForce>,   // for P(win) — the incoming damage + threat
+    target_value: f32,          // V — the objective's worth, in energy-equivalent units (the over-invest lever)
+    member_energy: u32,
+    params: &CompositionParams, // the tournament-tuned knobs
+) -> Option<SquadComposition>   // the EV-max squad, or None (EV below the commit threshold → defer)
 ```
 
-It is a **marginal-fill auction over a fixed, Vec-ordered set of weapon roles** — the body is *sized per pick*,
-there is no body catalog. Algorithm (bit-deterministic, integer/ceil over Vec-ordered inputs, no HashMap):
+**The objective: maximize EV** (operator: "highest expected value and most efficient squad is the best").
+`EV(C) = P(win | C) · target_value − cost(C)`, where `cost(C) = w_energy · spawn_energy(C) + w_creep ·
+creep_count(C)` (the multi-dimensional efficiency term: energy AND the per-creep forming/CPU/management
+overhead). For a fixed target, `target_value` is constant, so maximizing EV trades P(win) (more/over-powered
+force → higher win-prob but higher cost) against cost — and `target_value` sets HOW MUCH to over-invest (the
+principled EV form of R5/importance). The commit decision is `max EV > params.commit_ev_threshold` (else defer).
 
-1. **Min-viable ROLE-SET floor** (a constraint, not a scalar count): if any kill demand > 0 → ≥1 fighter slot of
-   each demanded weapon; if `heal_parts > 0` → ≥1 Healer. This is the role-set viability floor (never an
-   under-sized "healing required but no healer," never "defenders present but no anti-creep"). It is **NOT a
-   template-count floor** — `sized_for`'s `.max(template_count)` (composition.rs:770) is deleted; there is no
-   template, so Layer B cannot recur. If a required role can't field even one member at this energy → `None`.
-2. **Probe** the per-member single-role part cap via the **real** builder (the existing `cap_for` reverse-probe
-   over `MAX_SINGLE_ROLE_PARTS` using `build_combat_body`, composition.rs:741–747, lifted out of `sized_for`) at
-   `min(member_energy, PREFERRED_MEMBER_ENERGY)` — so the cap can never drift from what actually spawns.
-3. **Marginal fill** — maintain a remaining-need ledger `r` (the capability vector, mutable). Repeatedly: pick
-   the **scarcest** unmet dimension (largest unmet fraction `r_i / req_i`; ties → fixed dimension order
-   `[heal, dismantle, immune_struct, anti_creep, tough]`), then among the roles that supply it add the member
-   with the highest **capability-per-energy** (`cap_of(role, dim) / cost(role)`; ties → role enum order). Recompute
-   `r` from what is placed each iteration. Stop when `all(r ≤ 0)`, or when `members > MAX_SIZED_MEMBERS`
-   (composition.rs:26 = 8) → return **`None`** (a TERMINAL "can't field a winnable single squad -> don't attack this objective" -- D10, NOT a hand-off to a heavier path).
-   *The "scarcest capability per energy first" rule IS the auction* — a tower@100k out-heal demand floods Healer
-   picks until ~7/8 slots, then `None` (correct deferral); a Guard-defended core interleaves AntiStructure +
-   AntiCreep + Healer until all three needs clear.
-4. **Re-balance** each role's even share over its grown count (`per_member = total.div_ceil(count)`, ceil so the
-   force never under-sizes), then build each slot as `BodyType::Sized(CombatBodySpec)` via the existing builder.
-   Role from the dominant part (HEAL→Healer, WORK→Dismantler, RANGED→RangedDPS, ATTACK→MeleeDPS, TOUGH→Tank;
-   closing the MeleeDPS gap at composition.rs:733). Formation from member count + roles (the existing
-   `FormationShape` heuristics, not a per-template constant); `retreat_threshold` from objective class. Re-confirm
-   every spec builds at `member_energy` (else `None` = defer).
+**P(win | C)** combines the survival + kill axes (both must hold): `P = win_probability(C.heal, incoming) ·
+kill_feasibility(C, defense, window)` — each a logistic on its surplus (heal-surplus, kill-time-surplus). The
+**dynamic margin** inflates the OBSERVED hostile force (`enemy × params.dynamic_margin`) before P(win), so the
+fielded force over-powers enough that a force which grows/changes still loses (operator's "margin for hostile
+forces to change/be dynamic").
 
-**Continuous count + role-mix; the granularity gap is subsumed.** One mandatory fighter + one mandatory healer =
-a duo; a heavier need adds members one at a time. 1,2,3,…,8 are all reachable. The floor is a **role-set** (≥1 of
-each required role), never a count — so the solo↔quad snap (composition.rs:770) and Layer-B (can't-add-a-role)
-are **structurally** impossible.
+**The search (one parameterized search — D16; emergent strategies stay implicit for now, see Consequences):**
+bit-deterministic, integer/ceil over Vec-ordered candidates, no HashMap. Enumerate creep splits
+`(n_fighters, n_healers)` with `1 ≤ n_fighters + n_healers ≤ MAX_SIZED_MEMBERS (8)` and an over-power factor
+`k ∈ {tuned set}`: distribute `k · req` across the members (fighters carry `immune_struct + anti_creep` RANGED
++ `dismantle` WORK; healers carry HEAL), each member sized at `min(member_energy, params.member_energy)` (the
+many-small ↔ few-big knob); skip if a needed role gets 0 members or a member exceeds the 50-part cap; build each
+member as `BodyType::Sized`; score `EV(C)`. Return the **max-EV** candidate above the commit threshold, else
+`None`. Small-many vs few-big EMERGES from the tuned `w_creep`/`member_energy`; the over-power level emerges from
+`target_value` vs `cost`. Formation is footprint-derived from `creep_count` (D14); `retreat_threshold` from the
+doctrine. `None` is the TERMINAL defer (D10).
+
+```rust
+// composition.rs — the tournament-tuned knobs (NOT Serialize — recomputed each tick, no WFV)
+pub struct CompositionParams {
+    pub w_energy: f32,            // energy → EV cost weight
+    pub w_creep: f32,            // per-creep EV penalty (forming/CPU/management overhead)
+    pub hold_margin: f32,        // out-heal the incoming × this (was HOLD_MARGIN)
+    pub over_power_margin: f32,  // square-law over-power vs coordinated defenders (was COORDINATED_DPS_MARGIN)
+    pub dynamic_margin: f32,     // inflate the OBSERVED hostile force (margin for a changing/growing threat)
+    pub member_energy: u32,      // per-member energy cap for the search (many-small vs few-big; was PREFERRED)
+    pub commit_ev_threshold: f32,// min EV to FIELD vs defer
+}
+```
+
+All four operator-chosen knobs — **cost weights, safety margins, member-energy split, commit threshold** — are
+fields here, swept by the tournament (P6) so the fielded squads are winning-but-EFFICIENT (D13, now the
+optimizer's literal objective). `hold_margin`/`over_power_margin` thread into `emit_requirement` (replacing the
+`HOLD_MARGIN`/`COORDINATED_DPS_MARGIN` constants); `Default::default()` reproduces today's constants so the
+calibration gates hold until P6 re-sweeps. `target_value` comes from the caller (the bot's candidate score; the
+eval's scenario), defaulting from `importance`.
+
+**Layer B + the granularity snap remain structurally impossible** — there is no template, the creep count is a
+free search variable (1..8 all reachable), and the role mix is derived from `req`. The "winnability budget" /
+`force_ceiling` presumption is GONE: winnability = "the search found a candidate with `EV > threshold`."
 
 ### 2.3 T3a — doctrine = pure classifier; retire `template()`/`is_sized()`
 
@@ -534,6 +564,20 @@ old "Phase 5" in). Ordered so the tree stays buildable between steps where possi
   never "quad". Sim/opponent-model test names (`screeps-combat-agent`) are cosmetic and out of scope. The
   formation-geometry generalization MAY be a tracked follow-up if it is larger than P4's core, but the named
   shapes must not survive into the assembler's output contract.
+- **D16 — T2 is an EV-MAXIMIZING optimizer, tournament-tuned; NO presumed reference squad (operator 2026-06-27).**
+  Supersedes the marginal-fill `assemble_force` + `force_ceiling`: both presumed a composition (the 3+5 ceiling /
+  the 1:1 role↔dimension fill) — the same smell as the templates. Composition is a **multi-dimensional
+  optimization** over body parts + creep count + energy/spawn availability; the best squad **maximizes EV**
+  (`P(win)·target_value − cost`, `cost = w_energy·energy + w_creep·creeps`) with a **dynamic margin** so a
+  changing/growing hostile force still loses. `optimize_composition` runs ONE parameterized search over creep
+  splits × over-power factor (no reference squad — winnability = "a candidate clears the commit-EV threshold").
+  The **four tunable knobs the operator chose** — cost weights, safety margins, member-energy split, commit
+  threshold — live on `CompositionParams` and are **swept in the tournament** (P6 — D13 made literal). `force_ceiling`
+  is DELETED; `emit_requirement` (T1, the requirement + margins) survives as the optimizer's win-target. **One
+  search for now** (small-many vs few-big EMERGE from the tuned weights); **documented follow-up:** codify
+  emergent spawning/composition strategies as explicit selectable strategies later if the single search proves
+  too narrow or a better structure emerges (operator). The `assemble_force`/`force_ceiling` built in P3/P4.1 are
+  the bridge this replaces.
 - **D15 — ONE squad-generation path; no gen outside the driver (operator 2026-06-27).** After P4 there is
   exactly ONE place a fielded combat squad is born: the shared driver `emit_requirement → assemble_force`.
   The §1.5 audit's out-of-registry sites are unified: `war.rs:467` (the hardcoded defend-flag `duo_attack_heal`)
