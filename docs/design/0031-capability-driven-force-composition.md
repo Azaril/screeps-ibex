@@ -332,7 +332,31 @@ real G4-HEAVY defer target. Each phase says what it **deletes**.
     ranged-Skirmisher kill assertions also deferred (kiters evade under breach tactics — not a sizing failure).
   - `OracleCalibration`/`SizingWins`/`CreepClearWins` green + discriminating; FP/FN gates held.
 
-### Phase 4 — route all doctrines through emit+assemble; retire `is_sized` + silent fallbacks; DELETE catalogs + WFV (D12 folds P5 in) — **NEXT**
+### Phase 4 — route all doctrines through emit+assemble; retire `is_sized` + silent fallbacks; DELETE catalogs + WFV (D12 folds P5 in)
+
+**P4a — functional unification — DONE (decision `4691c00`, eval `54da38c`, super `0fb1370`).** `ForceDoctrine`
+is a pure classifier (`name`/`applies`/`fighter_role`/`honor_verdict`/`retreat_threshold`); the shared free fn
+`plan_engagement(doctrine, ctx, budget)` (emit_requirement → honor_verdict gate → assemble_force) is the SOLE
+path; `sized_plan`/`ForcePlan::fixed`/the custom `plan()`s are deleted; `force_ceiling` (P4.1) is the
+template-free budget (the bot's `best_force_budget` takes a `SquadRole`). Bot offense/defense/SK + the eval all
+route through it; the `unwrap_or_else(solo_ranged/duo_sk_farmer)` + the hardcoded defend-flag `duo_attack_heal`
+are gone (D15); always-field doctrines floor at a minimal vector + scale with threat (D11); `emit_requirement`
+selects the structure weapon (KillImmuneStructure zeroes `dismantle_parts`, DismantleStructure zeroes
+`immune_struct_parts`). `capabilities()` reports a Sized body's actual ranged parts (the full-energy ceiling
+stays only for template RangedDPS). Green: decision 185, eval 62, clippy-wasm. The catalog constructors +
+static `BodyType` variants + `sized_for` are now DEAD (only tests / budget-helpers reference them) — deleted in P4b.
+
+**P4b — DELETE the catalog + the WFV reset — NEXT.** (a) Delete the ≈13 `SquadComposition` constructors +
+`sized_for`, migrating their remaining test / eval-helper uses to `force_ceiling` / `assemble_force`; (b) delete
+the static `BodyType` variants + `body_definition` arms + `bodies::*_body` (leaving `Sized` + `Hauler`); (c) D14
+formation cleanup (`FormationShape::Box2x2` → footprint-from-`slots.len()`) — MAY be a tracked follow-up since
+it touches the serialized formation enum + the squad runtime; (d) `WORLD_FORMAT_VERSION` 18→19. **D15 acceptance:
+a grep for `SquadComposition::<constructor>` outside the driver + tests returns EMPTY.**
+
+> **⚠ P4 sub-design (RESOLVED in P4a):** the template-free budget is `force_ceiling`, probed at the assembler's
+> per-member cap (PREFERRED) so the budget is assembler-fieldable; the eval calibration stays on `siege_ceiling`
+> (explicit budget), so the gates were UNPERTURBED (decision 185 / eval 62 green, no re-tune needed yet — P6
+> re-tunes after P4b). The original "⚠ resolve first" note below is superseded.
 
 > **⚠ P4 sub-design to resolve FIRST — the winnability BUDGET ceiling.** `emit_requirement`'s `assess`/`clear_force`
 > still need a `ForceBudget` = the CEILING capabilities of one squad at `member_energy`. Today every caller derives
