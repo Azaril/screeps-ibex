@@ -1,7 +1,8 @@
 # ADR 0028 — Engine-backed Offline Lifecycle Harness (P-OBJ)
 
-Status: IN PROGRESS 2026-06-27. Kernels **K0 (rally), K1 (spawn-throughput), K2 (FSM
-next_state) LANDED**; the colony driver + K3/K4 remaining. Companion to ADR 0008 (squad
+Status: IN PROGRESS 2026-06-27. **All five kernels K0–K4 LANDED** + the **forming-phase
+colony driver LANDED** (`screeps-combat-eval/src/harness/lifecycle.rs`); the engine-engage
+handoff + multi-squad claim-pacing remaining. Companion to ADR 0008 (squad
 lifecycle), ADR 0027 (objective/squad lifecycle rework), ADR 0023/0023a (the combat sim
 harness), ADR 0026 §9 (doctrine sizing). Task #23 / #25.
 
@@ -105,12 +106,29 @@ spread-0). The only new ordering surface is the spawn queue — modeled as a **d
     Calling `next_state` up-front would move those, a behavior risk on a *working* FSM that is
     not the bug. So the kernel is the canonical, tested spec (a sync note sits above the live
     `machine!`); the harness drives `next_state`; full bot adoption waits for a tick refactor.
-- **K3 — fielding (TODO).** `fielding::slots_to_spawn(objective, colony)` wrapping the
-  already-shared `sized_for`/`build_body`/`PREFERRED_MEMBER_ENERGY` so the harness queues the
-  same bodies the bot does (incl. the `None`-on-unbuildable stall).
-- **K4 — claim pacing (TODO).** `claim_pacing::plan_claims` (counts) for `MAX_FORMING_SQUADS`
-  / `MAX_CONCURRENT_SQUADS` so the harness reproduces the claim-throttle interactions (the
-  `forming-cap=1` lockup that backfired live).
+- **K3 — fielding (LANDED).** `fielding::slots_to_spawn(composition, filled, best_capacity,
+  per_member_cap, priority, move_profile)` wraps the shared `sized_for`/`build_body`/
+  `PREFERRED_MEMBER_ENERGY`: one `QueuedSpawn` per UNFILLED slot, body built at
+  `min(best_capacity, per_member_cap)`, a slot no in-range home can build is skipped (the
+  `None` stall), `id` = slot index. 3 tests.
+- **K4 — claim pacing (LANDED).** `claim_pacing::claims_allowed(active, forming,
+  max_concurrent, max_forming)` = the tighter of the two headrooms — reproduces the
+  forming-cap LOCKUP (a stuck-forming squad blocks all new claims, the `forming-cap=1`
+  zeroing seen live). 3 tests.
+
+### Forming-phase colony driver (LANDED)
+
+`screeps-combat-eval/src/harness/lifecycle.rs` — `run_forming(ColonyFormingScenario) ->
+FormingOutcome`. A deterministic tick loop over a `Colony` (homes with capacity/income, a
+per-tick `EconomyPressure` of a HIGH hauler ± CRITICAL miner) that drives the REAL kernel
+chain: K3 fields the unfilled slots → K1 `spawn_step` runs each home's head-of-line lane
+contest (combat vs economy, cross-home de-duped) → spawns occupy a home for `part_count*3`
+ticks → K0 `squad_ready_to_depart` decides departure. Reproduces the live behavior OFFLINE:
+**MEDIUM combat stalls below economy; above-economy combat completes the roster** — the
+spawn-priority lever, now tunable offline instead of guessed on Docker. 3 tests (stall,
+complete, determinism). The engage handoff (place the formed roster → `ManagedSimSquad` →
+`resolve_tick` to a dead core) is the next phase; multi-squad + K4 claim-pacing reproduces
+the `forming-cap=1` backfire (a single squad does not show it).
 
 ## Live fixes shipped this session (the harness must reproduce these, and the next layers)
 
@@ -124,13 +142,20 @@ All bot-only, no `WORLD_FORMAT_VERSION` change:
 
 ## Remaining work
 
-1. K3 + K4 kernels.
-2. The colony driver + tick loop in `screeps-combat-eval`.
-3. **First red tests:** the 3/5 spawn stall (DONE via K1); the **stale-intel give-up** (an
-   engaged squad whose objective goes producer-silent — reproduce, then confirm the ADR 0027
-   lease behavior offline).
+1. **Engage handoff** — place the formed roster into `CombatWorld` → drive `ManagedSimSquad`
+   → `resolve_tick` to a dead core, so `run_forming` chains into the existing engine engage
+   for the full `objective→…→kill` assertion.
+2. **Multi-squad + K4 in the driver** — extend `run_forming` to several objectives gated by
+   `claim_pacing::claims_allowed`, to reproduce the `forming-cap=1` backfire (a single squad
+   does not exhibit it; the lockup is the multi-squad interaction).
+3. **Stale-intel give-up red test** — an engaged squad whose objective goes producer-silent;
+   confirm the ADR 0027 lease/give-up behavior offline via `lifecycle::reconcile`.
 4. Use the harness to find the **correct** spawn-priority + forming-cap values (the live
-   guesses did not converge), validate, then deploy.
+   guesses did not converge — the forming driver already shows MEDIUM stalls / above-economy
+   completes for one squad), validate, then deploy.
+
+Done: K0–K4 kernels; the forming-phase colony driver (the 3/5 stall + above-economy-completes
+reproduced offline + deterministically).
 
 ## What the harness CANNOT catch (keep a thin live canary)
 
