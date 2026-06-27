@@ -395,6 +395,11 @@ impl Mission for SourceKeeperFarmMission {
             enemy_force: Some(doctrine::EnemyForce { dps: SK_KEEPER_MELEE_DPS, heal: 0.0, hits: SK_KEEPER_HP, count: 1, boosted: false }),
             importance: 0.0,
             member_energy: home_energy,
+            // Suppress is winnable-by-construction + kited — plan_engagement assembles it directly (no EV
+            // search), so target_value / window are inert here; Default knobs at the home's member energy.
+            target_value: 1_000_000.0,
+            onsite_window: 1400,
+            params: screeps_combat_decision::composition::CompositionParams { member_energy: home_energy, ..Default::default() },
         };
         let sk_doctrines = doctrine::sk_doctrines();
         // ADR 0031 D15: the doctrine driver assembles the suppression force (no hardcoded `duo_sk_farmer`

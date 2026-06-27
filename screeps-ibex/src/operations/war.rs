@@ -1,10 +1,10 @@
 use super::data::*;
 use super::operationsystem::*;
-use screeps_combat_decision::composition::{force_ceiling, SquadComposition, SquadRole};
+use screeps_combat_decision::composition::{CompositionParams, SquadComposition, SquadRole};
 use screeps_combat_decision::doctrine::{
     decide_doctrine, default_doctrines, defense_doctrines, plan_engagement, DoctrineObjective, EnemyCoordination, EnemyForce, EngagementContext,
 };
-use screeps_combat_decision::force_sizing::{win_probability, DefenseProfile, ForceBudget, TowerThreat, HOLD_MARGIN};
+use screeps_combat_decision::force_sizing::{win_probability, DefenseProfile, TowerThreat, HOLD_MARGIN};
 use crate::military::objective_queue::{
     ForceRequirement, ObjectiveKind, ObjectiveOwner, ObjectiveRequest, OBJECTIVE_PRIORITY_CRITICAL, OBJECTIVE_PRIORITY_HIGH,
     OBJECTIVE_PRIORITY_LOW, OBJECTIVE_PRIORITY_MEDIUM,
@@ -36,6 +36,22 @@ const DEFEND_OBJECTIVE_TTL: u32 = 60;
 /// pressure), so this comfortably outlives the re-assert gap — a cleared room
 /// (no core ⇒ no upsert) then lapses and the manager retires the siege squad.
 const OFFENSE_OBJECTIVE_TTL: u32 = 100;
+
+/// The EV optimizer's `target_value` for always-field DEFENSE / operator-intent engagements (ADR 0031
+/// D16): high so the always-field doctrine always commits the EV-best force (you can't skip defending an
+/// owned room / honoring an operator flag). The optimizer's always-field path also floors at the default
+/// force, so a defer never fields nothing.
+const DEFENSE_TARGET_VALUE: f32 = 1_000_000.0;
+
+/// Default on-site window for in-room defense (≈ a creep lifetime; no travel) — the optimizer's
+/// `deliverable = structure_dps · window` term (inert for the dps-bound creep-clear).
+const DEFENSE_ONSITE_WINDOW: u32 = 1400;
+
+/// Scale a candidate's score into the EV optimizer's `target_value` (ADR 0031 D16). Large enough that a
+/// winnable target's `EV = P(win)·value − cost` clears the commit threshold (so the gated doctrine fields
+/// whenever winnable — preserving the pre-D16 "field if winnable" behavior); the ROI gate downstream still
+/// caps the spawn cost against the affordable military surplus.
+const OFFENSE_TARGET_VALUE_SCALE: f32 = 10_000.0;
 
 // ---------------------------------------------------------------------------
 // Target scoring
@@ -380,6 +396,12 @@ impl WarOperation {
                 // The defended room is owned (has a spawn) — size the defender to ITS spawn capacity so the
                 // oracle actually sizes a blob (0 made sized_for return None → bare template; ADR 0029).
                 member_energy: game::rooms().get(room_name).map(|r| r.energy_capacity_available()).unwrap_or(0),
+                target_value: DEFENSE_TARGET_VALUE,
+                onsite_window: DEFENSE_ONSITE_WINDOW,
+                params: CompositionParams {
+                    member_energy: game::rooms().get(room_name).map(|r| r.energy_capacity_available()).unwrap_or(0),
+                    ..Default::default()
+                },
             };
             // ADR 0031 D15: the SINGLE generation path — the doctrine driver assembles the defender (no
             // hardcoded `solo_ranged` fallback). Always-field, so it returns the threat-sized force or the
@@ -482,6 +504,9 @@ impl WarOperation {
             enemy_force: None,
             importance: 0.0,
             member_energy: max_home_energy,
+            target_value: DEFENSE_TARGET_VALUE,
+            onsite_window: DEFENSE_ONSITE_WINDOW,
+            params: CompositionParams { member_energy: max_home_energy, ..Default::default() },
         };
         let defend_comp = decide_doctrine(&defend_ctx, &defend_docs).and_then(|d| screeps_combat_decision::doctrine::plan_engagement(d, &defend_ctx, None).composition);
         if let Some(defend_comp) = defend_comp {
@@ -579,6 +604,9 @@ impl WarOperation {
                 // A remote has no spawn — the defender is built at the best HOME's capacity (ADR 0031: a real
                 // member energy, not 0; the assembler can't size at 0).
                 member_energy: max_home_energy,
+                target_value: DEFENSE_TARGET_VALUE,
+                onsite_window: DEFENSE_ONSITE_WINDOW,
+                params: CompositionParams { member_energy: max_home_energy, ..Default::default() },
             };
             // ADR 0031 D15: the doctrine driver assembles the defender (no hardcoded `solo_ranged`); `None`
             // only if no home can build even one member → skip (can't spawn).
@@ -1114,18 +1142,25 @@ impl WarOperation {
                 }),
                 importance,
                 member_energy: 0,
+                // EV upside of taking this objective (ADR 0031 D16) — the candidate's score scaled into a
+                // value high enough that a winnable target's EV clears the commit threshold (so the gated
+                // doctrine fields whenever winnable, preserving the pre-D16 behavior); a higher-scored target
+                // earns a higher P(win) over-investment. Window + Default knobs are filled per-home below.
+                target_value: candidate.score.max(1.0) * OFFENSE_TARGET_VALUE_SCALE,
+                onsite_window: 0,
+                params: CompositionParams::default(),
             };
             let doctrines = default_doctrines();
             let Some(doctrine) = decide_doctrine(&base_ctx, &doctrines) else {
                 continue;
             };
 
-            // WINNABILITY + ROI GATE (ADR 0020 §12 / ADR 0031 D15): the ONE offense path — compute the best
-            // in-range home's force_ceiling budget, run the shared doctrine driver (emit_requirement →
-            // assemble_force), then the ROI gate. A GATED doctrine (`honor_verdict`: core / siege / gated raid)
-            // DEFERS an unwinnable room (and needs scouted defense to judge it); an ALWAYS-FIELD doctrine
-            // (operator-flag raid / harass) fields the assembled force regardless (sized to the threat + the
-            // default floor). Unaffordable / unreachable ⇒ skip — never feed a squad to its death.
+            // WINNABILITY + ROI GATE (ADR 0020 §12 / ADR 0031 D16): the ONE offense path — find the best
+            // in-range home's launch window + energy, run the shared doctrine driver (emit_requirement → EV
+            // optimize_composition), then the ROI gate. A GATED doctrine (`honor_verdict`: core / siege /
+            // gated raid) DEFERS an unwinnable / negative-EV room (and needs scouted defense to judge it); an
+            // ALWAYS-FIELD doctrine (operator-flag raid / harass) fields the EV-best force regardless (sized to
+            // the threat + the default floor). Unaffordable / unreachable ⇒ skip — never feed a squad to its death.
             let objective: Option<(ObjectiveKind, f32, SquadComposition)> = if doctrine.honor_verdict() && candidate.defense.is_none() {
                 // A gated doctrine needs the scouted defense to judge winnability; without it, don't commit.
                 None
@@ -1135,9 +1170,14 @@ impl WarOperation {
                         info!("[War]   Skip {} -- no home room can reach it within a creep lifetime", candidate.room);
                         None
                     }
-                    Some((budget, member_energy)) => {
-                        let ctx = EngagementContext { member_energy, ..base_ctx.clone() };
-                        let plan = plan_engagement(doctrine, &ctx, Some(budget));
+                    Some((onsite_window, member_energy)) => {
+                        let ctx = EngagementContext {
+                            member_energy,
+                            onsite_window,
+                            params: CompositionParams { member_energy, ..Default::default() },
+                            ..base_ctx.clone()
+                        };
+                        let plan = plan_engagement(doctrine, &ctx, None);
                         if doctrine.honor_verdict() && !plan.winnable() {
                             info!(
                                 "[War]   Skip {} -- force oracle: not winnable for one squad ({})",
@@ -1374,40 +1414,61 @@ fn classify_coordination(candidate: &AttackCandidate) -> EnemyCoordination {
     }
 }
 
-/// The best (longest on-site) winnability [`ForceBudget`] for launching a `fighter`-led squad at `target`
-/// from any home room (ADR 0020 §12.2 / ADR 0031 P4): the budget is the template-free [`force_ceiling`]
-/// (the strongest single squad of this kill weapon at the home's energy), so deleting the catalog doesn't
-/// remove the budget. On-site ticks = `CREEP_LIFE_TIME − spawn − travel`, via
-/// [`SquadComposition::estimated_combat_time`]. Picks the home that yields the most on-site time. `None` if
-/// no home can reach the target.
+/// The best (longest on-site) launch window for a squad attacking `target` from any home room (ADR 0020
+/// §12.2 / ADR 0031 D16): returns `(onsite_window, member_energy)` — the EV optimizer
+/// ([`optimize_composition`], called via [`plan_engagement`]) presumes NO reference squad, so this no
+/// longer builds a `force_ceiling` budget; it only reports the launch window + the chosen home's energy.
+/// `onsite_window` = `CREEP_LIFE_TIME − spawn − travel` (via [`SquadComposition::estimated_combat_time`] over
+/// a per-member-capped probe shape, the same window the old `force_ceiling` reported); `member_energy` is the
+/// chosen home's capacity (the optimizer sizes the fielded force at the SAME energy the spawn path uses, so
+/// the affordability check and the actual spawn agree). Picks the home that yields the most on-site time.
+/// `None` if no home can reach the target.
 fn best_force_budget(
     fighter: SquadRole,
     home_rooms: &[RoomName],
     target: RoomName,
     pathfinder: &mut crate::pathing::pathfinderservice::PathfinderService,
-) -> Option<(ForceBudget, u32)> {
-    let mut best: Option<(ForceBudget, u32)> = None;
+) -> Option<(u32, u32)> {
+    let mut best: Option<(u32, u32)> = None; // (onsite_window, member_energy)
     for &home in home_rooms {
         let Some(room) = game::rooms().get(home) else {
             continue;
         };
         let energy_capacity = room.energy_capacity_available();
         let spawns = room.find(find::MY_SPAWNS, None).len().max(1) as u32;
-        // The route lookup is the bot's (the `PathfinderService`); the ceiling's on-site calc is a pure
-        // scalar over the precomputed travel ticks (Shim A — so the sim/eval can drive it too).
+        // The route lookup is the bot's (the `PathfinderService`); the on-site calc is a pure scalar over the
+        // precomputed travel ticks (Shim A — so the sim/eval can drive it too). The probe shape is a
+        // per-member-capped force of this kill weapon (the same shape the assembler/optimizer can field),
+        // so the spawn-time estimate matches.
         let Some(travel) = pathfinder.travel_ticks(home, target, game::time()) else {
             continue;
         };
-        let ceiling = force_ceiling(energy_capacity, fighter);
-        let onsite = ceiling.estimated_combat_time(travel, energy_capacity, spawns);
-        let budget = ceiling.force_budget(energy_capacity, onsite);
-        // Return the chosen home's energy too — the assembler sizes the fielded force at the SAME energy the
-        // spawn path will use, so the affordability check and the actual spawn agree.
-        if best.map(|(b, _)| onsite > b.onsite_budget_ticks).unwrap_or(true) {
-            best = Some((budget, energy_capacity));
+        let probe = probe_window_comp(energy_capacity, fighter);
+        let onsite = probe.estimated_combat_time(travel, energy_capacity, spawns);
+        if best.map(|(w, _)| onsite > w).unwrap_or(true) {
+            best = Some((onsite, energy_capacity));
         }
     }
     best
+}
+
+/// A small probe composition (per-member-capped fighter + healer) used ONLY to estimate the on-site launch
+/// window (spawn time) in [`best_force_budget`] — NOT a budget / reference squad (the EV optimizer presumes
+/// none). One fighter + one healer at the assembler's per-member caps is a representative member-body for the
+/// spawn-time-per-member estimate.
+fn probe_window_comp(member_energy: u32, fighter: SquadRole) -> SquadComposition {
+    use screeps_combat_decision::composition::assemble_force;
+    use screeps_combat_decision::force_sizing::RequiredForce;
+    let req = match fighter {
+        SquadRole::Dismantler => RequiredForce { heal_parts: 4, dismantle_parts: 4, ..Default::default() },
+        _ => RequiredForce { heal_parts: 4, immune_struct_parts: 4, ..Default::default() },
+    };
+    assemble_force(&req, member_energy).unwrap_or_else(|| {
+        // Degenerate: can't field even a tiny probe → an empty single-slot shell (window calc only needs a
+        // member body for the spawn-time-per-member estimate).
+        assemble_force(&RequiredForce { heal_parts: 4, ..Default::default() }, member_energy.max(550))
+            .expect("a minimal heal probe is always fieldable at >=550 energy")
+    })
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
