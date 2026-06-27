@@ -366,7 +366,9 @@ impl WarOperation {
                 defense: DefenseProfile::default(),
                 enemy_force: Some(threat),
                 importance: 0.0,
-                member_energy: 0,
+                // The defended room is owned (has a spawn) — size the defender to ITS spawn capacity so the
+                // oracle actually sizes a blob (0 made sized_for return None → bare template; ADR 0029).
+                member_energy: game::rooms().get(room_name).map(|r| r.energy_capacity_available()).unwrap_or(0),
             };
             let composition = decide_doctrine(&ctx, &defense_docs)
                 .and_then(|d| d.plan(&ctx, None).composition)
@@ -922,7 +924,13 @@ impl WarOperation {
                     let safe_mode_penalty = if has_safe_mode { 20.0 } else { 0.0 };
                     let score = 40.0 - distance_penalty - tower_penalty - safe_mode_penalty;
 
-                    if score > 0.0 {
+                    // ResourceDenial fields a FIXED solo harasser (HarassRemote, no oracle gate). A lone
+                    // creep can deny an UNDEFENDED player remote (kill miners/haulers) but is just fed to its
+                    // death by a single tower (out-ranges + out-damages, un-kiteable). So only harass towerless
+                    // rooms here. Sizing a real raid to a DEFENDED player room (route ResourceDenial through
+                    // the sized+gated PlayerRaid doctrine, populating `defense`) is the ADR 0029 generalization
+                    // follow-up — a notable offense-behavior change held for review, not a doomed solo.
+                    if score > 0.0 && tower_count == 0 {
                         candidates.push(AttackCandidate {
                             room: room_name,
                             source: TargetSource::ResourceDenial,

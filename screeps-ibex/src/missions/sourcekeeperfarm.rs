@@ -402,7 +402,11 @@ impl Mission for SourceKeeperFarmMission {
             .and_then(|d| d.plan(&ctx, None).composition)
             .unwrap_or_else(SquadComposition::duo_sk_farmer);
 
-        let request = ObjectiveRequest::new(farm_kind, OBJECTIVE_PRIORITY_LOW, ForceRequirement::single(comp))
+        // MEDIUM (not LOW): the SK duo must FORM to mine, but at LOW its slots map to SPAWN_MEDIUM
+        // (`spawn_priority_for`) — below economy — so it lost every spawn lane to miners/haulers and
+        // stalled at 1/3 forever (the long-standing zero-SK-farm). At MEDIUM its forming slots map to
+        // SPAWN_HIGH and win lanes; CRITICAL miners still out-rank it, so income is protected.
+        let request = ObjectiveRequest::new(farm_kind, OBJECTIVE_PRIORITY_MEDIUM, ForceRequirement::single(comp))
             .owner(ObjectiveOwner::SourceKeeper);
         system_data.combat_objective_queue.request(request, game::time());
 
