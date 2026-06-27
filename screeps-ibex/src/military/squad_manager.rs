@@ -57,13 +57,14 @@ use specs::saveload::*;
 /// e.g. SK `max_concurrent_farms` — are enforced by the producers.)
 const MAX_CONCURRENT_SQUADS: usize = 4;
 
-/// Cap on squads still FORMING (incomplete roster) at once. A forming squad's slots spawn at HIGH (above
-/// the economy bulk — see `spawn_priority_for`), so letting many form together starves logistics AND
-/// splits the scarce high-priority spawn-ticks so none completes (observed: two squads co-stalled at 3/5
-/// and 1/2 for thousands of ticks). Serializing finishes one or two rosters before the next is claimed.
-/// Complete squads (out fighting) do NOT count toward this, so it never reduces total concurrent offense
-/// below `MAX_CONCURRENT_SQUADS` — it only paces how fast new rosters are started.
-const MAX_FORMING_SQUADS: usize = 2;
+/// Cap on squads still FORMING (incomplete roster) at once. A forming squad's slots spawn ABOVE economy
+/// (see `spawn_priority_for`), so letting several form together both starves logistics AND splits the
+/// scarce spawn lanes so no roster completes (observed: squads co-stalled at 3/5 for thousands of ticks
+/// even with bankable members). Serializing to ONE finishes a roster before the next is claimed, so the
+/// colony's combat-spawn throughput concentrates on completing it. Complete squads (out fighting) do NOT
+/// count toward this, so it never reduces total concurrent offense below `MAX_CONCURRENT_SQUADS` — it
+/// only paces how fast new rosters are started.
+const MAX_FORMING_SQUADS: usize = 1;
 
 /// Max room distance from a candidate home to the objective room for that home to
 /// be a spawn source (keeps a squad from being spawned across the map). Matches
@@ -86,19 +87,24 @@ fn room_distance(a: RoomName, b: RoomName) -> u32 {
     delta.0.unsigned_abs().max(delta.1.unsigned_abs())
 }
 
+/// Spawn priority for active combat (offense/defense) squad members: ABOVE economy HIGH (75 — haulers/
+/// builders) so a FORMING squad reliably WINS spawn lanes and completes its roster, but BELOW CRITICAL
+/// (100 — miners) so energy income is never starved. Combat at plain HIGH only TIED economy and rosters
+/// stalled partway even with bankable members (observed stuck at 3/5); `MAX_FORMING_SQUADS` bounds how
+/// many squads spawn at this tier at once (1), so the economy preemption is brief and contained.
+const SPAWN_PRIORITY_FORMING_COMBAT: f32 = 87.5; // between SPAWN_PRIORITY_HIGH (75) and _CRITICAL (100)
+
 /// Map an objective's selection priority to a spawn-queue priority so a FORMING combat squad is not
 /// starved below economy. The spawnsystem head-of-line break (`spawnsystem.rs`: a request with
-/// `body_cost > available_energy` but `<= energy_capacity` → `break`) reserves each idle home's energy for
-/// the highest-priority pending request and spawns nothing below it that tick. MEDIUM offense slots
-/// therefore sat permanently last behind the colony's constant economy demand and rosters never completed
-/// (observed dead-stuck at 3/5 for thousands of ticks despite idle in-range spawns). MEDIUM+ objectives
-/// (active offense/defense) map to HIGH so their slots form in the gaps between CRITICAL miners and
-/// transient-HIGH haulers without preempting energy income; only LOW farms stay at MEDIUM. The
-/// `MAX_FORMING_SQUADS` cap bounds how many spawn at HIGH at once. (Defense objectives upsert at
+/// `body_cost > available_energy` but `<= energy_capacity` → `break`) reserves each home's energy for the
+/// highest-priority pending request and spawns nothing below it that tick. So MEDIUM offense slots sat
+/// permanently last, and even at HIGH they only TIED economy and won ~3 of 5 lanes (roster stuck at 3/5).
+/// MEDIUM+ objectives (active offense/defense) therefore map to `SPAWN_PRIORITY_FORMING_COMBAT` (above
+/// economy, below CRITICAL miners); only LOW farms stay at MEDIUM. (Defense objectives upsert at
 /// `OBJECTIVE_PRIORITY_HIGH`; invader-core offense at `..._MEDIUM`; farms at `..._LOW`.)
 fn spawn_priority_for(objective_priority: f32) -> f32 {
     if objective_priority >= OBJECTIVE_PRIORITY_MEDIUM {
-        SPAWN_PRIORITY_HIGH
+        SPAWN_PRIORITY_FORMING_COMBAT
     } else {
         SPAWN_PRIORITY_MEDIUM
     }
@@ -1040,15 +1046,19 @@ mod tests {
     #[test]
     fn forming_combat_squads_spawn_above_economy_bulk() {
         use crate::military::objective_queue::{OBJECTIVE_PRIORITY_CRITICAL, OBJECTIVE_PRIORITY_HIGH, OBJECTIVE_PRIORITY_LOW};
-        // Active offense (a MEDIUM objective, e.g. an invader core) MUST map to HIGH spawn priority, or the
-        // spawnsystem head-of-line break strands its forming slots permanently below the economy bulk and
-        // the roster never completes (the dead-stall root). Defense (HIGH) and any CRITICAL stay HIGH.
-        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_CRITICAL), SPAWN_PRIORITY_HIGH);
-        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_HIGH), SPAWN_PRIORITY_HIGH);
+        // Active offense (a MEDIUM objective, e.g. an invader core) MUST map ABOVE economy so its forming
+        // slots win spawn lanes and the roster completes; at plain HIGH it only tied economy and stalled at
+        // 3/5. Defense (HIGH) and any CRITICAL also map above economy. All sit below CRITICAL miners.
+        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_CRITICAL), SPAWN_PRIORITY_FORMING_COMBAT);
+        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_HIGH), SPAWN_PRIORITY_FORMING_COMBAT);
         assert_eq!(
             spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM),
-            SPAWN_PRIORITY_HIGH,
-            "MEDIUM offense must form at HIGH, not be starved at MEDIUM"
+            SPAWN_PRIORITY_FORMING_COMBAT,
+            "MEDIUM offense must form above economy, not be starved"
+        );
+        assert!(
+            SPAWN_PRIORITY_FORMING_COMBAT > SPAWN_PRIORITY_HIGH && SPAWN_PRIORITY_FORMING_COMBAT < SPAWN_PRIORITY_CRITICAL,
+            "forming combat sits above economy HIGH but below CRITICAL miners (income protected)"
         );
         // Low-priority farms stay below combat so they never preempt economy.
         assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_LOW), SPAWN_PRIORITY_MEDIUM);
