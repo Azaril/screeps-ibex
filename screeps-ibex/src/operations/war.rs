@@ -746,9 +746,19 @@ impl WarOperation {
                         .invader_cores()
                         .iter()
                         .max_by_key(|core| core.level())
-                        .map(|core| (core.level(), core.pos(), core.hits(), core.ticks_to_deploy()))
+                        .map(|core| {
+                            // P-OBJ #23 lifetime-aware offense: read the core's self-decay clock
+                            // (EFFECT_COLLAPSE_TIMER — present on lesser reserver cores AND strongholds) so
+                            // we never field a squad against a core that will collapse before we can clear it.
+                            let collapse_ticks = core
+                                .effects()
+                                .iter()
+                                .find(|e| matches!(e.effect(), EffectType::NaturalEffect(NaturalEffectType::CollapseTimer)))
+                                .map(|e| e.ticks_remaining());
+                            (core.level(), core.pos(), core.hits(), core.ticks_to_deploy(), collapse_ticks)
+                        })
                 });
-            let invader_core_level = invader_core.map(|(level, _, _, _)| level);
+            let invader_core_level = invader_core.map(|(level, _, _, _, _)| level);
 
             // Check for power banks.
             let power_bank_info = room_entity
@@ -784,7 +794,7 @@ impl WarOperation {
             // and the launch loop upserts a `Dismantle { room, pos }` instead of
             // launching an `AttackOperation` — see the launch loop's source→objective
             // mapping. The affordability/interest gate is preserved here.
-            if let Some((core_level, core_pos, core_hits, ticks_to_deploy)) = invader_core {
+            if let Some((core_level, core_pos, core_hits, ticks_to_deploy, core_collapse_ticks)) = invader_core {
                 // D13: a deploying invader core carries the Invulnerability natural effect during its
                 // `ticks_to_deploy` window — ZERO damage is possible, so fielding a squad against it
                 // just chips nothing until it deploys (a real "combat does nothing" trap). Skip it and
@@ -843,18 +853,38 @@ impl WarOperation {
                             repair_per_tick: threat_data.repair_per_tick as f32,
                             safe_mode: threat_data.safe_mode_active,
                         };
-                        candidates.push(AttackCandidate {
-                            room: room_name,
-                            source: TargetSource::InvaderCore { level: core_level },
-                            score,
-                            tower_count,
-                            estimated_enemy_dps: threat_data.estimated_dps,
-                            estimated_enemy_heal: threat_data.estimated_heal,
-                            has_safe_mode: false,
-                            estimated_roi: None,
-                            target_pos: Some(core_pos),
-                            defense: Some(defense),
-                        });
+                        // P-OBJ #23 lifetime-aware: skip a core that will self-decay before a squad can
+                        // realistically form, travel, and clear its HP (the W4N2 collapse-race that wastes a
+                        // squad and leaves orphans). Conservative clear at ~CLEAR_DPS sized-ranged dps plus a
+                        // form + distance-scaled travel overhead. A core with no decay timer is treated as
+                        // persistent (attack). The margin is large in practice (thousands of ticks left, or
+                        // about to vanish), so the estimate need not be exact.
+                        const CLEAR_DPS: u32 = 200;
+                        let est_clear = core_hits / CLEAR_DPS + 150 + min_distance * 50;
+                        let decays_first = core_collapse_ticks.is_some_and(|ct| est_clear > ct);
+                        if decays_first {
+                            if war_debug {
+                                info!(
+                                    "[War]   Skip {} -- core self-decays first (~{} ticks left < ~{} to form+travel+clear)",
+                                    room_name,
+                                    core_collapse_ticks.unwrap_or(0),
+                                    est_clear
+                                );
+                            }
+                        } else {
+                            candidates.push(AttackCandidate {
+                                room: room_name,
+                                source: TargetSource::InvaderCore { level: core_level },
+                                score,
+                                tower_count,
+                                estimated_enemy_dps: threat_data.estimated_dps,
+                                estimated_enemy_heal: threat_data.estimated_heal,
+                                has_safe_mode: false,
+                                estimated_roi: None,
+                                target_pos: Some(core_pos),
+                                defense: Some(defense),
+                            });
+                        }
                     }
                 }
             }

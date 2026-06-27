@@ -112,6 +112,17 @@ impl MoveToRoom {
         let creep_pos = creep.pos();
         let creep_entity = tick_context.runtime_data.creep_entity;
 
+        // P-OBJ #23 zero-orphan recall (travel path): if this squad was retired while we were en route
+        // (its objective resolved/given-up), DON'T trek on to the now-abandoned objective room — recall to
+        // the nearest home spawn and recycle, so an orphan is never stranded mid-travel on a room edge.
+        if state_context.squad_entity.is_some() && get_squad_state(state_context.squad_entity, tick_context).is_none() {
+            let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
+            if hostiles.is_empty() {
+                Engaged::recall_to_recycle(creep, creep_pos, creep_entity, tick_context);
+                return None;
+            }
+        }
+
         // Check for hostiles in the current room -- respond to ambush.
         if creep_pos.room_name() != state_context.target_room {
             let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
