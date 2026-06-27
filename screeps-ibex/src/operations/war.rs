@@ -1137,7 +1137,7 @@ impl WarOperation {
                                     info!(
                                         "[War]   {} winnable via {:?} (~{} ticks): {} sized to {} ranged + {} heal parts, P(win)~{:.0}% (cost {}, {})",
                                         candidate.room, plan.assessment.mode, plan.assessment.est_ticks, doctrine.name(),
-                                        plan.required.ranged_parts, plan.required.heal_parts, pwin * 100.0, spawn_cost, plan.assessment.reason
+                                        plan.required.immune_struct_parts + plan.required.anti_creep_parts, plan.required.heal_parts, pwin * 100.0, spawn_cost, plan.assessment.reason
                                     );
                                     Some((kind, priority, sized))
                                 }
