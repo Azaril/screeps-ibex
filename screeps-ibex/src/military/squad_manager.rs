@@ -65,6 +65,13 @@ const MAX_CONCURRENT_SQUADS: usize = 4;
 /// below `MAX_CONCURRENT_SQUADS` — it only paces how fast new rosters are started.
 const MAX_FORMING_SQUADS: usize = 2;
 
+/// While a squad is still FORMING (incomplete roster), renew a present member whose remaining TTL drops
+/// below this so a slow/contested form does not bleed out its early members to old age before the roster
+/// completes (ADR 0028 — the live no-renew member-death; `request_renew` previously had zero callers). The
+/// spawn system's renew pass only uses spawns no pending spawn claimed + is gated on room energy, so this
+/// never starves spawning or a poor colony.
+const RENEW_WHILE_FORMING_TTL: u32 = 300;
+
 /// Max room distance from a candidate home to the objective room for that home to
 /// be a spawn source (keeps a squad from being spawned across the map). Matches
 /// the legacy `MAX_DEFENSE_SOURCE_DISTANCE` (10) so the defense migration does not
@@ -357,6 +364,44 @@ impl<'a> System<'a> for SquadManagerSystem {
                     continue;
                 }
                 queue_slot_spawn(&mut data.spawn_queue, &homes, slot, slot_index, target_room, *squad_entity, spawn_priority, debug);
+            }
+        }
+
+        // ── Phase B-renew: keep a FORMING squad's early members alive while it rallies for the full
+        // roster (ADR 0028). Without renew, a slow/contested form loses its early members to old age →
+        // they drop to unfilled → re-spawn → churn → never all-present. Request a renew for any present
+        // member with low TTL; the spawn system renews creeps adjacent to a free spawn (the rally point is
+        // a home spawn — see compute_squad_orders) and is gated on room energy, so it never starves
+        // spawning or a poor colony.
+        for (squad_entity, obj_id) in &live_managed {
+            let requested = data
+                .objective_queue
+                .get(*obj_id)
+                .and_then(|o| o.force.squads.first())
+                .map(|c| c.slots.len())
+                .unwrap_or(0);
+            let Some(ctx) = data.squad_contexts.get(*squad_entity) else {
+                continue;
+            };
+            if requested == 0 || ctx.filled_slot_count() >= requested {
+                continue; // not forming (full or unknown roster) — the squad departs; no renew needed
+            }
+            // Collect first (immutable ctx + creep_owner borrow), then issue (mutable spawn_queue).
+            let renews: Vec<(Entity, Entity, u32)> = ctx
+                .members
+                .iter()
+                .filter_map(|m| {
+                    let pos = m.position?;
+                    let home = homes.iter().find(|h| h.name == pos.room_name())?;
+                    let ttl = data.creep_owner.get(m.entity).and_then(|co| co.owner.resolve()).and_then(|c| c.ticks_to_live())?;
+                    (ttl < RENEW_WHILE_FORMING_TTL).then_some((home.entity, m.entity, ttl))
+                })
+                .collect();
+            for (room, member, ttl) in renews {
+                data.spawn_queue.request_renew(room, member, ttl);
+                if debug {
+                    log::info!("[Lifecycle] RENEW squad={:?} obj={:?} ttl={} (forming — keep the roster alive)", squad_entity, obj_id, ttl);
+                }
             }
         }
 
@@ -875,7 +920,13 @@ fn compute_squad_orders(
             // toward the objective until the full roster is present. apply_squad_decision below issues the
             // Formation move orders that make the members track this (home) anchor.
             if let Some(lead) = member_views.iter().find_map(|m| m.pos) {
-                let rally = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), lead.room_name());
+                // Rally AT a home spawn (not the room centre) so the gathering members stay adjacent to a
+                // spawn and can be RENEWED while waiting for the full roster (ADR 0028 — the spawn renew
+                // pass needs the creep next to the spawn). Fall back to the room centre if no spawn resolves.
+                let rally = screeps::game::rooms()
+                    .get(lead.room_name())
+                    .and_then(|r| r.find(screeps::constants::find::MY_SPAWNS, None).first().map(|s| s.pos()))
+                    .unwrap_or_else(|| Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), lead.room_name()));
                 crate::military::formation::advance_squad_virtual_position(ctx, rally);
             }
             if debug {
