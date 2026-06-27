@@ -1,7 +1,9 @@
 use super::data::*;
 use super::operationsystem::*;
 use screeps_combat_decision::composition::SquadComposition;
-use screeps_combat_decision::doctrine::{decide_doctrine, default_doctrines, DoctrineObjective, EnemyCoordination, EngagementContext};
+use screeps_combat_decision::doctrine::{
+    decide_doctrine, default_doctrines, defense_doctrines, DoctrineObjective, EnemyCoordination, EnemyForce, EngagementContext,
+};
 use screeps_combat_decision::force_sizing::{win_probability, DefenseProfile, ForceBudget, TowerThreat, HOLD_MARGIN};
 use crate::military::objective_queue::{
     ForceRequirement, ObjectiveKind, ObjectiveOwner, ObjectiveRequest, OBJECTIVE_PRIORITY_CRITICAL, OBJECTIVE_PRIORITY_HIGH,
@@ -82,31 +84,8 @@ pub struct AttackCandidate {
     pub defense: Option<DefenseProfile>,
 }
 
-/// Defense escalation level, replacing string-based "Solo"/"Duo"/"Quad".
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DefenseEscalation {
-    /// Single ranged+heal defender.
-    Solo,
-    /// Attacker + healer pair.
-    Duo,
-    /// Four creeps in 2x2 formation.
-    Quad,
-}
-
-impl DefenseEscalation {
-    /// Determine escalation level from threat analysis. `pub` so the expansion
-    /// escort (ADR 0017, deferred) can size its pre-clear squad with the same
-    /// policy war uses for reactive defense.
-    pub fn from_threat(estimated_dps: f32, estimated_heal: f32, hostile_count: usize, any_boosted: bool) -> Self {
-        if (any_boosted && estimated_dps > 200.0) || (estimated_heal > 100.0 && estimated_dps > 150.0) || hostile_count >= 4 {
-            DefenseEscalation::Quad
-        } else if estimated_dps > 60.0 || estimated_heal > 20.0 || hostile_count >= 2 || any_boosted {
-            DefenseEscalation::Duo
-        } else {
-            DefenseEscalation::Solo
-        }
-    }
-}
+// Defender selection (the former `DefenseEscalation` 3-bucket) now lives on the doctrine registry —
+// `screeps_combat_decision::doctrine::GarrisonDefense` / `defense_doctrines()` (ADR 0026 §9.10 L3).
 
 /// Whether a hostile creep in an owned room warrants dispatching a defender.
 ///
@@ -365,20 +344,36 @@ impl WarOperation {
         // (`owner().mine() && visible()`) preserves the ADR 0017 §13 ownership-
         // subordinate invariant — a lost room drops out, its TTL lapses, the squad
         // retires. (Replaces the removed squad-less `SquadDefenseMission`.)
+        let defense_docs = defense_doctrines();
         for need in rooms_needing_defense {
-            let escalation = DefenseEscalation::from_threat(need.estimated_dps, need.estimated_heal, need.hostile_count, need.any_boosted);
             let room_name = match system_data.room_data.get(need.room_entity) {
                 Some(rd) => rd.name,
                 None => continue,
             };
-            let composition = match escalation {
-                DefenseEscalation::Quad => SquadComposition::quad_ranged(),
-                DefenseEscalation::Duo => SquadComposition::duo_attack_heal(),
-                DefenseEscalation::Solo => SquadComposition::solo_ranged(),
+            // UNIFIED defender selection (ADR 0026 §9.10 L3): the `GarrisonDefense` doctrine selects the
+            // shape from the threat (the former `DefenseEscalation::from_threat` thresholds, now on the
+            // registry). An owned-room attacker may be a player → `Coordinated` (the Q1 safe default).
+            let threat = EnemyForce {
+                dps: need.estimated_dps,
+                heal: need.estimated_heal,
+                hits: 0,
+                count: need.hostile_count as u32,
+                boosted: need.any_boosted,
             };
+            let ctx = EngagementContext {
+                objective: DoctrineObjective::ClearCreeps,
+                coordination: EnemyCoordination::Coordinated,
+                defense: DefenseProfile::default(),
+                enemy_force: Some(threat),
+                importance: 0.0,
+                member_energy: 0,
+            };
+            let composition = decide_doctrine(&ctx, &defense_docs)
+                .and_then(|d| d.plan(&ctx, None).composition)
+                .unwrap_or_else(SquadComposition::solo_ranged);
             info!(
-                "[War] Defend objective for owned room {} ({:?}, dps={:.0}, heal={:.0}, count={})",
-                room_name, escalation, need.estimated_dps, need.estimated_heal, need.hostile_count
+                "[War] Defend objective for owned room {} (dps={:.0}, heal={:.0}, count={})",
+                room_name, need.estimated_dps, need.estimated_heal, need.hostile_count
             );
             // Owned-room defense is CRITICAL — our base is under attack. Under the
             // manager's concurrency cap it must out-rank operator defend-flags (HIGH)
@@ -536,24 +531,30 @@ impl WarOperation {
         // re-created it endlessly. As an objective there is no mission-internal
         // ownership self-termination; the producer re-asserts while invaders are
         // present and the manager retires the squad (TTL lapse) once they're gone.
+        let defense_docs = defense_doctrines();
         for (room_entity, dps, heal, count) in remote_rooms_with_invaders {
             let room_name = match system_data.room_data.get(room_entity) {
                 Some(rd) => rd.name,
                 None => continue,
             };
-            // Escalate based on invader strength.
-            let escalation = if dps > 100.0 || heal > 30.0 || count >= 3 {
-                DefenseEscalation::Duo
-            } else {
-                DefenseEscalation::Solo
+            // UNIFIED defender selection (ADR 0026 §9.10 L3): the `GarrisonDefense` doctrine sizes the
+            // shape. Remote invaders are NPCs → `Individual`. (The shape thresholds harmonize to the former
+            // `from_threat` set — practically Solo/Duo for the small invader forces this path sees.)
+            let threat = EnemyForce { dps, heal, hits: 0, count: count as u32, boosted: false };
+            let ctx = EngagementContext {
+                objective: DoctrineObjective::ClearCreeps,
+                coordination: EnemyCoordination::Individual,
+                defense: DefenseProfile::default(),
+                enemy_force: Some(threat),
+                importance: 0.0,
+                member_energy: 0,
             };
-            let composition = match escalation {
-                DefenseEscalation::Duo => SquadComposition::duo_attack_heal(),
-                _ => SquadComposition::solo_ranged(),
-            };
+            let composition = decide_doctrine(&ctx, &defense_docs)
+                .and_then(|d| d.plan(&ctx, None).composition)
+                .unwrap_or_else(SquadComposition::solo_ranged);
             info!(
-                "[War] Defend objective for remote room {} ({:?}, dps={:.0}, heal={:.0}, count={})",
-                room_name, escalation, dps, heal, count
+                "[War] Defend objective for remote room {} (dps={:.0}, heal={:.0}, count={})",
+                room_name, dps, heal, count
             );
             // Remote-invader cleanup is MEDIUM — below owned-room defense (CRITICAL)
             // and operator defend-flags (HIGH), above SK farming (LOW). So under the
@@ -979,7 +980,7 @@ impl WarOperation {
                 objective: doc_obj,
                 coordination: classify_coordination(&candidate),
                 defense: candidate.defense.clone().unwrap_or_default(),
-                worst_single: None,
+                enemy_force: None,
                 importance,
                 member_energy: 0,
             };
