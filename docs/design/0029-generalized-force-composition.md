@@ -131,7 +131,9 @@ revisit the auction when a concrete objective demonstrably loses value to blob-o
 ## 9. Decisions
 
 - **D1.** Generalize `GarrisonDefense` onto the continuous oracle; delete the solo/duo/quad buckets. *(landed)*
-- **D2.** Base = `quad_ranged` (budget sizes a strong threat; 4-member floor is the safe over-spend side). *(landed)*
+- **D2.** Defense sizing budget from `quad_ranged` (sizes a strong threat) but FLOOR from `duo_attack_heal` (2) —
+  the floor is decoupled from the budget so a trivial threat doesn't over-spawn to 4. *(landed; the original
+  4-member floor over-loaded the spawn lanes — corrected in §11 FIX B)*
 - **D3.** Defense scan sizes to the defended room's spawn capacity, not 0. *(landed)*
 - **D4.** Composition stays on the doctrine+oracle axis; the strategy layer stays tactics. *(decision)*
 - **D5.** Custom templates only for behavioral mixes / no-fight / measured optimal mixes (§5); SkSuppression and
@@ -141,6 +143,11 @@ revisit the auction when a concrete objective demonstrably loses value to blob-o
 - **D7.** ResourceDenial: only solo-harass towerless rooms now; route defended rooms through sized+gated
   `PlayerRaid` as a reviewed follow-up. *(half landed, half held)*
 - **D8.** Defer the part-auction until a measured objective needs a non-blob mix. *(decision)*
+- **D9.** The rally-until-full gate is OFFENSE-only: defenders (`ObjectiveKind::Defend`) deploy immediately with
+  whatever has spawned (§11 FIX A). *(landed)*
+- **D10.** The `MAX_FORMING_SQUADS` pace counts only OFFENSE forming squads; defense is exempt (§11 FIX C). *(landed)*
+- **D11.** Renew-while-forming is moot once defense deploys immediately + offense forming is paced (D9/D10); left in
+  place (harmless) but not relied on (§11 FIX D). *(decision)*
 
 ## 10. Remaining work
 
@@ -149,5 +156,33 @@ revisit the auction when a concrete objective demonstrably loses value to blob-o
    `run_lifecycle` (formed, undefended). Discriminates "form/travel degrades a sized force" from "the live
    under-sizing was the whole story".
 2. **D7 follow-up:** the sized+gated `PlayerRaid` routing for `ResourceDenial` (operator review — offense behavior).
-3. **Live re-soak (private server):** confirm W9N8 no longer churns (continuous defender, no 1↔2 flap) and W6N4 SK
-   reaches 3/3 and mines.
+3. **Live re-soak (private server):** ✅ W9N8 oscillation fixed (stable 4-slot request) + renew fires — but the
+   re-soak EXPOSED the forming-completion wall (§11); FIX A/B/C landed + re-deployed, re-verifying.
+
+## 11. Forming-completion under contention (the generalization's second-order effect — landed)
+
+The §4 generalization fixed the W9N8 size oscillation, but the live re-soak then showed a NEW wall: four squads
+forming at once, every one stuck at N-1/4 forever, none departing (defenders never deploy, offense never attacks).
+A parallel investigation ranked the causes:
+
+- **#1 (dominant) — the rally-until-full gate was applied to DEFENSE.** `squad_ready_to_depart` holds a squad at
+  home until `present >= requested` — correct for an OFFENSE bloc crossing into a contested room, but WRONG for a
+  defender of an owned room under attack: it sits at home massing a 4th member that contention never delivers while
+  the room burns. The *direct, sufficient* cause of "stuck at N-1, never departs".
+- **#2 — the 4-member defense floor over-loaded the lanes.** §4's `quad_ranged` floor × N contested rooms ≈ 16
+  concurrent HIGH spawns saturate throughput, so the missing member never spawns (D2 was the original mistake).
+- **#3 — the forming cap gated new claims, not in-flight stock** (so concurrent forming was unbounded).
+- **#4 — renew was a *symptom*** (it needs a free spawn; under contention spawns are busy, so it can't fire — the
+  `ttl` declines despite the request).
+
+**Fixes (landed), ordered by leverage:**
+- **FIX A (D9) — rally gate objective-kind-aware:** defenders deploy immediately. *Subsumes the visible lockup + most
+  of renew.* (`squad_manager.rs` `compute_squad_orders`)
+- **FIX B (D2) — decouple the defense floor from the budget:** quad budget (sizes a strong threat) + duo floor (no
+  trivial over-spawn). *Subsumes the lane saturation.* (`doctrine.rs` `GarrisonDefense::plan`)
+- **FIX C (D10) — count only OFFENSE forming** toward `MAX_FORMING_SQUADS`: defense exempt; offense serializes at ≤2.
+- **FIX D (D11) — renew demoted:** A+B make it moot; left in place, harmless.
+
+**Recommended follow-up:** extend `run_forming` ([[0028]]) to model MULTI-squad lane contention (today it is
+single-squad) and prove A+B+C reproduce-then-fix the N-1 stall offline — the operator's tune-offline-not-live
+preference (the second-order analogue of §10 #1).
