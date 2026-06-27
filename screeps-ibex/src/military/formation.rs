@@ -226,7 +226,7 @@ pub fn standoff_one_tile(structure: Position, toward: Position) -> Position {
 /// #23 gates, lifted to the shared `screeps_combat_decision::rally` kernel (K0 / ADR 0028) so the bot and
 /// the offline lifecycle harness share ONE implementation. Re-exported here so existing call sites
 /// (`squad_manager`, `advance_squad_virtual_position`) are unchanged.
-pub use screeps_combat_decision::rally::{should_hold_at_boundary, squad_ready_to_depart};
+pub use screeps_combat_decision::rally::{should_hold_at_boundary, squad_ready_to_depart, squad_ready_to_depart_at_quorum};
 
 pub fn advance_squad_virtual_position(squad: &mut SquadContext, destination: Position) {
     // P-OBJ #23 invader no-engage ROOT CAUSE: count ONLY members with a resolved position. A still-

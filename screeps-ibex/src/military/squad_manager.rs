@@ -918,13 +918,17 @@ fn compute_squad_orders(
     // re-field → slot-0 forever (the actual invader no-engage root cause). Measured against the objective's
     // requested slot count so a death-degraded layout can't shrink "full".
     let member_positions: Vec<Option<Position>> = member_views.iter().map(|m| m.pos).collect();
-    // FIX A (ADR 0029, forming-completion): the rally-until-full gate is an OFFENSE bloc-cohesion mechanism
-    // (cross into a contested room together). A DEFENDER of an owned room under attack must NOT wait at home
-    // to mass a full roster — it deploys NOW with whatever has spawned, or the room burns while N-1 members
-    // wait for a 4th that spawn contention never delivers (the live 4-squads-stuck-at-N-1). Defense deploys
-    // immediately; offense still rallies as a bloc.
-    let ready_to_depart =
-        is_defend || crate::military::formation::squad_ready_to_depart(&member_positions, requested_slots);
+    // Rally/deploy gate, objective-kind-aware (ADR 0029 §11 + ADR 0030). An OFFENSE bloc must cross into a
+    // contested room ALL-OR-NOTHING (`squad_ready_to_depart`). A DEFENDER must GROUP UP enough to fight —
+    // a lone defender is picked off under-powered (operator 2026-06-27) — but must NOT wait for the
+    // unspawnable last member (the N-1/4 deadlock that froze defense). So defense deploys at a QUORUM and the
+    // rest reinforce by formation-follow. (The earlier full disconnect was the over-correction; ADR 0030 will
+    // tune the quorum by the objective's lifetime/wave tempo.)
+    let ready_to_depart = if is_defend {
+        crate::military::formation::squad_ready_to_depart_at_quorum(&member_positions, requested_slots)
+    } else {
+        crate::military::formation::squad_ready_to_depart(&member_positions, requested_slots)
+    };
 
     if let Some(ctx) = squad_contexts.get_mut(squad_entity) {
         if !ready_to_depart {
