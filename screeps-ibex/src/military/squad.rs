@@ -824,12 +824,13 @@ impl SquadContext {
         let new_layout = match (base_shape, living_count) {
             (_, 0) => FormationLayout::none(),
             (_, 1) => FormationLayout::none(),
-            (FormationShape::Box2x2, 3) => FormationLayout::triangle(),
+            // A degraded box of 2 is a line; any box of ≥3 stays a COMPACT box (ADR 0031 D14 — the
+            // count-driven `box_formation`, so the live layout and the `box_footprint(N)` probe agree).
             (FormationShape::Box2x2, 2) => FormationLayout::line(2),
+            (FormationShape::Box2x2, n) => FormationLayout::box_formation(n),
             (FormationShape::Triangle, 2) => FormationLayout::line(2),
             (FormationShape::Line, n) => FormationLayout::line(n),
             (FormationShape::WideLine, n) => FormationLayout::wide_line(n),
-            (shape, n) if n >= 4 && shape == FormationShape::Box2x2 => FormationLayout::box_formation(n),
             (_, n) => FormationLayout::line(n),
         };
 

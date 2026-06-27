@@ -4,139 +4,10 @@ use screeps::*;
 use screeps_rover::*;
 use specs::Entity;
 
-/// Offset positions for a 2x2 box formation relative to the anchor at (0,0).
-/// Anchor is top-left; other members fill right, below, and diagonal.
-const QUAD_OFFSETS: [(i32, i32); 4] = [(0, 0), (1, 0), (0, 1), (1, 1)];
-
-/// Offset positions for a line formation (front member first, others behind).
-const LINE_OFFSETS: [(i32, i32); 4] = [(0, 0), (0, 1), (0, 2), (0, 3)];
-
-/// Check if a 2x2 footprint at (x, y) is valid (all four tiles are within room bounds).
-pub fn is_valid_quad_position(x: u8, y: u8) -> bool {
-    // All four tiles of the 2x2 must be within walkable room bounds (1..48).
-    (1..=47).contains(&x) && (1..=47).contains(&y)
-}
-
-/// Apply a 2x2 cost matrix overlay for quad formation movement.
-/// Marks tiles where the 2x2 footprint would overlap walls or unwalkable terrain
-/// as impassable (cost 255).
-///
-/// This should be applied to the cost matrix before pathfinding for the quad anchor.
-pub fn apply_quad_cost_overlay(cost_matrix: &mut LocalCostMatrix, room_name: RoomName) {
-    let terrain = game::map::get_room_terrain(room_name);
-
-    if let Some(terrain) = terrain {
-        // For each potential anchor position, check if the 2x2 footprint is valid.
-        for x in 0u8..50 {
-            for y in 0u8..50 {
-                // Check if any of the 4 tiles in the 2x2 footprint is a wall.
-                let mut blocked = false;
-
-                for &(dx, dy) in &QUAD_OFFSETS {
-                    let fx = x as i32 + dx;
-                    let fy = y as i32 + dy;
-
-                    if !(0..50).contains(&fx) || !(0..50).contains(&fy) {
-                        blocked = true;
-                        break;
-                    }
-
-                    if terrain.get(fx as u8, fy as u8) == Terrain::Wall {
-                        blocked = true;
-                        break;
-                    }
-                }
-
-                if blocked {
-                    if let Ok(xy) = RoomXY::checked_new(x, y) {
-                        cost_matrix.set(xy, 255);
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Apply a formation-aware cost matrix overlay for any formation shape.
-/// Marks tiles where the formation footprint would overlap walls as impassable.
-/// Works for any formation shape, not just 2x2.
-pub fn apply_formation_cost_overlay(cost_matrix: &mut LocalCostMatrix, room_name: RoomName, layout: &FormationLayout) {
-    if layout.offsets.len() <= 1 {
-        return; // No overlay needed for single-member formations.
-    }
-
-    let terrain = game::map::get_room_terrain(room_name);
-
-    if let Some(terrain) = terrain {
-        for x in 0u8..50 {
-            for y in 0u8..50 {
-                let mut blocked = false;
-
-                for &(dx, dy) in &layout.offsets {
-                    let fx = x as i32 + dx;
-                    let fy = y as i32 + dy;
-
-                    if !(0..50).contains(&fx) || !(0..50).contains(&fy) {
-                        blocked = true;
-                        break;
-                    }
-
-                    if terrain.get(fx as u8, fy as u8) == Terrain::Wall {
-                        blocked = true;
-                        break;
-                    }
-                }
-
-                if blocked {
-                    if let Ok(xy) = RoomXY::checked_new(x, y) {
-                        cost_matrix.set(xy, 255);
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Apply hostile tower range costs to a cost matrix.
-/// Tiles within tower range get increased cost to encourage pathfinding around them.
-pub fn apply_tower_avoidance_costs(cost_matrix: &mut LocalCostMatrix, tower_positions: &[Position], room_name: RoomName) {
-    for tower_pos in tower_positions {
-        if tower_pos.room_name() != room_name {
-            continue;
-        }
-
-        let tx = tower_pos.x().u8();
-        let ty = tower_pos.y().u8();
-
-        // Apply costs in concentric rings around the tower.
-        for x in 0u8..50 {
-            for y in 0u8..50 {
-                let dx = (x as i32 - tx as i32).unsigned_abs();
-                let dy = (y as i32 - ty as i32).unsigned_abs();
-                let range = dx.max(dy);
-
-                let additional_cost: u8 = if range <= 5 {
-                    20 // Max damage range -- very expensive.
-                } else if range <= 10 {
-                    10 // Medium damage range.
-                } else if range <= 20 {
-                    5 // Low damage range.
-                } else {
-                    0
-                };
-
-                if additional_cost > 0 {
-                    if let Ok(xy) = RoomXY::checked_new(x, y) {
-                        let current = cost_matrix.get(xy);
-                        if current < 255 {
-                            cost_matrix.set(xy, current.saturating_add(additional_cost));
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+// ADR 0031 D14: the dead hardcoded-2×2 cost overlay (`is_valid_quad_position`, `apply_quad_cost_overlay`)
+// and its unused generalizations (`apply_formation_cost_overlay`, `apply_tower_avoidance_costs`) were
+// removed here — the LIVE footprint overlay is rover `moving_maximum(cm, w, h)`, fed the COMPACT
+// `box_footprint(N)` derived from the member count (see `advance_virtual_pos`).
 
 // ─── Virtual anchor movement (new) ─────────────────────────────────────────
 
@@ -400,14 +271,18 @@ fn squad_footprint(squad: &SquadContext) -> (u8, u8) {
 /// footprint expansion). Cost-matrix/source/pathfinder are built ad-hoc (they read `game::*`
 /// lazily). Validate behavior on the private server before relying on it live.
 fn advance_virtual_pos(squad: &mut SquadContext, destination: Position) {
-    // The cohesive footprint we WANT to route as. For a full quad this is the 2×2 box even when
-    // the member layout is temporarily collapsed to a line for a corridor; for everything else it
-    // is just the current layout's footprint. Probing with the tight footprint every tick gives a
-    // stable "does the box fit here?" signal independent of the current member layout, so the
-    // collapse/re-form below cannot oscillate.
-    let layout_footprint = squad_footprint(squad);
-    let is_quad = squad.members.len() >= 4;
-    let tight_footprint = if is_quad { (2, 2) } else { layout_footprint };
+    // The cohesive footprint we WANT to route as. For a ≥3-member blob this is the COMPACT box that
+    // holds all members (`box_footprint`, ADR 0031 D14 — N=4→2×2, 5-6→3×2, 7-8→3×3) even when the member
+    // layout is temporarily collapsed to a line for a corridor; for a duo/solo it is just the current
+    // layout's footprint. Probing with the box footprint every tick — derived from the member COUNT, not
+    // the live (possibly-collapsed) layout — gives a stable "does the box fit here?" signal, so the
+    // collapse/re-form below cannot oscillate. The rover overlay + single-file fallback handle any W×H.
+    let member_count = squad.members.len();
+    let tight_footprint = if member_count >= 3 {
+        box_footprint(member_count)
+    } else {
+        squad_footprint(squad)
+    };
 
     // Advance the anchor with the tight footprint; thread single-file when the box can't fit.
     // `tight_blocked` is the corridor signal that drives the member-layout collapse below.
@@ -457,20 +332,22 @@ fn advance_virtual_pos(squad: &mut SquadContext, destination: Position) {
     }
 }
 
-/// Decide the member layout for a quad given whether its tight (2×2 box) footprint is currently
+/// Decide the member layout for a box blob given whether its tight (compact-box) footprint is currently
 /// blocked. Returns `Some(new_layout)` when the layout should change this tick, or `None` to keep
 /// the current one.
 ///
 /// - **Collapse**: a `Box2x2` whose footprint is blocked drops to a single-file `Line` so members
 ///   thread the corridor.
-/// - **Re-form**: a `Line` whose box footprint fits again snaps back to `Box2x2` — the corridor →
-///   cohesive transition, taken the instant a group path exists.
+/// - **Re-form**: a `Line` whose box footprint fits again snaps back to a compact box ([`box_formation`])
+///   — the corridor → cohesive transition, taken the instant a group path exists.
 ///
-/// Scoped to full quads (≥4 members): every intended `Line` composition is a 2-member duo, so a
-/// 4-member `Line` is always a collapsed quad and re-forming it can never clobber an intended line.
-/// This is pure (no `game::*`) so the transition is unit-testable without the game runtime.
+/// Scoped to box blobs (≥3 members, ADR 0031 D14 — `formation_for` emits `Box2x2` for any count ≥3): every
+/// intended `Line` composition is a 2-member duo, so a ≥3-member `Line` is always a collapsed blob and
+/// re-forming it can never clobber an intended line. The offsets are count-driven (`line`/`box_formation`
+/// take the member count), so this generalizes to 5-8 members with no per-shape table. Pure (no `game::*`)
+/// so the transition is unit-testable without the game runtime.
 fn corridor_layout_transition(shape: Option<FormationShape>, member_count: usize, tight_blocked: bool) -> Option<FormationLayout> {
-    if member_count < 4 {
+    if member_count < 3 {
         return None;
     }
     match shape {
@@ -523,17 +400,53 @@ mod tests {
         // Line, box fits again → re-form to the tight box immediately.
         let reformed = corridor_layout_transition(Some(FormationShape::Line), 4, false).expect("should re-form");
         assert_eq!(reformed.shape, FormationShape::Box2x2);
-        assert_eq!(reformed.offsets, QUAD_OFFSETS.to_vec());
+        assert_eq!(reformed.offsets, vec![(0, 0), (1, 0), (0, 1), (1, 1)]);
     }
 
-    /// Duos (and any <4-member squad) are never touched: an intended 2-member `Line` must not be
+    /// ADR 0031 D14: the corridor collapse/re-form generalizes to any box blob (5-8 members), with
+    /// count-driven offsets — a stuck N-box collapses to an N-long line and re-forms to the compact
+    /// `box_formation(N)` (e.g. N=6 → 6 distinct offsets) the moment it fits again.
+    #[test]
+    fn box_blob_collapses_and_re_forms_for_5_to_8_members() {
+        for n in [3usize, 5, 6, 8] {
+            let collapsed = corridor_layout_transition(Some(FormationShape::Box2x2), n, true).expect("box collapses");
+            assert_eq!(collapsed.shape, FormationShape::Line);
+            assert_eq!(collapsed.offsets.len(), n, "line is N-long (n={n})");
+
+            let reformed = corridor_layout_transition(Some(FormationShape::Line), n, false).expect("line re-forms");
+            assert_eq!(reformed.shape, FormationShape::Box2x2);
+            assert_eq!(reformed.offsets.len(), n, "box holds all N members (n={n})");
+            assert_eq!(reformed.offsets.iter().collect::<std::collections::HashSet<_>>().len(), n, "distinct tiles (n={n})");
+        }
+    }
+
+    /// Duos (and any <3-member squad) are never touched: an intended 2-member `Line` must not be
     /// "re-formed" into a box, and a 2-member squad has no box to collapse.
     #[test]
     fn duos_are_left_alone() {
         assert!(corridor_layout_transition(Some(FormationShape::Line), 2, false).is_none());
         assert!(corridor_layout_transition(Some(FormationShape::Line), 2, true).is_none());
-        assert!(corridor_layout_transition(Some(FormationShape::Box2x2), 3, true).is_none());
         assert!(corridor_layout_transition(Some(FormationShape::None), 1, true).is_none());
+    }
+
+    /// ADR 0031 D14: the live footprint the anchor routes as is DERIVED from the member count, and matches
+    /// the decision-crate `box_footprint(N)` single source of truth. For N=1..=8: member offsets are
+    /// distinct + in-bounds + non-negative (anchor top-left), and the bounding box of `box_formation(N)`
+    /// equals `box_footprint(N)` — so the rover overlay reserves exactly the footprint tiles for N members.
+    #[test]
+    fn box_footprint_matches_box_formation_bounding_box_for_1_to_8() {
+        for n in 1..=8usize {
+            let layout = FormationLayout::box_formation(n);
+            assert_eq!(layout.offsets.len(), n, "one offset per member (n={n})");
+            // Distinct + non-negative (anchor at top-left, fills right then down).
+            let set: std::collections::HashSet<_> = layout.offsets.iter().collect();
+            assert_eq!(set.len(), n, "distinct tiles (n={n})");
+            assert!(layout.offsets.iter().all(|&(x, y)| x >= 0 && y >= 0), "non-negative offsets (n={n})");
+            // Bounding box (since min is 0,0) = (max_x+1, max_y+1) must equal box_footprint(n).
+            let w = layout.offsets.iter().map(|&(x, _)| x).max().unwrap() + 1;
+            let h = layout.offsets.iter().map(|&(_, y)| y).max().unwrap() + 1;
+            assert_eq!((w as u8, h as u8), box_footprint(n), "bounding box == box_footprint (n={n})");
+        }
     }
 
     /// A structure focus must stand the anchor OFF the structure's own (impassable) tile — pathing onto it
