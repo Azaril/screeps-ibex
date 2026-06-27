@@ -416,11 +416,12 @@ impl<'a> System<'a> for SquadManagerSystem {
         // and reused by every squad fighting there. Per-squad work (the cohesion search) is unaffected.
         let mut room_layers: HashMap<RoomName, (LocalCostMatrix, PositionLayers)> = HashMap::new();
         for (squad_entity, obj_id) in &live_managed {
-            let (target_room, formation, requested_slots) = match data.objective_queue.get(*obj_id) {
+            let (target_room, formation, requested_slots, is_defend) = match data.objective_queue.get(*obj_id) {
                 Some(obj) => (
                     objective_target(&obj.kind).1,
                     is_formation_objective(&obj.kind),
                     obj.force.squads.first().map(|c| c.slots.len()).unwrap_or(0),
+                    matches!(obj.kind, ObjectiveKind::Defend { .. }),
                 ),
                 None => continue,
             };
@@ -435,6 +436,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 &mut room_layers,
                 debug,
                 requested_slots,
+                is_defend,
             );
         }
 
@@ -451,12 +453,16 @@ impl<'a> System<'a> for SquadManagerSystem {
         let mut forming = live_managed
             .iter()
             .filter(|(se, oid)| {
-                let requested = data
-                    .objective_queue
-                    .get(*oid)
-                    .and_then(|o| o.force.squads.first())
-                    .map(|c| c.slots.len())
-                    .unwrap_or(0);
+                let Some(o) = data.objective_queue.get(*oid) else {
+                    return false;
+                };
+                // FIX C (ADR 0029): defense is EXEMPT from the forming pace — defenders deploy immediately
+                // (FIX A) and must never queue behind offense. Counting only OFFENSE forming makes the cap
+                // serialize offense rosters at <= MAX_FORMING_SQUADS without ever starving owned-room defense.
+                if matches!(o.kind, ObjectiveKind::Defend { .. }) {
+                    return false;
+                }
+                let requested = o.force.squads.first().map(|c| c.slots.len()).unwrap_or(0);
                 let filled = data.squad_contexts.get(*se).map(|c| c.filled_slot_count()).unwrap_or(0);
                 requested > 0 && filled < requested
             })
@@ -759,6 +765,7 @@ fn compute_squad_orders(
     room_layers: &mut HashMap<RoomName, (LocalCostMatrix, PositionLayers)>,
     debug: bool,
     requested_slots: usize,
+    is_defend: bool,
 ) {
     // Read the roster's cached status (immutable). `pos`/`has_ranged` feed the centroid + the kite
     // plan; `has_ranged` resolves the creep body (the adapter's job — the pure crate stays JS-free).
@@ -911,7 +918,13 @@ fn compute_squad_orders(
     // re-field → slot-0 forever (the actual invader no-engage root cause). Measured against the objective's
     // requested slot count so a death-degraded layout can't shrink "full".
     let member_positions: Vec<Option<Position>> = member_views.iter().map(|m| m.pos).collect();
-    let ready_to_depart = crate::military::formation::squad_ready_to_depart(&member_positions, requested_slots);
+    // FIX A (ADR 0029, forming-completion): the rally-until-full gate is an OFFENSE bloc-cohesion mechanism
+    // (cross into a contested room together). A DEFENDER of an owned room under attack must NOT wait at home
+    // to mass a full roster — it deploys NOW with whatever has spawned, or the room burns while N-1 members
+    // wait for a 4th that spawn contention never delivers (the live 4-squads-stuck-at-N-1). Defense deploys
+    // immediately; offense still rallies as a bloc.
+    let ready_to_depart =
+        is_defend || crate::military::formation::squad_ready_to_depart(&member_positions, requested_slots);
 
     if let Some(ctx) = squad_contexts.get_mut(squad_entity) {
         if !ready_to_depart {
