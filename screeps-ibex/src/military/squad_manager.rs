@@ -416,12 +416,11 @@ impl<'a> System<'a> for SquadManagerSystem {
         // and reused by every squad fighting there. Per-squad work (the cohesion search) is unaffected.
         let mut room_layers: HashMap<RoomName, (LocalCostMatrix, PositionLayers)> = HashMap::new();
         for (squad_entity, obj_id) in &live_managed {
-            let (target_room, formation, requested_slots, is_defend) = match data.objective_queue.get(*obj_id) {
+            let (target_room, formation, requested_slots) = match data.objective_queue.get(*obj_id) {
                 Some(obj) => (
                     objective_target(&obj.kind).1,
                     is_formation_objective(&obj.kind),
                     obj.force.squads.first().map(|c| c.slots.len()).unwrap_or(0),
-                    matches!(obj.kind, ObjectiveKind::Defend { .. }),
                 ),
                 None => continue,
             };
@@ -436,7 +435,6 @@ impl<'a> System<'a> for SquadManagerSystem {
                 &mut room_layers,
                 debug,
                 requested_slots,
-                is_defend,
             );
         }
 
@@ -765,7 +763,6 @@ fn compute_squad_orders(
     room_layers: &mut HashMap<RoomName, (LocalCostMatrix, PositionLayers)>,
     debug: bool,
     requested_slots: usize,
-    is_defend: bool,
 ) {
     // Read the roster's cached status (immutable). `pos`/`has_ranged` feed the centroid + the kite
     // plan; `has_ranged` resolves the creep body (the adapter's job — the pure crate stays JS-free).
@@ -918,17 +915,16 @@ fn compute_squad_orders(
     // re-field → slot-0 forever (the actual invader no-engage root cause). Measured against the objective's
     // requested slot count so a death-degraded layout can't shrink "full".
     let member_positions: Vec<Option<Position>> = member_views.iter().map(|m| m.pos).collect();
-    // Rally/deploy gate, objective-kind-aware (ADR 0029 §11 + ADR 0030). An OFFENSE bloc must cross into a
-    // contested room ALL-OR-NOTHING (`squad_ready_to_depart`). A DEFENDER must GROUP UP enough to fight —
-    // a lone defender is picked off under-powered (operator 2026-06-27) — but must NOT wait for the
-    // unspawnable last member (the N-1/4 deadlock that froze defense). So defense deploys at a QUORUM and the
-    // rest reinforce by formation-follow. (The earlier full disconnect was the over-correction; ADR 0030 will
-    // tune the quorum by the objective's lifetime/wave tempo.)
-    let ready_to_depart = if is_defend {
-        crate::military::formation::squad_ready_to_depart_at_quorum(&member_positions, requested_slots)
-    } else {
-        crate::military::formation::squad_ready_to_depart(&member_positions, requested_slots)
-    };
+    // Rally/deploy gate. BOTH offense and defense require the FULL roster (`squad_ready_to_depart`): the
+    // oracle sized it to be Lanchester-favorable, so the full roster is winnable BY CONSTRUCTION and never
+    // ships a loser. The interim 0.75-count quorum was UNSOUND (operator 2026-06-27): the survival axis binds
+    // at 1/HOLD_MARGIN ≈ 0.77, so a 0.75 subset can't out-heal the incoming (~coin-flip loss), and a count
+    // fraction is composition-blind (it can drop the healer). The deadlock the quorum chased (the last member
+    // never spawns) is a SPAWN-COMPLETION problem (ADR 0029 FIX B's small duo floor makes quorum==requested
+    // for most defense, + FIX C + renew), not license to deploy under-strength. ADR 0030 §6 replaces this
+    // with a winnability-VALIDATED gate (`present_force_is_winnable`) that deploys the smallest FAVORABLE
+    // present force per the lifetime/wave tempo — principled subset-deploy, not a count ratio.
+    let ready_to_depart = crate::military::formation::squad_ready_to_depart(&member_positions, requested_slots);
 
     if let Some(ctx) = squad_contexts.get_mut(squad_entity) {
         if !ready_to_depart {
