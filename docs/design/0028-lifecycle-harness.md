@@ -179,9 +179,11 @@ core, so the open question is the *defended* case.
 
 ## Remaining work
 
-1. **Implement renew live** (the harness-validated spawn/form fix) — wire `request_renew` for a
-   squad's present members while it rallies, so a slow/contested form doesn't lose its early members.
-   Mind the energy cost (the colony's economy is fragile); the harness can tune the lane/energy budget.
+1. ~~**Implement renew live**~~ **DONE** (`ebf3623`): Phase B-renew in `squad_manager` requests
+   `request_renew` for a forming squad's present members with TTL < 300, and the rally point moved to a
+   home SPAWN so members are renewable. Gated on the spawn renew pass's free-spawn + room-energy checks
+   (never starves spawning/economy). Caveat: under heavy spawn contention there are few free spawns to
+   renew with — renew helps a slow form on a colony with idle capacity more than a contended one.
 2. **Graded-defender engage tests (combat effectiveness).** `assemble_single_room` already takes
    `towers`, `ForceSpec`, `rampart_hits`, `safe_mode`. Run a force-sized squad through
    `run_lifecycle` against a DEFENDED core/room and ask "does the sized force WIN?" If a
