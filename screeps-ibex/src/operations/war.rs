@@ -924,13 +924,39 @@ impl WarOperation {
                     let safe_mode_penalty = if has_safe_mode { 20.0 } else { 0.0 };
                     let score = 40.0 - distance_penalty - tower_penalty - safe_mode_penalty;
 
-                    // ResourceDenial fields a FIXED solo harasser (HarassRemote, no oracle gate). A lone
-                    // creep can deny an UNDEFENDED player remote (kill miners/haulers) but is just fed to its
-                    // death by a single tower (out-ranges + out-damages, un-kiteable). So only harass towerless
-                    // rooms here. Sizing a real raid to a DEFENDED player room (route ResourceDenial through
-                    // the sized+gated PlayerRaid doctrine, populating `defense`) is the ADR 0029 generalization
-                    // follow-up — a notable offense-behavior change held for review, not a doomed solo.
-                    if score > 0.0 && tower_count == 0 {
+                    // ADR 0029 §7/D7 — GENERALIZED: route ResourceDenial through the SIZED + GATED
+                    // `GatedPlayerRaid` doctrine (mapped to `DoctrineObjective::RaidCreeps` below). A
+                    // DEFENDED player remote now gets a clear_force-sized raid that out-powers + out-heals
+                    // the defenders AND their towers, OR is DEFERRED by the winnability + ROI gate — never
+                    // the prior doomed solo (a lone harasser is just fed to a single tower). The sized-
+                    // doctrine gate SKIPS when `defense.is_none()`, so populate it here: ResourceDenial has
+                    // no flag tile (`target_pos: None`), so range the towers to the room CENTER (25,25) as
+                    // the assault proxy (towers cluster near the center/controller); unknown per-tower energy
+                    // ⇒ assume firing (1000), never under-estimating (mirrors the InvaderCore + AttackFlag
+                    // enrichment). The `tower_count == 0` band-aid is GONE — the gate handles towered rooms.
+                    if score > 0.0 {
+                        let assault = Position::new(
+                            RoomCoordinate::new(25).expect("valid coordinate"),
+                            RoomCoordinate::new(25).expect("valid coordinate"),
+                            room_name,
+                        );
+                        let towers: Vec<TowerThreat> = threat_data
+                            .hostile_tower_positions
+                            .iter()
+                            .enumerate()
+                            .map(|(i, tpos)| TowerThreat {
+                                range_to_assault: tpos.get_range_to(assault),
+                                energy: threat_data.tower_energy.get(i).copied().unwrap_or(1000),
+                            })
+                            .collect();
+                        let defense = DefenseProfile {
+                            towers,
+                            breach_hits: 0,
+                            objective_hits: 0,
+                            enemy_dps: threat_data.estimated_dps,
+                            repair_per_tick: threat_data.repair_per_tick as f32,
+                            safe_mode: threat_data.safe_mode_active,
+                        };
                         candidates.push(AttackCandidate {
                             room: room_name,
                             source: TargetSource::ResourceDenial,
@@ -941,7 +967,7 @@ impl WarOperation {
                             has_safe_mode,
                             estimated_roi: None,
                             target_pos: None,
-                            defense: None,
+                            defense: Some(defense),
                         });
                     }
                 }
@@ -1023,9 +1049,13 @@ impl WarOperation {
                     OBJECTIVE_PRIORITY_HIGH,
                     0.0,
                 )),
-                // Resource denial → harass a hostile player's remote (LOW: opportunistic).
+                // Resource denial → SIZED + GATED raid on a hostile player's remote (ADR 0029 §7/D7). The
+                // `GatedPlayerRaid` doctrine clear_force-sizes a quad to out-power + out-heal the defenders
+                // and towers, OR the bot's winnability + ROI gate DEFERS a hopeless / unaffordable room (it
+                // HONORS the oracle's verdict, unlike the always-field `PlayerRaid`). LOW priority
+                // (opportunistic). Keeps `ObjectiveKind::Harass` (deny + leave; don't hold the room).
                 TargetSource::ResourceDenial => Some((
-                    DoctrineObjective::Harass,
+                    DoctrineObjective::RaidCreeps,
                     ObjectiveKind::Harass { room: candidate.room },
                     OBJECTIVE_PRIORITY_LOW,
                     0.0,
