@@ -356,7 +356,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 if already_filled {
                     continue;
                 }
-                queue_slot_spawn(&mut data.spawn_queue, &homes, slot, slot_index, target_room, *squad_entity, spawn_priority);
+                queue_slot_spawn(&mut data.spawn_queue, &homes, slot, slot_index, target_room, *squad_entity, spawn_priority, debug);
             }
         }
 
@@ -471,6 +471,7 @@ fn retire_squad(updater: &Read<LazyUpdate>, entities: &Entities, squad_entity: E
 
 /// Queue one slot's spawn to every in-range home room, sharing a token so exactly
 /// one room fulfills it per tick.
+#[allow(clippy::too_many_arguments)]
 fn queue_slot_spawn(
     spawn_queue: &mut SpawnQueue,
     homes: &[HomeRoom],
@@ -479,6 +480,7 @@ fn queue_slot_spawn(
     target_room: RoomName,
     squad_entity: Entity,
     priority: f32,
+    debug: bool,
 ) {
     // Size the member's body ONCE to the STRONGEST in-range home (capped by the body's
     // `maximum_repeat`) — the composition's intended size — NOT per-home. Per-home sizing let a cheaper
@@ -502,8 +504,48 @@ fn queue_slot_spawn(
         Some(body) => body,
         // Even the strongest in-range home can't build it (template min OR the sized spec) — don't field
         // an undersized one. (A sized slot that doesn't fit was already vetoed upstream by sized_for.)
-        None => return,
+        None => {
+            // This is a silent roster-stall point: the slot is NEVER queued, so the squad rallies forever
+            // at present<full. Surface it so an over-sized per-member spec (or no strong-enough in-range
+            // home) is diagnosable instead of invisible.
+            if debug {
+                log::warn!(
+                    "[SpawnQueue] slot={} role={:?} target={} CANNOT BUILD: build_body None at best_cap={} (per-member spec exceeds the strongest IN-RANGE home, or >50 parts) — slot never queued, roster stalls here",
+                    slot_index,
+                    slot.role,
+                    target_room,
+                    best_capacity,
+                );
+            }
+            return;
+        }
     };
+
+    // Observability: dump the ACTUAL body queued for this slot so we can confirm sizing live (e.g. is the
+    // whole force piled onto one member, vs split across members). Behind features.military.debug_log.
+    if debug {
+        let n = |p: Part| body.iter().filter(|b| **b == p).count();
+        let cost: u32 = body.iter().map(|p| p.cost()).sum();
+        let in_range = homes.iter().filter(|h| room_distance(h.name, target_room) <= MAX_SPAWN_DISTANCE).count();
+        log::info!(
+            "[SpawnQueue] slot={} role={:?} target={} parts={} (rng={} heal={} atk={} work={} tough={} carry={} move={}) cost={} prio={} homes_in_range={} (best_cap={})",
+            slot_index,
+            slot.role,
+            target_room,
+            body.len(),
+            n(Part::RangedAttack),
+            n(Part::Heal),
+            n(Part::Attack),
+            n(Part::Work),
+            n(Part::Tough),
+            n(Part::Carry),
+            n(Part::Move),
+            cost,
+            priority,
+            in_range,
+            best_capacity,
+        );
+    }
 
     let token = spawn_queue.token();
     for home in homes.iter().filter(|h| room_distance(h.name, target_room) <= MAX_SPAWN_DISTANCE) {
