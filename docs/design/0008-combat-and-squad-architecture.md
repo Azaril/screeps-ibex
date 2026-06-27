@@ -140,7 +140,7 @@ struct CombatObjective {
 
   **Coexistence + cap (current state, O6 done):** all migrated reasons flow through one `source → (ObjectiveKind, priority, composition)` branch in the offense launch loop (so the dedup — highest-scored candidate per room — and one combined cap apply uniformly); the un-migrated reasons (`PowerBank`, the heavy assault) keep launching `AttackOperation`s, so the two paths run side by side until O7. A migrated room carries no `active_attacks` entry, so the per-scan re-evaluation re-asserts its objective idempotently (refreshing the TTL). **War-side cap (reconciled):** the launch-loop budget is `active_attacks.len() + (Attack-owned objectives in the queue)`, capped at `max_concurrent_attacks` — an existing objective is always re-asserted (only new offense is gated, score-sorted so the skipped one is lowest-value); this replaces the old `active_attacks`-only break. The manager's `MAX_CONCURRENT_SQUADS` is the downstream fielding limit.
 - `WarOperation::run_defense_scan` → `Defend` (replaces `SquadDefenseMission` creation; **keep** the 2026-06-16 `hostile_warrants_defender` body-parts trigger and the owned-room-invader rule).
-- `ClaimOperation` (marginal target) → `Escort{room}` (the ADR 0008/0017 deferred pre-clear escort; sizing via `DefenseEscalation::from_threat`).
+- `ClaimOperation` (marginal target) → `Escort{room}` (the ADR 0008/0017 deferred pre-clear escort; sizing via `defense_doctrines()`/`GarrisonDefense` — ADR 0026 §9.10 L3; the old `DefenseEscalation::from_threat` was deleted).
 - `AttackOperation` → `Dismantle` for blocking structures.
 
 A producer that stops caring simply stops re-asserting; the TTL lapses, the objective dies, the squad is retasked/retired — exactly how a satisfied scout request disappears.

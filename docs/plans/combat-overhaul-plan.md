@@ -129,7 +129,7 @@ The ultracode design pass (wf_c4ad0572, 11 agents, ground-truthed the engine/har
 ### (d) War supervisor
 
 - **P2.W2** — `WarOperation` as supervisor: withdraw/trim low-value objectives when `max_concurrent_attacks` shrinks (IBEX-028); feed real per-squad spend so economy-abort fires (IBEX-026); UnwinnableTarget backoff on the supervisor side. *Why:* only the defense half of migration step 5 is done; the supervisor still doesn't throttle/withdraw offense by real spend or cap shrink. *Deps:* O6. *Gated_on:* benefits from per-squad spend instrumentation. *Effort:* M.
-- **P2.W3** — `Escort{room}` pre-clear producer in `claim.rs` for marginal claim targets (`DefenseEscalation::from_threat` sizing). *Why:* the `Escort` kind is defined + handled by `squad_manager` but has NO producer — inert; ADR 0017 expansion pre-clear. Operator decided "build it." *Deps:* O6. *Gated_on:* nothing blocking; unstarted. *Effort:* M.
+- **P2.W3** — `Escort{room}` pre-clear producer in `claim.rs` for marginal claim targets (sizing via `defense_doctrines()`/`GarrisonDefense` — ADR 0026 §9.10 L3; the old `DefenseEscalation::from_threat` was deleted). *Why:* the `Escort` kind is defined + handled by `squad_manager` but has NO producer — inert; ADR 0017 expansion pre-clear. Operator decided "build it." *Deps:* O6. *Gated_on:* nothing blocking; unstarted. *Effort:* M.
 - **P2.W4** — Thin `WarDecl` posture hook (player-offense only under WarDecl); feature-flag proactive de-reservation OFF (T-CTRL-3); register S11. *Why:* posture/ADR-0014 governance; reactive reserve denial always-on, proactive flagged OFF. *Deps:* W2. *Gated_on:* nothing blocking; unstarted. *Effort:* M.
 
 ### (e) Spawn

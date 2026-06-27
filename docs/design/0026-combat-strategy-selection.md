@@ -426,7 +426,7 @@ pub fn engagement_context(c: &AttackCandidate, threat: &RoomThreatData, home_ene
 | `screeps-combat-decision/src/force_sizing.rs` | `assess` gains the Individual/Coordinated branch (§9.4); `DefenseProfile` (or `EngagementContext`) carries `worst_single`. For `PlayerRaid`: the §12.7(B) `enemy_creep_hits` + `clear_creeps` branch (R8). |
 | `screeps-combat-decision/src/lib.rs` | `pub mod doctrine;`. |
 | `screeps-ibex/src/military/doctrine.rs` | **NEW.** `engagement_context()` adapter (projects `AttackCandidate` + `RoomThreatData` + home energy; derives `EnemyCoordination` from owner/body signals). |
-| `screeps-ibex/src/operations/war.rs` | Offense `match` → `decide_doctrine`; delete `DefenseEscalation::from_threat` once `PlayerDefend` lands. |
+| `screeps-ibex/src/operations/war.rs` | Offense `match` → `decide_doctrine` (✅ done, L1); defense sites → `defense_doctrines()`/`GarrisonDefense` + `DefenseEscalation::from_threat` **deleted** (✅ done, L3a). |
 | `screeps-combat-eval/src/tournament.rs` | Per-doctrine beds (an Individual NPC bed + a Coordinated player-squad bed) + the `doctrines_are_each_best_in_class` gate. |
 
 **Rungs** (map onto ADR 0020 §12.7 R5.5 → R8):
