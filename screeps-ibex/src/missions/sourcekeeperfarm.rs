@@ -49,16 +49,13 @@ const KEEPER_DANGER_RANGE: u32 = 5;
 /// happening to reach `maximum_repeat` at a high-energy home.
 const SK_KEEPER_MELEE_DPS: f32 = 168.0;
 
-/// Σ RANGED parts the kiter must field to KILL a keeper promptly (operator 2026-06-26: the kiter must
-/// take out the SK creeps so the miner is safe — a *dead* keeper clears the source for the ~300t respawn,
-/// where a *kited* one returns and the miner flees). A keeper has ~5000 HP and does NOT self-heal (engine
-/// `keeper-lairs/tick.js` builds it from TOUGH/MOVE/ATTACK/RANGED_ATTACK only), so net kill rate == gross
-/// ranged DPS: `5000 HP ÷ ~34 t ÷ RANGED_ATTACK_POWER(10) ≈ 15` parts (≈150 DPS — the proven full-template
-/// suppression rate). At a low-energy home where the `SkRangedAttacker` template caps BELOW this (the same
-/// `maximum_repeat`-not-reached gap R6 fixed for the healer), `sized_for` grows the kiter to hit it (or
-/// falls back to the template). The healer (R6) already out-heals the keeper's melee, so the kiter survives
-/// while it kills.
-const SK_KEEPER_KILL_RANGED_PARTS: u32 = 15;
+/// A Source Keeper's HP — the kiter must KILL it (operator 2026-06-26: take out the SK creeps so the miner
+/// is safe; a *dead* keeper clears the source for the ~300t respawn, a *kited* one returns). A keeper does
+/// NOT self-heal (engine `keeper-lairs/tick.js` = TOUGH/MOVE/ATTACK/RANGED only), so net kill == gross
+/// ranged DPS. Passed to the `SkSuppression` doctrine as the keeper's observed force; the doctrine sizes
+/// the kiter's RANGED to kill it in the kill window (ADR 0026 §9.10 L7 — the SK sizing is now on the
+/// doctrine registry, the R6 out-heal + R-attack kill-rate folded into `SkSuppression::plan`).
+const SK_KEEPER_HP: u32 = 5000;
 
 /// While a stronghold pauses the farm the room goes blind (no friendly creeps),
 /// so the persisted `hostile_structures` flag sticks at its last-observed value
@@ -374,23 +371,16 @@ impl Mission for SourceKeeperFarmMission {
         // TTL-lapses). The squad's `SquadCombatJob` self-drives to the SK room and
         // suppresses the keepers (job-owns-movement, ADR 0008 §5 ⚑). K3 source
         // mining + the per-source suppression signal remain the coordinator's to own.
-        // R6 + R-attack (ADR 0020 §12.6): force-size the suppression duo at the strongest in-range home's
+        // R6 + R-attack, now UNIFIED onto the doctrine registry (ADR 0026 §9.10 L7): the `SkSuppression`
+        // doctrine force-sizes the suppression duo from the keeper's force at the strongest in-range home's
         // energy — the same energy the `SquadManager` spawn path sizes a `Sized` body against — so it both
-        // SURVIVES and CLEARS the keeper instead of relying on the body template happening to reach
-        // `maximum_repeat`. (a) HEALER → out-heal the keeper's 168 melee DPS × the hold margin (a kiting
-        // slip costs HP it recovers, not a death). (b) KITER (R-attack) → enough RANGED to KILL the keeper
-        // promptly (operator: take out the SK creeps so the miner is safe) — a dead keeper clears the
-        // source for the ~300t respawn (the positional mining gate stays open), vs a kited one that returns
-        // and the miner flees. `sized_for` grows member count / defers + falls back to the template duo
-        // (the spawn path still builds the largest bodies that home affords).
-        let required = screeps_combat_decision::force_sizing::RequiredForce {
-            heal_parts: screeps_combat_decision::bodies::defender_heal_parts_for_dps(
-                SK_KEEPER_MELEE_DPS * screeps_combat_decision::force_sizing::HOLD_MARGIN,
-                false,
-            ),
-            ranged_parts: SK_KEEPER_KILL_RANGED_PARTS,
-            ..Default::default()
-        };
+        // SURVIVES (healer out-heals the 168 melee × hold margin — a kiting slip recovers, not dies) and
+        // CLEARS (kiter sizes its RANGED to KILL the keeper's HP in the kill window — a dead keeper clears
+        // the source for the ~300t respawn, vs a kited one that returns and the miner flees). The bot
+        // supplies the keeper as the observed `enemy_force`; the doctrine sizes `duo_sk_farmer` (falling
+        // back to the template when no home affords the sized duo). Behavior-identical to the prior inline
+        // sizing — the keeper has no heal (engine-fixed body).
+        use screeps_combat_decision::doctrine;
         let home_energy = self
             .home_room_datas
             .iter()
@@ -399,8 +389,18 @@ impl Mission for SourceKeeperFarmMission {
             .map(|r| r.energy_capacity_available())
             .max()
             .unwrap_or(0);
-        let duo = SquadComposition::duo_sk_farmer();
-        let comp = duo.sized_for(required, home_energy).unwrap_or(duo);
+        let ctx = doctrine::EngagementContext {
+            objective: doctrine::DoctrineObjective::Suppress,
+            coordination: doctrine::EnemyCoordination::Individual,
+            defense: Default::default(),
+            enemy_force: Some(doctrine::EnemyForce { dps: SK_KEEPER_MELEE_DPS, heal: 0.0, hits: SK_KEEPER_HP, count: 1, boosted: false }),
+            importance: 0.0,
+            member_energy: home_energy,
+        };
+        let sk_doctrines = doctrine::sk_doctrines();
+        let comp = doctrine::decide_doctrine(&ctx, &sk_doctrines)
+            .and_then(|d| d.plan(&ctx, None).composition)
+            .unwrap_or_else(SquadComposition::duo_sk_farmer);
 
         let request = ObjectiveRequest::new(farm_kind, OBJECTIVE_PRIORITY_LOW, ForceRequirement::single(comp))
             .owner(ObjectiveOwner::SourceKeeper);
