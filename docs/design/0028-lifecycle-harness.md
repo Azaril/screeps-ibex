@@ -1,8 +1,10 @@
 # ADR 0028 — Engine-backed Offline Lifecycle Harness (P-OBJ)
 
-Status: IN PROGRESS 2026-06-27. **All five kernels K0–K4 LANDED** + the **forming-phase
-colony driver LANDED** (`screeps-combat-eval/src/harness/lifecycle.rs`); the engine-engage
-handoff + multi-squad claim-pacing remaining. Companion to ADR 0008 (squad
+Status: IN PROGRESS 2026-06-27. **All five kernels K0–K4 + the forming-phase driver + the
+ENGINE-ENGAGE HANDOFF LANDED** (`screeps-combat-eval/src/harness/lifecycle.rs` — the full
+`objective→form→travel→engage→kill` chain is offline + deterministic). The harness then
+diagnosed the live 87.5 backfire (see §Diagnosis) and **reframed the effort: the offense
+fails on COMBAT EFFECTIVENESS (squads lose defended fights), not spawn/forming.** Companion to ADR 0008 (squad
 lifecycle), ADR 0027 (objective/squad lifecycle rework), ADR 0023/0023a (the combat sim
 harness), ADR 0026 §9 (doctrine sizing). Task #23 / #25.
 
@@ -140,22 +142,43 @@ All bot-only, no `WORLD_FORMAT_VERSION` change:
 - **Reverted:** forming combat at 87.5 + `forming-cap=1` (it zeroed combat spawning). The
   current deployed state is HIGH + forming-cap=2 + the bankable-body cap.
 
+## Diagnosis — the 87.5 backfire (live, captured 2026-06-27, then reverted)
+
+Re-deployed the backfired config (forming combat at 87.5 + `forming-cap=1`) with two captures:
+
+```
+total:  118  99  85  84 100 107 107    (dipped ~30%, RECOVERED — not a collapse)
+combat:   2   2   2   2   0   2   3     (near-zero throughout)
+carry:   93  81  64  65  79  80  81     (haulers dipped, recovered to ~80)
+[Lifecycle]: squad 327 RALLY 0→2/3 (DOES form);  RETIRE squad=144 reason=Wiped engaged_once=true
+```
+
+It is **neither** energy-collapse (economy recovers) **nor** a forming-cap lockup (squads form).
+The mechanism: squads **form → depart → engage → get WIPED (lose the fight)** → re-form → churn
+at ~0–2 standing combat creeps, with a *transient* economy drag from the 87.5 preemption.
+
+**⇒ The spawn-priority knob is a RED HERRING.** HIGH stalls squads before they fight; 87.5 lets
+them form-then-lose. The real failure is **combat effectiveness: squads lose their defended
+engagements.** The spawn-priority/forming-cap tuning is parked at the safe **HIGH + forming-cap=2**
+(deployed); the offline harness `run_lifecycle` proved the engage WORKS against an *undefended*
+core, so the open question is the *defended* case.
+
 ## Remaining work
 
-1. **Engage handoff** — place the formed roster into `CombatWorld` → drive `ManagedSimSquad`
-   → `resolve_tick` to a dead core, so `run_forming` chains into the existing engine engage
-   for the full `objective→…→kill` assertion.
+1. **Graded-defender engage tests (the reframed priority).** `assemble_single_room` already takes
+   `towers`, `ForceSpec`, `rampart_hits`, `safe_mode`. Run a force-sized squad through
+   `run_lifecycle` against a DEFENDED core/room and ask "does the sized force WIN?" If a
+   winnability-gated (`force_sizing`) squad gets wiped, the gate is mis-calibrated OR the tactics
+   under-perform — both now offline-testable. THIS is the real target, not spawn priority.
 2. **Multi-squad + K4 in the driver** — extend `run_forming` to several objectives gated by
-   `claim_pacing::claims_allowed`, to reproduce the `forming-cap=1` backfire (a single squad
-   does not exhibit it; the lockup is the multi-squad interaction).
-3. **Stale-intel give-up red test** — an engaged squad whose objective goes producer-silent;
-   confirm the ADR 0027 lease/give-up behavior offline via `lifecycle::reconcile`.
-4. Use the harness to find the **correct** spawn-priority + forming-cap values (the live
-   guesses did not converge — the forming driver already shows MEDIUM stalls / above-economy
-   completes for one squad), validate, then deploy.
+   `claim_pacing::claims_allowed` (the claim-throttle interaction; secondary now that the backfire
+   is understood as a fight-loss, not a lockup).
+3. **Stale-intel give-up scenario** — the give-up *decision* is already covered by the reconcile
+   kernel; a multi-tick scenario test is optional polish.
 
-Done: K0–K4 kernels; the forming-phase colony driver (the 3/5 stall + above-economy-completes
-reproduced offline + deterministically).
+Done: K0–K4 kernels; the forming-phase driver (3/5 stall + above-economy-completes); the
+**engine-engage handoff** (`run_lifecycle` — full form→engage→kill offline + deterministic);
+the 87.5 backfire diagnosis (combat-effectiveness, not spawn-priority).
 
 ## What the harness CANNOT catch (keep a thin live canary)
 
