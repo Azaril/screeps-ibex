@@ -190,6 +190,7 @@ pub struct SquadManagerSystemData<'a> {
     mapping: Read<'a, EntityMappingData>,
     creep_owner: ReadStorage<'a, CreepOwner>,
     visibility: Write<'a, VisibilityQueue>,
+    features: Read<'a, crate::features::Features>,
 }
 
 /// A home room that can act as a spawn source for a squad.
@@ -205,6 +206,10 @@ impl<'a> System<'a> for SquadManagerSystem {
 
     fn run(&mut self, mut data: Self::SystemData) {
         let now = game::time();
+        // P-OBJ #23 lifecycle introspection: reuse the war debug flag for low-noise, per-event squad/
+        // objective lifecycle logs (field / reach / engage / retire-reason) so a live capture pinpoints
+        // WHICH stage a squad fails at, instead of guessing from Docker.
+        let debug = data.features.military.debug_log;
 
         // ── Gather candidate home rooms (owned, has an idle-capable spawn). ──
         let homes: Vec<HomeRoom> = (&data.entities, &data.room_data)
@@ -276,6 +281,23 @@ impl<'a> System<'a> for SquadManagerSystem {
 
             // Retire a duplicate, an orphaned (objective gone), a wiped, a resolved, or a given-up squad.
             if objective_gone || covered.contains(&obj_id) || wiped || resolved || gave_up {
+                if debug {
+                    let reason = if resolved {
+                        "resolved"
+                    } else if gave_up {
+                        "gave_up"
+                    } else if wiped {
+                        "wiped"
+                    } else if objective_gone {
+                        "objective_gone"
+                    } else {
+                        "duplicate"
+                    };
+                    log::info!(
+                        "[Lifecycle] RETIRE squad={:?} obj={:?} reason={} engaged_once={} in_room={} focus={} deadline_lapsed={} members={}",
+                        squad_entity, obj_id, reason, engaged_once, in_target_room, has_focus, deadline_lapsed, has_members
+                    );
+                }
                 if resolved {
                     data.objective_queue.withdraw(obj_id); // clean win — clear the objective so no one re-fields it
                 } else if (wiped || gave_up) && !objective_gone && !is_defend {
@@ -355,6 +377,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 target_room,
                 formation,
                 &mut room_layers,
+                debug,
             );
         }
 
@@ -390,10 +413,16 @@ impl<'a> System<'a> for SquadManagerSystem {
             // never-spawned `SquadContext` would linger forever holding a cap slot).
             // Skip and try the next-best objective.
             if !homes.iter().any(|h| room_distance(h.name, target.1) <= MAX_SPAWN_DISTANCE) {
+                if debug {
+                    log::info!("[Lifecycle] SKIP obj={:?} room={} reason=no_home_in_range", obj_id, target.1);
+                }
                 skipped.push(obj_id);
                 continue;
             }
 
+            if debug {
+                log::info!("[Lifecycle] FIELD obj={:?} room={} members={}", obj_id, target.1, composition.member_count());
+            }
             field_new_squad(&data.updater, &data.entities, &mut data.objective_queue, obj_id, &composition, target, now);
             active += 1;
         }
@@ -607,6 +636,7 @@ fn compute_squad_orders(
     target_room: RoomName,
     formation: bool,
     room_layers: &mut HashMap<RoomName, (LocalCostMatrix, PositionLayers)>,
+    debug: bool,
 ) {
     // Read the roster's cached status (immutable). `pos`/`has_ranged` feed the centroid + the kite
     // plan; `has_ranged` resolves the creep body (the adapter's job — the pure crate stays JS-free).
@@ -741,6 +771,17 @@ fn compute_squad_orders(
     let all_arrived = member_views
         .iter()
         .all(|m| m.pos.map(|p| p.room_name() == target_room).unwrap_or(false));
+
+    // P-OBJ #23 killer diagnostic: the squad is fully in the target room but `decide_squad` found NOTHING
+    // to attack. This one line classifies the live no-engage failure: hostiles=0 structs=0 => empty room
+    // DTOs (visibility/mapping timing); structs>=1 focus=None => structure-focus selection bug;
+    // safe_mode=true => correct veto. Repeats while stalled, which itself confirms a persistent stall.
+    if debug && all_arrived && decision.focus.is_none() {
+        log::info!(
+            "[Lifecycle] IN_ROOM_NO_FOCUS squad={:?} room={} hostiles={} structs={} state={:?} safe_mode={} formation={}",
+            squad_entity, target_room, hostiles.len(), structures.len(), current_state, enemy_safe_mode, formation
+        );
+    }
 
     if let Some(ctx) = squad_contexts.get_mut(squad_entity) {
         if !all_arrived {
