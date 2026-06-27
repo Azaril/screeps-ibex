@@ -616,9 +616,9 @@ impl WarOperation {
         for flag in game::flags().values() {
             let name = flag.name();
             if name.to_lowercase().starts_with("attack") {
-                let room = flag.pos().room_name();
+                let pos = flag.pos();
                 candidates.push(AttackCandidate {
-                    room,
+                    room: pos.room_name(),
                     source: TargetSource::AttackFlag,
                     score: 100.0,
                     tower_count: 0,
@@ -626,7 +626,9 @@ impl WarOperation {
                     estimated_enemy_heal: 0.0,
                     has_safe_mode: false,
                     estimated_roi: None,
-                    target_pos: None,
+                    // The flag tile = the assault position (used by the L4 enrichment below for the tower
+                    // ranges). Enriched with the flag room's scouted threat after the threat scan.
+                    target_pos: Some(pos),
                     defense: None,
                 });
             }
@@ -644,6 +646,29 @@ impl WarOperation {
                 .join()
                 .map(|(e, rd, td)| (e, rd.name, td.clone()))
                 .collect();
+
+        // L4-activate (ADR 0026 §9.10): enrich AttackFlag candidates with the flag room's SCOUTED threat
+        // (creeps + TOWERS) so the `PlayerRaid` doctrine sizes the raid to out-power + out-heal the real
+        // defense. AttackFlag candidates are built above (before the scan) with zeros; cross-reference each
+        // flag room against the threat scan here. A creeps-only estimate would under-field vs a towered
+        // base (a regression); an UNSCOUTED flag room keeps zeros → PlayerRaid fields the default quad
+        // (operator intent fields the flag regardless). Towers are ranged to the flag tile (the assault
+        // position); unknown per-tower energy ⇒ assume firing (1000) — never under-estimate.
+        for cand in candidates.iter_mut().filter(|c| matches!(c.source, TargetSource::AttackFlag)) {
+            let (Some(assault), Some((_, _, td))) = (cand.target_pos, threat_rooms.iter().find(|(_, rn, _)| *rn == cand.room)) else {
+                continue;
+            };
+            let towers: Vec<TowerThreat> = td
+                .hostile_tower_positions
+                .iter()
+                .enumerate()
+                .map(|(i, tpos)| TowerThreat { range_to_assault: tpos.get_range_to(assault), energy: td.tower_energy.get(i).copied().unwrap_or(1000) })
+                .collect();
+            cand.estimated_enemy_dps = td.estimated_dps;
+            cand.estimated_enemy_heal = td.estimated_heal;
+            cand.has_safe_mode = td.safe_mode_active;
+            cand.defense = Some(DefenseProfile { towers, safe_mode: td.safe_mode_active, ..Default::default() });
+        }
 
         if war_debug {
             info!(
@@ -973,14 +998,21 @@ impl WarOperation {
                 continue;
             };
 
-            // `coordination` records the Q1-confirmed prior (Coordinated unless a positive NPC signal);
-            // rung-1 doctrines are all Individual, so it is forward context. `member_energy` is filled
-            // from the chosen home below for a sized doctrine.
+            // `coordination` records the Q1-confirmed prior (Coordinated unless a positive NPC signal).
+            // `enemy_force` carries the room's scouted creep force (dps/heal) — the `PlayerRaid` doctrine
+            // (ClearCreeps) sizes the raid from it (L4-activate); the structure arms (NpcCore/SiegeBreach)
+            // ignore it and size from `defense`. `member_energy` is filled from the chosen home below.
             let base_ctx = EngagementContext {
                 objective: doc_obj,
                 coordination: classify_coordination(&candidate),
                 defense: candidate.defense.clone().unwrap_or_default(),
-                enemy_force: None,
+                enemy_force: Some(EnemyForce {
+                    dps: candidate.estimated_enemy_dps,
+                    heal: candidate.estimated_enemy_heal,
+                    hits: 0,
+                    count: 0,
+                    boosted: false,
+                }),
                 importance,
                 member_energy: 0,
             };
