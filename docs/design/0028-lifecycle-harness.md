@@ -195,9 +195,18 @@ core, so the open question is the *defended* case.
 4. **Stale-intel give-up scenario** — the give-up *decision* is already covered by the reconcile
    kernel; a multi-tick scenario test is optional polish.
 
+Still-open spawn/form issues surfaced by live verification (2026-06-27):
+- **SK forming-contention** — W6N4 stuck at `1/3` (only 1 of 3 members ever spawns; the spawn is
+  busy with economy). The deeper contention the priority bump couldn't fully solve.
+- **Requested-size oscillation** — W9N8's objective requested-slot count flaps 1↔2 each tick (the
+  producer re-sizes a player room to 1-2 members — under-sized = the combat-effectiveness layer).
+  The rally gate is now robust to it, but the oscillation/under-sizing itself wants a fix.
+
 Done: K0–K4 kernels; the forming-phase driver (3/5 stall + above-economy-completes); the
 **engine-engage handoff** (`run_lifecycle` — full form→engage→kill offline + deterministic);
-the 87.5 backfire diagnosis (combat-effectiveness, not spawn-priority).
+the 87.5 backfire diagnosis (combat-effectiveness, not spawn-priority); **renew** (Phase B-renew
++ spawn-adjacent rally, `ebf3623`); the **rally-gate fix** (depart on requested-present, robust to
+oscillating size — `bf021dd`, the live W9N8 stuck-at-1/1).
 
 ## What the harness CANNOT catch (keep a thin live canary)
 
