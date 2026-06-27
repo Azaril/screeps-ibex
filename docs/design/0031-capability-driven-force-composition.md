@@ -171,7 +171,7 @@ there is no body catalog. Algorithm (bit-deterministic, integer/ceil over Vec-or
    `[heal, dismantle, immune_struct, anti_creep, tough]`), then among the roles that supply it add the member
    with the highest **capability-per-energy** (`cap_of(role, dim) / cost(role)`; ties → role enum order). Recompute
    `r` from what is placed each iteration. Stop when `all(r ≤ 0)`, or when `members > MAX_SIZED_MEMBERS`
-   (composition.rs:26 = 8) → return **`None`** (an honest defer to the unimplemented multi-squad G4-HEAVY, §3 P5).
+   (composition.rs:26 = 8) → return **`None`** (a TERMINAL "can't field a winnable single squad -> don't attack this objective" -- D10, NOT a hand-off to a heavier path).
    *The "scarcest capability per energy first" rule IS the auction* — a tower@100k out-heal demand floods Healer
    picks until ~7/8 slots, then `None` (correct deferral); a Guard-defended core interleaves AntiStructure +
    AntiCreep + Healer until all three needs clear.
@@ -414,6 +414,7 @@ real G4-HEAVY defer target. Each phase says what it **deletes**.
   D14); the count floor becomes the role-set floor (subsumes 0030 D15); the silent fallbacks are deleted (subsumes
   0030 D12); the no-silent-static test discipline is carried forward (0030 D19). `EngagementTempo` (0030 §4)
   remains orthogonal — it parameterizes the emitter; the assembler fields whatever vector results.
+- **D10 — `None` is TERMINAL; remove the G4-HEAVY failover (operator 2026-06-27).** When the assembler can't field a winnable single squad (requirement > `MAX_SIZED_MEMBERS`, or no in-range home affords it), it returns `None` = an honest **"don't attack this objective"** — NOT a hand-off to a multi-squad "G4-HEAVY" path, which never existed beyond log strings + unwinnable-reason text (`force_sizing.rs:206`, `war.rs:1115`, comments in `composition.rs`/`force_sizing.rs`). Carrying that pretense as a failover is the broken outlier the operator flagged. The implementation **deletes the G4-HEAVY framing** (those reasons/logs become "not winnable for one squad"); **this decision supersedes every "defer to G4-HEAVY" mention elsewhere in this ADR.** The higher-power response — **scale up the blob, field multiple coordinated squads, or boost** — is a separate **strategy-layer** decision (a future ADR, tracked follow-up), invoked deliberately for a high-value objective, NOT a composition-layer failover. The composition layer's job ends at "the best single-squad force, or `None`."
 
 ---
 
@@ -426,5 +427,8 @@ real G4-HEAVY defer target. Each phase says what it **deletes**.
 - **Negative / risk:** the assembler is a new deterministic path that must reproduce the old calibration on the
   existing beds (P2/P3 golden-output + gate tests guard this); one WFV reset (operator-accepted); the bot wiring
   lags the eval (tracked). The marginal-fill tie-break must be frozen and tested (determinism).
-- **Deferred:** multi-squad G4-HEAVY (the >8-member `None` target); boosted-body sizing; the cross-goal body/blob
-  EV auction (0020 R7-R8 / 0029 §8) that reads tempo; full cross-blob role re-allocation (R8 / 0020-S5).
+- **Deferred (a STRATEGY-LAYER future ADR, not a composition failover — D10):** the higher-power response to an
+  assembler `None` — **scale up the blob / field multiple coordinated squads / boost** — invoked deliberately for
+  a high-value objective the single-squad assembler can't win; boosted-body sizing; the cross-goal body/blob EV
+  auction (0020 R7-R8 / 0029 §8) that reads tempo; full cross-blob role re-allocation (R8 / 0020-S5). The
+  composition layer terminates at "best single-squad force, or `None`"; escalation is the strategy layer's call.
