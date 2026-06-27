@@ -1081,8 +1081,24 @@ mod tests {
     /// projected onto the threat direction; no entities/game state.)
     #[test]
     fn slots_front_to_back_orients_toward_the_threat() {
-        // quad_ranged → a 2×2 box: slot offsets [(0,0),(1,0),(0,1),(1,1)].
-        let mut ctx = SquadContext::from_composition(&SquadComposition::quad_ranged());
+        use screeps_combat_decision::bodies::CombatBodySpec;
+        // A 4-slot Box2x2 ranged quad (the catalog `quad_ranged` is gone, ADR 0031 P4b — build the same
+        // shape template-free): 2 RangedDPS + 2 Healer → box offsets [(0,0),(1,0),(0,1),(1,1)].
+        let sized_ranged = BodyType::Sized(CombatBodySpec { ranged_attack: 4, ..Default::default() });
+        let sized_heal = BodyType::Sized(CombatBodySpec { heal: 4, ..Default::default() });
+        let comp = SquadComposition {
+            label: "Quad Ranged".into(),
+            slots: vec![
+                SquadSlot { role: SquadRole::RangedDPS, body_type: sized_ranged },
+                SquadSlot { role: SquadRole::RangedDPS, body_type: sized_ranged },
+                SquadSlot { role: SquadRole::Healer, body_type: sized_heal },
+                SquadSlot { role: SquadRole::Healer, body_type: sized_heal },
+            ],
+            formation_shape: FormationShape::Box2x2,
+            formation_mode: FormationMode::Strict,
+            retreat_threshold: 0.3,
+        };
+        let mut ctx = SquadContext::from_composition(&comp);
 
         // Threat to the east (+x): the max-x slots {1,3} lead.
         ctx.threat_direction = Some(Direction::Right);

@@ -649,7 +649,9 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// 18 = P-OBJ #23 objective/squad lifecycle rework: `SquadContext` gains the serialized
 /// `engaged_once` flag (the commitment resolve-vs-give-up signal). The bincode positional shape
 /// change needs a reset — which usefully also clears the currently churned/orphaned combat squads.
-const WORLD_FORMAT_VERSION: u32 = 18;
+/// 19 = ADR 0031 Phase 4b catalog deletion: `BodyType` collapses to the single `Sized` variant (the
+/// static template variants are gone), changing the serialized enum shape on every persisted squad.
+const WORLD_FORMAT_VERSION: u32 = 19;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode
