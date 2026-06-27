@@ -356,8 +356,12 @@ impl<'a> System<'a> for SquadManagerSystem {
         // and reused by every squad fighting there. Per-squad work (the cohesion search) is unaffected.
         let mut room_layers: HashMap<RoomName, (LocalCostMatrix, PositionLayers)> = HashMap::new();
         for (squad_entity, obj_id) in &live_managed {
-            let (target_room, formation) = match data.objective_queue.get(*obj_id) {
-                Some(obj) => (objective_target(&obj.kind).1, is_formation_objective(&obj.kind)),
+            let (target_room, formation, requested_slots) = match data.objective_queue.get(*obj_id) {
+                Some(obj) => (
+                    objective_target(&obj.kind).1,
+                    is_formation_objective(&obj.kind),
+                    obj.force.squads.first().map(|c| c.slots.len()).unwrap_or(0),
+                ),
                 None => continue,
             };
             compute_squad_orders(
@@ -370,6 +374,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 formation,
                 &mut room_layers,
                 debug,
+                requested_slots,
             );
         }
 
@@ -629,6 +634,7 @@ fn compute_squad_orders(
     formation: bool,
     room_layers: &mut HashMap<RoomName, (LocalCostMatrix, PositionLayers)>,
     debug: bool,
+    requested_slots: usize,
 ) {
     // Read the roster's cached status (immutable). `pos`/`has_ranged` feed the centroid + the kite
     // plan; `has_ranged` resolves the creep body (the adapter's job — the pure crate stays JS-free).
@@ -775,10 +781,33 @@ fn compute_squad_orders(
         );
     }
 
+    // P-OBJ #23 RALLY-until-full gate (operator: wait + group up until the squad is ready, THEN go in
+    // together). The full roster must be spawned AND present in the world before the squad leaves home —
+    // otherwise the lone slot-0 lead departs alone, can't solo the objective, dies, and the squad wipes →
+    // re-field → slot-0 forever (the actual invader no-engage root cause). Measured against the objective's
+    // requested slot count so a death-degraded layout can't shrink "full".
+    let member_positions: Vec<Option<Position>> = member_views.iter().map(|m| m.pos).collect();
+    let ready_to_depart = crate::military::formation::squad_ready_to_depart(&member_positions, requested_slots);
+
     if let Some(ctx) = squad_contexts.get_mut(squad_entity) {
-        if !all_arrived {
-            // Traveling (both styles): advance the anchor toward the room centre so the squad
-            // arrives cohesively (O1). The job's `MoveToRoom` follows `virtual_pos`.
+        if !ready_to_depart {
+            // RALLY: hold at home and group up. Point the travel anchor at the lead's home-room centre (NOT
+            // the target room) so the members formation-follow it HOME and gather — no lone lead crosses
+            // toward the objective until the full roster is present. apply_squad_decision below issues the
+            // Formation move orders that make the members track this (home) anchor.
+            if let Some(lead) = member_views.iter().find_map(|m| m.pos) {
+                let rally = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), lead.room_name());
+                crate::military::formation::advance_squad_virtual_position(ctx, rally);
+            }
+            if debug {
+                log::info!(
+                    "[Lifecycle] RALLY squad={:?} room={} present={}/{} (holding home until full)",
+                    squad_entity, target_room, member_positions.iter().filter(|p| p.is_some()).count(), requested_slots
+                );
+            }
+        } else if !all_arrived {
+            // Ready (full roster present): advance the anchor toward the target room centre so the squad
+            // crosses cohesively (O1). The job's `MoveToRoom` follows `virtual_pos`.
             if let Ok(centre) = RoomCoordinate::new(25) {
                 let dest = Position::new(centre, centre, target_room);
                 crate::military::formation::advance_squad_virtual_position(ctx, dest);

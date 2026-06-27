@@ -221,6 +221,19 @@ pub fn standoff_one_tile(structure: Position, toward: Position) -> Position {
     )
 }
 
+/// Whether the squad's full roster has spawned AND every member has a body in the world — i.e. it is
+/// READY to leave the rally and travel to the objective as a bloc. Until then the manager holds the squad
+/// at home and groups up; it must NOT send a lone lead toward the target (a single creep can't solo the
+/// objective, dies, and the squad wipes → re-field loop — the P-OBJ #23 invader no-engage root cause).
+/// Measured against the objective's REQUESTED slot count so death-degrade of the layout can't shrink
+/// "full". `requested_slots == 0` (unknown) does not gate (preserves legacy behaviour).
+pub fn squad_ready_to_depart(member_positions: &[Option<Position>], requested_slots: usize) -> bool {
+    if requested_slots == 0 {
+        return true;
+    }
+    member_positions.len() >= requested_slots && member_positions.iter().all(|p| p.is_some())
+}
+
 /// Whether to HOLD the squad's virtual anchor at a room boundary for cohesion (don't advance across until
 /// enough members are gathered near the edge), instead of letting fast creeps trickle into a contested
 /// room one at a time. Pure + offline-testable (the P-OBJ #23 fix lives here): counts ONLY members with a
@@ -666,5 +679,18 @@ mod tests {
             !should_hold_at_boundary(&[Some(a), Some(b)], vp, dest),
             "release once the whole squad has crossed"
         );
+    }
+
+    /// P-OBJ #23 rally gate: the squad departs home ONLY when the full roster has spawned AND every member
+    /// is present in the world — otherwise it holds + groups up. This is what stops the lone slot-0 lead
+    /// from creeping in alone, dying, and tripping the wipe → re-field loop.
+    #[test]
+    fn squad_ready_only_when_full_roster_present() {
+        let r: RoomName = "W1N1".parse().unwrap();
+        let p = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), r);
+        assert!(squad_ready_to_depart(&[Some(p), Some(p)], 2), "full + all present → depart");
+        assert!(!squad_ready_to_depart(&[Some(p), None], 2), "a still-spawning member → hold + rally");
+        assert!(!squad_ready_to_depart(&[Some(p)], 2), "roster not fully spawned → hold + rally");
+        assert!(squad_ready_to_depart(&[Some(p)], 0), "unknown roster size → do not gate (legacy)");
     }
 }
