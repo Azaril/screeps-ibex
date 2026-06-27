@@ -238,7 +238,17 @@ wiring (`war.rs`) as a tracked follow-up — the bot lacks a `DismantleStructure
 real G4-HEAVY defer target. Each phase says what it **deletes**.
 
 ### Phase 0 — Layer A brain fix (no new types, no WFV)
-- kernel.rs:360, lib.rs:1021, lib.rs:1101: `our_dps += dismantle_power`. Gate the focus reorder (T3b).
+- **DONE (P0a, commit `5db5e08`):** `assess_engage`'s `our_strength` (lib.rs) adds the squad's `dismantle_power`
+  WHEN a hostile structure is present (a dismantle target) -> fighting STRENGTH > 0 -> no retreat at t0.
+  CORRECTION: the literal "`our_dps += dismantle_power` at kernel.rs:360/lib.rs:1021/1101" was IMPRECISE —
+  those `our_dps` feed `ev_target_order`'s creep-killability (lib.rs:346, `net = our_dps - heal`), and dismantle
+  can't kill creeps; adding it there mis-scores dismantle as anti-creep. The strength fix is `assess_engage`'s
+  `our_strength` ONLY (creep-targeting stays melee+ranged -> CreepClearWins-safe).
+- **DEFERRED — the focus half (P0b, obviated by P3).** A pure-dismantle squad (`our_dps==0`) still fixates an
+  unkillable guard via `select_focus_target` fallback-1. The assembler (P3) fields anti-creep -> `our_dps>0` ->
+  the existing structure-fallback works, so a properly-assembled siege never hits this. A `select_focus_target`
+  gate on `our_dps==0` OVER-REACHES (a healer remnant is `our_dps==0` too -> it disengaged to the core -> a
+  self_play standoff); a precise gate needs the dismantle signal threaded into `select_focus_target`. Hold for P3.
 - **Deletes:** nothing.
 - **Tests:** `CreepClearWins` (validate.rs:698) stays at its current win rate; `OracleCalibration`
   (validate.rs:94) FP ≤ 0.010 / FN ≤ 0.200 unchanged; `sim_is_deterministic_over_rounds` (tournament.rs:804)
