@@ -498,9 +498,14 @@ fn queue_slot_spawn(
     let Some(best_capacity) = best_capacity else {
         return;
     };
-    // Build via `build_body` so a force-SIZED slot (BodyType::Sized, R3) goes through the dynamic
-    // builder and a template slot through create_body — both at the strongest in-range home's energy.
-    let body = match slot.body_type.build_body(best_capacity, screeps_combat_decision::bodies::MoveProfile::Plains) {
+    // Build via `build_body` so a force-SIZED slot (BodyType::Sized, R3) goes through the dynamic builder
+    // and a template slot through create_body. CAP the build energy at PREFERRED_MEMBER_ENERGY: a force-
+    // sized spec is already ≤ that ceiling (sized_for capped it), but a TEMPLATE fallback (a defense shape
+    // when sized_for defers) would otherwise scale to the strongest in-range home and spawn a ~5000e blob
+    // that never banks at HIGH priority while CRITICAL economy drains the home (the live W5N2/W4N7 defense
+    // squads that re-queued forever). Capping keeps every spawned member bankable.
+    let build_energy = best_capacity.min(screeps_combat_decision::composition::PREFERRED_MEMBER_ENERGY);
+    let body = match slot.body_type.build_body(build_energy, screeps_combat_decision::bodies::MoveProfile::Plains) {
         Some(body) => body,
         // Even the strongest in-range home can't build it (template min OR the sized spec) — don't field
         // an undersized one. (A sized slot that doesn't fit was already vetoed upstream by sized_for.)
