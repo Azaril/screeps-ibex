@@ -121,12 +121,23 @@ impl FormationLayout {
         }
     }
 
-    /// 2x2 box formation.
-    pub fn box_2x2() -> Self {
+    /// Compact box formation for `count` members (ADR 0026 §9.10 L5 — N-blob). A `⌈√count⌉`-wide box,
+    /// row-major from the anchor (slot 0 = `(0,0)`): `count == 4` reproduces the 2×2, and a force-sized
+    /// N-blob (up to `MAX_SIZED_MEMBERS = 8`) fills the smallest square that holds it — so a grown quad's
+    /// 5th–8th members get DISTINCT, cohesive tiles instead of stacking on the anchor (the old fixed-4
+    /// `box_2x2` left them at the `(0,0)` fallback). The footprint grows with `count` (a 3×3 for 8); the
+    /// anchor path-fit + single-file fallback handle the wider footprint.
+    pub fn box_formation(count: usize) -> Self {
+        let width = (1..).find(|w| w * w >= count.max(1)).unwrap_or(1);
         FormationLayout {
             shape: FormationShape::Box2x2,
-            offsets: vec![(0, 0), (1, 0), (0, 1), (1, 1)],
+            offsets: (0..count).map(|i| ((i % width) as i32, (i / width) as i32)).collect(),
         }
+    }
+
+    /// 2x2 box formation (the `count == 4` case of [`Self::box_formation`]).
+    pub fn box_2x2() -> Self {
+        Self::box_formation(4)
     }
 
     /// Line formation with N members.
@@ -158,7 +169,7 @@ impl FormationLayout {
         match shape {
             FormationShape::None => FormationLayout::none(),
             FormationShape::Line => FormationLayout::line(count),
-            FormationShape::Box2x2 => FormationLayout::box_2x2(),
+            FormationShape::Box2x2 => FormationLayout::box_formation(count),
             FormationShape::Triangle => FormationLayout::triangle(),
             FormationShape::WideLine => FormationLayout::wide_line(count),
         }
@@ -810,7 +821,7 @@ impl SquadContext {
             (FormationShape::Triangle, 2) => FormationLayout::line(2),
             (FormationShape::Line, n) => FormationLayout::line(n),
             (FormationShape::WideLine, n) => FormationLayout::wide_line(n),
-            (shape, n) if n >= 4 && shape == FormationShape::Box2x2 => FormationLayout::box_2x2(),
+            (shape, n) if n >= 4 && shape == FormationShape::Box2x2 => FormationLayout::box_formation(n),
             (_, n) => FormationLayout::line(n),
         };
 
@@ -1013,6 +1024,27 @@ impl<'a> System<'a> for RunSquadUpdateSystem {
 mod tests {
     use super::*;
     use specs::{Builder, World, WorldExt};
+
+    /// L5 (ADR 0026 §9.10): the box formation scales to an N-blob — `count == 4` is the 2×2, larger
+    /// force-sized squads fill a compact square with DISTINCT offsets (no member stacks on the anchor as
+    /// the old fixed-4 `box_2x2` left them), and the count drives both `from_shape` and the death-degrade
+    /// re-layout.
+    #[test]
+    fn box_formation_scales_to_an_n_blob() {
+        let four = FormationLayout::box_formation(4);
+        assert_eq!(four.offsets, vec![(0, 0), (1, 0), (0, 1), (1, 1)], "count 4 is the 2x2");
+        for n in [5usize, 6, 8] {
+            let l = FormationLayout::box_formation(n);
+            assert_eq!(l.offsets.len(), n, "one distinct slot per member (n={n})");
+            assert_eq!(l.offsets.iter().collect::<std::collections::HashSet<_>>().len(), n, "no two members share a tile (n={n})");
+            assert_eq!(l.offsets[0], (0, 0), "slot 0 is the anchor");
+            // Compact: fits within a ⌈√n⌉-wide square.
+            let w = (1..).find(|w| w * w >= n).unwrap() as i32;
+            assert!(l.offsets.iter().all(|&(x, y)| x < w && y < w), "compact within {w}x{w} (n={n})");
+        }
+        // from_shape + the death-degrade path both route Box2x2 through box_formation(count).
+        assert_eq!(FormationLayout::from_shape(FormationShape::Box2x2, 6).offsets.len(), 6);
+    }
 
     /// Blocker #2 (ADR 0022 P-ID): a `SquadRef` must validate the generation on access so a recycled
     /// ECS slot resolves to `None` — never silently aliases the different squad that now occupies the

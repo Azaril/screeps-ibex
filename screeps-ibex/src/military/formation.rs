@@ -474,7 +474,7 @@ fn corridor_layout_transition(shape: Option<FormationShape>, member_count: usize
     }
     match shape {
         Some(FormationShape::Box2x2) if tight_blocked => Some(FormationLayout::line(member_count)),
-        Some(FormationShape::Line) if !tight_blocked => Some(FormationLayout::box_2x2()),
+        Some(FormationShape::Line) if !tight_blocked => Some(FormationLayout::box_formation(member_count)),
         _ => None,
     }
 }
