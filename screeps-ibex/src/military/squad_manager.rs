@@ -29,6 +29,7 @@
 
 use super::objective_queue::{CombatObjectiveQueue, ObjectiveId, ObjectiveKind, OBJECTIVE_PRIORITY_HIGH};
 use screeps_combat_decision::composition::{SquadComposition, SquadSlot};
+use screeps_combat_decision::lifecycle; // P-OBJ #23 / ADR 0027 — the pure reconcile kernel (shared, tested offline)
 use super::squad::{AttackTarget, SquadContext, SquadState, SquadTarget, TickMovement, TickOrders};
 use crate::combat::kite::{PositionLayers, ThreatField, MAX_KITE_OPS};
 use crate::combat::{
@@ -268,40 +269,32 @@ impl<'a> System<'a> for SquadManagerSystem {
                 })
                 .unwrap_or((false, false, false, false, false));
 
-            // RESOLVE (P-OBJ #23): the squad fought (`engaged_once`) and now stands in the objective room
-            // with no target left → the objective is CLEARED. Withdraw it cleanly (NOT a give-up: the room
-            // is not backed off) and retire the victorious squad. `engaged_once` is what distinguishes this
-            // from the just-arrived tick (in-room, no focus yet) — a squad that never engaged cannot have
-            // "cleared" anything.
-            let resolved = engaged_once && in_target_room && !has_focus && has_members;
-            // GIVE-UP: the lease lapsed with no active focus and no clean clear → stuck en route, or it
-            // fought and withdrew without finishing. Back the (non-Defend) room off so we don't immediately
-            // re-field into the same dead end; the exponential backoff lapses and a fresh squad may retry.
-            let gave_up = deadline_lapsed && !has_focus && !resolved;
-
-            // Retire a duplicate, an orphaned (objective gone), a wiped, a resolved, or a given-up squad.
-            if objective_gone || covered.contains(&obj_id) || wiped || resolved || gave_up {
+            // P-OBJ #23 / ADR 0027: the pure reconcile kernel decides retire-vs-keep (unit-tested offline
+            // in `screeps_combat_decision::lifecycle`). The manager only builds the snapshot and applies the
+            // action — single source of truth, shared with the offline lifecycle harness (no drift).
+            let snapshot = lifecycle::ReconcileSnapshot {
+                objective_gone,
+                duplicate: covered.contains(&obj_id),
+                is_defend,
+                deadline_lapsed,
+                wiped,
+                has_focus,
+                engaged_once,
+                in_target_room,
+                has_members,
+            };
+            let action = lifecycle::reconcile(snapshot);
+            if let lifecycle::ReconcileAction::Retire { reason, withdraw, mark_unwinnable } = action {
                 if debug {
-                    let reason = if resolved {
-                        "resolved"
-                    } else if gave_up {
-                        "gave_up"
-                    } else if wiped {
-                        "wiped"
-                    } else if objective_gone {
-                        "objective_gone"
-                    } else {
-                        "duplicate"
-                    };
                     log::info!(
-                        "[Lifecycle] RETIRE squad={:?} obj={:?} reason={} engaged_once={} in_room={} focus={} deadline_lapsed={} members={}",
+                        "[Lifecycle] RETIRE squad={:?} obj={:?} reason={:?} engaged_once={} in_room={} focus={} deadline_lapsed={} members={}",
                         squad_entity, obj_id, reason, engaged_once, in_target_room, has_focus, deadline_lapsed, has_members
                     );
                 }
-                if resolved {
+                if withdraw {
                     data.objective_queue.withdraw(obj_id); // clean win — clear the objective so no one re-fields it
-                } else if (wiped || gave_up) && !objective_gone && !is_defend {
-                    // Defense is exempt — we never abandon an owned room; a wiped defense squad is re-staffed.
+                } else if mark_unwinnable {
+                    // Defense is exempt (kernel never sets this for is_defend) — we never abandon an owned room.
                     if let Some(room) = squad_room {
                         data.objective_queue.mark_unwinnable(room, now);
                     }
@@ -310,17 +303,16 @@ impl<'a> System<'a> for SquadManagerSystem {
                 data.objective_queue.release_entity(squad_entity);
                 continue;
             }
-            // Live: re-establish the (ephemeral) claim — idempotent; self-heals post-reset. Refresh the
-            // commitment lease while the squad is actively engaging a target, so a long fight (or a brief
-            // visibility gap) never lets the objective lapse underneath it.
+            // Live (Keep / KeepRefreshLease): re-establish the (ephemeral) claim — idempotent, self-heals
+            // post-reset. Refresh the commitment lease ONLY while actively engaging (KeepRefreshLease) so a
+            // long fight or a brief visibility gap never lets the objective lapse underneath the squad.
             data.objective_queue.claim(obj_id, squad_entity);
-            if has_focus {
+            if action == lifecycle::ReconcileAction::KeepRefreshLease {
                 data.objective_queue.set_deadline(obj_id, Some(now + COMMITMENT_BUDGET));
             }
-            // P-OBJ #23 (intel coverage): keep eyes on a committed objective's room so its intel never
-            // goes stale underneath the producer. OBSERVE-only + HIGH so an in-range RCL8 observer
-            // refreshes it for free (no scout burned on a walled/defended target); if no observer covers
-            // it, commitment + the deadline lease bridge the gap instead.
+            // Intel coverage: keep eyes on a committed objective's room so its intel never goes stale
+            // underneath the producer. OBSERVE-only + HIGH so an in-range RCL8 observer refreshes it free;
+            // if no observer covers it, commitment + the deadline lease bridge the gap instead.
             if let Some(room) = squad_room {
                 data.visibility
                     .request(VisibilityRequest::new(room, VISIBILITY_PRIORITY_HIGH, VisibilityRequestFlags::OBSERVE));
