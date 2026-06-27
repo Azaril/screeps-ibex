@@ -51,9 +51,7 @@ The **anti-creep overlay** (`overlay_anti_creep`, `:215-230`, Layer C): when def
 
 This is the marginal-capability-per-energy fill specialized to the current 1:1 role↔dimension map; a future overlapping dimension would generalize to the full scarcest-dimension auction (the frozen order being its tie-break).
 
-**BUILT — `force_ceiling` (the template-free budget BRIDGE).** `force_ceiling(member_energy, fighter)` (`composition.rs:417-445`) replaces `doctrine.template().force_budget(..)`. It builds `CEILING_FIGHTERS=3` + `CEILING_HEALERS=5` (=8, the eval's siege_ceiling shape), each `Sized` at `single_role_cap` at the same per-member cap the assembler uses — so the ceiling represents a force the assembler can actually field within `MAX_SIZED_MEMBERS`, keeping a "winnable" verdict conservative. `fighter` = Dismantler (dismantle-able rings) or RangedDPS (immune cores / creep clear). **This fixed 3+5 shape is the bridge the EV optimizer (D16) replaces.**
-
-**DESIGNED-NEXT — `optimize_composition` (the EV-maximizing optimizer, D16).** Both `assemble_force` (the 1:1 `ceil(demand/cap)` fill) and `force_ceiling` (the 3+5 budget) still presume a composition shape — the same template smell at one remove. The target state treats composition as a multi-dimensional optimization that **maximizes expected value**:
+**BUILT — `optimize_composition` (the EV-maximizing optimizer, D16/D17).** The top-level composition decision. `force_ceiling`'s presumed 3+5 budget is **DELETED** — the EV/commit decision is **per-candidate** (no reference squad). The optimizer treats composition as a multi-dimensional optimization that **maximizes expected value**:
 
 > `EV(C) = P(win | C) · target_value − cost(C)`, with `cost = w_energy·energy + w_creep·creeps` and `P(win) = win_probability(heal, incoming) · kill_feasibility(C, defense, window)`. A dynamic margin inflates the observed hostile force so a growing threat still loses.
 
