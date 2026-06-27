@@ -221,8 +221,43 @@ pub fn standoff_one_tile(structure: Position, toward: Position) -> Position {
     )
 }
 
+/// Whether to HOLD the squad's virtual anchor at a room boundary for cohesion (don't advance across until
+/// enough members are gathered near the edge), instead of letting fast creeps trickle into a contested
+/// room one at a time. Pure + offline-testable (the P-OBJ #23 fix lives here): counts ONLY members with a
+/// resolved position — a still-spawning member (`None`, no body in the world) must NEVER inflate the
+/// quorum denominator, or it jams the gate so a lone in-room lead is frozen at the edge forever. Returns
+/// false when not at a boundary, or with ≤1 member present (a lone lead just crosses).
+fn should_hold_at_boundary(member_positions: &[Option<Position>], virtual_pos: Position, destination: Position) -> bool {
+    let positioned: Vec<Position> = member_positions.iter().filter_map(|p| *p).collect();
+    let living_count = positioned.len();
+    let at_room_boundary = virtual_pos.room_name() != destination.room_name();
+    if !at_room_boundary || living_count <= 1 {
+        return false;
+    }
+    let vp_room = virtual_pos.room_name();
+    // Gathered = in the anchor's room OR already across into the destination.
+    let gathered = positioned
+        .iter()
+        .filter(|p| p.room_name() == vp_room || p.room_name() == destination.room_name())
+        .count();
+    let quorum_met = gathered as f32 >= living_count as f32 * STRICT_QUORUM_RATIO;
+    // Near-edge = already crossed (different room) OR within the edge band toward the destination.
+    let near_edge = positioned
+        .iter()
+        .filter(|p| p.room_name() != vp_room || is_near_room_edge_toward(**p, destination))
+        .count();
+    let near_edge_quorum = near_edge as f32 >= living_count as f32 * STRICT_QUORUM_RATIO;
+    !(quorum_met && near_edge_quorum)
+}
+
 pub fn advance_squad_virtual_position(squad: &mut SquadContext, destination: Position) {
-    let living_members: Vec<(usize, Option<Position>)> = squad.members.iter().map(|m| (m.formation_slot, m.position)).collect();
+    // P-OBJ #23 invader no-engage ROOT CAUSE: count ONLY members with a resolved position. A still-
+    // spawning member carries `position: None` (no body in the world yet) for the whole ~body*3-tick
+    // spawn; including it inflated `living_count` AND failed every cohesion quorum, so `boundary_hold`
+    // latched true and a lone in-room lead was frozen at the room edge — the squad never massed, the room
+    // never became visible, the DTOs stayed empty, and `decide_squad` never found a focus to engage.
+    let living_members: Vec<(usize, Option<Position>)> =
+        squad.members.iter().filter(|m| m.position.is_some()).map(|m| (m.formation_slot, m.position)).collect();
 
     if living_members.is_empty() {
         return;
@@ -272,46 +307,11 @@ pub fn advance_squad_virtual_position(squad: &mut SquadContext, destination: Pos
     // is in a different room), require most members to be in the same room as
     // the virtual position before advancing across. This prevents faster
     // creeps from trickling into the next room while slower ones lag behind.
-    let at_room_boundary = virtual_pos.room_name() != destination.room_name();
-    let boundary_hold = if at_room_boundary && living_count > 1 {
-        let vp_room = virtual_pos.room_name();
-        let members_in_vp_room = living_members
-            .iter()
-            .filter(|(_, pos)| pos.map(|p| p.room_name() == vp_room).unwrap_or(false))
-            .count();
-        let members_already_crossed = living_members
-            .iter()
-            .filter(|(_, pos)| pos.map(|p| p.room_name() == destination.room_name()).unwrap_or(false))
-            .count();
-
-        // Allow crossing when:
-        // - All members are in the virtual_pos room (full cohesion), OR
-        // - At least 75% are in either the vp room or destination room AND
-        //   the majority are near the boundary (within 8 tiles of the edge), OR
-        // - The hold has lasted too long (STRICT_HOLD_MAX_TICKS) to avoid deadlock.
-        let gathered_count = members_in_vp_room + members_already_crossed;
-        let quorum_met = gathered_count as f32 >= living_count as f32 * STRICT_QUORUM_RATIO;
-
-        // Count members near the relevant room edge.
-        let members_near_edge = living_members
-            .iter()
-            .filter(|(_, pos)| {
-                pos.map(|p| {
-                    if p.room_name() != vp_room {
-                        // Already in destination room -- they've crossed.
-                        return true;
-                    }
-                    is_near_room_edge_toward(p, destination)
-                })
-                .unwrap_or(false)
-            })
-            .count();
-        let near_edge_quorum = members_near_edge as f32 >= living_count as f32 * STRICT_QUORUM_RATIO;
-
-        !(quorum_met && near_edge_quorum)
-    } else {
-        false
-    };
+    // Room-boundary cohesion gate (extracted to the pure `should_hold_at_boundary` for offline tests +
+    // the P-OBJ #23 spawning-member fix). `living_members` is already positioned-only (filtered above), so
+    // these are all `Some`; the helper filters again defensively.
+    let member_positions: Vec<Option<Position>> = living_members.iter().map(|(_, pos)| *pos).collect();
+    let boundary_hold = should_hold_at_boundary(&member_positions, virtual_pos, destination);
 
     let should_advance = if boundary_hold {
         // Hold at the room boundary -- don't advance the virtual pos.
@@ -619,5 +619,52 @@ mod tests {
         let core = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), room);
         let s = standoff_one_tile(core, core);
         assert_eq!(core.get_range_to(s), 1, "still steps off the structure");
+    }
+
+    /// P-OBJ #23 ROOT-CAUSE regression: a still-spawning member (position `None`) must NOT jam the
+    /// boundary cohesion gate. Pre-fix it inflated `living_count` and failed every quorum, freezing a lone
+    /// in-room lead at the room edge → the squad never massed → never engaged the invader core (W3N5 stayed
+    /// 100000/100000 with ≤1 creep in-room). The gate must count only members present in the world.
+    #[test]
+    fn boundary_does_not_hold_for_a_spawning_member() {
+        let home: RoomName = "W3N6".parse().unwrap();
+        let target: RoomName = "W3N5".parse().unwrap();
+        let vp = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), home);
+        let dest = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), target);
+        let lead = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(2).unwrap(), target); // already crossed
+        assert!(
+            !should_hold_at_boundary(&[Some(lead), None], vp, dest),
+            "a still-spawning (None) member must not jam the boundary hold for a lone in-room lead"
+        );
+    }
+
+    /// The gate still HOLDS when a real (positioned) squadmate lags far from the edge — cohesion preserved.
+    #[test]
+    fn boundary_holds_for_a_lagging_member() {
+        let home: RoomName = "W3N6".parse().unwrap();
+        let target: RoomName = "W3N5".parse().unwrap();
+        let vp = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), home);
+        let dest = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), target);
+        let lead = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(2).unwrap(), target);
+        let lagger = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), home); // home centre, far from edge
+        assert!(
+            should_hold_at_boundary(&[Some(lead), Some(lagger)], vp, dest),
+            "hold while a real member lags far from the boundary edge"
+        );
+    }
+
+    /// The gate RELEASES once the whole (positioned) squad has crossed into the destination room.
+    #[test]
+    fn boundary_releases_when_all_crossed() {
+        let home: RoomName = "W3N6".parse().unwrap();
+        let target: RoomName = "W3N5".parse().unwrap();
+        let vp = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), home);
+        let dest = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), target);
+        let a = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(2).unwrap(), target);
+        let b = Position::new(RoomCoordinate::new(26).unwrap(), RoomCoordinate::new(2).unwrap(), target);
+        assert!(
+            !should_hold_at_boundary(&[Some(a), Some(b)], vp, dest),
+            "release once the whole squad has crossed"
+        );
     }
 }
