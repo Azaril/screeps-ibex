@@ -3,8 +3,9 @@
 Status: IN PROGRESS 2026-06-27. **All five kernels K0–K4 + the forming-phase driver + the
 ENGINE-ENGAGE HANDOFF LANDED** (`screeps-combat-eval/src/harness/lifecycle.rs` — the full
 `objective→form→travel→engage→kill` chain is offline + deterministic). The harness then
-diagnosed the live 87.5 backfire (see §Diagnosis) and **reframed the effort: the offense
-fails on COMBAT EFFECTIVENESS (squads lose defended fights), not spawn/forming.** Companion to ADR 0008 (squad
+diagnosed the live 87.5 backfire (see §Diagnosis) and now tests single/multi-room spawning +
+rally/renew. **Both layers are broken: the spawn/form layer (no renew → stuck forms lose
+members; + lane contention) AND combat effectiveness (squads lose defended fights).** Companion to ADR 0008 (squad
 lifecycle), ADR 0027 (objective/squad lifecycle rework), ADR 0023/0023a (the combat sim
 harness), ADR 0026 §9 (doctrine sizing). Task #23 / #25.
 
@@ -163,17 +164,33 @@ engagements.** The spawn-priority/forming-cap tuning is parked at the safe **HIG
 (deployed); the offline harness `run_lifecycle` proved the engage WORKS against an *undefended*
 core, so the open question is the *defended* case.
 
+## Spawn/form layer — single/multi-room + rally/renew (operator-requested, tested 2026-06-27)
+
+`run_forming` now models member TTL (`CREEP_LIFE_TIME`) + death-by-age + optional renew. Findings
+(10 lifecycle tests):
+- **Single-room** spawning forms the roster (serial); **multi-room** forms it FASTER (parallel,
+  asserted `multi < single`).
+- **No-renew member-death is REAL.** A stuck/slow form (forming-span > a member's life) loses its
+  early members to old age → they drop to unfilled → re-spawn → the roster never has the full set
+  present at once → never departs. **The live bot has exactly this**: `request_renew` has zero
+  callers, and live forms were stuck >1500t (> `CREEP_LIFE_TIME`), so the early members aged out.
+- **Renew fixes it**: keeping the rallying roster alive (at a spawn-lane cost) completes the stuck
+  form. ⇒ **Implement renew live** (wire `request_renew` for rallying members with low TTL).
+
 ## Remaining work
 
-1. **Graded-defender engage tests (the reframed priority).** `assemble_single_room` already takes
+1. **Implement renew live** (the harness-validated spawn/form fix) — wire `request_renew` for a
+   squad's present members while it rallies, so a slow/contested form doesn't lose its early members.
+   Mind the energy cost (the colony's economy is fragile); the harness can tune the lane/energy budget.
+2. **Graded-defender engage tests (combat effectiveness).** `assemble_single_room` already takes
    `towers`, `ForceSpec`, `rampart_hits`, `safe_mode`. Run a force-sized squad through
    `run_lifecycle` against a DEFENDED core/room and ask "does the sized force WIN?" If a
    winnability-gated (`force_sizing`) squad gets wiped, the gate is mis-calibrated OR the tactics
-   under-perform — both now offline-testable. THIS is the real target, not spawn priority.
-2. **Multi-squad + K4 in the driver** — extend `run_forming` to several objectives gated by
+   under-perform — both now offline-testable.
+3. **Multi-squad + K4 in the driver** — extend `run_forming` to several objectives gated by
    `claim_pacing::claims_allowed` (the claim-throttle interaction; secondary now that the backfire
    is understood as a fight-loss, not a lockup).
-3. **Stale-intel give-up scenario** — the give-up *decision* is already covered by the reconcile
+4. **Stale-intel give-up scenario** — the give-up *decision* is already covered by the reconcile
    kernel; a multi-tick scenario test is optional polish.
 
 Done: K0–K4 kernels; the forming-phase driver (3/5 stall + above-economy-completes); the
