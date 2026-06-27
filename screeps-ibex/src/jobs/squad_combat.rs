@@ -24,6 +24,12 @@ pub struct SquadCombatJobContext {
 /// Maximum ticks to spend in combat response before resuming objective.
 const COMBAT_RESPONSE_TIMEOUT: u32 = 50;
 
+// The pure transition table of this state machine is mirrored in `screeps_combat_decision::squad_fsm`
+// (`next_state`, K2 / ADR 0028) — the canonical, unit-tested spec the offline lifecycle harness drives.
+// The `return Some(state)` decisions in each `*::tick` below MUST stay in step with that kernel; the ECS
+// actions (movement, combat, the orphan recall-to-recycle) stay here. (Full bot adoption of `next_state`
+// is deferred: each tick interleaves its transition checks with movement, so calling `next_state`
+// up-front would move the post-movement arrival-engage — see ADR 0028 §K2.)
 machine!(
     #[derive(Clone, Serialize, Deserialize)]
     enum SquadCombatState {

@@ -362,8 +362,9 @@ pub struct SquadMember {
 
 /// Anti-deadlock: max ticks to wait for stragglers in strict mode before quorum.
 pub const STRICT_QUORUM_TICKS: u16 = 3;
-/// Anti-deadlock: fraction of living members needed for quorum advance.
-pub const STRICT_QUORUM_RATIO: f32 = 0.75;
+/// Anti-deadlock: fraction of living members needed for quorum advance. Canonical def lives in the shared
+/// `screeps_combat_decision::rally` kernel (K0 / ADR 0028) so the bot and the lifecycle harness agree.
+pub use screeps_combat_decision::rally::STRICT_QUORUM_RATIO;
 /// Anti-deadlock: max ticks before forcing loose mode.
 pub const STRICT_HOLD_MAX_TICKS: u16 = 15;
 

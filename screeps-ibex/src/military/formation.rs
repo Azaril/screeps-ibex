@@ -222,46 +222,11 @@ pub fn standoff_one_tile(structure: Position, toward: Position) -> Position {
 }
 
 /// Whether the squad's full roster has spawned AND every member has a body in the world — i.e. it is
-/// READY to leave the rally and travel to the objective as a bloc. Until then the manager holds the squad
-/// at home and groups up; it must NOT send a lone lead toward the target (a single creep can't solo the
-/// objective, dies, and the squad wipes → re-field loop — the P-OBJ #23 invader no-engage root cause).
-/// Measured against the objective's REQUESTED slot count so death-degrade of the layout can't shrink
-/// "full". `requested_slots == 0` (unknown) does not gate (preserves legacy behaviour).
-pub fn squad_ready_to_depart(member_positions: &[Option<Position>], requested_slots: usize) -> bool {
-    if requested_slots == 0 {
-        return true;
-    }
-    member_positions.len() >= requested_slots && member_positions.iter().all(|p| p.is_some())
-}
-
-/// Whether to HOLD the squad's virtual anchor at a room boundary for cohesion (don't advance across until
-/// enough members are gathered near the edge), instead of letting fast creeps trickle into a contested
-/// room one at a time. Pure + offline-testable (the P-OBJ #23 fix lives here): counts ONLY members with a
-/// resolved position — a still-spawning member (`None`, no body in the world) must NEVER inflate the
-/// quorum denominator, or it jams the gate so a lone in-room lead is frozen at the edge forever. Returns
-/// false when not at a boundary, or with ≤1 member present (a lone lead just crosses).
-fn should_hold_at_boundary(member_positions: &[Option<Position>], virtual_pos: Position, destination: Position) -> bool {
-    let positioned: Vec<Position> = member_positions.iter().filter_map(|p| *p).collect();
-    let living_count = positioned.len();
-    let at_room_boundary = virtual_pos.room_name() != destination.room_name();
-    if !at_room_boundary || living_count <= 1 {
-        return false;
-    }
-    let vp_room = virtual_pos.room_name();
-    // Gathered = in the anchor's room OR already across into the destination.
-    let gathered = positioned
-        .iter()
-        .filter(|p| p.room_name() == vp_room || p.room_name() == destination.room_name())
-        .count();
-    let quorum_met = gathered as f32 >= living_count as f32 * STRICT_QUORUM_RATIO;
-    // Near-edge = already crossed (different room) OR within the edge band toward the destination.
-    let near_edge = positioned
-        .iter()
-        .filter(|p| p.room_name() != vp_room || is_near_room_edge_toward(**p, destination))
-        .count();
-    let near_edge_quorum = near_edge as f32 >= living_count as f32 * STRICT_QUORUM_RATIO;
-    !(quorum_met && near_edge_quorum)
-}
+/// `squad_ready_to_depart` (rally gate) + `should_hold_at_boundary` (boundary cohesion) — the pure P-OBJ
+/// #23 gates, lifted to the shared `screeps_combat_decision::rally` kernel (K0 / ADR 0028) so the bot and
+/// the offline lifecycle harness share ONE implementation. Re-exported here so existing call sites
+/// (`squad_manager`, `advance_squad_virtual_position`) are unchanged.
+pub use screeps_combat_decision::rally::{should_hold_at_boundary, squad_ready_to_depart};
 
 pub fn advance_squad_virtual_position(squad: &mut SquadContext, destination: Position) {
     // P-OBJ #23 invader no-engage ROOT CAUSE: count ONLY members with a resolved position. A still-
@@ -517,45 +482,6 @@ fn corridor_layout_transition(shape: Option<FormationShape>, member_count: usize
 
 const ROOM_SIZE: u8 = 50;
 
-/// Check if a position is near the room edge leading toward a destination in
-/// another room. "Near" means within 8 tiles of the relevant border.
-fn is_near_room_edge_toward(pos: Position, destination: Position) -> bool {
-    let (cur_wx, cur_wy) = pos.world_coords();
-    let (dst_wx, dst_wy) = destination.world_coords();
-    let pos_room = pos.room_name();
-    let dst_room = destination.room_name();
-
-    if pos_room == dst_room {
-        return true; // Already in the destination room.
-    }
-
-    let x = pos.x().u8();
-    let y = pos.y().u8();
-    let near_threshold = 8;
-
-    // Check which direction we need to go based on world coordinates.
-    let room_dx = (dst_wx - cur_wx).signum();
-    let room_dy = (dst_wy - cur_wy).signum();
-
-    let near_x_edge = if room_dx > 0 {
-        x >= 49 - near_threshold
-    } else if room_dx < 0 {
-        x <= near_threshold
-    } else {
-        true // Same x-axis; no x-boundary to cross.
-    };
-
-    let near_y_edge = if room_dy > 0 {
-        y >= 49 - near_threshold
-    } else if room_dy < 0 {
-        y <= near_threshold
-    } else {
-        true // Same y-axis; no y-boundary to cross.
-    };
-
-    near_x_edge && near_y_edge
-}
-
 /// Issue flee movement for all squad members using virtual anchor approach.
 /// Each member independently flees from hostile positions.
 pub fn issue_virtual_anchor_flee(
@@ -634,63 +560,6 @@ mod tests {
         assert_eq!(core.get_range_to(s), 1, "still steps off the structure");
     }
 
-    /// P-OBJ #23 ROOT-CAUSE regression: a still-spawning member (position `None`) must NOT jam the
-    /// boundary cohesion gate. Pre-fix it inflated `living_count` and failed every quorum, freezing a lone
-    /// in-room lead at the room edge → the squad never massed → never engaged the invader core (W3N5 stayed
-    /// 100000/100000 with ≤1 creep in-room). The gate must count only members present in the world.
-    #[test]
-    fn boundary_does_not_hold_for_a_spawning_member() {
-        let home: RoomName = "W3N6".parse().unwrap();
-        let target: RoomName = "W3N5".parse().unwrap();
-        let vp = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), home);
-        let dest = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), target);
-        let lead = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(2).unwrap(), target); // already crossed
-        assert!(
-            !should_hold_at_boundary(&[Some(lead), None], vp, dest),
-            "a still-spawning (None) member must not jam the boundary hold for a lone in-room lead"
-        );
-    }
-
-    /// The gate still HOLDS when a real (positioned) squadmate lags far from the edge — cohesion preserved.
-    #[test]
-    fn boundary_holds_for_a_lagging_member() {
-        let home: RoomName = "W3N6".parse().unwrap();
-        let target: RoomName = "W3N5".parse().unwrap();
-        let vp = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), home);
-        let dest = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), target);
-        let lead = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(2).unwrap(), target);
-        let lagger = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), home); // home centre, far from edge
-        assert!(
-            should_hold_at_boundary(&[Some(lead), Some(lagger)], vp, dest),
-            "hold while a real member lags far from the boundary edge"
-        );
-    }
-
-    /// The gate RELEASES once the whole (positioned) squad has crossed into the destination room.
-    #[test]
-    fn boundary_releases_when_all_crossed() {
-        let home: RoomName = "W3N6".parse().unwrap();
-        let target: RoomName = "W3N5".parse().unwrap();
-        let vp = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), home);
-        let dest = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), target);
-        let a = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(2).unwrap(), target);
-        let b = Position::new(RoomCoordinate::new(26).unwrap(), RoomCoordinate::new(2).unwrap(), target);
-        assert!(
-            !should_hold_at_boundary(&[Some(a), Some(b)], vp, dest),
-            "release once the whole squad has crossed"
-        );
-    }
-
-    /// P-OBJ #23 rally gate: the squad departs home ONLY when the full roster has spawned AND every member
-    /// is present in the world — otherwise it holds + groups up. This is what stops the lone slot-0 lead
-    /// from creeping in alone, dying, and tripping the wipe → re-field loop.
-    #[test]
-    fn squad_ready_only_when_full_roster_present() {
-        let r: RoomName = "W1N1".parse().unwrap();
-        let p = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), r);
-        assert!(squad_ready_to_depart(&[Some(p), Some(p)], 2), "full + all present → depart");
-        assert!(!squad_ready_to_depart(&[Some(p), None], 2), "a still-spawning member → hold + rally");
-        assert!(!squad_ready_to_depart(&[Some(p)], 2), "roster not fully spawned → hold + rally");
-        assert!(squad_ready_to_depart(&[Some(p)], 0), "unknown roster size → do not gate (legacy)");
-    }
+    // (squad_ready_to_depart + should_hold_at_boundary tests live with the kernel now —
+    // screeps_combat_decision::rally, K0 / ADR 0028.)
 }
