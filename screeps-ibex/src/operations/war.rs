@@ -1,8 +1,8 @@
 use super::data::*;
 use super::operationsystem::*;
-use screeps_combat_decision::composition::SquadComposition;
+use screeps_combat_decision::composition::{force_ceiling, SquadComposition, SquadRole};
 use screeps_combat_decision::doctrine::{
-    decide_doctrine, default_doctrines, defense_doctrines, DoctrineObjective, EnemyCoordination, EnemyForce, EngagementContext,
+    decide_doctrine, default_doctrines, defense_doctrines, plan_engagement, DoctrineObjective, EnemyCoordination, EnemyForce, EngagementContext,
 };
 use screeps_combat_decision::force_sizing::{win_probability, DefenseProfile, ForceBudget, TowerThreat, HOLD_MARGIN};
 use crate::military::objective_queue::{
@@ -203,6 +203,17 @@ impl WarOperation {
             return;
         }
 
+        // The strongest home spawn capacity — the per-member energy a defender fielded FROM a home is sized
+        // at (ADR 0031: the assembler needs a real member energy; a remote room / defend-flag room has no
+        // spawn of its own, so it borrows the best home's). 0 → no fieldable home (the defense loops skip).
+        let max_home_energy = home_rooms
+            .iter()
+            .filter_map(|&e| system_data.room_data.get(e))
+            .filter_map(|rd| game::rooms().get(rd.name))
+            .map(|r| r.energy_capacity_available())
+            .max()
+            .unwrap_or(0);
+
         // ── Collect rooms needing defense ──────────────────────────────────
 
         struct DefenseNeed {
@@ -370,9 +381,12 @@ impl WarOperation {
                 // oracle actually sizes a blob (0 made sized_for return None → bare template; ADR 0029).
                 member_energy: game::rooms().get(room_name).map(|r| r.energy_capacity_available()).unwrap_or(0),
             };
-            let composition = decide_doctrine(&ctx, &defense_docs)
-                .and_then(|d| d.plan(&ctx, None).composition)
-                .unwrap_or_else(SquadComposition::solo_ranged);
+            // ADR 0031 D15: the SINGLE generation path — the doctrine driver assembles the defender (no
+            // hardcoded `solo_ranged` fallback). Always-field, so it returns the threat-sized force or the
+            // minimal floor; `None` only if no home can build even one member (then skip — can't spawn).
+            let Some(composition) = decide_doctrine(&ctx, &defense_docs).and_then(|d| screeps_combat_decision::doctrine::plan_engagement(d, &ctx, None).composition) else {
+                continue;
+            };
             info!(
                 "[War] Defend objective for owned room {} (dps={:.0}, heal={:.0}, count={})",
                 room_name, need.estimated_dps, need.estimated_heal, need.hostile_count
@@ -455,21 +469,34 @@ impl WarOperation {
         }
         self.defend_flag_rooms = defend_rooms;
 
-        // Operator `defend`-flag rooms → a `Defend` objective (duo). Re-asserted
-        // each scan while the flag is present; addressed by RoomName so it works
-        // even for a room we have no `RoomData` entity for yet (the squad travels
-        // there). The manager retires it when the flag is removed (TTL lapse).
-        for &defend_room in &self.defend_flag_rooms {
-            system_data.combat_objective_queue.request(
-                ObjectiveRequest::new(
-                    ObjectiveKind::Defend { room: defend_room },
-                    OBJECTIVE_PRIORITY_HIGH,
-                    ForceRequirement::single(SquadComposition::duo_attack_heal()),
-                )
-                .owner(ObjectiveOwner::Defense)
-                .ttl(DEFEND_OBJECTIVE_TTL),
-                game::time(),
-            );
+        // Operator `defend`-flag rooms → a `Defend` objective. Re-asserted each scan while the flag is
+        // present; addressed by RoomName so it works even for a room we have no `RoomData` for yet (the squad
+        // travels there). ADR 0031 D15: the force comes from the SAME doctrine driver (no hardcoded duo) — no
+        // scouted threat at request time, so it assembles the minimal default floor (a small balanced force,
+        // sized to the best home), then re-sizes once the room's threat is seen by the owned/remote scans.
+        let defend_docs = defense_doctrines();
+        let defend_ctx = EngagementContext {
+            objective: DoctrineObjective::ClearCreeps,
+            coordination: EnemyCoordination::Coordinated,
+            defense: DefenseProfile::default(),
+            enemy_force: None,
+            importance: 0.0,
+            member_energy: max_home_energy,
+        };
+        let defend_comp = decide_doctrine(&defend_ctx, &defend_docs).and_then(|d| screeps_combat_decision::doctrine::plan_engagement(d, &defend_ctx, None).composition);
+        if let Some(defend_comp) = defend_comp {
+            for &defend_room in &self.defend_flag_rooms {
+                system_data.combat_objective_queue.request(
+                    ObjectiveRequest::new(
+                        ObjectiveKind::Defend { room: defend_room },
+                        OBJECTIVE_PRIORITY_HIGH,
+                        ForceRequirement::single(defend_comp.clone()),
+                    )
+                    .owner(ObjectiveOwner::Defense)
+                    .ttl(DEFEND_OBJECTIVE_TTL),
+                    game::time(),
+                );
+            }
         }
 
         // ── Remote room defense (invader creeps in reserved rooms) ────────
@@ -549,11 +576,15 @@ impl WarOperation {
                 defense: DefenseProfile::default(),
                 enemy_force: Some(threat),
                 importance: 0.0,
-                member_energy: 0,
+                // A remote has no spawn — the defender is built at the best HOME's capacity (ADR 0031: a real
+                // member energy, not 0; the assembler can't size at 0).
+                member_energy: max_home_energy,
             };
-            let composition = decide_doctrine(&ctx, &defense_docs)
-                .and_then(|d| d.plan(&ctx, None).composition)
-                .unwrap_or_else(SquadComposition::solo_ranged);
+            // ADR 0031 D15: the doctrine driver assembles the defender (no hardcoded `solo_ranged`); `None`
+            // only if no home can build even one member → skip (can't spawn).
+            let Some(composition) = decide_doctrine(&ctx, &defense_docs).and_then(|d| screeps_combat_decision::doctrine::plan_engagement(d, &ctx, None).composition) else {
+                continue;
+            };
             info!(
                 "[War] Defend objective for remote room {} (dps={:.0}, heal={:.0}, count={})",
                 room_name, dps, heal, count
@@ -1089,71 +1120,61 @@ impl WarOperation {
                 continue;
             };
 
-            // WINNABILITY GATE (ADR 0020 §12): a SIZED doctrine (core / siege) runs the force-sizing
-            // oracle against the real defense at the best in-range home's budget, force-sizes the squad
-            // (R3 + R-attack: out-heal the towers AND size the ranged kill parts — kill-time is sized,
-            // not the balanced template's few ranged parts that deferred every core), and the bot adds
-            // the ROI gate. Unwinnable / unaffordable / unreachable ⇒ skip (defer to G4-HEAVY) so we
-            // never feed a squad to its death. A FIXED doctrine (secure / harass) fields its template
-            // unconditionally (the prior hardcoded arms).
-            let objective: Option<(ObjectiveKind, f32, SquadComposition)> = if doctrine.is_sized() {
-                // A sized doctrine needs the scouted defense; without it skip silently (the prior
-                // InvaderCore `(Some(pos), Some(defense))` guard).
-                if candidate.defense.is_none() {
-                    None
-                } else {
-                    match best_force_budget(&doctrine.template(), &home_rooms, candidate.room, system_data.pathfinder) {
-                        None => {
-                            info!("[War]   Skip {} -- no home room can reach it within a creep lifetime", candidate.room);
+            // WINNABILITY + ROI GATE (ADR 0020 §12 / ADR 0031 D15): the ONE offense path — compute the best
+            // in-range home's force_ceiling budget, run the shared doctrine driver (emit_requirement →
+            // assemble_force), then the ROI gate. A GATED doctrine (`honor_verdict`: core / siege / gated raid)
+            // DEFERS an unwinnable room (and needs scouted defense to judge it); an ALWAYS-FIELD doctrine
+            // (operator-flag raid / harass) fields the assembled force regardless (sized to the threat + the
+            // default floor). Unaffordable / unreachable ⇒ skip — never feed a squad to its death.
+            let objective: Option<(ObjectiveKind, f32, SquadComposition)> = if doctrine.honor_verdict() && candidate.defense.is_none() {
+                // A gated doctrine needs the scouted defense to judge winnability; without it, don't commit.
+                None
+            } else {
+                match best_force_budget(doctrine.fighter_role(), &home_rooms, candidate.room, system_data.pathfinder) {
+                    None => {
+                        info!("[War]   Skip {} -- no home room can reach it within a creep lifetime", candidate.room);
+                        None
+                    }
+                    Some((budget, member_energy)) => {
+                        let ctx = EngagementContext { member_energy, ..base_ctx.clone() };
+                        let plan = plan_engagement(doctrine, &ctx, Some(budget));
+                        if doctrine.honor_verdict() && !plan.winnable() {
+                            info!(
+                                "[War]   Skip {} -- force oracle: not winnable for one squad ({})",
+                                candidate.room, plan.assessment.reason
+                            );
                             None
-                        }
-                        Some((budget, member_energy)) => {
-                            let ctx = EngagementContext { member_energy, ..base_ctx.clone() };
-                            let plan = doctrine.plan(&ctx, Some(budget));
-                            if !plan.winnable() {
+                        } else if let Some(sized) = plan.composition {
+                            // ROI gate (blocker #3): never field a squad the colony can't afford to SPAWN.
+                            // The assembler can grow a winnable squad large, so a per-tick-affordable
+                            // composition can still be globally unsustainable. Defer if the spawn cost exceeds
+                            // the reserve-protected military surplus.
+                            let spawn_cost = sized.estimated_cost(member_energy);
+                            if !system_data.economy.can_afford_military(spawn_cost) {
                                 info!(
-                                    "[War]   Skip {} -- force oracle: not winnable for one squad ({}); defer to G4-HEAVY",
-                                    candidate.room, plan.assessment.reason
+                                    "[War]   Skip {} -- ROI: squad spawn cost {} exceeds affordable military surplus; defer",
+                                    candidate.room, spawn_cost
                                 );
                                 None
-                            } else if let Some(sized) = plan.composition {
-                                // ROI gate (blocker #3): never field a squad the colony can't afford to SPAWN.
-                                // Member-count scaling (D3) can make a winnable squad large, so a per-tick-
-                                // affordable composition can still be globally unsustainable. Defer if the spawn
-                                // cost exceeds the reserve-protected military surplus.
-                                let spawn_cost = sized.estimated_cost(member_energy);
-                                if !system_data.economy.can_afford_military(spawn_cost) {
-                                    info!(
-                                        "[War]   Skip {} -- ROI: squad spawn cost {} exceeds affordable military surplus; defer",
-                                        candidate.room, spawn_cost
-                                    );
-                                    None
-                                } else {
-                                    // R4: log the fielded force's win confidence.
-                                    let pwin = win_probability(
-                                        plan.required.heal_parts as f32 * 12.0,
-                                        plan.assessment.required_heal_per_tick / HOLD_MARGIN,
-                                    );
-                                    info!(
-                                        "[War]   {} winnable via {:?} (~{} ticks): {} sized to {} ranged + {} heal parts, P(win)~{:.0}% (cost {}, {})",
-                                        candidate.room, plan.assessment.mode, plan.assessment.est_ticks, doctrine.name(),
-                                        plan.required.immune_struct_parts + plan.required.anti_creep_parts, plan.required.heal_parts, pwin * 100.0, spawn_cost, plan.assessment.reason
-                                    );
-                                    Some((kind, priority, sized))
-                                }
                             } else {
-                                info!(
-                                    "[War]   Skip {} -- can't afford the required {} heal parts (out-heal towers) at {} energy; defer",
-                                    candidate.room, plan.required.heal_parts, member_energy
+                                // R4: log the fielded force's win confidence.
+                                let pwin = win_probability(
+                                    plan.required.heal_parts as f32 * 12.0,
+                                    plan.assessment.required_heal_per_tick / HOLD_MARGIN,
                                 );
-                                None
+                                info!(
+                                    "[War]   {} via {:?} (~{} ticks): {} sized to {} ranged + {} heal parts, P(win)~{:.0}% (cost {}, {})",
+                                    candidate.room, plan.assessment.mode, plan.assessment.est_ticks, doctrine.name(),
+                                    plan.required.immune_struct_parts + plan.required.anti_creep_parts, plan.required.heal_parts, pwin * 100.0, spawn_cost, plan.assessment.reason
+                                );
+                                Some((kind, priority, sized))
                             }
+                        } else {
+                            info!("[War]   Skip {} -- can't field the required force at {} energy; defer", candidate.room, member_energy);
+                            None
                         }
                     }
                 }
-            } else {
-                // Fixed arm — field the template (the prior AttackFlag / ResourceDenial behavior; no gate).
-                doctrine.plan(&base_ctx, None).composition.map(|comp| (kind, priority, comp))
             };
 
             let Some((kind, priority, composition)) = objective else {
@@ -1353,13 +1374,14 @@ fn classify_coordination(candidate: &AttackCandidate) -> EnemyCoordination {
     }
 }
 
-/// The best (longest on-site) [`ForceBudget`] for launching `comp` at `target` from any home room
-/// (ADR 0020 §12.2): on-site ticks = `CREEP_LIFE_TIME − spawn − travel` (the operator's "creep
-/// lifetime minus travel"), via [`SquadComposition::estimated_combat_time`]; capabilities auto-size to
-/// the launching room's energy. Picks the home that yields the most on-site time (the manager will
-/// likewise field from a viable in-range home). `None` if no home can reach the target.
+/// The best (longest on-site) winnability [`ForceBudget`] for launching a `fighter`-led squad at `target`
+/// from any home room (ADR 0020 §12.2 / ADR 0031 P4): the budget is the template-free [`force_ceiling`]
+/// (the strongest single squad of this kill weapon at the home's energy), so deleting the catalog doesn't
+/// remove the budget. On-site ticks = `CREEP_LIFE_TIME − spawn − travel`, via
+/// [`SquadComposition::estimated_combat_time`]. Picks the home that yields the most on-site time. `None` if
+/// no home can reach the target.
 fn best_force_budget(
-    comp: &SquadComposition,
+    fighter: SquadRole,
     home_rooms: &[RoomName],
     target: RoomName,
     pathfinder: &mut crate::pathing::pathfinderservice::PathfinderService,
@@ -1371,20 +1393,15 @@ fn best_force_budget(
         };
         let energy_capacity = room.energy_capacity_available();
         let spawns = room.find(find::MY_SPAWNS, None).len().max(1) as u32;
-        // The route lookup is the bot's (the `PathfinderService`); the composition's on-site calc is a
-        // pure scalar over the precomputed travel ticks (Shim A — so the sim/eval can drive it too).
+        // The route lookup is the bot's (the `PathfinderService`); the ceiling's on-site calc is a pure
+        // scalar over the precomputed travel ticks (Shim A — so the sim/eval can drive it too).
         let Some(travel) = pathfinder.travel_ticks(home, target, game::time()) else {
             continue;
         };
-        let onsite = comp.estimated_combat_time(travel, energy_capacity, spawns);
-        let caps = comp.capabilities(energy_capacity);
-        let budget = ForceBudget {
-            max_heal_per_tick: caps.heal_per_tick as f32,
-            max_dismantle_dps: caps.structure_dps as f32,
-            tank_effective_hp: caps.tank_effective_hp as f32,
-            onsite_budget_ticks: onsite,
-        };
-        // Return the chosen home's energy too — R3 sizes the fielded composition at the SAME energy the
+        let ceiling = force_ceiling(energy_capacity, fighter);
+        let onsite = ceiling.estimated_combat_time(travel, energy_capacity, spawns);
+        let budget = ceiling.force_budget(energy_capacity, onsite);
+        // Return the chosen home's energy too — the assembler sizes the fielded force at the SAME energy the
         // spawn path will use, so the affordability check and the actual spawn agree.
         if best.map(|(b, _)| onsite > b.onsite_budget_ticks).unwrap_or(true) {
             best = Some((budget, energy_capacity));
