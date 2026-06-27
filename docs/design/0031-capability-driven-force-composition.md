@@ -270,34 +270,55 @@ real G4-HEAVY defer target. Each phase says what it **deletes**.
   form/travel/brain; both miss ⇒ under-sized. Keep `oracle_sized_force_forms_and_kills_a_defended_core`
   `#[ignore]`d until Phase 3 if fusion alone doesn't close it — **do not soften.**
 
-### Phase 2 — `emit_requirement` (T1): collapse the three maths (no WFV)
-- Implement T1 as a pure function composing `assess` + `clear_force` + the SK kite terms (the producers become
-  thin callers, differing only in their kill-rate model). Route the eval's `siege_doctrine_plan` and the
-  SK/defense/raid `plan()`s through it — still emitting into the OLD `sized_for` (the assembler is not yet in the
-  loop, isolating the emitter).
-- **Deletes:** the per-doctrine sizing forks' *math* moves into the emitter (the `plan()` bodies still call it).
-- **Tests:** a **run-twice-equal determinism test over `emit_requirement`** (the standing fence only covers the
-  hardcoded `quad_ranged`); a golden-output byte-stability test over `realistic_bases()` (generate.rs:414) — the
-  emitter must reproduce the old per-doctrine outputs on the existing beds.
+### Phase 2 — `emit_requirement` (T1): collapse the three maths (no WFV) — **DONE (decision `778e93d`, eval `ac61b0b`, super `6bd8e1b`)**
+- **DONE:** T1 is a pure function `emit_requirement(objective, defense, enemy_force, budget: Option<&ForceBudget>,
+  coordination, importance) -> (ForceAssessment, RequiredForce)` (doctrine.rs) composing `assess` + `clear_force`
+  + the SK kite terms. ALL six doctrine `plan()`s are now thin callers: `sized_plan` (NpcCore), SiegeBreach,
+  PlayerRaid, GatedPlayerRaid, GarrisonDefense, SkSuppression. The anti-creep overlay (was duplicated in BOTH
+  `sized_plan` AND `SiegeBreach::plan`) is now one `overlay_anti_creep` helper. `budget` is `None` only for SK
+  (it sizes from the keeper). HarassRemote stays genuinely fixed (its `Harass` emitter arm is the seam P4 routes
+  the dynamic harass through). Still emits into the OLD `sized_for` (the assembler was isolated until P3).
+- **Deletes:** the per-doctrine sizing forks' *math* moved into the emitter (the `plan()` bodies still call it).
+- **Tests DONE:** `emit_requirement_is_deterministic_over_objectives` (the run-twice fence) +
+  `emit_requirement_reproduces_per_objective_semantics` (decision) +
+  `emit_requirement_golden_output_is_stable_over_realistic_bases` (eval — bed-level byte-stability, defenders
+  fed in). Exact-behavior-preserving (all prior doctrine unit tests unchanged + green). decision 179, eval 61.
 
-### Phase 3 — `assemble_force` (T2): replace `sized_for` (no WFV)
-- Implement T2 alongside `sized_for` (parity bridge). Route `run_defended_lifecycle` (lifecycle.rs:257) through
-  emit → assemble. **Un-ignore `oracle_sized_force_forms_and_kills_a_defended_core`** (lifecycle.rs:470) — it
-  must now pass on its own (the P3 re-soak the brief names).
-- **Deletes:** nothing yet (`sized_for` retained as the bridge).
-- **Tests:**
-  - **Determinism:** run-twice-equal over `assemble_force` (its own fence — required by the brief).
-  - **Graded regime sweep** (build it; the removed `diag_defended_sweep` was scratch): tower-only / rampart-only
-    / melee `Guard` / ranged `Skirmishers` / combined / shielded-guard — each FORMED + MOVING via
-    `run_defended_lifecycle` (using `assemble_single_room`/`ForceSpec`, generate.rs:256/211), asserting
-    `Killed`-when-winnable and clean-defer-when-not.
-  - **Pre-placed-vs-moving discriminator** for each winnable regime.
-  - **OFFENSE continuous-sizing test:** sweep `RequiredForce` trivial→large; assert member count is **monotonic
-    non-decreasing**, **starts at the role-mix viability floor**, and **never snaps 1→4** (the Layer-B regression
-    pin; contrast composition.rs:770).
+### Phase 3 — `assemble_force` (T2): replace `sized_for` (no WFV) — **DONE (decision `5079bf8`, eval `38fd534`, super `da79345`)**
+- **DONE:** T2 implemented alongside `sized_for` (parity bridge). `assemble_force(&RequiredForce, member_energy)
+  -> Option<SquadComposition>` (composition.rs) fields the capability vector directly (no template, no catalog):
+  continuous per-role count (`ceil(demand/cap)`), role-SET floor (≥1 per demanded role — Layer B gone),
+  RANGED = immune_struct + anti_creep, `None` terminal past `MAX_SIZED_MEMBERS` (D10). `run_defended_lifecycle`
+  routes emit → assemble (parameterized into `run_defended_lifecycle_with`). **`oracle_sized_force_forms_and_kills_a_defended_core`
+  passes THROUGH the assembler (un-ignored).**
+- **Deletes:** nothing yet (`sized_for` retained as the bridge until P4).
+- **Tests DONE:**
+  - **Determinism:** `assemble_force_is_deterministic`.
+  - **Graded regime sweep:** `assembler_kills_across_defended_regimes` — rampart-only / tower-only /
+    tower+rampart / corridor-choke melee-guard beds, each FORMED + MOVING via `run_defended_lifecycle_with`,
+    asserting `Killed` + deterministic.
+  - **OFFENSE continuous-sizing:** `assemble_force_sizes_continuously_no_snap` (count monotonic, minimal force
+    is a duo not a quad, 3 reachable — the Layer-B pin) + `assemble_force_fields_the_full_role_set` +
+    `assemble_force_defers_terminally`.
+  - **Deferred:** the pre-placed-vs-moving discriminator for DEFENDED regimes (the eval's `place_squad` only
+    handles Dismantler/Healer tiles, not RangedDPS — extending it would perturb `SizingWins`'s pass/fail on
+    defended beds, a calibration gate; the MOVING regime sweep is the primary proof). Shielded-guard /
+    ranged-Skirmisher kill assertions also deferred (kiters evade under breach tactics — not a sizing failure).
   - `OracleCalibration`/`SizingWins`/`CreepClearWins` green + discriminating; FP/FN gates held.
 
-### Phase 4 — route all doctrines through emit+assemble; retire `is_sized` + silent fallbacks (no WFV)
+### Phase 4 — route all doctrines through emit+assemble; retire `is_sized` + silent fallbacks; DELETE catalogs + WFV (D12 folds P5 in) — **NEXT**
+
+> **⚠ P4 sub-design to resolve FIRST — the winnability BUDGET ceiling.** `emit_requirement`'s `assess`/`clear_force`
+> still need a `ForceBudget` = the CEILING capabilities of one squad at `member_energy`. Today every caller derives
+> it from a TEMPLATE (`doctrine.template().force_budget(..)` in war.rs; `siege_ceiling(..)` in the eval). Deleting
+> the catalogs (Phase 5, folded here) removes those templates, so P4 needs a **template-free ceiling**. The
+> conservative ceiling the oracle has ALWAYS judged against is a balanced ~4-member quad (2 fighters + 2 healers)
+> at `member_energy` — the assembler can field MORE (grown to 8), so a "winnable" verdict stays conservative. So
+> P4 introduces a `squad_ceiling_budget(member_energy, onsite, fighter_role)` (a synthetic 2-fighter+2-healer
+> budget reusing `single_role_cap` + the part powers) that **must reproduce the current `siege_quad`/`quad_ranged`
+> budgets numerically** — else the `OracleCalibration` (FP≤0.010/FN≤0.200) + `SizingWins` gates shift. Verify the
+> calibration gates byte-for-byte before/after. This is the gating risk of P4; everything else is mechanical.
+
 - Replace each doctrine's `template()`/`is_sized()`/custom `plan()` with the shared driver (T3a). Delete the
   `.unwrap_or_else(static_template)` fallbacks (PlayerRaid:253, GarrisonDefense:363, SkSuppression:420,
   NpcCore/SiegeBreach via `sized_plan:150`). **Deletes:** `is_sized()` (doctrine.rs:168), `sized_plan`
