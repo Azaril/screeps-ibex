@@ -333,11 +333,30 @@ impl CombatObjectiveQueue {
         self.unwinnable.retain(|u| u.room != room);
     }
 
-    /// Remove objectives that have expired, pruning their runtime entries.
+    /// Remove objectives that have expired, pruning their runtime entries. An objective is kept past its
+    /// TTL while it is CLAIMED (a squad is on it right now — `claimed_by`, a within-session resource) or
+    /// while its `deadline` (a manager-stamped commitment lease, serialized so it survives a VM reset) is
+    /// still in the future. This is the P-OBJ #23 churn fix: a still-forming/en-route committed squad is
+    /// never retired underneath by a producer that fell silent on stale intel. The objective dies only on
+    /// explicit `withdraw()` (resolved / given up) or once BOTH the TTL and the commitment lease lapse.
     pub fn expire(&mut self, now: u32) {
-        self.objectives.retain(|o| o.expires_at > now);
+        // Compute the claimed set up front: `retain` borrows `objectives` mutably, so the predicate
+        // cannot also borrow `self.runtime`.
+        let claimed: std::collections::HashSet<ObjectiveId> =
+            self.runtime.iter().filter_map(|(id, r)| r.claimed_by.map(|_| *id)).collect();
+        self.objectives
+            .retain(|o| o.expires_at > now || claimed.contains(&o.id) || o.deadline.is_some_and(|d| d > now));
         let live: std::collections::HashSet<ObjectiveId> = self.objectives.iter().map(|o| o.id).collect();
         self.runtime.retain(|id, _| live.contains(id));
+    }
+
+    /// Stamp/refresh an objective's commitment `deadline` (the manager's lease — see [`Self::expire`]).
+    /// No-op if the objective is gone. The producer's `request` also writes `deadline`, but the manager
+    /// re-stamps each tick a squad is live, so the lease is manager-owned regardless of producer silence.
+    pub fn set_deadline(&mut self, id: ObjectiveId, deadline: Option<u32>) {
+        if let Some(o) = self.objectives.iter_mut().find(|o| o.id == id) {
+            o.deadline = deadline;
+        }
     }
 
     /// Select the best unclaimed objective: highest priority, then (optionally)
@@ -595,6 +614,35 @@ mod tests {
         q.expire(1000 + DEFAULT_OBJECTIVE_TTL);
         assert!(q.get(id).is_none(), "stale objective dropped");
         assert!(!q.runtime.contains_key(&id), "runtime entry pruned with the objective");
+    }
+
+    /// P-OBJ #23: a CLAIMED objective is immune to TTL lapse (a committed squad is on it) — it dies only
+    /// once the claim is released AND it is past its TTL. This is the within-session arm of the fix.
+    #[test]
+    fn expire_keeps_claimed_objective_past_ttl() {
+        use specs::WorldExt;
+        let mut world = World::new();
+        let squad = world.create_entity().build();
+        let mut q = CombatObjectiveQueue::default();
+        let id = q.request(farm_request("W5N5", 10.0), 1000);
+        q.claim(id, squad);
+        q.expire(1000 + DEFAULT_OBJECTIVE_TTL + 50);
+        assert!(q.get(id).is_some(), "a claimed objective is immune to TTL lapse");
+        q.release_entity(squad);
+        q.expire(1000 + DEFAULT_OBJECTIVE_TTL + 60);
+        assert!(q.get(id).is_none(), "released + past-TTL objective is dropped");
+    }
+
+    /// P-OBJ #23: the manager's serialized commitment `deadline` keeps an objective alive past its TTL
+    /// even with no live claim (the cross-reset / cross-system-ordering arm) — until the deadline lapses.
+    #[test]
+    fn expire_keeps_deadline_committed_objective_past_ttl() {
+        let mut q = CombatObjectiveQueue::default();
+        let id = q.request(farm_request("W5N5", 10.0).deadline(Some(1000 + DEFAULT_OBJECTIVE_TTL + 300)), 1000);
+        q.expire(1000 + DEFAULT_OBJECTIVE_TTL + 100);
+        assert!(q.get(id).is_some(), "deadline lease keeps it alive past TTL");
+        q.expire(1000 + DEFAULT_OBJECTIVE_TTL + 400);
+        assert!(q.get(id).is_none(), "lapsed deadline + TTL → dropped");
     }
 
     // ── Claim / release single-owner ──────────────────────────────────────────

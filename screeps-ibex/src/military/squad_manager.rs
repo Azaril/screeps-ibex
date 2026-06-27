@@ -43,6 +43,7 @@ use crate::creep::{spawning, CreepOwner};
 use crate::entitymappingsystem::EntityMappingData;
 use crate::jobs::squad_combat::{creep_to_dto, structure_to_dto};
 use crate::room::data::RoomData;
+use crate::room::visibilitysystem::{VisibilityQueue, VisibilityRequest, VisibilityRequestFlags, VISIBILITY_PRIORITY_HIGH};
 use crate::serialize::SerializeMarker;
 use crate::spawnsystem::*;
 use screeps::*;
@@ -60,6 +61,15 @@ const MAX_CONCURRENT_SQUADS: usize = 4;
 /// the legacy `MAX_DEFENSE_SOURCE_DISTANCE` (10) so the defense migration does not
 /// narrow the set of rooms a defender can be sourced from.
 const MAX_SPAWN_DISTANCE: u32 = 10;
+
+/// P-OBJ #23 commitment lease (ticks). When the manager fields a squad it stamps the objective's
+/// `deadline = now + COMMITMENT_BUDGET` and refreshes it every tick the squad still has a focus (is
+/// actively closing on / fighting a target). The objective then survives producer silence on stale intel
+/// for this whole window — generous cover for form (~120) + travel (~150) + a clear margin (~130) — so a
+/// committed squad is never retired underneath before it can arrive and engage. If the lease lapses with
+/// no active focus (stuck en route, or fought-and-withdrew without a clean clear) the manager gives up
+/// and backs the room off; a clean clear resolves earlier via `engaged_once && no-focus && in-room`.
+const COMMITMENT_BUDGET: u32 = 400;
 
 /// Chebyshev distance between two rooms.
 fn room_distance(a: RoomName, b: RoomName) -> u32 {
@@ -179,6 +189,7 @@ pub struct SquadManagerSystemData<'a> {
     room_data: ReadStorage<'a, RoomData>,
     mapping: Read<'a, EntityMappingData>,
     creep_owner: ReadStorage<'a, CreepOwner>,
+    visibility: Write<'a, VisibilityQueue>,
 }
 
 /// A home room that can act as a spawn source for a squad.
@@ -229,27 +240,47 @@ impl<'a> System<'a> for SquadManagerSystem {
         let mut covered: std::collections::HashSet<ObjectiveId> = std::collections::HashSet::new();
 
         for (squad_entity, obj_id) in managed {
-            let objective_gone = data.objective_queue.get(obj_id).is_none();
-            // Wave-wipe (P2.G4-O4): the squad had members and all are now dead — overwhelmed.
-            let wiped = data
+            // Snapshot the objective once (all Copy) so the queue mutations below don't fight a borrow.
+            let obj_info =
+                data.objective_queue.get(obj_id).map(|o| (o.kind.room(), matches!(o.kind, ObjectiveKind::Defend { .. }), o.deadline));
+            let objective_gone = obj_info.is_none();
+            let squad_room = obj_info.map(|(r, _, _)| r);
+            let is_defend = obj_info.map(|(_, d, _)| d).unwrap_or(false);
+            // P-OBJ #23: has the commitment lease lapsed (the squad failed to make progress in time)?
+            let deadline_lapsed = obj_info.and_then(|(_, _, dl)| dl).is_some_and(|d| now >= d);
+
+            // Snapshot the squad facts (Copy) in one borrow.
+            let (wiped, has_focus, engaged_once, in_target_room, has_members) = data
                 .squad_contexts
                 .get(squad_entity)
-                .map(|ctx| squad_is_wiped(ctx.total_members_added, ctx.members.len()))
-                .unwrap_or(false);
+                .map(|ctx| {
+                    // Wave-wipe (P2.G4-O4): the squad had members and all are now dead — overwhelmed.
+                    let wiped = squad_is_wiped(ctx.total_members_added, ctx.members.len());
+                    let in_room = squad_room
+                        .map(|room| ctx.members.iter().any(|m| m.position.is_some_and(|p| p.room_name() == room)))
+                        .unwrap_or(false);
+                    (wiped, ctx.focus_target.is_some(), ctx.engaged_once, in_room, !ctx.members.is_empty())
+                })
+                .unwrap_or((false, false, false, false, false));
 
-            // Retire a duplicate, an orphaned (objective gone), or a wiped squad.
-            if objective_gone || covered.contains(&obj_id) || wiped {
-                // On a wave-wipe of a non-`Defend` objective, back off: mark the room unwinnable so the
-                // manager stops feeding squads into an unwinnable siege (the queue's exponential backoff
-                // makes `best_unclaimed_near` skip it until `retry_after`; the producer's re-assert is
-                // ignored meanwhile, and a fresh squad is fielded once the backoff lapses). Defense is
-                // exempt — we never abandon an owned room; a wiped defense squad is simply re-staffed.
-                if wiped && !objective_gone {
-                    let backoff_room = data
-                        .objective_queue
-                        .get(obj_id)
-                        .and_then(|obj| (!matches!(obj.kind, ObjectiveKind::Defend { .. })).then(|| obj.kind.room()));
-                    if let Some(room) = backoff_room {
+            // RESOLVE (P-OBJ #23): the squad fought (`engaged_once`) and now stands in the objective room
+            // with no target left → the objective is CLEARED. Withdraw it cleanly (NOT a give-up: the room
+            // is not backed off) and retire the victorious squad. `engaged_once` is what distinguishes this
+            // from the just-arrived tick (in-room, no focus yet) — a squad that never engaged cannot have
+            // "cleared" anything.
+            let resolved = engaged_once && in_target_room && !has_focus && has_members;
+            // GIVE-UP: the lease lapsed with no active focus and no clean clear → stuck en route, or it
+            // fought and withdrew without finishing. Back the (non-Defend) room off so we don't immediately
+            // re-field into the same dead end; the exponential backoff lapses and a fresh squad may retry.
+            let gave_up = deadline_lapsed && !has_focus && !resolved;
+
+            // Retire a duplicate, an orphaned (objective gone), a wiped, a resolved, or a given-up squad.
+            if objective_gone || covered.contains(&obj_id) || wiped || resolved || gave_up {
+                if resolved {
+                    data.objective_queue.withdraw(obj_id); // clean win — clear the objective so no one re-fields it
+                } else if (wiped || gave_up) && !objective_gone && !is_defend {
+                    // Defense is exempt — we never abandon an owned room; a wiped defense squad is re-staffed.
+                    if let Some(room) = squad_room {
                         data.objective_queue.mark_unwinnable(room, now);
                     }
                 }
@@ -257,8 +288,21 @@ impl<'a> System<'a> for SquadManagerSystem {
                 data.objective_queue.release_entity(squad_entity);
                 continue;
             }
-            // Re-establish the (ephemeral) claim — idempotent; self-heals post-reset.
+            // Live: re-establish the (ephemeral) claim — idempotent; self-heals post-reset. Refresh the
+            // commitment lease while the squad is actively engaging a target, so a long fight (or a brief
+            // visibility gap) never lets the objective lapse underneath it.
             data.objective_queue.claim(obj_id, squad_entity);
+            if has_focus {
+                data.objective_queue.set_deadline(obj_id, Some(now + COMMITMENT_BUDGET));
+            }
+            // P-OBJ #23 (intel coverage): keep eyes on a committed objective's room so its intel never
+            // goes stale underneath the producer. OBSERVE-only + HIGH so an in-range RCL8 observer
+            // refreshes it for free (no scout burned on a walled/defended target); if no observer covers
+            // it, commitment + the deadline lease bridge the gap instead.
+            if let Some(room) = squad_room {
+                data.visibility
+                    .request(VisibilityRequest::new(room, VISIBILITY_PRIORITY_HIGH, VisibilityRequestFlags::OBSERVE));
+            }
             covered.insert(obj_id);
             live_managed.push((squad_entity, obj_id));
         }
@@ -350,7 +394,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 continue;
             }
 
-            field_new_squad(&data.updater, &data.entities, &mut data.objective_queue, obj_id, &composition, target);
+            field_new_squad(&data.updater, &data.entities, &mut data.objective_queue, obj_id, &composition, target, now);
             active += 1;
         }
     }
@@ -426,6 +470,7 @@ fn field_new_squad(
     obj_id: ObjectiveId,
     composition: &SquadComposition,
     target: (SquadTarget, RoomName),
+    now: u32,
 ) {
     let mut ctx = SquadContext::from_composition(composition);
     ctx.objective_id = Some(obj_id);
@@ -438,6 +483,9 @@ fn field_new_squad(
         .build();
 
     queue.claim(obj_id, squad_entity);
+    // P-OBJ #23: open the commitment lease so the objective outlives producer silence on stale intel
+    // while this squad forms + travels (the manager refreshes it each tick the squad has a focus).
+    queue.set_deadline(obj_id, Some(now + COMMITMENT_BUDGET));
 }
 
 /// Map the live squad state to the pure decision's combat-state subset.
@@ -738,6 +786,9 @@ fn compute_squad_orders(
 /// until that migrates into `decide_squad` (Step 7).
 fn apply_squad_decision(ctx: &mut SquadContext, decision: &SquadDecision, creep_owner: &ReadStorage<CreepOwner>) {
     ctx.state = order_state_to_squad(decision.state);
+    if ctx.state == SquadState::Engaged {
+        ctx.engaged_once = true; // P-OBJ #23: latch reaching combat (drives resolve vs give-up in Phase A)
+    }
     ctx.focus_target = decision.focus.map(|f| f.pos);
 
     match decision.state {

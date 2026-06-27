@@ -414,6 +414,12 @@ pub struct SquadContext {
     /// a legacy path — `SquadDefenseMission` was removed in P2.W-final.) Serialized,
     /// so the manager re-binds the ephemeral objective claim after a VM reset.
     pub objective_id: Option<crate::military::objective_queue::ObjectiveId>,
+    /// Latches true the first tick this squad reaches `Engaged` (P-OBJ #23). It distinguishes a squad
+    /// that FOUGHT and then ran out of targets (its objective is cleared → resolve) from one that has not
+    /// yet engaged (just arrived, or stuck en route → keep waiting / give up) — a distinction the
+    /// per-tick `state`/`focus_target` cannot make alone (both read "in-room, no focus" on the arrival
+    /// tick before Phase B2 finds the target and on the post-clear tick after it is gone).
+    pub engaged_once: bool,
 }
 
 impl SquadContext {
@@ -439,6 +445,7 @@ impl SquadContext {
             heal_priority: None.into(),
             total_members_added: 0,
             objective_id: None,
+            engaged_once: false,
         }
     }
 

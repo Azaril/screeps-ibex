@@ -605,6 +605,18 @@ impl Engaged {
 
         let hostiles = get_hostile_creeps(state_context.target_room, tick_context);
 
+        // P-OBJ #23 zero-orphan recall: this creep's squad is GONE (the manager retired it — resolved a
+        // clear, gave up, or it was wiped) and there is nothing to fight here. Rather than idling in place
+        // (the observed "stuck on a room edge" scatter), recall to the nearest home spawn and recycle,
+        // reclaiming part of the body energy. A squad that still exists but simply has no orders this tick
+        // is NOT orphaned — `get_squad_state` resolves for it — so a live squad is never recalled.
+        let orphaned =
+            state_context.squad_entity.is_some() && get_squad_state(state_context.squad_entity, tick_context).is_none();
+        if orphaned && hostiles.is_empty() {
+            Self::recall_to_recycle(creep, creep_pos, creep_entity, tick_context);
+            return;
+        }
+
         if has_attack && !has_ranged {
             // Pure melee: close to range 1 aggressively.
             if let Some(target) = hostiles.iter().min_by_key(|c| creep_pos.get_range_to(c.pos())) {
@@ -675,6 +687,29 @@ impl Engaged {
             }
         }
         // Hauler / no combat parts: idle.
+    }
+
+    /// P-OBJ #23: send an orphaned squad creep home to recycle rather than letting it idle/scatter where
+    /// its squad was retired. Moves to the nearest of our spawns and, once adjacent, recycles (reclaiming
+    /// part of the body energy); if we somehow have no spawn at all, suicides rather than leaving a
+    /// permanently idle creep. Called only for a creep whose squad has vanished (see `fallback_movement`).
+    fn recall_to_recycle(creep: &Creep, creep_pos: Position, creep_entity: Entity, tick_context: &mut JobTickContext) {
+        match game::spawns().values().min_by_key(|s| creep_pos.get_range_to(s.pos())) {
+            Some(spawn) if creep_pos.get_range_to(spawn.pos()) > 1 => {
+                tick_context
+                    .runtime_data
+                    .movement
+                    .move_to(creep_entity, spawn.pos())
+                    .range(1)
+                    .priority(MovementPriority::Normal);
+            }
+            Some(spawn) => {
+                let _ = spawn.recycle_creep(creep);
+            }
+            None => {
+                let _ = creep.suicide();
+            }
+        }
     }
 }
 

@@ -646,7 +646,10 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// different squad. This reshapes the persisted `JobData` (struct field type change → bincode
 /// positional shape change), so it needs a reset. Reset-freedom (private-server dev) — bump
 /// freely; this folds into the single MMO deploy reset.
-const WORLD_FORMAT_VERSION: u32 = 17;
+/// 18 = P-OBJ #23 objective/squad lifecycle rework: `SquadContext` gains the serialized
+/// `engaged_once` flag (the commitment resolve-vs-give-up signal). The bincode positional shape
+/// change needs a reset — which usefully also clears the currently churned/orphaned combat squads.
+const WORLD_FORMAT_VERSION: u32 = 18;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode
