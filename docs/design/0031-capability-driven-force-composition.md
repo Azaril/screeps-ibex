@@ -206,9 +206,10 @@ explicit `ForcePlan::skip` (doctrine.rs:116), never a silent template. The 3 cus
 (PlayerRaid/GarrisonDefense/SkSuppression) collapse to objective + shaping; their `clear_force`/SK math moves
 into the emitter (T1). `is_sized()` (doctrine.rs:168) is **deleted** — the `enum Sizing { Fixed, Dynamic }`
 0030 D14 proposed is unnecessary because *every* doctrine is now dynamic through the one driver; `honor_verdict`
-(defer-on-unwinnable) is the only per-doctrine policy bit, and even the one truly-fixed doctrine (`HarassRemote`)
-flows through `assemble_force` via a tiny fixed capability vector — so there is one path, not a fixed/dynamic
-fork.
+(defer-on-unwinnable) is the only per-doctrine policy bit. **There is no fixed doctrine at all (D11):** even
+`HarassRemote` emits a *dynamic* anti-creep vector sized to the room's observed force + a safety margin (its
+"deny, don't hold" nature is tactical — `MultiLifetimeWave` + retreat-happy — not a sizing distinction). One
+path, no fixed/dynamic fork.
 
 ### 2.4 T3b — the brain Layer-A fix (keep the engage gate honest)
 
@@ -415,6 +416,22 @@ real G4-HEAVY defer target. Each phase says what it **deletes**.
   0030 D12); the no-silent-static test discipline is carried forward (0030 D19). `EngagementTempo` (0030 §4)
   remains orthogonal — it parameterizes the emitter; the assembler fields whatever vector results.
 - **D10 — `None` is TERMINAL; remove the G4-HEAVY failover (operator 2026-06-27).** When the assembler can't field a winnable single squad (requirement > `MAX_SIZED_MEMBERS`, or no in-range home affords it), it returns `None` = an honest **"don't attack this objective"** — NOT a hand-off to a multi-squad "G4-HEAVY" path, which never existed beyond log strings + unwinnable-reason text (`force_sizing.rs:206`, `war.rs:1115`, comments in `composition.rs`/`force_sizing.rs`). Carrying that pretense as a failover is the broken outlier the operator flagged. The implementation **deletes the G4-HEAVY framing** (those reasons/logs become "not winnable for one squad"); **this decision supersedes every "defer to G4-HEAVY" mention elsewhere in this ADR.** The higher-power response — **scale up the blob, field multiple coordinated squads, or boost** — is a separate **strategy-layer** decision (a future ADR, tracked follow-up), invoked deliberately for a high-value objective, NOT a composition-layer failover. The composition layer's job ends at "the best single-squad force, or `None`."
+- **D11 — No fixed doctrine; HarassRemote scales too (operator 2026-06-27).** `HarassRemote` does NOT field a
+  fixed solo — it emits a DYNAMIC anti-creep capability vector sized to the room's observed force
+  (`ctx.enemy_force`) + a safety margin, **updating as defense is identified**, then assembles like any
+  creep-clear doctrine. Its distinction is purely TACTICAL (deny, don't hold — `MultiLifetimeWave`,
+  retreat-happy), not a sizing/template one. So EVERY doctrine is dynamic through the one driver — no
+  fixed/dynamic fork (strengthens D4). The `solo_harasser` constructor is deleted with the rest of the catalog.
+- **D12 — The WFV reset is not a phase blocker (operator 2026-06-27).** A `WORLD_FORMAT_VERSION` bump only gates
+  an MMO deploy; the private server recovers in minutes. So the catalog deletion + bump need NOT be quarantined
+  to a final isolated phase — delete the constructors/`BodyType` variants as soon as the assembler is the only
+  producer (**fold P5 into P4**), bump WFV 18→19 then, and keep soaking on the private server. Operator
+  go-ahead is still required before any MMO deploy.
+- **D13 — Re-tune + re-eval after the assembler lands (operator 2026-06-27).** The assembler changes WHICH
+  forces are fielded, so the position-utility weights (ADR 0019) and the tournament tuning must be
+  RE-EVALUATED (a final phase, P6): re-run the tournament/exploitability tuning, re-sweep the weights, and
+  confirm the assembler yields **winning-but-EFFICIENT** squads (smallest-favorable-Lanchester — the marginal
+  fill stops at "requirement met", no over-spend). Sufficient test coverage at every phase, not just the end.
 
 ---
 
