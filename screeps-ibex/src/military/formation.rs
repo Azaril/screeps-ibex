@@ -198,6 +198,29 @@ pub fn issue_virtual_anchor_movement(squad: &mut SquadContext, destination: Posi
 ///
 /// `destination` is the strategic target the squad is moving toward (e.g.
 /// the focus target position or room center).
+/// A reachable STAND-OFF tile one step from a target structure toward the squad. A structure focus sits on
+/// an IMPASSABLE tile, so driving the formation anchor onto it pathfinds to range 0, finds no path, and
+/// reports `Blocked` — the squad then holds SHORT of weapon range and never fires (the invader-core "enters
+/// the room but does nothing" bug, ADR 0026 §9). Standing off one tile toward the squad keeps a ranged (≤3)
+/// or siege (1) formation in weapon range. (For a fully ramparted target this tile may itself be blocked;
+/// breaching is the separate siege path — this fixes the open-target case, e.g. a level-0 invader core.)
+pub fn standoff_one_tile(structure: Position, toward: Position) -> Position {
+    let (sx, sy) = (structure.x().u8() as i32, structure.y().u8() as i32);
+    let (tx, ty) = (toward.x().u8() as i32, toward.y().u8() as i32);
+    let mut dx = (tx - sx).signum();
+    let dy = (ty - sy).signum();
+    if dx == 0 && dy == 0 {
+        dx = 1; // degenerate (squad centroid on the structure tile) — pick an arbitrary neighbour
+    }
+    let nx = (sx + dx).clamp(1, (ROOM_SIZE - 2) as i32) as u8;
+    let ny = (sy + dy).clamp(1, (ROOM_SIZE - 2) as i32) as u8;
+    Position::new(
+        RoomCoordinate::new(nx).expect("1..=48 is a valid room coordinate"),
+        RoomCoordinate::new(ny).expect("1..=48 is a valid room coordinate"),
+        structure.room_name(),
+    )
+}
+
 pub fn advance_squad_virtual_position(squad: &mut SquadContext, destination: Position) {
     let living_members: Vec<(usize, Option<Position>)> = squad.members.iter().map(|m| (m.formation_slot, m.position)).collect();
 
@@ -572,5 +595,29 @@ mod tests {
         assert!(corridor_layout_transition(Some(FormationShape::Line), 2, true).is_none());
         assert!(corridor_layout_transition(Some(FormationShape::Box2x2), 3, true).is_none());
         assert!(corridor_layout_transition(Some(FormationShape::None), 1, true).is_none());
+    }
+
+    /// A structure focus must stand the anchor OFF the structure's own (impassable) tile — pathing onto it
+    /// reports Blocked and the squad never reaches weapon range (the invader-core no-fire bug, ADR 0026 §9).
+    #[test]
+    fn standoff_one_tile_steps_off_the_structure_toward_the_squad() {
+        let room: RoomName = "W1N1".parse().unwrap();
+        let core = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), room);
+        // Squad centroid to the west (lower x) and north (lower y) of the core.
+        let squad = Position::new(RoomCoordinate::new(20).unwrap(), RoomCoordinate::new(22).unwrap(), room);
+        let s = standoff_one_tile(core, squad);
+        assert_ne!(s, core, "never the structure's own (impassable) tile");
+        assert_eq!(core.get_range_to(s), 1, "exactly one tile off — in weapon range (ranged <=3, dismantle 1)");
+        assert_eq!((s.x().u8(), s.y().u8()), (24, 24), "stepped toward the squad (west + north)");
+    }
+
+    /// Degenerate: a centroid exactly on the structure tile still yields an adjacent (off-structure) tile,
+    /// never range 0 (which would re-introduce the Blocked-on-the-structure hold).
+    #[test]
+    fn standoff_one_tile_handles_centroid_on_the_structure() {
+        let room: RoomName = "W1N1".parse().unwrap();
+        let core = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), room);
+        let s = standoff_one_tile(core, core);
+        assert_eq!(core.get_range_to(s), 1, "still steps off the structure");
     }
 }

@@ -709,7 +709,16 @@ fn compute_squad_orders(
             // (`decide_squad.orientation` → `threat_direction`). The job's `squad_has_anchor`
             // branch then formation-follows. (Pure decision in the crate; manager applies; job moves.)
             if let Some(focus) = decision.focus {
-                crate::military::formation::advance_squad_virtual_position(ctx, focus.pos);
+                // A STRUCTURE focus (`focus.id` is None) sits on an IMPASSABLE tile: advancing the anchor
+                // onto it pathfinds to range 0, finds no path, and reports `Blocked`, so the squad parks
+                // SHORT of weapon range and never fires (the invader-core "enters but does nothing" bug,
+                // ADR 0026 §9). Stand off one tile toward the squad so the formation holds in weapon range;
+                // a creep focus keeps targeting the creep's tile (where the kite logic wants the anchor).
+                let dest = match (focus.id, decision.center) {
+                    (None, Some(center)) => crate::military::formation::standoff_one_tile(focus.pos, center),
+                    _ => focus.pos,
+                };
+                crate::military::formation::advance_squad_virtual_position(ctx, dest);
             }
             ctx.threat_direction = decision.orientation;
             ctx.reassign_slots();
