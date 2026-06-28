@@ -299,10 +299,23 @@ fn capability_class(kind: &ObjectiveKind) -> CapabilityClass {
 // decision-crate kernels (`objective_value::value_e` + `composition::pairing_ev`), exactly as `war.rs`
 // projects intel into `optimize_composition` — so the bot and the kernels agree, no inline EV math here.
 
+use screeps_combat_decision::assignment::{
+    build_ev_matrix, solve_assignment, CapClass, ColumnKind, MatrixParams, ObjectiveCell, SquadRow,
+};
 use screeps_combat_decision::composition::{pairing_ev, quantize_ev, PairingParams, SquadCapabilities};
 use screeps_combat_decision::doctrine::EnemyForce;
 use screeps_combat_decision::force_sizing::{DefenseProfile, TowerThreat};
 use screeps_combat_decision::objective_value::{value_e, ObjectiveIntel, ObjectiveValueKind};
+
+/// Map the bot's `CapabilityClass` → the decision crate's bot-enum-free [`CapClass`] (ADR 0032 v1.2 —
+/// the global Hungarian's capability pre-filter). A 1:1 projection, like `project_value_kind`.
+fn cap_class(class: CapabilityClass) -> CapClass {
+    match class {
+        CapabilityClass::Defense => CapClass::Defense,
+        CapabilityClass::Offense => CapClass::Offense,
+        CapabilityClass::Declaim => CapClass::Declaim,
+    }
+}
 
 /// The commit-EV threshold reused from ADR 0031 (`CompositionParams::commit_ev_threshold`) as the
 /// per-squad reassign/claim gate floor (ADR 0032 §EV-positive gate): a move must beat its alternative by
@@ -444,6 +457,126 @@ fn objective_ev_q(
     quantize_ev(ev)
 }
 
+/// ADR 0032 v1.2 — the GLOBAL EV-maximizing REASSIGN matching (the Hungarian kernel, run ONCE per scan).
+/// Builds the `N×K` EV matrix over the managed squads (ROWS, in the caller's STABLE id order) × all live
+/// objectives (COLUMNS) + the per-row StayPut/Recycle columns, solves it deterministically
+/// ([`solve_assignment`]), and returns a `squad entity → globally-optimal NEW objective` map. A squad whose
+/// optimum is StayPut/Recycle (keep its current fight / no net-positive move) is ABSENT from the map.
+///
+/// This REPLACES the v1.1 per-squad greedy `best_by_ev` reassign loop: the per-squad reconcile below
+/// consults this single global solution instead of each squad greedily grabbing its own best. The cell EV,
+/// `value_e`, defense/enemy projection, and the EV-positive gate (the StayPut/Recycle columns) reuse the
+/// SAME helpers v1.1 used (`project_*`/`pairing_ev`/`value_e`) — only the SELECTION changed from greedy to
+/// global. Pure read of `data` (no mutation); deterministic (Vec-ordered, integer EV, no `HashMap` in the
+/// kernel — the returned map is built after the deterministic solve).
+fn solve_global_reassignment(
+    data: &SquadManagerSystemData,
+    managed: &[(Entity, ObjectiveId)],
+    homes: &[HomeRoom],
+    now: u32,
+) -> std::collections::HashMap<Entity, ObjectiveId> {
+    let mut out = std::collections::HashMap::new();
+    if managed.is_empty() || homes.is_empty() {
+        return out;
+    }
+    let anchor = homes.first().map(|h| h.name);
+    let squad_energy = homes.first().map(|h| h.energy_capacity).unwrap_or(0);
+    let threat_for = |room: RoomName| -> Option<&crate::military::threatmap::RoomThreatData> {
+        data.mapping.get_room(&room).and_then(|e| data.threat_data.get(e))
+    };
+    let asset_of = |room: RoomName| -> f32 {
+        data.mapping
+            .get_room(&room)
+            .and_then(|e| data.room_data.get(e))
+            .and_then(|rd| game::rooms().get(rd.name))
+            .map(|r| r.energy_capacity_available() as f32)
+            .unwrap_or(1.0)
+    };
+
+    // ── ROWS: the managed squads, in the caller's stable order. Each row carries its surviving caps (off the
+    //    claimed objective's composition at the anchor energy — what we fielded), its class, and its current
+    //    objective id (so the StayPut column re-scores the right fight). recycle_ev = 0 (the reassign path
+    //    reuses bodies; recycling here is the net-negative floor, not a refund model — v1.1 parity). ──
+    let mut rows: Vec<SquadRow> = Vec::with_capacity(managed.len());
+    for (_, obj_id) in managed {
+        let obj = data.objective_queue.get(*obj_id);
+        let class = obj.map(|o| cap_class(capability_class(&o.kind))).unwrap_or(CapClass::Offense);
+        let caps: SquadCapabilities = obj
+            .and_then(|o| o.force.squads.first())
+            .map(|c| c.capabilities(squad_energy))
+            .unwrap_or_default();
+        rows.push(SquadRow {
+            caps,
+            class,
+            // A gone objective ⇒ no StayPut fight (the reconcile retire path owns it); None ⇒ StayPut infeasible.
+            current_objective: obj.map(|o| o.id.0),
+            recycle_ev: 0,
+        });
+    }
+
+    // ── COLUMNS: all live objectives, in the queue's stable Vec order. Per-row feasibility = NOT claimed by
+    //    ANOTHER squad, NOT in give-up backoff, AND NOT the row's OWN current objective (no-ping-pong — the
+    //    current fight is reachable only via StayPut). The capability-class match is the kernel's own pre-
+    //    filter (`SquadRow.class` vs `ObjectiveCell.class`). ──
+    let objectives: Vec<&super::objective_queue::CombatObjective> = data.objective_queue.iter_objectives().collect();
+    let mut cells: Vec<ObjectiveCell> = Vec::with_capacity(objectives.len());
+    for o in &objectives {
+        let room = o.kind.room();
+        let unwinnable = data.objective_queue.is_unwinnable_now(room, now);
+        let claimed_by = data.objective_queue.claimed_by(o.id);
+        let travel = anchor.map(|h| room_distance(h, room)).unwrap_or(0);
+        // Per-row travel + feasibility (parallel to `rows`).
+        let mut travel_rooms_per_row = Vec::with_capacity(rows.len());
+        let mut feasible_per_row = Vec::with_capacity(rows.len());
+        for (entity, cur_id) in managed {
+            travel_rooms_per_row.push(travel);
+            // Feasible to REASSIGN onto iff: not the row's current objective (StayPut owns that), the room is
+            // winnable, and (it is unclaimed OR claimed by THIS very squad — its own claim never blocks it).
+            let is_own_current = *cur_id == o.id;
+            let claimed_by_other = matches!(claimed_by, Some(c) if c != *entity);
+            feasible_per_row.push(!is_own_current && !unwinnable && !claimed_by_other);
+        }
+        cells.push(ObjectiveCell {
+            id: o.id.0,
+            class: cap_class(capability_class(&o.kind)),
+            value_kind: project_value_kind(&o.kind),
+            intel: project_intel(&o.kind, o.priority, asset_of(room), threat_for(room)),
+            defense: project_defense(threat_for(room)),
+            enemy: project_enemy(threat_for(room)),
+            travel_rooms_per_row,
+            feasible_per_row,
+        });
+    }
+
+    // The on-site window proxy (a reassign reuses already-spawned bodies — a generous window, v1.1 parity).
+    let params = MatrixParams { onsite_window: MAX_TRAVEL_BUDGET, pairing: PairingParams::default() };
+    let matrix = build_ev_matrix(&rows, &cells, &params);
+    let solution = solve_assignment(&matrix);
+
+    // Map each squad's assigned column back to a NEW objective id, applying the EV-POSITIVE GATE against
+    // StayPut: a reassign fires only if the chosen objective beats the row's StayPut EV by MORE than the
+    // commit threshold (so a marginal swap does not thrash — v1.1 parity). StayPut/Recycle columns ⇒ no
+    // reassign (absent from the map). A column whose id == the row's current objective is impossible (the
+    // no-ping-pong feasibility filter excludes it), but we guard anyway.
+    let commit_threshold_q = quantize_ev(COMMIT_EV_THRESHOLD);
+    let stay_base = cells.len(); // the first StayPut column index
+    for (r, (entity, cur_id)) in managed.iter().enumerate() {
+        let Some(col) = solution.row_to_col[r] else { continue };
+        if let ColumnKind::Objective { id } = matrix.columns[col] {
+            if id == cur_id.0 {
+                continue; // defensive — already excluded by feasibility
+            }
+            let new_ev = matrix.at(r, col);
+            let stay_ev = matrix.at(r, stay_base + r); // this row's private StayPut column EV
+            // The gate: only reassign if the global pick beats continuing the current fight by the threshold.
+            if new_ev - stay_ev > commit_threshold_q {
+                out.insert(*entity, ObjectiveId(id));
+            }
+        }
+    }
+    out
+}
+
 /// Map an objective to the squad's target + the room its members travel to.
 fn objective_target(kind: &ObjectiveKind) -> (SquadTarget, RoomName) {
     match kind {
@@ -571,10 +704,25 @@ impl<'a> System<'a> for SquadManagerSystem {
             .collect();
 
         // ── Phase A: reconcile existing manager-owned squads. ──
-        let managed: Vec<(Entity, ObjectiveId)> = (&data.entities, &data.squad_contexts)
+        // STABLE-ORDERED (by Entity id, never the join's arbitrary ECS order) so the global Hungarian's ROWS
+        // are deterministic (ADR 0032 §Determinism — "stable id, never `Entity` index" for the matrix order).
+        let mut managed: Vec<(Entity, ObjectiveId)> = (&data.entities, &data.squad_contexts)
             .join()
             .filter_map(|(e, ctx)| ctx.objective_id.map(|id| (e, id)))
             .collect();
+        managed.sort_by_key(|(e, _)| e.id());
+
+        // ── ADR 0032 v1.2: the GLOBAL EV-maximizing matching (Hungarian) over ALL managed squads × ALL
+        //    claimable objectives — computed ONCE here, between Phase-A classify (the per-squad reconcile
+        //    below) and apply. This REPLACES the v1.1 per-squad greedy `best_by_ev` reassign SELECTION: the
+        //    per-squad loop now CONSULTS this global solution (`global_reassign[entity]` = the squad's
+        //    globally-optimal NEW objective, or None ⇒ stay/recycle) instead of each squad greedily grabbing
+        //    its own best + `covered`-marking it. Column-exclusivity makes a double-claim impossible (so the
+        //    `covered` guard is retired for reassign). The lease/forming/travel lifecycle (the per-squad
+        //    reconcile) is ORTHOGONAL and unchanged — reconcile still decides retire-vs-keep; only WHICH new
+        //    objective a Reassign binds to is now the global optimum, not a greedy pick. ──
+        let global_reassign: std::collections::HashMap<Entity, ObjectiveId> =
+            solve_global_reassignment(&data, &managed, &homes, now);
 
         let mut live_managed: Vec<(Entity, ObjectiveId)> = Vec::new();
         let mut covered: std::collections::HashSet<ObjectiveId> = std::collections::HashSet::new();
@@ -675,61 +823,19 @@ impl<'a> System<'a> for SquadManagerSystem {
                 data.forming_progress.last_target_dist.insert(obj_id, d);
             }
 
-            // ── ADR 0027 v1 + ADR 0032 v1.1 (whole-squad REASSIGN, EV-RANKED + EV-POSITIVE GATE): compute
-            //    whether a COMPATIBLE sibling objective is worth reassigning to on a non-loss terminal
-            //    (Resolved/ObjectiveGone). The capability gate (`capability_class`) keeps a freed defender on
-            //    defense objectives + an offense squad on offense. The SELECTION is now `max_by(EV)` (ADR 0032
-            //    §EV-positive gate) — `best_by_ev` ranks the candidates by the quantized EV of THIS squad's
-            //    caps vs each objective's value_e/defense (replacing the old `priority.then(proximity)`); the
-            //    EV-POSITIVE GATE then only marks reassign available iff `EV(new) − EV(StayPut) >
-            //    commit_ev_threshold`, so the squad never reassigns into a net-negative or marginal move (and a
-            //    harmless/low-value objective is not taken — the dps=0 fix). ──
-            let anchor = homes.first().map(|h| h.name);
-            // The EXISTING squad's caps = its claimed objective's composition capabilities at the anchor
-            // home's energy (what we actually fielded). The threat intel per room comes from `threat_data`.
-            let squad_energy = homes.first().map(|h| h.energy_capacity).unwrap_or(0);
-            let squad_caps: SquadCapabilities = data
-                .objective_queue
-                .get(obj_id)
-                .and_then(|o| o.force.squads.first())
-                .map(|c| c.capabilities(squad_energy))
-                .unwrap_or_default();
-            // The per-room scouted intel lookup (room → its RoomThreatData component), used by the EV.
-            let threat_for = |room: RoomName| -> Option<&crate::military::threatmap::RoomThreatData> {
-                data.mapping.get_room(&room).and_then(|e| data.threat_data.get(e))
-            };
-            // A defender's on-site window is its full lifetime; we reuse the defense onsite constant proxy.
-            let onsite_window = MAX_TRAVEL_BUDGET; // a generous on-site window (reassign reuses existing bodies)
-            // The EV closure for a candidate objective (caps fixed; value_e/defense/travel per-objective).
-            let ev_of = |o: &super::objective_queue::CombatObjective| -> i64 {
-                let room = o.kind.room();
-                let asset = data
-                    .mapping
-                    .get_room(&room)
-                    .and_then(|e| data.room_data.get(e))
-                    .and_then(|rd| game::rooms().get(rd.name))
-                    .map(|r| r.energy_capacity_available() as f32)
-                    .unwrap_or(1.0);
-                let travel = anchor.map(|h| room_distance(h, room)).unwrap_or(0);
-                objective_ev_q(squad_caps, &o.kind, o.priority, asset, threat_for(room), onsite_window, travel)
-            };
-            // MAX-EV compatible sibling (excluding the current objective — no ping-pong). `ev_of` is borrowed
-            // (used for both the candidate ranking and the StayPut lookup below).
-            let ev_of = &ev_of;
-            let best_ev = cur_class.and_then(|class| {
-                data.objective_queue
-                    .best_by_ev(now, &[obj_id], |kind| capability_class(kind) == class, ev_of)
-            });
-            // The StayPut column: the EV of CONTINUING the current objective (the gate's alternative). A gone
-            // objective has no StayPut EV → 0 (any positive candidate beats it, which is correct for a
-            // vanished target).
-            let stay_ev = data.objective_queue.objective_ev_q(obj_id, ev_of).unwrap_or(0);
-            let commit_threshold_q = quantize_ev(COMMIT_EV_THRESHOLD);
-            // EV-POSITIVE GATE: reassign only if the best candidate beats StayPut by MORE than the threshold.
-            let best_reassignment = match best_ev {
-                Some((id, new_ev)) if new_ev - stay_ev > commit_threshold_q => Some(id),
-                _ => None,
-            };
+            // ── ADR 0032 v1.2 (whole-squad REASSIGN, GLOBAL Hungarian): the squad's reassign target is the
+            //    column the GLOBAL solve assigned this squad's row (`solve_global_reassignment` above), NOT a
+            //    per-squad greedy `best_by_ev` pick. The global solve already applied: the capability-class
+            //    pre-filter (an Offense squad never reassigns onto Defense), the EV-positive gate (the
+            //    per-row StayPut/Recycle columns — a sub-threshold/net-negative move is never the optimum),
+            //    column-exclusivity (no two squads target the same objective — the v1 `covered` double-claim
+            //    guard is RETIRED for reassign), and the no-ping-pong exclusion (the row's own current
+            //    objective is reachable only via StayPut, never as a reassign column). So here we just LOOK UP
+            //    the global decision: `Some(new_id)` ⇒ the optimum moves this squad to `new_id`; absent ⇒
+            //    StayPut/Recycle (keep the current fight / the reconcile retire path handles a gone target).
+            //    The reconcile kernel still decides retire-vs-keep; `reassign_available` only tells it a
+            //    globally-better objective EXISTS for a non-loss terminal. ──
+            let best_reassignment = global_reassign.get(&squad_entity).copied();
             let reassign_available = best_reassignment.is_some();
 
             // P-OBJ #23 / ADR 0027: the pure reconcile kernel decides retire-vs-keep (unit-tested offline
@@ -1027,43 +1133,60 @@ impl<'a> System<'a> for SquadManagerSystem {
                 requested > 0 && filled < requested
             })
             .count();
-        let mut skipped: Vec<ObjectiveId> = Vec::new();
         let claim_anchor = homes.first().map(|h| h.name);
         let claim_energy = homes.first().map(|h| h.energy_capacity).unwrap_or(0);
         let claim_threat_for = |room: RoomName| -> Option<&crate::military::threatmap::RoomThreatData> {
             data.mapping.get_room(&room).and_then(|e| data.threat_data.get(e))
         };
+        // ── ADR 0032 v1.2: Phase C as GLOBAL "about-to-field" rows (ADR 0032 §Integration: "Phase C
+        //    becomes additional about-to-field rows, capped by the concurrency limits"). The new-squad
+        //    fielders are INTERCHANGEABLE generic slots (each fields the objective's OWN requested force), so
+        //    the global EV-maximizing assignment over (slots × claimable objectives) reduces to "field the
+        //    top-K claimable objectives by their requested-force EV" — provably the global optimum for
+        //    identical rows (a Hungarian over a constant-per-column matrix picks the K largest columns). We
+        //    therefore pre-rank ALL claimable objectives by the SAME quantized EV the v1.1 claim used (the
+        //    requested force's caps vs the objective's defense · value_e − travel), apply the EV-positive gate
+        //    (EV > the commit threshold, the idle/Recycle alternative being 0), and field down the ranked list
+        //    until the concurrency / forming caps are hit. This REPLACES the per-iteration greedy `best_by_ev`
+        //    claim loop (deterministic: a stable sort over the Vec-ordered queue, integer EV, ties → smaller
+        //    id). ──
+        let ev_of_claim = |o: &super::objective_queue::CombatObjective| -> i64 {
+            let room = o.kind.room();
+            let caps = o.force.squads.first().map(|c| c.capabilities(claim_energy)).unwrap_or_default();
+            let asset = data
+                .mapping
+                .get_room(&room)
+                .and_then(|e| data.room_data.get(e))
+                .and_then(|rd| game::rooms().get(rd.name))
+                .map(|r| r.energy_capacity_available() as f32)
+                .unwrap_or(1.0);
+            let travel = claim_anchor.map(|h| room_distance(h, room)).unwrap_or(0);
+            objective_ev_q(caps, &o.kind, o.priority, asset, claim_threat_for(room), MAX_TRAVEL_BUDGET, travel)
+        };
+        let commit_threshold_q = quantize_ev(COMMIT_EV_THRESHOLD);
+        // Rank the claimable (unclaimed, non-backoff, EV-positive) objectives by EV desc; tie → smaller id
+        // (the same stable tie-break the kernel uses — ADR 0032 §Determinism). Vec-ordered, no HashMap.
+        let mut ranked_claims: Vec<(ObjectiveId, i64)> = data
+            .objective_queue
+            .iter_objectives()
+            .filter(|o| !data.objective_queue.is_claimed(o.id))
+            .filter(|o| !data.objective_queue.is_unwinnable_now(o.kind.room(), now))
+            .map(|o| (o.id, ev_of_claim(o)))
+            .filter(|(_, ev_q)| *ev_q > commit_threshold_q)
+            .collect();
+        ranked_claims.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0 .0.cmp(&b.0 .0)));
+
+        let mut claim_iter = ranked_claims.into_iter();
         while active < MAX_CONCURRENT_SQUADS && forming < MAX_FORMING_SQUADS {
-            // ── ADR 0032 v1.1: EV-RANKED claim (replacing `best_unclaimed_near_excluding`'s
-            //    priority.then(proximity)). Rank claimable objectives by `EV = P(win | the REQUESTED force's
-            //    caps vs the objective's defense) · value_e − travel`; the EV-POSITIVE GATE then claims only a
-            //    net-positive objective (EV > the commit threshold, the Recycle/idle alternative being 0) — so a
-            //    harmless/low-value objective (a dps=0 scout) is NOT fielded against. ──
-            let ev_of_claim = |o: &super::objective_queue::CombatObjective| -> i64 {
-                let room = o.kind.room();
-                let caps = o.force.squads.first().map(|c| c.capabilities(claim_energy)).unwrap_or_default();
-                let asset = data
-                    .mapping
-                    .get_room(&room)
-                    .and_then(|e| data.room_data.get(e))
-                    .and_then(|rd| game::rooms().get(rd.name))
-                    .map(|r| r.energy_capacity_available() as f32)
-                    .unwrap_or(1.0);
-                let travel = claim_anchor.map(|h| room_distance(h, room)).unwrap_or(0);
-                objective_ev_q(caps, &o.kind, o.priority, asset, claim_threat_for(room), MAX_TRAVEL_BUDGET, travel)
-            };
-            let obj_id = match data.objective_queue.best_by_ev(now, &skipped, |_| true, ev_of_claim) {
-                // EV-POSITIVE GATE vs Recycle/idle (EV 0): don't claim a net-negative / marginal objective.
-                Some((id, ev_q)) if ev_q > quantize_ev(COMMIT_EV_THRESHOLD) => id,
-                _ => break,
+            let Some((obj_id, _ev_q)) = claim_iter.next() else {
+                break; // ran out of EV-positive claimable objectives
             };
 
             let (composition, target) = match data.objective_queue.get(obj_id) {
                 Some(obj) => match obj.force.squads.first() {
                     Some(comp) => (comp.clone(), objective_target(&obj.kind)),
                     None => {
-                        // Malformed objective (no force requested) — can't field it.
-                        skipped.push(obj_id);
+                        // Malformed objective (no force requested) — can't field it; skip to the next claim.
                         continue;
                     }
                 },
@@ -1077,7 +1200,6 @@ impl<'a> System<'a> for SquadManagerSystem {
                 if debug {
                     log::info!("[Lifecycle] SKIP obj={:?} room={} reason=no_home_in_range", obj_id, target.1);
                 }
-                skipped.push(obj_id);
                 continue;
             }
 
