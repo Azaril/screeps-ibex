@@ -52,6 +52,18 @@ use screeps_rover::{CostMatrixCache, CostMatrixOptions, CostMatrixSystem};
 use specs::prelude::*;
 use specs::saveload::*;
 
+/// Last-seen present-member count per live objective, so the manager can tell whether a FORMING squad
+/// made spawn progress SINCE the previous reconcile (FIX 2 — the rally-stall fix). Ephemeral (NOT
+/// serialized): a `BTreeMap` (deterministic iteration; never a result-affecting `HashMap`) reset to empty
+/// on a VM reload. On reset a forming squad simply gets a fresh forming budget — still bounded, because
+/// the per-objective entry only grows monotonically while the roster grows. Auto-created by specs as a
+/// `Default` resource (like `CombatObjectiveQueue`), so no explicit registration is needed.
+#[derive(Default)]
+pub struct SquadFormingProgress {
+    /// objective id → last-observed present-member count.
+    last_present: std::collections::BTreeMap<ObjectiveId, usize>,
+}
+
 /// Global cap on concurrently-fielded manager squads. Objectives above this
 /// compete by priority via `best_unclaimed_near`. (Per-objective-kind caps —
 /// e.g. SK `max_concurrent_farms` — are enforced by the producers.)
@@ -116,6 +128,27 @@ fn spawn_priority_for(objective_priority: f32) -> f32 {
 /// all-empty; only a squad that lost everyone does. Pure so it's host-testable without an ECS world.
 fn squad_is_wiped(total_members_added: u32, living_members: usize) -> bool {
     total_members_added > 0 && living_members == 0
+}
+
+/// FIX 2 (rally-stall): classify whether a squad is still FORMING its roster and whether it made spawn
+/// PROGRESS since the previous reconcile. Pure so it's host-testable without an ECS world.
+///
+/// `forming` = the squad has members, has NOT engaged yet, and has fewer present members than the
+/// requested roster (still assembling). `forming_progress` = the present count grew since the last
+/// reconcile — true only on the exact tick a new member appears. The kernel refreshes the lease while
+/// `forming && forming_progress`, which is BOUNDED: the present count can only increase up to
+/// `requested_slots`, so a squad that stops gaining members (can't bank energy for the next slot) stops
+/// being refreshed and gives up. `requested_slots == 0` (unknown) ⇒ never forming (preserve legacy).
+fn forming_state(
+    has_members: bool,
+    engaged_once: bool,
+    present_count: usize,
+    requested_slots: usize,
+    prev_present: usize,
+) -> (bool, bool) {
+    let forming = has_members && !engaged_once && requested_slots > 0 && present_count < requested_slots;
+    let forming_progress = forming && present_count > prev_present;
+    (forming, forming_progress)
 }
 
 /// Whether an objective's squad fights as an oriented **formation box** (siege: keep the anchor
@@ -207,6 +240,7 @@ pub struct SquadManagerSystemData<'a> {
     entities: Entities<'a>,
     updater: Read<'a, LazyUpdate>,
     objective_queue: Write<'a, CombatObjectiveQueue>,
+    forming_progress: Write<'a, SquadFormingProgress>,
     squad_contexts: WriteStorage<'a, SquadContext>,
     spawn_queue: Write<'a, SpawnQueue>,
     room_data: ReadStorage<'a, RoomData>,
@@ -278,7 +312,7 @@ impl<'a> System<'a> for SquadManagerSystem {
             let deadline_lapsed = obj_info.and_then(|(_, _, dl)| dl).is_some_and(|d| now >= d);
 
             // Snapshot the squad facts (Copy) in one borrow.
-            let (wiped, has_focus, engaged_once, in_target_room, has_members) = data
+            let (wiped, has_focus, engaged_once, in_target_room, has_members, present_count) = data
                 .squad_contexts
                 .get(squad_entity)
                 .map(|ctx| {
@@ -287,9 +321,30 @@ impl<'a> System<'a> for SquadManagerSystem {
                     let in_room = squad_room
                         .map(|room| ctx.members.iter().any(|m| m.position.is_some_and(|p| p.room_name() == room)))
                         .unwrap_or(false);
-                    (wiped, ctx.focus_target.is_some(), ctx.engaged_once, in_room, !ctx.members.is_empty())
+                    // FIX 2: count members PRESENT in the world (a resolved position) — a still-spawning
+                    // slot has no body yet and must not count as progress. Matches the rally gate's notion.
+                    let present = ctx.members.iter().filter(|m| m.position.is_some()).count();
+                    (wiped, ctx.focus_target.is_some(), ctx.engaged_once, in_room, !ctx.members.is_empty(), present)
                 })
-                .unwrap_or((false, false, false, false, false));
+                .unwrap_or((false, false, false, false, false, 0));
+
+            // FIX 2 (rally-stall): a forming squad legitimately sitting at home assembling its roster has
+            // no focus, so the base +400 lease lapses and the kernel would retire it mid-form → re-field →
+            // Generation churn that orphans the already-spawned members. Tell the kernel whether the squad
+            // is still FORMING and whether it made spawn PROGRESS since the last reconcile, so it refreshes
+            // the lease while progressing (bounded — progress can only be true `requested` times). Requested
+            // roster size off the objective (the producer owns it).
+            let requested_slots_for_form = data
+                .objective_queue
+                .get(obj_id)
+                .and_then(|o| o.force.squads.first())
+                .map(|c| c.slots.len())
+                .unwrap_or(0);
+            let prev_present = data.forming_progress.last_present.get(&obj_id).copied().unwrap_or(0);
+            let (forming, forming_progress) =
+                forming_state(has_members, engaged_once, present_count, requested_slots_for_form, prev_present);
+            // Record this tick's present count for the next reconcile's progress delta.
+            data.forming_progress.last_present.insert(obj_id, present_count);
 
             // P-OBJ #23 / ADR 0027: the pure reconcile kernel decides retire-vs-keep (unit-tested offline
             // in `screeps_combat_decision::lifecycle`). The manager only builds the snapshot and applies the
@@ -304,6 +359,8 @@ impl<'a> System<'a> for SquadManagerSystem {
                 engaged_once,
                 in_target_room,
                 has_members,
+                forming,
+                forming_progress,
             };
             let action = lifecycle::reconcile(snapshot);
             if let lifecycle::ReconcileAction::Retire { reason, withdraw, mark_unwinnable } = action {
@@ -323,11 +380,13 @@ impl<'a> System<'a> for SquadManagerSystem {
                 }
                 retire_squad(&data.updater, &data.entities, squad_entity);
                 data.objective_queue.release_entity(squad_entity);
+                data.forming_progress.last_present.remove(&obj_id); // FIX 2: drop the progress tracker
                 continue;
             }
             // Live (Keep / KeepRefreshLease): re-establish the (ephemeral) claim — idempotent, self-heals
-            // post-reset. Refresh the commitment lease ONLY while actively engaging (KeepRefreshLease) so a
-            // long fight or a brief visibility gap never lets the objective lapse underneath the squad.
+            // post-reset. Refresh the commitment lease on KeepRefreshLease — the kernel returns it both while
+            // actively engaging (a long fight / vision gap) AND while a FORMING squad is still making spawn
+            // progress (FIX 2 — so a squad assembling its roster is not retired mid-form → re-field churn).
             data.objective_queue.claim(obj_id, squad_entity);
             if action == lifecycle::ReconcileAction::KeepRefreshLease {
                 data.objective_queue.set_deadline(obj_id, Some(now + COMMITMENT_BUDGET));
@@ -919,16 +978,28 @@ fn compute_squad_orders(
     // re-field → slot-0 forever (the actual invader no-engage root cause). Measured against the objective's
     // requested slot count so a death-degraded layout can't shrink "full".
     let member_positions: Vec<Option<Position>> = member_views.iter().map(|m| m.pos).collect();
-    // Rally/deploy gate. BOTH offense and defense require the FULL roster (`squad_ready_to_depart`): the
-    // oracle sized it to be Lanchester-favorable, so the full roster is winnable BY CONSTRUCTION and never
-    // ships a loser. The interim 0.75-count quorum was UNSOUND (operator 2026-06-27): the survival axis binds
-    // at 1/HOLD_MARGIN ≈ 0.77, so a 0.75 subset can't out-heal the incoming (~coin-flip loss), and a count
-    // fraction is composition-blind (it can drop the healer). The deadlock the quorum chased (the last member
-    // never spawns) is a SPAWN-COMPLETION problem (ADR 0029 FIX B's small duo floor makes quorum==requested
-    // for most defense, + FIX C + renew), not license to deploy under-strength. ADR 0030 §6 replaces this
-    // with a winnability-VALIDATED gate (`present_force_is_winnable`) that deploys the smallest FAVORABLE
-    // present force per the lifetime/wave tempo — principled subset-deploy, not a count ratio.
-    let ready_to_depart = crate::military::formation::squad_ready_to_depart(&member_positions, requested_slots);
+    // Rally/deploy gate (FIX 1 — the rally-stall fix). A DEFENDED or UNSEEN target keeps the hard full-roster
+    // `squad_ready_to_depart`: the oracle sized it to be Lanchester-favorable, so the full roster is winnable
+    // BY CONSTRUCTION and must enter together or the trickle is picked off. BUT a PROVEN-uncontested target —
+    // a room we can currently SEE with no hostiles, no hostile towers, and no enemy safe mode — does not need
+    // the last member (which can lose the within-tier spawn race on a young colony and deadlock the
+    // all-or-nothing gate forever, the live W7N7 stall). An oversized force advancing + dismantling an
+    // undefended core as members arrive is harmless, so deploy at the min-viable quorum. The visibility flag
+    // is LOAD-BEARING: an unseen room reports empty DTOs because we have no vision, NOT because it is clear —
+    // so `uncontested` requires POSITIVE room visibility, never `hostiles.is_empty()` alone (else a
+    // defended-but-unseen room mis-classifies as uncontested and trickles a sub-roster in to be picked off).
+    let room_visible = game::rooms().get(target_room).is_some();
+    let no_hostile_towers = !structures
+        .iter()
+        .any(|s| s.structure_type == StructureType::Tower && s.ownership == screeps_combat_decision::Ownership::Hostile);
+    let uncontested = crate::military::formation::target_is_uncontested(
+        room_visible,
+        hostiles.is_empty(),
+        no_hostile_towers,
+        !enemy_safe_mode,
+    );
+    let ready_to_depart =
+        crate::military::formation::ready_to_depart_gate(&member_positions, requested_slots, uncontested);
 
     if let Some(ctx) = squad_contexts.get_mut(squad_entity) {
         if !ready_to_depart {
@@ -948,8 +1019,9 @@ fn compute_squad_orders(
             }
             if debug {
                 log::info!(
-                    "[Lifecycle] RALLY squad={:?} room={} present={}/{} (holding home until full)",
-                    squad_entity, target_room, member_positions.iter().filter(|p| p.is_some()).count(), requested_slots
+                    "[Lifecycle] RALLY squad={:?} room={} present={}/{} uncontested={} (holding home until {})",
+                    squad_entity, target_room, member_positions.iter().filter(|p| p.is_some()).count(),
+                    requested_slots, uncontested, if uncontested { "quorum" } else { "full roster" }
                 );
             }
         } else if !all_arrived {
@@ -1127,6 +1199,44 @@ mod tests {
         assert!(!squad_is_wiped(0, 0), "fresh squad, nothing spawned yet → not wiped");
         assert!(!squad_is_wiped(4, 2), "still has living members → not wiped");
         assert!(squad_is_wiped(4, 0), "spawned members and all are gone → wiped");
+    }
+
+    #[test]
+    fn rally_gate_picks_quorum_only_for_visible_clear_rooms() {
+        // FIX 1: the manager composes `target_is_uncontested` (with the live `game::rooms()` visibility
+        // flag) with `ready_to_depart_gate`. This test exercises that exact composition for the four cases:
+        // visible+clear deploys at quorum, contested/unseen holds for the full roster.
+        let p = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), room("W7N7"));
+        let three_of_five = [Some(p), Some(p), Some(p), None, None];
+        let gate = |room_visible: bool, no_hostiles: bool, no_towers: bool, no_safe: bool| {
+            let uncontested = crate::military::formation::target_is_uncontested(room_visible, no_hostiles, no_towers, no_safe);
+            crate::military::formation::ready_to_depart_gate(&three_of_five, 5, uncontested)
+        };
+        // Visible + clear + no towers + no safe mode → uncontested → deploy at quorum with 3/5.
+        assert!(gate(true, true, true, true), "visible + clear → quorum deploys 3/5");
+        // UNSEEN room (empty DTOs, no_hostiles/no_towers read true) → full roster → hold at 3/5.
+        assert!(!gate(false, true, true, true), "unseen room (empty DTOs) → full-roster gate holds 3/5");
+        // Visible but a hostile creep / tower / safe mode → contested → full roster → hold at 3/5.
+        assert!(!gate(true, false, true, true), "hostiles present → full-roster gate holds 3/5");
+        assert!(!gate(true, true, false, true), "hostile tower present → full-roster gate holds 3/5");
+        assert!(!gate(true, true, true, false), "enemy safe mode → full-roster gate holds 3/5");
+    }
+
+    #[test]
+    fn forming_state_progress_is_bounded_to_increasing_present_count() {
+        // FIX 2: a squad with members, not yet engaged, below the requested roster is FORMING; progress
+        // is true ONLY when the present count grew since last reconcile (self-bounding).
+        // present 4, prev 3, requested 5 → forming + progress (a member just appeared).
+        assert_eq!(forming_state(true, false, 4, 5, 3), (true, true), "present grew → forming + progress");
+        // present 3, prev 3 (flat — can't bank energy for #4) → forming but NO progress → kernel gives up.
+        assert_eq!(forming_state(true, false, 3, 5, 3), (true, false), "flat present → forming, no progress");
+        // full roster present (5/5) → NOT forming (the squad departs).
+        assert_eq!(forming_state(true, false, 5, 5, 4), (false, false), "full roster → not forming");
+        // engaged already → never forming (the lease refreshes via focus, not the forming path).
+        assert_eq!(forming_state(true, true, 3, 5, 2), (false, false), "engaged → not forming");
+        // no members / unknown roster → not forming (legacy preserved).
+        assert_eq!(forming_state(false, false, 0, 5, 0), (false, false), "no members → not forming");
+        assert_eq!(forming_state(true, false, 1, 0, 0), (false, false), "unknown roster size → not forming");
     }
 
     #[test]
