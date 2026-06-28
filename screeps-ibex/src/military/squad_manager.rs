@@ -844,6 +844,10 @@ fn compute_squad_orders(
         // no-progress counter (a fast-follow; the sim already validates the stalemate-disengage path).
         engage_objective: screeps_combat_decision::EngageObjective::Destroy,
         enemy_stalled: false,
+        // ADR 0031 #39: the drain stance is NOT wired into the live bot at P1 (drain comps don't reach the
+        // bot until the tactic is proven + threaded in P2/P3). The bot takes the byte-unchanged breach/
+        // engage path; the drain exception is exercised only via the sim (the proving vehicle).
+        drain_stance: false,
     };
 
     // Build the target room's movement cost matrix (terrain walls baked in — the headless
