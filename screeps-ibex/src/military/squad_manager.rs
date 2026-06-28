@@ -80,6 +80,14 @@ pub struct SquadFormingProgress {
     /// INTROSPECTION ONLY. objective id → whether the squad had ENGAGED at the previous trace, so the
     /// `ENGAGED` transition event fires exactly once on the false→true latch.
     last_engaged: std::collections::BTreeMap<ObjectiveId, bool>,
+    /// FIX A (assault latch): objective ids whose squad has had `gather_quorum_met` fire at least once. Once
+    /// latched, the TRAVEL phase takes the ASSAULT branch (advance the anchor rally→target) WITHOUT
+    /// re-evaluating the gather quorum every tick — so members dying/lagging crossing enemy-held neighbours
+    /// can't un-commit the assault (the contested in_room<->travel oscillation, BUG A). Ephemeral (a
+    /// `BTreeSet`, NOT serialized — no `WORLD_FORMAT_VERSION` bump): on a VM reload the squad re-derives the
+    /// quorum from live positions (a massed bloc re-latches immediately; a still-scattered one re-gathers).
+    /// Cleared on retire alongside the other per-objective trackers.
+    assault_latched: std::collections::BTreeSet<ObjectiveId>,
 }
 
 /// INTROSPECTION ONLY (ADR 0027 squad-lifecycle observability) — a coarse phase label for the
@@ -495,6 +503,10 @@ impl<'a> System<'a> for SquadManagerSystem {
                 traveling,
                 travel_progress,
                 travel_budget_remaining,
+                // FIX B2: a Defend squad garrisoning its CLEAR owned room (arrived, no in-room focus) holds
+                // its lease while the Defend objective persists, instead of GaveUp+refield (Gen churn). The
+                // owned-room threat roams a NEIGHBOUR room, so the owned room itself shows no in-room focus.
+                holding_station: is_defend && in_target_room && !has_focus,
             };
             let action = lifecycle::reconcile(snapshot);
             if let lifecycle::ReconcileAction::Retire { reason, withdraw, mark_unwinnable } = action {
@@ -543,6 +555,8 @@ impl<'a> System<'a> for SquadManagerSystem {
                 // Introspection trackers too, so a re-field starts the phase-change/heartbeat trace fresh.
                 data.forming_progress.last_phase.remove(&obj_id);
                 data.forming_progress.last_engaged.remove(&obj_id);
+                // FIX A: clear the assault latch so a RE-FIELD (new generation) re-derives the quorum.
+                data.forming_progress.assault_latched.remove(&obj_id);
                 continue;
             }
             // Live (Keep / KeepRefreshLease): re-establish the (ephemeral) claim — idempotent, self-heals
@@ -1161,6 +1175,15 @@ fn compute_squad_orders(
     let all_arrived = member_views
         .iter()
         .all(|m| m.pos.map(|p| p.room_name() == target_room).unwrap_or(false));
+    // FIX B1 (engaged-en-route latch): whether ANY living member stands in the target room. The
+    // `engaged_once` latch is gated on this so a squad whose VISIBLE target room has a hostile while it is
+    // still TRAVELING (a proximity-free focus, no member in-room) does NOT latch engaged_once en route —
+    // which would permanently kill its travel lease (`traveling` requires `!engaged_once`) and freeze it
+    // mid-hop. Latch only once a member is actually IN the room (decide_squad still picks the focus per-tick;
+    // only the PERMANENT latch is gated). Uncontested clears still latch on arrival — unchanged.
+    let in_room_any = member_views
+        .iter()
+        .any(|m| m.pos.map(|p| p.room_name() == target_room).unwrap_or(false));
 
     // P-OBJ #23 killer diagnostic: the squad is fully in the target room but `decide_squad` found NOTHING
     // to attack. This one line classifies the live no-engage failure: hostiles=0 structs=0 => empty room
@@ -1247,19 +1270,43 @@ fn compute_squad_orders(
                 .unwrap_or_else(|| Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), target_room));
             let rally = screeps_combat_decision::rally::shared_rally_point(centroid, assault_target, uncontested);
 
-            // Has a FIGHTER gathered at the rally? (No healer-only assault.) A fighter has melee or ranged.
+            // Has a FIGHTER gathered at the rally OR already in the target room? (No healer-only assault.) A
+            // fighter has melee or ranged. FIX A counts an in-target-room fighter as "gathered" so an
+            // arrived member never fails the gather (the uncontested gathered>=1 / members-already-arrived
+            // path) — a defender whose lead is already in the room keeps committing.
             let fighter_gathered = member_views.iter().any(|m| {
-                m.pos.map(|p| p.get_range_to(rally) <= screeps_combat_decision::rally::RALLY_GATHER_RADIUS).unwrap_or(false)
-                    && (m.has_ranged || m.melee_power > 0)
+                m.pos
+                    .map(|p| {
+                        (p.get_range_to(rally) <= screeps_combat_decision::rally::RALLY_GATHER_RADIUS || p.room_name() == target_room)
+                            && (m.has_ranged || m.melee_power > 0)
+                    })
+                    .unwrap_or(false)
             });
-            let gathered = screeps_combat_decision::rally::gather_quorum_met(
-                &member_positions,
+            // FIX A: members already IN the target room count as gathered (modeled as gathered-at-rally) so
+            // arrived members can't fail the quorum.
+            let mut gather_positions = member_positions.clone();
+            for (m, slot) in member_views.iter().zip(gather_positions.iter_mut()) {
+                if m.pos.map(|p| p.room_name() == target_room).unwrap_or(false) {
+                    *slot = Some(rally); // an in-room member is counted at the rally for the gather quorum
+                }
+            }
+            let quorum_now = screeps_combat_decision::rally::gather_quorum_met(
+                &gather_positions,
                 rally,
                 requested_slots,
                 uncontested,
                 fighter_gathered,
                 screeps_combat_decision::rally::RALLY_GATHER_RADIUS,
             );
+            // FIX A (assault latch): once the gather quorum FIRST fires, LATCH the assault and thereafter take
+            // the assault branch WITHOUT re-evaluating the quorum — so members dying/lagging crossing
+            // enemy-held neighbours can't un-commit it (the contested in_room<->travel oscillation, BUG A).
+            // The latch is an ephemeral per-objective flag (no WORLD_FORMAT_VERSION bump); on a VM reload the
+            // squad re-derives the quorum from live positions (a massed bloc re-latches immediately).
+            if quorum_now {
+                forming_progress.assault_latched.insert(obj_id);
+            }
+            let gathered = quorum_now || forming_progress.assault_latched.contains(&obj_id);
 
             if gathered {
                 // ASSAULT: members are massed at the rally → advance the box-formation anchor rally→target
@@ -1310,7 +1357,7 @@ fn compute_squad_orders(
             // Arrived + SKIRMISH: drop the anchor so `Engaged` kites via `decide_movement` (O1).
             ctx.squad_path = None;
         }
-        apply_squad_decision(ctx, &decision, creep_owner);
+        apply_squad_decision(ctx, &decision, creep_owner, in_room_any);
     }
 
     // ───────────────────────── INTROSPECTION TRACE (logging only) ─────────────────────────
@@ -1465,9 +1512,15 @@ fn compute_squad_orders(
 /// directive (`squad_movement`/`squad_center`/`squad_cohesion_radius`) the manager stamps here so the
 /// block kites/advances as one. Heal *assignment* still reuses `SquadContext::compute_heal_assignments`
 /// until that migrates into `decide_squad` (Step 7).
-fn apply_squad_decision(ctx: &mut SquadContext, decision: &SquadDecision, creep_owner: &ReadStorage<CreepOwner>) {
+fn apply_squad_decision(ctx: &mut SquadContext, decision: &SquadDecision, creep_owner: &ReadStorage<CreepOwner>, in_room_any: bool) {
     ctx.state = order_state_to_squad(decision.state);
-    if ctx.state == SquadState::Engaged {
+    // FIX B1: latch `engaged_once` ONLY when the squad is Engaged AND a member is actually IN the target
+    // room. `decide_squad` sets `Engaged` purely from `focus.is_some()` with NO proximity gate (lib.rs), so a
+    // far squad whose VISIBLE target room has a hostile would otherwise latch engaged_once while dist>0,
+    // in_room=false — permanently killing its travel lease (`traveling` needs `!engaged_once`) → freeze
+    // mid-hop. Gating the PERMANENT latch on in-room presence keeps the travel lease alive until arrival.
+    // (decide_squad still computes the per-tick focus + Engaged state; only the latch is gated.)
+    if ctx.state == SquadState::Engaged && in_room_any {
         ctx.engaged_once = true; // P-OBJ #23: latch reaching combat (drives resolve vs give-up in Phase A)
     }
     ctx.focus_target = decision.focus.map(|f| f.pos);
