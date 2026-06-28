@@ -1204,19 +1204,15 @@ fn compute_squad_orders(
 
     if let Some(ctx) = squad_contexts.get_mut(squad_entity) {
         if !ready_to_depart {
-            // RALLY: hold at home and group up. Point the travel anchor at the lead's home-room centre (NOT
-            // the target room) so the members formation-follow it HOME and gather — no lone lead crosses
-            // toward the objective until the full roster is present. apply_squad_decision below issues the
-            // Formation move orders that make the members track this (home) anchor.
-            if let Some(lead) = member_views.iter().find_map(|m| m.pos) {
-                // Rally AT a home spawn (not the room centre) so the gathering members stay adjacent to a
-                // spawn and can be RENEWED while waiting for the full roster (ADR 0028 — the spawn renew
-                // pass needs the creep next to the spawn). Fall back to the room centre if no spawn resolves.
-                let rally = screeps::game::rooms()
-                    .get(lead.room_name())
-                    .and_then(|r| r.find(screeps::constants::find::MY_SPAWNS, None).first().map(|s| s.pos()))
-                    .unwrap_or_else(|| Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), lead.room_name()));
-                crate::military::formation::advance_squad_virtual_position(ctx, rally);
+            // RALLY/FORMING: hold at home and group up while the roster spawns. With MULTI-HOME SPAWN the
+            // members are at DIFFERENT homes; a cross-room formation march toward one home would re-introduce
+            // the very frozen-anchor stall this fix removes (and needlessly pull a member off its own spawn,
+            // where the renew pass keeps it alive). So drop the formation anchor and issue NO travel order —
+            // each freshly-spawned member simply HOLDS next to its own home spawn (renewable) until the rally
+            // gate releases, at which point the SOLO-travel-to-shared-rally phase (below) takes over.
+            ctx.squad_path = None;
+            for member in ctx.members.iter_mut() {
+                member.tick_orders = Some(TickOrders { movement: TickMovement::Hold, ..Default::default() });
             }
             if debug {
                 log::info!(
@@ -1226,11 +1222,69 @@ fn compute_squad_orders(
                 );
             }
         } else if !all_arrived {
-            // Ready (full roster present): advance the anchor toward the target room centre so the squad
-            // crosses cohesively (O1). The job's `MoveToRoom` follows `virtual_pos`.
-            if let Ok(centre) = RoomCoordinate::new(25) {
-                let dest = Position::new(centre, centre, target_room);
-                crate::military::formation::advance_squad_virtual_position(ctx, dest);
+            // ── MOVEMENT-STALL FIX (ADR 0028 K0): SOLO travel to a SHARED rally, THEN assault in formation.
+            //
+            // The squad spawned from MANY homes (multi-home spawn preserved) so its members are rooms apart.
+            // Crossing as a cross-room box FORMATION freezes the anchor for scattered members (no member ever
+            // meets the boundary cohesion quorum → virtual_pos stalls → each per-creep move becomes a
+            // self-target no-op → the live "milling at home, fatigue=0, d=(stalled)" bug). So DECOUPLE travel
+            // from formation:
+            //   1. SOLO TRAVEL — each member paths INDIVIDUALLY to ONE shared rally point near the target
+            //      (no box cohesion during transit; the robust fix that sidesteps the frozen anchor). The
+            //      shared rally is derived deterministically each tick (no stored field → no WFV bump).
+            //   2. GATHER QUORUM — once enough living members have converged at the shared rally (the UNIFIED
+            //      `rally::gather_quorum_met` kernel the sim also calls), transition to the assault.
+            //   3. ASSAULT — advance the box-formation anchor rally→target on the short final leg (cohesion
+            //      applies HERE, where the members are already massed). This is where the anchor box belongs.
+            let centroid = decision
+                .center
+                .or_else(|| member_views.iter().find_map(|m| m.pos))
+                .unwrap_or_else(|| Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), target_room));
+            // The assault target: a focus if we already see one, else the target-room centre.
+            let assault_target = decision
+                .focus
+                .map(|f| f.pos)
+                .unwrap_or_else(|| Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), target_room));
+            let rally = screeps_combat_decision::rally::shared_rally_point(centroid, assault_target, uncontested);
+
+            // Has a FIGHTER gathered at the rally? (No healer-only assault.) A fighter has melee or ranged.
+            let fighter_gathered = member_views.iter().any(|m| {
+                m.pos.map(|p| p.get_range_to(rally) <= screeps_combat_decision::rally::RALLY_GATHER_RADIUS).unwrap_or(false)
+                    && (m.has_ranged || m.melee_power > 0)
+            });
+            let gathered = screeps_combat_decision::rally::gather_quorum_met(
+                &member_positions,
+                rally,
+                requested_slots,
+                uncontested,
+                fighter_gathered,
+                screeps_combat_decision::rally::RALLY_GATHER_RADIUS,
+            );
+
+            if gathered {
+                // ASSAULT: members are massed at the rally → advance the box-formation anchor rally→target
+                // (cohesion on the short final leg). The job's `MoveToRoom`/`squad_has_anchor` follows it.
+                crate::military::formation::advance_squad_virtual_position(ctx, assault_target);
+            } else {
+                // SOLO TRAVEL: drop the formation anchor (no cross-room box cohesion during transit) and
+                // send each member INDIVIDUALLY to the shared rally. Setting per-member MoveTo orders here
+                // (after dropping squad_path) means apply_squad_decision's non-engaged arm leaves them
+                // intact (it only stamps Formation orders when a squad_path exists). Members converge solo;
+                // the gather quorum then flips this to the assault branch next tick.
+                ctx.squad_path = None;
+                for member in ctx.members.iter_mut() {
+                    member.tick_orders = Some(TickOrders {
+                        movement: TickMovement::MoveTo(rally),
+                        ..Default::default()
+                    });
+                }
+            }
+            if debug {
+                log::info!(
+                    "[Lifecycle] TRAVEL squad={:?} room={} rally={:?} gathered={} uncontested={} ({})",
+                    squad_entity, target_room, (rally.room_name(), rally.x().u8(), rally.y().u8()),
+                    gathered, uncontested, if gathered { "assault: anchor rally->target" } else { "solo travel to shared rally" }
+                );
             }
         } else if formation {
             // Arrived + FORMATION (siege, O2): keep the anchor and advance it toward the focus

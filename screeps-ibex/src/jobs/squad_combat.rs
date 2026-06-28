@@ -150,6 +150,31 @@ impl MoveToRoom {
         // Check for squad formation movement orders (keeps squad grouped during travel).
         let tick_orders = get_tick_orders(state_context.squad_entity, creep_entity, tick_context);
 
+        // MOVEMENT-STALL FIX (ADR 0028 K0): SOLO travel to the shared rally. The manager stamps a
+        // `MoveTo(rally)` order during the travel-to-rally phase (no formation anchor) — each member paths
+        // INDIVIDUALLY to the shared staging point (sidestepping the frozen cross-room formation anchor).
+        // Once the gather quorum fires the manager switches to a formation anchor + `Formation` orders
+        // (handled below). A member that has reached the rally still holds here (range 1) until then.
+        if let Some(ref orders) = tick_orders {
+            match orders.movement {
+                TickMovement::MoveTo(rally) => {
+                    tick_context
+                        .runtime_data
+                        .movement
+                        .move_to(creep_entity, rally)
+                        .range(1)
+                        .priority(MovementPriority::High);
+                    return None;
+                }
+                // HOLD (rally/forming phase): the rally gate has not released — hold at home next to the
+                // spawn (renewable) instead of marching solo to the target room. No movement this tick.
+                TickMovement::Hold => {
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
         if let Some(ref orders) = tick_orders {
             if matches!(orders.movement, TickMovement::Formation) {
                 if let Some(target_tile) = get_formation_target(state_context.squad_entity, creep_entity, tick_context, creep_pos) {
