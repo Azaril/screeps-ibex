@@ -32,12 +32,12 @@ Task #23 / #25.
   produce/withdraw + the stronghold→`Dismantle`→resume loop, which closes via war.rs's `has_known_core`
   rescout escalation). **v1 is COMPLETE** — every produced combat objective is on v1.
 
-**CURRENT:** none — **v1 COMPLETE**. **Next = v2** (the pending-slot Merge column in the auction).
+**CURRENT:** none — **v1 + the auction are COMPLETE.** The ADR 0032 auction is fully landed (v1.1
+per-squad EV → v1.2 global Hungarian matrix → **v2 the Merge→Bk transfer column**); reassign / claim /
+StayPut / Recycle / Merge are chosen in one global EV-optimal solve. The combat objective system is
+feature-complete; only the non-blocking polish below remains.
 
-**FUTURE (ordered):**
-- **v2** — transfer/merge (the pending-slot Merge column in the auction, ADR 0032).
-- **Auction v1.2** (ADR 0032) — the GLOBAL Hungarian matching over squads × {objectives + StayPut +
-  Merge + Recycle} (v1.1 is per-squad).
+**FUTURE (non-blocking polish):**
 - **SK rescout-margin hardening** (non-blocking follow-up) — `THREAT_DATA_MAX_AGE=500` <
   `STRONGHOLD_RESCOUT_INTERVAL=1500`: if intel fully expires before a re-scout lands, a known-stronghold SK
   room can drop out of `threat_rooms` (stopping both war.rs's >200t rescout AND offense eval). Backstopped

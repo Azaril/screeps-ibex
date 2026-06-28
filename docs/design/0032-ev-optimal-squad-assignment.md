@@ -5,7 +5,10 @@ the `pairing_p_win`/`pairing_ev`/`quantize_ev` EV-of-pairing helper + EV-positiv
 reassign/claim replacing greedy priority-then-proximity + enemy-creep-force pricing; super `98dc1e7`,
 decision `b848c26`). **v1.2 (the GLOBAL Hungarian matching) IMPLEMENTED 2026-06-28** (super `f12a711`,
 decision `2da289b`, eval `8543278`; `assignment.rs` replaces BOTH greedy loops with one deterministic
-global EV-maximizing solve; transient matrix → no WFV bump). **v2 (the Merge column) PROPOSED — NEXT.**
+global EV-maximizing solve; transient matrix → no WFV bump). **v2 (the Merge column) IMPLEMENTED
+2026-06-28** (super `a03ee91`, decision `43cc43e`, eval `9b26286`; transient matrix → no WFV bump).
+**AUCTION COMPLETE** — reassign / claim / StayPut / Recycle / **Merge** are chosen in one global EV-optimal
+solve per scan.
 Task #28 (P-AUCTION). Extends ADR 0027 (the reassignment / merge lifecycle + the objective queue),
 reuses ADR 0031 (the composition EV machinery), and makes concrete the cross-goal EV currency ADR
 0020 §11 deferred. The decision/identity changes live here; the doctrine/body specifics
@@ -23,8 +26,16 @@ cross-reference ADR 0026/0031.
   per-row `debug_assert` + a 6400-matrix brute-force cross-check proptest vs the exhaustive may-skip
   optimum (0 mismatches). Offline-proven: `hungarian_strictly_beats_greedy_on_total_ev` +
   `run_auction_flow` (`auction_global_strictly_beats_greedy_in_the_flow`).
-- **v2 (NEXT)** — the `Merge→Bk` column class (the ADR 0027 transfer/merge, EV-scored, Lanchester
-  pending-slot guard = column feasibility). Plugs into the v1.2 matrix as an additional column.
+- **v2 (DONE)** — the `Merge→Bk` column class (`ColumnKind::Merge`, appended so v1.2 indices are
+  byte-unchanged): cell EV = the receiver's **marginal P(win) lift** `[P(win|B.comp+donor.sheddable) −
+  P(win|B.comp)]·value_e(B.obj) − transfer_cost`; column-feasibility = the **Lanchester pending-slot
+  guard** (merge-eligible donor + role-matched open slot + no self-merge — the dilutive split is *never*
+  representable as a column). The mechanism (`apply_merges`): transfer the donor's role-matched member →
+  B's open slot (rebind squad-ref+room, spawn-slot dropped, B is the coordination unit), emptied donor
+  retires; the same-tick deferred-`exec_mut` vs Phase-B double-fill is guarded by the
+  `create_spawn_callback` `is_slot_filled` recheck (surplus recalled-to-recycle, never orphaned).
+  Offline-proven: `merge_is_picked_over_a_marginal_solo_reassign_and_the_dilutive_split_is_absent` +
+  `run_merge_flow`. No WFV bump.
 
 ## Problem
 
