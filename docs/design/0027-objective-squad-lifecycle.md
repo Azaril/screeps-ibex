@@ -5,6 +5,35 @@ reach/engage hardened end-to-end across a live soak (see "Update 2026-06-28" bel
 Companion to ADR 0008 (squad lifecycle) and ADR 0026 §9 (doctrine selection/sizing).
 Task #23 / #25.
 
+## Status ledger (2026-06-28)
+
+**COMPLETED (committed + deployed, offline-proven):**
+- v1 base (commitment lease / resolve-vs-give-up / zero-orphan recall) — WFV 18.
+- Reach/engage hardening: scout-fix, spawn-priority edge, efficient undefended sizing, quorum
+  rally + forming/travel lease, focus-on-arrival, fighter-first, shared-rally traverse,
+  `[SquadTrace]`, defender hold-station/no-churn (see "Update 2026-06-28").
+- **v1**: whole-squad **Reassign** (in-place rebind) + **threat-centric defense** (`Secure{threat_room}`
+  + asset-priority + leash; `Defend{owned}` demoted) + **live neighbour-chase** — WFV 20.
+- **P0 (sim-infra)**: `observe_neighbours` pure kernel + `run_v1_flow` full production chain +
+  `run_offense_flow` → the production/observation layer is sim-able.
+- **Auction v1.1** (ADR 0032): `value_e` energy-equivalent currency + EV-of-pairing + EV-positive-gated
+  **per-squad** reassign/claim (replaces greedy priority-then-proximity) + enemy-creep-force pricing.
+
+**CURRENT:** salvage migration **P1** — emit `Dismantle{breach-blocker}` from a producer + delete
+`SalvageMission`'s breach-dismantler fielding (reuses the existing `Dismantle` kind + the dormant
+`SiegeBreach` doctrine; lowest-risk combat migration; offline-provable via `run_offense_flow`).
+
+**FUTURE (ordered):**
+- Salvage **P2** — `ObjectiveKind::Declaim{room,controller}` + `SquadRole::Declaimer` + CLAIM body +
+  `DeclaimAttack` doctrine (WFV bump); **P3** — delete vestigial `DefendMission`.
+- **v2** — transfer/merge (the pending-slot Merge column in the auction, ADR 0032).
+- **Auction v1.2** (ADR 0032) — the GLOBAL Hungarian matching over squads × {objectives + StayPut +
+  Merge + Recycle} (v1.1 is per-squad).
+- **Owned-room intel-floor refinement** — `project_intel` floors owned-room danger by
+  `priority_implied_danger`, bypassing `value_e`'s dps=0 curve, so a harmless dps=0 scout in an OWNED
+  room still pulls a CRITICAL defender (neighbours already fixed via `observe_neighbours`). Floor only
+  on STALE/missing intel; use known-zero danger on fresh intel.
+
 ## Problem (Docker soak, 2026-06-27)
 
 A force-sized offense squad "did nothing / scattered" against level-0 invader cores.

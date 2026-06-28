@@ -1,9 +1,23 @@
 # ADR 0032 — EV-Optimal Squad↔Objective Assignment (P-AUCTION)
 
-Status: PROPOSED 2026-06-28. Task #28 (P-AUCTION). Extends ADR 0027 (the reassignment /
-merge lifecycle + the objective queue), reuses ADR 0031 (the composition EV machinery), and
-makes concrete the cross-goal EV currency ADR 0020 §11 deferred. The decision/identity changes
-live here; the doctrine/body specifics cross-reference ADR 0026/0031.
+Status: **v1.1 IMPLEMENTED + DEPLOYED 2026-06-28** (the `value_e` energy-equivalent currency +
+the `pairing_p_win`/`pairing_ev`/`quantize_ev` EV-of-pairing helper + EV-positive-gated **per-squad**
+reassign/claim replacing greedy priority-then-proximity + enemy-creep-force pricing; super `98dc1e7`,
+decision `b848c26`). **v1.2 (the GLOBAL Hungarian matching) + v2 (the Merge column) PROPOSED.**
+Task #28 (P-AUCTION). Extends ADR 0027 (the reassignment / merge lifecycle + the objective queue),
+reuses ADR 0031 (the composition EV machinery), and makes concrete the cross-goal EV currency ADR
+0020 §11 deferred. The decision/identity changes live here; the doctrine/body specifics
+cross-reference ADR 0026/0031.
+
+### Phase status
+- **v1.1 (DONE)** — per-squad EV scoring + the EV-positive gate (StayPut/Recycle alternatives) +
+  `value_e` + enemy-force pricing. Offline-proven (the kernel pairing/gate/quantize tests +
+  `objective_ev_prices_enemy_creeps_no_free_win`).
+- **v1.2 (FUTURE)** — replace the per-squad `best_by_ev` selection with the global Hungarian solve in
+  `assignment.rs` over the `N×K` matrix; subsumes Phase C. Sim: the greedy-suboptimal headline test +
+  `run_auction_flow`.
+- **v2 (FUTURE)** — the `Merge→Bk` column class (the ADR 0027 transfer/merge, EV-scored, Lanchester
+  pending-slot guard = column feasibility).
 
 ## Problem
 
