@@ -168,8 +168,9 @@ collapsed from 5–13 to ~1).
 ## Design — Squad reassignment (backlog #1 + #5) [PROPOSED 2026-06-28]
 
 Subsumes backlog **#1 (defense targeting)** + **#5 (reassign survivors)**, and removes the
-retire→re-field churn for non-loss terminals. Reviewed against the existing objective model
-for cohesion; lands in the same pure-kernel + thin-adapter seam as the rest of 0027.
+retire→re-field churn for non-loss terminals. Chosen shape: **threat-centric defense (Option B)**
++ **atomic whole-squad reassignment** (no splitting). Reviewed against the existing objective
+model for cohesion; lands in the same pure-kernel + thin-adapter seam as the rest of 0027.
 
 ### Problem
 A squad that **Resolves** (target cleared) or hits **ObjectiveGone** (target vanished)
@@ -196,25 +197,47 @@ the squad useful).
   `state`/`squad_path` → **clear + re-key the `SquadFormingProgress` clocks** under the new id
   (reuse the existing re-field cleanup block, then stamp fresh `forming_started_at`) →
   `set_deadline(new, now+COMMITMENT_BUDGET)`.
-- **No `WORLD_FORMAT_VERSION` bump** — only the already-serialized `objective_id` is rewritten;
-  `claimed_by` + `SquadFormingProgress` are ephemeral.
+- **Reassignment is ATOMIC + resets rally/lease/renew as ONE step.** A squad is one unit with one
+  rally, one commitment lease, one renew-state; `Reassign` resets all three together for the new
+  objective — re-gather at the new `shared_rally_point` (reset `engaged_once`/`focus_target`/
+  `squad_path`), reopen the `COMMITMENT_BUDGET` lease (`set_deadline`), and let the Phase-B renew
+  pass follow the new rally (renew only if it's near a spawn). No partial/per-creep reassignment
+  (see "Atomic squads" in Deferred/rejected) — atomicity is what keeps those three coordinated.
+- **WFV:** the in-place rebind only rewrites the already-serialized `objective_id` (no shape
+  change), so reassignment alone needs no bump — but a bump is acceptable where it buys a cleaner
+  model (we don't dodge it with ephemeral hacks). Option B's threat-centric `Defend` semantics +
+  any new producer fields land under one deliberate bump rather than contortions.
 
-### "Defending the wrong room" — reassignment **+** an intercept objective (not reassignment alone)
-Reassignment can only re-point a freed defender to objectives that **exist**; today `war.rs`
-emits only `Defend{owned_room}`, so when the owned room clears there is **nothing at the
-neighbor** to reassign to (the offense scan `continue`s on owned rooms — `war.rs:759`). So the
-producer must **also emit an INTERCEPT objective at the THREAT's room**: in the defense scan
-(`war.rs:201-431`), when an armed hostile roams a neighbor of an owned room (reuse
-`hostile_warrants_defender` + the existing border-visibility refresh), emit
-`ObjectiveKind::Secure { room: threat_room }` (or a dedicated `Intercept{room}`) at **HIGH**
-(below owned-`Defend` CRITICAL, above farms). Flow: threat in owned room → `Defend{owned}`
-fielded → owned cleared (`Resolved`) **or** threat steps to a neighbor (`Defend{owned}`
-TTL-lapses → `ObjectiveGone`) → Phase A `Reassign` → defender re-points to `Secure{neighbor}`
-→ intercepts. The bounded garrison `holding_station` remains the fallback when no intercept
-objective exists. **Rejected: objective-follows-threat** (mutating a `Defend`'s `room` breaks
-the queue's `kind == identity` upsert/claim invariant — `objective_queue.rs:225-260`).
+### "Defending the wrong room" — threat-centric defense (Option B, chosen)
+Reassignment can only re-point a freed defender to objectives that **exist**, and today `war.rs`
+emits only `Defend{owned_room}` (the offense scan `continue`s on owned rooms — `war.rs:759`), so a
+freed defender has nothing at the neighbor to go to. **Make defense threat-centric:** the defense
+scan emits the clear objective at the **threat's CURRENT room** as `ObjectiveKind::Secure{room}`.
+**No new `Intercept` kind** — an intercept is mechanically *"go to room X and clear its hostiles"*,
+which is exactly `Secure`; the only differences (priority, TTL, doctrine, HUD label) ride existing
+fields, not a parallel variant. When the threat is in an owned room the `Secure` objective sits
+there (today's defend behavior); when it roams a neighbor the objective **moves with it** (re-emitted
+each ~2-tick scan at the threat's room; the stale one TTL-lapses), and the squad **reassigns to
+follow** (`ObjectiveGone` on the old → `Reassign` to the new). Two policy guards: an **asset-priority
+boost** when the threat is in/adjacent to a valuable owned room (base defense outranks chasing a
+distant roamer), and a **leash** so a squad doesn't over-extend away from its base. This **deletes
+the empty-room-garrison as the default** — `Defend{owned}` survives only as an *optional preemptive
+rampart-hold* for high-value bases, and `holding_station` becomes the bounded fallback, not the norm.
+**Rejected: objective-follows-threat** (mutating one objective's `room` breaks the queue's
+`kind == identity` upsert/claim invariant — `objective_queue.rs:225-260`); the producer re-emits per
+the threat's room and reassignment + TTL handle the hand-off instead.
 
 ### Deferred / rejected
+- **Squad SPLITTING / partial (per-creep) reassignment — REJECTED; squads stay ATOMIC.** Splitting
+  is usually a Lanchester *loss* (two half-squads are each far weaker than half-strength → a split
+  force loses fights a massed one wins; it helps only vs *individually-trivial* targets, where
+  sequential whole-squad reassignment is nearly as good and far simpler). And it fragments exactly
+  the things that must stay coordinated — rally, commitment lease, renew-state, ECS membership —
+  into per-sub-squad accounting (which sub-squad owns a creep's renewal/rally/lease + a
+  generation-safe member transfer). Atomic whole-squad reassignment keeps all of those as one unit.
+  *If cross-squad creep reuse is ever wanted*, the clean form is a **survivor-reinforcement pool**
+  (a cleared squad's survivors return to a reserve and reinforce a *forming* squad near home) — it
+  never peels apart an in-flight squad; NOT mid-flight splitting.
 - **Preemption** (reassign to a higher-EV target mid-flight) — deferred (thrash; the
   `assault_latched`/`engaged_once` latches exist precisely to stop un-committing). Behind a flag
   if ever pursued.
@@ -240,6 +263,7 @@ holds/recycles). Plus pure-kernel unit tests: resolved/gone→`Reassign` with co
 ### Seams
 `lifecycle.rs` (new action + snapshot input + tests) · `squad_manager.rs` (Phase-A rebind +
 re-key) · `objective_queue.rs` (capability-aware selection helper over
-`best_unclaimed_near_excluding`) · `war.rs` (emit the intercept objective — the "wrong room"
-half) · eval harness (the churn cases). Cross-ref ADR 0026 (the `war.rs` intercept targeting is
-a doctrine/targeting change).
+`best_unclaimed_near_excluding`) · `war.rs` (threat-centric defense: emit `Secure{threat_room}` +
+asset-priority boost + leash, demote `Defend{owned}` to an optional preemptive hold — the "wrong
+room" half) · eval harness (the churn cases). Cross-ref ADR 0026 (threat-centric targeting is a
+doctrine/targeting change).
