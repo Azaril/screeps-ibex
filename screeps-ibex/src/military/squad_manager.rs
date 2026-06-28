@@ -109,15 +109,21 @@ fn room_distance(a: RoomName, b: RoomName) -> u32 {
 /// starved below economy. The spawnsystem head-of-line break (`spawnsystem.rs`: a request with
 /// `body_cost > available_energy` but `<= energy_capacity` → `break`) reserves each idle home's energy for
 /// the highest-priority pending request and spawns nothing below it that tick. MEDIUM offense slots
-/// therefore sat permanently last behind the colony's constant economy demand and rosters never completed
-/// (observed dead-stuck at 3/5 for thousands of ticks despite idle in-range spawns). MEDIUM+ objectives
-/// (active offense/defense) map to HIGH so their slots form in the gaps between CRITICAL miners and
-/// transient-HIGH haulers without preempting energy income; only LOW farms stay at MEDIUM. The
-/// `MAX_FORMING_SQUADS` cap bounds how many spawn at HIGH at once. (Defense objectives upsert at
-/// `OBJECTIVE_PRIORITY_HIGH`; invader-core offense at `..._MEDIUM`; farms at `..._LOW`.)
+/// previously mapped to `SPAWN_PRIORITY_HIGH` (75) — TIED with the economy bulk (haulers / upgraders /
+/// claim / secondary-mining all 75) and sorted LAST in-tier (`RunMissionSystem` enqueues economy before
+/// `SquadManagerSystem` enqueues squads), so they still sat permanently last behind the colony's constant
+/// economy demand and rosters never completed (observed dead-stuck at 3/5, 1/2 for thousands of ticks
+/// despite idle in-range spawns). FIX 2: MEDIUM+ objectives (active offense/defense) now map to the
+/// dedicated `SPAWN_PRIORITY_COMBAT_FORMING` band (85) — STRICTLY above the HIGH economy bulk so forming
+/// slots win the within-tier ordering AND the energy-banking race, but STRICTLY below the CRITICAL miners
+/// (100) so energy INCOME is never preempted. Only LOW farms stay at MEDIUM. BOUNDED: the
+/// `MAX_FORMING_SQUADS` (=2) cap limits how many squads' slots sit in this band at once, and
+/// `economy::can_afford_military` already declined unaffordable squads, so it cannot crater the economy.
+/// (Defense objectives upsert at `OBJECTIVE_PRIORITY_HIGH`; invader-core offense at `..._MEDIUM`; farms at
+/// `..._LOW`.)
 fn spawn_priority_for(objective_priority: f32) -> f32 {
     if objective_priority >= OBJECTIVE_PRIORITY_MEDIUM {
-        SPAWN_PRIORITY_HIGH
+        SPAWN_PRIORITY_COMBAT_FORMING
     } else {
         SPAWN_PRIORITY_MEDIUM
     }
@@ -1180,18 +1186,30 @@ mod tests {
     #[test]
     fn forming_combat_squads_spawn_above_economy_bulk() {
         use crate::military::objective_queue::{OBJECTIVE_PRIORITY_CRITICAL, OBJECTIVE_PRIORITY_HIGH, OBJECTIVE_PRIORITY_LOW};
-        // Active offense (a MEDIUM objective, e.g. an invader core) MUST map to HIGH spawn priority, or the
-        // spawnsystem head-of-line break strands its forming slots permanently below the economy bulk and
-        // the roster never completes (the dead-stall root). Defense (HIGH) and any CRITICAL stay HIGH.
-        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_CRITICAL), SPAWN_PRIORITY_HIGH);
-        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_HIGH), SPAWN_PRIORITY_HIGH);
+        // FIX 2: active offense (a MEDIUM objective, e.g. an invader core) MUST map to the dedicated
+        // COMBAT_FORMING band — STRICTLY between the HIGH economy bulk and the CRITICAL miners — or the
+        // spawnsystem head-of-line break strands its forming slots last-in-tier behind the economy bulk and
+        // the roster never completes (the dead-stall root). Defense (HIGH) and any CRITICAL map there too.
+        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_CRITICAL), SPAWN_PRIORITY_COMBAT_FORMING);
+        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_HIGH), SPAWN_PRIORITY_COMBAT_FORMING);
         assert_eq!(
             spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM),
-            SPAWN_PRIORITY_HIGH,
-            "MEDIUM offense must form at HIGH, not be starved at MEDIUM"
+            SPAWN_PRIORITY_COMBAT_FORMING,
+            "MEDIUM offense must form in the COMBAT_FORMING band, not be tied with / starved below the economy bulk"
         );
         // Low-priority farms stay below combat so they never preempt economy.
         assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_LOW), SPAWN_PRIORITY_MEDIUM);
+
+        // The band is STRICTLY between the HIGH economy bulk and the CRITICAL miners: forming squad slots
+        // win the within-tier race against economy WITHOUT preempting energy income (miners stay first).
+        assert!(
+            SPAWN_PRIORITY_COMBAT_FORMING > SPAWN_PRIORITY_HIGH,
+            "forming squad slots must outrank the HIGH economy bulk (haulers/upgraders/claim/mining)"
+        );
+        assert!(
+            SPAWN_PRIORITY_COMBAT_FORMING < SPAWN_PRIORITY_CRITICAL,
+            "forming squad slots must NOT preempt CRITICAL miners (income protected)"
+        );
     }
 
     #[test]

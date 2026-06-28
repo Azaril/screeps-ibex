@@ -20,6 +20,19 @@ const CREEP_SPAWN_TIME: u32 = 3;
 const RENEW_MIN_ROOM_ENERGY: u32 = 10_000;
 
 pub const SPAWN_PRIORITY_CRITICAL: f32 = 100.0;
+/// FIX 2 (rally-stall): a band STRICTLY above the HIGH economy bulk (haulers / upgraders / claim /
+/// secondary-mining all at HIGH = 75) but STRICTLY below the CRITICAL miners (100), reserved for the
+/// slots of a FORMING active offense/defense combat squad. The spawnsystem head-of-line break
+/// (`process_room_spawns`: a request whose `body_cost > available_energy` but `<= energy_capacity`
+/// reserves the room's energy and `break`s the rest of the queue this tick) means a request TIED with
+/// the economy bulk but sorted last in-tier (squad slots, because `RunMissionSystem` enqueues economy
+/// before `SquadManagerSystem` enqueues squads) can never bank energy ahead of the colony's constant
+/// economy demand — rosters dead-stall (observed 3/5, 1/2 for thousands of ticks). Placing forming
+/// squad slots in this band lets them win the within-tier ordering AND the energy-banking race against
+/// economy WITHOUT preempting energy income (miners stay CRITICAL = first). BOUNDED: only the slots of
+/// the at-most-`MAX_FORMING_SQUADS` (=2) forming squads spawn here, and `economy::can_afford_military`
+/// already declined unaffordable squads — so it cannot crater income.
+pub const SPAWN_PRIORITY_COMBAT_FORMING: f32 = 85.0;
 pub const SPAWN_PRIORITY_HIGH: f32 = 75.0;
 pub const SPAWN_PRIORITY_MEDIUM: f32 = 50.0;
 pub const SPAWN_PRIORITY_LOW: f32 = 25.0;
