@@ -18,14 +18,17 @@ Task #23 / #25.
   `run_offense_flow` → the production/observation layer is sim-able.
 - **Auction v1.1** (ADR 0032): `value_e` energy-equivalent currency + EV-of-pairing + EV-positive-gated
   **per-squad** reassign/claim (replaces greedy priority-then-proximity) + enemy-creep-force pricing.
+- **Salvage P1** (breach→`Dismantle` producer; `SiegeBreach`'s first live producer; rover
+  `room_grid_dijkstra_to_edge` primitive) + **Salvage P2** (declaim→`ObjectiveKind::Declaim` +
+  `SquadRole::Declaimer` + CLAIM body + `DeclaimAttack` doctrine + the `declaiming` lease-hold that
+  persists across the 1000-tick `attackController` cadence) — **WFV 20→21**. `SalvageMission` is now a
+  thin v1 producer; only teardown dismantlers + raiders remain mission-owned (raiders = economy by design;
+  teardown migration is P3-adjacent).
 
-**CURRENT:** salvage migration **P1** — emit `Dismantle{breach-blocker}` from a producer + delete
-`SalvageMission`'s breach-dismantler fielding (reuses the existing `Dismantle` kind + the dormant
-`SiegeBreach` doctrine; lowest-risk combat migration; offline-provable via `run_offense_flow`).
+**CURRENT:** salvage migration **P3** — delete the vestigial `DefendMission` (its `squads` vec is always
+empty + it spawns nothing; only `is_room_safe()` is consumed → make that a pure predicate/kernel). LOW risk.
 
 **FUTURE (ordered):**
-- Salvage **P2** — `ObjectiveKind::Declaim{room,controller}` + `SquadRole::Declaimer` + CLAIM body +
-  `DeclaimAttack` doctrine (WFV bump); **P3** — delete vestigial `DefendMission`.
 - **v2** — transfer/merge (the pending-slot Merge column in the auction, ADR 0032).
 - **Auction v1.2** (ADR 0032) — the GLOBAL Hungarian matching over squads × {objectives + StayPut +
   Merge + Recycle} (v1.1 is per-squad).
