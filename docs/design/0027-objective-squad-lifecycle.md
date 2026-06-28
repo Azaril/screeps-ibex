@@ -164,3 +164,82 @@ collapsed from 5–13 to ~1).
    P0/P1 landed inert).
 10. `member_energy>3000` PREFERRED-clamp lift; budget-free `emit_requirement` (retire
     `optimizer_ceiling_budget`).
+
+## Design — Squad reassignment (backlog #1 + #5) [PROPOSED 2026-06-28]
+
+Subsumes backlog **#1 (defense targeting)** + **#5 (reassign survivors)**, and removes the
+retire→re-field churn for non-loss terminals. Reviewed against the existing objective model
+for cohesion; lands in the same pure-kernel + thin-adapter seam as the rest of 0027.
+
+### Problem
+A squad that **Resolves** (target cleared) or hits **ObjectiveGone** (target vanished)
+retires → members recycle or a fresh squad re-fields next tick (Generation churn), wasting
+the invested spawn energy. And a garrisoning defender holds its now-clear owned room while
+the threat roams a neighbor (the `holding_station` fix *bounds* the waste but doesn't make
+the squad useful).
+
+### Decision — reassign-on-terminal, in-place rebind, composition-gated
+- **Kernel** (`screeps-combat-decision/src/lifecycle.rs`): new `ReconcileAction::Reassign {
+  withdraw_old: bool }`, returned in place of `Retire{Resolved}` / `Retire{ObjectiveGone}`
+  **iff** a manager-computed `reassign_available: bool` (a new `ReconcileSnapshot` input, fed
+  in exactly like `holding_station` so the kernel stays pure/deterministic) is true. Resolved
+  → `withdraw_old=true` (record the clean win); ObjectiveGone → `withdraw_old=false`.
+  **`Wiped`/`Duplicate`/`GaveUp` still retire** (no members / unwinnable-backoff — don't chain
+  a tired squad straight into another fight).
+- **Manager** (`squad_manager.rs` Phase A): compute `reassign_available` + the target via a new
+  `best_reassignment` = `best_unclaimed_near_excluding(exclude=[current_id])` + a **capability
+  gate** (v1: same broad class — defender→`Defend`/`Secure`, offense→offense; full ADR-0031
+  capability match later). On `Reassign`, **rebind in place — no `retire_squad`/`field_new_squad`,
+  no Generation churn, bodies reused**: release/withdraw old claim → `claim(new)` (and add it to
+  the Phase-A `covered` set so a second reassigner can't double-claim) → rewrite
+  `SquadContext.objective_id`+`target` → reset `engaged_once=false`/`focus_target=None`/
+  `state`/`squad_path` → **clear + re-key the `SquadFormingProgress` clocks** under the new id
+  (reuse the existing re-field cleanup block, then stamp fresh `forming_started_at`) →
+  `set_deadline(new, now+COMMITMENT_BUDGET)`.
+- **No `WORLD_FORMAT_VERSION` bump** — only the already-serialized `objective_id` is rewritten;
+  `claimed_by` + `SquadFormingProgress` are ephemeral.
+
+### "Defending the wrong room" — reassignment **+** an intercept objective (not reassignment alone)
+Reassignment can only re-point a freed defender to objectives that **exist**; today `war.rs`
+emits only `Defend{owned_room}`, so when the owned room clears there is **nothing at the
+neighbor** to reassign to (the offense scan `continue`s on owned rooms — `war.rs:759`). So the
+producer must **also emit an INTERCEPT objective at the THREAT's room**: in the defense scan
+(`war.rs:201-431`), when an armed hostile roams a neighbor of an owned room (reuse
+`hostile_warrants_defender` + the existing border-visibility refresh), emit
+`ObjectiveKind::Secure { room: threat_room }` (or a dedicated `Intercept{room}`) at **HIGH**
+(below owned-`Defend` CRITICAL, above farms). Flow: threat in owned room → `Defend{owned}`
+fielded → owned cleared (`Resolved`) **or** threat steps to a neighbor (`Defend{owned}`
+TTL-lapses → `ObjectiveGone`) → Phase A `Reassign` → defender re-points to `Secure{neighbor}`
+→ intercepts. The bounded garrison `holding_station` remains the fallback when no intercept
+objective exists. **Rejected: objective-follows-threat** (mutating a `Defend`'s `room` breaks
+the queue's `kind == identity` upsert/claim invariant — `objective_queue.rs:225-260`).
+
+### Deferred / rejected
+- **Preemption** (reassign to a higher-EV target mid-flight) — deferred (thrash; the
+  `assault_latched`/`engaged_once` latches exist precisely to stop un-committing). Behind a flag
+  if ever pursued.
+- **GaveUp-reassign** — excluded for v1 (the squad just `mark_unwinnable`'d its room).
+
+### Cohesion risks → mitigations
+claim race → reassign-claim immediately + add to `covered`; lease/Generation accounting →
+reuse the re-field cleanup + re-key the per-id clocks; ping-pong → terminal-only + `exclude=
+[old_id]`; composition mismatch (defender onto an uncrackable core → `IN_ROOM_NO_FOCUS` stall →
+poisons the room unwinnable) → the capability gate; unwinnable poisoning → `best_unclaimed_near`
+already skips backoff rooms; determinism → selection is `max_by` over a `Vec` + the capability
+gate is a pure fn over sorted roles (no `HashMap`).
+
+### Offline repro / tests (extend `screeps-combat-eval/src/harness/lifecycle.rs`)
+New `ChurnOutcome::Reassigned { from_gen, to, reuse_tick }` + cases over the shared kernel:
+(1) reassign-on-resolve (assert **same generation** = reuse, vs churn's climbing generations);
+(2) reassign-on-expire (+ a no-sibling control that still falls back to retire — reassign is
+strictly additive); (3) defender-reassigns-to-threat (a neighbor `Secure` appears on owned
+`ObjectiveGone` → `Reassigned{neighbor}` not `Garrisoned`; + a capability-mismatch control that
+holds/recycles). Plus pure-kernel unit tests: resolved/gone→`Reassign` with correct
+`withdraw_old`; wiped/gaveup never reassign; `reassign_available=false`→existing retire.
+
+### Seams
+`lifecycle.rs` (new action + snapshot input + tests) · `squad_manager.rs` (Phase-A rebind +
+re-key) · `objective_queue.rs` (capability-aware selection helper over
+`best_unclaimed_near_excluding`) · `war.rs` (emit the intercept objective — the "wrong room"
+half) · eval harness (the churn cases). Cross-ref ADR 0026 (the `war.rs` intercept targeting is
+a doctrine/targeting change).
