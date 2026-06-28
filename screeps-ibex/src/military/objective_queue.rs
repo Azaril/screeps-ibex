@@ -390,6 +390,35 @@ impl CombatObjectiveQueue {
             .map(|o| o.id)
     }
 
+    /// ADR 0027 v1 (whole-squad REASSIGN): the best unclaimed objective COMPATIBLE with `compatible`, near
+    /// `home`, excluding `exclude` (the squad's current objective). The capability gate (`compatible`, a
+    /// pure predicate over the objective's `ObjectiveKind`) keeps the kernel's `best_unclaimed_near_excluding`
+    /// selection while letting a lower-priority but COMPATIBLE objective win over a higher-priority
+    /// incompatible one (so a freed defender reassigns to another defense objective, never onto an offense
+    /// core it can't crack). Same priority-then-proximity ordering + backoff/claim skips; deterministic
+    /// (a `max_by` over a `Vec`, the predicate is a pure fn — no `HashMap`).
+    pub fn best_reassignment_near<F>(&self, home: Option<RoomName>, now: u32, exclude: &[ObjectiveId], compatible: F) -> Option<ObjectiveId>
+    where
+        F: Fn(&ObjectiveKind) -> bool,
+    {
+        self.objectives
+            .iter()
+            .filter(|o| !self.is_claimed(o.id))
+            .filter(|o| !exclude.contains(&o.id))
+            .filter(|o| !self.is_unwinnable_now(o.kind.room(), now))
+            .filter(|o| compatible(&o.kind))
+            .max_by(|a, b| {
+                a.priority
+                    .partial_cmp(&b.priority)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| match home {
+                        Some(h) => room_distance(h, b.kind.room()).cmp(&room_distance(h, a.kind.room())),
+                        None => std::cmp::Ordering::Equal,
+                    })
+            })
+            .map(|o| o.id)
+    }
+
     /// Whether there is any unclaimed, non-backoff objective at all.
     pub fn has_unclaimed(&self, now: u32) -> bool {
         self.objectives
@@ -745,6 +774,29 @@ mod tests {
         assert!(!q2.is_claimed(id));
         // The id counter survives so future mints never collide with loaded ids.
         assert_eq!(q2.next_id, 1);
+    }
+
+    /// ADR 0027 v1: the capability-aware reassignment selector excludes the current id, skips claimed +
+    /// backoff rooms, and applies the capability predicate — so a freed defender reassigns only to a
+    /// COMPATIBLE objective, even when a higher-priority incompatible one exists.
+    #[test]
+    fn best_reassignment_excludes_current_and_honors_capability() {
+        use specs::WorldExt;
+        let mut world = World::new();
+        let other = world.create_entity().build();
+        let mut q = CombatObjectiveQueue::default();
+        // The squad's current Secure (defense); a sibling Secure (defense); a higher-prio Harass (offense).
+        let cur = q.request(ObjectiveRequest::new(ObjectiveKind::Secure { room: room("W1N1") }, 50.0, ForceRequirement::default()), 1000);
+        let sibling = q.request(ObjectiveRequest::new(ObjectiveKind::Secure { room: room("W2N2") }, 40.0, ForceRequirement::default()), 1000);
+        let offense = q.request(ObjectiveRequest::new(ObjectiveKind::Harass { room: room("W3N3") }, 90.0, ForceRequirement::default()), 1000);
+
+        let is_defense = |k: &ObjectiveKind| matches!(k, ObjectiveKind::Defend { .. } | ObjectiveKind::Secure { .. });
+        // Excludes the current; the higher-prio Harass is incompatible → the defense sibling wins.
+        assert_eq!(q.best_reassignment_near(None, 1000, &[cur], is_defense), Some(sibling));
+        // A claimed sibling is skipped (back to the offense path picks nothing compatible → None).
+        q.claim(sibling, other);
+        assert_eq!(q.best_reassignment_near(None, 1000, &[cur], is_defense), None);
+        let _ = offense;
     }
 
     #[test]

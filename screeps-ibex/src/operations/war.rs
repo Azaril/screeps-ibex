@@ -371,8 +371,46 @@ impl WarOperation {
         // (`owner().mine() && visible()`) preserves the ADR 0017 §13 ownership-
         // subordinate invariant — a lost room drops out, its TTL lapses, the squad
         // retires. (Replaces the removed squad-less `SquadDefenseMission`.)
+        // ── ADR 0027 v1 (threat-centric defense, "Defending the wrong room"): run the PURE
+        //    `war_decision::emit_defense` kernel over (owned rooms, observed threats) to decide the
+        //    objective ROOM + PRIORITY. The kernel emits `Secure{threat_room}` at the threat's CURRENT room
+        //    (the intercept point) with the asset-priority boost (in/adjacent owned → CRITICAL/HIGH) and the
+        //    over-extension leash (a far roamer is not chased). war.rs is the THIN adapter: gather the
+        //    threats (the owned-room DefenseNeeds — the rooms where hostiles were observed), call the kernel,
+        //    and request the resulting `Secure` objectives. `Defend{owned}` is DEMOTED to an optional
+        //    preemptive rampart-hold (below). The squad reassigns to follow the threat as it roams
+        //    (`ObjectiveGone` on the stale Secure → `Reassign` to the new — squad_manager Phase A). ──
+        let owned_rooms_for_kernel: Vec<screeps_combat_decision::war_decision::OwnedRoom<RoomName>> = home_rooms
+            .iter()
+            .filter_map(|&e| system_data.room_data.get(e))
+            .map(|rd| {
+                // Value = the owned room's energy capacity (a proxy for RCL/asset weight) so a bigger base
+                // outranks a marginal outpost for the asset-priority boost.
+                let value = game::rooms().get(rd.name).map(|r| r.energy_capacity_available() as f32).unwrap_or(1.0);
+                screeps_combat_decision::war_decision::OwnedRoom { room: rd.name, value }
+            })
+            .collect();
+        // The observed threats (the rooms where hostiles were seen this scan). `danger` = estimated DPS so
+        // two equal-priority threats break ties by who is more dangerous.
+        let threats_for_kernel: Vec<screeps_combat_decision::war_decision::Threat<RoomName>> = rooms_needing_defense
+            .iter()
+            .filter_map(|need| system_data.room_data.get(need.room_entity).map(|rd| (rd.name, need.estimated_dps)))
+            .map(|(room, dps)| screeps_combat_decision::war_decision::Threat { room, danger: dps })
+            .collect();
+        // The kernel's per-room verdict (Secure room → priority). A threat beyond the leash is absent here
+        // (not chased). Deterministic ordering; we index it by room below.
+        let defense_emissions = screeps_combat_decision::war_decision::emit_defense(
+            &owned_rooms_for_kernel,
+            &threats_for_kernel,
+            screeps_combat_decision::war_decision::DefensePolicy::default(),
+            |a: RoomName, b: RoomName| {
+                let d = a - b;
+                d.0.unsigned_abs().max(d.1.unsigned_abs())
+            },
+        );
+
         let defense_docs = defense_doctrines();
-        for need in rooms_needing_defense {
+        for need in &rooms_needing_defense {
             let room_name = match system_data.room_data.get(need.room_entity) {
                 Some(rd) => rd.name,
                 None => continue,
@@ -409,19 +447,29 @@ impl WarOperation {
             let Some(composition) = decide_doctrine(&ctx, &defense_docs).and_then(|d| screeps_combat_decision::doctrine::plan_engagement(d, &ctx, None).composition) else {
                 continue;
             };
+            // ADR 0027 v1: emit `Secure{threat_room}` at the kernel-decided priority (the asset-priority
+            // boost already folded in). The threat's room IS `room_name` here (the owned room where hostiles
+            // were observed); when the threat roams a neighbour the next scan re-emits at the neighbour's
+            // room (if visible) and the squad reassigns to follow. A threat beyond the over-extension leash
+            // is absent from `defense_emissions` (not chased) → no objective. Fall back to CRITICAL if the
+            // room is somehow absent (it shouldn't be — the kernel saw the same threat list).
+            let priority = defense_emissions
+                .iter()
+                .find(|e| e.room == room_name)
+                .map(|e| e.priority)
+                .unwrap_or(OBJECTIVE_PRIORITY_CRITICAL);
             info!(
-                "[War] Defend objective for owned room {} (dps={:.0}, heal={:.0}, count={})",
-                room_name, need.estimated_dps, need.estimated_heal, need.hostile_count
+                "[War] Secure objective for threat room {} prio={:.0} (dps={:.0}, heal={:.0}, count={})",
+                room_name, priority, need.estimated_dps, need.estimated_heal, need.hostile_count
             );
-            // Owned-room defense is CRITICAL — our base is under attack. Under the
-            // manager's concurrency cap it must out-rank operator defend-flags (HIGH)
-            // and remote-invader cleanup (MEDIUM) so a far owned room is never starved
-            // by a lower-value defense (the equal-HIGH-priority starvation the review
-            // flagged when all three contexts funnel through one capped manager).
+            // Threat-centric defense (ADR 0027 Option B): the clear objective sits at the THREAT's room as a
+            // `Secure` (an intercept is mechanically "go to room X + clear its hostiles" = Secure). The
+            // asset-priority boost already ranks an in-base CRITICAL above an adjacent HIGH above a leashed
+            // MEDIUM, so a far owned room under attack still out-prioritises a roamer.
             system_data.combat_objective_queue.request(
                 ObjectiveRequest::new(
-                    ObjectiveKind::Defend { room: room_name },
-                    OBJECTIVE_PRIORITY_CRITICAL,
+                    ObjectiveKind::Secure { room: room_name },
+                    priority,
                     ForceRequirement::single(composition),
                 )
                 .owner(ObjectiveOwner::Defense)

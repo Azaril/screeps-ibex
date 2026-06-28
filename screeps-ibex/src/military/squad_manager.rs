@@ -263,6 +263,29 @@ fn classify_objective(formation: bool, has_structures: bool, has_live_hostiles: 
     }
 }
 
+/// ADR 0027 v1 capability class — the BROAD class a squad/objective belongs to, for the reassignment
+/// capability gate (v1: same broad class only; full ADR-0031 capability match later). A defender
+/// (`Defend`/`Secure` — the threat-centric defense arm) may reassign to another defense objective; an
+/// offense objective (`Harass`/`Dismantle`/`Farm`/`Escort`) only to another offense objective. This stops a
+/// freed defender being rebound onto an uncrackable core (the `IN_ROOM_NO_FOCUS` stall the ADR's cohesion
+/// risks call out, line 277). Pure + deterministic (a `match`, no `HashMap`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CapabilityClass {
+    Defense,
+    Offense,
+}
+
+fn capability_class(kind: &ObjectiveKind) -> CapabilityClass {
+    match kind {
+        // The threat-centric defense arm (ADR 0027 Option B): `Secure` is how defense is now emitted (at the
+        // threat's room), alongside the optional preemptive `Defend` hold.
+        ObjectiveKind::Defend { .. } | ObjectiveKind::Secure { .. } => CapabilityClass::Defense,
+        ObjectiveKind::Harass { .. } | ObjectiveKind::Dismantle { .. } | ObjectiveKind::Farm { .. } | ObjectiveKind::Escort { .. } => {
+            CapabilityClass::Offense
+        }
+    }
+}
+
 /// Map an objective to the squad's target + the room its members travel to.
 fn objective_target(kind: &ObjectiveKind) -> (SquadTarget, RoomName) {
     match kind {
@@ -395,13 +418,16 @@ impl<'a> System<'a> for SquadManagerSystem {
 
         for (squad_entity, obj_id) in managed {
             // Snapshot the objective once (all Copy) so the queue mutations below don't fight a borrow.
-            let obj_info =
-                data.objective_queue.get(obj_id).map(|o| (o.kind.room(), matches!(o.kind, ObjectiveKind::Defend { .. }), o.deadline));
+            let obj_info = data
+                .objective_queue
+                .get(obj_id)
+                .map(|o| (o.kind.room(), matches!(o.kind, ObjectiveKind::Defend { .. }), o.deadline, capability_class(&o.kind)));
             let objective_gone = obj_info.is_none();
-            let squad_room = obj_info.map(|(r, _, _)| r);
-            let is_defend = obj_info.map(|(_, d, _)| d).unwrap_or(false);
+            let squad_room = obj_info.map(|(r, _, _, _)| r);
+            let is_defend = obj_info.map(|(_, d, _, _)| d).unwrap_or(false);
+            let cur_class = obj_info.map(|(_, _, _, c)| c);
             // P-OBJ #23: has the commitment lease lapsed (the squad failed to make progress in time)?
-            let deadline_lapsed = obj_info.and_then(|(_, _, dl)| dl).is_some_and(|d| now >= d);
+            let deadline_lapsed = obj_info.and_then(|(_, _, dl, _)| dl).is_some_and(|d| now >= d);
 
             // Snapshot the squad facts (Copy) in one borrow.
             let (wiped, has_focus, engaged_once, in_target_room, has_members, present_count, target_dist) = data
@@ -483,6 +509,19 @@ impl<'a> System<'a> for SquadManagerSystem {
                 data.forming_progress.last_target_dist.insert(obj_id, d);
             }
 
+            // ── ADR 0027 v1 (whole-squad REASSIGN): compute whether a COMPATIBLE sibling objective is
+            //    available for this squad to take over on a non-loss terminal (Resolved/ObjectiveGone). Fed
+            //    into the snapshot exactly like `holding_station` so the kernel stays pure. The capability
+            //    gate (`capability_class`) keeps a freed defender reassigning only to defense objectives and
+            //    an offense squad only to offense. `best_reassignment` excludes the current id (no ping-pong)
+            //    and skips claimed/backoff rooms; anchored on the nearest home for proximity. ──
+            let anchor = homes.first().map(|h| h.name);
+            let best_reassignment = cur_class.and_then(|class| {
+                data.objective_queue
+                    .best_reassignment_near(anchor, now, &[obj_id], |kind| capability_class(kind) == class)
+            });
+            let reassign_available = best_reassignment.is_some();
+
             // P-OBJ #23 / ADR 0027: the pure reconcile kernel decides retire-vs-keep (unit-tested offline
             // in `screeps_combat_decision::lifecycle`). The manager only builds the snapshot and applies the
             // action — single source of truth, shared with the offline lifecycle harness (no drift).
@@ -507,6 +546,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 // its lease while the Defend objective persists, instead of GaveUp+refield (Gen churn). The
                 // owned-room threat roams a NEIGHBOUR room, so the owned room itself shows no in-room focus.
                 holding_station: is_defend && in_target_room && !has_focus,
+                reassign_available,
             };
             let action = lifecycle::reconcile(snapshot);
             if let lifecycle::ReconcileAction::Retire { reason, withdraw, mark_unwinnable } = action {
@@ -520,7 +560,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                     // travel-budget vs no-progress) without a deploy-observe cycle. Mirrors the kernel's
                     // refresh conditions (we don't re-derive the verdict — that's the kernel's job — we only
                     // attribute it). `deadline` is the absolute lease tick; None ⇒ never stamped.
-                    let deadline = obj_info.and_then(|(_, _, dl)| dl);
+                    let deadline = obj_info.and_then(|(_, _, dl, _)| dl);
                     let forming_exhausted = forming && !forming_budget_remaining;
                     let travel_exhausted = traveling && !travel_budget_remaining;
                     let forming_no_progress = forming && forming_budget_remaining && !forming_progress;
@@ -557,6 +597,66 @@ impl<'a> System<'a> for SquadManagerSystem {
                 data.forming_progress.last_engaged.remove(&obj_id);
                 // FIX A: clear the assault latch so a RE-FIELD (new generation) re-derives the quorum.
                 data.forming_progress.assault_latched.remove(&obj_id);
+                continue;
+            }
+            // ── ADR 0027 v1 (whole-squad REASSIGN): a non-loss terminal (Resolved/ObjectiveGone) with a
+            //    compatible sibling available → REBIND THIS SQUAD IN PLACE to the new objective. Bodies are
+            //    reused — NO `retire_squad`/`field_new_squad`, NO Generation churn. Atomic: release/withdraw
+            //    the old claim → claim the new (+ cover it) → rewrite objective_id/target → reset
+            //    engaged_once/focus/state/squad_path → re-key the per-objective clocks under the new id →
+            //    reopen the COMMITMENT lease. The Phase-B renew/rally then follow the new rally next tick. ──
+            if let lifecycle::ReconcileAction::Reassign { withdraw_old } = action {
+                let Some(new_id) = best_reassignment else {
+                    // Defensive: the kernel only returns Reassign when `reassign_available` (i.e.
+                    // `best_reassignment.is_some()`); if it somehow vanished this tick, fall through to keep.
+                    data.objective_queue.claim(obj_id, squad_entity);
+                    covered.insert(obj_id);
+                    live_managed.push((squad_entity, obj_id));
+                    continue;
+                };
+                // Release/withdraw the OLD objective (withdraw on a clean clear so no one re-fields it).
+                data.objective_queue.release_entity(squad_entity);
+                if withdraw_old {
+                    data.objective_queue.withdraw(obj_id);
+                }
+                // Claim the NEW objective + add to the Phase-A covered set so a second reassigner this tick
+                // cannot double-claim it. Reopen the commitment lease for the new objective.
+                data.objective_queue.claim(new_id, squad_entity);
+                covered.insert(new_id);
+                data.objective_queue.set_deadline(new_id, Some(now + COMMITMENT_BUDGET));
+                let new_target = data.objective_queue.get(new_id).map(|o| objective_target(&o.kind));
+                // Rewrite the SquadContext IN PLACE: re-point it at the new objective + reset the per-squad
+                // engage/travel/path state so it re-gathers + re-approaches the new rally cleanly.
+                if let Some(ctx) = data.squad_contexts.get_mut(squad_entity) {
+                    ctx.objective_id = Some(new_id);
+                    if let Some((target, _room)) = new_target {
+                        ctx.target = Some(target);
+                    }
+                    ctx.engaged_once = false;
+                    ctx.focus_target = None;
+                    ctx.state = SquadState::Forming;
+                    ctx.squad_path = None;
+                    ctx.rally_point = None;
+                }
+                // Re-key the per-objective lifecycle trackers under the NEW id (reuse the re-field cleanup,
+                // then stamp fresh clocks) — the deep-reach forming/travel budgets are per-objective, so the
+                // reassigned squad gets a fresh forming/travel window at the new target.
+                data.forming_progress.last_present.remove(&obj_id);
+                data.forming_progress.forming_started_at.remove(&obj_id);
+                data.forming_progress.departed_at.remove(&obj_id);
+                data.forming_progress.last_target_dist.remove(&obj_id);
+                data.forming_progress.last_phase.remove(&obj_id);
+                data.forming_progress.last_engaged.remove(&obj_id);
+                data.forming_progress.assault_latched.remove(&obj_id);
+                data.forming_progress.forming_started_at.insert(new_id, now);
+                data.forming_progress.last_present.insert(new_id, 0);
+                if debug {
+                    log::info!(
+                        "[Lifecycle] REASSIGN squad={:?} from_obj={:?} to_obj={:?} withdraw_old={} (in-place rebind — bodies reused, no Gen churn)",
+                        squad_entity, obj_id, new_id, withdraw_old
+                    );
+                }
+                live_managed.push((squad_entity, new_id));
                 continue;
             }
             // Live (Keep / KeepRefreshLease): re-establish the (ephemeral) claim — idempotent, self-heals

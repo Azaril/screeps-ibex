@@ -651,7 +651,13 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// change needs a reset — which usefully also clears the currently churned/orphaned combat squads.
 /// 19 = ADR 0031 Phase 4b catalog deletion: `BodyType` collapses to the single `Sized` variant (the
 /// static template variants are gone), changing the serialized enum shape on every persisted squad.
-const WORLD_FORMAT_VERSION: u32 = 19;
+/// 20 = ADR 0027 v1 (whole-squad REASSIGN + threat-centric defense): no serialized SHAPE change (the
+/// in-place rebind only rewrites the already-serialized `SquadContext.objective_id`, and threat-centric
+/// defense reuses the existing `ObjectiveKind::Secure` variant) — but a deliberate reset buys a clean
+/// slate: persisted squads still bound to old `Defend{owned}` objectives (war.rs now emits `Secure` at the
+/// threat's room) would otherwise spend a few ticks self-healing via `ObjectiveGone`→reassign/retire. The
+/// operator approved bumping freely where it buys a cleaner model (ADR 0027 lines 207-210).
+const WORLD_FORMAT_VERSION: u32 = 20;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode
