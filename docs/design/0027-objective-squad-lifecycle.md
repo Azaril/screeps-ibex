@@ -396,3 +396,36 @@ deterministic Hungarian matching over squads × {objectives + StayPut + Merge + 
 v2 transfer/merge as an EV-scored column. The new `DeclaimAttack` doctrine / `SquadRole::Declaimer`
 / CLAIM body cross-ref the ADR 0026/0031 doctrine corpus; the sim-layering taxonomy cross-refs ADR
 0019/0020. Task #28 / #23 / #25.
+
+## Combat objective inventory — add/remove sites + migration status (2026-06-28)
+
+Every `ObjectiveKind` (objective_queue.rs:81-93), where it is ADDED (`combat_objective_queue.request`)
+and REMOVED, and whether it flows through the v1 system (producer → queue → squad_manager) vs legacy
+mission-owned creeps. **Result: every PRODUCED combat objective is on v1 — the migration out of legacy
+mission management is complete.** Generic remove paths apply to all: the lifecycle `reconcile`
+**Resolved → withdraw** (clean win) + **`mark_unwinnable`** (give-up), and the queue's **`expire`**
+(TTL elapsed AND not claimed AND no live deadline lease — objective_queue.rs:348).
+
+| Kind | ADD (producer → owner) | Dedicated REMOVE (beyond resolve/expire) | Status |
+|------|------------------------|------------------------------------------|--------|
+| `Secure{room}` | war.rs:534 owned-room threat (Defense), war.rs:589 neighbour threat (Defense), war.rs:1294→1427 AttackFlag (Attack) | — (resolve/expire) | **v1** |
+| `Defend{room}` | war.rs:682 defend-flag (Defense), war.rs:792 remote-invader (Defense) | — (resolve/expire) | **v1** |
+| `Dismantle{room,pos}` | war.rs:1286→1427 InvaderCore (Attack), salvage.rs:574 **P1 breach** (Attack) | salvage.rs:492 breach withdraw (pos-scoped via `SalvageBreachTracker`, on standdown/re-arm) | **v1** |
+| `Harass{room}` | war.rs:1305→1427 ResourceDenial / GatedPlayerRaid (Attack) | — (resolve/expire) | **v1** |
+| `Farm{SourceKeeper,room}` | sourcekeeperfarm.rs:414 (SourceKeeper) | sourcekeeperfarm.rs:349 stronghold-present / stand-down withdraw | **v1** |
+| `Declaim{room,controller}` | salvage.rs:465 **P2** (Attack) | salvage.rs:403 declaim withdraw (pos-scoped, on standdown/re-arm/neutralize) | **v1** |
+| `Escort{room}` | **no producer** | — | **inert** — defined + manager-handled; planned future producer = claim/build escort (claimers are unescorted today). Migrate claim → emit `Escort` when ready, or drop the variant. |
+| `Farm{Core}` / `Farm{PowerBank}` | **no producer** | — | **inert** — `value_e`/value-kind arms exist (squad_manager.rs:335/337) but nothing requests them; lvl0 cores are razed via `Dismantle`, not farmed. Implement producers or drop the FarmKinds. |
+
+**Legacy mission-owned combat-adjacent work NOT (yet) objective-based** (the only remaining
+mission-owned spawning; none produce an `ObjectiveKind`):
+- `SalvageMission` **teardown dismantlers** (raze-for-salvage within-horizon) — could migrate to
+  `Dismantle` (P3-adjacent; deferred — distinct from the breach corridor which IS migrated).
+- `SalvageMission` **raiders** (`HaulJob`) — **economy by design, stays off v1** (hauling, not combat).
+- `DefendMission` — **vestigial** (empty `squads`, spawns nothing; only `is_room_safe()` consumed) →
+  **P3** deletes it.
+
+So `SalvageMission` is now a thin v1 *producer* (breach `Dismantle` + `Declaim`); the migration of every
+combat OBJECTIVE out of legacy mission management is **complete**, with only the two inert variants
+(Escort, Farm Core/PowerBank — implement-or-drop) and the non-objective teardown/raiders/`DefendMission`
+(P3) outstanding.
