@@ -392,21 +392,90 @@ impl WarOperation {
             .collect();
         // The observed threats (the rooms where hostiles were seen this scan). `danger` = estimated DPS so
         // two equal-priority threats break ties by who is more dangerous.
-        let threats_for_kernel: Vec<screeps_combat_decision::war_decision::Threat<RoomName>> = rooms_needing_defense
+        let owned_threats_for_kernel: Vec<screeps_combat_decision::war_decision::Threat<RoomName>> = rooms_needing_defense
             .iter()
             .filter_map(|need| system_data.room_data.get(need.room_entity).map(|rd| (rd.name, need.estimated_dps)))
             .map(|(room, dps)| screeps_combat_decision::war_decision::Threat { room, danger: dps })
             .collect();
+
+        // The Chebyshev room distance the kernel + the neighbour builder need (the only spatial fact).
+        let cheby = |a: RoomName, b: RoomName| {
+            let d = a - b;
+            d.0.unsigned_abs().max(d.1.unsigned_abs())
+        };
+        let policy = screeps_combat_decision::war_decision::DefensePolicy::default();
+
+        // ── ADR 0027 v1 LIVE SEAM: feed NEIGHBOUR threats ──────────────────────────────────────────────
+        // The owned-room scan above only feeds threats IN owned rooms; a hostile roaming a VISIBLE,
+        // non-owned NEIGHBOUR (within the leash) was never fed, so the kernel's adjacent-HIGH / leashed-
+        // MEDIUM branches were dead on the live path (the comment below about "the next scan re-emits at the
+        // neighbour's room" was aspirational — nothing populated a neighbour threat). Here we gather the
+        // ARMED hostiles from each visible non-owned room within the leash, fold each room into ONE
+        // `ObservedRoom` (a swarm of N hostiles ⇒ one room ⇒ one threat ⇒ one Secure — never N), and run the
+        // PURE `neighbour_threats` builder (geometry within leash + the danger estimate + the threat-list
+        // build). Only the `game::*`/intel hostile-gather below is non-pure; the decision is the proven
+        // kernel. Border visibility is kept fresh by the heavy-recompute refresh (war.rs ~1345-1372).
+        let owned_room_names: Vec<RoomName> = home_rooms.iter().filter_map(|&e| system_data.room_data.get(e)).map(|rd| rd.name).collect();
+        let observed_neighbours: Vec<screeps_combat_decision::war_decision::ObservedRoom<RoomName>> =
+            (system_data.entities, &*system_data.room_data)
+                .join()
+                .filter_map(|(_, room_data)| {
+                    let dynamic_vis = room_data.get_dynamic_visibility_data()?;
+                    // VISIBLE + NON-OWNED only. Owned rooms are covered by the owned-room scan above (and
+                    // the pure builder also drops dist-0 as a backstop, so we never double-count).
+                    if !dynamic_vis.visible() || dynamic_vis.owner().mine() {
+                        return None;
+                    }
+                    // Bounded: don't even GATHER beyond the leash (the builder/kernel would drop it anyway).
+                    let nearest = owned_room_names.iter().map(|&o| cheby(o, room_data.name)).min()?;
+                    if nearest == 0 || nearest > policy.leash {
+                        return None;
+                    }
+                    // Sum the danger over the hostiles that warrant a defender (same dps estimate the owned
+                    // path uses). Source Keepers are excluded (permanent lair residents, not a colony threat).
+                    let creeps = room_data.get_creeps()?;
+                    let hostiles: Vec<_> = creeps
+                        .hostile()
+                        .iter()
+                        .filter(|c| !crate::military::is_source_keeper_owner(&c.owner().username()))
+                        .collect();
+                    if hostiles.is_empty() {
+                        return None;
+                    }
+                    let mut armed = false;
+                    let mut danger: f32 = 0.0;
+                    for hostile in &hostiles {
+                        let parts: Vec<Part> = hostile.body().iter().filter(|p| p.hits() > 0).map(|p| p.part()).collect();
+                        if hostile_warrants_defender(&parts) {
+                            armed = true;
+                        }
+                        for part in &parts {
+                            match part {
+                                Part::Attack => danger += 30.0,
+                                Part::RangedAttack => danger += 10.0,
+                                _ => {}
+                            }
+                        }
+                    }
+                    if !armed {
+                        return None;
+                    }
+                    Some(screeps_combat_decision::war_decision::ObservedRoom { room: room_data.name, armed, danger })
+                })
+                .collect();
+        let neighbour_threats = screeps_combat_decision::war_decision::neighbour_threats(&owned_rooms_for_kernel, &observed_neighbours, policy, cheby);
+
+        // Feed the owned-room threats AND the neighbour threats to the one proven kernel. The kernel emits
+        // Secure{neighbour} at HIGH (adjacent) / MEDIUM (within leash) and a defender reassigns to follow.
+        let threats_for_kernel: Vec<screeps_combat_decision::war_decision::Threat<RoomName>> =
+            owned_threats_for_kernel.iter().copied().chain(neighbour_threats.iter().copied()).collect();
         // The kernel's per-room verdict (Secure room → priority). A threat beyond the leash is absent here
         // (not chased). Deterministic ordering; we index it by room below.
         let defense_emissions = screeps_combat_decision::war_decision::emit_defense(
             &owned_rooms_for_kernel,
             &threats_for_kernel,
-            screeps_combat_decision::war_decision::DefensePolicy::default(),
-            |a: RoomName, b: RoomName| {
-                let d = a - b;
-                d.0.unsigned_abs().max(d.1.unsigned_abs())
-            },
+            policy,
+            cheby,
         );
 
         let defense_docs = defense_doctrines();
@@ -470,6 +539,61 @@ impl WarOperation {
                 ObjectiveRequest::new(
                     ObjectiveKind::Secure { room: room_name },
                     priority,
+                    ForceRequirement::single(composition),
+                )
+                .owner(ObjectiveOwner::Defense)
+                .ttl(DEFEND_OBJECTIVE_TTL),
+                game::time(),
+            );
+        }
+
+        // ── ADR 0027 v1 LIVE SEAM: emit Secure for NEIGHBOUR threats ───────────────────────────────────
+        // Each neighbour threat (gathered above, already bounded to ARMED + VISIBLE + within-leash) gets one
+        // `Secure{neighbour}` at the kernel-decided priority (adjacent → HIGH, leashed → MEDIUM; the asset-
+        // priority boost is folded in). ONE threat-room ⇒ ONE objective (a swarm is one room), so the
+        // max_concurrent_squads cap + the reassign/claim mean ONE defender follows the threat, never one per
+        // roaming creep. A neighbour has no spawn of its own → the defender is sized to the strongest home's
+        // capacity (`max_home_energy`). A neighbour beyond the leash is absent from `defense_emissions` and
+        // from `neighbour_threats` → no objective.
+        for nbr in &neighbour_threats {
+            let Some(emission) = defense_emissions.iter().find(|e| e.room == nbr.room) else {
+                continue; // beyond the leash (shouldn't happen — we pre-filtered) → not chased
+            };
+            // The neighbour has no spawn; size the defender to the strongest home's capacity so the oracle
+            // sizes a real blob (0 → bare template). `danger` is the summed DPS; heal/count are unknown from
+            // the coarse neighbour gather, so use the dps with a single-creep count (the GarrisonDefense
+            // doctrine still sizes from the dps).
+            let ctx = EngagementContext {
+                objective: DoctrineObjective::ClearCreeps,
+                coordination: EnemyCoordination::Coordinated,
+                defense: DefenseProfile::default(),
+                enemy_force: Some(EnemyForce {
+                    dps: nbr.danger,
+                    heal: 0.0,
+                    hits: 0,
+                    count: 1,
+                    boosted: false,
+                }),
+                importance: 0.0,
+                member_energy: max_home_energy,
+                target_value: DEFENSE_TARGET_VALUE,
+                onsite_window: DEFENSE_ONSITE_WINDOW,
+                params: CompositionParams {
+                    member_energy: max_home_energy,
+                    ..Default::default()
+                },
+            };
+            let Some(composition) = decide_doctrine(&ctx, &defense_docs).and_then(|d| screeps_combat_decision::doctrine::plan_engagement(d, &ctx, None).composition) else {
+                continue;
+            };
+            info!(
+                "[War] Secure objective for NEIGHBOUR threat room {} prio={:.0} (dps={:.0}, adjacent={})",
+                nbr.room, emission.priority, nbr.danger, emission.asset_boosted
+            );
+            system_data.combat_objective_queue.request(
+                ObjectiveRequest::new(
+                    ObjectiveKind::Secure { room: nbr.room },
+                    emission.priority,
                     ForceRequirement::single(composition),
                 )
                 .owner(ObjectiveOwner::Defense)
