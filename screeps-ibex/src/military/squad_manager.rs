@@ -72,7 +72,49 @@ pub struct SquadFormingProgress {
     /// objective id → last-observed room-distance from the squad centroid to the target room. The travel
     /// lease only refreshes while this is DECREASING (positional progress) — a stuck traveler gives up.
     last_target_dist: std::collections::BTreeMap<ObjectiveId, u32>,
+    /// INTROSPECTION ONLY (zero behavior impact — never read by any gate/kernel). objective id → the phase
+    /// label the squad was in at the previous trace, so the `[SquadTrace]` state-vector + transition-event
+    /// lines fire on a PHASE CHANGE (and a throttled heartbeat) instead of every tick. A `BTreeMap`
+    /// (deterministic; never a result-affecting `HashMap`); cleared on retire alongside the other trackers.
+    last_phase: std::collections::BTreeMap<ObjectiveId, SquadPhase>,
+    /// INTROSPECTION ONLY. objective id → whether the squad had ENGAGED at the previous trace, so the
+    /// `ENGAGED` transition event fires exactly once on the false→true latch.
+    last_engaged: std::collections::BTreeMap<ObjectiveId, bool>,
 }
+
+/// INTROSPECTION ONLY (ADR 0027 squad-lifecycle observability) — a coarse phase label for the
+/// `[SquadTrace]` logs so the full FIELD → forming → rally → deploy → travel → in_room → engaged journey
+/// is visible on a live soak. Derived purely from already-computed snapshot facts; NEVER feeds a gate,
+/// kernel, or control-flow decision. Ordered/`PartialEq` only for the phase-change detection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SquadPhase {
+    /// Roster incomplete — still spawning/banking members at home.
+    Forming,
+    /// Full (or quorum) roster, but the rally gate has not released — holding at home to group up.
+    Rally,
+    /// Rally released, full roster present, not yet in the target room — crossing toward it.
+    Travel,
+    /// At least one member is standing in the target room but the squad has not engaged.
+    InRoom,
+    /// The squad has reached `Engaged` (focus acquired + combat) at least once.
+    Engaged,
+}
+
+impl SquadPhase {
+    fn label(self) -> &'static str {
+        match self {
+            SquadPhase::Forming => "forming",
+            SquadPhase::Rally => "rally",
+            SquadPhase::Travel => "travel",
+            SquadPhase::InRoom => "in_room",
+            SquadPhase::Engaged => "engaged",
+        }
+    }
+}
+
+/// INTROSPECTION heartbeat throttle: while a squad sits in a steady phase, re-emit its state vector every
+/// this-many ticks so a long-lived stuck squad keeps producing one greppable status line without flooding.
+const SQUAD_TRACE_HEARTBEAT: u32 = 25;
 
 /// Global cap on concurrently-fielded manager squads. Objectives above this
 /// compete by priority via `best_unclaimed_near`. (Per-objective-kind caps —
@@ -461,6 +503,25 @@ impl<'a> System<'a> for SquadManagerSystem {
                         "[Lifecycle] RETIRE squad={:?} obj={:?} reason={:?} engaged_once={} in_room={} focus={} deadline_lapsed={} members={}",
                         squad_entity, obj_id, reason, engaged_once, in_target_room, has_focus, deadline_lapsed, has_members
                     );
+                    // GIVE-UP BREAKDOWN (introspection only): spell out WHICH bound tripped + the raw clock
+                    // values so a `reason=GaveUp` is self-explaining (deadline lapse vs forming-budget vs
+                    // travel-budget vs no-progress) without a deploy-observe cycle. Mirrors the kernel's
+                    // refresh conditions (we don't re-derive the verdict — that's the kernel's job — we only
+                    // attribute it). `deadline` is the absolute lease tick; None ⇒ never stamped.
+                    let deadline = obj_info.and_then(|(_, _, dl)| dl);
+                    let forming_exhausted = forming && !forming_budget_remaining;
+                    let travel_exhausted = traveling && !travel_budget_remaining;
+                    let forming_no_progress = forming && forming_budget_remaining && !forming_progress;
+                    let travel_no_progress = traveling && travel_budget_remaining && !travel_progress;
+                    log::info!(
+                        "[SquadTrace] GIVEUP squad={:?} obj={:?} deadline_lapsed={} forming_budget_exhausted={} travel_budget_exhausted={} forming_no_progress={} travel_no_progress={} | deadline={:?} now={} gen_start={:?} departed_at={:?} last_target_dist={:?} forming={} traveling={}",
+                        squad_entity, obj_id, deadline_lapsed, forming_exhausted, travel_exhausted, forming_no_progress, travel_no_progress,
+                        deadline, now,
+                        data.forming_progress.forming_started_at.get(&obj_id).copied(),
+                        data.forming_progress.departed_at.get(&obj_id).copied(),
+                        data.forming_progress.last_target_dist.get(&obj_id).copied(),
+                        forming, traveling
+                    );
                 }
                 if withdraw {
                     data.objective_queue.withdraw(obj_id); // clean win — clear the objective so no one re-fields it
@@ -479,6 +540,9 @@ impl<'a> System<'a> for SquadManagerSystem {
                 data.forming_progress.forming_started_at.remove(&obj_id);
                 data.forming_progress.departed_at.remove(&obj_id);
                 data.forming_progress.last_target_dist.remove(&obj_id);
+                // Introspection trackers too, so a re-field starts the phase-change/heartbeat trace fresh.
+                data.forming_progress.last_phase.remove(&obj_id);
+                data.forming_progress.last_engaged.remove(&obj_id);
                 continue;
             }
             // Live (Keep / KeepRefreshLease): re-establish the (ephemeral) claim — idempotent, self-heals
@@ -581,11 +645,12 @@ impl<'a> System<'a> for SquadManagerSystem {
         // and reused by every squad fighting there. Per-squad work (the cohesion search) is unaffected.
         let mut room_layers: HashMap<RoomName, (LocalCostMatrix, PositionLayers)> = HashMap::new();
         for (squad_entity, obj_id) in &live_managed {
-            let (target_room, formation, requested_slots) = match data.objective_queue.get(*obj_id) {
+            let (target_room, formation, requested_slots, deadline) = match data.objective_queue.get(*obj_id) {
                 Some(obj) => (
                     objective_target(&obj.kind).1,
                     is_formation_objective(&obj.kind),
                     obj.force.squads.first().map(|c| c.slots.len()).unwrap_or(0),
+                    obj.deadline,
                 ),
                 None => continue,
             };
@@ -595,11 +660,15 @@ impl<'a> System<'a> for SquadManagerSystem {
                 &mut data.squad_contexts,
                 &data.creep_owner,
                 *squad_entity,
+                *obj_id,
                 target_room,
                 formation,
                 &mut room_layers,
                 debug,
                 requested_slots,
+                now,
+                deadline,
+                &mut data.forming_progress,
             );
         }
 
@@ -938,11 +1007,15 @@ fn compute_squad_orders(
     squad_contexts: &mut WriteStorage<SquadContext>,
     creep_owner: &ReadStorage<CreepOwner>,
     squad_entity: Entity,
+    obj_id: ObjectiveId,
     target_room: RoomName,
     formation: bool,
     room_layers: &mut HashMap<RoomName, (LocalCostMatrix, PositionLayers)>,
     debug: bool,
     requested_slots: usize,
+    now: u32,
+    deadline: Option<u32>,
+    forming_progress: &mut SquadFormingProgress,
 ) {
     // Read the roster's cached status (immutable). `pos`/`has_ranged` feed the centroid + the kite
     // plan; `has_ranged` resolves the creep body (the adapter's job — the pure crate stays JS-free).
@@ -1001,6 +1074,13 @@ fn compute_squad_orders(
     if member_views.is_empty() {
         return;
     }
+
+    // INTROSPECTION: did the FOCUS source come from the cached RoomData path, or the on-arrival
+    // `game::rooms()` fallback (Break #2 arrival half — the room is visible but its RoomData entity is not
+    // yet mapped this tick)? Pure read; mirrors `build_room_combat_dtos`'s own branch order. Logged below
+    // only when a member is actually in the room (where it matters), so it is not noisy while still en route.
+    let dto_from_mapping = mapping.get_room(&target_room).and_then(|e| room_data.get(e)).is_some();
+    let dto_from_live_fallback = !dto_from_mapping && game::rooms().get(target_room).is_some();
 
     let (hostiles, structures) = build_room_combat_dtos(room_data, mapping, target_room);
 
@@ -1177,6 +1257,151 @@ fn compute_squad_orders(
             ctx.squad_path = None;
         }
         apply_squad_decision(ctx, &decision, creep_owner);
+    }
+
+    // ───────────────────────── INTROSPECTION TRACE (logging only) ─────────────────────────
+    // The full squad journey on one greppable family of lines, gated on the SAME `military.debug_log`
+    // flag (free when off). NOTHING below mutates a gate/kernel input — it only reads already-computed
+    // facts + the small `last_phase`/`last_engaged` trackers. Emitted on a PHASE CHANGE and on a throttled
+    // heartbeat, plus explicit one-shot TRANSITION-EVENT lines. Keeps the existing `[Lifecycle]` lines
+    // intact; adds `[SquadTrace]` so the two are independently greppable.
+    if debug {
+        // Post-decision squad facts (re-borrow immutably; `apply_squad_decision` may have latched engaged).
+        let (post_state, engaged_once_now, focus_now) = squad_contexts
+            .get(squad_entity)
+            .map(|c| (c.state, c.engaged_once, c.focus_target.is_some()))
+            .unwrap_or((SquadState::Forming, false, false));
+
+        let present = member_positions.iter().filter(|p| p.is_some()).count();
+        let in_room_any = member_views
+            .iter()
+            .any(|m| m.pos.map(|p| p.room_name() == target_room).unwrap_or(false));
+        // Closest member's room-distance to the target (None ⇒ no member has a body yet).
+        let target_dist = member_views
+            .iter()
+            .filter_map(|m| m.pos.map(|p| room_distance(p.room_name(), target_room)))
+            .min();
+
+        // Coarse phase from already-computed facts (introspection only — never a gate).
+        let phase = if engaged_once_now {
+            SquadPhase::Engaged
+        } else if in_room_any {
+            SquadPhase::InRoom
+        } else if !ready_to_depart {
+            // Below the rally gate: forming (incomplete roster) vs rallying (quorum/full, gate not released).
+            if requested_slots > 0 && present >= requested_slots {
+                SquadPhase::Rally
+            } else {
+                SquadPhase::Forming
+            }
+        } else {
+            // Rally released, full roster present, not yet in-room → crossing.
+            SquadPhase::Travel
+        };
+
+        let prev_phase = forming_progress.last_phase.get(&obj_id).copied();
+        let prev_engaged = forming_progress.last_engaged.get(&obj_id).copied().unwrap_or(false);
+        let phase_changed = prev_phase != Some(phase);
+        let heartbeat = now.is_multiple_of(SQUAD_TRACE_HEARTBEAT);
+
+        // ── Explicit one-shot TRANSITION-EVENT lines (fire on the edge). ──
+        if phase_changed {
+            match (prev_phase, phase) {
+                // DEPLOY: the rally gate just RELEASED — the anchor switches home → target.
+                (Some(SquadPhase::Forming) | Some(SquadPhase::Rally), SquadPhase::Travel)
+                | (Some(SquadPhase::Forming) | Some(SquadPhase::Rally), SquadPhase::InRoom)
+                | (Some(SquadPhase::Forming) | Some(SquadPhase::Rally), SquadPhase::Engaged) => {
+                    log::info!(
+                        "[SquadTrace] DEPLOY squad={:?} obj={:?} room={} present={}/{} uncontested={} (rally released; anchor home->target)",
+                        squad_entity, obj_id, target_room, present, requested_slots, uncontested
+                    );
+                }
+                _ => {}
+            }
+            // ARRIVED: first tick a member stands in the target room (Travel → InRoom/Engaged).
+            if matches!(prev_phase, Some(SquadPhase::Travel)) && (phase == SquadPhase::InRoom || phase == SquadPhase::Engaged) {
+                log::info!(
+                    "[SquadTrace] ARRIVED squad={:?} obj={:?} room={} in_room=true present={}/{}",
+                    squad_entity, obj_id, target_room, present, requested_slots
+                );
+            }
+        }
+        // TRAVEL progress/stall: while crossing, report the room distance + whether it is closing.
+        if phase == SquadPhase::Travel {
+            let prev_dist = forming_progress.last_target_dist.get(&obj_id).copied();
+            let closing = match (target_dist, prev_dist) {
+                (Some(cur), Some(prev)) => cur < prev,
+                (Some(_), None) => true,
+                _ => false,
+            };
+            if phase_changed || heartbeat {
+                log::info!(
+                    "[SquadTrace] TRAVEL squad={:?} obj={:?} room={} d={:?} ({})",
+                    squad_entity, obj_id, target_room, target_dist, if closing { "progress" } else { "stalled" }
+                );
+            }
+        }
+        // FOCUS acquired / empty-DTO fallback (only meaningful once a member is in the room).
+        if in_room_any {
+            if focus_now && (phase_changed || heartbeat) {
+                log::info!(
+                    "[SquadTrace] FOCUS acquired squad={:?} obj={:?} room={} hostiles={} structs={} via={}",
+                    squad_entity, obj_id, target_room, hostiles.len(), structures.len(),
+                    if dto_from_live_fallback { "live-fallback" } else { "mapping" }
+                );
+            }
+            if dto_from_live_fallback && decision.focus.is_none() && (phase_changed || heartbeat) {
+                log::info!(
+                    "[SquadTrace] FOCUS empty-DTO fallback squad={:?} obj={:?} room={} (game::rooms() re-read; hostiles={} structs={})",
+                    squad_entity, obj_id, target_room, hostiles.len(), structures.len()
+                );
+            }
+        }
+        // ENGAGED: the engaged_once latch flipped false → true this tick.
+        if engaged_once_now && !prev_engaged {
+            log::info!(
+                "[SquadTrace] ENGAGED squad={:?} obj={:?} room={} state={:?} focus={}",
+                squad_entity, obj_id, target_room, post_state, focus_now
+            );
+        }
+
+        // ── STATE-VECTOR + PER-MEMBER detail (on phase change OR heartbeat). ──
+        if phase_changed || heartbeat {
+            let forming_started = forming_progress.forming_started_at.get(&obj_id).copied();
+            let departed = forming_progress.departed_at.get(&obj_id).copied();
+            let forming_budget_left = forming_started.map(|s| MAX_FORMING_BUDGET.saturating_sub(now.saturating_sub(s)));
+            let travel_budget_left = departed.map(|s| MAX_TRAVEL_BUDGET.saturating_sub(now.saturating_sub(s)));
+            // Lease remaining (deadline - now); `None` if the objective is gone or no deadline stamped.
+            let lease_left = deadline.map(|d| d.saturating_sub(now));
+            log::info!(
+                "[SquadTrace] STATE squad={:?} obj={:?} room={} phase={} state={:?} present={}/{} in_room={} dist={:?} engaged_once={} focus={} lease_left={:?} forming_budget_left={:?} travel_budget_left={:?} reason={}",
+                squad_entity, obj_id, target_room, phase.label(), post_state, present, requested_slots,
+                in_room_any, target_dist, engaged_once_now, focus_now, lease_left, forming_budget_left, travel_budget_left,
+                if phase_changed { "phase-change" } else { "heartbeat" }
+            );
+            // PER-MEMBER detail companion line: name, room, (x,y), role, spawned (Some pos vs None body).
+            if let Some(ctx) = squad_contexts.get(squad_entity) {
+                for m in ctx.members.iter() {
+                    let name = creep_owner
+                        .get(m.entity)
+                        .and_then(|co| co.owner.resolve())
+                        .map(|c| c.name())
+                        .unwrap_or_else(|| "<unspawned>".to_string());
+                    let (room_s, x, y) = match m.position {
+                        Some(p) => (p.room_name().to_string(), p.x().u8() as i32, p.y().u8() as i32),
+                        None => ("?".to_string(), -1, -1),
+                    };
+                    log::info!(
+                        "[SquadTrace]   MEMBER squad={:?} slot={} role={:?} name={} room={} pos=({},{}) spawned={}",
+                        squad_entity, m.slot_index, m.role, name, room_s, x, y, m.position.is_some()
+                    );
+                }
+            }
+        }
+
+        // Record this tick's phase / engaged latch for the next reconcile's edge detection.
+        forming_progress.last_phase.insert(obj_id, phase);
+        forming_progress.last_engaged.insert(obj_id, engaged_once_now);
     }
 }
 
