@@ -126,6 +126,37 @@ pub fn should_abandon_claim(
     upgrade_blocked || contested_persist_ticks >= abort_persistence_ticks
 }
 
+// ── Remote-room safety gate (replaces the vestigial DefendMission) ───────────
+
+/// Whether a remote mining outpost room is safe to keep spawning economy creeps
+/// (reservers / miners / haulers) into. Pure predicate over the room's dynamic
+/// visibility intel — the kernel that the old `DefendMission::is_room_safe()`
+/// state machine collapsed to (ADR 0027 P3). It spawned nothing and held no
+/// real squad; its only output was this boolean.
+///
+/// The room is UNSAFE only while we currently see an ACTUAL threat —
+/// combat-capable hostile creeps, active hostile spawns, or armed active towers
+/// (`militarily_active`). It is NOT made unsafe by inert hostile structures
+/// (leftover enemy walls / ramparts / husks in a neutral remote, e.g. a
+/// de-claimed derelict room can't hurt a creep); treating those as an attack
+/// kept the room unsafe forever and permanently gated off the outpost's
+/// reserver / miners / haulers (the post-`4fae295` fix this preserves).
+///
+/// Absence of fresh intel reads SAFE — matching the old consumer's
+/// `unwrap_or(true)` fallback (a brief vision gap, with the outpost's own
+/// miners keeping the room visible, must not freeze economy spawning). The old
+/// state machine added a 20-tick de-escalation debounce backed by cross-tick
+/// state; a pure predicate over current intel intentionally drops that latch —
+/// the gate flips back to safe the moment we observe the threat is gone, which
+/// is the per-tick-optimal behavior (no hysteresis unless oscillation is
+/// actually observed).
+pub fn is_remote_room_safe(dynamic: Option<&RoomDynamicVisibilityData>) -> bool {
+    match dynamic {
+        Some(d) => !(d.visible() && d.militarily_active()),
+        None => true,
+    }
+}
+
 pub fn is_valid_home_room(room_data: &RoomData) -> bool {
     if let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() {
         if dynamic_visibility_data.visible() {

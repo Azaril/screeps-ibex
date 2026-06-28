@@ -68,8 +68,23 @@ pub struct ObjectiveId(pub u32);
 /// What flavour of farm a `Farm` objective clears + exploits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FarmKind {
+    /// Power-bank harvesting (ADR 0013 power economy). **Planned-future, no producer yet**
+    /// (combat-overhaul-plan.md §5(g) "Power-bank farming" + ADR 0013: the deferred farming
+    /// workstream names `Farm{PowerBank, room}` as the squad's objective home — a boosted
+    /// attacker+healer set with the bank tile as an explicit focus). Producer = a future
+    /// `PowerBankOperation`/coordinator mission mirroring the SK pipeline.
     PowerBank,
+    /// Source-keeper farming — **LIVE** (the SK farm). Produced by `SourceKeeperFarmMission`
+    /// (sourcekeeperfarm.rs) → `duo_sk_farmer` via the `SquadManager`.
     SourceKeeper,
+    /// Farm a level-0 highway invader-core room for the **denied-reservation income** it
+    /// otherwise costs us (a reserver-based passive farm — DISTINCT from razing a core via
+    /// `Dismantle`). **Planned-future, no producer yet**: classified in ADR 0030 §"Per-objective
+    /// classification" (`Farm{Core}` → `KillImmuneStructure`, `SingleLifetime`, win-in-time ranged
+    /// kill) and ADR 0032 §"EV currency" (`Farm{Core} (lvl0 reserver)` = denied-reservation income
+    /// recovered; the `value_e`/`ObjectiveValueKind::FarmCore` valuation already exists for it).
+    /// Live lvl0 cores in OUR remotes are razed via `Dismantle` (war.rs InvaderCore arm); this kind
+    /// is the future passive-income farm the ADRs plan, not the razing path.
     Core,
 }
 
@@ -90,6 +105,11 @@ pub enum ObjectiveKind {
     /// Clear + suppress a farmable resource room (power bank / source keeper / core).
     Farm { kind: FarmKind, room: RoomName },
     /// Pre-clear + escort a marginal claim target while the claimer commits.
+    /// **Planned-future, no producer yet** (defined + manager-handled; claimers are unescorted
+    /// today). Planned producer = the claim/build escort in `claim.rs` — combat-overhaul-plan.md
+    /// §W3 ("`Escort{room}` pre-clear producer in `claim.rs` for marginal claim targets"; :168
+    /// "W3 adds one") + ADR 0017 expansion pre-clear. ADR 0030 classifies it (`SingleLifetime`,
+    /// win-in-time pre-clear while the claimer commits).
     Escort { room: RoomName },
     /// Neutralize a derelict controller (`attackController`) so the waiting mining outpost can take the room
     /// over (ADR 0027 v1.1 P2). `controller` is the controller tile (the squad's `AttackController` target);

@@ -344,6 +344,21 @@ impl Mission for SourceKeeperFarmMission {
         // react to hostile creeps, not towers — so the last in-flight creeps may
         // still take tower fire on the way out. Prompt cross-room evacuation is
         // tracked as the L1 follow-up.
+        //
+        // The stronghold→clear→resume LOOP closes via war.rs offense (ADR 0027
+        // P3 SK-objectives check): the SK room is visible (the rescout below +
+        // the K3 miners while farming), so it carries `RoomThreatData` and the
+        // offense scan (`run_offense_evaluation`, every ~10-20t, default-ON)
+        // iterates it like any non-owned threat room. A level≥1 core scores via
+        // `invader_core_attack_score` (SK rooms have sources → at least the
+        // non-remote base score) and the InvaderCore arm emits an Attack-owned
+        // `Dismantle{room, core_pos}` — the SK farm need NOT emit its own clear.
+        // While our 1500t rescout is between probes and war.rs hits its 200t
+        // staleness gate, its `has_known_core` branch escalates the rescout to
+        // HIGH, so the core is never silently abandoned. Once war.rs razes the
+        // core, the next observation drops `stronghold_present` and the farm
+        // resumes (mining ungated, `Farm{sk}` re-requested). So an SK stronghold
+        // is PAUSED-then-cleared, not permanently abandoned.
         if stronghold_present {
             if let Some(id) = system_data.combat_objective_queue.find_by_kind(&farm_kind) {
                 system_data.combat_objective_queue.withdraw(id);

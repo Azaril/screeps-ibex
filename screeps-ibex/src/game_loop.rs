@@ -662,7 +662,14 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// the `CombatBodySpec` riding in a persisted `BodyType::Sized` slot gains a `claim` field) — appended-enum-
 /// variant + appended-struct-field shape changes. bincode tolerates an appended variant but a new struct
 /// field is a positional shape change, so a reset is required; it folds into the single MMO deploy reset.
-const WORLD_FORMAT_VERSION: u32 = 21;
+/// 22 = ADR 0027 P3 (salvage migration cleanup): the vestigial `DefendMission` is deleted, removing the
+/// `MissionData::Defend(..)` variant from the serialized `MissionData` enum. bincode is positional, so
+/// removing an interior enum variant shifts every later variant's discriminant — a serialized-shape change
+/// → one loud reset. The same reset also covers the removed `defend_mission` fields on the ConvertSaveload
+/// `ColonyMission` Incubate + `MiningOutpostMission` Mine states (positional struct-field removals).
+/// (The inert `ObjectiveKind::Escort` / `FarmKind::Core` / `FarmKind::PowerBank` variants
+/// were KEPT as planned-future per the ADRs, so the objective-queue enums are unchanged.)
+const WORLD_FORMAT_VERSION: u32 = 22;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode

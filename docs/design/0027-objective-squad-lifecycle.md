@@ -24,14 +24,26 @@ Task #23 / #25.
   persists across the 1000-tick `attackController` cadence) — **WFV 20→21**. `SalvageMission` is now a
   thin v1 producer; only teardown dismantlers + raiders remain mission-owned (raiders = economy by design;
   teardown migration is P3-adjacent).
+- **Salvage P3 + v1 completion** (2026-06-28, **WFV 21→22**): the vestigial `DefendMission` is deleted +
+  `is_room_safe()` → a pure `is_remote_room_safe(dynamic)` predicate the mining-outpost gate calls. The
+  objective-variant audit KEPT all three inert variants (`Escort` / `Farm{Core}` / `Farm{PowerBank}`) as
+  planned-future (none obsolete — `Farm{Core}` = denied-reservation income, distinct from razing cores via
+  `Dismantle`; each annotated + ADR-cited). SK objectives verified end-to-end (Farm{SourceKeeper}
+  produce/withdraw + the stronghold→`Dismantle`→resume loop, which closes via war.rs's `has_known_core`
+  rescout escalation). **v1 is COMPLETE** — every produced combat objective is on v1.
 
-**CURRENT:** salvage migration **P3** — delete the vestigial `DefendMission` (its `squads` vec is always
-empty + it spawns nothing; only `is_room_safe()` is consumed → make that a pure predicate/kernel). LOW risk.
+**CURRENT:** none — **v1 COMPLETE**. **Next = v2** (the pending-slot Merge column in the auction).
 
 **FUTURE (ordered):**
 - **v2** — transfer/merge (the pending-slot Merge column in the auction, ADR 0032).
 - **Auction v1.2** (ADR 0032) — the GLOBAL Hungarian matching over squads × {objectives + StayPut +
   Merge + Recycle} (v1.1 is per-squad).
+- **SK rescout-margin hardening** (non-blocking follow-up) — `THREAT_DATA_MAX_AGE=500` <
+  `STRONGHOLD_RESCOUT_INTERVAL=1500`: if intel fully expires before a re-scout lands, a known-stronghold SK
+  room can drop out of `threat_rooms` (stopping both war.rs's >200t rescout AND offense eval). Backstopped
+  today by war.rs's 2–3 HIGH rescouts within the 500t window — adequate margin, not a hard guarantee.
+  Consider `STRONGHOLD_RESCOUT_INTERVAL < THREAT_DATA_MAX_AGE` for a hard close. (Unaffordable high-level
+  strongholds left to self-collapse is a *deliberate* economic gate, not a gap.)
 - **Owned-room intel-floor refinement** — `project_intel` floors owned-room danger by
   `priority_implied_danger`, bypassing `value_e`'s dps=0 curve, so a harmless dps=0 scout in an OWNED
   room still pulls a CRITICAL defender (neighbours already fixed via `observe_neighbours`). Floor only
@@ -422,8 +434,8 @@ mission-owned spawning; none produce an `ObjectiveKind`):
 - `SalvageMission` **teardown dismantlers** (raze-for-salvage within-horizon) — could migrate to
   `Dismantle` (P3-adjacent; deferred — distinct from the breach corridor which IS migrated).
 - `SalvageMission` **raiders** (`HaulJob`) — **economy by design, stays off v1** (hauling, not combat).
-- `DefendMission` — **vestigial** (empty `squads`, spawns nothing; only `is_room_safe()` consumed) →
-  **P3** deletes it.
+- `DefendMission` — **DELETED (P3, 2026-06-28)**; `is_room_safe()` is now the pure `is_remote_room_safe`
+  predicate the mining-outpost gate calls (missions/utility.rs).
 
 So `SalvageMission` is now a thin v1 *producer* (breach `Dismantle` + `Declaim`); the migration of every
 combat OBJECTIVE out of legacy mission management is **complete**, with only the two inert variants

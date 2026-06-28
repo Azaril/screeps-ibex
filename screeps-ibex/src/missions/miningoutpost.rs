@@ -1,5 +1,4 @@
 use super::data::*;
-use super::defend::*;
 use super::haul::*;
 use super::localsupply::*;
 use super::missionsystem::*;
@@ -30,8 +29,7 @@ machine!(
         Mine {
             supply_mission: EntityOption<Entity>,
             haul_mission: EntityOption<Entity>,
-            reserve_mission: EntityOption<Entity>,
-            defend_mission: EntityOption<Entity>
+            reserve_mission: EntityOption<Entity>
         }
     }
 
@@ -153,7 +151,7 @@ impl Scout {
         if dynamic_visibility_data.owner().neutral() {
             info!("Completed scouting of room - transitioning to mining");
 
-            return Ok(Some(MiningOutpostState::mine(None.into(), None.into(), None.into(), None.into())));
+            return Ok(Some(MiningOutpostState::mine(None.into(), None.into(), None.into())));
         }
 
         if dynamic_visibility_data.owner().mine() || dynamic_visibility_data.owner().friendly() {
@@ -177,7 +175,7 @@ impl Scout {
                 outpost_room_data.name
             );
 
-            Ok(Some(MiningOutpostState::mine(None.into(), None.into(), None.into(), None.into())))
+            Ok(Some(MiningOutpostState::mine(None.into(), None.into(), None.into())))
         } else {
             Err("Mission cannot run in current room state".to_string())
         }
@@ -196,9 +194,6 @@ impl Mine {
         if self.reserve_mission.is_some() {
             parts.push("reserve");
         }
-        if self.defend_mission.is_some() {
-            parts.push("defend");
-        }
         if parts.is_empty() {
             "Mine".to_string()
         } else {
@@ -206,21 +201,19 @@ impl Mine {
         }
     }
 
-    fn get_children_internal(&self) -> [&Option<Entity>; 4] {
+    fn get_children_internal(&self) -> [&Option<Entity>; 3] {
         [
             &self.supply_mission,
             &self.haul_mission,
             &self.reserve_mission,
-            &self.defend_mission,
         ]
     }
 
-    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 4] {
+    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 3] {
         [
             &mut self.supply_mission,
             &mut self.haul_mission,
             &mut self.reserve_mission,
-            &mut self.defend_mission,
         ]
     }
 
@@ -322,37 +315,18 @@ impl Mine {
             self.reserve_mission = Some(mission_entity).into();
         }
 
-        if let Some(mut defend_mission) = self
-            .defend_mission
-            .and_then(|e| system_data.missions.get(e))
-            .as_mission_type_mut::<DefendMission>()
-        {
-            defend_mission.set_home_rooms(&state_context.home_room_datas);
-        } else if self.defend_mission.is_none() {
-            let outpost_room_data = system_data
+        // Safety gate (ADR 0027 P3): the vestigial `DefendMission` (which spawned
+        // nothing — its only output was this boolean) was deleted; the gate is now
+        // the pure `is_remote_room_safe` predicate over the room's dynamic-
+        // visibility intel. Stop spawning economy creeps into a remote that is
+        // currently militarily active (combat creeps / active spawns / armed
+        // towers); resume the moment we observe the threat is gone.
+        let room_is_safe = is_remote_room_safe(
+            system_data
                 .room_data
-                .get_mut(state_context.outpost_room_data)
-                .ok_or("Expected outpost room data")?;
-
-            let mission_entity = DefendMission::build(
-                system_data.updater.create_entity(system_data.entities),
-                Some(mission_entity),
-                state_context.outpost_room_data,
-                &state_context.home_room_datas,
-            )
-            .build();
-
-            outpost_room_data.add_mission(mission_entity);
-
-            self.defend_mission = Some(mission_entity).into();
-        }
-
-        let room_is_safe = self
-            .defend_mission
-            .and_then(|e| system_data.missions.get(e))
-            .as_mission_type::<DefendMission>()
-            .map(|d| d.is_room_safe())
-            .unwrap_or(true);
+                .get(state_context.outpost_room_data)
+                .and_then(|rd| rd.get_dynamic_visibility_data()),
+        );
 
         if let Some(mut supply_mission) = self
             .supply_mission

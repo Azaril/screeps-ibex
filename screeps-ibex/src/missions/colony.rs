@@ -2,7 +2,6 @@
 
 use super::construction::*;
 use super::data::*;
-use super::defend::*;
 use super::haul::*;
 use super::labs::*;
 use super::localbuild::*;
@@ -41,7 +40,6 @@ machine!(
             upgrade_mission: EntityOption<Entity>,
             power_spawn_mission: EntityOption<Entity>,
             labs_mission: EntityOption<Entity>,
-            defend_mission: EntityOption<Entity>,
             /// First tick of an unbroken sustained-hostile span on this room
             /// (None when clear). Drives the contested-claim abort (ADR 0017).
             contested_since: Option<u32>,
@@ -85,7 +83,7 @@ impl Incubate {
         format!("Incubate - {} active missions", active_count)
     }
 
-    fn get_children_internal(&self) -> [&Option<Entity>; 10] {
+    fn get_children_internal(&self) -> [&Option<Entity>; 9] {
         [
             &self.construction_mission,
             &self.local_supply_mission,
@@ -96,11 +94,10 @@ impl Incubate {
             &self.upgrade_mission,
             &self.power_spawn_mission,
             &self.labs_mission,
-            &self.defend_mission,
         ]
     }
 
-    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 10] {
+    fn get_children_internal_mut(&mut self) -> [&mut Option<Entity>; 9] {
         [
             &mut self.construction_mission,
             &mut self.local_supply_mission,
@@ -111,7 +108,6 @@ impl Incubate {
             &mut self.upgrade_mission,
             &mut self.power_spawn_mission,
             &mut self.labs_mission,
-            &mut self.defend_mission,
         ]
     }
 
@@ -349,20 +345,6 @@ impl Incubate {
             self.labs_mission = Some(mission_entity).into();
         }
 
-        if self.defend_mission.is_none() {
-            let mission_entity = DefendMission::build(
-                system_data.updater.create_entity(system_data.entities),
-                Some(mission_entity),
-                state_context.room_data,
-                &[state_context.room_data],
-            )
-            .build();
-
-            room_data.add_mission(mission_entity);
-
-            self.defend_mission = Some(mission_entity).into();
-        }
-
         Ok(None)
     }
 }
@@ -392,7 +374,6 @@ impl ColonyMission {
             owner: owner.into(),
             context: ColonyMissionContext { room_data },
             state: ColonyState::incubate(
-                None.into(),
                 None.into(),
                 None.into(),
                 None.into(),

@@ -3,7 +3,6 @@ pub mod colony;
 pub mod constants;
 pub mod construction;
 pub mod data;
-pub mod defend;
 pub mod haul;
 pub mod labs;
 pub mod localbuild;
