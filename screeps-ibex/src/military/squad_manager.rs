@@ -1656,15 +1656,43 @@ fn order_state_to_squad(state: SquadOrderState) -> SquadState {
     }
 }
 
+/// Where a room's combat DTOs came from — i.e. how TRUSTWORTHY "empty hostiles" is. The single source of
+/// truth for intel reliability (returned by [`build_room_combat_dtos`] so callers never re-derive the
+/// branch condition and risk drift). `Cached`/`LiveVisible` ⇒ reliable (empty means genuinely clear);
+/// `None` ⇒ unreliable (empty means merely UNSEEN — never trust no-vision emptiness).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CombatIntelSource {
+    /// Scouted `RoomData` ECS entity — cached last-scouted intel, reliable even without current live vision.
+    Cached,
+    /// No mapping entity, but the room is live-visible this tick (`game::rooms().get` is Some).
+    LiveVisible,
+    /// Neither — genuinely no information about the room (empty DTOs are merely UNSEEN, not clear).
+    None,
+}
+
+impl CombatIntelSource {
+    /// Whether the DTOs are TRUSTWORTHY: empty hostiles/towers genuinely mean clear, not merely unseen.
+    fn is_reliable(self) -> bool {
+        matches!(self, CombatIntelSource::Cached | CombatIntelSource::LiveVisible)
+    }
+}
+
 /// Read a room's hostiles + structures into JS-free combat DTOs (the live adapter leaf;
 /// the shared `squad_combat` adapters preserve ordering so the decision's tie-breaks match).
+///
+/// Also returns the [`CombatIntelSource`] (the DTO provenance) as the SINGLE SOURCE OF TRUTH for intel
+/// reliability — callers (e.g. the rally-stall `target_is_uncontested` gate) read `source.is_reliable()`
+/// instead of independently recomputing the cached/live branch condition (which would risk drift, and —
+/// the rally-oscillation bug — flapped as a solo member crossed a room boundary toggling raw live vision).
 fn build_room_combat_dtos(
     room_data: &ReadStorage<RoomData>,
     mapping: &EntityMappingData,
     room: RoomName,
-) -> (Vec<CombatCreepDto>, Vec<CombatStructureDto>) {
+) -> (Vec<CombatCreepDto>, Vec<CombatStructureDto>, CombatIntelSource) {
     // The cached path: the room has a RoomData ECS entity (registered in the mapping). `get_creeps`/
     // `get_structures` self-refresh from `game::rooms()` when stale, so this returns the live state.
+    // Cached intel persists even when the room is not CURRENTLY live-visible — RELIABLE, and stable as a
+    // member crosses the room boundary (the rally-oscillation fix relies on this stability).
     if let Some(rd) = mapping.get_room(&room).and_then(|e| room_data.get(e)) {
         let hostiles = rd
             .get_creeps()
@@ -1674,7 +1702,7 @@ fn build_room_combat_dtos(
             .get_structures()
             .map(|s| s.all().iter().map(structure_to_dto).collect())
             .unwrap_or_default();
-        return (hostiles, structures);
+        return (hostiles, structures, CombatIntelSource::Cached);
     }
 
     // FOCUS-ON-ARRIVAL FIX (Break #2 arrival half): the squad has just ENTERED `room`, so the room IS
@@ -1691,10 +1719,10 @@ fn build_room_combat_dtos(
             .map(creep_to_dto)
             .collect();
         let structures = live.find(find::STRUCTURES, None).iter().map(structure_to_dto).collect();
-        return (hostiles, structures);
+        return (hostiles, structures, CombatIntelSource::LiveVisible);
     }
 
-    (Vec::new(), Vec::new())
+    (Vec::new(), Vec::new(), CombatIntelSource::None)
 }
 
 /// ADR 0024 Stage 1 (live mirror of `screeps_combat_agent::pathing`): scales the [`ThreatField`]'s
@@ -1834,14 +1862,13 @@ fn compute_squad_orders(
         return;
     }
 
-    // INTROSPECTION: did the FOCUS source come from the cached RoomData path, or the on-arrival
-    // `game::rooms()` fallback (Break #2 arrival half — the room is visible but its RoomData entity is not
-    // yet mapped this tick)? Pure read; mirrors `build_room_combat_dtos`'s own branch order. Logged below
-    // only when a member is actually in the room (where it matters), so it is not noisy while still en route.
-    let dto_from_mapping = mapping.get_room(&target_room).and_then(|e| room_data.get(e)).is_some();
-    let dto_from_live_fallback = !dto_from_mapping && game::rooms().get(target_room).is_some();
-
-    let (hostiles, structures) = build_room_combat_dtos(room_data, mapping, target_room);
+    // INTROSPECTION + INTEL-RELIABILITY: `build_room_combat_dtos` reports its DTO provenance as the SINGLE
+    // SOURCE OF TRUTH (no re-derivation of the cached/live branch condition — that drift was the rally
+    // oscillation: a separate `game::rooms().get().is_some()` flapped as a member crossed the boundary).
+    // `Cached` = the scouted RoomData path; `LiveVisible` = the on-arrival `game::rooms()` fallback (Break #2
+    // arrival half — the room is visible but its RoomData entity is not yet mapped this tick).
+    let (hostiles, structures, intel_source) = build_room_combat_dtos(room_data, mapping, target_room);
+    let dto_from_live_fallback = intel_source == CombatIntelSource::LiveVisible;
 
     // Enemy safe mode → all our combat in the room is nullified (engage-veto, ADR 0020 §8). Only known
     // when the room is visible; default false otherwise (we discover + retreat on arrival).
@@ -1947,22 +1974,31 @@ fn compute_squad_orders(
     // re-field → slot-0 forever (the actual invader no-engage root cause). Measured against the objective's
     // requested slot count so a death-degraded layout can't shrink "full".
     let member_positions: Vec<Option<Position>> = member_views.iter().map(|m| m.pos).collect();
-    // Rally/deploy gate (FIX 1 — the rally-stall fix). A DEFENDED or UNSEEN target keeps the hard full-roster
+    // Rally/deploy gate (FIX 1 — the rally-stall fix). A DEFENDED or UNKNOWN target keeps the hard full-roster
     // `squad_ready_to_depart`: the oracle sized it to be Lanchester-favorable, so the full roster is winnable
     // BY CONSTRUCTION and must enter together or the trickle is picked off. BUT a PROVEN-uncontested target —
-    // a room we can currently SEE with no hostiles, no hostile towers, and no enemy safe mode — does not need
-    // the last member (which can lose the within-tier spawn race on a young colony and deadlock the
+    // a room we have TRUSTWORTHY intel for with no hostiles, no hostile towers, and no enemy safe mode — does
+    // not need the last member (which can lose the within-tier spawn race on a young colony and deadlock the
     // all-or-nothing gate forever, the live W7N7 stall). An oversized force advancing + dismantling an
-    // undefended core as members arrive is harmless, so deploy at the min-viable quorum. The visibility flag
-    // is LOAD-BEARING: an unseen room reports empty DTOs because we have no vision, NOT because it is clear —
-    // so `uncontested` requires POSITIVE room visibility, never `hostiles.is_empty()` alone (else a
-    // defended-but-unseen room mis-classifies as uncontested and trickles a sub-roster in to be picked off).
-    let room_visible = game::rooms().get(target_room).is_some();
+    // undefended core as members arrive is harmless, so deploy at the min-viable quorum.
+    //
+    // RALLY-OSCILLATION FIX: feed INTEL-RELIABILITY, not raw live vision. The pre-fix code passed
+    // `room_visible = game::rooms().get(target_room).is_some()` — raw CURRENT live vision, which FLAPS as a
+    // solo squad's member crosses the W6N5↔W7N5 boundary → `uncontested` flaps → `shared_rally_point` flips
+    // the rally ROOM between the target and one-room-short → the squad chases a moving rally (a feedback loop:
+    // rally depends on the squad's own vision, which depends on its position, which depends on the rally). We
+    // now pass `intel_source.is_reliable()` (Cached OR LiveVisible). A MAPPED offense target (an assault
+    // objective is ALWAYS mapped — it came from the war.rs offense scan over scouted threat rooms) has STABLE
+    // reliable cached intel, so `uncontested` is stable as a member crosses the boundary — the loop is broken.
+    // Still LOAD-BEARING for the trickle-guard: a GENUINELY-UNKNOWN room (source `None`: unmapped AND no live
+    // vision) is NOT reliable → NOT uncontested → keep the hard full-roster rally (never trust no-vision
+    // emptiness). The fix ONLY relaxes the requirement from CURRENT live vision to RELIABLE intel (cache counts).
+    let intel_reliable = intel_source.is_reliable();
     let no_hostile_towers = !structures
         .iter()
         .any(|s| s.structure_type == StructureType::Tower && s.ownership == screeps_combat_decision::Ownership::Hostile);
     let uncontested = crate::military::formation::target_is_uncontested(
-        room_visible,
+        intel_reliable,
         hostiles.is_empty(),
         no_hostile_towers,
         !enemy_safe_mode,
@@ -2590,6 +2626,31 @@ mod tests {
         );
         assert!(!should_register_spawned_member(false, false), "squad dead → do NOT register");
         assert!(!should_register_spawned_member(false, true), "squad dead → do NOT register");
+    }
+
+    /// Sim/live PARITY (rally-oscillation fix): the LIVE intel-reliability decision
+    /// (`CombatIntelSource::is_reliable`, which feeds `target_is_uncontested`) must agree with the decision
+    /// kernel the rally tests actually prove (`rally::rally_intel_reliable`) for EVERY DTO source — so the
+    /// offline oscillation proof genuinely covers the live path (the two logically-identical impls can't drift).
+    #[test]
+    fn combat_intel_source_reliability_matches_the_decision_kernel() {
+        use screeps_combat_decision::rally::rally_intel_reliable;
+        // Variant → the kernel's (mapped, live_visible) the live path encodes.
+        assert_eq!(
+            CombatIntelSource::Cached.is_reliable(),
+            rally_intel_reliable(true, false),
+            "Cached ⇔ mapped: reliable regardless of current live vision (the stability property)"
+        );
+        assert_eq!(
+            CombatIntelSource::LiveVisible.is_reliable(),
+            rally_intel_reliable(false, true),
+            "LiveVisible ⇔ unmapped but live-visible: reliable"
+        );
+        assert_eq!(
+            CombatIntelSource::None.is_reliable(),
+            rally_intel_reliable(false, false),
+            "None ⇔ neither: unreliable (never trust no-vision emptiness)"
+        );
     }
 
     /// ADR 0032 v2 (same-tick DOUBLE-FILL guard, integration): a `SquadContext` whose `slot_index` was just
