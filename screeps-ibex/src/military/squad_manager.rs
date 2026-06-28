@@ -62,6 +62,16 @@ use specs::saveload::*;
 pub struct SquadFormingProgress {
     /// objective id → last-observed present-member count.
     last_present: std::collections::BTreeMap<ObjectiveId, usize>,
+    /// objective id → the tick this generation STARTED forming (the deep-reach forming-budget clock, Break
+    /// #1). Bounds how long the forming-in-flight lease refresh may extend a slow-but-fielding roster — past
+    /// `MAX_FORMING_BUDGET` ticks the squad gives up even with a member in flight (no immortal squad).
+    forming_started_at: std::collections::BTreeMap<ObjectiveId, u32>,
+    /// objective id → the tick the full-roster squad DEPARTED home (the travel-budget clock, Break #2 travel
+    /// half). Bounds the travel-phase lease refresh — past `MAX_TRAVEL_BUDGET` ticks the squad gives up.
+    departed_at: std::collections::BTreeMap<ObjectiveId, u32>,
+    /// objective id → last-observed room-distance from the squad centroid to the target room. The travel
+    /// lease only refreshes while this is DECREASING (positional progress) — a stuck traveler gives up.
+    last_target_dist: std::collections::BTreeMap<ObjectiveId, u32>,
 }
 
 /// Global cap on concurrently-fielded manager squads. Objectives above this
@@ -98,6 +108,18 @@ const MAX_SPAWN_DISTANCE: u32 = 10;
 /// no active focus (stuck en route, or fought-and-withdrew without a clean clear) the manager gives up
 /// and backs the room off; a clean clear resolves earlier via `engaged_once && no-focus && in-room`.
 const COMMITMENT_BUDGET: u32 = 400;
+
+/// Deep-reach fix (Break #1) — absolute bound on how long the forming-in-flight lease refresh may extend a
+/// squad's life. A roster that has not completed within this many ticks of its generation starting gives up
+/// even with a member nominally in flight (banking), so a genuinely-unfieldable squad is never immortal.
+/// Generous: covers a trickle-income RCL6/7 colony banking several capped members serially (the inter-member
+/// banking gap can exceed COMMITMENT_BUDGET, which is exactly why the per-present++ refresh was insufficient).
+const MAX_FORMING_BUDGET: u32 = 3000;
+
+/// Deep-reach fix (Break #2 travel half) — absolute bound on the travel-phase lease refresh. A full-roster
+/// squad that has not arrived within this many ticks of departing home gives up. Covers the longest realistic
+/// multi-room hop (MAX_SPAWN_DISTANCE=10 rooms ≈ 500 tiles) with margin.
+const MAX_TRAVEL_BUDGET: u32 = 1000;
 
 /// Chebyshev distance between two rooms.
 fn room_distance(a: RoomName, b: RoomName) -> u32 {
@@ -155,6 +177,20 @@ fn forming_state(
     let forming = has_members && !engaged_once && requested_slots > 0 && present_count < requested_slots;
     let forming_progress = forming && present_count > prev_present;
     (forming, forming_progress)
+}
+
+/// FIGHTER-FIRST spawn ordering (deep-reach fix — Break #1): the slot indices of `slots` reordered so the
+/// FIGHTER roles (RangedDPS / Dismantler / MeleeDPS) come BEFORE the support roles (Healer / Tank / Hauler).
+/// A stable sort within each group preserves the original slot order, so the reorder is deterministic and
+/// the per-slot `slot_index` (the composition position the spawn callback + slot-filled tracking key on) is
+/// PRESERVED — only the queue-attempt order changes. Pure so it's host-testable without an ECS world.
+fn spawn_order_fighter_first(slots: &[SquadSlot]) -> Vec<usize> {
+    use screeps_combat_decision::composition::SquadRole;
+    let is_fighter = |r: SquadRole| matches!(r, SquadRole::RangedDPS | SquadRole::Dismantler | SquadRole::MeleeDPS);
+    let mut order: Vec<usize> = (0..slots.len()).collect();
+    // Stable sort by a fighter-first key (false < true ⇒ negate): fighters get key 0, support key 1.
+    order.sort_by_key(|&i| u8::from(!is_fighter(slots[i].role)));
+    order
 }
 
 /// Whether an objective's squad fights as an oriented **formation box** (siege: keep the anchor
@@ -318,7 +354,7 @@ impl<'a> System<'a> for SquadManagerSystem {
             let deadline_lapsed = obj_info.and_then(|(_, _, dl)| dl).is_some_and(|d| now >= d);
 
             // Snapshot the squad facts (Copy) in one borrow.
-            let (wiped, has_focus, engaged_once, in_target_room, has_members, present_count) = data
+            let (wiped, has_focus, engaged_once, in_target_room, has_members, present_count, target_dist) = data
                 .squad_contexts
                 .get(squad_entity)
                 .map(|ctx| {
@@ -330,9 +366,19 @@ impl<'a> System<'a> for SquadManagerSystem {
                     // FIX 2: count members PRESENT in the world (a resolved position) — a still-spawning
                     // slot has no body yet and must not count as progress. Matches the rally gate's notion.
                     let present = ctx.members.iter().filter(|m| m.position.is_some()).count();
-                    (wiped, ctx.focus_target.is_some(), ctx.engaged_once, in_room, !ctx.members.is_empty(), present)
+                    // Deep-reach fix (Break #2 travel half): the CLOSEST present member's room-distance to the
+                    // target room — the travel-progress signal. Decreasing ⇒ the squad is closing on the
+                    // target (refresh the travel lease); flat/increasing ⇒ stuck (let it give up). `None`
+                    // when no member has a position yet (still forming) — handled as "no travel progress".
+                    let dist = squad_room.and_then(|room| {
+                        ctx.members
+                            .iter()
+                            .filter_map(|m| m.position.map(|p| room_distance(p.room_name(), room)))
+                            .min()
+                    });
+                    (wiped, ctx.focus_target.is_some(), ctx.engaged_once, in_room, !ctx.members.is_empty(), present, dist)
                 })
-                .unwrap_or((false, false, false, false, false, 0));
+                .unwrap_or((false, false, false, false, false, 0, None));
 
             // FIX 2 (rally-stall): a forming squad legitimately sitting at home assembling its roster has
             // no focus, so the base +400 lease lapses and the kernel would retire it mid-form → re-field →
@@ -352,6 +398,41 @@ impl<'a> System<'a> for SquadManagerSystem {
             // Record this tick's present count for the next reconcile's progress delta.
             data.forming_progress.last_present.insert(obj_id, present_count);
 
+            // ── Deep-reach fix (Break #1, the forming-lease): a forming squad has a slot still QUEUED or
+            // IN FLIGHT (an unfilled slot Phase B re-queues every tick = a member banking/spawning) whenever
+            // it is forming — so refresh the lease through the inter-member banking gap, NOT only on the exact
+            // present++ tick (which lapsed between members under contention → re-field churn). BOUNDED by a
+            // per-generation forming clock: past MAX_FORMING_BUDGET the refresh stops and the squad gives up.
+            let forming_in_flight = forming;
+            let forming_started_at = *data.forming_progress.forming_started_at.entry(obj_id).or_insert(now);
+            let forming_budget_remaining = now.saturating_sub(forming_started_at) < MAX_FORMING_BUDGET;
+
+            // ── Deep-reach fix (Break #2 travel half, the travel-lease): a FULL-ROSTER squad that has departed
+            // home but not yet engaged / arrived is TRAVELING — it has no focus and is not forming, so the
+            // base lease lapses mid-hop (the W7N7 1-slot lapse). Refresh while it is closing distance on the
+            // target room (positional progress), BOUNDED by an absolute travel clock from the departure tick.
+            let full_roster = requested_slots_for_form > 0 && present_count >= requested_slots_for_form;
+            let traveling = full_roster && !engaged_once && !in_target_room && has_members;
+            let departed_at = if traveling {
+                *data.forming_progress.departed_at.entry(obj_id).or_insert(now)
+            } else {
+                data.forming_progress.departed_at.remove(&obj_id);
+                now
+            };
+            let travel_budget_remaining = now.saturating_sub(departed_at) < MAX_TRAVEL_BUDGET;
+            // Positional progress = the centroid distance to the target DECREASED since last reconcile (or the
+            // first travel tick, where there is no prior reading). A flat/increasing distance ⇒ no progress.
+            let prev_dist = data.forming_progress.last_target_dist.get(&obj_id).copied();
+            let travel_progress = traveling
+                && match (target_dist, prev_dist) {
+                    (Some(cur), Some(prev)) => cur < prev,
+                    (Some(_), None) => true, // first travel reading — assume progress for one reconcile
+                    _ => false,
+                };
+            if let Some(d) = target_dist {
+                data.forming_progress.last_target_dist.insert(obj_id, d);
+            }
+
             // P-OBJ #23 / ADR 0027: the pure reconcile kernel decides retire-vs-keep (unit-tested offline
             // in `screeps_combat_decision::lifecycle`). The manager only builds the snapshot and applies the
             // action — single source of truth, shared with the offline lifecycle harness (no drift).
@@ -367,6 +448,11 @@ impl<'a> System<'a> for SquadManagerSystem {
                 has_members,
                 forming,
                 forming_progress,
+                forming_in_flight,
+                forming_budget_remaining,
+                traveling,
+                travel_progress,
+                travel_budget_remaining,
             };
             let action = lifecycle::reconcile(snapshot);
             if let lifecycle::ReconcileAction::Retire { reason, withdraw, mark_unwinnable } = action {
@@ -386,7 +472,13 @@ impl<'a> System<'a> for SquadManagerSystem {
                 }
                 retire_squad(&data.updater, &data.entities, squad_entity);
                 data.objective_queue.release_entity(squad_entity);
-                data.forming_progress.last_present.remove(&obj_id); // FIX 2: drop the progress tracker
+                // Drop ALL per-objective lifecycle trackers so a RE-FIELD (new generation claiming the same
+                // objective) restarts the forming + travel budget clocks from scratch (the deep-reach bounds
+                // are per-generation, like the offline harness's `gen_start`).
+                data.forming_progress.last_present.remove(&obj_id);
+                data.forming_progress.forming_started_at.remove(&obj_id);
+                data.forming_progress.departed_at.remove(&obj_id);
+                data.forming_progress.last_target_dist.remove(&obj_id);
                 continue;
             }
             // Live (Keep / KeepRefreshLease): re-establish the (ephemeral) claim — idempotent, self-heals
@@ -419,7 +511,15 @@ impl<'a> System<'a> for SquadManagerSystem {
                 None => continue,
             };
 
-            for (slot_index, slot) in slots.iter().enumerate() {
+            // FIGHTER-FIRST spawn order (deep-reach fix — Break #1): attempt the FIGHTER slots
+            // (RangedDPS / Dismantler / MeleeDPS) BEFORE the Healer / Tank / Hauler slots, so a roster that
+            // forms slowly under spawn contention spawns a combat-capable member FIRST. A partial roster
+            // (the common contention case) is then a fighter, not a pile of orphaned healers waiting for a
+            // fighter that lost the spawn race (the live W7N4 "5 Healers + 1 RangedDPS at present=1/2"
+            // healer pile-up). The slot's stable `slot_index` (its composition position) is PRESERVED —
+            // only the queue-attempt ORDER changes, so the engaged formation / member tracking is unchanged.
+            for slot_index in spawn_order_fighter_first(&slots) {
+                let slot = &slots[slot_index];
                 let already_filled = data
                     .squad_contexts
                     .get(*squad_entity)
@@ -735,23 +835,38 @@ fn build_room_combat_dtos(
     mapping: &EntityMappingData,
     room: RoomName,
 ) -> (Vec<CombatCreepDto>, Vec<CombatStructureDto>) {
-    let entity = match mapping.get_room(&room) {
-        Some(e) => e,
-        None => return (Vec::new(), Vec::new()),
-    };
-    let rd = match room_data.get(entity) {
-        Some(rd) => rd,
-        None => return (Vec::new(), Vec::new()),
-    };
-    let hostiles = rd
-        .get_creeps()
-        .map(|c| c.hostile().iter().map(creep_to_dto).collect())
-        .unwrap_or_default();
-    let structures = rd
-        .get_structures()
-        .map(|s| s.all().iter().map(structure_to_dto).collect())
-        .unwrap_or_default();
-    (hostiles, structures)
+    // The cached path: the room has a RoomData ECS entity (registered in the mapping). `get_creeps`/
+    // `get_structures` self-refresh from `game::rooms()` when stale, so this returns the live state.
+    if let Some(rd) = mapping.get_room(&room).and_then(|e| room_data.get(e)) {
+        let hostiles = rd
+            .get_creeps()
+            .map(|c| c.hostile().iter().map(creep_to_dto).collect())
+            .unwrap_or_default();
+        let structures = rd
+            .get_structures()
+            .map(|s| s.all().iter().map(structure_to_dto).collect())
+            .unwrap_or_default();
+        return (hostiles, structures);
+    }
+
+    // FOCUS-ON-ARRIVAL FIX (Break #2 arrival half): the squad has just ENTERED `room`, so the room IS
+    // visible (a member stands in it), but the mapping has not yet registered its RoomData entity this tick
+    // (`mapping.get_room` is None on the arrival tick — the visibility/mapping timing hole). The pre-fix
+    // path returned EMPTY DTOs → `decide_squad` found no focus → the squad logged IN_ROOM_NO_FOCUS and sat
+    // until the lease lapsed (it never engaged, never razed the core — THE deep no-engage bug). Force a
+    // direct LIVE re-read from `game::rooms()` so a focus is computed on the arrival tick. Inert when the
+    // room is genuinely not visible (we have no vision — keep the empty result, the squad keeps closing).
+    if let Some(live) = game::rooms().get(room) {
+        let hostiles = live
+            .find(find::HOSTILE_CREEPS, None)
+            .iter()
+            .map(creep_to_dto)
+            .collect();
+        let structures = live.find(find::STRUCTURES, None).iter().map(structure_to_dto).collect();
+        return (hostiles, structures);
+    }
+
+    (Vec::new(), Vec::new())
 }
 
 /// ADR 0024 Stage 1 (live mirror of `screeps_combat_agent::pathing`): scales the [`ThreatField`]'s
@@ -1255,6 +1370,24 @@ mod tests {
         // no members / unknown roster → not forming (legacy preserved).
         assert_eq!(forming_state(false, false, 0, 5, 0), (false, false), "no members → not forming");
         assert_eq!(forming_state(true, false, 1, 0, 0), (false, false), "unknown roster size → not forming");
+    }
+
+    #[test]
+    fn spawn_order_puts_fighters_before_support() {
+        use screeps_combat_decision::bodies::CombatBodySpec;
+        use screeps_combat_decision::composition::{BodyType, SquadRole};
+        let slot = |role: SquadRole| SquadSlot { role, body_type: BodyType::Sized(CombatBodySpec::default()) };
+        // A healer-front composition (assemble_force orders Healer first): Healer, Healer, RangedDPS, Tank.
+        let slots = vec![slot(SquadRole::Healer), slot(SquadRole::Healer), slot(SquadRole::RangedDPS), slot(SquadRole::Tank)];
+        let order = spawn_order_fighter_first(&slots);
+        // The RangedDPS fighter (slot index 2) is attempted FIRST, support after — slot indices preserved.
+        assert_eq!(order, vec![2, 0, 1, 3], "fighter (RangedDPS) spawns first, support after, indices preserved");
+        // A dismantler + ranged + 2 healers: both fighters precede both healers, stable within each group.
+        let siege = vec![slot(SquadRole::Healer), slot(SquadRole::Dismantler), slot(SquadRole::Healer), slot(SquadRole::RangedDPS)];
+        assert_eq!(spawn_order_fighter_first(&siege), vec![1, 3, 0, 2], "fighters (Dismantler, RangedDPS) first, healers after");
+        // An all-support (no fighter) roster keeps its original order (degenerate; no reorder).
+        let support = vec![slot(SquadRole::Healer), slot(SquadRole::Tank)];
+        assert_eq!(spawn_order_fighter_first(&support), vec![0, 1], "no fighters → original order");
     }
 
     #[test]
