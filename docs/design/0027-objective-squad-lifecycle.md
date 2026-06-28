@@ -169,8 +169,9 @@ collapsed from 5–13 to ~1).
 
 Subsumes backlog **#1 (defense targeting)** + **#5 (reassign survivors)**, and removes the
 retire→re-field churn for non-loss terminals. Chosen shape: **threat-centric defense (Option B)**
-+ **atomic whole-squad reassignment** (no splitting). Reviewed against the existing objective
-model for cohesion; lands in the same pure-kernel + thin-adapter seam as the rest of 0027.
++ **whole-squad reassignment** + **Lanchester-guarded creep transfer/merge** (the pending-slot rule
+below; only *dilutive* splitting is rejected). Reviewed against the existing objective model for
+cohesion; lands in the same pure-kernel + thin-adapter seam as the rest of 0027.
 
 ### Problem
 A squad that **Resolves** (target cleared) or hits **ObjectiveGone** (target vanished)
@@ -208,6 +209,38 @@ the squad useful).
   model (we don't dodge it with ephemeral hacks). Option B's threat-centric `Defend` semantics +
   any new producer fields land under one deliberate bump rather than contortions.
 
+### Creep transfer & merge — the pending-slot Lanchester guard
+Whole-squad reassignment is one move; a squad can also **merge** (wholly) or **partially merge** into
+another. The guard that keeps this Lanchester-safe: **a creep may transfer to another squad ONLY to
+fill that squad's PENDING SPAWN SLOT (compatible role).** Then the receiver's *target* force is
+unchanged (it fills the slot by transfer instead of by spawn) — no new under-strength force is created,
+the donor only sheds creeps it no longer needs, and the move is **concentration, not dilution.** Three
+ops collapse to one safe primitive:
+- **Reassign** — the whole squad takes a new objective (atomic; above).
+- **Merge** — squad A's members fill squad B's pending slots; A empties → retires, B fields fuller/sooner.
+- **Partial merge / reinforce** — some of A's members fill some of B's pending slots; leftover A keeps
+  its objective or recycles.
+
+It is strictly positive: reuses A's invested creeps, **saves B's spawn energy + time** (B fields
+sooner), and the transferred creep can **RENEW with the forming receiver** (recover lifetime vs
+recycling). It also eases the spawn-starve forming-tail (backlog #6): two squads stuck at 1/4 each can
+**merge into one at 2/4** instead of both churning.
+
+**When it fires (donor sheds, never weakens mid-fight):** A is terminal (Resolved/ObjectiveGone) with
+survivors, OR A is over-rostered (objective needs fewer), OR two forming squads consolidate. The
+receiver B is **forming** (has pending slots); prefer a **nearby** B (minimize transfer travel).
+
+**Coordination (the renew/rally concern) is clean because the RECEIVER is the coordination unit:** B
+already owns its rally, commitment lease, renew-state, and the *defined* pending slot — a transferred
+creep just sets its squad-ref + slot to B's pending slot, joins B's gather, and renews under B; the
+spawn queue drops the now-filled slot. The pending slot is the handoff point, so nothing fragments
+(contrast a dilutive split, which would have to *invent* a new rally/lease/renew unit). The
+(creep → pending slot) match is deterministic (role-matched, nearest-B, `BTreeMap`/`Vec` order).
+
+**Phasing:** v1 = whole-squad **Reassign** (the foundation, provable alone). v2 = the **transfer/merge**
+pending-slot primitive (reinforce survivors + consolidate forming squads) — subsumes the old
+"survivor-reinforcement pool".
+
 ### "Defending the wrong room" — threat-centric defense (Option B, chosen)
 Reassignment can only re-point a freed defender to objectives that **exist**, and today `war.rs`
 emits only `Defend{owned_room}` (the offense scan `continue`s on owned rooms — `war.rs:759`), so a
@@ -228,16 +261,11 @@ rampart-hold* for high-value bases, and `holding_station` becomes the bounded fa
 the threat's room and reassignment + TTL handle the hand-off instead.
 
 ### Deferred / rejected
-- **Squad SPLITTING / partial (per-creep) reassignment — REJECTED; squads stay ATOMIC.** Splitting
-  is usually a Lanchester *loss* (two half-squads are each far weaker than half-strength → a split
-  force loses fights a massed one wins; it helps only vs *individually-trivial* targets, where
-  sequential whole-squad reassignment is nearly as good and far simpler). And it fragments exactly
-  the things that must stay coordinated — rally, commitment lease, renew-state, ECS membership —
-  into per-sub-squad accounting (which sub-squad owns a creep's renewal/rally/lease + a
-  generation-safe member transfer). Atomic whole-squad reassignment keeps all of those as one unit.
-  *If cross-squad creep reuse is ever wanted*, the clean form is a **survivor-reinforcement pool**
-  (a cleared squad's survivors return to a reserve and reinforce a *forming* squad near home) — it
-  never peels apart an in-flight squad; NOT mid-flight splitting.
+- **DILUTIVE split — REJECTED** (only the dilutive case; the *concentrating* transfer/merge is
+  first-class above). Peeling creeps into a NEW, smaller squad that does **not** fill an existing
+  pending slot creates an under-strength force (Lanchester loss) and would have to invent a fresh
+  rally/lease/renew unit. The **pending-slot rule is the line**: fill an existing slot = concentration
+  (allowed); spawn a new weaker force = dilution (rejected).
 - **Preemption** (reassign to a higher-EV target mid-flight) — deferred (thrash; the
   `assault_latched`/`engaged_once` latches exist precisely to stop un-committing). Behind a flag
   if ever pursued.
