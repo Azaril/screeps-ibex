@@ -646,12 +646,15 @@ impl WarOperation {
             return;
         }
 
-        // Spawn pressure gate: don't attack if all spawns are busy.
-        if system_data.economy.total_free_spawns == 0 {
-            if features.military.debug_log {
-                info!("[War] Offense skipped -- no free spawns");
-            }
-            return;
+        // FIX D (ii): a busy-spawn tick must NOT blind the whole offense SCAN. Previously
+        // `total_free_spawns == 0` early-returned the entire evaluation, so while spawns were busy we
+        // never (re-)registered re-scouts (the W3N5 stale-data loop) and never upserted offense
+        // objectives — even though objectives are queued idempotently and the SquadManager assembles
+        // them when a spawn frees up. The per-candidate ROI/affordability gate (`can_afford_military`)
+        // already protects against committing a squad we can't pay for, so the spawn-pressure check is
+        // redundant here. Keep the log for observability; do not return.
+        if system_data.economy.total_free_spawns == 0 && features.military.debug_log {
+            info!("[War] Offense scan continues despite no free spawns (objectives upsert; ROI gate protects spawning)");
         }
 
         // Collect home rooms (entity + name) for distance scoring and spawn assignment.
@@ -779,14 +782,30 @@ impl WarOperation {
             // explicit per-tier re-scout *scheduler* owning the cadence + OBSERVE-only registration for
             // rooms confirmed in observer range — see docs/design/0021-strategic-visibility.md.
             if current_tick.saturating_sub(threat_data.last_seen) > 200 {
+                // FIX C: escalate this re-scout to HIGH if the room is an active/candidate offense
+                // target — an existing Attack objective targets it, or last-seen (stale) structures
+                // still show an invader core we'd clear. Otherwise it stays MEDIUM, below the claim
+                // CRITICAL/HIGH flood, and the strategic intel never lands (the W3N5 forever-loop).
+                let has_attack_objective = system_data
+                    .combat_objective_queue
+                    .objectives
+                    .iter()
+                    .any(|o| o.owner == ObjectiveOwner::Attack && o.kind.room() == room_name);
+                let has_known_core = room_entity
+                    .and_then(|e| system_data.room_data.get(e))
+                    .and_then(|rd| rd.get_structures())
+                    .map(|s| !s.invader_cores().is_empty())
+                    .unwrap_or(false);
+                let rescout_priority = offense_rescout_priority(has_attack_objective || has_known_core);
                 system_data
                     .visibility
-                    .request(VisibilityRequest::new(room_name, VISIBILITY_PRIORITY_MEDIUM, VisibilityRequestFlags::ALL));
+                    .request(VisibilityRequest::new(room_name, rescout_priority, VisibilityRequestFlags::ALL));
                 if war_debug {
                     info!(
-                        "[War]   Skip {} -- stale data (age={}); requested re-scout",
+                        "[War]   Skip {} -- stale data (age={}); requested re-scout (priority={})",
                         room_name,
-                        current_tick.saturating_sub(threat_data.last_seen)
+                        current_tick.saturating_sub(threat_data.last_seen),
+                        rescout_priority
                     );
                 }
                 continue;
@@ -1224,8 +1243,13 @@ impl WarOperation {
             // Always re-assert an EXISTING objective (refresh its TTL so the manager
             // keeps fielding it); gate only NEW offense on the cap. Candidates are
             // score-sorted desc, so a skipped new objective is the lowest-value one.
+            // FIX D: gate only NEW offense on the cap — but EXEMPT cheap, self-decaying level-0
+            // InvaderCore Dismantle objectives, so a young single colony (cap == 1) can address all
+            // its reserver cores concurrently instead of one-at-a-time. The SquadManager's
+            // MAX_CONCURRENT_SQUADS still backstops real spawn pressure, and the ROI/winnability gate
+            // above already declined anything unaffordable, so this can't over-commit.
             let is_new = system_data.combat_objective_queue.find_by_kind(&kind).is_none();
-            if is_new && offense_count >= self.max_concurrent_attacks {
+            if is_new && !offense_cap_allows_new(&candidate.source, offense_count, self.max_concurrent_attacks) {
                 continue;
             }
             info!(
@@ -1339,6 +1363,38 @@ impl WarOperation {
 /// (IBEX-044).
 fn cadence_elapsed(now: u32, last_tick: Option<u32>, cadence: u32) -> bool {
     last_tick.map(|t| now.saturating_sub(t) >= cadence).unwrap_or(true)
+}
+
+/// FIX C — priority for a war OFFENSE re-scout request on a stale in-range room.
+///
+/// A room that is an active or candidate offense target (an existing Attack objective targets it, or
+/// cached intel shows an invader core we want to clear) gets HIGH so its re-scout preempts the
+/// CRITICAL/HIGH flood of expansion (claim) visibility requests — otherwise the strategic intel
+/// never lands and the room loops "stale data; requested re-scout" forever (the live W3N5 case).
+/// Every OTHER stale room keeps MEDIUM (we do NOT raise all visibility requests — only the
+/// offense-target re-scouts).
+fn offense_rescout_priority(is_offense_target: bool) -> f32 {
+    if is_offense_target {
+        VISIBILITY_PRIORITY_HIGH
+    } else {
+        VISIBILITY_PRIORITY_MEDIUM
+    }
+}
+
+/// FIX D — whether a NEW offense objective may be fielded given the concurrency cap.
+///
+/// `max_concurrent_attacks` collapses to 1 on a young single colony (`room_count - 1` floored at 1),
+/// so only ONE offense objective could exist at a time — and the 5 cheap level-0 invader cores
+/// littering a starting region could never be addressed concurrently. Cheap, self-decaying level-0
+/// `InvaderCore` Dismantle objectives are EXEMPT from the cap (the SquadManager's
+/// `MAX_CONCURRENT_SQUADS` still backstops the real spawn pressure). This is a TARGETED exemption,
+/// not a broad cap raise: a strong, expensive target (player room, leveled stronghold) still
+/// competes for the limited concurrency budget.
+fn offense_cap_allows_new(source: &TargetSource, offense_count: u32, max_concurrent_attacks: u32) -> bool {
+    if matches!(source, TargetSource::InvaderCore { level: 0 }) {
+        return true;
+    }
+    offense_count < max_concurrent_attacks
 }
 
 /// Score an invader core as an attack candidate; `None` = don't attack.
@@ -1700,5 +1756,61 @@ mod tests {
                 assert!(easy > hard, "level {level}: {easy} <= {hard}");
             }
         }
+    }
+
+    // FIX C: a stale in-range room that is an active/candidate offense target re-scouts at HIGH so it
+    // preempts the claim CRITICAL/HIGH visibility flood; every other stale room stays MEDIUM. (We do
+    // NOT raise all visibility requests — only the offense-target re-scouts.)
+    #[test]
+    fn offense_target_rescout_escalates_to_high() {
+        assert_eq!(offense_rescout_priority(true), VISIBILITY_PRIORITY_HIGH);
+        assert_eq!(offense_rescout_priority(false), VISIBILITY_PRIORITY_MEDIUM);
+        // The escalated priority must actually outrank the MEDIUM default (so it sorts above the
+        // expansion scouts in the visibility queue).
+        assert!(offense_rescout_priority(true) > offense_rescout_priority(false));
+    }
+
+    // FIX D: N level-0 invader cores with fresh intel must all become offense objectives even when
+    // the concurrency cap is 1 (a young single colony) — they are EXEMPT (cheap, self-decaying; the
+    // SquadManager MAX_CONCURRENT_SQUADS still backstops). A non-core target is NOT exempt and still
+    // competes for the cap.
+    #[test]
+    fn lvl0_cores_bypass_the_concurrency_cap() {
+        let cap = 1; // base_attacks.saturating_sub(1).max(1) on a single young colony.
+        let lvl0 = TargetSource::InvaderCore { level: 0 };
+
+        // Simulate fielding N=5 fresh lvl0 cores one after another: each is allowed despite the
+        // count already being at/over the cap.
+        let mut offense_count = 0u32;
+        let mut fielded = 0u32;
+        for _ in 0..5 {
+            assert!(
+                offense_cap_allows_new(&lvl0, offense_count, cap),
+                "lvl0 core #{} blocked by cap {} at count {}",
+                fielded + 1,
+                cap,
+                offense_count
+            );
+            offense_count += 1;
+            fielded += 1;
+        }
+        assert_eq!(fielded, 5, "all 5 lvl0 cores must be fieldable concurrently under cap=1");
+    }
+
+    #[test]
+    fn non_core_offense_still_obeys_the_cap() {
+        let cap = 1;
+        // A leveled stronghold core (not level 0) is NOT exempt.
+        let lvl3 = TargetSource::InvaderCore { level: 3 };
+        assert!(offense_cap_allows_new(&lvl3, 0, cap), "first leveled-core objective fits the cap");
+        assert!(!offense_cap_allows_new(&lvl3, 1, cap), "second leveled-core objective is over the cap");
+
+        // A player-room clear (AttackFlag) also obeys the cap.
+        assert!(offense_cap_allows_new(&TargetSource::AttackFlag, 0, cap));
+        assert!(!offense_cap_allows_new(&TargetSource::AttackFlag, 1, cap));
+
+        // With more headroom, a non-core target fits up to the cap.
+        assert!(offense_cap_allows_new(&TargetSource::AttackFlag, 2, 3));
+        assert!(!offense_cap_allows_new(&TargetSource::AttackFlag, 3, 3));
     }
 }
