@@ -114,10 +114,12 @@ pub struct AttackCandidate {
 /// and healers sustaining them (Heal) are all worth a defender; pure
 /// scouts/haulers (only Move/Carry/Tough) are not — they can't hurt us and
 /// don't warrant a spawn. Pure and host-tested.
+///
+/// ADR 0027 P0: delegates to the PURE `war_decision::hostile_warrants_defender` kernel so the owned-room
+/// scan + the lifted neighbour observation share ONE armed-check (no drift). The bot keeps this thin alias
+/// for the owned-room scan's existing call sites + tests.
 pub fn hostile_warrants_defender(parts: &[Part]) -> bool {
-    parts
-        .iter()
-        .any(|p| matches!(p, Part::Attack | Part::RangedAttack | Part::Work | Part::Claim | Part::Heal))
+    screeps_combat_decision::war_decision::hostile_warrants_defender(parts)
 }
 
 // ---------------------------------------------------------------------------
@@ -416,53 +418,47 @@ impl WarOperation {
         // build). Only the `game::*`/intel hostile-gather below is non-pure; the decision is the proven
         // kernel. Border visibility is kept fresh by the heavy-recompute refresh (war.rs ~1345-1372).
         let owned_room_names: Vec<RoomName> = home_rooms.iter().filter_map(|&e| system_data.room_data.get(e)).map(|rd| rd.name).collect();
-        let observed_neighbours: Vec<screeps_combat_decision::war_decision::ObservedRoom<RoomName>> =
-            (system_data.entities, &*system_data.room_data)
-                .join()
-                .filter_map(|(_, room_data)| {
-                    let dynamic_vis = room_data.get_dynamic_visibility_data()?;
-                    // VISIBLE + NON-OWNED only. Owned rooms are covered by the owned-room scan above (and
-                    // the pure builder also drops dist-0 as a backstop, so we never double-count).
-                    if !dynamic_vis.visible() || dynamic_vis.owner().mine() {
-                        return None;
-                    }
-                    // Bounded: don't even GATHER beyond the leash (the builder/kernel would drop it anyway).
-                    let nearest = owned_room_names.iter().map(|&o| cheby(o, room_data.name)).min()?;
-                    if nearest == 0 || nearest > policy.leash {
-                        return None;
-                    }
-                    // Sum the danger over the hostiles that warrant a defender (same dps estimate the owned
-                    // path uses). Source Keepers are excluded (permanent lair residents, not a colony threat).
-                    let creeps = room_data.get_creeps()?;
-                    let hostiles: Vec<_> = creeps
-                        .hostile()
-                        .iter()
-                        .filter(|c| !crate::military::is_source_keeper_owner(&c.owner().username()))
-                        .collect();
-                    if hostiles.is_empty() {
-                        return None;
-                    }
-                    let mut armed = false;
-                    let mut danger: f32 = 0.0;
-                    for hostile in &hostiles {
-                        let parts: Vec<Part> = hostile.body().iter().filter(|p| p.hits() > 0).map(|p| p.part()).collect();
-                        if hostile_warrants_defender(&parts) {
-                            armed = true;
-                        }
-                        for part in &parts {
-                            match part {
-                                Part::Attack => danger += 30.0,
-                                Part::RangedAttack => danger += 10.0,
-                                _ => {}
-                            }
-                        }
-                    }
-                    if !armed {
-                        return None;
-                    }
-                    Some(screeps_combat_decision::war_decision::ObservedRoom { room: room_data.name, armed, danger })
-                })
-                .collect();
+        // ── ADR 0027 P0: war.rs keeps ONLY the RAW `game::*`/intel read — (room, hostile bodies as parts,
+        //    visible, is_owned, nearest-owned-dist) — and the DECISION (armed-check + danger estimate +
+        //    visible/non-owned/within-leash filter + swarm→one-room fold) is the PURE `observe_neighbours`
+        //    kernel, so the whole observation LAYER is sim-able (run_v1_flow / war_decision tests). Source
+        //    Keepers are excluded HERE (the raw read), the only non-pure judgement left.
+        // (room, visible, is_owned, nearest-owned-dist, hostile bodies as live parts) — the RAW read.
+        type RawNeighbourRead = (RoomName, bool, bool, Option<u32>, Vec<Vec<Part>>);
+        let raw_bodies: Vec<RawNeighbourRead> = (system_data.entities, &*system_data.room_data)
+            .join()
+            .filter_map(|(_, room_data)| {
+                let dynamic_vis = room_data.get_dynamic_visibility_data()?;
+                let visible = dynamic_vis.visible();
+                let is_owned = dynamic_vis.owner().mine();
+                let nearest = owned_room_names.iter().map(|&o| cheby(o, room_data.name)).min();
+                // Source Keepers excluded (permanent lair residents, not a colony threat). Each remaining
+                // hostile's LIVE parts → one body entry; the pure kernel folds armed + danger over them.
+                let bodies: Vec<Vec<Part>> = room_data
+                    .get_creeps()
+                    .map(|creeps| {
+                        creeps
+                            .hostile()
+                            .iter()
+                            .filter(|c| !crate::military::is_source_keeper_owner(&c.owner().username()))
+                            .map(|c| c.body().iter().filter(|p| p.hits() > 0).map(|p| p.part()).collect::<Vec<Part>>())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some((room_data.name, visible, is_owned, nearest, bodies))
+            })
+            .collect();
+        let observations: Vec<screeps_combat_decision::war_decision::RawObservation<RoomName>> = raw_bodies
+            .iter()
+            .map(|(room, visible, is_owned, nearest, bodies)| screeps_combat_decision::war_decision::RawObservation {
+                room: *room,
+                hostile_bodies: bodies,
+                visible: *visible,
+                is_owned: *is_owned,
+                nearest_owned_dist: *nearest,
+            })
+            .collect();
+        let observed_neighbours = screeps_combat_decision::war_decision::observe_neighbours(&observations, policy);
         let neighbour_threats = screeps_combat_decision::war_decision::neighbour_threats(&owned_rooms_for_kernel, &observed_neighbours, policy, cheby);
 
         // Feed the owned-room threats AND the neighbour threats to the one proven kernel. The kernel emits

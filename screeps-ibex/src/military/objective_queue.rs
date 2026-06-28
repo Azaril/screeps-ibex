@@ -419,6 +419,41 @@ impl CombatObjectiveQueue {
             .map(|o| o.id)
     }
 
+    /// ADR 0032 v1.1 — the EV-MAXIMIZING per-squad selection that SUPERSEDES the `priority.then(proximity)`
+    /// ranking of [`Self::best_reassignment_near`]/[`Self::best_unclaimed_near_excluding`]: rank the
+    /// claimable, compatible objectives by the caller-supplied `ev_q` (a QUANTIZED `EV = P(win | caps vs
+    /// defense) · value_e − travel`, computed in `squad_manager` from the squad's caps + the objective's
+    /// value_e/defense) and return the MAX-EV id. The caller owns the EV (the queue has no intel/defense), so
+    /// this stays a thin, pure ranking; ties break on the smallest id (deterministic, no `HashMap`). Skips
+    /// claimed / excluded / backoff / capability-incompatible objectives (the column-feasibility filter).
+    pub fn best_by_ev<F, C>(&self, now: u32, exclude: &[ObjectiveId], compatible: C, ev_q: F) -> Option<(ObjectiveId, i64)>
+    where
+        F: Fn(&CombatObjective) -> i64,
+        C: Fn(&ObjectiveKind) -> bool,
+    {
+        self.objectives
+            .iter()
+            .filter(|o| !self.is_claimed(o.id))
+            .filter(|o| !exclude.contains(&o.id))
+            .filter(|o| !self.is_unwinnable_now(o.kind.room(), now))
+            .filter(|o| compatible(&o.kind))
+            .map(|o| (o.id, ev_q(o)))
+            // Max EV; deterministic tie-break: the SMALLER id wins (stable `ObjectiveId` order, never an
+            // `Entity` index — ADR 0032 §Determinism). The compare is over INTEGER EV (already quantized),
+            // so no float feeds the discrete branch (ADR 0020 §6).
+            .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+    }
+
+    /// The quantized EV of ONE objective for this squad (the StayPut column of the gate) — looks the
+    /// objective up by id + runs the caller's `ev_q`. `None` if the objective is gone. Used by the EV-positive
+    /// gate to compare a candidate reassign/claim against CONTINUING the current objective.
+    pub fn objective_ev_q<F>(&self, id: ObjectiveId, ev_q: F) -> Option<i64>
+    where
+        F: Fn(&CombatObjective) -> i64,
+    {
+        self.objectives.iter().find(|o| o.id == id).map(ev_q)
+    }
+
     /// Whether there is any unclaimed, non-backoff objective at all.
     pub fn has_unclaimed(&self, now: u32) -> bool {
         self.objectives

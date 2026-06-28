@@ -286,6 +286,157 @@ fn capability_class(kind: &ObjectiveKind) -> CapabilityClass {
     }
 }
 
+// ═══ ADR 0032 v1.1 — EV-of-pairing projection (bot intel → the pure `objective_value`/`pairing_ev` kernels) ══
+//
+// The auction's per-squad SELECTION ranks candidate objectives by `EV = P(win | squad caps vs defense) ·
+// value_e − travel cost` (ADR 0032 §"EV of a (squad, objective) pairing"), reusing the EXISTING squad's
+// `capabilities()` (not a candidate search). These helpers PROJECT the bot's per-room intel into the pure
+// decision-crate kernels (`objective_value::value_e` + `composition::pairing_ev`), exactly as `war.rs`
+// projects intel into `optimize_composition` — so the bot and the kernels agree, no inline EV math here.
+
+use screeps_combat_decision::composition::{pairing_ev, quantize_ev, PairingParams, SquadCapabilities};
+use screeps_combat_decision::doctrine::EnemyForce;
+use screeps_combat_decision::force_sizing::{DefenseProfile, TowerThreat};
+use screeps_combat_decision::objective_value::{value_e, ObjectiveIntel, ObjectiveValueKind};
+
+/// The commit-EV threshold reused from ADR 0031 (`CompositionParams::commit_ev_threshold`) as the
+/// per-squad reassign/claim gate floor (ADR 0032 §EV-positive gate): a move must beat its alternative by
+/// MORE than this (quantized) to fire, preventing thrash on near-ties. Conservative (small) so a clearly
+/// better move always fires but a marginal one does not.
+const COMMIT_EV_THRESHOLD: f32 = 1.0;
+
+/// A priority-implied DANGER floor (DPS) for a DEFENSE objective so `value_e` is never starved by missing
+/// intel (ADR 0032 §"must not starve real defense"): a producer-set band → a minimum threat danger. Scaled
+/// so even a MEDIUM defense objective clears the EV-positive floor (the producer only emits when a defender
+/// is warranted), while the scouted DPS (which can exceed this) still ranks objectives against each other.
+fn priority_implied_danger(priority: f32) -> f32 {
+    use super::objective_queue::{OBJECTIVE_PRIORITY_CRITICAL, OBJECTIVE_PRIORITY_HIGH, OBJECTIVE_PRIORITY_MEDIUM};
+    if priority >= OBJECTIVE_PRIORITY_CRITICAL {
+        300.0 // base under direct attack — a substantial assault floor
+    } else if priority >= OBJECTIVE_PRIORITY_HIGH {
+        120.0 // adjacent / operator intent
+    } else if priority >= OBJECTIVE_PRIORITY_MEDIUM {
+        60.0 // leashed roamer / remote invader
+    } else {
+        30.0 // a real-but-minor threat (one armed creep)
+    }
+}
+
+/// Project a bot `ObjectiveKind` → the pure `value_e` kind (parity with the `DoctrineObjective` projection).
+fn project_value_kind(kind: &ObjectiveKind) -> ObjectiveValueKind {
+    use super::objective_queue::FarmKind;
+    match kind {
+        ObjectiveKind::Defend { .. } | ObjectiveKind::Secure { .. } | ObjectiveKind::Escort { .. } => ObjectiveValueKind::Defend,
+        ObjectiveKind::Farm { kind: FarmKind::Core, .. } => ObjectiveValueKind::FarmCore,
+        ObjectiveKind::Farm { kind: FarmKind::SourceKeeper, .. } => ObjectiveValueKind::FarmSourceKeeper,
+        ObjectiveKind::Farm { kind: FarmKind::PowerBank, .. } => ObjectiveValueKind::FarmPowerBank,
+        ObjectiveKind::Harass { .. } | ObjectiveKind::Dismantle { .. } => ObjectiveValueKind::Denial,
+    }
+}
+
+/// Build the per-objective `DefenseProfile` the EV P(win) is judged against, from the room's scouted threat
+/// intel. The assault tile is the room center (the coarse proxy war.rs uses for non-flag targets); unknown
+/// per-tower energy ⇒ assume firing (1000), never under-estimating. `None` intel ⇒ undefended profile.
+fn project_defense(threat: Option<&crate::military::threatmap::RoomThreatData>) -> DefenseProfile {
+    let Some(td) = threat else {
+        return DefenseProfile::default();
+    };
+    let towers: Vec<TowerThreat> = td
+        .hostile_tower_positions
+        .iter()
+        .enumerate()
+        .map(|(i, _)| TowerThreat { range_to_assault: 25, energy: td.tower_energy.get(i).copied().unwrap_or(1000) })
+        .collect();
+    DefenseProfile {
+        towers,
+        breach_hits: td.breach_rampart_hits,
+        objective_hits: 0,
+        // The hostile-creep DPS is NOT priced here: `pairing_ev`/`pairing_p_win` (the EV path this profile
+        // feeds) read the enemy via the separate `EnemyForce` argument, NOT `DefenseProfile.enemy_dps`
+        // (that field is read only by `optimize_composition`/force-sizing, a different path). `objective_ev_q`
+        // builds the `EnemyForce` from the same threat intel and passes it as the `enemy` arg — leaving an
+        // `enemy_dps` here would imply the enemy is priced twice / falsely suggest this path reads it.
+        enemy_dps: 0.0,
+        repair_per_tick: 0.0,
+        safe_mode: td.safe_mode_active,
+    }
+}
+
+/// Build the hostile CREEP `EnemyForce` the EV P(win) is judged against, from the room's scouted threat —
+/// the `enemy` arg `pairing_p_win` actually reads (parity with war.rs's owned-defense path, war.rs ~486-492).
+/// `dps`/`heal` are the threat totals; `hits = 0` (this prices the attrition the squad takes, NOT a structure
+/// objective to kill — the structure/breach cost is on `DefenseProfile`); `count`/`boosted` come from the
+/// per-creep intel. `None` intel ⇒ no enemy (`None`), the genuinely-undefended case.
+fn project_enemy(threat: Option<&crate::military::threatmap::RoomThreatData>) -> Option<EnemyForce> {
+    let td = threat?;
+    Some(EnemyForce {
+        dps: td.estimated_dps,
+        heal: td.estimated_heal,
+        hits: 0,
+        count: td.hostile_creeps.len() as u32,
+        boosted: td.hostile_creeps.iter().any(|c| c.boosted),
+    })
+}
+
+/// Build the `ObjectiveIntel` the `value_e` reads. For a DEFENSE objective the value scales with the THREAT
+/// DANGER (the dps=0 over-response fix, ADR 0032 line 46): asset_value = the room's energy capacity (the
+/// RCL/asset proxy war.rs uses), threat_danger = the scouted estimated DPS. Farm/denial kinds derive their
+/// fields from the priority as a coarse income/denial proxy (v1.1 — the precise farm income is the war/SK
+/// producer's; the per-squad gate only needs a comparable ordering).
+fn project_intel(kind: &ObjectiveKind, priority: f32, asset_value: f32, threat: Option<&crate::military::threatmap::RoomThreatData>) -> ObjectiveIntel {
+    let danger = threat.map(|t| t.estimated_dps).unwrap_or(0.0);
+    match project_value_kind(kind) {
+        // DEFENSE: scale value by the THREAT DANGER (the dps=0 over-response fix — a HIGHER-dps threat is
+        // worth more to defend), but FLOOR the danger by a priority-implied minimum so a defense objective is
+        // NEVER starved by missing/stale intel: the producer (war.rs) only emits a Defend/Secure when a
+        // threat ALREADY warrants a defender (`hostile_warrants_defender` — incl. dps=0 controller-attackers),
+        // so its mere existence is a real threat. The floor keeps a genuinely-dangerous threat (high
+        // priority) fielding a defender even before its DPS is scouted; the scouted DPS still differentiates
+        // RANKING among defense objectives. (The pure "harmless scout → 0 value" case is gated upstream at the
+        // observe layer; here a fielded defense objective always clears the EV-positive floor.)
+        ObjectiveValueKind::Defend => {
+            ObjectiveIntel { asset_value, threat_danger: danger.max(priority_implied_danger(priority)), ..Default::default() }
+        }
+        // Farm/denial: the producer-set priority is a comparable upside proxy (v1.1). Scaled so it lands in a
+        // similar magnitude to a defended value_e (priority ∈ ~[0,100] → a denial-magnitude upside).
+        ObjectiveValueKind::FarmCore | ObjectiveValueKind::FarmSourceKeeper => {
+            ObjectiveIntel { income_per_tick: priority.max(0.0), horizon: 100.0, ..Default::default() }
+        }
+        ObjectiveValueKind::FarmPowerBank => ObjectiveIntel { roi: priority.max(0.0) * 100.0, ..Default::default() },
+        ObjectiveValueKind::Denial => ObjectiveIntel { denial_value: priority.max(0.0) * 100.0, ..Default::default() },
+    }
+}
+
+/// THE per-squad EV of pairing `caps` with an objective (ADR 0032 v1.1), quantized for a stable discrete
+/// branch (ADR 0020 §6): `EV = P(win | caps vs defense) · value_e − w_travel · travel`. `caps` is the
+/// EXISTING squad's surviving capability; `value_e`/`defense`/`intel` are projected from the objective's
+/// kind + the room's scouted intel; `travel` is the Chebyshev distance home→room. Pure inputs → the pure
+/// kernels → a deterministic integer.
+#[allow(clippy::too_many_arguments)]
+fn objective_ev_q(
+    caps: SquadCapabilities,
+    kind: &ObjectiveKind,
+    priority: f32,
+    asset_value: f32,
+    threat: Option<&crate::military::threatmap::RoomThreatData>,
+    onsite_window: u32,
+    travel_rooms: u32,
+) -> i64 {
+    let intel = project_intel(kind, priority, asset_value, threat);
+    let val = value_e(project_value_kind(kind), &intel);
+    let defense = project_defense(threat);
+    // Price the hostile CREEP force the P(win) is judged against (the EV-wiring fix): `pairing_p_win` reads
+    // the enemy via this `EnemyForce` arg, NOT `DefenseProfile.enemy_dps`. Passing `None` let a room defended
+    // ONLY by hostile creeps (no energized towers, objective_hits=0) read as `undefended` → P(win)=1.0 against
+    // a room full of attackers, inflating EV for creep-defended Harass/Dismantle/Farm/Defend objectives.
+    // Derive the force from the room's scouted threat exactly as war.rs's owned-defense path does (war.rs
+    // ~486-492): dps/heal from the threat totals, hits=0 (creeps, not a structure objective), count/boosted
+    // from the per-creep intel.
+    let enemy = project_enemy(threat);
+    let ev = pairing_ev(caps, &defense, enemy, val, onsite_window, travel_rooms, &PairingParams::default());
+    quantize_ev(ev)
+}
+
 /// Map an objective to the squad's target + the room its members travel to.
 fn objective_target(kind: &ObjectiveKind) -> (SquadTarget, RoomName) {
     match kind {
@@ -359,6 +510,9 @@ pub struct SquadManagerSystemData<'a> {
     squad_contexts: WriteStorage<'a, SquadContext>,
     spawn_queue: Write<'a, SpawnQueue>,
     room_data: ReadStorage<'a, RoomData>,
+    // ADR 0032 v1.1: the per-room scouted intel the EV-of-pairing helper reads (threat danger → value_e for a
+    // defense objective; towers/dps/safe-mode → the `DefenseProfile` P(win) judges against). Read-only.
+    threat_data: ReadStorage<'a, crate::military::threatmap::RoomThreatData>,
     mapping: Read<'a, EntityMappingData>,
     creep_owner: ReadStorage<'a, CreepOwner>,
     visibility: Write<'a, VisibilityQueue>,
@@ -509,17 +663,61 @@ impl<'a> System<'a> for SquadManagerSystem {
                 data.forming_progress.last_target_dist.insert(obj_id, d);
             }
 
-            // ── ADR 0027 v1 (whole-squad REASSIGN): compute whether a COMPATIBLE sibling objective is
-            //    available for this squad to take over on a non-loss terminal (Resolved/ObjectiveGone). Fed
-            //    into the snapshot exactly like `holding_station` so the kernel stays pure. The capability
-            //    gate (`capability_class`) keeps a freed defender reassigning only to defense objectives and
-            //    an offense squad only to offense. `best_reassignment` excludes the current id (no ping-pong)
-            //    and skips claimed/backoff rooms; anchored on the nearest home for proximity. ──
+            // ── ADR 0027 v1 + ADR 0032 v1.1 (whole-squad REASSIGN, EV-RANKED + EV-POSITIVE GATE): compute
+            //    whether a COMPATIBLE sibling objective is worth reassigning to on a non-loss terminal
+            //    (Resolved/ObjectiveGone). The capability gate (`capability_class`) keeps a freed defender on
+            //    defense objectives + an offense squad on offense. The SELECTION is now `max_by(EV)` (ADR 0032
+            //    §EV-positive gate) — `best_by_ev` ranks the candidates by the quantized EV of THIS squad's
+            //    caps vs each objective's value_e/defense (replacing the old `priority.then(proximity)`); the
+            //    EV-POSITIVE GATE then only marks reassign available iff `EV(new) − EV(StayPut) >
+            //    commit_ev_threshold`, so the squad never reassigns into a net-negative or marginal move (and a
+            //    harmless/low-value objective is not taken — the dps=0 fix). ──
             let anchor = homes.first().map(|h| h.name);
-            let best_reassignment = cur_class.and_then(|class| {
+            // The EXISTING squad's caps = its claimed objective's composition capabilities at the anchor
+            // home's energy (what we actually fielded). The threat intel per room comes from `threat_data`.
+            let squad_energy = homes.first().map(|h| h.energy_capacity).unwrap_or(0);
+            let squad_caps: SquadCapabilities = data
+                .objective_queue
+                .get(obj_id)
+                .and_then(|o| o.force.squads.first())
+                .map(|c| c.capabilities(squad_energy))
+                .unwrap_or_default();
+            // The per-room scouted intel lookup (room → its RoomThreatData component), used by the EV.
+            let threat_for = |room: RoomName| -> Option<&crate::military::threatmap::RoomThreatData> {
+                data.mapping.get_room(&room).and_then(|e| data.threat_data.get(e))
+            };
+            // A defender's on-site window is its full lifetime; we reuse the defense onsite constant proxy.
+            let onsite_window = MAX_TRAVEL_BUDGET; // a generous on-site window (reassign reuses existing bodies)
+            // The EV closure for a candidate objective (caps fixed; value_e/defense/travel per-objective).
+            let ev_of = |o: &super::objective_queue::CombatObjective| -> i64 {
+                let room = o.kind.room();
+                let asset = data
+                    .mapping
+                    .get_room(&room)
+                    .and_then(|e| data.room_data.get(e))
+                    .and_then(|rd| game::rooms().get(rd.name))
+                    .map(|r| r.energy_capacity_available() as f32)
+                    .unwrap_or(1.0);
+                let travel = anchor.map(|h| room_distance(h, room)).unwrap_or(0);
+                objective_ev_q(squad_caps, &o.kind, o.priority, asset, threat_for(room), onsite_window, travel)
+            };
+            // MAX-EV compatible sibling (excluding the current objective — no ping-pong). `ev_of` is borrowed
+            // (used for both the candidate ranking and the StayPut lookup below).
+            let ev_of = &ev_of;
+            let best_ev = cur_class.and_then(|class| {
                 data.objective_queue
-                    .best_reassignment_near(anchor, now, &[obj_id], |kind| capability_class(kind) == class)
+                    .best_by_ev(now, &[obj_id], |kind| capability_class(kind) == class, ev_of)
             });
+            // The StayPut column: the EV of CONTINUING the current objective (the gate's alternative). A gone
+            // objective has no StayPut EV → 0 (any positive candidate beats it, which is correct for a
+            // vanished target).
+            let stay_ev = data.objective_queue.objective_ev_q(obj_id, ev_of).unwrap_or(0);
+            let commit_threshold_q = quantize_ev(COMMIT_EV_THRESHOLD);
+            // EV-POSITIVE GATE: reassign only if the best candidate beats StayPut by MORE than the threshold.
+            let best_reassignment = match best_ev {
+                Some((id, new_ev)) if new_ev - stay_ev > commit_threshold_q => Some(id),
+                _ => None,
+            };
             let reassign_available = best_reassignment.is_some();
 
             // P-OBJ #23 / ADR 0027: the pure reconcile kernel decides retire-vs-keep (unit-tested offline
@@ -814,12 +1012,34 @@ impl<'a> System<'a> for SquadManagerSystem {
             })
             .count();
         let mut skipped: Vec<ObjectiveId> = Vec::new();
+        let claim_anchor = homes.first().map(|h| h.name);
+        let claim_energy = homes.first().map(|h| h.energy_capacity).unwrap_or(0);
+        let claim_threat_for = |room: RoomName| -> Option<&crate::military::threatmap::RoomThreatData> {
+            data.mapping.get_room(&room).and_then(|e| data.threat_data.get(e))
+        };
         while active < MAX_CONCURRENT_SQUADS && forming < MAX_FORMING_SQUADS {
-            // Anchor proximity selection on the closest owned room (any home).
-            let anchor = homes.first().map(|h| h.name);
-            let obj_id = match data.objective_queue.best_unclaimed_near_excluding(anchor, now, &skipped) {
-                Some(id) => id,
-                None => break,
+            // ── ADR 0032 v1.1: EV-RANKED claim (replacing `best_unclaimed_near_excluding`'s
+            //    priority.then(proximity)). Rank claimable objectives by `EV = P(win | the REQUESTED force's
+            //    caps vs the objective's defense) · value_e − travel`; the EV-POSITIVE GATE then claims only a
+            //    net-positive objective (EV > the commit threshold, the Recycle/idle alternative being 0) — so a
+            //    harmless/low-value objective (a dps=0 scout) is NOT fielded against. ──
+            let ev_of_claim = |o: &super::objective_queue::CombatObjective| -> i64 {
+                let room = o.kind.room();
+                let caps = o.force.squads.first().map(|c| c.capabilities(claim_energy)).unwrap_or_default();
+                let asset = data
+                    .mapping
+                    .get_room(&room)
+                    .and_then(|e| data.room_data.get(e))
+                    .and_then(|rd| game::rooms().get(rd.name))
+                    .map(|r| r.energy_capacity_available() as f32)
+                    .unwrap_or(1.0);
+                let travel = claim_anchor.map(|h| room_distance(h, room)).unwrap_or(0);
+                objective_ev_q(caps, &o.kind, o.priority, asset, claim_threat_for(room), MAX_TRAVEL_BUDGET, travel)
+            };
+            let obj_id = match data.objective_queue.best_by_ev(now, &skipped, |_| true, ev_of_claim) {
+                // EV-POSITIVE GATE vs Recycle/idle (EV 0): don't claim a net-negative / marginal objective.
+                Some((id, ev_q)) if ev_q > quantize_ev(COMMIT_EV_THRESHOLD) => id,
+                _ => break,
             };
 
             let (composition, target) = match data.objective_queue.get(obj_id) {
@@ -1820,6 +2040,74 @@ mod tests {
         // An all-support (no fighter) roster keeps its original order (degenerate; no reorder).
         let support = vec![slot(SquadRole::Healer), slot(SquadRole::Tank)];
         assert_eq!(spawn_order_fighter_first(&support), vec![0, 1], "no fighters → original order");
+    }
+
+    /// EV-WIRING REGRESSION (ADR 0032 v1.1 verifier-found): the per-squad auction EV must price the hostile
+    /// CREEP force. A room defended ONLY by hostile creeps (no energized towers, objective_hits=0) used to read
+    /// as `undefended` in `pairing_p_win` (because `objective_ev_q` passed `enemy: None` and the scouted DPS was
+    /// written to the dead `DefenseProfile.enemy_dps` that path never reads) → P(win)=1.0 against a room full of
+    /// attackers, inflating EV for creep-defended offense/defense. The fix builds an `EnemyForce` from the
+    /// threat and passes it as the `enemy` arg. This test is deterministic + offline (no game state): it drives
+    /// `objective_ev_q` exactly as the bot does and proves (a) a creep-defended objective now scores a LOWER EV
+    /// than the same objective undefended (no free win against attackers), and (b) a genuinely UNDEFENDED
+    /// objective still scores P(win)=1.0 (EV == value_e, no travel here).
+    #[test]
+    fn objective_ev_prices_enemy_creeps_no_free_win() {
+        use crate::military::threatmap::{HostileCreepInfo, RoomThreatData};
+
+        let r = room("W5N5");
+        let kind = ObjectiveKind::Harass { room: r }; // Denial value_e — a creep-defended offense objective.
+        let priority = crate::military::objective_queue::OBJECTIVE_PRIORITY_MEDIUM;
+
+        // A real clearing force that CANNOT out-heal a heavy attacker (heal=0): it kills (structure_dps>0) but
+        // dies under sustained incoming creep DPS → P(win) must drop below 1.
+        let caps = SquadCapabilities { heal_per_tick: 0, structure_dps: 300, tank_effective_hp: 5_000 };
+
+        // value_e is unaffected by defense, so EV is directly comparable across the two threat profiles.
+        // No towers in EITHER case — the ONLY difference is the hostile-creep force.
+        let val = value_e(project_value_kind(&kind), &project_intel(&kind, priority, 0.0, None));
+        assert!(val > 0.0, "Denial value_e must be positive for a comparable EV");
+
+        // (b) CONTROL — genuinely undefended (no intel at all): undefended binary → P(win)=1.0 → EV == value_e.
+        let ev_undefended = objective_ev_q(caps, &kind, priority, 0.0, None, 1_500, 0);
+        assert_eq!(
+            ev_undefended,
+            quantize_ev(val),
+            "an UNDEFENDED objective (no threat) must keep P(win)=1.0 → EV == value_e"
+        );
+
+        // (a) Enemy CREEPS only — heavy attacker DPS, NO towers, no structure to kill (objective_hits=0).
+        let attacker = HostileCreepInfo {
+            position: Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), r),
+            owner: "enemy".to_string(),
+            hits: 2_000,
+            hits_max: 2_000,
+            melee_dps: 240.0,
+            ranged_dps: 0.0,
+            heal_per_tick: 0.0,
+            tough_hp: 0.0,
+            work_parts: 0,
+            boosted: false,
+        };
+        let threat = RoomThreatData {
+            estimated_dps: 240.0, // a heavy attacker the heal-less squad cannot survive
+            hostile_creeps: vec![attacker],
+            ..Default::default() // NO towers (hostile_tower_positions empty), no safe mode, no breach hits
+        };
+        let ev_creep_defended = objective_ev_q(caps, &kind, priority, 0.0, Some(&threat), 1_500, 0);
+
+        // The whole point: pricing the enemy creeps makes a creep-defended objective NO LONGER a free win.
+        assert!(
+            ev_creep_defended < ev_undefended,
+            "creep-defended EV ({ev_creep_defended}) must be LOWER than undefended EV ({ev_undefended}) — \
+             enemy creeps must be priced (P(win) < 1), no free win against attackers"
+        );
+        // And concretely below the certain-win value (P(win) strictly < 1).
+        assert!(
+            ev_creep_defended < quantize_ev(val),
+            "creep-defended EV ({ev_creep_defended}) must be below the P(win)=1 value ({})",
+            quantize_ev(val)
+        );
     }
 
     #[test]
