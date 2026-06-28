@@ -119,10 +119,11 @@ impl MoveToRoom {
         let creep_pos = creep.pos();
         let creep_entity = tick_context.runtime_data.creep_entity;
 
-        // P-OBJ #23 zero-orphan recall (travel path): if this squad was retired while we were en route
-        // (its objective resolved/given-up), DON'T trek on to the now-abandoned objective room — recall to
-        // the nearest home spawn and recycle, so an orphan is never stranded mid-travel on a room edge.
-        if state_context.squad_entity.is_some() && get_squad_state(state_context.squad_entity, tick_context).is_none() {
+        // P-OBJ #23 zero-orphan recall (travel path): if this squad was retired while we were en route (its
+        // objective resolved/given-up), OR this creep is a merge-transfer SURPLUS the spawn callback declined
+        // to roster (ADR 0032 v2), DON'T trek on to the now-abandoned/over-rostered objective room — recall to
+        // the nearest home spawn and recycle, so a surplus/orphan is never stranded mid-travel on a room edge.
+        if should_recall_to_recycle(state_context.squad_entity, creep_entity, tick_context) {
             let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
             if hostiles.is_empty() {
                 Engaged::recall_to_recycle(creep, creep_pos, creep_entity, tick_context);
@@ -670,12 +671,12 @@ impl Engaged {
         let hostiles = get_hostile_creeps(state_context.target_room, tick_context);
 
         // P-OBJ #23 zero-orphan recall: this creep's squad is GONE (the manager retired it — resolved a
-        // clear, gave up, or it was wiped) and there is nothing to fight here. Rather than idling in place
-        // (the observed "stuck on a room edge" scatter), recall to the nearest home spawn and recycle,
-        // reclaiming part of the body energy. A squad that still exists but simply has no orders this tick
-        // is NOT orphaned — `get_squad_state` resolves for it — so a live squad is never recalled.
-        let orphaned =
-            state_context.squad_entity.is_some() && get_squad_state(state_context.squad_entity, tick_context).is_none();
+        // clear, gave up, or it was wiped), OR this creep is a merge-transfer SURPLUS that was never rostered
+        // (ADR 0032 v2), and there is nothing to fight here. Rather than idling in place (the observed "stuck
+        // on a room edge" scatter), recall to the nearest home spawn and recycle, reclaiming part of the body
+        // energy. A LIVE squad's rostered member is never recalled — `should_recall_to_recycle` requires
+        // either an unresolvable squad or this creep being absent from its `members`.
+        let orphaned = should_recall_to_recycle(state_context.squad_entity, creep_entity, tick_context);
         if orphaned && hostiles.is_empty() {
             Self::recall_to_recycle(creep, creep_pos, creep_entity, tick_context);
             return;
@@ -1096,6 +1097,19 @@ impl SquadCombatJob {
             state: SquadCombatState::move_to_room(),
         }
     }
+
+    /// ADR 0032 v2 / ADR 0027 — REBIND this creep's job to a new squad (the merge/transfer receiver) + its
+    /// target room, and reset the FSM to MoveToRoom so the transferred creep re-gathers at the receiver's
+    /// rally (the receiver owns rally/lease/renew — ADR 0027 line 277). This only rewrites the already-
+    /// serialized `squad_entity` + `target_room` fields (the in-place rebind), so it needs NO serialized-
+    /// shape change. The caller must keep the SquadContext membership consistent (remove from the donor, add
+    /// to the receiver) so the creep ends up owned by EXACTLY ONE squad.
+    pub fn rebind_to_squad(&mut self, target_room: RoomName, squad_entity: Entity) {
+        self.context.target_room = target_room;
+        self.context.squad_entity = Some(SquadRef::from_entity(squad_entity));
+        self.context.combat_response_start = None;
+        self.state = SquadCombatState::move_to_room();
+    }
 }
 
 /// Look up the squad state for a job that may or may not be in a squad.
@@ -1103,6 +1117,36 @@ fn get_squad_state(squad: Option<SquadRef>, tick_context: &JobTickContext) -> Op
     let entity = squad?.resolve(tick_context.system_data.entities)?;
     let squad_ctx = tick_context.system_data.squad_contexts.get(entity)?;
     Some(squad_ctx.state)
+}
+
+/// ADR 0027 §(d) / ADR 0032 v2 — the PURE recall-to-recycle decision (host-testable; no game/ECS state).
+///   * `has_squad_ref` — the job binds a squad at all (`squad_entity.is_some()`). A job with no squad is not
+///     a squad creep here and is never recalled by this path.
+///   * `squad_resolves` — that squad still resolves to a live `SquadContext` (false ⇒ RETIRED — the original
+///     P-OBJ #23 orphan; recall).
+///   * `creep_is_rostered` — when the squad resolves, whether this creep is in its `members`. A SURPLUS body
+///     the spawn callback declined to register (the same-tick merge-transfer double-fill: a donor creep
+///     already filled this creep's pending slot) is bound-but-unrostered ⇒ recall.
+///
+/// A legitimately-rostered member is added to `members` in the SAME `exec_mut` that mints its job, so a live
+/// member is never (even transiently) "bound but unrostered" — making non-membership a SAFE recall signal.
+fn recall_decision(has_squad_ref: bool, squad_resolves: bool, creep_is_rostered: bool) -> bool {
+    has_squad_ref && (!squad_resolves || !creep_is_rostered)
+}
+
+/// Whether this creep should RECALL-to-recycle rather than soldier on (the live adapter over
+/// [`recall_decision`]). Resolves the squad + membership from the world, then defers to the pure predicate.
+fn should_recall_to_recycle(squad: Option<SquadRef>, creep_entity: Entity, tick_context: &JobTickContext) -> bool {
+    let has_squad_ref = squad.is_some();
+    let resolved = squad.and_then(|s| s.resolve(tick_context.system_data.entities));
+    let squad_resolves = resolved.is_some();
+    // Only meaningful when the squad resolves; default `true` (rostered) otherwise so `recall_decision`'s
+    // `!squad_resolves` arm alone drives the unresolved case.
+    let creep_is_rostered = resolved
+        .and_then(|entity| tick_context.system_data.squad_contexts.get(entity))
+        .map(|ctx| ctx.members.iter().any(|m| m.entity == creep_entity))
+        .unwrap_or(true);
+    recall_decision(has_squad_ref, squad_resolves, creep_is_rostered)
 }
 
 /// ADR 0027 v1.1 P2: the controller TILE this squad must `attackController` (de-claim), if its objective is a
@@ -1252,8 +1296,24 @@ impl Job for SquadCombatJob {
 
 #[cfg(test)]
 mod tests {
-    use super::cross_room_formation_target;
+    use super::{cross_room_formation_target, recall_decision};
     use screeps::{Position, RoomCoordinate, RoomName};
+
+    /// ADR 0032 v2 — the zero-orphan recall decision. A merge-transfer SURPLUS (a creep bound to a LIVE
+    /// squad it is NOT rostered in) recalls to recycle, exactly like the classic retired-squad orphan; a
+    /// rostered member of a live squad never does; a job with no squad is never touched by this path.
+    #[test]
+    fn recall_decision_recalls_surplus_and_orphans_but_never_a_rostered_member() {
+        // Bound + squad resolves + rostered ⇒ a healthy member: soldier on, never recall.
+        assert!(!recall_decision(true, true, true), "a rostered member of a live squad is never recalled");
+        // Bound + squad resolves + NOT rostered ⇒ a merge-transfer surplus the callback declined to register.
+        assert!(recall_decision(true, true, false), "a bound-but-unrostered surplus recalls to recycle");
+        // Bound + squad gone ⇒ the classic P-OBJ #23 orphan (the rostered flag is irrelevant when unresolved).
+        assert!(recall_decision(true, false, false), "a retired squad's surviving creep recalls (orphan)");
+        assert!(recall_decision(true, false, true), "an unresolved squad recalls regardless of the rostered flag");
+        // No squad ref ⇒ not a squad creep here; this recall path leaves it alone.
+        assert!(!recall_decision(false, false, false), "a job with no squad ref is never recalled by this path");
+    }
 
     fn pos(x: u8, y: u8, room: &str) -> Position {
         Position::new(

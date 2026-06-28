@@ -300,7 +300,7 @@ fn capability_class(kind: &ObjectiveKind) -> CapabilityClass {
 // projects intel into `optimize_composition` — so the bot and the kernels agree, no inline EV math here.
 
 use screeps_combat_decision::assignment::{
-    build_ev_matrix, solve_assignment, CapClass, ColumnKind, MatrixParams, ObjectiveCell, SquadRow,
+    build_ev_matrix_with_merge, role_bit, solve_assignment, CapClass, ColumnKind, MatrixParams, ObjectiveCell, SquadRow,
 };
 use screeps_combat_decision::composition::{pairing_ev, quantize_ev, PairingParams, SquadCapabilities};
 use screeps_combat_decision::doctrine::EnemyForce;
@@ -469,15 +469,61 @@ fn objective_ev_q(
 /// SAME helpers v1.1 used (`project_*`/`pairing_ev`/`value_e`) — only the SELECTION changed from greedy to
 /// global. Pure read of `data` (no mutation); deterministic (Vec-ordered, integer EV, no `HashMap` in the
 /// kernel — the returned map is built after the deterministic solve).
+/// ADR 0032 v2 / ADR 0027 — the result of a chosen `Merge→Bk` column: the DONOR squad `donor` sheds its
+/// role-matched present member(s) into the RECEIVER squad `receiver`'s open pending slot(s). The apply
+/// layer performs the transfer (rebind creep squad-ref + slot to B's pending slot, drop the now-filled
+/// spawn slot, donor empties → clean retire). `roles` = the donor's sheddable role bitmask (so the apply
+/// matches each transferred creep to a compatible OPEN slot of B deterministically).
+#[derive(Clone, Copy, Debug)]
+struct MergeDecision {
+    donor: Entity,
+    receiver: Entity,
+    roles: u8,
+}
+
+/// Compute the SHEDDABLE capability + role bitmask of the donor's FILLED slots (ADR 0027 — the member(s) it
+/// transfers): the sub-composition of `comp.slots` whose `slot_index` is in `filled`. Deterministic (Vec
+/// order; no HashMap). Returns `(caps, role_bitmask)`.
+fn sheddable_of(comp: &SquadComposition, filled: &[usize], squad_energy: u32) -> (SquadCapabilities, u8) {
+    let mut roles = 0u8;
+    let mut sub = SquadComposition {
+        label: String::new(),
+        slots: Vec::new(),
+        formation_shape: comp.formation_shape,
+        formation_mode: comp.formation_mode,
+        retreat_threshold: comp.retreat_threshold,
+    };
+    for (i, slot) in comp.slots.iter().enumerate() {
+        if filled.contains(&i) {
+            roles |= role_bit(slot.role);
+            sub.slots.push(SquadSlot { role: slot.role, body_type: slot.body_type });
+        }
+    }
+    (sub.capabilities(squad_energy), roles)
+}
+
+/// Compute the OPEN (unfilled) pending-slot role bitmask of a forming receiver (ADR 0027 line 258 — the
+/// PENDING SPAWN SLOT a donor's creep may fill): the OR of `role_bit` over `comp.slots` whose `slot_index`
+/// is NOT in `filled`. Deterministic. Zero ⇒ no open slot ⇒ not a merge receiver.
+fn open_slot_roles_of(comp: &SquadComposition, filled: &[usize]) -> u8 {
+    let mut roles = 0u8;
+    for (i, slot) in comp.slots.iter().enumerate() {
+        if !filled.contains(&i) {
+            roles |= role_bit(slot.role);
+        }
+    }
+    roles
+}
+
 fn solve_global_reassignment(
     data: &SquadManagerSystemData,
     managed: &[(Entity, ObjectiveId)],
     homes: &[HomeRoom],
     now: u32,
-) -> std::collections::HashMap<Entity, ObjectiveId> {
+) -> (std::collections::HashMap<Entity, ObjectiveId>, Vec<MergeDecision>) {
     let mut out = std::collections::HashMap::new();
     if managed.is_empty() || homes.is_empty() {
-        return out;
+        return (out, Vec::new());
     }
     let anchor = homes.first().map(|h| h.name);
     let squad_energy = homes.first().map(|h| h.energy_capacity).unwrap_or(0);
@@ -498,19 +544,50 @@ fn solve_global_reassignment(
     //    objective id (so the StayPut column re-scores the right fight). recycle_ev = 0 (the reassign path
     //    reuses bodies; recycling here is the net-negative floor, not a refund model — v1.1 parity). ──
     let mut rows: Vec<SquadRow> = Vec::with_capacity(managed.len());
-    for (_, obj_id) in managed {
+    for (entity, obj_id) in managed {
         let obj = data.objective_queue.get(*obj_id);
         let class = obj.map(|o| cap_class(capability_class(&o.kind))).unwrap_or(CapClass::Offense);
-        let caps: SquadCapabilities = obj
-            .and_then(|o| o.force.squads.first())
-            .map(|c| c.capabilities(squad_energy))
-            .unwrap_or_default();
+        let comp = obj.and_then(|o| o.force.squads.first());
+        let caps: SquadCapabilities = comp.map(|c| c.capabilities(squad_energy)).unwrap_or_default();
+
+        // ── ADR 0032 v2 / ADR 0027 MERGE fields. Read this squad's live members → filled slot indices +
+        //    present count + whether it has committed to a fight (`engaged_once`). The donor SHEDS its filled
+        //    slots; the receiver OFFERS its unfilled (open pending) slots. ──
+        let ctx = data.squad_contexts.get(*entity);
+        let filled: Vec<usize> = ctx.map(|c| c.members.iter().map(|m| m.slot_index).collect()).unwrap_or_default();
+        let present = ctx.map(|c| c.members.iter().filter(|m| m.position.is_some()).count()).unwrap_or(0);
+        let engaged_once = ctx.map(|c| c.engaged_once).unwrap_or(false);
+        let has_members = !filled.is_empty();
+        let requested = comp.map(|c| c.slots.len()).unwrap_or(0);
+        let objective_gone = obj.is_none();
+
+        // DONOR: merge-eligible iff terminal-with-survivors (objective gone, members alive) OR a FORMING
+        // squad consolidating (has members, not yet committed to a fight). A mid-fight (engaged) squad is
+        // NEVER eligible — it sheds, never weakens mid-fight (ADR 0027 line 273).
+        let forming_consolidate = has_members && !engaged_once && requested > 0 && filled.len() < requested;
+        let merge_eligible = (objective_gone && has_members) || forming_consolidate;
+        let (sheddable, sheddable_roles) = match comp {
+            Some(c) if merge_eligible => sheddable_of(c, &filled, squad_energy),
+            _ => (SquadCapabilities::default(), 0),
+        };
+        // RECEIVER: a FORMING squad (has at least one present member, not full) offers its OPEN pending slots.
+        // An empty squad is not a receiver (it would just spawn its whole roster); a full one has no open slot.
+        let is_forming_receiver = present > 0 && requested > 0 && filled.len() < requested && !engaged_once;
+        let open_slot_roles = match comp {
+            Some(c) if is_forming_receiver => open_slot_roles_of(c, &filled),
+            _ => 0,
+        };
+
         rows.push(SquadRow {
             caps,
             class,
             // A gone objective ⇒ no StayPut fight (the reconcile retire path owns it); None ⇒ StayPut infeasible.
             current_objective: obj.map(|o| o.id.0),
             recycle_ev: 0,
+            merge_eligible,
+            sheddable,
+            sheddable_roles,
+            open_slot_roles,
         });
     }
 
@@ -548,9 +625,25 @@ fn solve_global_reassignment(
         });
     }
 
+    // ── ADR 0032 v2 — the donor→receiver-rally transfer-travel matrix (row-major `rows × rows`). The
+    //    receiver is the coordination unit (rallies at/near home), so the transfer cost ≈ the donor's
+    //    distance from the receiver's objective room (both forming squads rally home → typically ~0).
+    //    Deterministic (Vec order; no HashMap). ──
+    let obj_room_of = |obj_id: ObjectiveId| -> Option<RoomName> { data.objective_queue.get(obj_id).map(|o| o.kind.room()) };
+    let mut merge_travel_rooms: Vec<u32> = vec![0; managed.len() * managed.len()];
+    for (di, (_, d_obj)) in managed.iter().enumerate() {
+        for (ri, (_, r_obj)) in managed.iter().enumerate() {
+            let t = match (obj_room_of(*d_obj), obj_room_of(*r_obj)) {
+                (Some(dr), Some(rr)) => room_distance(dr, rr),
+                _ => 0,
+            };
+            merge_travel_rooms[di * managed.len() + ri] = t;
+        }
+    }
+
     // The on-site window proxy (a reassign reuses already-spawned bodies — a generous window, v1.1 parity).
-    let params = MatrixParams { onsite_window: MAX_TRAVEL_BUDGET, pairing: PairingParams::default() };
-    let matrix = build_ev_matrix(&rows, &cells, &params);
+    let params = MatrixParams { onsite_window: MAX_TRAVEL_BUDGET, pairing: PairingParams::default(), w_transfer: 1.0 };
+    let matrix = build_ev_matrix_with_merge(&rows, &cells, &merge_travel_rooms, &params);
     let solution = solve_assignment(&matrix);
 
     // Map each squad's assigned column back to a NEW objective id, applying the EV-POSITIVE GATE against
@@ -560,21 +653,161 @@ fn solve_global_reassignment(
     // no-ping-pong feasibility filter excludes it), but we guard anyway.
     let commit_threshold_q = quantize_ev(COMMIT_EV_THRESHOLD);
     let stay_base = cells.len(); // the first StayPut column index
+    let mut merges: Vec<MergeDecision> = Vec::new();
     for (r, (entity, cur_id)) in managed.iter().enumerate() {
         let Some(col) = solution.row_to_col[r] else { continue };
-        if let ColumnKind::Objective { id } = matrix.columns[col] {
-            if id == cur_id.0 {
-                continue; // defensive — already excluded by feasibility
+        match matrix.columns[col] {
+            ColumnKind::Objective { id } => {
+                if id == cur_id.0 {
+                    continue; // defensive — already excluded by feasibility
+                }
+                let new_ev = matrix.at(r, col);
+                let stay_ev = matrix.at(r, stay_base + r); // this row's private StayPut column EV
+                // The gate: only reassign if the global pick beats continuing the current fight by the threshold.
+                if new_ev - stay_ev > commit_threshold_q {
+                    out.insert(*entity, ObjectiveId(id));
+                }
             }
-            let new_ev = matrix.at(r, col);
-            let stay_ev = matrix.at(r, stay_base + r); // this row's private StayPut column EV
-            // The gate: only reassign if the global pick beats continuing the current fight by the threshold.
-            if new_ev - stay_ev > commit_threshold_q {
-                out.insert(*entity, ObjectiveId(id));
+            // ── ADR 0032 v2 / ADR 0027 — row `r` (the DONOR) MERGES into receiver row's pending slot. The
+            //    merge cell EV is the receiver's MARGINAL P(win) lift; a merge fires only if it is net-positive
+            //    by the same commit threshold (a marginal lift does not thrash). ──
+            ColumnKind::Merge { receiver_row } => {
+                let merge_ev = matrix.at(r, col);
+                let stay_ev = matrix.at(r, stay_base + r);
+                // The donor merges only if the lift beats keeping the donor's own fight by the threshold (and
+                // is feasible — solve never returns an INFEASIBLE_EV cell as a real match, but guard anyway).
+                if merge_ev != screeps_combat_decision::assignment::INFEASIBLE_EV
+                    && merge_ev.saturating_sub(stay_ev.max(0)) > commit_threshold_q
+                {
+                    let receiver = managed[receiver_row].0;
+                    merges.push(MergeDecision { donor: *entity, receiver, roles: rows[r].sheddable_roles });
+                }
             }
+            ColumnKind::StayPut { .. } | ColumnKind::Recycle { .. } => {}
         }
     }
-    out
+    (out, merges)
+}
+
+/// ADR 0032 v2 / ADR 0027 — apply the chosen `Merge→Bk` TRANSFERS (lines 256-312 of ADR 0027). For each
+/// decision: transfer the donor's role-matched present member(s) into the RECEIVER's OPEN pending slot(s)
+/// (rebind the creep's `SquadCombatJob` squad-ref + target room to the receiver, move the `SquadMember` from
+/// the donor `SquadContext` to the receiver's, re-keyed to the receiver's open `slot_index`), then if the
+/// donor is now EMPTY delete its squad entity DIRECTLY via `world.delete_entity` (the SAME route
+/// `retire_squad` uses — neither goes through `EntityCleanupQueue`). The direct delete is SAFE precisely
+/// because the donor has shed ALL its members (the creeps were TRANSFERRED, not orphaned/deleted): an empty
+/// donor holds no live member refs, and creeps hold a non-`ConvertSaveload` `Option<SquadRef>` (validate-on-
+/// access), so no dangling Entity ref survives to serialize. The now-filled receiver slot is dropped from the
+/// spawn queue automatically: Phase B checks `is_slot_filled(slot_index)`, which becomes true once the
+/// transferred member occupies it.
+///
+/// SAFETY (ADR 0027 line "SAFE entity ops" / the ECS dangling-ref serialize panic history): NOTHING is
+/// routed through `entities.delete` for a creep — the creeps stay alive and bound to EXACTLY ONE squad
+/// (removed from the donor's `members` in the SAME `exec_mut` they are added to the receiver's), so
+/// `get_creeps()` / `repair_entity_integrity` / `ConvertSaveload` never see a dangling or doubly-owned ref.
+/// Only the now-EMPTY donor squad ENTITY is deleted (directly — see above), never a creep.
+/// All membership + job rebinds happen inside ONE `exec_mut` per decision (full world access), reading the
+/// LIVE post-spawn world; the receiver composition's slot→role map is captured BEFORE the closure.
+fn apply_merges(data: &mut SquadManagerSystemData, merges: &[MergeDecision], _now: u32, debug: bool) {
+    for m in merges {
+        // Capture the receiver's objective composition (slot→role) + target room BEFORE the closure (the
+        // queue is not available inside exec_mut). Skip a decision whose receiver objective vanished.
+        let Some(recv_obj) = data
+            .squad_contexts
+            .get(m.receiver)
+            .and_then(|ctx| ctx.objective_id)
+            .and_then(|id| data.objective_queue.get(id))
+        else {
+            continue;
+        };
+        let Some(recv_comp) = recv_obj.force.squads.first() else { continue };
+        // (slot_index, role) for every receiver slot, in stable order.
+        let recv_slots: Vec<(usize, screeps_combat_decision::composition::SquadRole)> =
+            recv_comp.slots.iter().enumerate().map(|(i, s)| (i, s.role)).collect();
+        let recv_target_room = objective_target(&recv_obj.kind).1;
+        let donor = m.donor;
+        let receiver = m.receiver;
+        let shed_roles = m.roles;
+
+        data.updater.exec_mut(move |world| {
+            // Both squads must still be alive (a concurrent retire could have removed one).
+            if !world.entities().is_alive(donor) || !world.entities().is_alive(receiver) {
+                return;
+            }
+            // ── 1) Compute the transfers from the LIVE world: receiver's OPEN slots (not occupied by a live
+            //    member) whose role matches a shed role, paired greedily-in-stable-order with the donor's
+            //    present members of that role. Deterministic (Vec order; no HashMap). ──
+            let mut transfers: Vec<(Entity, usize, screeps_combat_decision::composition::SquadRole)> = Vec::new(); // (creep, recv_slot_index, role)
+            {
+                let contexts = world.read_storage::<SquadContext>();
+                let Some(recv_ctx) = contexts.get(receiver) else { return };
+                let Some(donor_ctx) = contexts.get(donor) else { return };
+                // Open receiver slots (role-matched to a shed role), still-needed in stable order.
+                let mut open_slots: Vec<(usize, screeps_combat_decision::composition::SquadRole)> = recv_slots
+                    .iter()
+                    .copied()
+                    .filter(|(idx, role)| {
+                        (role_bit(*role) & shed_roles) != 0 && !recv_ctx.members.iter().any(|mem| mem.slot_index == *idx)
+                    })
+                    .collect();
+                // Donor's present members eligible to shed (a resolved position = a real body), stable order.
+                let donor_members: Vec<(Entity, screeps_combat_decision::composition::SquadRole)> =
+                    donor_ctx.members.iter().filter(|mem| mem.position.is_some()).map(|mem| (mem.entity, mem.role)).collect();
+                // Greedy role-match: each open slot pulls the FIRST unused donor member of the same role.
+                let mut used: Vec<bool> = vec![false; donor_members.len()];
+                for (slot_idx, slot_role) in open_slots.drain(..) {
+                    if let Some(pos) = (0..donor_members.len()).find(|&i| !used[i] && donor_members[i].1 == slot_role) {
+                        used[pos] = true;
+                        transfers.push((donor_members[pos].0, slot_idx, slot_role));
+                    }
+                }
+            }
+            if transfers.is_empty() {
+                return;
+            }
+
+            // ── 2) Apply the membership move + the job rebind for each transfer (the creep ends up owned by
+            //    EXACTLY ONE squad). Remove from the donor FIRST, then add to the receiver. ──
+            {
+                let mut contexts = world.write_storage::<SquadContext>();
+                for (creep, slot_idx, role) in &transfers {
+                    if let Some(donor_ctx) = contexts.get_mut(donor) {
+                        donor_ctx.members.retain(|mem| mem.entity != *creep);
+                    }
+                    if let Some(recv_ctx) = contexts.get_mut(receiver) {
+                        recv_ctx.add_member(*creep, *role, *slot_idx);
+                    }
+                }
+            }
+            {
+                let mut jobs = world.write_storage::<crate::jobs::data::JobData>();
+                for (creep, _slot_idx, _role) in &transfers {
+                    if let Some(crate::jobs::data::JobData::SquadCombat(job)) = jobs.get_mut(*creep) {
+                        job.rebind_to_squad(recv_target_room, receiver);
+                    }
+                }
+            }
+            if debug {
+                log::info!(
+                    "[Lifecycle] MERGE donor={:?} -> receiver={:?} transferred={} member(s) into open pending slot(s) (ADR 0027 pending-slot transfer)",
+                    donor,
+                    receiver,
+                    transfers.len()
+                );
+            }
+
+            // ── 3) If the donor is now EMPTY, retire it cleanly (the creeps were transferred, not deleted).
+            //    A PARTIAL donor (members left) keeps its objective — the per-squad reconcile classifies it
+            //    next. We only delete the EMPTY donor squad entity here (no creep deletion). ──
+            let donor_empty = world.read_storage::<SquadContext>().get(donor).map(|c| c.members.is_empty()).unwrap_or(true);
+            if donor_empty && world.entities().is_alive(donor) {
+                let _ = world.delete_entity(donor);
+            }
+        });
+        // NOTE: the donor's ephemeral objective claim is left to the per-squad reconcile (it re-claims live
+        // squads each tick) / `release_entity` on the deferred delete — a merge is a FORCE move, not an
+        // objective resolution, and a PARTIAL donor keeps its claim, so we must NOT release here.
+    }
 }
 
 /// Map an objective to the squad's target + the room its members travel to.
@@ -591,6 +824,26 @@ fn objective_target(kind: &ObjectiveKind) -> (SquadTarget, RoomName) {
             (SquadTarget::AttackRoom { room: *room }, *room)
         }
     }
+}
+
+/// ADR 0032 v2 — the spawn-completion REGISTRATION decision: should the freshly-spawned creep be added to
+/// its receiver squad's roster at `slot_index`? Only when the squad is still ALIVE **and** that slot is not
+/// ALREADY filled. A `false` result means the creep must NOT be added (it would over-roster the squad):
+///
+///   * squad dead — the squad died during the spawn delay (the recycled-slot / retired-squad case);
+///   * slot already filled — the SAME-TICK DOUBLE-FILL race: a merge-transfer (`apply_merges`) rebinds a
+///     donor creep into this very open pending slot via a DEFERRED `exec_mut`, while Phase B (reading the
+///     pre-`maintain` live storage that tick) still saw the slot empty and queued THIS spawn. The transfer
+///     applies at `maintain` (filling the slot); when this spawn then completes, registering it would push a
+///     SECOND member at the same `slot_index` — a surplus creep + an over-rostered (>requested) squad. The
+///     recycled-slot reuse race the callback already contemplates produces the same "slot already filled"
+///     state, so one recheck covers both.
+///
+/// When this returns `false` the caller still BUILDS the creep entity with a squad-bound `SquadCombatJob`
+/// (so it is ECS-tracked) but skips `add_member`; the job's zero-orphan recall (ADR 0027 §(d)) then walks it
+/// home to recycle rather than leaving it stranded. Pure so it is host-testable without an ECS world.
+fn should_register_spawned_member(squad_alive: bool, slot_already_filled: bool) -> bool {
+    squad_alive && !slot_already_filled
 }
 
 /// The spawn-completion callback: mints the creep entity with a squad-bound
@@ -610,22 +863,42 @@ fn create_spawn_callback(
             // so we never register the fresh creep onto a *different* squad that now occupies the
             // index (the recycled-slot aliasing bug). `squad_entity` is captured whole — not as a
             // bare `.id()` reconstructed via `entity(id)`, which would alias.
-            if !world.entities().is_alive(squad_entity) {
+            let squad_alive = world.entities().is_alive(squad_entity);
+
+            // ADR 0032 v2 (same-tick DOUBLE-FILL guard): recheck whether this slot is ALREADY filled before
+            // registering. A merge-transfer (`apply_merges`) can have rebound a donor creep into this very
+            // open pending slot via a DEFERRED `exec_mut` that applied at `maintain` (AFTER Phase B, reading
+            // the still-empty live storage, queued THIS spawn). Reading the LIVE post-`maintain` storage here
+            // sees that fill, so we never push a SECOND member at `slot_index`. (Also covers the recycled-slot
+            // reuse race the callback already contemplated — same "slot already filled" state.)
+            let slot_already_filled = squad_alive
+                && world
+                    .read_storage::<SquadContext>()
+                    .get(squad_entity)
+                    .map(|ctx| ctx.is_slot_filled(slot_index))
+                    .unwrap_or(false);
+
+            // Always BUILD the creep entity with a squad-bound `SquadCombatJob` — so it is ECS-tracked and
+            // carries the zero-orphan recall machinery (ADR 0027 §(d)) — and THEN decide registration. A creep
+            // we do NOT register (squad dead, or its slot already filled by a merge transfer) is a surplus that
+            // must still be cleaned up: its job recalls it home to recycle rather than orphaning it in-world.
+            let creep_job = crate::jobs::data::JobData::SquadCombat(crate::jobs::squad_combat::SquadCombatJob::new_with_squad(
+                target_room,
+                squad_entity,
+            ));
+            let creep_entity = spawning::build(world.create_entity(), &name).with(creep_job).build();
+
+            if !should_register_spawned_member(squad_alive, slot_already_filled) {
                 log::warn!(
-                    "[SquadManager] Spawn callback: squad {:?} no longer alive; creep {} (slot {}) not registered",
+                    "[SquadManager] Spawn callback: squad {:?} {} for creep {} (slot {}); NOT registered — its \
+                     squad-bound job recalls it home to recycle (zero-orphan)",
                     squad_entity,
+                    if !squad_alive { "no longer alive" } else { "slot already filled (merge-transfer surplus)" },
                     name,
                     slot_index
                 );
                 return;
             }
-
-            let creep_job = crate::jobs::data::JobData::SquadCombat(crate::jobs::squad_combat::SquadCombatJob::new_with_squad(
-                target_room,
-                squad_entity,
-            ));
-
-            let creep_entity = spawning::build(world.create_entity(), &name).with(creep_job).build();
 
             if let Some(squad_ctx) = world.write_storage::<SquadContext>().get_mut(squad_entity) {
                 squad_ctx.add_member(creep_entity, role, slot_index);
@@ -721,8 +994,22 @@ impl<'a> System<'a> for SquadManagerSystem {
         //    `covered` guard is retired for reassign). The lease/forming/travel lifecycle (the per-squad
         //    reconcile) is ORTHOGONAL and unchanged — reconcile still decides retire-vs-keep; only WHICH new
         //    objective a Reassign binds to is now the global optimum, not a greedy pick. ──
-        let global_reassign: std::collections::HashMap<Entity, ObjectiveId> =
+        let (global_reassign, global_merges): (std::collections::HashMap<Entity, ObjectiveId>, Vec<MergeDecision>) =
             solve_global_reassignment(&data, &managed, &homes, now);
+
+        // ── ADR 0032 v2 / ADR 0027 — apply the chosen MERGE transfers before the per-squad reconcile loop
+        //    below. NOTE the transfer is DEFERRED (it runs inside `exec_mut`, applied at `world.maintain()`),
+        //    so the reconcile loop THIS tick still observes the donor with its members — it is NOT the
+        //    reconcile that retires an emptied donor. Instead `apply_merges` itself, once the donor has shed
+        //    all members, deletes the now-EMPTY donor squad ENTITY DIRECTLY via `world.delete_entity` (the
+        //    SAME route `retire_squad` uses — neither goes through `EntityCleanupQueue`; the one-tick deferral
+        //    is harmless). The receiver fields its now-filled slot by transfer (the spawn queue drops the slot
+        //    because `is_slot_filled` now reports it filled). The transfer rebinds each shed creep's squad-ref
+        //    + slot to the receiver's open pending slot (the creep ends up owned by EXACTLY ONE squad), routes
+        //    NO CREEP through `entities.delete` (see the ECS dangling-ref panic history), and keeps every
+        //    squad's `get_creeps()`/members correct so serialize + repair_entity_integrity do not hit a
+        //    dangling Entity ref (the direct donor-entity delete is safe because the donor is empty). ──
+        apply_merges(&mut data, &global_merges, now, debug);
 
         let mut live_managed: Vec<(Entity, ObjectiveId)> = Vec::new();
         let mut covered: std::collections::HashSet<ObjectiveId> = std::collections::HashSet::new();
@@ -2290,5 +2577,73 @@ mod tests {
         assert_eq!(classify_objective(false, false, true), OpenCombat);
         // Empty room (no structures, no hostiles) → open (nothing to breach).
         assert_eq!(classify_objective(false, false, false), OpenCombat);
+    }
+
+    /// ADR 0032 v2 (same-tick DOUBLE-FILL guard): the registration predicate the spawn callback uses. A
+    /// freshly-spawned creep is registered ONLY when its squad is alive AND the slot is not already filled.
+    #[test]
+    fn spawned_member_registration_is_gated_on_alive_and_unfilled_slot() {
+        assert!(should_register_spawned_member(true, false), "alive + open slot → register the new member");
+        assert!(
+            !should_register_spawned_member(true, true),
+            "alive but the slot is ALREADY filled (merge-transfer surplus) → do NOT register a second member"
+        );
+        assert!(!should_register_spawned_member(false, false), "squad dead → do NOT register");
+        assert!(!should_register_spawned_member(false, true), "squad dead → do NOT register");
+    }
+
+    /// ADR 0032 v2 (same-tick DOUBLE-FILL guard, integration): a `SquadContext` whose `slot_index` was just
+    /// filled by a merge transfer reports `is_slot_filled(slot_index) == true`, which drives the callback's
+    /// `should_register_spawned_member` to FALSE — so the late spawn-callback never pushes a SECOND member at
+    /// that slot (the over-roster bug). An untouched sibling slot still admits its member.
+    #[test]
+    fn is_slot_filled_blocks_a_second_member_at_a_merge_filled_slot() {
+        use screeps_combat_decision::bodies::CombatBodySpec;
+        use screeps_combat_decision::composition::{BodyType, FormationShape, SquadComposition, SquadRole, SquadSlot};
+        use specs::WorldExt;
+
+        // A 2-slot receiver composition (one RangedDPS, one Healer): slot 0 is the merge-filled pending slot,
+        // slot 1 is still open.
+        let sized_ranged = BodyType::Sized(CombatBodySpec { ranged_attack: 2, ..Default::default() });
+        let sized_heal = BodyType::Sized(CombatBodySpec { heal: 2, ..Default::default() });
+        let comp = SquadComposition {
+            label: "Merge receiver".into(),
+            slots: vec![
+                SquadSlot { role: SquadRole::RangedDPS, body_type: sized_ranged },
+                SquadSlot { role: SquadRole::Healer, body_type: sized_heal },
+            ],
+            formation_shape: FormationShape::Box2x2,
+            formation_mode: Default::default(),
+            retreat_threshold: 0.5,
+        };
+
+        let mut world = World::new();
+        world.register::<SquadContext>();
+        let transferred_creep = world.create_entity().build();
+        let late_spawn_creep = world.create_entity().build();
+
+        // The receiver fields slot 0 by a merge transfer (the deferred `apply_merges` `add_member`).
+        let mut ctx = SquadContext::from_composition(&comp);
+        ctx.add_member(transferred_creep, SquadRole::RangedDPS, 0);
+
+        // The late spawn callback (queued by Phase B before the transfer applied) now runs and rechecks.
+        let slot0_filled = ctx.is_slot_filled(0);
+        let slot1_filled = ctx.is_slot_filled(1);
+        assert!(slot0_filled, "the merge transfer filled slot 0");
+        assert!(!slot1_filled, "slot 1 is still open");
+
+        // The guard: slot 0 is filled → do NOT register a SECOND member there (the surplus recalls/recycles
+        // via its squad-bound job, see `jobs::squad_combat::recall_decision`).
+        assert!(
+            !should_register_spawned_member(true, slot0_filled),
+            "the late spawn must NOT add a second member at the merge-filled slot 0"
+        );
+        // Had the guard been bypassed, registering would over-roster the slot — prove that would be a dup.
+        ctx.add_member(late_spawn_creep, SquadRole::RangedDPS, 0);
+        let slot0_members = ctx.members.iter().filter(|m| m.slot_index == 0).count();
+        assert_eq!(slot0_members, 2, "demonstrate the double-fill the guard PREVENTS in the callback");
+
+        // A still-open sibling slot is admitted normally.
+        assert!(should_register_spawned_member(true, slot1_filled), "an open sibling slot still admits its member");
     }
 }
