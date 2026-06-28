@@ -1,3 +1,4 @@
+use super::actions::*;
 use super::context::*;
 use super::jobsystem::*;
 use super::utility::movebehavior::*;
@@ -127,6 +128,15 @@ impl MoveToRoom {
                 Engaged::recall_to_recycle(creep, creep_pos, creep_entity, tick_context);
                 return None;
             }
+        }
+
+        // ADR 0027 v1.1 P2: a DECLAIM squad member that has reached the target room transitions to Engaged
+        // (which runs the declaim drive — move-to-controller + strike). A declaimer carries no combat parts,
+        // so it does not need the formation-assault path; reaching the room is enough to start striking.
+        if squad_attack_controller_pos(state_context.squad_entity, tick_context).is_some()
+            && creep_pos.room_name() == state_context.target_room
+        {
+            return Some(SquadCombatState::engaged());
         }
 
         // Check for hostiles in the current room -- respond to ambush.
@@ -419,6 +429,18 @@ impl Engaged {
         // If we've left the target room, move back.
         if creep_pos.room_name() != state_context.target_room {
             return Some(SquadCombatState::move_to_room());
+        }
+
+        // ── ADR 0027 v1.1 P2: DECLAIM drive ──
+        // A declaim squad's in-room job is NOT to fight (the room is derelict/quiet by construction) but to
+        // `attackController` the controller on the 1000-tick upgrade-block cadence. A CLAIM declaimer carries
+        // no combat parts, so it skips the combat pipeline entirely; it moves adjacent to the controller and
+        // strikes when the block clears (else HOLDS adjacent — the manager's lease keeps it committed across
+        // the cadence; see `declaiming` in squad_manager). Inert for every combat squad (returns early only
+        // when the squad target is `AttackController`).
+        if let Some(controller_pos) = squad_attack_controller_pos(state_context.squad_entity, tick_context) {
+            drive_declaim(controller_pos, tick_context);
+            return None;
         }
 
         // ── Execute actions (all pipelines fire independently) ──
@@ -1081,6 +1103,58 @@ fn get_squad_state(squad: Option<SquadRef>, tick_context: &JobTickContext) -> Op
     let entity = squad?.resolve(tick_context.system_data.entities)?;
     let squad_ctx = tick_context.system_data.squad_contexts.get(entity)?;
     Some(squad_ctx.state)
+}
+
+/// ADR 0027 v1.1 P2: the controller TILE this squad must `attackController` (de-claim), if its objective is a
+/// `SquadTarget::AttackController`. `None` for every combat squad — so the declaim drive below is inert for
+/// all existing objectives. The position is read off the squad's shared `SquadContext.target` (set by the
+/// manager from the `Declaim` objective), so every member of the declaim squad sees the same tile.
+fn squad_attack_controller_pos(squad: Option<SquadRef>, tick_context: &JobTickContext) -> Option<Position> {
+    let entity = squad?.resolve(tick_context.system_data.entities)?;
+    let squad_ctx = tick_context.system_data.squad_contexts.get(entity)?;
+    match squad_ctx.target {
+        Some(SquadTarget::AttackController { position }) => Some(position),
+        _ => None,
+    }
+}
+
+/// ADR 0027 v1.1 P2 — drive a DECLAIM member: move adjacent to the controller tile and `attackController`
+/// (the EXISTING `DeclaimJob` behavior — strike + the 1000-tick upgrade-block cadence). A declaimer carries
+/// CLAIM + MOVE only (no combat parts), so it never fights; it just reaches the controller and strikes when
+/// the upgrade-block clears. Returns `true` when it acted as a declaimer (the caller then skips the combat
+/// pipeline this tick). `controller_pos` is the controller TILE from the squad target. Mirrors
+/// `controllerbehavior::tick_attack_controller` (resolved from the tile, since the squad target carries a
+/// `Position`, not a `RemoteObjectId`).
+fn drive_declaim(controller_pos: Position, tick_context: &mut JobTickContext) {
+    let creep = tick_context.runtime_data.owner;
+    let creep_pos = creep.pos();
+    let creep_entity = tick_context.runtime_data.creep_entity;
+
+    if !creep_pos.is_near_to(controller_pos) {
+        // Not yet adjacent — close to range 1 of the controller (routes through the confirmed-derelict room
+        // with HighCost, like the dismantler / the former DeclaimJob).
+        tick_context
+            .runtime_data
+            .movement
+            .move_to(creep_entity, controller_pos)
+            .range(1)
+            .room_options(RoomOptions::new(HostileBehavior::HighCost))
+            .priority(MovementPriority::High);
+        return;
+    }
+
+    // Adjacent — strike the controller. Resolve it from the structures at the tile (the squad target carries
+    // the tile, not an id). Already-neutral or upgrade-blocked (a strike within the last 1000 ticks) ⇒ no
+    // intent this tick — the squad simply HOLDS adjacent until the block clears (the manager's lease keeps it
+    // committed across the cadence). The controller going neutral is observed by the manager (the de-claim
+    // is achieved → the producer withdraws the Declaim objective → the squad retires).
+    if let Some(controller) = game::rooms().get(controller_pos.room_name()).and_then(|room| room.controller()) {
+        let owned_or_reserved = controller.owner().is_some() || controller.reservation().is_some();
+        let upgrade_blocked = controller.upgrade_blocked().unwrap_or(0) > 0;
+        if owned_or_reserved && !upgrade_blocked && tick_context.action_flags.consume(SimultaneousActionFlags::ATTACK_CONTROLLER) {
+            let _ = creep.attack_controller(&controller);
+        }
+    }
 }
 
 /// Whether the squad has a populated anchor path (`SquadPath`). Anchor-driven

@@ -657,7 +657,12 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// slate: persisted squads still bound to old `Defend{owned}` objectives (war.rs now emits `Secure` at the
 /// threat's room) would otherwise spend a few ticks self-healing via `ObjectiveGone`→reassign/retire. The
 /// operator approved bumping freely where it buys a cleaner model (ADR 0027 lines 207-210).
-const WORLD_FORMAT_VERSION: u32 = 20;
+/// 21 = ADR 0027 v1.1 P2 (salvage declaim migration): the serialized `ObjectiveKind` enum gains the
+/// `Declaim { room, controller }` variant (and `SquadTarget` the `AttackController { position }` variant, and
+/// the `CombatBodySpec` riding in a persisted `BodyType::Sized` slot gains a `claim` field) — appended-enum-
+/// variant + appended-struct-field shape changes. bincode tolerates an appended variant but a new struct
+/// field is a positional shape change, so a reset is required; it folds into the single MMO deploy reset.
+const WORLD_FORMAT_VERSION: u32 = 21;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode

@@ -91,6 +91,11 @@ pub enum ObjectiveKind {
     Farm { kind: FarmKind, room: RoomName },
     /// Pre-clear + escort a marginal claim target while the claimer commits.
     Escort { room: RoomName },
+    /// Neutralize a derelict controller (`attackController`) so the waiting mining outpost can take the room
+    /// over (ADR 0027 v1.1 P2). `controller` is the controller tile (the squad's `AttackController` target);
+    /// fielded as a CLAIM `SquadRole::Declaimer` squad by the `DeclaimAttack` always-field doctrine. Emitted
+    /// by `SalvageMission` once the corridor is open (`ControllerAccess::ReachableNow`).
+    Declaim { room: RoomName, controller: Position },
 }
 
 impl ObjectiveKind {
@@ -102,7 +107,8 @@ impl ObjectiveKind {
             | ObjectiveKind::Dismantle { room, .. }
             | ObjectiveKind::Harass { room }
             | ObjectiveKind::Farm { room, .. }
-            | ObjectiveKind::Escort { room } => *room,
+            | ObjectiveKind::Escort { room }
+            | ObjectiveKind::Declaim { room, .. } => *room,
         }
     }
 }

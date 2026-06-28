@@ -4,7 +4,6 @@ use super::missionsystem::*;
 use super::utility::*;
 use crate::creep::*;
 use crate::jobs::data::*;
-use crate::jobs::declaim::*;
 use crate::jobs::dismantle::*;
 use crate::jobs::haul::*;
 use crate::jobs::utility::dismantle::*;
@@ -122,7 +121,6 @@ pub struct SalvageMission {
     home_room_datas: EntityVec<Entity>,
     raiders: EntityVec<Entity>,
     dismantlers: EntityVec<Entity>,
-    declaimers: EntityVec<Entity>,
 }
 
 /// EPHEMERAL (ADR 0027 v1.1 P1): the breach-blocker pos of the v1 `Dismantle`
@@ -144,6 +142,14 @@ pub struct SalvageMission {
 pub struct SalvageBreachTracker {
     /// target room → the breach-blocker pos of the live v1 `Dismantle` objective.
     last_breach_pos: std::collections::BTreeMap<RoomName, Position>,
+    /// ADR 0027 v1.1 P2: target room → the controller pos of the live v1 `Declaim` objective this mission
+    /// emitted, the SIBLING of `last_breach_pos`. Lets `withdraw_declaim_objective` scope its teardown to OUR
+    /// `Declaim { room == target AND controller == tracked-pos }` so it removes only our objective. Same
+    /// ephemeral-resource discipline as `last_breach_pos` (a `BTreeMap`, NOT serialized → bit-deterministic;
+    /// on a VM reset it starts empty and an orphaned `Declaim` objective TTL-expires). No WFV bump for THIS
+    /// field (the persisted `SalvageMission` shape is unchanged; the WFV 20→21 bump covers the serialized
+    /// `ObjectiveKind::Declaim` variant, not this transient tracker).
+    last_declaim_pos: std::collections::BTreeMap<RoomName, Position>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -166,7 +172,6 @@ impl SalvageMission {
             home_room_datas: home_room_datas.to_owned().into(),
             raiders: EntityVec::new(),
             dismantlers: EntityVec::new(),
-            declaimers: EntityVec::new(),
         }
     }
 
@@ -217,29 +222,6 @@ impl SalvageMission {
                     .as_mission_type_mut::<SalvageMission>()
                 {
                     mission_data.dismantlers.push(creep_entity);
-                }
-            });
-        })
-    }
-
-    fn create_handle_declaimer_spawn(
-        mission_entity: Entity,
-        controller_id: RemoteObjectId<StructureController>,
-    ) -> crate::spawnsystem::SpawnQueueCallback {
-        Box::new(move |spawn_system_data, name| {
-            let name = name.to_string();
-
-            spawn_system_data.updater.exec_mut(move |world| {
-                let creep_job = JobData::Declaim(DeclaimJob::new(controller_id));
-
-                let creep_entity = crate::creep::spawning::build(world.create_entity(), &name).with(creep_job).build();
-
-                if let Some(mut mission_data) = world
-                    .write_storage::<MissionData>()
-                    .get_mut(mission_entity)
-                    .as_mission_type_mut::<SalvageMission>()
-                {
-                    mission_data.declaimers.push(creep_entity);
                 }
             });
         })
@@ -393,44 +375,94 @@ impl SalvageMission {
         Ok(())
     }
 
-    fn spawn_declaimers(
-        &self,
-        system_data: &mut MissionExecutionSystemData,
-        mission_entity: Entity,
-        controller_id: RemoteObjectId<StructureController>,
-    ) -> Result<(), String> {
-        let token = system_data.spawn_queue.token();
-
-        for home_room_entity in self.home_room_datas.iter() {
-            let home_room_data = system_data.room_data.get(*home_room_entity).ok_or("Expected home room data")?;
-            let home_room = game::rooms().get(home_room_data.name).ok_or("Expected home room")?;
-
-            // CLAIM is heavy (600 energy/part); each body lands ~one strike
-            // before it dies (600t life vs 1000t upgrade-block), so size for a
-            // meaningful single strike (−300 ttd/CLAIM) without runaway cost.
-            let body_definition = SpawnBodyDefinition {
-                maximum_energy: home_room.energy_capacity_available(),
-                minimum_repeat: Some(1),
-                maximum_repeat: Some(4),
-                pre_body: &[],
-                repeat_body: &[Part::Claim, Part::Move],
-                post_body: &[],
-            };
-
-            if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                let spawn_request = SpawnRequest::new(
-                    "Declaimer".to_string(),
-                    &body,
-                    SPAWN_PRIORITY_LOW,
-                    Some(token),
-                    Self::create_handle_declaimer_spawn(mission_entity, controller_id),
-                );
-
-                system_data.spawn_queue.request(*home_room_entity, spawn_request);
-            }
+    /// Withdraw the v1 `Declaim` objective THIS mission emitted (ADR 0027 v1.1 P2). Scoped to
+    /// `Declaim { room == target AND controller == tracked-pos }` — the exact `(room, controller)` we last
+    /// requested (from the ephemeral [`SalvageBreachTracker::last_declaim_pos`], keyed by room) — so it
+    /// removes ONLY our objective. The SIBLING of [`Self::withdraw_breach_objective`]. No-op if we have no
+    /// tracked controller for this room (incl. after a VM reset — the orphaned objective then TTL-expires).
+    /// Clears the tracker entry. Called when the controller goes neutral, the room re-arms / stands down /
+    /// goes stale / aborts, and on completion — every path where the mission stops pursuing the de-claim.
+    fn withdraw_declaim_objective(&self, system_data: &mut MissionExecutionSystemData, room_name: RoomName) {
+        let Some(controller_pos) = system_data.salvage_breach_tracker.last_declaim_pos.remove(&room_name) else {
+            return;
+        };
+        let stale: Vec<_> = system_data
+            .combat_objective_queue
+            .objectives
+            .iter()
+            .filter(|o| {
+                o.owner == ObjectiveOwner::Attack
+                    && o.kind == ObjectiveKind::Declaim {
+                        room: room_name,
+                        controller: controller_pos,
+                    }
+            })
+            .map(|o| o.id)
+            .collect();
+        for id in stale {
+            system_data.combat_objective_queue.withdraw(id);
         }
+    }
 
-        Ok(())
+    /// Emit (or refresh) the v1 `Declaim{room, controller}` objective (ADR 0027 v1.1 P2): the salvage
+    /// DECLAIM producer. Owner=Attack, LOW priority (opportunistic). Sized by the always-field `DeclaimAttack`
+    /// doctrine (which fields a CLAIM `SquadRole::Declaimer` squad). Mirrors [`Self::request_breach_objective`]
+    /// and `SourceKeeperFarmMission`'s `Farm{SK}` producer: build the bot-agnostic engagement context, let
+    /// `decide_doctrine` pick `DeclaimAttack` + `plan_engagement` size the CLAIM squad, and request the
+    /// objective. The `SquadManager` then fields, travels, and `attackController`s the controller across the
+    /// 1000-tick cadence (the `declaiming` lease-hold keeps it committed until the controller is neutral).
+    /// Only called once the corridor is open (`ControllerAccess::ReachableNow`) — so the CLAIM body never dies
+    /// against a walled-in controller. The EV/admit decision stays in `SalvageOperation` (the mission only
+    /// reaches here for a strategic, hostile-owned, sourced derelict room).
+    fn request_declaim_objective(&self, system_data: &mut MissionExecutionSystemData, room_name: RoomName, controller_pos: Position) {
+        use screeps_combat_decision::composition::CompositionParams;
+        use screeps_combat_decision::doctrine;
+        use screeps_combat_decision::force_sizing::DefenseProfile;
+
+        let member_energy = self
+            .home_room_datas
+            .iter()
+            .filter_map(|&e| system_data.room_data.get(e))
+            .filter_map(|rd| game::rooms().get(rd.name))
+            .map(|r| r.energy_capacity_available())
+            .max()
+            .unwrap_or(0);
+
+        // Project into the doctrine registry: a `Declaim` objective → the always-field `DeclaimAttack`
+        // doctrine, which sizes a CLAIM declaimer squad directly (a derelict controller is undefended by
+        // construction — no scouted enemy/towers; the mission aborts on re-arm). No EV gate here (the gate is
+        // upstream in SalvageOperation).
+        let ctx = doctrine::EngagementContext {
+            objective: doctrine::DoctrineObjective::Declaim,
+            coordination: doctrine::EnemyCoordination::Individual,
+            defense: DefenseProfile::default(),
+            enemy_force: None,
+            importance: 0.0,
+            member_energy,
+            target_value: 1_000_000.0,
+            onsite_window: CREEP_LIFE_TIME,
+            params: CompositionParams { member_energy, ..Default::default() },
+        };
+        let doctrines = doctrine::default_doctrines();
+        let Some(comp) = doctrine::decide_doctrine(&ctx, &doctrines).and_then(|d| doctrine::plan_engagement(d, &ctx, None).composition) else {
+            // No home affords even one declaimer at this energy → don't emit (the manager could not field it).
+            return;
+        };
+
+        let kind = ObjectiveKind::Declaim {
+            room: room_name,
+            controller: controller_pos,
+        };
+
+        // If the tracked controller pos drifted (different controller tile — shouldn't happen, but be
+        // defensive), withdraw the prior objective first so the queue never accretes stale Declaims.
+        if system_data.salvage_breach_tracker.last_declaim_pos.get(&room_name) != Some(&controller_pos) {
+            self.withdraw_declaim_objective(system_data, room_name);
+        }
+        system_data.salvage_breach_tracker.last_declaim_pos.insert(room_name, controller_pos);
+
+        let request = ObjectiveRequest::new(kind, OBJECTIVE_PRIORITY_LOW, ForceRequirement::single(comp)).owner(ObjectiveOwner::Attack);
+        system_data.combat_objective_queue.request(request, game::time());
     }
 
     /// Withdraw the v1 breach `Dismantle` objective THIS mission emitted (ADR 0027
@@ -562,33 +594,23 @@ impl Mission for SalvageMission {
     fn remove_creep(&mut self, entity: Entity) {
         self.raiders.retain(|e| *e != entity);
         self.dismantlers.retain(|e| *e != entity);
-        self.declaimers.retain(|e| *e != entity);
     }
 
     fn get_creeps(&self) -> Vec<Entity> {
-        self.raiders
-            .iter()
-            .chain(self.dismantlers.iter())
-            .chain(self.declaimers.iter())
-            .copied()
-            .collect()
+        self.raiders.iter().chain(self.dismantlers.iter()).copied().collect()
     }
 
     fn describe_state(&self, _system_data: &mut MissionExecutionSystemData, _mission_entity: Entity) -> String {
-        format!(
-            "Salvage - Raiders: {} Dismantlers: {} Declaimers: {}",
-            self.raiders.len(),
-            self.dismantlers.len(),
-            self.declaimers.len()
-        )
+        // ADR 0027 v1.1 P2: declaimers are no longer mission-owned creeps — the de-claim is a v1 `Declaim`
+        // objective the `SquadManager` fields. Only raiders + teardown dismantlers remain mission-owned.
+        format!("Salvage - Raiders: {} Dismantlers: {}", self.raiders.len(), self.dismantlers.len())
     }
 
     fn summarize(&self) -> crate::visualization::SummaryContent {
         crate::visualization::SummaryContent::Text(format!(
-            "Salvage - Raiders: {} Dismantlers: {} Declaimers: {}",
+            "Salvage - Raiders: {} Dismantlers: {}",
             self.raiders.len(),
-            self.dismantlers.len(),
-            self.declaimers.len()
+            self.dismantlers.len()
         ))
     }
 
@@ -772,13 +794,14 @@ impl Mission for SalvageMission {
         };
 
         // FIX 1: on every standdown path (claimed / re-arm / not-derelict / stale /
-        // safe mode) explicitly tear the breach objective down before returning, so a
-        // squad that claimed it cannot keep dismantling a re-armed room under the
-        // manager's deadline lease (the TTL alone would not retire it). Mirrors the
-        // completion withdraw at the end of the tick.
+        // safe mode) explicitly tear the breach AND declaim objectives down before
+        // returning, so a squad that claimed one cannot keep working a re-armed room
+        // under the manager's deadline lease (the TTL alone would not retire it).
+        // Mirrors the completion withdraw at the end of the tick. (ADR 0027 v1.1 P1+P2.)
         if let Some(result) = standdown {
             if let Some(name) = system_data.room_data.get(self.room_data).map(|rd| rd.name) {
                 self.withdraw_breach_objective(system_data, name);
+                self.withdraw_declaim_objective(system_data, name);
             }
             return result;
         }
@@ -841,21 +864,24 @@ impl Mission for SalvageMission {
             0
         };
 
-        // One de-claimer at a time: only one attackController strike lands per
-        // 1000 ticks anyway (engine-mechanics §2.12), so a second would idle.
-        // `declaim_target` is gated on declaim enabled + hostile-owned + sources;
-        // `declaim_access` gates reachability:
-        //   - ReachableNow → desire 1 and SPAWN (path is clear);
-        //   - Breachable (dismantlers can clear it) → desire 1 but DON'T spawn
-        //     yet — dismantlers open the path first (M10 corridor);
-        //   - Sealed → desire 0 (breach dismantlers run first; the de-claimer
-        //     spawns once the corridor opens and access becomes Reachable).
-        let declaim_spawnable = matches!(declaim_access, Some(ControllerAccess::ReachableNow));
-        let desired_declaimers = match declaim_access {
-            Some(ControllerAccess::ReachableNow) => 1,
-            Some(ControllerAccess::Breachable) if features.dismantle => 1,
-            _ => 0,
-        };
+        // ── ADR 0027 v1.1 P2: declaim producer gating ───────────────────────────
+        // The de-claim is no longer a mission-owned `DeclaimJob` creep — it is a v1
+        // `Declaim{room, controller}` objective the `SquadManager` fields as a CLAIM
+        // declaimer squad. `declaim_target` is gated on declaim enabled + hostile-owned
+        // + sources; `declaim_access` gates reachability:
+        //   - ReachableNow → the corridor is OPEN (opened by the P1 breach `Dismantle`
+        //     squad), so EMIT the `Declaim` objective and let the manager field +
+        //     persist the declaimer across the 1000-tick cadence;
+        //   - Breachable → the breach producer runs first (the P1 `Dismantle` squad
+        //     opens the path); we do NOT emit declaim yet (the CLAIM body would die
+        //     against the walled controller);
+        //   - Sealed → likewise wait for the corridor.
+        // `declaim_wanted` keeps the mission OPEN while a de-claim is still desired
+        // (mirrors `breach_needed`), so it does not complete-and-cool while waiting for
+        // the corridor / the squad.
+        let declaim_objective_live = matches!(declaim_access, Some(ControllerAccess::ReachableNow));
+        let declaim_wanted = declaim_target.is_some()
+            && matches!(declaim_access, Some(ControllerAccess::ReachableNow) | Some(ControllerAccess::Breachable));
 
         if derelict_features.diagnostics {
             // Source reachability — answers "do leftover walls block mining".
@@ -881,7 +907,7 @@ impl Mission for SalvageMission {
                 .unwrap_or((0, 0));
 
             info!(
-                "[salvage-mission-diag] {} loot(e={},o={}) dismantle_hits={} dismantle_ready={} declaim_target={} declaim_access={:?} breach_possible={} breach_needed={} breach_surplus={} breach_obj_live={} breach_target={:?} sources_reachable={}/{} -> desired raiders={} dismantlers={} declaimers={} (spawnable={}) alive r={} d={} dc={}",
+                "[salvage-mission-diag] {} loot(e={},o={}) dismantle_hits={} dismantle_ready={} declaim_target={} declaim_access={:?} declaim_obj_live={} declaim_wanted={} breach_possible={} breach_needed={} breach_surplus={} breach_obj_live={} breach_target={:?} sources_reachable={}/{} -> desired raiders={} dismantlers={} alive r={} d={}",
                 room_name,
                 work.loot_energy,
                 work.loot_other,
@@ -889,6 +915,8 @@ impl Mission for SalvageMission {
                 dismantle_ready,
                 declaim_target.is_some(),
                 declaim_access,
+                declaim_objective_live,
+                declaim_wanted,
                 breach_possible,
                 breach_needed,
                 breach_surplus,
@@ -898,11 +926,8 @@ impl Mission for SalvageMission {
                 total_sources,
                 desired_raiders,
                 desired_dismantlers,
-                desired_declaimers,
-                declaim_spawnable,
                 self.raiders.len(),
                 self.dismantlers.len(),
-                self.declaimers.len(),
             );
         }
 
@@ -925,12 +950,30 @@ impl Mission for SalvageMission {
             self.withdraw_breach_objective(system_data, room_name);
         }
 
+        // ── ADR 0027 v1.1 P2: declaim producer ───────────────────────────────
+        // Once the corridor is open (`ReachableNow`), EMIT the v1 `Declaim` objective
+        // so the `SquadManager` fields the CLAIM declaimer + persists it across the
+        // 1000-tick cadence. WITHDRAW it the moment the controller is no longer a
+        // declaim target (it went neutral → `declaim_target` is None → not ReachableNow)
+        // or the room re-arms / stands down (handled by the early returns above, plus
+        // the explicit standdown withdraw below). The producer pattern (like the breach
+        // `Dismantle` + SK `Farm`), NOT a mission-owned `DeclaimJob`.
+        if declaim_objective_live {
+            if let Some(controller_id) = declaim_target {
+                self.request_declaim_objective(system_data, room_name, controller_id.pos());
+            }
+        } else {
+            // Not reachable / controller neutral: drop the declaim objective so the
+            // manager retires the declaimer squad (a neutral controller = de-claim done).
+            self.withdraw_declaim_objective(system_data, room_name);
+        }
+
         // Complete only when there is genuinely nothing to do. A breach-NEEDED
         // room holds the mission open (as the old breach `desired_dismantlers==1`
         // did): while breach is wanted it waits for surplus and keeps re-asserting
         // the v1 `Dismantle` objective, instead of completing-and-cooling in a
         // loop. (`breach_needed` ⊇ `breach_objective_live`.)
-        if desired_raiders == 0 && desired_dismantlers == 0 && desired_declaimers == 0 && !breach_needed {
+        if desired_raiders == 0 && desired_dismantlers == 0 && !declaim_wanted && !breach_needed {
             info!(
                 "Salvage of room {} complete - no enabled work remains (loot={}, within-horizon dismantle hits={}, declaim_access={:?}, breach_possible={})",
                 room_name,
@@ -940,8 +983,9 @@ impl Mission for SalvageMission {
                 breach_possible
             );
 
-            // Defensive: never leave a breach objective behind on completion.
+            // Defensive: never leave a breach / declaim objective behind on completion.
             self.withdraw_breach_objective(system_data, room_name);
+            self.withdraw_declaim_objective(system_data, room_name);
             return Ok(MissionResult::Success);
         }
 
@@ -964,11 +1008,8 @@ impl Mission for SalvageMission {
             )?;
         }
 
-        if declaim_spawnable && self.declaimers.len() < desired_declaimers {
-            if let Some(controller_id) = declaim_target {
-                self.spawn_declaimers(system_data, mission_entity, controller_id)?;
-            }
-        }
+        // ADR 0027 v1.1 P2: no mission-owned declaimer spawn — the `Declaim` objective (emitted above) is
+        // fielded by the `SquadManager`.
 
         Ok(MissionResult::Running)
     }

@@ -273,6 +273,10 @@ fn classify_objective(formation: bool, has_structures: bool, has_live_hostiles: 
 enum CapabilityClass {
     Defense,
     Offense,
+    /// ADR 0027 v1.1 P2: a DECLAIM squad (a CLAIM declaimer). A DEDICATED class so a freed declaimer is
+    /// NEVER reassigned onto a combat objective (a CLAIM creep can't crack a core / clear creeps) and no
+    /// combat squad is ever reassigned onto a Declaim (a RANGED squad can't `attackController` — wrong body).
+    Declaim,
 }
 
 fn capability_class(kind: &ObjectiveKind) -> CapabilityClass {
@@ -283,6 +287,7 @@ fn capability_class(kind: &ObjectiveKind) -> CapabilityClass {
         ObjectiveKind::Harass { .. } | ObjectiveKind::Dismantle { .. } | ObjectiveKind::Farm { .. } | ObjectiveKind::Escort { .. } => {
             CapabilityClass::Offense
         }
+        ObjectiveKind::Declaim { .. } => CapabilityClass::Declaim,
     }
 }
 
@@ -330,7 +335,9 @@ fn project_value_kind(kind: &ObjectiveKind) -> ObjectiveValueKind {
         ObjectiveKind::Farm { kind: FarmKind::Core, .. } => ObjectiveValueKind::FarmCore,
         ObjectiveKind::Farm { kind: FarmKind::SourceKeeper, .. } => ObjectiveValueKind::FarmSourceKeeper,
         ObjectiveKind::Farm { kind: FarmKind::PowerBank, .. } => ObjectiveValueKind::FarmPowerBank,
-        ObjectiveKind::Harass { .. } | ObjectiveKind::Dismantle { .. } => ObjectiveValueKind::Denial,
+        // ADR 0027 v1.1 P2: a declaim DENIES the enemy a controller (and acquires a mining room) — value as
+        // a denial objective so the EV-positive claim gate treats it like the other resource-denial work.
+        ObjectiveKind::Harass { .. } | ObjectiveKind::Dismantle { .. } | ObjectiveKind::Declaim { .. } => ObjectiveValueKind::Denial,
     }
 }
 
@@ -443,6 +450,8 @@ fn objective_target(kind: &ObjectiveKind) -> (SquadTarget, RoomName) {
         ObjectiveKind::Defend { room } => (SquadTarget::DefendRoom { room: *room }, *room),
         ObjectiveKind::Harass { room } => (SquadTarget::HarassRoom { room: *room }, *room),
         ObjectiveKind::Dismantle { room, pos } => (SquadTarget::AttackStructure { position: *pos }, *room),
+        // ADR 0027 v1.1 P2: a declaim squad travels to the room and `attackController`s the controller tile.
+        ObjectiveKind::Declaim { room, controller } => (SquadTarget::AttackController { position: *controller }, *room),
         // Secure / Farm / Escort all reduce to "go to the room and clear it";
         // the SquadCombatJob self-drives there and engages whatever is hostile.
         ObjectiveKind::Secure { room } | ObjectiveKind::Farm { room, .. } | ObjectiveKind::Escort { room } => {
@@ -580,6 +589,9 @@ impl<'a> System<'a> for SquadManagerSystem {
             let squad_room = obj_info.map(|(r, _, _, _)| r);
             let is_defend = obj_info.map(|(_, d, _, _)| d).unwrap_or(false);
             let cur_class = obj_info.map(|(_, _, _, c)| c);
+            // ADR 0027 v1.1 P2: a DECLAIM objective (a CLAIM declaimer). Drives the `declaiming` lease-hold
+            // below so the squad persists across the 1000-tick cadence (a declaimer has no focus to refresh on).
+            let is_declaim = cur_class == Some(CapabilityClass::Declaim);
             // P-OBJ #23: has the commitment lease lapsed (the squad failed to make progress in time)?
             let deadline_lapsed = obj_info.and_then(|(_, _, dl, _)| dl).is_some_and(|d| now >= d);
 
@@ -744,6 +756,10 @@ impl<'a> System<'a> for SquadManagerSystem {
                 // its lease while the Defend objective persists, instead of GaveUp+refield (Gen churn). The
                 // owned-room threat roams a NEIGHBOUR room, so the owned room itself shows no in-room focus.
                 holding_station: is_defend && in_target_room && !has_focus,
+                // ADR 0027 v1.1 P2: an in-room declaimer is HOLDING (striking on the 1000-tick cadence), so
+                // refresh its lease + block the false Resolve while it neutralizes the controller. Bounded by
+                // the objective lifecycle: the producer withdraws on controller-neutral / re-arm → objective_gone.
+                declaiming: is_declaim && in_target_room && has_members,
                 reassign_available,
             };
             let action = lifecycle::reconcile(snapshot);
@@ -1941,6 +1957,24 @@ mod tests {
         let (t, travel) = objective_target(&ObjectiveKind::Dismantle { room: r, pos });
         assert!(matches!(t, SquadTarget::AttackStructure { position } if position == pos));
         assert_eq!(travel, r);
+
+        // ADR 0027 v1.1 P2: Declaim travels to the controller's room, targets the controller tile.
+        let ctrl = Position::new(RoomCoordinate::new(20).unwrap(), RoomCoordinate::new(20).unwrap(), r);
+        let (t, travel) = objective_target(&ObjectiveKind::Declaim { room: r, controller: ctrl });
+        assert!(matches!(t, SquadTarget::AttackController { position } if position == ctrl));
+        assert_eq!(travel, r);
+    }
+
+    /// ADR 0027 v1.1 P2: a Declaim objective is its OWN capability class — a CLAIM declaimer is never
+    /// reassigned onto combat work (it can't crack a core / clear creeps) and no combat squad is reassigned
+    /// onto a Declaim (a RANGED squad can't `attackController`).
+    #[test]
+    fn declaim_is_a_dedicated_capability_class() {
+        let r = room("W5N5");
+        let ctrl = Position::new(RoomCoordinate::new(20).unwrap(), RoomCoordinate::new(20).unwrap(), r);
+        assert_eq!(capability_class(&ObjectiveKind::Declaim { room: r, controller: ctrl }), CapabilityClass::Declaim);
+        assert_ne!(capability_class(&ObjectiveKind::Declaim { room: r, controller: ctrl }), CapabilityClass::Offense);
+        assert_ne!(capability_class(&ObjectiveKind::Declaim { room: r, controller: ctrl }), CapabilityClass::Defense);
     }
 
     #[test]

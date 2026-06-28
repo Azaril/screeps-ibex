@@ -79,6 +79,9 @@ pub enum SquadTarget {
     CollectResources { room: RoomName },
     /// Escort/defend another squad or position (power bank defense).
     EscortPosition { position: Position },
+    /// Neutralize a derelict controller via `attackController` (ADR 0027 v1.1 P2). `position` is the
+    /// controller tile; a `SquadRole::Declaimer` member strikes it on the 1000-tick upgrade-block cadence.
+    AttackController { position: Position },
 }
 
 // ─── Virtual anchor path ────────────────────────────────────────────────────
@@ -880,6 +883,9 @@ impl SquadContext {
                     SquadRole::Dismantler => 0.5,
                     SquadRole::Hauler => 0.2,
                     SquadRole::Healer => 0.1,
+                    // A declaimer carries no combat parts; it is the lowest-priority anchor (its job is to
+                    // hold position and strike the controller, not fight).
+                    SquadRole::Declaimer => 0.05,
                 };
                 (idx, hp_score * 0.6 + role_score * 0.4)
             })
