@@ -9,6 +9,7 @@ use crate::jobs::dismantle::*;
 use crate::jobs::haul::*;
 use crate::jobs::utility::dismantle::*;
 use crate::jobs::utility::dismantlebehavior::*;
+use crate::military::objective_queue::*;
 use crate::remoteobjectid::*;
 use crate::room::data::*;
 use crate::room::visibilitysystem::*;
@@ -122,6 +123,27 @@ pub struct SalvageMission {
     raiders: EntityVec<Entity>,
     dismantlers: EntityVec<Entity>,
     declaimers: EntityVec<Entity>,
+}
+
+/// EPHEMERAL (ADR 0027 v1.1 P1): the breach-blocker pos of the v1 `Dismantle`
+/// objective each salvage mission last emitted (`request_breach_objective`),
+/// keyed by the mission's target room. Lets `withdraw_breach_objective` scope its
+/// teardown to OUR objective by `room AND pos`, so it never clobbers `war.rs`'s
+/// same-room Attack-owned InvaderCore `Dismantle` (which targets the CORE tile, a
+/// different pos — the FIX 2 clobber guard).
+///
+/// NOT serialized — the project's ephemeral-resource pattern (mirrors
+/// [`SquadFormingProgress`](crate::military::squad_manager::SquadFormingProgress)):
+/// a `Default`-derived, non-`Serialize` resource auto-created by specs, holding a
+/// deterministic `BTreeMap` (no `HashMap` iteration → bit-deterministic). On a VM
+/// reset the map starts empty, so a `withdraw` after reset matches nothing and any
+/// orphaned breach objective simply TTL-expires (≤200t) — the self-heal the queue
+/// already relies on. No `WORLD_FORMAT_VERSION` bump (the persisted `SalvageMission`
+/// shape is unchanged; `last_breach_pos` is NOT a struct field).
+#[derive(Default)]
+pub struct SalvageBreachTracker {
+    /// target room → the breach-blocker pos of the live v1 `Dismantle` objective.
+    last_breach_pos: std::collections::BTreeMap<RoomName, Position>,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -410,6 +432,115 @@ impl SalvageMission {
 
         Ok(())
     }
+
+    /// Withdraw the v1 breach `Dismantle` objective THIS mission emitted (ADR 0027
+    /// v1.1 P1). Scoped to `Dismantle { room == target AND pos == tracked-pos }` — the
+    /// exact `(room, breach-blocker)` we last requested (from the ephemeral
+    /// [`SalvageBreachTracker`], keyed by room) — so it removes ONLY our objective and
+    /// never clobbers `war.rs`'s same-room Attack-owned InvaderCore `Dismantle` (which
+    /// targets the CORE tile, a different pos). Matching by pos (not room alone) is the
+    /// FIX-2 clobber guard; the tracked pos follows the producer as the outermost seal
+    /// falls (re-stamped on each emit, withdrawing the prior pos on drift). No-op if we
+    /// have no tracked pos for this room (incl. after a VM reset — the orphaned objective
+    /// then TTL-expires). Clears the tracker entry. Called when the corridor opens, the
+    /// room re-arms / stands down / goes stale / aborts, before re-emitting at a changed
+    /// pos, and on completion — every path where the mission stops pursuing the breach.
+    fn withdraw_breach_objective(&self, system_data: &mut MissionExecutionSystemData, room_name: RoomName) {
+        let Some(breach_pos) = system_data.salvage_breach_tracker.last_breach_pos.remove(&room_name) else {
+            return;
+        };
+        let stale: Vec<_> = system_data
+            .combat_objective_queue
+            .objectives
+            .iter()
+            .filter(|o| o.owner == ObjectiveOwner::Attack && o.kind == ObjectiveKind::Dismantle { room: room_name, pos: breach_pos })
+            .map(|o| o.id)
+            .collect();
+        for id in stale {
+            system_data.combat_objective_queue.withdraw(id);
+        }
+    }
+
+    /// Emit (or refresh) the v1 breach `Dismantle{room, breach-blocker}` objective
+    /// (ADR 0027 v1.1 P1): the salvage breach PRODUCER. Owner=Attack, LOW
+    /// priority (opportunistic, surplus-only), sized by the dormant `SiegeBreach`
+    /// doctrine — this is its first live producer. Mirrors `war.rs`'s InvaderCore
+    /// `Dismantle` emit + `SourceKeeperFarmMission`'s `Farm{SK}` producer: build
+    /// the bot-agnostic engagement context (the corridor hits as the structure
+    /// `objective_hits`, member energy from the best home), let `decide_doctrine`
+    /// pick `SiegeBreach` + `plan_engagement` size the WORK squad, and request the
+    /// objective. The `SquadManager` then fields, sizes, travels, and razes the
+    /// blocker. If the pos drifted, the prior objective is withdrawn first so the
+    /// queue holds exactly one breach objective per room.
+    fn request_breach_objective(
+        &self,
+        system_data: &mut MissionExecutionSystemData,
+        room_name: RoomName,
+        breach_pos: Position,
+        corridor_hits: u32,
+    ) {
+        use screeps_combat_decision::composition::CompositionParams;
+        use screeps_combat_decision::doctrine;
+        use screeps_combat_decision::force_sizing::DefenseProfile;
+
+        // Best in-range home's spawn energy sizes each squad member (the same
+        // energy the manager's spawn path sizes a `Sized` body against).
+        let member_energy = self
+            .home_room_datas
+            .iter()
+            .filter_map(|&e| system_data.room_data.get(e))
+            .filter_map(|rd| game::rooms().get(rd.name))
+            .map(|r| r.energy_capacity_available())
+            .max()
+            .unwrap_or(0);
+
+        // Project into the doctrine registry's bot-agnostic context. A breach is
+        // a dismantle-able structure ring → `DismantleStructure` selects the
+        // `SiegeBreach` doctrine, which sizes the WORK force from `defense`
+        // (the corridor's total hits as `objective_hits`). No scouted enemy creep
+        // force is folded in (a derelict room is quiet by construction — the
+        // mission already aborts on re-arm).
+        let ctx = doctrine::EngagementContext {
+            objective: doctrine::DoctrineObjective::DismantleStructure,
+            coordination: doctrine::EnemyCoordination::Individual,
+            defense: DefenseProfile { objective_hits: corridor_hits, ..Default::default() },
+            enemy_force: None,
+            importance: 0.0,
+            member_energy,
+            // Opportunistic surplus chew — a large target_value so a feasible
+            // breach clears the EV commit threshold (the wall-energy ROI gate is
+            // upstream: the mission only calls this on `breach_surplus`).
+            target_value: 1_000_000.0,
+            onsite_window: CREEP_LIFE_TIME,
+            params: CompositionParams { member_energy, ..Default::default() },
+        };
+        let doctrines = doctrine::default_doctrines();
+        let Some(comp) = doctrine::decide_doctrine(&ctx, &doctrines).and_then(|d| doctrine::plan_engagement(d, &ctx, None).composition) else {
+            // No home affords the sized force at this energy → don't emit (the
+            // manager could not field it anyway).
+            return;
+        };
+
+        let kind = ObjectiveKind::Dismantle {
+            room: room_name,
+            pos: breach_pos,
+        };
+
+        // The pos drifts as the outermost seal falls. If the tracker holds a PRIOR
+        // breach pos for this room that differs from this one, withdraw it first
+        // (pos-scoped to OUR objective, never war's core) so the queue never accretes
+        // stale Dismantle objectives. (A same-pos refresh leaves the live objective in
+        // place — `request` upserts by kind below.)
+        if system_data.salvage_breach_tracker.last_breach_pos.get(&room_name) != Some(&breach_pos) {
+            self.withdraw_breach_objective(system_data, room_name);
+        }
+        // Track the pos we are emitting so a later withdraw (drift / abort / re-arm /
+        // stale / corridor-open / completion) removes exactly this objective.
+        system_data.salvage_breach_tracker.last_breach_pos.insert(room_name, breach_pos);
+
+        let request = ObjectiveRequest::new(kind, OBJECTIVE_PRIORITY_LOW, ForceRequirement::single(comp)).owner(ObjectiveOwner::Attack);
+        system_data.combat_objective_queue.request(request, game::time());
+    }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -496,35 +627,46 @@ impl Mission for SalvageMission {
         }
 
         // Phase 1: gates and work survey against an immutable room borrow.
-        let (room_name, work, dismantle_ready, declaim_target, declaim_access, breach_possible) = {
+        //
+        // ADR 0027 v1.1 P1 (FIX 1): the abort / re-arm / stale / claimed early-returns
+        // below must explicitly TEAR DOWN the v1 breach `Dismantle` objective — relying
+        // on its 200-tick TTL is unsafe once a squad has CLAIMED it (the manager's
+        // deadline lease keeps a claimed objective alive past TTL, so a squad could keep
+        // dismantling a room that just RE-ARMED). The borrow held here is immutable on
+        // `system_data.room_data`, which conflicts with the `&mut self`/`&mut system_data`
+        // the withdraw needs, so the standdown decision is DEFERRED out of the borrow:
+        // we capture it as `standdown` and handle withdraw+return after the block closes.
+        let mut standdown: Option<Result<MissionResult, String>> = None;
+        let survey_tuple = {
             let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
             let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility data")?;
 
             if dynamic_visibility_data.updated_within(1000) {
                 if dynamic_visibility_data.owner().mine() || dynamic_visibility_data.owner().friendly() {
                     // Claimed - colony/outpost machinery owns the room now.
-                    return Ok(MissionResult::Success);
-                }
-
-                if dynamic_visibility_data.militarily_active() {
-                    return Err("Salvage target re-armed (spawn/tower/combat creeps) - aborting".to_string());
-                }
-
-                // For hostile-owned targets, any threat-capable creep sighting
-                // (haulers refilling towers, claimers, healers) breaks the
-                // derelict classification even though it is not "militarised".
-                if dynamic_visibility_data.owner().hostile() && !dynamic_visibility_data.derelict() {
-                    return Err("Salvage target no longer derelict (hostile activity sighted) - aborting".to_string());
+                    standdown = Some(Ok(MissionResult::Success));
+                } else if dynamic_visibility_data.militarily_active() {
+                    standdown = Some(Err("Salvage target re-armed (spawn/tower/combat creeps) - aborting".to_string()));
+                } else if dynamic_visibility_data.owner().hostile() && !dynamic_visibility_data.derelict() {
+                    // For hostile-owned targets, any threat-capable creep sighting
+                    // (haulers refilling towers, claimers, healers) breaks the
+                    // derelict classification even though it is not "militarised".
+                    standdown = Some(Err("Salvage target no longer derelict (hostile activity sighted) - aborting".to_string()));
                 }
             } else if !dynamic_visibility_data.updated_within(derelict_features.action_max_age) {
-                return Err("Salvage intel too stale - aborting".to_string());
+                standdown = Some(Err("Salvage intel too stale - aborting".to_string()));
             }
 
-            if dynamic_visibility_data.safe_mode_active() {
+            if standdown.is_none() && dynamic_visibility_data.safe_mode_active() {
                 // Safe mode blocks withdraw/dismantle for us; abort and let the
                 // operation re-admit once it has expired.
-                return Err("Salvage target under safe mode - aborting".to_string());
+                standdown = Some(Err("Salvage target under safe mode - aborting".to_string()));
             }
+
+            if standdown.is_some() {
+                // Drop the room borrow and tear the breach objective down below.
+                None
+            } else {
 
             // De-claim target (from PERSISTED intel — no live structures
             // needed): a still-hostile-owned derelict room WITH sources is
@@ -591,18 +733,31 @@ impl Mission for SalvageMission {
                     derelict_features.max_structure_hits,
                 );
 
-                (work, dismantle_ready, declaim_access, breach_possible)
+                // The single corridor blocker tile + total hits the v1
+                // `Dismantle` objective targets (ADR 0027 v1.1 P1): the outermost
+                // seal on the cheapest corridor from an objective out to a room
+                // edge. `None` ⇒ no breach work (every objective already reaches
+                // an edge). The producer below emits/withdraws on this.
+                let breach_target = breach_target_tile(
+                    room_data.name,
+                    structures.all(),
+                    &breach_objectives,
+                    derelict_features.max_structure_hits,
+                );
+
+                (work, dismantle_ready, declaim_access, breach_possible, breach_target)
             });
 
             match survey {
-                Some((work, dismantle_ready, declaim_access, breach_possible)) => (
+                Some((work, dismantle_ready, declaim_access, breach_possible, breach_target)) => Some((
                     room_data.name,
                     work,
                     dismantle_ready,
                     declaim_target,
                     declaim_access,
                     breach_possible,
-                ),
+                    breach_target,
+                )),
                 None => {
                     system_data.visibility.request(VisibilityRequest::new(
                         room_data.name,
@@ -613,7 +768,24 @@ impl Mission for SalvageMission {
                     return Ok(MissionResult::Running);
                 }
             }
+            } // end else (no standdown)
         };
+
+        // FIX 1: on every standdown path (claimed / re-arm / not-derelict / stale /
+        // safe mode) explicitly tear the breach objective down before returning, so a
+        // squad that claimed it cannot keep dismantling a re-armed room under the
+        // manager's deadline lease (the TTL alone would not retire it). Mirrors the
+        // completion withdraw at the end of the tick.
+        if let Some(result) = standdown {
+            if let Some(name) = system_data.room_data.get(self.room_data).map(|rd| rd.name) {
+                self.withdraw_breach_objective(system_data, name);
+            }
+            return result;
+        }
+        // Safe: `None` standdown ⇒ `survey_tuple` is `Some` (the visibility-needed path
+        // returned above).
+        let (room_name, work, dismantle_ready, declaim_target, declaim_access, breach_possible, breach_target) =
+            survey_tuple.expect("survey tuple present when not standing down");
 
         // Per-role desired rosters from observed work. Disabled feature flags
         // zero the role; live creeps finish their jobs and expire naturally.
@@ -623,16 +795,23 @@ impl Mission for SalvageMission {
             0
         };
 
-        // Breach: when the controller is Sealed at the normal dismantle horizon
-        // but reachable if we IGNORE it (`breach_possible`), the seal is
-        // over-horizon walls we could chew. For a strategic takeover room we
-        // breach them — but only on SURPLUS (excess home energy + an idle
-        // spawn), at the lowest priority, because the wall energy is a net loss
-        // (per the EV analysis) and this must consume spare capacity only.
-        // Breach when an objective (source for mining, or the controller for
-        // de-claim) is sealed behind over-horizon walls. `breach_possible`
-        // already aggregates all objectives — so this also opens walled-off
-        // sources, not just the controller.
+        // Breach: when an objective (source for mining, or the controller for
+        // de-claim) is Sealed at the normal dismantle horizon but reachable if
+        // we IGNORE the over-horizon walls (`breach_possible`), the seal is
+        // walls we could chew to open a corridor. `breach_possible` already
+        // aggregates all objectives — so this opens walled-off sources, not just
+        // the controller. For a strategic takeover room we breach them — but
+        // only on SURPLUS (excess home energy + an idle spawn), because the wall
+        // energy is a net loss (per the EV analysis) and this must consume spare
+        // capacity only.
+        //
+        // ADR 0027 v1.1 P1: the breach corridor is no longer chewed by a
+        // mission-owned solo dismantler. The mission now EMITS a v1
+        // `Dismantle{room, breach-blocker}` objective (owner=Attack, LOW) and the
+        // unified `SquadManager` fields + force-SIZES the dismantler squad via the
+        // dormant `SiegeBreach` doctrine — the producer pattern (like
+        // `SourceKeeperFarmMission` emitting `Farm{SK}`). The mission keeps only
+        // the within-horizon TEARDOWN dismantlers below.
         let breach_needed = derelict_features.breach_sealed && features.dismantle && breach_possible;
 
         let breach_surplus = breach_needed
@@ -643,17 +822,23 @@ impl Mission for SalvageMission {
                 .map(|econ| econ.stored_energy >= derelict_features.breach_min_home_energy && econ.free_spawns > 0)
                 .unwrap_or(false);
 
-        // Dismantler roster. Breach mode (unbounded hit ceiling — chew the
-        // sealing walls) takes precedence when the controller is Sealed, since
-        // in-horizon dismantle cannot reach it anyway. Otherwise the normal
-        // within-horizon roster sized by the ready dismantle work.
-        let (desired_dismantlers, breach_mode) = if breach_needed {
-            (1, true)
-        } else if features.dismantle && dismantle_ready {
-            let count = if work.dismantle_hits > SECOND_DISMANTLER_HITS { 2 } else { 1 };
-            (count, false)
+        // The v1 breach objective is LIVE this tick when breach is wanted, on
+        // surplus, and we have a concrete blocker tile to target. (`breach_target`
+        // is `None` once the corridor is open — every objective reaches an edge —
+        // which is exactly when we withdraw the objective below.)
+        let breach_objective_live = breach_surplus && breach_target.is_some();
+
+        // Dismantler roster: ONLY the within-horizon TEARDOWN (raze-for-salvage)
+        // role now — the breach corridor is the v1 squad's job (above). Sized by
+        // the ready dismantle work.
+        let desired_dismantlers = if features.dismantle && dismantle_ready {
+            if work.dismantle_hits > SECOND_DISMANTLER_HITS {
+                2
+            } else {
+                1
+            }
         } else {
-            (0, false)
+            0
         };
 
         // One de-claimer at a time: only one attackController strike lands per
@@ -696,7 +881,7 @@ impl Mission for SalvageMission {
                 .unwrap_or((0, 0));
 
             info!(
-                "[salvage-mission-diag] {} loot(e={},o={}) dismantle_hits={} dismantle_ready={} declaim_target={} declaim_access={:?} breach_possible={} breach_needed={} breach_surplus={} sources_reachable={}/{} -> desired raiders={} dismantlers={}{} declaimers={} (spawnable={}) alive r={} d={} dc={}",
+                "[salvage-mission-diag] {} loot(e={},o={}) dismantle_hits={} dismantle_ready={} declaim_target={} declaim_access={:?} breach_possible={} breach_needed={} breach_surplus={} breach_obj_live={} breach_target={:?} sources_reachable={}/{} -> desired raiders={} dismantlers={} declaimers={} (spawnable={}) alive r={} d={} dc={}",
                 room_name,
                 work.loot_energy,
                 work.loot_other,
@@ -707,11 +892,12 @@ impl Mission for SalvageMission {
                 breach_possible,
                 breach_needed,
                 breach_surplus,
+                breach_objective_live,
+                breach_target.map(|(p, h)| (p.x().u8(), p.y().u8(), h)),
                 reachable_sources,
                 total_sources,
                 desired_raiders,
                 desired_dismantlers,
-                if breach_mode { " (breach)" } else { "" },
                 desired_declaimers,
                 declaim_spawnable,
                 self.raiders.len(),
@@ -720,11 +906,31 @@ impl Mission for SalvageMission {
             );
         }
 
-        // Complete only when there is genuinely nothing to do. A breach-needed
-        // room never reaches here (desired_dismantlers == 1), so it holds the
-        // slot and chews the seal whenever surplus allows instead of
-        // completing-and-cooling in a loop.
-        if desired_raiders == 0 && desired_dismantlers == 0 && desired_declaimers == 0 {
+        // ── ADR 0027 v1.1 P1: breach producer ────────────────────────────────
+        // The breach corridor is opened by a v1 `Dismantle` squad the
+        // `SquadManager` fields, NOT a mission-owned dismantler. Emit the
+        // objective while breach is wanted on surplus + a blocker tile exists;
+        // WITHDRAW it the moment the corridor is open (`breach_target` is None ⇒
+        // every objective reaches an edge), surplus lapses, or the room
+        // re-arms/stands-down (handled by the early returns above, which exit
+        // before this point — leaving the objective to TTL-expire, plus the
+        // explicit withdraw on standdown below).
+        if breach_objective_live {
+            if let Some((breach_pos, corridor_hits)) = breach_target {
+                self.request_breach_objective(system_data, room_name, breach_pos, corridor_hits);
+            }
+        } else {
+            // Corridor open (or surplus lapsed): drop the breach objective so the
+            // manager retires the dismantler squad this tick.
+            self.withdraw_breach_objective(system_data, room_name);
+        }
+
+        // Complete only when there is genuinely nothing to do. A breach-NEEDED
+        // room holds the mission open (as the old breach `desired_dismantlers==1`
+        // did): while breach is wanted it waits for surplus and keeps re-asserting
+        // the v1 `Dismantle` objective, instead of completing-and-cooling in a
+        // loop. (`breach_needed` ⊇ `breach_objective_live`.)
+        if desired_raiders == 0 && desired_dismantlers == 0 && desired_declaimers == 0 && !breach_needed {
             info!(
                 "Salvage of room {} complete - no enabled work remains (loot={}, within-horizon dismantle hits={}, declaim_access={:?}, breach_possible={})",
                 room_name,
@@ -734,6 +940,8 @@ impl Mission for SalvageMission {
                 breach_possible
             );
 
+            // Defensive: never leave a breach objective behind on completion.
+            self.withdraw_breach_objective(system_data, room_name);
             return Ok(MissionResult::Success);
         }
 
@@ -745,24 +953,15 @@ impl Mission for SalvageMission {
             self.spawn_raiders(system_data, mission_entity, room_name)?;
         }
 
+        // Within-horizon TEARDOWN dismantlers only (raze-for-salvage). The breach
+        // corridor is the v1 squad's job (above); the teardown migration is P3.
         if self.dismantlers.len() < desired_dismantlers {
-            if breach_mode {
-                // Over-horizon wall-chewing: unbounded hit ceiling, lowest
-                // priority, and only when the home has spare energy + an idle
-                // spawn. M10 corridor prioritization keeps it on the controller
-                // path; once a sealing wall decays below the normal horizon the
-                // room flips to Breachable and the normal roster finishes it.
-                if breach_surplus {
-                    self.spawn_dismantlers(system_data, mission_entity, 0, SPAWN_PRIORITY_NONE)?;
-                }
-            } else {
-                self.spawn_dismantlers(
-                    system_data,
-                    mission_entity,
-                    derelict_features.max_structure_hits,
-                    SPAWN_PRIORITY_LOW,
-                )?;
-            }
+            self.spawn_dismantlers(
+                system_data,
+                mission_entity,
+                derelict_features.max_structure_hits,
+                SPAWN_PRIORITY_LOW,
+            )?;
         }
 
         if declaim_spawnable && self.declaimers.len() < desired_declaimers {

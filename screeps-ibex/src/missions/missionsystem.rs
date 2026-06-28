@@ -51,6 +51,7 @@ pub struct MissionSystemData<'a> {
     threat_data: ReadStorage<'a, RoomThreatData>,
     expansion_avoidance: Write<'a, ExpansionAvoidance>,
     combat_objective_queue: Write<'a, CombatObjectiveQueue>,
+    salvage_breach_tracker: Write<'a, crate::missions::salvage::SalvageBreachTracker>,
 }
 
 pub struct MissionExecutionSystemData<'a, 'b> {
@@ -87,6 +88,10 @@ pub struct MissionExecutionSystemData<'a, 'b> {
     /// The combat objective queue (ADR 0008 §2 / P2.G1). Missions that are
     /// objective *producers* upsert here; the `SquadManager` fields the squads.
     pub combat_objective_queue: &'b mut CombatObjectiveQueue,
+    /// Ephemeral per-room breach-pos tracker (ADR 0027 v1.1 P1). `SalvageMission`
+    /// stamps the v1 breach `Dismantle` pos it emits here so its withdraw is pos-scoped
+    /// to its own objective (never clobbers war's InvaderCore `Dismantle`). Not serialized.
+    pub salvage_breach_tracker: &'b mut crate::missions::salvage::SalvageBreachTracker,
 }
 
 /// Queue a mission for cleanup via the `EntityCleanupQueue`.
@@ -232,6 +237,7 @@ impl<'a> System<'a> for PreRunMissionSystem {
                 threat_data: &data.threat_data,
                 expansion_avoidance: &mut data.expansion_avoidance,
                 combat_objective_queue: &mut data.combat_objective_queue,
+                salvage_breach_tracker: &mut data.salvage_breach_tracker,
             };
 
             if let Some(mission_data) = data.missions.get(entity) {
@@ -292,6 +298,7 @@ impl<'a> System<'a> for RunMissionSystem {
                 threat_data: &data.threat_data,
                 expansion_avoidance: &mut data.expansion_avoidance,
                 combat_objective_queue: &mut data.combat_objective_queue,
+                salvage_breach_tracker: &mut data.salvage_breach_tracker,
             };
 
             if let Some(mission_data) = data.missions.get(entity) {

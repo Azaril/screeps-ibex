@@ -223,6 +223,43 @@ pub fn breach_path_blockers(
     )
 }
 
+/// Breach-corridor blockers on the cheapest corridor from `start` OUT to the
+/// nearest room edge (the "objective → exit" twin of [`breach_path_blockers`]),
+/// in walk order from `start` outward. Same pricing (a tile costs
+/// [`BREACH_STEP_COST`] plus [`BREACH_HIT_WEIGHT`] per dismantlable-blocker hit);
+/// the search runs in the pathfinding system
+/// ([`room_grid_dijkstra_to_edge`](screeps_rover::room_grid_dijkstra_to_edge)).
+/// Returns the dismantlable blocker tiles along that corridor (empty when
+/// `start` already reaches an edge without dismantling), or `None` when no edge
+/// is reachable even through dismantlable blockers. Drives the salvage breach
+/// PRODUCER (ADR 0027 v1.1 P1), which has no creep position to anchor the
+/// fixed-goal search on — it plans from the walled objective outward.
+pub fn breach_path_blockers_to_edge(
+    is_wall: &dyn Fn(u8, u8) -> bool,
+    blockers: &std::collections::HashMap<(u8, u8), BreachBlocker>,
+    start: (u8, u8),
+) -> Option<Vec<(u8, u8)>> {
+    let enter_cost = |x: u8, y: u8| -> Option<u64> {
+        if is_wall(x, y) {
+            return None;
+        }
+
+        match blockers.get(&(x, y)) {
+            Some(BreachBlocker::Impassable) => None,
+            Some(BreachBlocker::Dismantlable(hits)) => Some(BREACH_STEP_COST + *hits as u64 * BREACH_HIT_WEIGHT),
+            None => Some(BREACH_STEP_COST),
+        }
+    };
+
+    let path = screeps_rover::room_grid_dijkstra_to_edge(&enter_cost, start)?;
+
+    Some(
+        path.into_iter()
+            .filter(|tile| matches!(blockers.get(tile), Some(BreachBlocker::Dismantlable(_))))
+            .collect(),
+    )
+}
+
 /// Total hits to dismantle along the cheapest breach corridor from `start` to range 1 of `goal` — the
 /// breach-COST input for the force-sizing oracle (ADR 0020 §12). Sums ONLY the corridor blockers' hits
 /// (the breach-relevant ramparts/walls per §12.3 — never a room-wide rampart sum). `Some(0)` ⇒ the goal
@@ -368,5 +405,64 @@ mod tests {
                 far_y
             );
         }
+    }
+
+    // ── breach_path_blockers_to_edge (ADR 0027 v1.1 P1 producer) ──────────────
+
+    #[test]
+    fn to_edge_open_objective_needs_no_breach() {
+        // An interior objective with no blockers reaches an edge for free.
+        let result = breach_path_blockers_to_edge(&NO_WALLS, &HashMap::new(), (25, 25));
+        assert_eq!(result, Some(Vec::new()));
+    }
+
+    #[test]
+    fn to_edge_objective_already_on_edge() {
+        let blockers = wall_line_with_gaps(25, &[]);
+        assert_eq!(breach_path_blockers_to_edge(&NO_WALLS, &blockers, (0, 25)), Some(Vec::new()));
+    }
+
+    #[test]
+    fn to_edge_reports_the_single_corridor_blocker() {
+        // Objective at (25,25) fully ringed by an impassable wall at radius 5,
+        // with a single dismantlable gap at (20,25): the ONLY exit is through it.
+        let mut blockers = HashMap::new();
+        for d in 20u8..=30 {
+            blockers.insert((d, 20), BreachBlocker::Impassable);
+            blockers.insert((d, 30), BreachBlocker::Impassable);
+            blockers.insert((20, d), BreachBlocker::Impassable);
+            blockers.insert((30, d), BreachBlocker::Impassable);
+        }
+        // Punch a dismantlable gap on the left wall.
+        blockers.insert((20u8, 25u8), BreachBlocker::Dismantlable(500));
+        let result = breach_path_blockers_to_edge(&NO_WALLS, &blockers, (25, 25)).expect("corridor exists");
+        assert_eq!(result, vec![(20, 25)]);
+    }
+
+    #[test]
+    fn to_edge_sealed_returns_none() {
+        // A solid impassable box around the objective: no edge reachable even
+        // through dismantlable blockers.
+        let mut blockers = HashMap::new();
+        for d in 23u8..=27 {
+            blockers.insert((d, 23), BreachBlocker::Impassable);
+            blockers.insert((d, 27), BreachBlocker::Impassable);
+            blockers.insert((23, d), BreachBlocker::Impassable);
+            blockers.insert((27, d), BreachBlocker::Impassable);
+        }
+        assert_eq!(breach_path_blockers_to_edge(&NO_WALLS, &blockers, (25, 25)), None);
+    }
+
+    #[test]
+    fn to_edge_is_deterministic() {
+        let mut blockers = HashMap::new();
+        for y in 0..50u8 {
+            blockers.insert((24u8, y), BreachBlocker::Impassable);
+        }
+        blockers.insert((24u8, 10u8), BreachBlocker::Dismantlable(100));
+        blockers.insert((24u8, 40u8), BreachBlocker::Dismantlable(100));
+        let a = breach_path_blockers_to_edge(&NO_WALLS, &blockers, (30, 25));
+        let b = breach_path_blockers_to_edge(&NO_WALLS, &blockers, (30, 25));
+        assert_eq!(a, b, "to-edge breach planning is deterministic");
     }
 }

@@ -163,6 +163,75 @@ pub fn objectives_need_breach(room: RoomName, structures: &[StructureObject], ob
     })
 }
 
+/// The breach corridor's representative TARGET tile + its total dismantle cost,
+/// for the v1 `Dismantle{room, pos}` objective the salvage breach producer emits
+/// (ADR 0027 v1.1 P1). Plans the cheapest dismantle corridor from EACH objective
+/// (controller + every source) OUT to the nearest room edge with
+/// [`breach_path_blockers_to_edge`] over the live terrain — the SAME Dijkstra
+/// pricing the `DismantleJob` corridor uses, but anchored at the walled-in
+/// objective (the producer has no creep position). It returns the OUTERMOST
+/// blocker tile (closest to the edge — the first seal an incoming squad reaches)
+/// of the CHEAPEST corridor, as a [`Position`], together with the corridor's
+/// total hits (the SiegeBreach sizing input). That blocker is the squad's single
+/// `Dismantle` target tile; the SquadManager fields a WORK squad that razes it,
+/// opening the corridor one blocker at a time as the M10 priority logic did for
+/// the solo dismantler. `None` when there is no breachable objective (every
+/// objective already reaches an edge, all are sealed past the horizon, no
+/// objectives, or no live terrain) — the producer then emits nothing.
+///
+/// Needs live terrain (mirrors [`objectives_need_breach`] / [`position_access`]);
+/// returns `None` if the room is not visible.
+pub fn breach_target_tile(
+    room: RoomName,
+    structures: &[StructureObject],
+    objectives: &[Position],
+    max_structure_hits: u32,
+) -> Option<(Position, u32)> {
+    let room_obj = game::rooms().get(room)?;
+    let terrain = FastRoomTerrain::new(room_obj.get_terrain().get_raw_buffer().to_vec());
+    let is_wall = |x: u8, y: u8| terrain.is_wall(x, y);
+
+    let blockers = breach_blockers(structures, max_structure_hits);
+
+    let mut best: Option<((u8, u8), u32)> = None;
+    for obj in objectives {
+        let start = (obj.x().u8(), obj.y().u8());
+        // Plan from the objective outward to a room edge; the corridor blockers
+        // are in walk order from the objective, so the LAST is the outermost
+        // seal (closest to the edge) an incoming squad reaches first.
+        let Some(corridor) = breach_path_blockers_to_edge(&is_wall, &blockers, start) else {
+            continue;
+        };
+        let Some(&outermost) = corridor.last() else {
+            continue; // already reachable without dismantling — no breach needed.
+        };
+        let total: u32 = corridor.iter().fold(0u32, |acc, tile| {
+            let hits = match blockers.get(tile) {
+                Some(BreachBlocker::Dismantlable(h)) => *h,
+                _ => 0,
+            };
+            acc.saturating_add(hits)
+        });
+        // Cheapest corridor wins; deterministic tie-break on the blocker tile.
+        let replace = match best {
+            None => true,
+            Some((best_tile, best_hits)) => total < best_hits || (total == best_hits && outermost < best_tile),
+        };
+        if replace {
+            best = Some((outermost, total));
+        }
+    }
+
+    best.map(|((x, y), hits)| {
+        let pos = Position::new(
+            RoomCoordinate::new(x).expect("breach blocker x in-bounds"),
+            RoomCoordinate::new(y).expect("breach blocker y in-bounds"),
+            room,
+        );
+        (pos, hits)
+    })
+}
+
 /// Whether a creep can walk from a room edge to within range 1 of `pos`
 /// RIGHT NOW (no dismantling) given current structures — the same "reachable
 /// now" test [`position_access`] applies, exposed for any position (e.g. a
