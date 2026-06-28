@@ -295,3 +295,72 @@ re-key) · `objective_queue.rs` (capability-aware selection helper over
 asset-priority boost + leash, demote `Defend{owned}` to an optional preemptive hold — the "wrong
 room" half) · eval harness (the churn cases). Cross-ref ADR 0026 (threat-centric targeting is a
 doctrine/targeting change).
+
+## Update 2026-06-28 — v1.1 producer unification + sim-able production layer (audit)
+
+A fan-out audit of every operation/doctrine/job/mission for combat-work assignment + a
+sim-layering review, to make objective assignment UNIFORM (one v1 pipeline) and every layer
+sim-able.
+
+### Audit result — most combat work is ALREADY on v1
+**ON v1** (producer-kernel → `objective_queue` → `squad_manager` — the target pattern, no migration):
+- `war.rs:run_defense_scan` → `Secure{owned/neighbour threat room}` + `Defend{flag/remote}`
+  (owner=Defense) via `emit_defense` + `neighbour_threats`.
+- `war.rs:run_offense_evaluation` → `Secure{room}`(AttackFlag) / `Dismantle{room,pos}`(InvaderCore)
+  / `Harass{room}`(ResourceDenial=GatedPlayerRaid) (owner=Attack). Legacy `AttackOperation` is gone.
+- `SourceKeeperFarmMission` → `Farm{SourceKeeper}` (owner=SourceKeeper) → `duo_sk_farmer`.
+  **(Corrects the stale note that SK fields its own duo — SK combat is ON v1.)**
+
+**OFF v1** (the migration target):
+- `SalvageMission` (operations/salvage.rs → missions/salvage.rs): fields its OWN solo creeps via
+  `spawn_queue` — declaimers (`DeclaimJob` attackController), dismantlers (`DismantleJob` WORK),
+  raiders (`HaulJob`). Low urgency (only derelict/quiet rooms, aborts on re-arm).
+- `DefendMission`: **vestigial** (squads always empty, spawns nothing; only `is_room_safe()` is
+  consumed) — cleanup, not a combat migration.
+- Confirmed **economy, stay off by design**: salvage raiders (hauling), claimers/builders
+  (unescorted — no `Escort` objective emitted despite the variant existing), scouts, reservers/miners.
+
+### Migration phasing (critical path P0 → P1 → P2; P3 anytime)
+- **P0 (sim infra, independent — land first):** extract `war_decision::observe_neighbours` as a
+  PURE kernel (lift the `game::*` hostile-fold out of `run_defense_scan`) so neighbour-threat
+  observation becomes a sim-able layer; extend `run_v1_flow` to drive
+  observe_neighbours → neighbour_threats → emit_defense → queue → reconcile end-to-end; add a
+  `run_offense_flow` driver. Offline-provable. LOW risk.
+- **P1 (breach-dismantle — reuses the EXISTING `Dismantle` kind + `SiegeBreach` doctrine, lowest-
+  risk combat migration):** a salvage breach producer emits `Dismantle{room, breach-blocker pos}`
+  (owner=Attack, LOW) when breach-possible + surplus; delete the mission's breach-dismantler
+  fielding. Gives the dormant `SiegeBreach` its first live producer. Depends on P0. LOW risk.
+- **P2 (declaim — NEW kind + doctrine + role + body, highest risk):** add
+  `ObjectiveKind::Declaim{room, controller}` (+ the exhaustive `room`/`capability_class`/
+  `objective_target` arms) — **WFV bump** (fold into the deploy reset); `SquadRole::Declaimer` +
+  a CLAIM body; a `DeclaimAttack` always-field doctrine (EV gate stays in `SalvageOperation`);
+  `SquadTarget::AttackController`; the declaim producer emits when `ReachableNow`; delete
+  `spawn_declaimers`. Depends on P1 (breach opens the declaim path). Sim-provable except the live
+  1000-tick upgrade-block cadence (soak after sim). MEDIUM risk.
+- **P3 (cleanup, anytime):** delete `DefendMission`'s dead squads field; `is_room_safe` → a pure
+  predicate. LOW risk.
+
+### Sim-able layers (the operator's "sim the layers" requirement)
+The combat stack, each layer with a pure kernel a harness drives:
+1. **Production / observation** — `emit_defense`, `neighbour_threats`, **`observe_neighbours`
+   (extract in P0 — the last live-only glue)**, the offense candidate→objective map;
+   `objective_value::value_e` (ADR 0032).
+2. **Assignment / lifecycle** — `reconcile`, the objective queue, **the EV-global assignment
+   (ADR 0032)**.
+3. **Sizing** — `emit_requirement` + `optimize_composition` (ADR 0031).
+4. **Spawn** — the spawn-priority / forming model.
+5. **Movement / rally** — `shared_rally_point` + `gather_quorum_met` + the traverse kernels.
+6. **Combat / tactics** — `decide_squad_with_pathing` + the engine sim.
+
+Layers 2–6 already have pure kernels driven by `run_v1_flow` / `run_lifecycle_churn[_spatial]` /
+the agent sim / the eval. **P0 brings layer 1 fully in**, so the WHOLE stack is offline-provable —
+the explicit goal: prove pieces like neighbour-observation in the sim, not discover them broken on
+Docker.
+
+### Cross-references
+The EV-positive, globally-optimal ASSIGNMENT (replacing the greedy claim/reassign — both defects
+the operator named) is **ADR 0032 (P-AUCTION, #28)**: an energy-equivalent `value_e` currency + a
+deterministic Hungarian matching over squads × {objectives + StayPut + Merge + Recycle}, with the
+v2 transfer/merge as an EV-scored column. The new `DeclaimAttack` doctrine / `SquadRole::Declaimer`
+/ CLAIM body cross-ref the ADR 0026/0031 doctrine corpus; the sim-layering taxonomy cross-refs ADR
+0019/0020. Task #28 / #23 / #25.
