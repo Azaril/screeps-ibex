@@ -511,6 +511,9 @@ impl WarOperation {
                     member_energy: game::rooms().get(room_name).map(|r| r.energy_capacity_available()).unwrap_or(0),
                     ..Default::default()
                 },
+                // Defense vs a PRESENT threat (the threat is in `enemy_force`, not `defense`): NEVER
+                // confirmed-undefended — keep the always-field floor (GarrisonDefense unchanged, ADR 0031 §2(d)).
+                defense_intel_reliable: false,
             };
             // ADR 0031 D15: the SINGLE generation path — the doctrine driver assembles the defender (no
             // hardcoded `solo_ranged` fallback). Always-field, so it returns the threat-sized force or the
@@ -584,6 +587,8 @@ impl WarOperation {
                     member_energy: max_home_energy,
                     ..Default::default()
                 },
+                // Defense vs a PRESENT neighbour threat — NEVER confirmed-undefended (keep the floor).
+                defense_intel_reliable: false,
             };
             let Some(composition) = decide_doctrine(&ctx, &defense_docs).and_then(|d| screeps_combat_decision::doctrine::plan_engagement(d, &ctx, None).composition) else {
                 continue;
@@ -681,6 +686,9 @@ impl WarOperation {
             target_value: DEFENSE_TARGET_VALUE,
             onsite_window: DEFENSE_ONSITE_WINDOW,
             params: CompositionParams { member_energy: max_home_energy, ..Default::default() },
+            // UNSCOUTED operator defend-flag room (no scouted threat at request time) — NOT confirmed-
+            // undefended: keep the floor so we field a survivable scout force, not a naked one (ADR 0031 §2(d)).
+            defense_intel_reliable: false,
         };
         let defend_comp = decide_doctrine(&defend_ctx, &defend_docs).and_then(|d| screeps_combat_decision::doctrine::plan_engagement(d, &defend_ctx, None).composition);
         if let Some(defend_comp) = defend_comp {
@@ -781,6 +789,9 @@ impl WarOperation {
                 target_value: DEFENSE_TARGET_VALUE,
                 onsite_window: DEFENSE_ONSITE_WINDOW,
                 params: CompositionParams { member_energy: max_home_energy, ..Default::default() },
+                // Defense vs PRESENT remote invaders (the threat is in `enemy_force`) — NEVER confirmed-
+                // undefended: keep the floor.
+                defense_intel_reliable: false,
             };
             // ADR 0031 D15: the doctrine driver assembles the defender (no hardcoded `solo_ranged`); `None`
             // only if no home can build even one member → skip (can't spawn).
@@ -1376,6 +1387,12 @@ impl WarOperation {
                 target_value: candidate.score.max(1.0) * OFFENSE_TARGET_VALUE_SCALE,
                 onsite_window: 0,
                 params: CompositionParams::default(),
+                // RELIABLE intel iff we SCOUTED this room's defense (`candidate.defense.is_some()` — the
+                // offense-path analog of the rally fix's `CombatIntelSource::is_reliable`). An always-field
+                // doctrine (operator-flag raid / harass) on a CONFIRMED-undefended target (scouted, zero
+                // towers + zero defenders) then drops the heal/anti-creep floor (no wasted Healer slots,
+                // ADR 0031 §2(d)); an UNSCOUTED room (`defense.is_none()`) keeps the floor (the hedge holds).
+                defense_intel_reliable: candidate.defense.is_some(),
             };
             let doctrines = default_doctrines();
             let Some(doctrine) = decide_doctrine(&base_ctx, &doctrines) else {

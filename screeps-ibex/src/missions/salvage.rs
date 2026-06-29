@@ -442,6 +442,9 @@ impl SalvageMission {
             target_value: 1_000_000.0,
             onsite_window: CREEP_LIFE_TIME,
             params: CompositionParams { member_energy, ..Default::default() },
+            // Inert: Declaim is direct-assembled (CLAIM + MOVE only, no combat floor) — never reaches the
+            // always-field floor. Left false (the conservative default).
+            defense_intel_reliable: false,
         };
         let doctrines = doctrine::default_doctrines();
         let Some(comp) = doctrine::decide_doctrine(&ctx, &doctrines).and_then(|d| doctrine::plan_engagement(d, &ctx, None).composition) else {
@@ -545,6 +548,8 @@ impl SalvageMission {
             target_value: 1_000_000.0,
             onsite_window: CREEP_LIFE_TIME,
             params: CompositionParams { member_energy, ..Default::default() },
+            // Inert: DismantleStructure → the gated SiegeBreach never reaches the always-field floor.
+            defense_intel_reliable: false,
         };
         let doctrines = doctrine::default_doctrines();
         let Some(comp) = doctrine::decide_doctrine(&ctx, &doctrines).and_then(|d| doctrine::plan_engagement(d, &ctx, None).composition) else {

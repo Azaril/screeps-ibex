@@ -415,6 +415,9 @@ impl Mission for SourceKeeperFarmMission {
             target_value: 1_000_000.0,
             onsite_window: 1400,
             params: screeps_combat_decision::composition::CompositionParams { member_energy: home_energy, ..Default::default() },
+            // Inert here (Suppress is direct-assembled, bypassing the always-field floor), but the keeper is
+            // a PRESENT, known hazard → not confirmed-undefended.
+            defense_intel_reliable: false,
         };
         let sk_doctrines = doctrine::sk_doctrines();
         // ADR 0031 D15: the doctrine driver assembles the suppression force (no hardcoded `duo_sk_farmer`
