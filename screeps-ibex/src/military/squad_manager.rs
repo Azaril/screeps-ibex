@@ -2195,6 +2195,21 @@ fn compute_squad_orders(
             ctx.squad_path = None;
         }
         apply_squad_decision(ctx, &decision, creep_owner, in_room_any);
+        // ADR 0031 §2(g) FOLLOW-UP 1b — LIVE DRAIN WIRING. The drain tank-forward / healers-behind
+        // per-member goals (`decision.member_goals`, stamped onto each member's `tick_orders.squad_movement`
+        // in `apply_squad_decision` above) are honored IN-SIM but INERT on the live bot when a Dismantle is
+        // in its FORMATION (anchor) phase: with an anchor the job takes `execute_formation_movement`
+        // (slot-based), which IGNORES `squad_movement`; only the ANCHORLESS `execute_decide_movement` path
+        // reads it. So for a DRAIN directive specifically, DROP the formation anchor here → the job routes
+        // through the anchorless path next tick → each member moves to its `member_goal` (tank forward at the
+        // standoff, healers one tile behind) — exactly what the sim proves. Scoped to DRAIN ONLY: a non-drain
+        // formation (breach / normal siege) keeps its anchor + slots byte-unchanged; the single-member drain
+        // is harmless (no slots to lose); on drain EXIT (towers dry → decision drops `Drain`, emits Advance)
+        // this no longer fires → the squad re-forms/advances normally. Reuses the existing runtime anchor-drop
+        // pattern (rally/solo-travel/skirmish above) → squad_path is set None at RUNTIME → no WFV bump.
+        if should_drop_anchor_for_drain(&decision) {
+            ctx.squad_path = None;
+        }
     }
 
     // ───────────────────────── INTROSPECTION TRACE (logging only) ─────────────────────────
@@ -2341,6 +2356,16 @@ fn compute_squad_orders(
         forming_progress.last_phase.insert(obj_id, phase);
         forming_progress.last_engaged.insert(obj_id, engaged_once_now);
     }
+}
+
+/// ADR 0031 §2(g) FOLLOW-UP 1b — should the formation anchor be dropped this tick because the squad is
+/// in an ACTIVE drain? When `decide_squad` emits a `SquadMovement::Drain` directive, the per-member drain
+/// goals (tank forward at the standoff, healers one tile behind) are stamped onto each member's
+/// `tick_orders.squad_movement`, but the live job only READS `squad_movement` on the ANCHORLESS movement
+/// path. Dropping the anchor for a `Drain` directive (and ONLY for `Drain`) forces that path so the goals
+/// are honored live. Pure + testable so the drain-only scoping is provable offline without a live job.
+fn should_drop_anchor_for_drain(decision: &SquadDecision) -> bool {
+    matches!(decision.movement, SquadMovement::Drain { .. })
 }
 
 /// Write a `SquadDecision` into the `SquadContext`: the combat state, the shared focus, and per-member
@@ -2763,5 +2788,187 @@ mod tests {
 
         // A still-open sibling slot is admitted normally.
         assert!(should_register_spawned_member(true, slot1_filled), "an open sibling slot still admits its member");
+    }
+
+    /// ADR 0031 §2(g) FOLLOW-UP 1b — the DRAIN-only scoping of the live anchor-drop. The predicate the
+    /// reconcile gate uses fires ONLY for a `SquadMovement::Drain` directive; every non-drain movement
+    /// (Advance / Kite / Hold) keeps the formation anchor (byte-unchanged formation slots).
+    #[test]
+    fn drain_anchor_drop_predicate_fires_only_for_drain() {
+        let r = room("W5N5");
+        let goal = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), r);
+        let decision_for = |movement: SquadMovement| SquadDecision {
+            state: SquadOrderState::Engaged,
+            focus: None,
+            movement,
+            center: Some(goal),
+            cohesion_radius: 1,
+            heal_assignments: Vec::new(),
+            focus_assignments: Vec::new(),
+            orientation: None,
+            member_goals: Vec::new(),
+            member_intents: Vec::new(),
+        };
+
+        // DRAIN → drop the anchor (route through the anchorless path so member_goals are honored live).
+        assert!(should_drop_anchor_for_drain(&decision_for(SquadMovement::Drain {
+            goal,
+            standoff_range: 6
+        })));
+        // Non-drain formations KEEP the anchor (formation slots byte-unchanged).
+        assert!(!should_drop_anchor_for_drain(&decision_for(SquadMovement::Advance { goal, range: 0 })));
+        assert!(!should_drop_anchor_for_drain(&decision_for(SquadMovement::Kite { goal })));
+        assert!(!should_drop_anchor_for_drain(&decision_for(SquadMovement::Hold)));
+    }
+
+    /// ADR 0031 §2(g) FOLLOW-UP 1b — the LIVE drain routing, end-to-end over the reconcile drain-gate
+    /// behavior. A Dismantle squad in an ACTIVE drain (`movement = Drain`, per-member `member_goals` = tank
+    /// forward at the standoff, healers one tile behind, `squad_path` = Some(anchor)) must, after the gate:
+    ///   1. drop its anchor (`squad_path == None` → `squad_has_anchor()` false → anchorless routing), AND
+    ///   2. carry each member's drain goal as its `tick_orders.squad_movement == Advance{goal, range:0}`
+    ///      (the directive the anchorless `decide_movement` reads → tank closes to standoff, healers hold a
+    ///      tile back) — exactly what the sim proves.
+    /// Control: a NON-drain Dismantle (`movement = Advance`, anchor set) KEEPS its anchor (formation slots
+    /// byte-unchanged). The single-member drain is also covered (the anchor-drop is harmless there).
+    #[test]
+    fn drain_reconcile_drops_anchor_and_routes_member_goals_live() {
+        use crate::military::squad::SquadPath;
+        use screeps_combat_decision::bodies::CombatBodySpec;
+        use screeps_combat_decision::composition::{BodyType, FormationShape, SquadComposition, SquadRole, SquadSlot};
+        use screeps_rover::AnchorPath;
+        use specs::WorldExt;
+
+        let r = room("W5N5");
+        // A drain comp: a TOUGH+HEAL tank (slot 0) + two Healers behind it.
+        let tank = BodyType::Sized(CombatBodySpec { tough: 10, heal: 4, ..Default::default() });
+        let healer = BodyType::Sized(CombatBodySpec { heal: 8, ..Default::default() });
+        let comp = SquadComposition {
+            label: "Drain".into(),
+            slots: vec![
+                SquadSlot { role: SquadRole::Tank, body_type: tank },
+                SquadSlot { role: SquadRole::Healer, body_type: healer },
+                SquadSlot { role: SquadRole::Healer, body_type: healer },
+            ],
+            formation_shape: FormationShape::Box2x2,
+            formation_mode: Default::default(),
+            retreat_threshold: 0.3,
+        };
+
+        let mut world = World::new();
+        world.register::<SquadContext>();
+        world.register::<CreepOwner>();
+        let m0 = world.create_entity().build();
+        let m1 = world.create_entity().build();
+        let m2 = world.create_entity().build();
+        world.maintain();
+        // An empty CreepOwner storage — no member is resolved to a live creep (the member_goals stamping
+        // does not touch creep_owner; the heal-assignment resolution simply yields None target_ids).
+        let creep_owner = world.read_storage::<CreepOwner>();
+
+        // The drain standoff goal (the tower nest) + the per-member drain goals the decision crate emits:
+        // the tank forward AT the standoff, the two healers ONE TILE BEHIND it.
+        let nest = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), r);
+        let tank_goal = Position::new(RoomCoordinate::new(18).unwrap(), RoomCoordinate::new(25).unwrap(), r); // at standoff
+        let healer_goal = Position::new(RoomCoordinate::new(17).unwrap(), RoomCoordinate::new(25).unwrap(), r); // a tile back
+        let member_goals = vec![Some(tank_goal), Some(healer_goal), Some(healer_goal)];
+
+        let drain_decision = SquadDecision {
+            state: SquadOrderState::Engaged,
+            focus: None,
+            movement: SquadMovement::Drain { goal: nest, standoff_range: 7 },
+            center: Some(tank_goal),
+            cohesion_radius: 1,
+            heal_assignments: Vec::new(),
+            focus_assignments: Vec::new(),
+            orientation: None,
+            member_goals: member_goals.clone(),
+            member_intents: Vec::new(),
+        };
+
+        // ── DRAIN squad (multi-member): start in the formation/anchor phase. ──
+        let mut ctx = SquadContext::from_composition(&comp);
+        ctx.add_member(m0, SquadRole::Tank, 0);
+        ctx.add_member(m1, SquadRole::Healer, 1);
+        ctx.add_member(m2, SquadRole::Healer, 2);
+        // The squad holds a formation anchor (the gather-quorum assault set it).
+        ctx.squad_path = Some(SquadPath {
+            anchor: AnchorPath::new(nest, nest),
+            room_route: vec![r],
+        });
+        assert!(ctx.squad_path.is_some(), "precondition: the squad holds a formation anchor");
+
+        // Reproduce the reconcile drain-gate exactly: stamp the decision, THEN the drain anchor-drop.
+        apply_squad_decision(&mut ctx, &drain_decision, &creep_owner, true);
+        if should_drop_anchor_for_drain(&drain_decision) {
+            ctx.squad_path = None;
+        }
+
+        // (1) The anchor is dropped → the job takes the ANCHORLESS `decide_movement` path next tick.
+        assert!(ctx.squad_path.is_none(), "drain drops the formation anchor → anchorless routing");
+        // (2) Each member carries its OWN drain goal as Advance{goal, range:0} (what decide_movement reads).
+        for (member, goal) in ctx.members.iter().zip(member_goals.iter()) {
+            let orders = member.tick_orders.as_ref().expect("a drain member has tick_orders");
+            match orders.squad_movement {
+                SquadMovement::Advance { goal: g, range } => {
+                    assert_eq!(Some(g), *goal, "the member moves to its own drain goal");
+                    assert_eq!(range, 0, "the per-member goal is stamped at range 0");
+                }
+                other => panic!("a drain member must route its member_goal, got {other:?}"),
+            }
+        }
+
+        // ── CONTROL: a NON-drain Dismantle (Advance) KEEPS its anchor (formation slots byte-unchanged). ──
+        let advance_decision = SquadDecision {
+            movement: SquadMovement::Advance { goal: nest, range: 0 },
+            member_goals: Vec::new(), // a siege formation has no per-member goals
+            ..drain_decision.clone()
+        };
+        let mut ctx2 = SquadContext::from_composition(&comp);
+        ctx2.add_member(m0, SquadRole::Tank, 0);
+        ctx2.add_member(m1, SquadRole::Healer, 1);
+        ctx2.add_member(m2, SquadRole::Healer, 2);
+        ctx2.squad_path = Some(SquadPath {
+            anchor: AnchorPath::new(nest, nest),
+            room_route: vec![r],
+        });
+        apply_squad_decision(&mut ctx2, &advance_decision, &creep_owner, true);
+        if should_drop_anchor_for_drain(&advance_decision) {
+            ctx2.squad_path = None;
+        }
+        assert!(ctx2.squad_path.is_some(), "a non-drain Dismantle KEEPS its formation anchor");
+
+        // ── SINGLE-MEMBER drain: the anchor-drop is harmless (one member still routes its own goal). ──
+        let solo_goals = vec![Some(tank_goal)];
+        let solo_decision = SquadDecision {
+            movement: SquadMovement::Drain { goal: nest, standoff_range: 7 },
+            member_goals: solo_goals.clone(),
+            ..drain_decision.clone()
+        };
+        let solo_comp = SquadComposition {
+            label: "Solo drain".into(),
+            slots: vec![SquadSlot {
+                role: SquadRole::Tank,
+                body_type: BodyType::Sized(CombatBodySpec { tough: 10, heal: 4, ..Default::default() }),
+            }],
+            formation_shape: FormationShape::None,
+            formation_mode: Default::default(),
+            retreat_threshold: 0.3,
+        };
+        let mut ctx3 = SquadContext::from_composition(&solo_comp);
+        ctx3.add_member(m0, SquadRole::Tank, 0);
+        ctx3.squad_path = Some(SquadPath {
+            anchor: AnchorPath::new(nest, nest),
+            room_route: vec![r],
+        });
+        apply_squad_decision(&mut ctx3, &solo_decision, &creep_owner, true);
+        if should_drop_anchor_for_drain(&solo_decision) {
+            ctx3.squad_path = None;
+        }
+        assert!(ctx3.squad_path.is_none(), "single-member drain still drops the anchor (harmless)");
+        let solo_orders = ctx3.members[0].tick_orders.as_ref().expect("solo drain member has tick_orders");
+        assert!(
+            matches!(solo_orders.squad_movement, SquadMovement::Advance { goal, range: 0 } if goal == tank_goal),
+            "the solo drain member routes its own goal"
+        );
     }
 }

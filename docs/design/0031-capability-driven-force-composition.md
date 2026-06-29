@@ -137,14 +137,23 @@ towers bleed dry, the squad breaches → genuine `Killed{form 300, engage 217}`.
 > core** (= the forward tank). Correct vs a focus-closest defender (the sim model + the common live tower
 > script); a hypothetical focus-LOWEST-HITS AI could draw healer fire. Acceptable.
 
-**FOLLOW-UP 1b (NEW, OPEN) — LIVE drain wiring.** The per-member `member_goals` (tank-forward / healers-behind)
-are honored by the SIM adapter (`squad.rs:407`) and the live `SquadManager` mapping (`squad_manager.rs:2384`),
-BUT that per-member squad-movement override is only read by the **anchorless** `decide_movement` path and is
-**inert for a live siege FORMATION** (`squad_manager.rs:2376-2378`) — so the coordination is proven IN-SIM and
-is **behavior-neutral on the live bot** until drain comps reach the live anchorless path (the broader
-"drain-comp-not-yet-fielded-live" P-follow-up). Next: route the live drain assault through the anchorless
-per-member-goal path (or have the formation path honor `member_goals` in drain) so the live drain comp
-coordinates as the sim proves. This is the remaining gate to a LIVE towered-target clear via drain.
+**FOLLOW-UP 1b — LIVE drain wiring — DONE 2026-06-29** (super `<live-drain>`). The per-member `member_goals`
+were honored in-sim but inert on the live bot: a drain comp on a `Dismantle` (formation) objective holds a
+formation ANCHOR during assault, so the job took the slot-based `execute_formation_movement` (ignoring
+`member_goals`); only the ANCHORLESS `execute_decide_movement` reads them. FIX: a pure predicate
+`should_drop_anchor_for_drain(&decision) = matches!(decision.movement, SquadMovement::Drain { .. })` gates an
+anchor-drop (`ctx.squad_path = None`) in `reconcile` right after `apply_squad_decision` (squad_manager.rs) →
+the job routes anchorless → each member moves to its `member_goal` (tank forward at the standoff, healers one
+tile behind) — byte-for-byte the sim adapter's mechanism. Reuses the existing rally/solo-travel/skirmish
+runtime anchor-drop pattern. **Scoped to drain**: the predicate is exactly `matches!(Drain)`; non-drain
+formations (breach / normal siege / `Dismantle`-not-in-drain) keep their anchor + slots byte-unchanged
+(control test). **Drain exit re-forms**: towers dry → the decision crate emits `Advance` → the drop stops →
+the formation branch re-creates the anchor → re-form + breach. +2 bot tests
+(`drain_anchor_drop_predicate_fires_only_for_drain`, `drain_reconcile_drops_anchor_and_routes_member_goals_live`).
+No WFV bump (`squad_path` None at runtime; `tick_orders.squad_movement` is `#[serde(skip)]`); decision-crate
+drain coordination untouched. The drain tactic is now wired END-TO-END — oracle decides + sizes, bot threads
+`assault_mode`, the multi-member comp coordinates (tank-forward soak + heal-the-tank) BOTH in-sim and live;
+remaining = a LIVE confirmation soak + the LOW/not-live-reachable FOLLOW-UP 2 (mixed-tower hardening).
 
 **FOLLOW-UP 2 (LOW, NOT live-reachable) — mixed finite+infinite-tower base.** The soak
 (`tower_dps_at_drain_standoff` + `finite_drain_towers`) counts only FINITE towers, while `assess_engage`'s
