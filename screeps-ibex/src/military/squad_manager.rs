@@ -202,6 +202,24 @@ fn room_distance(a: RoomName, b: RoomName) -> u32 {
     delta.0.unsigned_abs().max(delta.1.unsigned_abs())
 }
 
+/// RC-11 — the squad's gather→ASSAULT vs SOLO-TRAVEL branch as a PURE, testable predicate (the exact
+/// composition the live `compute_squad_orders` uses for `gathered`). `true` ⇒ ASSAULT (advance the box-
+/// formation anchor); `false` ⇒ SOLO-TRAVEL (each member paths individually to the shared rally and the
+/// squad MASSES before any formation assault).
+///
+/// The win-or-stall fast-path (`present_wins_or_stalls`) only short-circuits the count quorum when the
+/// squad has REAL target intel (`have_target_intel`) — `winnable_fast_path_allowed`. Without intel (an
+/// UNSCOUTED room: empty DTOs, not LiveVisible) a VACUOUS win cannot latch the assault on a SCATTERED
+/// squad; the squad falls to the count quorum (`gather_quorum_met`) which a scattered roster does NOT meet
+/// → solo-travel. A previously-fired latch (`assault_latched`) keeps the assault committed. This is the one
+/// place the freeze-vs-reach distinction is decided, factored out so the conditional fix is unit-tested
+/// without the live world plumbing.
+fn squad_is_gathered(present_wins_or_stalls: bool, have_target_intel: bool, gather_quorum_met: bool, assault_latched: bool) -> bool {
+    let quorum_now =
+        screeps_combat_decision::winnable_fast_path_allowed(present_wins_or_stalls, have_target_intel) || gather_quorum_met;
+    quorum_now || assault_latched
+}
+
 /// Map an objective's selection priority to a spawn-queue priority so a FORMING combat squad is not
 /// starved below economy. The spawnsystem head-of-line break (`spawnsystem.rs`: a request with
 /// `body_cost > available_energy` but `<= energy_capacity` → `break`) reserves each idle home's energy for
@@ -2133,7 +2151,23 @@ fn compute_squad_orders(
     // roster never deploys into a defended room). The view/centroid here are the SAME ones `decide_squad`
     // assessed this tick.
     let present_wins_or_stalls = screeps_combat_decision::present_force_wins_or_stalls(&view, decision.center);
-    let ready_to_depart = present_wins_or_stalls
+    // RC-11 — the INTEL GATE on the win-or-stall fast-path. `present_force_wins_or_stalls` returns TRUE
+    // VACUOUSLY against an UNSCOUTED target room: empty hostiles + empty structures (source `None`) give
+    // `assess_engage` killable_dps=0/tower_dps=0 → unwinnable=false, enemy_strength~0, our_strength>0 →
+    // the balance clamps to +1000 → "we win" — a win against ZERO VISIBLE enemies that may not be real. If
+    // that fast-path fires while members are still rooms apart it latches the assault, anchors the cross-room
+    // box formation on the first living member's room, and FREEZES the scattered members at static positions
+    // (the live freeze-before-reaching bug). So gate the fast-path on REAL target intel: a non-empty DTO set
+    // (we actually SEE a hostile/structure) OR an on-arrival live read (`LiveVisible`, a member stands in the
+    // room). An empty `Cached`/`None` set does NOT satisfy it — the squad falls back to the gather-quorum
+    // COUNT gate (members MASS at the rally via solo-travel BEFORE any formation assault), and the fast-path
+    // re-enables the instant real DTOs arrive (room visible/cached non-empty). This PRESERVES the P(win)
+    // win-or-stall for REAL-intel targets (operator directive, D7) but stops it firing on vacuous no-intel
+    // wins. Pure read of the ephemeral DTOs + the existing `intel_source` — no serialized state, no WFV bump.
+    let have_target_intel =
+        !hostiles.is_empty() || !structures.is_empty() || intel_source == CombatIntelSource::LiveVisible;
+    let fast_path_allowed = screeps_combat_decision::winnable_fast_path_allowed(present_wins_or_stalls, have_target_intel);
+    let ready_to_depart = fast_path_allowed
         || crate::military::formation::ready_to_depart_gate(&member_positions, requested_slots, uncontested);
 
     if let Some(ctx) = squad_contexts.get_mut(squad_entity) {
@@ -2283,15 +2317,15 @@ fn compute_squad_orders(
             // count quorum stays as the legacy/under-strength path (a force that does NOT yet win-or-stall
             // still masses before committing — no trickle-to-death). Same win-or-stall predicate as the
             // proceed gate above, so the two cohesion gates agree.
-            let quorum_now = present_wins_or_stalls
-                || screeps_combat_decision::rally::gather_quorum_met(
-                    &gather_positions,
-                    rally,
-                    effective_slots,
-                    uncontested,
-                    fighter_gathered,
-                    screeps_combat_decision::rally::RALLY_GATHER_RADIUS,
-                );
+            let count_quorum_met = screeps_combat_decision::rally::gather_quorum_met(
+                &gather_positions,
+                rally,
+                effective_slots,
+                uncontested,
+                fighter_gathered,
+                screeps_combat_decision::rally::RALLY_GATHER_RADIUS,
+            );
+            let quorum_now = fast_path_allowed || count_quorum_met;
             // FIX A (assault latch): once the gather quorum FIRST fires, LATCH the assault and thereafter take
             // the assault branch WITHOUT re-evaluating the quorum — so members dying/lagging crossing
             // enemy-held neighbours can't un-commit it (the contested in_room<->travel oscillation, BUG A).
@@ -2300,7 +2334,17 @@ fn compute_squad_orders(
             if quorum_now {
                 forming_progress.assault_latched.insert(obj_id);
             }
-            let gathered = quorum_now || forming_progress.assault_latched.contains(&obj_id);
+            // RC-11 — the gather→assault vs solo-travel branch (the pure `squad_is_gathered`): the win-or-
+            // stall fast-path is INTEL-GATED, so a vacuous no-intel win on a SCATTERED squad falls to the
+            // count quorum (which a scattered roster does not meet) → solo-travel; a fired latch keeps a
+            // committed assault. Same `present_wins_or_stalls`/`have_target_intel` inputs the proceed gate
+            // used this tick, so the gates agree.
+            let gathered = squad_is_gathered(
+                present_wins_or_stalls,
+                have_target_intel,
+                count_quorum_met,
+                forming_progress.assault_latched.contains(&obj_id),
+            );
 
             if gathered {
                 // ASSAULT: members are massed at the rally → advance the box-formation anchor rally→target
@@ -2734,6 +2778,48 @@ mod tests {
         assert_eq!(room_distance(room("W0N0"), room("W0N0")), 0);
         assert_eq!(room_distance(room("W1N1"), room("W4N1")), 3); // dx dominates
         assert_eq!(room_distance(room("W1N1"), room("W4N5")), 4); // dy dominates
+    }
+
+    /// RC-11 — the gather→ASSAULT vs SOLO-TRAVEL branch is CONDITIONAL on real intel + co-location, so a
+    /// vacuous no-intel win on a SCATTERED squad does NOT latch the freeze, while a co-located squad with
+    /// real (cached) intel still assaults (no regression to the reaching Entity-100 case).
+    #[test]
+    fn rc11_scattered_no_intel_solo_travels_but_colocated_with_intel_assaults() {
+        // SCATTERED + UNSCOUTED (empty DTOs → present_wins_or_stalls vacuously TRUE, but have_target_intel
+        // FALSE; the count quorum is NOT met because members are rooms apart) ⇒ SOLO-TRAVEL (gathered=false).
+        // This is the Entity-414 freeze case (members in W9N8/W7N4/W2N5): the intel gate routes it to mass
+        // at the rally instead of latching a cross-room formation assault.
+        assert!(
+            !squad_is_gathered(
+                /*present_wins_or_stalls*/ true,
+                /*have_target_intel*/ false,
+                /*count_quorum_met*/ false,
+                /*assault_latched*/ false
+            ),
+            "scattered + vacuous no-intel win must NOT assault — it solo-travels to the rally (RC-11 fix)"
+        );
+        // CO-LOCATED + REAL (cached) intel: the win-or-stall fast-path fires (intel present) ⇒ ASSAULT
+        // (gathered=true). This is the reaching Entity-100 → W4N7 case — the fix must NOT regress it.
+        assert!(
+            squad_is_gathered(
+                /*present_wins_or_stalls*/ true,
+                /*have_target_intel*/ true,
+                /*count_quorum_met*/ false,
+                /*assault_latched*/ false
+            ),
+            "co-located squad WITH real intel still latches the assault — the win-or-stall is preserved (D7)"
+        );
+        // A scattered no-intel squad that has MASSED at the rally (count quorum met) also assaults — the
+        // legacy count-gate path still works without the fast-path.
+        assert!(
+            squad_is_gathered(true, false, /*count_quorum_met*/ true, false),
+            "once massed at the rally (count quorum met) the squad assaults via the legacy gate"
+        );
+        // And a previously-fired latch keeps the assault committed regardless (FIX-A preserved).
+        assert!(
+            squad_is_gathered(false, false, false, /*assault_latched*/ true),
+            "a fired assault latch keeps the squad committed (FIX-A latch preserved)"
+        );
     }
 
     #[test]

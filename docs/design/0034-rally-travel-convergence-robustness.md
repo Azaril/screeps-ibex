@@ -131,7 +131,39 @@ purely composition-completeness — see RC-9.
 - `screeps-combat-decision/src/rally.rs:155-157` (`members_gathered_at`)
 - `screeps-ibex/src/military/squad_manager.rs:2148-2165` (assault vs solo-travel branch)
 
-**Priority chain:** RC-1 → RC-2 (wrong rally) is the headline. RC-3 (no feedback) + RC-4/RC-8 (min-distance
+### RC-11 — Premature assault latch on a VACUOUS win → cross-room formation freeze — **THE TRUE LIVE BLOCKER** (found 2026-06-29 re-soak)
+- **Cause:** an **unscouted** target room → `build_room_combat_dtos` returns EMPTY hostiles+structures →
+  `assess_engage` sees `killable_dps=0, tower_dps=0` → `unwinnable=false`, enemy strength ≈ 0, our strength > 0
+  → balance clamps to +1000 → **`present_force_wins_or_stalls` returns TRUE against zero visible enemies (a
+  *vacuous* win).** That makes `ready_to_depart` **and** `quorum_now` true *regardless of co-location* → the
+  squad latches the assault → builds a formation anchor at the **first living member's room** → stamps
+  `TickMovement::Formation` on every member → a member in a *third* room hits `cross_room_formation_target`'s
+  edge/own-tile hold → `move_to(own_tile)` → rover `Ok(None)` → `Arrived` (**not** a failure) → **frozen, with
+  no `MOVE-BLOCKED`.**
+- **Conditional on co-location at the latch:** a co-located squad takes the same-room formation branch and
+  reaches (Entity 100 → W4N7); a scattered squad (Entity 414: W9N8/W7N4/W2N5) freezes. This is why some
+  squads reached and most didn't — and why RC-1/RC-2/RC-3 fixes (the decision layer) couldn't help: the
+  members were never moving. **The eval solo-stepper cannot see this** — it assumes moves execute and feeds
+  non-empty DTOs.
+- `screeps-ibex/src/military/squad_manager.rs` (~2135 `present_wins_or_stalls`, ~2286 `quorum_now`, ~2301
+  latch), `screeps-combat-decision/src/lib.rs:~1430` (`present_force_wins_or_stalls`, vacuous-win), `military/formation.rs:~235`
+  (`init_squad_path_if_needed` arbitrary-first-member anchor), `jobs/squad_combat.rs:~1043` (`cross_room_formation_target` edge-hold).
+- **FIX (D9, ✅ DONE — decision + super, no WFV bump):** gate the win-or-stall fast-path on **real target
+  intel**: `winnable_fast_path_allowed(present_wins_or_stalls, have_target_intel)` where
+  `have_target_intel = !hostiles.is_empty() || !structures.is_empty() || intel_source == LiveVisible`, applied
+  at **both** `ready_to_depart` and `quorum_now` (via `squad_is_gathered`). An unscouted "win vs zero enemies"
+  falls back to the **count-quorum** (members *mass* at the rally via solo-travel) before any formation
+  assault; the fast-path re-enables the moment real DTOs arrive (on arrival the DTO is `LiveVisible`, so no
+  deadlock). **Keyed on `== LiveVisible`, NOT `is_reliable()`** — an empty-*Cached* room is itself the vacuous
+  case (scouted-empty earlier, could now hold a fresh core). Defense-in-depth: `init_squad_path_if_needed`
+  anchors on the destination-nearest (lead) member when scattered, not the arbitrary first. **Refines (not
+  contradicts) the P(win)-driven-gating directive — a vacuous no-intel win isn't a real Lanchester P(win).**
+  Proven by pure unit tests (trigger: empty-DTO → vacuous-win=true + gated-predicate=false; branch:
+  scattered+no-intel → solo-travel, co-located+intel → assault).
+
+**Priority chain:** **RC-11 (premature latch on a vacuous win → formation freeze) is the TRUE live blocker** —
+it kept squads from moving at all, *upstream* of everything else. RC-1 → RC-2 (wrong rally) is the headline of
+the *decision* layer (real bugs, but downstream of RC-11). RC-3 (no feedback) + RC-4/RC-8 (min-distance
 progress + budget) turn a wrong rally into a *silent permanent stall* rather than a loud, recoverable one.
 RC-5/RC-6/RC-7 (renew/lifetime) are the slow-form / far-travel attrition axis. RC-9/RC-10 are downstream
 symptoms.

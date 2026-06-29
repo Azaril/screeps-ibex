@@ -1376,4 +1376,23 @@ mod tests {
         let on_edge = r.x().u8() == 0 || r.x().u8() == 49 || r.y().u8() == 0 || r.y().u8() == 49;
         assert!(on_edge, "laggard is routed to a room-edge tile toward the destination");
     }
+
+    /// RC-11 MECHANISM — documents the FREEZE the intel gate avoids. A member in a THIRD room (W2N5)
+    /// whose slot is anchored in the rear room (W7N4), with the destination yet another room (W9N8), is
+    /// sent only to an EDGE tile of its OWN room — never to the slot. Because this is an Arrived (Ok(None))
+    /// rover move, the scattered member effectively edge-holds while the cross-room box anchor lags; that
+    /// is the formation-freeze the RC-11 intel gate prevents by routing a scattered squad to SOLO-TRAVEL +
+    /// mass at a shared rally BEFORE any formation assault is latched.
+    #[test]
+    fn rc11_third_room_member_edge_holds_not_slot_following() {
+        let creep = pos(15, 25, "W2N5"); // a far-scattered member
+        let slot = pos(25, 25, "W7N4"); // the anchor/slot, a rear room
+        let dest = Some("W9N8".parse::<RoomName>().unwrap()); // the destination — yet another room
+        let r = cross_room_formation_target(creep, slot, dest).unwrap();
+        // Not the slot, not a hold-in-place (it isn't in the destination room): it's an edge tile of its OWN room.
+        assert_eq!(r.room_name(), creep.room_name(), "a third-room member only reaches its own room's edge");
+        assert_ne!(r, slot, "it is NOT sent to the slot in the rear room — it cannot follow the cross-room box");
+        let on_edge = r.x().u8() == 0 || r.x().u8() == 49 || r.y().u8() == 0 || r.y().u8() == 49;
+        assert!(on_edge, "a third-room member edge-holds toward the slot — the freeze the intel gate avoids");
+    }
 }

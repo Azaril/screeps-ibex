@@ -234,13 +234,47 @@ pub fn advance_squad_virtual_position(squad: &mut SquadContext, destination: Pos
 /// Initialize the squad path if it doesn't exist yet.
 fn init_squad_path_if_needed(squad: &mut SquadContext, living_members: &[(usize, Option<Position>)], destination: Position) {
     if squad.squad_path.is_none() {
-        let start_pos = living_members.iter().find_map(|(_, pos)| *pos).unwrap_or(destination);
+        let start_pos = anchor_start_pos(living_members, destination);
 
         squad.squad_path = Some(SquadPath {
             anchor: AnchorPath::new(start_pos, destination),
             room_route: Vec::new(),
         });
     }
+}
+
+/// Pick the formation anchor's START position from the living members.
+///
+/// RC-11 defense-in-depth: if a cross-room formation is (legitimately) latched while the squad still
+/// briefly SPANS MULTIPLE ROOMS, anchoring on the ARBITRARY first living member's room would freeze the
+/// far-flung others — the box never converges because the slots resolve to a room a laggard isn't in. So
+/// when the living members are SCATTERED (their rooms differ), anchor on the position CLOSEST to the
+/// destination instead (the member nearest the objective — the de-facto co-location/lead point the others
+/// march toward), so the anchor advances toward `destination` from the front of the squad and the box
+/// pulls the others forward rather than stranding them behind a rear anchor.
+///
+/// CO-LOCATED / single-room squads are BYTE-IDENTICAL to the legacy behaviour: when every living member
+/// shares one room (the common case + the reaching Entity-100 case), the closest-to-destination pick and
+/// the first-living-member pick are in the same room, and the anchor advances identically. No living
+/// member → fall back to the destination (unchanged).
+fn anchor_start_pos(living_members: &[(usize, Option<Position>)], destination: Position) -> Position {
+    let positions: Vec<Position> = living_members.iter().filter_map(|(_, p)| *p).collect();
+    let Some(&first) = positions.first() else {
+        return destination; // no living member with a body — unchanged fallback
+    };
+    let scattered = positions.iter().any(|p| p.room_name() != first.room_name());
+    if !scattered {
+        // Co-located: keep the legacy first-living-member anchor exactly.
+        return first;
+    }
+    // Scattered: anchor on the member CLOSEST to the destination (front of the squad), so the box advances
+    // from the lead point and pulls the laggards forward instead of freezing them behind a rear anchor.
+    // Chebyshev room distance (inlined — same metric as squad_manager's `room_distance`).
+    let room_dist = |p: &Position| -> u32 {
+        let delta = p.room_name() - destination.room_name();
+        delta.0.unsigned_abs().max(delta.1.unsigned_abs())
+    };
+    positions.into_iter().min_by_key(room_dist).unwrap_or(first)
 }
 
 /// The squad's bounding-box footprint `(w, h)` from its layout offsets — the size the anchor path
@@ -475,4 +509,37 @@ mod tests {
 
     // (squad_ready_to_depart + should_hold_at_boundary tests live with the kernel now —
     // screeps_combat_decision::rally, K0 / ADR 0028.)
+
+    fn p(x: u8, y: u8, room: &str) -> Position {
+        Position::new(
+            RoomCoordinate::new(x).unwrap(),
+            RoomCoordinate::new(y).unwrap(),
+            room.parse::<RoomName>().unwrap(),
+        )
+    }
+
+    /// RC-11 defense-in-depth: the formation anchor START pick. Co-located members keep the legacy
+    /// first-living-member anchor BYTE-IDENTICAL; a SCATTERED roster anchors on the member CLOSEST to the
+    /// destination (the lead point) so the box advances from the front and pulls laggards forward — instead
+    /// of stranding the far-flung members behind a rear anchor on the arbitrary first member's room.
+    #[test]
+    fn anchor_start_prefers_destination_side_when_scattered() {
+        let dest = p(25, 25, "W9N8");
+        // Co-located: every member in W4N7 → unchanged (the FIRST living member, identical to legacy).
+        let colocated = vec![(0usize, Some(p(10, 10, "W4N7"))), (1, Some(p(11, 11, "W4N7"))), (2, Some(p(12, 12, "W4N7")))];
+        assert_eq!(
+            anchor_start_pos(&colocated, dest),
+            p(10, 10, "W4N7"),
+            "co-located → byte-identical to the legacy first-living-member anchor"
+        );
+        // Scattered: members in W2N5 / W7N4 / W8N8. W8N8 is closest to dest W9N8 → anchor there (the front),
+        // NOT the arbitrary first member W2N5 (which would strand the others behind a rear anchor → freeze).
+        let scattered = vec![(0usize, Some(p(15, 25, "W2N5"))), (1, Some(p(25, 25, "W7N4"))), (2, Some(p(40, 40, "W8N8")))];
+        let start = anchor_start_pos(&scattered, dest);
+        assert_eq!(start.room_name(), "W8N8".parse::<RoomName>().unwrap(), "scattered → anchor on the member nearest the destination");
+        assert_ne!(start, p(15, 25, "W2N5"), "NOT the arbitrary first living member (the far-flung laggard)");
+        // No living member → fall back to the destination (unchanged).
+        let none: Vec<(usize, Option<Position>)> = vec![(0, None), (1, None)];
+        assert_eq!(anchor_start_pos(&none, dest), dest, "no body → destination fallback (unchanged)");
+    }
 }
