@@ -69,6 +69,10 @@ pub enum ThreatLevel {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Component)]
 #[storage(DenseVecStorage)]
 pub struct RoomThreatData {
+    /// The CANONICAL kind/harmlessness signal for this room (`ThreatLevel::None` == no threat;
+    /// `PlayerScout`/`PlayerRaid`/`Invader`/… == a threat). Prefer this (or [`Self::warrants_attention`])
+    /// over inferring harmlessness from [`Self::estimated_attack_dps`] — a CLAIM/WORK/HEAL hostile reads
+    /// 0 attack power yet is still classified here (e.g. `PlayerScout`/`PlayerRaid`) and warrants attention.
     pub threat_level: ThreatLevel,
     #[serde(default)]
     pub hostile_creeps: Vec<HostileCreepInfo>,
@@ -79,9 +83,15 @@ pub struct RoomThreatData {
     /// Game tick when this data was last updated.
     #[serde(default)]
     pub last_seen: u32,
-    /// Total hostile damage per tick across all hostiles.
+    /// Total hostile ATTACK/RangedAttack combat power per tick across all hostiles (Σ
+    /// `melee_dps + ranged_dps`). COMBAT POWER ONLY — this is the sizing/EV/danger input, NOT a
+    /// harmlessness signal. A CLAIM declaimer, a WORK dismantler, or a lone HEAL creep reads 0 here
+    /// yet still warrants attention. The canonical kind/harmlessness signal is [`Self::threat_level`]
+    /// (`ThreatLevel::None` == no threat); use [`Self::warrants_attention`] for the one canonical
+    /// "is this room a threat?" check. (`hostile_warrants_defender(parts)` is the LIVE per-creep
+    /// producer-side check; the cached canonical is `threat_level`.)
     #[serde(default)]
-    pub estimated_dps: f32,
+    pub estimated_attack_dps: f32,
     /// Total hostile healing per tick across all hostiles.
     #[serde(default)]
     pub estimated_heal: f32,
@@ -107,6 +117,17 @@ pub struct RoomThreatData {
     /// a later phase (P5). Reserved now so adding player-repair modelling later needs no further WFV bump.
     #[serde(default)]
     pub repair_per_tick: u32,
+}
+
+impl RoomThreatData {
+    /// The ONE canonical "does this room warrant attention?" check. True iff the room carries a
+    /// classified threat (`threat_level != ThreatLevel::None`). Use this instead of re-deriving
+    /// harmlessness from [`Self::estimated_attack_dps`] — a CLAIM declaimer, a WORK dismantler, or a
+    /// lone HEAL creep reads 0 attack power yet is classified as a threat here. `estimated_attack_dps`
+    /// is combat power (sizing/EV/danger) only; `threat_level` is the kind/harmlessness signal.
+    pub fn warrants_attention(&self) -> bool {
+        self.threat_level != ThreatLevel::None
+    }
 }
 
 /// Analyze a hostile creep's body to produce a `HostileCreepInfo`.
@@ -290,14 +311,14 @@ impl<'a> System<'a> for ThreatAssessmentSystem {
             }
 
             let mut hostile_creep_infos = Vec::new();
-            let mut estimated_dps: f32 = 0.0;
+            let mut estimated_attack_dps: f32 = 0.0;
             let mut estimated_heal: f32 = 0.0;
             let mut estimated_repair: u32 = 0;
 
             if let Some(creeps) = room_data.get_creeps() {
                 for hostile in creeps.hostile() {
                     let info = analyze_hostile_creep(hostile);
-                    estimated_dps += info.melee_dps + info.ranged_dps;
+                    estimated_attack_dps += info.melee_dps + info.ranged_dps;
                     estimated_heal += info.heal_per_tick;
                     // Defenders repair the breach target (e.g. invader-stronghold creeps repairing
                     // ramparts). Conservative proxy: all hostile WORK repairs at REPAIR_POWER/part
@@ -379,7 +400,7 @@ impl<'a> System<'a> for ThreatAssessmentSystem {
                         repair_per_tick: estimated_repair,
                         incoming_nukes,
                         last_seen: current_tick,
-                        estimated_dps,
+                        estimated_attack_dps,
                         estimated_heal,
                         safe_mode_active,
                         safe_mode_available,

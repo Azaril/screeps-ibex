@@ -397,7 +397,7 @@ fn project_defense(threat: Option<&crate::military::threatmap::RoomThreatData>) 
 fn project_enemy(threat: Option<&crate::military::threatmap::RoomThreatData>) -> Option<EnemyForce> {
     let td = threat?;
     Some(EnemyForce {
-        dps: td.estimated_dps,
+        dps: td.estimated_attack_dps,
         heal: td.estimated_heal,
         hits: 0,
         count: td.hostile_creeps.len() as u32,
@@ -427,7 +427,7 @@ fn project_intel(
             ..Default::default()
         };
     }
-    let danger = threat.map(|t| t.estimated_dps).unwrap_or(0.0);
+    let danger = threat.map(|t| t.estimated_attack_dps).unwrap_or(0.0);
     match project_value_kind(kind, None) {
         // DEFENSE: scale value by the THREAT DANGER (the dps=0 over-response fix — a HIGHER-dps threat is
         // worth more to defend), but FLOOR the danger by a priority-implied minimum so a defense objective is
@@ -2626,7 +2626,7 @@ mod tests {
             boosted: false,
         };
         let threat = RoomThreatData {
-            estimated_dps: 240.0, // a heavy attacker the heal-less squad cannot survive
+            estimated_attack_dps: 240.0, // a heavy attacker the heal-less squad cannot survive
             hostile_creeps: vec![attacker],
             ..Default::default() // NO towers (hostile_tower_positions empty), no safe mode, no breach hits
         };

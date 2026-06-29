@@ -36,7 +36,7 @@ pub fn is_claim_target_safe(threat: Option<&RoomThreatData>, dynamic: &RoomDynam
     // creep classifies as at least PlayerRaid).
     if let Some(t) = threat {
         if t.threat_level >= ThreatLevel::PlayerRaid
-            || t.estimated_dps > 0.0
+            || t.estimated_attack_dps > 0.0
             || !t.hostile_tower_positions.is_empty()
             || !t.incoming_nukes.is_empty()
         {

@@ -914,7 +914,7 @@ impl WarOperation {
                 .enumerate()
                 .map(|(i, tpos)| TowerThreat { range_to_assault: tpos.get_range_to(assault), energy: td.tower_energy.get(i).copied().unwrap_or(1000) })
                 .collect();
-            cand.estimated_enemy_dps = td.estimated_dps;
+            cand.estimated_enemy_dps = td.estimated_attack_dps;
             cand.estimated_enemy_heal = td.estimated_heal;
             cand.has_safe_mode = td.safe_mode_active;
             cand.defense = Some(DefenseProfile { towers, safe_mode: td.safe_mode_active, ..Default::default() });
@@ -1047,7 +1047,7 @@ impl WarOperation {
                 info!(
                     "[War]   Evaluating {} (dist={}, threat={:?}, dps={:.0}, heal={:.0}, towers={}, core_lvl={}, power_bank={}, hostile_owner={}, safe_mode={})",
                     room_name, min_distance, threat_data.threat_level,
-                    threat_data.estimated_dps, threat_data.estimated_heal,
+                    threat_data.estimated_attack_dps, threat_data.estimated_heal,
                     tower_count,
                     invader_core_level.map(|l| l.to_string()).unwrap_or_else(|| "none".to_string()),
                     power_bank_info.map(|(p, d)| format!("{}pw/{}t", p, d)).unwrap_or_else(|| "none".to_string()),
@@ -1139,7 +1139,7 @@ impl WarOperation {
                             objective_hits: core_hits,
                             // ADR 0031 #41: the enemy CREEP dps is no longer carried here — the single
                             // [`EnemyForce`] channel (built below from `estimated_enemy_dps`, the SAME
-                            // `threat_data.estimated_dps`) is the one source `assess` + the EV path read.
+                            // `threat_data.estimated_attack_dps`) is the one source `assess` + the EV path read.
                             repair_per_tick: threat_data.repair_per_tick as f32,
                             safe_mode: threat_data.safe_mode_active,
                         };
@@ -1176,7 +1176,7 @@ impl WarOperation {
                                 source: TargetSource::InvaderCore { level: core_level },
                                 score: ranked,
                                 tower_count,
-                                estimated_enemy_dps: threat_data.estimated_dps,
+                                estimated_enemy_dps: threat_data.estimated_attack_dps,
                                 estimated_enemy_heal: threat_data.estimated_heal,
                                 has_safe_mode: false,
                                 estimated_roi: None,
@@ -1261,7 +1261,7 @@ impl WarOperation {
                             source: TargetSource::ResourceDenial,
                             score,
                             tower_count,
-                            estimated_enemy_dps: threat_data.estimated_dps,
+                            estimated_enemy_dps: threat_data.estimated_attack_dps,
                             estimated_enemy_heal: threat_data.estimated_heal,
                             has_safe_mode,
                             estimated_roi: None,
