@@ -1396,12 +1396,20 @@ impl<'a> System<'a> for SquadManagerSystem {
             }
         }
 
-        // ── Phase B-renew: keep a FORMING squad's early members alive while it rallies for the full
-        // roster (ADR 0028). Without renew, a slow/contested form loses its early members to old age →
-        // they drop to unfilled → re-spawn → churn → never all-present. Request a renew for any present
-        // member with low TTL; the spawn system renews creeps adjacent to a free spawn (the rally point is
-        // a home spawn — see compute_squad_orders) and is gated on room energy, so it never starves
-        // spawning or a poor colony.
+        // ── Phase B-renew: keep a forming/holding squad's members alive while it rallies (ADR 0028 + ADR 0034
+        // D6b RC-5). Without renew, a slow/contested form loses its early members to old age → they drop to
+        // unfilled → re-spawn → churn → never all-present; and (RC-5) a FULL-but-still-rallying squad whose
+        // members hold at a home spawn (the D6a lifetime gate held a too-short member to top it up before the
+        // long crawl) bleeds out the same way. Request a renew for any present member with low TTL THAT IS
+        // STILL AT A HOME SPAWN; the spawn system renews creeps adjacent to a free spawn and is gated on room
+        // energy, so it never starves spawning, monopolizes a lane, or renews infinitely (a departed member is
+        // no longer in a home room → never matched; once topped up + released to travel it leaves the renew).
+        //
+        // ADR 0034 RC-5 CHANGE: the renew is NO LONGER gated FORMING-ONLY (`filled >= requested { continue }`).
+        // A member is renewed iff it is present, AT A HOME ROOM, and below the TTL threshold — so it covers
+        // BOTH the slow-form early-member case (Phase 0028) AND the D6a held-at-home lifetime-gate case (RC-5),
+        // while a departed/traveling member is intrinsically excluded (no home-room match). The per-member
+        // home-room filter is the bound; the spawn system's free-spawn + energy gate is the economy guard.
         for (squad_entity, obj_id) in &live_managed {
             let requested = data
                 .objective_queue
@@ -1412,10 +1420,12 @@ impl<'a> System<'a> for SquadManagerSystem {
             let Some(ctx) = data.squad_contexts.get(*squad_entity) else {
                 continue;
             };
-            if requested == 0 || ctx.filled_slot_count() >= requested {
-                continue; // not forming (full or unknown roster) — the squad departs; no renew needed
+            if requested == 0 {
+                continue; // unknown roster — no renew (legacy parity)
             }
-            // Collect first (immutable ctx + creep_owner borrow), then issue (mutable spawn_queue).
+            // Collect first (immutable ctx + creep_owner borrow), then issue (mutable spawn_queue). A member is
+            // renewed iff it is AT A HOME ROOM (still holding/rallying near a home spawn) and below the TTL
+            // threshold — a departed/traveling member is far from any home room and is intrinsically skipped.
             let renews: Vec<(Entity, Entity, u32)> = ctx
                 .members
                 .iter()
@@ -1429,7 +1439,7 @@ impl<'a> System<'a> for SquadManagerSystem {
             for (room, member, ttl) in renews {
                 data.spawn_queue.request_renew(room, member, ttl);
                 if debug {
-                    log::info!("[Lifecycle] RENEW squad={:?} obj={:?} ttl={} (forming — keep the roster alive)", squad_entity, obj_id, ttl);
+                    log::info!("[Lifecycle] RENEW squad={:?} obj={:?} ttl={} (forming/holding — keep the roster alive)", squad_entity, obj_id, ttl);
                 }
             }
         }
@@ -2302,10 +2312,54 @@ fn compute_squad_orders(
                 // (after dropping squad_path) means apply_squad_decision's non-engaged arm leaves them
                 // intact (it only stamps Formation orders when a squad_path exists). Members converge solo;
                 // the gather quorum then flips this to the assault branch next tick.
+                //
+                // ── ADR 0034 D6a (RC-7 — PRE-DEPARTURE LIFETIME GATE). Before committing a member to the long
+                // `MoveTo(rally)` crawl, check its remaining TTL covers the journey (dist→rally + rally→target)
+                // PLUS `FIGHT_BUFFER` ticks of fighting, via the SHARED `lifetime_sufficient_for_deployment`
+                // kernel (the sim calls the identical fn). A member that cannot survive the journey HOLDS next
+                // to its home spawn (where the Phase-B-renew, now RC-5-extended past the forming gate, tops it
+                // up to sufficiency) instead of departing doomed to arrive low/dead → roster drop → quorum
+                // oscillation. Once a renew lifts its TTL to `Commit`, it departs. The gate keys on the LIVE
+                // `ticks_to_live()` (read fresh each tick) — ephemeral, no serialized state, no WFV bump. The
+                // rally→target leg is `room_distance(rally, target)`; the per-member leg is `room_distance(pos,
+                // rally)`. A member with no resolvable TTL (just-spawned, position-only) is committed normally
+                // (the legacy behaviour) — the gate only HOLDS a member it can prove is too short-lived.
+                let rally_to_target = room_distance(rally.room_name(), target_room);
                 ctx.squad_path = None;
                 for member in ctx.members.iter_mut() {
+                    let mut hold_for_renew = false;
+                    if let Some(pos) = member.position {
+                        let ttl = creep_owner
+                            .get(member.entity)
+                            .and_then(|co| co.owner.resolve())
+                            .and_then(|c| c.ticks_to_live());
+                        if let Some(ttl) = ttl {
+                            let dist_to_rally = room_distance(pos.room_name(), rally.room_name());
+                            let decision = screeps_combat_decision::rally::lifetime_sufficient_for_deployment(
+                                ttl,
+                                dist_to_rally,
+                                rally_to_target,
+                                screeps_combat_decision::rally::FIGHT_BUFFER,
+                                screeps_combat_decision::rally::RENEW_TARGET_TTL,
+                            );
+                            // Hold a member that is short of sufficiency (renewable: top it up at home;
+                            // hopeless: recycle is a follow-up — for now HOLD so it can't trickle in doomed).
+                            // A member already AT the rally (range <= gather radius) never holds — it has
+                            // arrived; holding it would un-gather the bloc.
+                            hold_for_renew = !matches!(decision, screeps_combat_decision::rally::CommitDecision::Commit)
+                                && pos.get_range_to(rally) > screeps_combat_decision::rally::RALLY_GATHER_RADIUS;
+                            if hold_for_renew && debug {
+                                log::info!(
+                                    "[Lifecycle] LIFETIME-HOLD squad={:?} obj={:?} member={:?} ttl={} dist_to_rally={} rally_to_target={} decision={:?} (hold+renew before the crawl, RC-7)",
+                                    squad_entity, obj_id, member.entity, ttl, dist_to_rally, rally_to_target, decision
+                                );
+                            }
+                        }
+                    }
                     member.tick_orders = Some(TickOrders {
-                        movement: TickMovement::MoveTo(rally),
+                        // Insufficient TTL → HOLD (next to the home spawn the renew pass tops it up at);
+                        // otherwise solo-travel to the shared rally.
+                        movement: if hold_for_renew { TickMovement::Hold } else { TickMovement::MoveTo(rally) },
                         ..Default::default()
                     });
                 }

@@ -327,11 +327,26 @@ only after the corresponding RED sim exists.
   self-healing on reload) → no WFV bump. **Known gap:** single-member / fully-blocked unreachable target →
   Phase 1.5 (objective-level abort), see §3 D4.
 
-### Phase 2 — Renew-in-transit repro (RC-5/RC-6/RC-7, sim gap G4)
+### Phase 2 — Renew-in-transit repro (RC-5/RC-6/RC-7, sim gap G4) — ✅ DONE (decision `4f72088`, eval `ec23ee2`, super, no WFV bump)
 - **RED:** add the TTL/renew-at-rally model (§2.3.3). Reproduce S3 (slow far-home form) as
   `ChurnedNeverDeployed` (early members age out) and a far member arriving below the fight buffer.
 - **GREEN:** land D6 (lifetime gate + renew while holding/rallying + renewable-rally bias from D3). S3 →
   `DeployedAndEngaged`.
+- **AS-BUILT:** one shared pure kernel `rally::lifetime_sufficient_for_deployment(...) → CommitDecision`
+  (Commit / RenewThenCommit / Recycle) drives both the bot and the sim. D6a (RC-7): solo-travel reads the
+  live `ticks_to_live` and `Hold`s a would-die-en-route member at its home spawn. D6b (RC-5): the Phase-B
+  renew drops the forming-only gate and renews any present member at a home room with `ttl<300`, reusing the
+  existing energy-gated `request_renew` (non-griefing — verified bounded, no spawn monopolization, departed
+  members structurally excluded). Both legs independently load-bearing (gate-alone and renew-alone each still
+  lapse S3; `far_home_s3_gate_without_renew_still_fails` pins it). D6c renewable-rally bias is **sim-only** on
+  the bot (home-renew carries S3) — documented follow-up. **Follow-ups (in-code):** F1 the `Recycle` verdict
+  currently `Hold`s (torn down by MAX_TRAVEL_BUDGET, not an explicit recycle job); F2 `RALLY_TRAVEL_PER_ROOM`
+  is a flat 50t (swamp/fatigue could arrive a member slightly short — graceful, conservativeness-tuning). No
+  WFV bump (live ttl read per-tick; Hold/renew verdict ephemeral in `tick_orders`/`request_renew`).
+- **⚠ NOTE (sim-world caveat):** Phase 2 (like Phase 1) is proven in the harness's "moves execute" world. The
+  live re-soak after Phase 1 surfaced **RC-11** (see §3) — spawned scattered members *freeze* before any of
+  this matters — which the solo-stepper harness cannot see. RC-11 is the true live blocker; Phase 2's renew
+  only matters once members actually move.
 
 ### Phase 3 — Contested oscillation on the production path (RC-9, sim gap)
 - **RED:** promote S2 (contested oscillation) into `run_lifecycle_churn_extended` with the latch toggled off;
