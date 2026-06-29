@@ -169,6 +169,20 @@ impl MoveToRoom {
         if let Some(ref orders) = tick_orders {
             match orders.movement {
                 TickMovement::MoveTo(rally) => {
+                    // ADR 0034 D4 (RC-3 — member-side movement-failure feedback, NO silent retry loop): poll
+                    // the PREVIOUS tick's movement result before re-issuing the rally move. A
+                    // Blocked/NoPath/StuckTimeout means this member cannot path to the shared rally (impassable
+                    // terrain / a hostile room / no route) — historically the job just re-issued
+                    // `MoveTo(rally)` every tick in silence and the member sat forever. We now SURFACE it (a
+                    // greppable per-member signal); the SquadManager reads the same position-stagnation each
+                    // tick and, past its bounded stall window, RE-ASSESSES this member out of the gather quorum
+                    // so the reachable subset proceeds (the escalation lives in the manager — single owner).
+                    if let Some(failure) = check_movement_failure(tick_context) {
+                        log::info!(
+                            "[SquadTrace] MOVE-BLOCKED creep={:?} room={} rally={:?} failure={:?} (rally unreachable — surfaced for manager escalation)",
+                            creep_entity, creep_pos.room_name(), (rally.room_name(), rally.x().u8(), rally.y().u8()), failure
+                        );
+                    }
                     tick_context
                         .runtime_data
                         .movement

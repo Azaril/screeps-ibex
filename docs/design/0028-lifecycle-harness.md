@@ -9,6 +9,8 @@ members; + lane contention) AND combat effectiveness (squads lose defended fight
 lifecycle), ADR 0027 (objective/squad lifecycle rework), ADR 0023/0023a (the combat sim
 harness), ADR 0026 §9 (doctrine sizing). Task #23 / #25.
 
+> **Forward note (2026-06-29):** [ADR 0033](0033-rover-pathing-sim-and-benchmark.md) (Proposed) extracts the engine's movement mechanism into `screeps-sim-core` and renames `CombatWorld`→`SimWorld` / `resolve_tick`→`resolve_combat_tick`; this lifecycle harness becomes a consumer of `sim-core`, and the `CombatWorld` / `resolve_tick` references below read as their `Sim*` / split successors. No design change here. (The `Colony` model stays in `combat-eval`, outside the kernel.)
+
 ## Problem — live tuning is not converging
 
 After ADR 0027 the offense still did not work end-to-end on the Docker private server, and

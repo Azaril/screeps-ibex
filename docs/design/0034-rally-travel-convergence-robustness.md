@@ -232,15 +232,42 @@ reachability-and-renew aware, not pure geometry.
 
 ### D4 — Member-level path-failure detection + escalation (fixes RC-3)
 In `MoveToRoom::tick`, after `move_to(rally)`, poll the movement result (`check_movement_failure`). On
-`Blocked`/`NoPath`, surface a per-member `last_movement_result` to the manager. The manager escalates after a
-bounded stall: recompute a fallback rally closer to the members' world-centroid, OR (if the member is already
-in range of the target) go direct, OR signal the squad to re-assess. **No more silent retry loops.**
+`Blocked`/`NoPath`/`StuckTimeout`, surface a greppable per-member `[SquadTrace] MOVE-BLOCKED` signal — no
+more *silent* retry loop (the job still re-issues the move, harmlessly; the escalation decision is the
+manager's, single owner). The manager tracks each present member's room-distance to the rally; a member whose
+distance stops decreasing increments a per-member stall counter, and past the bounded `SOLO_TRAVEL_STALL_WINDOW`
+(D8) the manager **re-assesses that member OUT of the gather quorum** — it is dropped from the quorum
+denominator (`effective_slots`) and the `gather_positions`, so the **reachable subset masses and the contested
+quorum fires** rather than waiting forever on a member that cannot path.
+
+> **AS-BUILT (decision corrected during implementation):** the escalation is **quorum exclusion of the blocked
+> member, not a rally recompute.** The original sketch above ("recompute a fallback rally / go direct") was
+> *not* built — the verifier confirmed the production rally is geometry-stable (`shared_rally_point_for_members`
+> returns the same room with or without the blocked laggard in the set), so moving it would not help; dropping
+> the blocked member from the quorum is the mechanism in **both** the sim and the live bot. Driven by
+> independent position-stagnation (not the job's failure signal), self-correcting (a member that makes any
+> progress re-enters next tick), contested-only, never strands the last present member.
+>
+> **KNOWN GAP → follow-up (Phase 1.5 / objective layer):** exclusion cannot help a **single-member or
+> fully-blocked** squad — by design it never strands the last member, so a lone frozen member (or a squad
+> where *every* member is genuinely unreachable, e.g. no route to the target at all) is **detected** (the
+> `MOVE-BLOCKED` signal + the stall counter) but **not resolved**; it waits out `MAX_TRAVEL_BUDGET` and gives
+> up. The robust handling of a genuinely-unreachable target is an **objective-level** decision (abort /
+> mark-unreachable / reassign / reroute), tracked as a Phase 1.5 follow-up — *not* a rally/convergence concern.
+> The live soak's frozen `1/1` squad (member stuck in W2N5) is this case.
 
 ### D5 — Per-member + majority travel progress (fixes RC-4/RC-8)
 Replace the single `min`-distance progress signal with per-member tracking. Refresh the travel lease while a
-**majority** of present members are closing distance (not while the single closest is), so one straggler
-neither pins the squad "stalled" nor (conversely) one moving lead masks a stuck bulk. The trace reports
-per-member `d` and progress.
+**majority** of present members are closing distance (`closing * 2 > counted`, not while the single closest
+is), so one straggler neither pins the squad "stalled" nor (conversely) one moving lead masks a stuck bulk.
+In-target (`d = 0`) and a member's first reading count as closing; the signal is empty pre-departure so it
+cannot misfire while forming. The trace reports per-member `d` and progress.
+
+> **Sim/live signal nuance (as-built):** the live D5 majority signal keys on per-member distance-to-**target**
+> (`squad_manager.rs`, spanning both the travel-to-rally and assault legs); the sim's solo-travel D5 signal
+> keys on distance-to-**rally** (`harness/lifecycle.rs`). Same intent (is the present bulk progressing?) and
+> both kill the min-pinning — but they are not byte-identical during the rally-approach leg. Acceptable: the
+> sim proves the *mechanism* (majority-not-min), not an exact per-tick replica of the live distance metric.
 
 ### D6 — Lifetime-aware staging + renew-in-transit (fixes RC-5/RC-6/RC-7)
 - **Pre-departure lifetime gate:** before committing a member to travel, check
@@ -272,20 +299,33 @@ The plan proves the root cause *before* the fix: each phase first extends the si
 RED (demonstrating we understand the cause), then lands the robust fix to GREEN. Production code is touched
 only after the corresponding RED sim exists.
 
-### Phase 0 — Real-geometry rally repro (RC-1/RC-2, sim gap G1/G2)
+### Phase 0 — Real-geometry rally repro (RC-1/RC-2, sim gap G1/G2) — ✅ DONE (decision `5bb7666`, super `36bb340`)
 - **RED:** add the real-geometry rally test (§2.3.1) over far cross-quadrant + asymmetric scatter, calling the
   production `cohesion::centroid` + `rally::shared_rally_point`. Assert it FAILS today (wrong room / behind
   the squad). This is the cheapest, most surgical RED and proves RC-1/RC-2 directly.
 - **GREEN:** land D1 (world-coord centroid) + D2 (scatter-robust approach) + D3 (placement validation). The
   test goes GREEN.
+- **AS-BUILT:** RC-1 (centroid) and D2/D3 (scatter-robust rally) split into independent tests + two
+  discriminating geometries (legacy-vs-new genuinely differ), each RED-able by reverting the respective fix.
+  **D1 (the centroid) alone fixes the headline far-home stall** — for the W3N2+W4N7→W9N8 geometry the legacy
+  rally is insensitive to the centroid error (one room out by sign), so D2/D3 is *separate* robustness for
+  scatter geometries where the centroid bearing ≠ the laggard bearing. No WFV bump. Live-deployed; soak showed
+  reach jump from 0 → 20 `in_room=true`, confirming the geometry fix.
 
-### Phase 1 — Production-path far-home stall repro (RC-3/RC-4/RC-8/RC-10, sim gap G3/G6)
+### Phase 1 — Production-path far-home stall repro (RC-3/RC-4/RC-8/RC-10, sim gap G3/G6) — ✅ DONE (eval + super, no WFV bump)
 - **RED:** build `run_lifecycle_churn_extended` (§2.3.2) — per-member real `Position`s, production rally
   geometry, solo step, per-tick gather + latch, `Arrived` gated on `gathered`, per-member + min distance.
   Reproduce S1 (far-home stall) as `OscillatedNeverGathered`/`LapsedInTravel`. Add the blocked-path model
   (§2.3.4) to reproduce RC-3 as a silent budget-lapse give-up.
 - **GREEN:** land D4 (member-side failure detection + escalation) + D5 (majority progress) + D8 (tighter stall
   window). S1 → `DeployedAndEngaged`.
+- **AS-BUILT:** a differential toggle matrix proved orthogonality — **S1-clean is a D5-only bug** (held lead
+  pins the min, masking the closing bulk; lapses on the commitment lease, not budget exhaustion) and
+  **S1-blocked is closed *only* by D4+D8 together** (D5/D4/D8 alone each still lapse), pinned by
+  `far_home_s1_blocked_d5_alone_still_lapses`. D4 escalation = quorum **exclusion** of the blocked member (see
+  §3 D4 AS-BUILT, *not* a rally recompute). Trackers are transient in `SquadFormingProgress` (Default resource,
+  self-healing on reload) → no WFV bump. **Known gap:** single-member / fully-blocked unreachable target →
+  Phase 1.5 (objective-level abort), see §3 D4.
 
 ### Phase 2 — Renew-in-transit repro (RC-5/RC-6/RC-7, sim gap G4)
 - **RED:** add the TTL/renew-at-rally model (§2.3.3). Reproduce S3 (slow far-home form) as

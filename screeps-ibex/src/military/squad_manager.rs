@@ -88,7 +88,32 @@ pub struct SquadFormingProgress {
     /// quorum from live positions (a massed bloc re-latches immediately; a still-scattered one re-gathers).
     /// Cleared on retire alongside the other per-objective trackers.
     assault_latched: std::collections::BTreeSet<ObjectiveId>,
+    /// ADR 0034 D5 (RC-4/RC-8 — per-member travel progress): (objective, member-entity) → that member's
+    /// last-observed room-distance to the shared rally. The travel lease refreshes while a MAJORITY of
+    /// present members are CLOSING (vs the old single MIN-over-members signal that one stuck member could pin
+    /// flat or one moving lead could mask). Ephemeral (`BTreeMap`, deterministic; NOT serialized — no WFV
+    /// bump). Cleared on retire.
+    member_rally_dist: std::collections::BTreeMap<(ObjectiveId, u32), u32>,
+    /// ADR 0034 D8 (RC-3/RC-8 — the tighter per-member solo-travel STALL WINDOW): (objective, member-entity)
+    /// → consecutive ticks this member has made NO solo-travel progress toward the rally (blocked / NO_PATH /
+    /// stuck — its room-distance did not decrease). Past [`SOLO_TRAVEL_STALL_WINDOW`] the manager RE-ASSESSES
+    /// the member OUT of the gather quorum (D4 escalation) so the squad proceeds with the reachable subset,
+    /// well before the coarse `MAX_TRAVEL_BUDGET`. Ephemeral (NOT serialized — no WFV bump). Cleared on retire.
+    member_solo_stall: std::collections::BTreeMap<(ObjectiveId, u32), u32>,
+    /// ADR 0034 D5 (RC-4/RC-8 — per-member TARGET progress for the travel lease): (objective, member-entity)
+    /// → that member's last-observed room-distance to the TARGET room. The travel lease refreshes while a
+    /// MAJORITY of present members are CLOSING on the target — so one stuck member can't pin the lease
+    /// "stalled" (the old single MIN signal) and one moving lead can't mask a stuck bulk. Ephemeral (NOT
+    /// serialized — no WFV bump). Cleared on retire.
+    member_target_dist: std::collections::BTreeMap<(ObjectiveId, u32), u32>,
 }
+
+/// ADR 0034 D8 (RC-8): the TIGHTER per-member solo-travel stall window — consecutive ticks a member makes no
+/// progress toward the shared rally (blocked / NO_PATH) after which the manager RE-ASSESSES it OUT of the
+/// gather quorum (D4) and proceeds with the reachable subset. In the 50–150 band per the ADR so a
+/// wrong/blocked rally is caught FAST, well before the coarse `MAX_TRAVEL_BUDGET` (1000) backstop. Ephemeral
+/// runtime state (a per-member tracker like `assault_latched`) — NOT serialized, no `WORLD_FORMAT_VERSION` bump.
+pub const SOLO_TRAVEL_STALL_WINDOW: u32 = 100;
 
 /// INTROSPECTION ONLY (ADR 0027 squad-lifecycle observability) — a coarse phase label for the
 /// `[SquadTrace]` logs so the full FIELD → forming → rally → deploy → travel → in_room → engaged journey
@@ -1056,7 +1081,9 @@ impl<'a> System<'a> for SquadManagerSystem {
             let deadline_lapsed = obj_info.and_then(|(_, _, dl, _)| dl).is_some_and(|d| now >= d);
 
             // Snapshot the squad facts (Copy) in one borrow.
-            let (wiped, has_focus, engaged_once, in_target_room, has_members, present_count, target_dist) = data
+            // ADR 0034 D5: also collect PER-MEMBER (entity, room-distance-to-target) so the travel lease can
+            // refresh on a MAJORITY closing (not the single min). `member_dists` is empty while forming.
+            let (wiped, has_focus, engaged_once, in_target_room, has_members, present_count, target_dist, member_dists) = data
                 .squad_contexts
                 .get(squad_entity)
                 .map(|ctx| {
@@ -1078,9 +1105,18 @@ impl<'a> System<'a> for SquadManagerSystem {
                             .filter_map(|m| m.position.map(|p| room_distance(p.room_name(), room)))
                             .min()
                     });
-                    (wiped, ctx.focus_target.is_some(), ctx.engaged_once, in_room, !ctx.members.is_empty(), present, dist)
+                    // ADR 0034 D5: per-member (entity-id, room-distance-to-target) for the majority signal.
+                    let dists: Vec<(u32, u32)> = squad_room
+                        .map(|room| {
+                            ctx.members
+                                .iter()
+                                .filter_map(|m| m.position.map(|p| (m.entity.id(), room_distance(p.room_name(), room))))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    (wiped, ctx.focus_target.is_some(), ctx.engaged_once, in_room, !ctx.members.is_empty(), present, dist, dists)
                 })
-                .unwrap_or((false, false, false, false, false, 0, None));
+                .unwrap_or((false, false, false, false, false, 0, None, Vec::new()));
 
             // FIX 2 (rally-stall): a forming squad legitimately sitting at home assembling its roster has
             // no focus, so the base +400 lease lapses and the kernel would retire it mid-form → re-field →
@@ -1122,15 +1158,27 @@ impl<'a> System<'a> for SquadManagerSystem {
                 now
             };
             let travel_budget_remaining = now.saturating_sub(departed_at) < MAX_TRAVEL_BUDGET;
-            // Positional progress = the centroid distance to the target DECREASED since last reconcile (or the
-            // first travel tick, where there is no prior reading). A flat/increasing distance ⇒ no progress.
-            let prev_dist = data.forming_progress.last_target_dist.get(&obj_id).copied();
-            let travel_progress = traveling
-                && match (target_dist, prev_dist) {
-                    (Some(cur), Some(prev)) => cur < prev,
-                    (Some(_), None) => true, // first travel reading — assume progress for one reconcile
-                    _ => false,
-                };
+            // ── ADR 0034 D5 (RC-4/RC-8 — per-member + MAJORITY travel progress). Refresh the travel lease
+            // while a MAJORITY of PRESENT members are CLOSING distance on the target (or arrived in it), NOT
+            // while the single closest is. The old MIN-over-members signal let ONE stuck member pin the lease
+            // "stalled" while the bulk advanced (RC-4), OR a single moving lead mask a stuck bulk — both
+            // mis-read a converging/stuck squad. Per-member, keyed by entity (stable), tracked ephemerally.
+            let mut closing = 0usize;
+            let mut counted = 0usize;
+            for &(ent_id, cur) in &member_dists {
+                counted += 1;
+                let key = (obj_id, ent_id);
+                let prev = data.forming_progress.member_target_dist.get(&key).copied();
+                // Closing = the per-member distance strictly decreased, the member is IN the target room
+                // (dist 0), or it is the first reading (assume progress for one reconcile).
+                if cur == 0 || matches!(prev, Some(p) if cur < p) || prev.is_none() {
+                    closing += 1;
+                }
+                data.forming_progress.member_target_dist.insert(key, cur);
+            }
+            let majority_closing = counted > 0 && closing * 2 > counted;
+            let travel_progress = traveling && majority_closing;
+            // Keep the MIN-distance tracker fresh for the introspection trace (logging only — not the gate).
             if let Some(d) = target_dist {
                 data.forming_progress.last_target_dist.insert(obj_id, d);
             }
@@ -1229,6 +1277,9 @@ impl<'a> System<'a> for SquadManagerSystem {
                 data.forming_progress.last_engaged.remove(&obj_id);
                 // FIX A: clear the assault latch so a RE-FIELD (new generation) re-derives the quorum.
                 data.forming_progress.assault_latched.remove(&obj_id);
+                // ADR 0034 D4/D5/D8: clear the per-member rally/target distance + solo-stall trackers so a
+                // RE-FIELD re-derives them (a new generation's members must not inherit a stale block streak).
+                clear_member_trackers(&mut data.forming_progress, obj_id);
                 continue;
             }
             // ── ADR 0027 v1 (whole-squad REASSIGN): a non-loss terminal (Resolved/ObjectiveGone) with a
@@ -1280,6 +1331,9 @@ impl<'a> System<'a> for SquadManagerSystem {
                 data.forming_progress.last_phase.remove(&obj_id);
                 data.forming_progress.last_engaged.remove(&obj_id);
                 data.forming_progress.assault_latched.remove(&obj_id);
+                // ADR 0034 D4/D5/D8: a reassigned squad gets fresh per-member rally/target/stall trackers at
+                // the new target (the old block streak is meaningless against the new rally corridor).
+                clear_member_trackers(&mut data.forming_progress, obj_id);
                 data.forming_progress.forming_started_at.insert(new_id, now);
                 data.forming_progress.last_present.insert(new_id, 0);
                 if debug {
@@ -1540,6 +1594,16 @@ fn retire_squad(updater: &Read<LazyUpdate>, entities: &Entities, squad_entity: E
             }
         });
     }
+}
+
+/// ADR 0034 D4/D5/D8: drop the PER-MEMBER ephemeral travel trackers (rally-distance, target-distance, and
+/// solo-stall) for one objective on retire/reassign. These are keyed by `(ObjectiveId, member-entity-id)`,
+/// so a per-objective sweep retains only the entries for OTHER objectives. Ephemeral runtime state — no
+/// serialized field, no `WORLD_FORMAT_VERSION` bump.
+fn clear_member_trackers(fp: &mut SquadFormingProgress, obj_id: ObjectiveId) {
+    fp.member_rally_dist.retain(|&(oid, _), _| oid != obj_id);
+    fp.member_target_dist.retain(|&(oid, _), _| oid != obj_id);
+    fp.member_solo_stall.retain(|&(oid, _), _| oid != obj_id);
 }
 
 /// Queue one slot's spawn to every in-range home room, sharing a token so exactly
@@ -2010,6 +2074,13 @@ fn compute_squad_orders(
     // re-field → slot-0 forever (the actual invader no-engage root cause). Measured against the objective's
     // requested slot count so a death-degraded layout can't shrink "full".
     let member_positions: Vec<Option<Position>> = member_views.iter().map(|m| m.pos).collect();
+    // ADR 0034 D5/D8: the member ENTITIES parallel to `member_views`/`member_positions` (same iteration
+    // order — both derived from `ctx.members`), so the per-member rally-progress + solo-stall trackers can be
+    // keyed by a STABLE id (the entity), not the volatile slice index. Captured here once.
+    let member_entities: Vec<Entity> = squad_contexts
+        .get(squad_entity)
+        .map(|ctx| ctx.members.iter().map(|m| m.entity).collect())
+        .unwrap_or_default();
     // Rally/deploy gate (FIX 1 — the rally-stall fix). A DEFENDED or UNKNOWN target keeps the hard full-roster
     // `squad_ready_to_depart`: the oracle sized it to be Lanchester-favorable, so the full roster is winnable
     // BY CONSTRUCTION and must enter together or the trickle is picked off. BUT a PROVEN-uncontested target —
@@ -2104,6 +2175,67 @@ fn compute_squad_orders(
             let rally =
                 screeps_combat_decision::rally::shared_rally_point_for_members(&member_positions, assault_target, uncontested);
 
+            // ── ADR 0034 D4 + D8 (RC-3/RC-8 — member-side movement-failure escalation, NO silent retry) ──
+            // Track each present member's room-distance to the rally; a member whose distance does NOT
+            // decrease this tick made no solo-travel progress (blocked / NO_PATH / stuck behind impassable
+            // terrain or a hostile room — the `MoveToRoom::move_to(rally)` the bot silently re-issued every
+            // tick, RC-3). Its per-member STALL counter increments; a member that closes resets it. Past the
+            // tighter `SOLO_TRAVEL_STALL_WINDOW` (D8 — well before the coarse `MAX_TRAVEL_BUDGET`) the manager
+            // RE-ASSESSES it OUT of the gather quorum (D4): it proceeds with the REACHABLE subset rather than
+            // waiting forever on a member that cannot path to the rally. Scoped to a CONTESTED travel (the
+            // uncontested gate already trickles at quorum 1); only fires when MORE THAN ONE member is present
+            // (a lone member can't be "left behind"); and never excludes the LAST reachable member (always
+            // keep >=1). All ephemeral per-member trackers (NO serialized field → no WORLD_FORMAT_VERSION bump).
+            let mut excluded_member: Vec<bool> = vec![false; member_views.len()];
+            if !uncontested {
+                for (i, m) in member_views.iter().enumerate() {
+                    let Some(pos) = m.pos else {
+                        continue; // unspawned — no body to stall
+                    };
+                    let Some(&ent) = member_entities.get(i) else {
+                        continue;
+                    };
+                    let key = (obj_id, ent.id());
+                    let cur = room_distance(pos.room_name(), rally.room_name());
+                    let at_rally = pos.get_range_to(rally) <= screeps_combat_decision::rally::RALLY_GATHER_RADIUS;
+                    let prev = forming_progress.member_rally_dist.get(&key).copied();
+                    let closing = at_rally || matches!(prev, Some(p) if cur < p) || prev.is_none();
+                    forming_progress.member_rally_dist.insert(key, cur);
+                    if closing {
+                        forming_progress.member_solo_stall.remove(&key);
+                    } else {
+                        let s = forming_progress.member_solo_stall.entry(key).or_insert(0);
+                        *s = s.saturating_add(1);
+                    }
+                }
+                // Decide exclusions: members past the stall window. Keep at least ONE reachable member.
+                let present_now = member_views.iter().filter(|m| m.pos.is_some()).count();
+                if present_now > 1 {
+                    let mut stalled: Vec<usize> = (0..member_views.len())
+                        .filter(|&i| {
+                            member_views[i].pos.is_some()
+                                && member_entities
+                                    .get(i)
+                                    .and_then(|e| forming_progress.member_solo_stall.get(&(obj_id, e.id())))
+                                    .is_some_and(|&s| s >= SOLO_TRAVEL_STALL_WINDOW)
+                        })
+                        .collect();
+                    // Never strand the whole squad: leave at least one present member reachable.
+                    if stalled.len() >= present_now {
+                        stalled.truncate(present_now - 1);
+                    }
+                    for i in stalled {
+                        excluded_member[i] = true;
+                        if debug {
+                            log::info!(
+                                "[Lifecycle] ESCALATE-BLOCK squad={:?} obj={:?} member={:?} stalled>={} → re-assessed OUT of the gather quorum (reachable subset proceeds)",
+                                squad_entity, obj_id, member_entities.get(i), SOLO_TRAVEL_STALL_WINDOW
+                            );
+                        }
+                    }
+                }
+            }
+
             // Has a FIGHTER gathered at the rally OR already in the target room? (No healer-only assault.) A
             // fighter has melee or ranged. FIX A counts an in-target-room fighter as "gathered" so an
             // arrived member never fails the gather (the uncontested gathered>=1 / members-already-arrived
@@ -2117,13 +2249,24 @@ fn compute_squad_orders(
                     .unwrap_or(false)
             });
             // FIX A: members already IN the target room count as gathered (modeled as gathered-at-rally) so
-            // arrived members can't fail the quorum.
-            let mut gather_positions = member_positions.clone();
-            for (m, slot) in member_views.iter().zip(gather_positions.iter_mut()) {
+            // arrived members can't fail the quorum. ADR 0034 D4: a RE-ASSESSED-OUT (excluded) member is
+            // DROPPED from the gather positions — the squad no longer waits on it.
+            let mut gather_positions: Vec<Option<Position>> = Vec::with_capacity(member_views.len());
+            for (i, m) in member_views.iter().enumerate() {
+                if excluded_member[i] {
+                    continue; // re-assessed out (blocked past the stall window) — not in the quorum
+                }
                 if m.pos.map(|p| p.room_name() == target_room).unwrap_or(false) {
-                    *slot = Some(rally); // an in-room member is counted at the rally for the gather quorum
+                    gather_positions.push(Some(rally)); // an in-room member is counted at the rally
+                } else {
+                    gather_positions.push(m.pos);
                 }
             }
+            // ADR 0034 D4: the gather denominator drops the re-assessed-out members too, so the contested
+            // quorum is measured against who can ACTUALLY mass (the reachable subset), not the full roster a
+            // blocked member would otherwise pin un-fillable forever (RC-10).
+            let excluded_count = excluded_member.iter().filter(|e| **e).count();
+            let effective_slots = requested_slots.saturating_sub(excluded_count);
             // REACH BUG #2 — the gather→assault transition is ALSO P(win)-driven: if the PRESENT (gathered)
             // force already WINS-OR-STALLS against the target, advance the assault without waiting for the
             // near-full roster to mass at the rally (the contested `gather_quorum_met` count quorum). The
@@ -2134,7 +2277,7 @@ fn compute_squad_orders(
                 || screeps_combat_decision::rally::gather_quorum_met(
                     &gather_positions,
                     rally,
-                    requested_slots,
+                    effective_slots,
                     uncontested,
                     fighter_gathered,
                     screeps_combat_decision::rally::RALLY_GATHER_RADIUS,
@@ -2462,6 +2605,31 @@ mod tests {
 
     fn room(name: &str) -> RoomName {
         name.parse().expect("valid room name")
+    }
+
+    /// ADR 0034 D4/D5/D8: `clear_member_trackers` drops ONLY the per-member travel trackers for the given
+    /// objective (a per-`(obj_id, member)` keyed sweep) — another objective's members are untouched, so a
+    /// retire/reassign of one squad never wipes a sibling's progress/stall state.
+    #[test]
+    fn clear_member_trackers_is_scoped_to_one_objective() {
+        let mut fp = SquadFormingProgress::default();
+        let a = ObjectiveId(7);
+        let b = ObjectiveId(9);
+        fp.member_rally_dist.insert((a, 100), 3);
+        fp.member_rally_dist.insert((b, 100), 5);
+        fp.member_target_dist.insert((a, 101), 2);
+        fp.member_target_dist.insert((b, 102), 4);
+        fp.member_solo_stall.insert((a, 100), 80);
+        fp.member_solo_stall.insert((b, 103), 10);
+
+        clear_member_trackers(&mut fp, a);
+
+        assert!(fp.member_rally_dist.get(&(a, 100)).is_none(), "obj A rally tracker dropped");
+        assert_eq!(fp.member_rally_dist.get(&(b, 100)).copied(), Some(5), "obj B rally tracker retained");
+        assert!(fp.member_target_dist.get(&(a, 101)).is_none(), "obj A target tracker dropped");
+        assert_eq!(fp.member_target_dist.get(&(b, 102)).copied(), Some(4), "obj B target tracker retained");
+        assert!(fp.member_solo_stall.get(&(a, 100)).is_none(), "obj A stall tracker dropped");
+        assert_eq!(fp.member_solo_stall.get(&(b, 103)).copied(), Some(10), "obj B stall tracker retained");
     }
 
     #[test]
