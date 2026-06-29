@@ -213,8 +213,16 @@ collapsed from 5–13 to ~1).
 
 **Sizing / composition (ADR 0031 §Tier-3 / task #39 — cross-referenced, not owned here):**
 8. Defense right-sizing (a `dps=30` threat fields a 4-member 2-healer roster — calibration-gated).
-9. Drain **P2** (optimizer fields drain comps) / **P3** (bot threads `assault_mode`; the runtime tactic
-   P0/P1 landed inert).
+9. Drain **P2/P3 DONE 2026-06-29** (decision `79ebd32` / super `8b89f46`): the oracle decides
+   `AssaultMode::Drain` + sizes a sustainable TOUGH+HEAL comp (soak judged at the FALLOFF standoff, so a
+   base a breach can't out-heal is drainable; EV-guarded — never an infinite-energy tower / unsustainable
+   target, never downgrades a winning breach); the bot threads `assault_mode` via the ephemeral
+   `ObjectiveRuntimeEntry` → `StrategyInfo` so the previously-inert `DrainBreach` / `move_to_drain_standoff`
+   / `drain_stance` fire live (no WFV bump). **FOLLOW-UPS:** (a) a MULTI-member assembled soak doesn't yet
+   KILL — needs **tank-forward heal-the-tank coordination** (healers must position to heal the soaking tank);
+   single-member + the oracle decision are proven. (b) LOW, NOT live-reachable: a MIXED finite+infinite-tower
+   base under-sizes the soak (live towers cap at 1000 energy < the 50k sentinel; synthetic-fixture-only) —
+   optional hardening = refuse Drain if any energized tower ≥ `DRAIN_INFINITE_TOWER_ENERGY`.
 10. `member_energy>3000` PREFERRED-clamp lift; budget-free `emit_requirement` (retire
     `optimizer_ceiling_budget`).
 
