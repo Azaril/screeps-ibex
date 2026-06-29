@@ -234,7 +234,15 @@ pub fn classify_threat(hostile_creeps: &[HostileCreepInfo], has_nukes: bool, has
 /// Maximum age (in ticks) before a RoomThreatData component is removed.
 /// Prevents stale data from driving decisions long after the threat may
 /// have moved.
-const THREAT_DATA_MAX_AGE: u32 = 500;
+///
+/// ⚠ INVARIANT (ADR 0027): any periodic re-probe that exists to keep a
+/// *known-threat* room inside the `war.rs` `threat_rooms` join MUST refresh
+/// visibility on a cadence STRICTLY BELOW this age, or the room's
+/// `RoomThreatData` expires between probes and silently drops out of the join
+/// (the offense eval + war.rs's own rescout both require membership). The SK
+/// stronghold re-probe (`STRONGHOLD_RESCOUT_INTERVAL`) derives itself from
+/// this constant and a static-asserts the relation — see `sourcekeeperfarm.rs`.
+pub const THREAT_DATA_MAX_AGE: u32 = 500;
 
 /// System that populates `RoomThreatData` components on room entities each
 /// tick from visible room data.

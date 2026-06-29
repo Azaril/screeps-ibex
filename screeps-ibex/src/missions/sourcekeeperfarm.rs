@@ -63,10 +63,41 @@ const SK_KEEPER_HP: u32 = 5000;
 /// observers are RCL 8 — so once per ~creep-lifetime we dispatch one cheap scout
 /// to peek the room (a single tick of visibility on entry is enough to re-read
 /// the flag). Throttled so we never feed a scout to the towers every tick; the
-/// stronghold itself lasts ~75k ticks, so a probe every 1500t resumes promptly
+/// stronghold itself lasts ~75k ticks, so a sub-threat-window probe resumes promptly
 /// enough. (A *non-opportunistic* request can't be paired with an every-tick
 /// opportunistic one — the queue upsert makes the non-opportunistic flag sticky.)
-const STRONGHOLD_RESCOUT_INTERVAL: u32 = 1500;
+///
+/// ⚠ HARD INVARIANT (ADR 0027 — the SK-rescout-margin fix): the probe MUST fire
+/// strictly BEFORE the room's [`RoomThreatData`] expires, or the known-stronghold
+/// room drops out of the `war.rs` `threat_rooms` join while blind, which stops
+/// BOTH the offense eval that razes the core AND war.rs's own >200t
+/// `has_known_core` rescout escalation — so the core is never cleared and the SK
+/// room is silently abandoned (the war.rs HIGH-rescout backstop is
+/// adequate-margin, not a guarantee). To make the relation enforced + visible we
+/// DERIVE the interval from [`crate::military::threatmap::THREAT_DATA_MAX_AGE`]
+/// (keeping a comfortable margin so the re-observation + re-population round-trips
+/// before expiry) and a *compile-time* assert pins `interval < max_age`. A future
+/// edit to either constant cannot silently re-break the join.
+///
+/// `max_age` (500) / 2 = 250t: one probe per 250t keeps the room observed twice
+/// per expiry window, so a single dropped/late observation still refreshes the
+/// component in time. One re-probe per interval, and the visibility request is
+/// idempotent (the queue upserts a single per-room slot), so the tighter cadence
+/// does not churn scouts — at most one peek per 250t while the stronghold stands.
+const STRONGHOLD_RESCOUT_INTERVAL: u32 = crate::military::threatmap::THREAT_DATA_MAX_AGE / 2;
+
+// Compile-time guard for the invariant above: the re-probe MUST out-pace threat
+// expiry so the known-stronghold SK room stays in the war.rs `threat_rooms` join.
+// This assert IS the regression fence — a future change to either constant that
+// inverts the relation fails the build (ADR 0027 SK-rescout-margin).
+const _: () = {
+    assert!(
+        STRONGHOLD_RESCOUT_INTERVAL < crate::military::threatmap::THREAT_DATA_MAX_AGE,
+        "STRONGHOLD_RESCOUT_INTERVAL must be < THREAT_DATA_MAX_AGE so the known-stronghold SK room \
+         is re-observed before its RoomThreatData expires and drops out of war.rs threat_rooms \
+         (see ADR 0027 SK-rescout-margin)"
+    );
+};
 
 /// True when the SK room holds — or last held, while out of view — a dangerous
 /// **invader stronghold** (a level≥1 [`StructureInvaderCore`]). A deployed
@@ -353,9 +384,11 @@ impl Mission for SourceKeeperFarmMission {
         // `invader_core_attack_score` (SK rooms have sources → at least the
         // non-remote base score) and the InvaderCore arm emits an Attack-owned
         // `Dismantle{room, core_pos}` — the SK farm need NOT emit its own clear.
-        // While our 1500t rescout is between probes and war.rs hits its 200t
-        // staleness gate, its `has_known_core` branch escalates the rescout to
-        // HIGH, so the core is never silently abandoned. Once war.rs razes the
+        // Our rescout fires within the threat-data window (`STRONGHOLD_RESCOUT_INTERVAL`
+        // < `THREAT_DATA_MAX_AGE`, compile-time enforced), so the room never drops out
+        // of `threat_rooms`; if war.rs additionally hits its 200t staleness gate between
+        // probes, its `has_known_core` branch escalates the rescout to HIGH as a
+        // backstop, so the core is never silently abandoned. Once war.rs razes the
         // core, the next observation drops `stronghold_present` and the farm
         // resumes (mining ungated, `Farm{sk}` re-requested). So an SK stronghold
         // is PAUSED-then-cleared, not permanently abandoned.
@@ -450,6 +483,58 @@ impl Mission for SourceKeeperFarmMission {
         self.source_mining_missions.retain(|&e| e != child);
         if self.haul_mission.map(|e| e == child).unwrap_or(false) {
             self.haul_mission.take();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::STRONGHOLD_RESCOUT_INTERVAL;
+    use crate::military::threatmap::THREAT_DATA_MAX_AGE;
+
+    /// ADR 0027 SK-rescout-margin invariant: the stronghold re-probe MUST fire
+    /// strictly before a room's `RoomThreatData` expires, or a known-stronghold
+    /// SK room drops out of the `war.rs` `threat_rooms` join while blind and the
+    /// core is never cleared. The compile-time `const _` assert is the build-time
+    /// fence; this is its runtime twin so the relation is also an explicit,
+    /// greppable spec in the test suite.
+    #[test]
+    fn rescout_interval_is_below_threat_data_max_age() {
+        assert!(
+            STRONGHOLD_RESCOUT_INTERVAL < THREAT_DATA_MAX_AGE,
+            "STRONGHOLD_RESCOUT_INTERVAL ({STRONGHOLD_RESCOUT_INTERVAL}) must be < \
+             THREAT_DATA_MAX_AGE ({THREAT_DATA_MAX_AGE}) so a known-stronghold SK room is \
+             re-observed before its RoomThreatData expires"
+        );
+        // It must be a positive cadence (we don't probe every tick — that would
+        // feed scouts to tower fire) and leave real margin for the
+        // observe→re-populate round-trip, not just barely beat expiry.
+        assert!(STRONGHOLD_RESCOUT_INTERVAL > 0, "must be a real throttle, not every-tick");
+        assert!(
+            STRONGHOLD_RESCOUT_INTERVAL * 2 <= THREAT_DATA_MAX_AGE,
+            "interval should leave >=2x margin (observed twice per expiry window) so a single \
+             dropped/late observation still refreshes RoomThreatData in time"
+        );
+    }
+
+    /// Cadence coverage: across any contiguous `THREAT_DATA_MAX_AGE`-length tick
+    /// window, the `game::time().is_multiple_of(STRONGHOLD_RESCOUT_INTERVAL)`
+    /// gate at `sourcekeeperfarm.rs` (the re-probe trigger) fires at least once,
+    /// so a known-stronghold room is always re-observed before its threat data
+    /// can expire — no matter the absolute tick alignment.
+    #[test]
+    fn reprobe_fires_at_least_once_within_every_expiry_window() {
+        let interval = STRONGHOLD_RESCOUT_INTERVAL as u64;
+        let max_age = THREAT_DATA_MAX_AGE as u64;
+        // Sweep window start offsets across a full interval period; any longer
+        // start offset is congruent mod `interval`, so this covers all phases.
+        for start in 0..interval {
+            let fires = (start..start + max_age).any(|t| t % interval == 0);
+            assert!(
+                fires,
+                "no re-probe in window [{start}, {}) of length {max_age} at interval {interval}",
+                start + max_age
+            );
         }
     }
 }
