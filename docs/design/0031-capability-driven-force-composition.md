@@ -106,6 +106,42 @@ Enemy CREEP combat power had **two** representations: `DefenseProfile.enemy_dps`
 
 **WFV:** none — `DefenseProfile`/`EnemyForce`/`ForceAssessment` are transient compute structs, not `Serialize`.
 
+### 2(g) Drain tactic — status + follow-ups (#39)
+
+**DONE (P2/P3, 2026-06-29, decision `79ebd32` / super `8b89f46`).** The oracle DECIDES `AssaultMode::Drain` and
+sizes a sustainable TOUGH+HEAL comp (`assess` drain branch): the soak is judged at the **falloff standoff**
+(`tower_dps_at_drain_standoff` — the range the runtime holds, not point-blank), so a finite-tower base a direct
+breach can't out-heal is drainable; `required_heal = standoff_dps` (sustainable part), `required_tank_hp =
+(standoff_dps − required_heal)·drain_ticks` → TOUGH parts only when `mode==Drain`. **EV guard:** never an
+infinite-energy tower (`DRAIN_INFINITE_TOWER_ENERGY=50_000` → `dt=0`, filtered from the soak) or an
+unsustainable target (`tank_sustain >= drain_damage` veto → unwinnable), never downgrades a winning breach
+(the breach branch returns first). The bot THREADS the oracle's `assault_mode` via the ephemeral
+`ObjectiveRuntimeEntry` → `StrategyInfo` so the previously-inert `DrainBreach` / `move_to_drain_standoff` /
+`drain_stance` fire live. Offline-proven incl. an oracle-driven end-to-end test (drain stance DERIVED from
+`assess().mode==Drain`, not hardcoded).
+
+**FOLLOW-UP 1 (the substantive one) — MULTI-member tank-forward heal-the-tank coordination.** A SINGLE-member
+drain works end-to-end, and the oracle correctly picks Drain + sizes a multi-member TOUGH+HEAL comp, but a
+*multi-member assembled* soak does not yet KILL — it `RosterWiped`s
+(`finite_multi_tower_drain_bed_oracle_picks_drain_but_assembled_soak_needs_tank_forward_coord`, honestly
+RED-pending). Root: the SIZING is right but the runtime **positioning/coordination** isn't — the healers don't
+keep the *tank* alive while it soaks. Design direction (a tactic/positioning concern — `DrainBreach` strategy +
+ADR 0019 positioning, NOT the sizing): (a) place the **TANK forward** at the drain standoff (it absorbs the
+tower fire); (b) keep the **HEALERS** within heal range *behind* the tank, targeting the tank (not spread/
+self-healing); (c) sustain (Σ heal ≥ falloff tower dps on the tank) until the finite towers bleed to 0, then
+resume the normal advance/breach. This is the gate between "the oracle picks drain" (done) and "the drain comp
+actually clears a towered target" (the live win).
+
+**FOLLOW-UP 2 (LOW, NOT live-reachable) — mixed finite+infinite-tower base.** The soak
+(`tower_dps_at_drain_standoff` + `finite_drain_towers`) counts only FINITE towers, while `assess_engage`'s
+`drain_stance` relaxation drops the ENTIRE tower dps when the drain sustains — so a MIXED finite+infinite base
+would under-size heal (ignoring the never-draining tower's standoff fire) and not re-veto for it. Unreachable
+with live data (real Screeps towers cap at 1000 energy, always < the 50k "infinite" sentinel; the ≥50k concept
+exists only for synthetic eval/foreman 100k fixtures, never mixed with finite towers in a realistic bed).
+Optional hardening (defense-in-depth): in `assess()` refuse Drain if any energized tower has energy ≥
+`DRAIN_INFINITE_TOWER_ENERGY`, and/or mirror by making `drain_exempt_tower_dps` drop only the FINITE towers'
+contribution in `assess_engage`.
+
 ---
 
 ## 3. Invariants
