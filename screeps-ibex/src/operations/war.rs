@@ -98,6 +98,12 @@ pub struct AttackCandidate {
     /// The target's defense as the force-sizing oracle sees it (ADR 0020 §12) — built for `InvaderCore`
     /// candidates from the room's threat intel + the core; `None` for sources the oracle doesn't gate.
     pub defense: Option<DefenseProfile>,
+    /// The COMPUTED economic value of CONTROLLING this room (ADR 0032 §economic-value-unlocked): the
+    /// energy-equivalent net-ROI from the PURE [`crate::room_economics::room_net_roi`] kernel
+    /// (gross − hold − mining − haul − cpu, over a horizon). Populated for `InvaderCore` candidates whose
+    /// room unlocks a reservable mining remote (the reach-bug #3 fix — an undefended lvl0 core in our
+    /// remote is worth the remote's income, not ~0). `None` for sources with no controllable economy.
+    pub economic_roi: Option<f32>,
 }
 
 // Defender selection (the former `DefenseEscalation` 3-bucket) now lives on the doctrine registry —
@@ -862,6 +868,7 @@ impl WarOperation {
                     // ranges). Enriched with the flag room's scouted threat after the threat scan.
                     target_pos: Some(pos),
                     defense: None,
+                    economic_roi: None,
                 });
             }
         }
@@ -1067,11 +1074,12 @@ impl WarOperation {
                         .map(|d| d.reservation().mine())
                         .unwrap_or(false);
 
-                    let has_sources = room_entity
+                    let source_count = room_entity
                         .and_then(|e| system_data.room_data.get(e))
                         .and_then(|rd| rd.get_static_visibility_data())
-                        .map(|s| !s.sources().is_empty())
-                        .unwrap_or(false);
+                        .map(|s| s.sources().len() as u32)
+                        .unwrap_or(0);
+                    let has_sources = source_count > 0;
 
                     if let Some(score) = invader_core_attack_score(
                         core_level,
@@ -1080,6 +1088,27 @@ impl WarOperation {
                         is_our_remote,
                         has_sources,
                     ) {
+                        // ── ECONOMIC VALUE UNLOCKED (reach-bug #3, ADR 0032 §economic-value-unlocked) ──
+                        // The PURE, REUSABLE room-economics kernel values CONTROLLING the room by the energy
+                        // it unlocks as a FULL net-ROI (gross − hold − mining − haul − cpu/distance), NOT the
+                        // threat/proximity-only `score`. THE FIX: an undefended lvl0 reserver core in (or
+                        // adjacent to) our remote unlocks a reservable mining remote worth thousands of energy
+                        // — it used to read ~0 (Denial with dps=0). A level-0 core is the reservable-remote
+                        // case; higher-level strongholds are razed for the core/loot, not held as an economy,
+                        // so they carry no controlled-room economic value here (their value stays the
+                        // threat/strategic `score`). `min_distance` is ROOM HOPS (route steps); the kernel's
+                        // `haul_tiles` expects ACTUAL TILES, so we convert hops → tiles (× TILES_PER_ROOM)
+                        // first — the same conversion the SK scorer applies (`candidate.distance() *
+                        // TILES_PER_ROOM`) before it builds its own facts. Without the conversion far cores
+                        // under-count haul + cpu ~50× and read as massively over-valued.
+                        let economic_roi = if core_level == 0 && has_sources {
+                            let haul_tiles = min_distance.saturating_mul(crate::room_economics::TILES_PER_ROOM);
+                            let facts = crate::room_economics::RoomEconomyFacts::reservable_remote(source_count, haul_tiles);
+                            let v = crate::room_economics::room_net_roi(&facts);
+                            (v.net_roi > 0.0).then_some(v.net_roi as f32)
+                        } else {
+                            None
+                        };
                         // The defense the force-sizing oracle weighs (ADR 0020 §12). Tower ranges are
                         // measured to the core (the assault tile) — conservative, since towers cluster
                         // near it. Unknown per-tower energy (stale intel) ⇒ assume firing (a high value),
@@ -1120,10 +1149,19 @@ impl WarOperation {
                                 );
                             }
                         } else {
+                            // EV-AUGMENTED RANKING (reach-bug #3): blend the economic value UNLOCKED into the
+                            // launch-priority `score` so a CLOSE winnable economic core out-ranks a FAR one
+                            // AND a death-trap, while the threat/proximity `score` still orders the rest. The
+                            // precise winnability + affordability VETO stays in the launch loop
+                            // (`plan_engagement().winnable()` + `can_afford_military`); here we only RANK, so a
+                            // cheap pure P(win) PROXY from the room's defense suffices (a death-trap reads a
+                            // low proxy → ranks below an undefended core of the same economy). See
+                            // `economic_rank_score`.
+                            let ranked = economic_rank_score(score, economic_roi, &defense);
                             candidates.push(AttackCandidate {
                                 room: room_name,
                                 source: TargetSource::InvaderCore { level: core_level },
-                                score,
+                                score: ranked,
                                 tower_count,
                                 estimated_enemy_dps: threat_data.estimated_dps,
                                 estimated_enemy_heal: threat_data.estimated_heal,
@@ -1131,6 +1169,7 @@ impl WarOperation {
                                 estimated_roi: None,
                                 target_pos: Some(core_pos),
                                 defense: Some(defense),
+                                economic_roi,
                             });
                         }
                     }
@@ -1214,6 +1253,7 @@ impl WarOperation {
                             estimated_roi: None,
                             target_pos: None,
                             defense: Some(defense),
+                            economic_roi: None,
                         });
                     }
                 }
@@ -1424,12 +1464,25 @@ impl WarOperation {
                 "[War] Offense objective {:?} for {} (source={:?}, score={:.1})",
                 kind, candidate.room, candidate.source, candidate.score
             );
-            system_data.combat_objective_queue.request(
+            let obj_id = system_data.combat_objective_queue.request(
                 ObjectiveRequest::new(kind, priority, ForceRequirement::single(composition))
                     .owner(ObjectiveOwner::Attack)
                     .ttl(OFFENSE_OBJECTIVE_TTL),
                 game::time(),
             );
+            // Attach the COMPUTED economic value of CONTROLLING the room (reach-bug #3, ADR 0032
+            // §economic-value-unlocked) so the EV auction values a winnable economic core by the remote it
+            // unlocks (the `value_e` FarmCore/economic arm) instead of the ~0 `Denial` proxy. Transient —
+            // re-attached every offense scan, never serialized (no WFV bump).
+            if let Some(roi) = candidate.economic_roi {
+                system_data.combat_objective_queue.set_economic_intel(
+                    obj_id,
+                    crate::military::objective_queue::EconomicIntel {
+                        net_income_per_tick: (roi / crate::room_economics::DEFAULT_HOLD_HORIZON as f32).max(0.0),
+                        horizon: crate::room_economics::DEFAULT_HOLD_HORIZON as f32,
+                    },
+                );
+            }
             if is_new {
                 offense_count += 1;
             }
@@ -1625,6 +1678,44 @@ fn invader_core_attack_score(
     let score = base_score - level_penalty - distance_penalty;
 
     (score > 0.0).then_some(score)
+}
+
+/// Per-room-step distance cost (in launch-priority score units) charged against an economic target's EV —
+/// the `cost_to_take` distance term of `EV = P(win) · room_net_roi − cost` (the haul/CPU penalty already
+/// rode into `room_net_roi`; this is the marching/spawn-overhead cost the ranking pays per room of reach).
+const ECON_RANK_DISTANCE_COST: f32 = 1.0;
+/// Scale converting the kernel's energy-equivalent net-ROI into launch-priority score units so an economic
+/// win meaningfully out-ranks the bare threat/proximity score (which lives in ~[1, 60]). Tuned so a healthy
+/// reservable remote (~10k energy net-ROI) lands a few tens of score points above a worthless target, never
+/// so large it swamps the relative ordering among economic rooms.
+const ECON_RANK_ROI_SCALE: f32 = 0.004;
+
+/// EV-augmented launch-priority score for an economic target (reach-bug #3, ADR 0032
+/// §economic-value-unlocked): `score = base + P(win_proxy) · ROI_SCALE · room_net_roi`, where the P(win)
+/// PROXY is a cheap, pure, deterministic read of the room's defense (a death-trap — high energized-tower
+/// DPS — reads a low proxy, so it ranks BELOW an undefended core of the same economy). `base` keeps the
+/// existing threat/proximity ordering for the non-economic part; `None` ROI leaves the score unchanged.
+///
+/// This only RANKS candidates — the precise winnability + affordability VETO is the launch loop's
+/// (`plan_engagement().winnable()` + `can_afford_military`). Pure (no `game::*`); the float never enters a
+/// discrete branch (it is a continuous sort key, compared with the same `partial_cmp` the existing score
+/// uses). Unit-tested below.
+fn economic_rank_score(base: f32, economic_roi: Option<f32>, defense: &DefenseProfile) -> f32 {
+    let Some(roi) = economic_roi else {
+        return base;
+    };
+    // P(win) PROXY ∈ (0, 1]: the more energized-tower DPS the room throws, the lower the proxy. An
+    // undefended room (0 tower DPS) reads 1.0; a death-trap (heavy towers) tapers toward 0. A saturating
+    // curve `HALF / (HALF + tower_dps)` — monotone, bounded, deterministic. Safe mode ⇒ 0 (no win).
+    use screeps_combat_decision::force_sizing::tower_dps_at_assault;
+    let p_win_proxy = if defense.safe_mode {
+        0.0
+    } else {
+        const TOWER_DPS_HALF: f32 = 300.0; // ~one mid-range tower's DPS halves the proxy
+        let tdps = tower_dps_at_assault(&defense.towers).max(0.0);
+        TOWER_DPS_HALF / (TOWER_DPS_HALF + tdps)
+    };
+    base + p_win_proxy * ECON_RANK_ROI_SCALE * roi.max(0.0)
 }
 
 /// Classify the enemy's coordination for the doctrine sizing math (ADR 0026 §9.4, Q1 confirmed
@@ -1926,6 +2017,38 @@ mod tests {
         }
     }
 
+    /// Reach bug #3 (UNITS): the economic-ROI facts war.rs builds for a lvl0 core take ROOM HOPS
+    /// (`min_distance`) and MUST convert them to ACTUAL TILES (× `TILES_PER_ROOM`) before handing them to
+    /// the tile-valued `RoomEconomyFacts::reservable_remote`. The kernel's own unit tests are all tile-
+    /// valued, so they never exercise this hop→tile boundary; without the conversion a FAR core under-counts
+    /// haul + cpu ~50× and reads as massively over-valued. This pins the boundary at the war.rs call site:
+    /// a FAR core (10 hops → 500 tiles) nets ~0 (haul cost ≥ gross at that range), while a CLOSE core
+    /// (2 hops → 100 tiles) keeps a healthy positive net-ROI — i.e. the conversion makes the distance
+    /// discrimination real.
+    #[test]
+    fn core_economic_roi_converts_hops_to_tiles() {
+        use crate::room_economics::{room_net_roi, RoomEconomyFacts, TILES_PER_ROOM};
+
+        // The exact expression the war.rs call site uses (source_count = 2 sources).
+        let roi_for_hops = |hops: u32| -> f64 {
+            let haul_tiles = hops.saturating_mul(TILES_PER_ROOM);
+            room_net_roi(&RoomEconomyFacts::reservable_remote(2, haul_tiles)).net_roi
+        };
+
+        // FAR: 10 hops → 500 tiles. The worked example: 2-source gross = 20 e/t, but the 500-tile haul
+        // costs ~26.7 e/t (> gross) plus ~10 e/t cpu — so net e/t goes negative and net-ROI floors to 0.
+        // A 10-hop remote is worth ~nothing.
+        let far = roi_for_hops(10);
+        assert_eq!(far, 0.0, "a 10-hop (500-tile) core's haul cost meets/exceeds gross → net-ROI floored to 0, got {far}");
+
+        // CLOSE: 2 hops → 100 tiles. Costs pencil out → a large, clearly-positive energy-equivalent ROI.
+        let close = roi_for_hops(2);
+        assert!(close > 5_000.0, "a 2-hop (100-tile) core unlocks a healthy positive economy, got {close}");
+
+        // And the conversion is what creates the discrimination: close ≫ far (would be near-flat without it).
+        assert!(close > far, "close ({close}) must out-value far ({far})");
+    }
+
     // FIX C: a stale in-range room that is an active/candidate offense target re-scouts at HIGH so it
     // preempts the claim CRITICAL/HIGH visibility flood; every other stale room stays MEDIUM. (We do
     // NOT raise all visibility requests — only the offense-target re-scouts.)
@@ -1980,5 +2103,58 @@ mod tests {
         // With more headroom, a non-core target fits up to the cap.
         assert!(offense_cap_allows_new(&TargetSource::AttackFlag, 2, 3));
         assert!(!offense_cap_allows_new(&TargetSource::AttackFlag, 3, 3));
+    }
+
+    // ── Reach-bug #3: economic-value-unlocked target EV ranking (ADR 0032) ──
+
+    /// A defense profile with `n` energized mid-range towers (range 10 each) at the assault — the death-trap
+    /// knob for the P(win) proxy. `towers=0` ⇒ undefended.
+    fn defense_with_towers(n: usize) -> DefenseProfile {
+        DefenseProfile {
+            towers: (0..n).map(|_| TowerThreat { range_to_assault: 10, energy: 1000 }).collect(),
+            breach_hits: 0,
+            objective_hits: 0,
+            enemy_dps: 0.0,
+            repair_per_tick: 0.0,
+            safe_mode: false,
+        }
+    }
+
+    /// (c) The war target-EV ranking ranks a CLOSE winnable economic core ABOVE a FAR one AND a DEATH-TRAP.
+    /// The same threat/proximity base for all three; the difference is the economic ROI (close > far) and
+    /// the P(win) proxy (undefended > heavily-towered). This is the reach-bug #3 ordering the launch loop
+    /// sorts on.
+    #[test]
+    fn economic_rank_ranks_close_winnable_above_far_above_deathtrap() {
+        let base = 50.0_f32;
+        // Economic net-ROI from the PURE kernel — a close 2-source reserved remote vs a far one.
+        let close_roi = crate::room_economics::room_net_roi(&crate::room_economics::RoomEconomyFacts::reservable_remote(2, 2)).net_roi as f32;
+        let far_roi = crate::room_economics::room_net_roi(&crate::room_economics::RoomEconomyFacts::reservable_remote(2, 25)).net_roi as f32;
+
+        let close_winnable = economic_rank_score(base, Some(close_roi), &defense_with_towers(0));
+        let far_winnable = economic_rank_score(base, Some(far_roi), &defense_with_towers(0));
+        // Death-trap: the CLOSE high-ROI room but bristling with towers — a low P(win) proxy.
+        let close_deathtrap = economic_rank_score(base, Some(close_roi), &defense_with_towers(6));
+
+        assert!(close_winnable > far_winnable, "close ({close_winnable}) > far ({far_winnable})");
+        assert!(close_winnable > close_deathtrap, "close winnable ({close_winnable}) > death-trap ({close_deathtrap})");
+        // The death-trap's heavy towers pull its EV well below even the FAR winnable room.
+        assert!(far_winnable > close_deathtrap, "far winnable ({far_winnable}) > death-trap ({close_deathtrap})");
+    }
+
+    /// An undefended economic core's EV-augmented score is STRICTLY ABOVE its bare threat/proximity base
+    /// (the bug: the economic value used to never reach the score), and a `None` ROI leaves the base intact.
+    #[test]
+    fn economic_rank_lifts_winnable_core_above_bare_score() {
+        let base = 50.0_f32;
+        let roi = crate::room_economics::room_net_roi(&crate::room_economics::RoomEconomyFacts::reservable_remote(2, 3)).net_roi as f32;
+        let lifted = economic_rank_score(base, Some(roi), &defense_with_towers(0));
+        assert!(lifted > base, "an undefended economic core lifts the score ({lifted} > {base})");
+        // No economic value ⇒ unchanged (the non-economic targets keep their existing ordering).
+        assert_eq!(economic_rank_score(base, None, &defense_with_towers(0)), base);
+        // Safe mode ⇒ no win ⇒ no economic lift (P(win) proxy 0).
+        let mut sm = defense_with_towers(0);
+        sm.safe_mode = true;
+        assert_eq!(economic_rank_score(base, Some(roi), &sm), base, "safe mode → no winnable economy");
     }
 }

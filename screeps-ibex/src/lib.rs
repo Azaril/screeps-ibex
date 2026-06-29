@@ -37,6 +37,7 @@ mod pathing;
 mod remoteobjectid;
 mod repairqueue;
 mod room;
+mod room_economics;
 mod segments;
 mod serialize;
 mod spawnsystem;

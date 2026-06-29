@@ -9,6 +9,13 @@ global EV-maximizing solve; transient matrix → no WFV bump). **v2 (the Merge c
 2026-06-28** (super `a03ee91`, decision `43cc43e`, eval `9b26286`; transient matrix → no WFV bump).
 **AUCTION COMPLETE** — reassign / claim / StayPut / Recycle / **Merge** are chosen in one global EV-optimal
 solve per scan.
+**v3 (economic-value-unlocked target EV) IMPLEMENTED 2026-06-28** (reach-bug #3): a combat target's value is
+now the ECONOMIC value UNLOCKED by CONTROLLING its room — a FULL net-ROI from a PURE, REUSABLE
+room-economics kernel (`screeps-ibex/src/room_economics.rs`) — pushed UP from the auction into war/operation
+target selection so an undefended lvl0 invader core (the easiest, most valuable free win — it unlocks a
+reservable mining remote) is no longer ignored. Transient `EconomicIntel` on the ephemeral runtime entry →
+**no WFV bump**. The pure kernel is reusable by a future expansion/claim-selection scorer. See §"v3 —
+economic-value-unlocked target EV (reach-bug #3)" below.
 Task #28 (P-AUCTION). Extends ADR 0027 (the reassignment / merge lifecycle + the objective queue),
 reuses ADR 0031 (the composition EV machinery), and makes concrete the cross-goal EV currency ADR
 0020 §11 deferred. The decision/identity changes live here; the doctrine/body specifics
@@ -36,6 +43,81 @@ cross-reference ADR 0026/0031.
   `create_spawn_callback` `is_slot_filled` recheck (surplus recalled-to-recycle, never orphaned).
   Offline-proven: `merge_is_picked_over_a_marginal_solo_reassign_and_the_dilutive_split_is_absent` +
   `run_merge_flow`. No WFV bump.
+- **v3 (DONE)** — economic-value-unlocked target EV (reach-bug #3). A PURE, REUSABLE room-economics net-ROI
+  kernel values CONTROLLING a room; war/operation target selection ranks by `P(win)·net_roi − cost`; the
+  emitted objective carries the net-ROI (transient `EconomicIntel`) so `value_e`'s economic arm prices it.
+  Defense stays dominant. Offline-proven: the standalone pure-kernel tests
+  (`close_reservable_remote_beats_far_beats_no_economy`, `winnable_reservable_core_has_healthy_positive_value`,
+  determinism), the war-EV ranking tests (`economic_rank_ranks_close_winnable_above_far_above_deathtrap`,
+  `economic_rank_lifts_winnable_core_above_bare_score`), and the defense-dominant test
+  (`high_value_defend_out_ranks_a_remote_economic_target`). No WFV bump. See the §below.
+
+## v3 — economic-value-unlocked target EV (reach-bug #3)
+
+### The bug
+An undefended **level-0 invader core** — the easiest, most valuable free win, since clearing it unlocks a
+**reservable mining remote** — was effectively ignored. `war.rs`'s offense scan scored each core by
+**threat/proximity only** (`invader_core_attack_score`: a base 30/60 minus level + distance penalties),
+then mapped it to `Dismantle → Denial`. `value_e(Denial)` = `denial_value · DENIAL_DISCOUNT`, and a
+dismantle target with dps 0 carried a denial value ≈ 0 — so the auction priced a free, economy-unlocking
+win at ~nothing, below trivial denial/farm work. The strategic value (the remote's income) never entered
+the currency at all.
+
+### The fix — a PURE, REUSABLE room-economics kernel, value pushed UP into target selection
+A combat target's value is the **economic value unlocked by controlling the room**, as a **FULL net-ROI**:
+`net = gross_income − hold_cost − mining − haul − cpu/distance_penalty`, amortized to energy/tick and
+projected over a horizon. This GENERALIZES the SK-farm net-ROI (ADR 0018 §3.2) and the remote
+`MiningOutpost` economics into a single controlled-room model; it does **not** invent a parallel currency
+— it produces `value_e`'s economic-arm inputs (`income_per_tick`/`horizon`).
+
+**Architecture (the reuse contract).** The net-ROI computation is a **functionally PURE kernel**
+([`crate::room_economics::room_net_roi`], `screeps-ibex/src/room_economics.rs`): NO `game::*`/world reads.
+It takes plain room FACTS ([`RoomEconomyFacts`]: source count + per-source yield, distance, hold model,
+horizon) and returns an energy-equivalent net-ROI ([`RoomEconomyValue`]). It is positioned as a
+**standalone module in the bot crate**, deliberately NOT in `war.rs` and NOT in the combat-decision crate,
+chosen by the dependency graph: it must be importable by BOTH combat target selection (`operations::war`
+now) AND a FUTURE expansion/claim-selection scorer (`expansion`/`claim.rs`, which lives in the bot crate).
+Putting it in the combat-decision crate would force expansion to depend on combat; putting it in `war.rs`
+would couple expansion to the war operation. A pure module in the bot crate avoids both. The bot ADAPTER
+(`war.rs`) GATHERS the facts from `RoomData`/visibility and passes them in; the kernel stays pure +
+unit-testable + bit-deterministic.
+
+**The flow.**
+1. `war.rs` InvaderCore arm: for a winnable lvl0 core in a sourced room, build `RoomEconomyFacts`
+   (`reservable_remote(source_count, min_distance · TILES_PER_ROOM)`) and call `room_net_roi` → the
+   economic ROI; store it on `AttackCandidate.economic_roi`. NOTE the units: `min_distance` is ROOM HOPS
+   (route steps from `min_distance_to_homes`), but `RoomEconomyFacts::haul_tiles` is ACTUAL TILES, so the
+   adapter converts hops → tiles (× `TILES_PER_ROOM` = 50) at the call site — the same conversion the SK
+   scorer applies (`candidate.distance() · TILES_PER_ROOM`). Skipping it under-counts haul + cpu ~50× and
+   over-values far cores.
+2. **Target selection** ranks by an EV-augmented score (`economic_rank_score`):
+   `score = base + P(win_proxy)·ROI_SCALE·net_roi`, where the P(win) PROXY is a cheap pure read of the
+   room's defense (energized-tower DPS — a death-trap reads a low proxy). The precise winnability +
+   affordability VETO stays the launch loop's (`plan_engagement().winnable()` + `can_afford_military`);
+   this only RANKS (a continuous sort key, never a discrete branch — determinism preserved).
+3. The emitted objective carries the net-ROI via a transient `EconomicIntel { net_income_per_tick, horizon }`
+   on the **ephemeral runtime entry** (`ObjectiveRuntimeEntry.economic_intel`, like `claimed_by` — NEVER
+   serialized). The auction's `project_value_kind`/`project_intel` read it: an objective with economic
+   intel is priced as `FarmCore` (`income·horizon`) regardless of its `ObjectiveKind`, so a winnable core
+   (a `Dismantle`/`Denial` kind) is re-valued from ≈0 to its real remote income.
+
+**Defense stays dominant.** A high-value `Defend` (RCL8-magnitude asset under a genuine assault) still
+out-values a remote economic target — the economic fix lifts a winnable core from ~0 to its net-ROI, but a
+remote never out-bids defending the base (`high_value_defend_out_ranks_a_remote_economic_target`).
+
+**No `WORLD_FORMAT_VERSION` bump.** `EconomicIntel` is transient (ephemeral runtime, re-attached every
+offense scan), exactly the `RequiredForce`/matrix discipline. No serialized shape changed.
+
+### Critical files (v3)
+- `screeps-ibex/src/room_economics.rs` (NEW — the pure, reusable net-ROI kernel + its standalone tests).
+- `screeps-ibex/src/operations/war.rs` (`AttackCandidate.economic_roi`, the InvaderCore arm's
+  `room_net_roi` call, `economic_rank_score`, the `set_economic_intel` attach + tests).
+- `screeps-ibex/src/military/objective_queue.rs` (`EconomicIntel` + `ObjectiveRuntimeEntry.economic_intel`
+  + `set_economic_intel`/`economic_intel`).
+- `screeps-ibex/src/military/squad_manager.rs` (`project_value_kind`/`project_intel`/`objective_ev_q` read
+  the economic intel; the cell builder + `ev_of_claim` thread it).
+- `screeps-combat-decision/src/objective_value.rs` (the defense-dominant test; the economic arm is reused
+  unchanged).
 
 ## Problem
 

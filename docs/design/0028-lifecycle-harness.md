@@ -143,6 +143,59 @@ All bot-only, no `WORLD_FORMAT_VERSION` change:
 - **Reverted:** forming combat at 87.5 + `forming-cap=1` (it zeroed combat spawning). The
   current deployed state is HIGH + forming-cap=2 + the bankable-body cap.
 
+## Reach bug #2 — the proceed gate is Lanchester P(win)-driven (win-or-stall), not composition-completeness
+
+**Operator directive (memory `combat-ev-economic-and-pwin-gating`):** the gate to PROCEED — stop
+forming/holding and deploy/assault — must fire when the CURRENT PRESENT force's Lanchester P(win) meets
+the requirement: the force will **WIN or STALL** (won't lose), REGARDLESS of whether the expected
+archetypes are all present. If the squad as-is will win or stall, holding for more roster is pointless.
+Only HOLD (wait for more) if the present force would LOSE. **Composition still SIZES the spawn; P(win)
+GATES the proceed.**
+
+This is the structural fix for the 87.5-backfire diagnosis below ("squads form → depart → engage → get
+WIPED"): the pre-fix proceed gate was a roster COUNT (`rally::ready_to_depart_gate` →
+`squad_ready_to_depart` / the quorum), so a squad departed on a count it could not win with, and a
+winnable-but-incomplete squad needlessly HELD. The new gate decides from the **same Lanchester outcome on
+the ACTUAL present force that the retreat gate uses** — so the proceed gate and the retreat gate can never
+disagree about what "losing" means.
+
+**Kernel (`screeps_combat_decision::present_force_wins_or_stalls`, lib.rs):** REUSES the private
+`assess_engage` (the EXACT model the retreat gate in `decide_squad` consumes — consistency with the retreat
+fix). "Win or stall" is the precise INVERSE of the present-force RETREAT (lose) condition
+(`balance_retreat = our_strength > 0 && balance <= -ENGAGE_BALANCE_BAND`, plus the `unwinnable` bleed-out
+veto):
+
+```
+present_force_wins_or_stalls = our_strength > 0       // a PRESENT fighting force (never trickle a
+                                                       //   zero-strength roster — roster-incompleteness
+                                                       //   is the rally/lifecycle layer's job; cf. #1)
+                            && !unwinnable             // no irremovable incoming we can't out-heal / safe-mode
+                            && balance > -ENGAGE_BALANCE_BAND  // not in the retreat/lose band:
+                                                       //   a clear WIN, or a sustainable STALL around parity
+```
+
+**Wiring (`military::squad_manager`):** `present_wins_or_stalls` is OR'd into BOTH cohesion gates:
+- the rally PROCEED gate — `ready_to_depart = present_wins_or_stalls || ready_to_depart_gate(count…)`;
+- the gather→assault transition — `quorum_now = present_wins_or_stalls || gather_quorum_met(count…)`.
+
+The count gates stay as the legacy/uncontested/under-strength path (a force that does NOT yet win-or-stall
+still masses before committing — **no trickle-to-death**). The view + centroid passed are the SAME ones
+`decide_squad` assessed this tick. Bot-only; **no `WORLD_FORMAT_VERSION` bump** (a pure read; no serialized
+shape changes — the win-or-stall predicate is derived fresh each tick, no stored field).
+
+**Offline proof (RED→GREEN, `screeps-combat-decision` lib tests):**
+- `proceed_gate_fires_for_a_winning_incomplete_force` — a lone fighter (no healer archetype) that
+  out-matches a weak target PROCEEDS, and the same force does not retreat (consistency).
+- `proceed_gate_fires_for_a_stalling_force` — a force tuned to near-parity (our_strength ==
+  enemy_strength, balance ~0) PROCEEDS (a stall, won't lose). The test pins the balance INSIDE the GENUINE
+  stall band on BOTH sides — `> -ENGAGE_BALANCE_BAND` AND `<= +ENGAGE_BALANCE_BAND` — so it provably
+  exercises the novel middle region the win-or-stall predicate introduces, NOT a disguised clear win.
+- `proceed_gate_holds_for_a_losing_force` — an outmatched force HOLDS; and a zero-fighting-strength
+  (healers-only) roster never proceeds into a defended room. The held force is exactly the one the retreat
+  gate sends retreating (consistency).
+- Sizing is UNCHANGED: composition (`RequiredForce`/`sized_for`) still sizes the spawn; only the
+  proceed-GATE changed (the `assemble_force_*` sizing tests are untouched and green).
+
 ## Diagnosis — the 87.5 backfire (live, captured 2026-06-27, then reverted)
 
 Re-deployed the backfired config (forming combat at 87.5 + `forming-cap=1`) with two captures:

@@ -27,7 +27,7 @@
 //! `SquadCombatJob` fallback (no dangling `SquadContext` — no leak) until the general
 //! `Recall` terminal state (P2.M0) lands.
 
-use super::objective_queue::{CombatObjectiveQueue, ObjectiveId, ObjectiveKind, OBJECTIVE_PRIORITY_MEDIUM};
+use super::objective_queue::{CombatObjectiveQueue, EconomicIntel, ObjectiveId, ObjectiveKind, OBJECTIVE_PRIORITY_MEDIUM};
 use screeps_combat_decision::composition::{SquadComposition, SquadSlot};
 use screeps_combat_decision::lifecycle; // P-OBJ #23 / ADR 0027 — the pure reconcile kernel (shared, tested offline)
 use super::squad::{AttackTarget, SquadContext, SquadState, SquadTarget, TickMovement, TickOrders};
@@ -341,8 +341,17 @@ fn priority_implied_danger(priority: f32) -> f32 {
 }
 
 /// Project a bot `ObjectiveKind` → the pure `value_e` kind (parity with the `DoctrineObjective` projection).
-fn project_value_kind(kind: &ObjectiveKind) -> ObjectiveValueKind {
+///
+/// Reach-bug #3 (ADR 0032 §economic-value-unlocked): when the producer attached COMPUTED economic intel
+/// (the room's controlled net-ROI), value the objective as a `FarmCore` (income·horizon) REGARDLESS of its
+/// `ObjectiveKind` — a winnable lvl0 invader core maps to `Dismantle`/`Denial` (≈0 with dps 0), but the
+/// room it UNLOCKS is worth its remote's income, so the economic arm of `value_e` should price it.
+fn project_value_kind(kind: &ObjectiveKind, economic: Option<EconomicIntel>) -> ObjectiveValueKind {
     use super::objective_queue::FarmKind;
+    if economic.is_some() {
+        // The economic-value-unlocked override: price by the controlled-room net-ROI (the FarmCore arm).
+        return ObjectiveValueKind::FarmCore;
+    }
     match kind {
         ObjectiveKind::Defend { .. } | ObjectiveKind::Secure { .. } | ObjectiveKind::Escort { .. } => ObjectiveValueKind::Defend,
         ObjectiveKind::Farm { kind: FarmKind::Core, .. } => ObjectiveValueKind::FarmCore,
@@ -403,9 +412,25 @@ fn project_enemy(threat: Option<&crate::military::threatmap::RoomThreatData>) ->
 /// RCL/asset proxy war.rs uses), threat_danger = the scouted estimated DPS. Farm/denial kinds derive their
 /// fields from the priority as a coarse income/denial proxy (v1.1 — the precise farm income is the war/SK
 /// producer's; the per-squad gate only needs a comparable ordering).
-fn project_intel(kind: &ObjectiveKind, priority: f32, asset_value: f32, threat: Option<&crate::military::threatmap::RoomThreatData>) -> ObjectiveIntel {
+fn project_intel(
+    kind: &ObjectiveKind,
+    priority: f32,
+    asset_value: f32,
+    threat: Option<&crate::military::threatmap::RoomThreatData>,
+    economic: Option<EconomicIntel>,
+) -> ObjectiveIntel {
+    // Reach-bug #3 (ADR 0032 §economic-value-unlocked): if the producer attached the room's COMPUTED
+    // controlled net-ROI, feed it straight into the FarmCore economic arm (`income_per_tick · horizon`) —
+    // the real economy unlocked, not the priority proxy. `project_value_kind` returns FarmCore to match.
+    if let Some(econ) = economic {
+        return ObjectiveIntel {
+            income_per_tick: econ.net_income_per_tick.max(0.0),
+            horizon: econ.horizon.max(0.0),
+            ..Default::default()
+        };
+    }
     let danger = threat.map(|t| t.estimated_dps).unwrap_or(0.0);
-    match project_value_kind(kind) {
+    match project_value_kind(kind, None) {
         // DEFENSE: scale value by the THREAT DANGER (the dps=0 over-response fix — a HIGHER-dps threat is
         // worth more to defend), but FLOOR the danger by a priority-implied minimum so a defense objective is
         // NEVER starved by missing/stale intel: the producer (war.rs) only emits a Defend/Secure when a
@@ -439,11 +464,12 @@ fn objective_ev_q(
     priority: f32,
     asset_value: f32,
     threat: Option<&crate::military::threatmap::RoomThreatData>,
+    economic: Option<EconomicIntel>,
     onsite_window: u32,
     travel_rooms: u32,
 ) -> i64 {
-    let intel = project_intel(kind, priority, asset_value, threat);
-    let val = value_e(project_value_kind(kind), &intel);
+    let intel = project_intel(kind, priority, asset_value, threat, economic);
+    let val = value_e(project_value_kind(kind, economic), &intel);
     let defense = project_defense(threat);
     // Price the hostile CREEP force the P(win) is judged against (the EV-wiring fix): `pairing_p_win` reads
     // the enemy via this `EnemyForce` arg, NOT `DefenseProfile.enemy_dps`. Passing `None` let a room defended
@@ -613,11 +639,12 @@ fn solve_global_reassignment(
             let claimed_by_other = matches!(claimed_by, Some(c) if c != *entity);
             feasible_per_row.push(!is_own_current && !unwinnable && !claimed_by_other);
         }
+        let econ = data.objective_queue.economic_intel(o.id);
         cells.push(ObjectiveCell {
             id: o.id.0,
             class: cap_class(capability_class(&o.kind)),
-            value_kind: project_value_kind(&o.kind),
-            intel: project_intel(&o.kind, o.priority, asset_of(room), threat_for(room)),
+            value_kind: project_value_kind(&o.kind, econ),
+            intel: project_intel(&o.kind, o.priority, asset_of(room), threat_for(room), econ),
             defense: project_defense(threat_for(room)),
             enemy: project_enemy(threat_for(room)),
             travel_rooms_per_row,
@@ -1448,7 +1475,8 @@ impl<'a> System<'a> for SquadManagerSystem {
                 .map(|r| r.energy_capacity_available() as f32)
                 .unwrap_or(1.0);
             let travel = claim_anchor.map(|h| room_distance(h, room)).unwrap_or(0);
-            objective_ev_q(caps, &o.kind, o.priority, asset, claim_threat_for(room), MAX_TRAVEL_BUDGET, travel)
+            let econ = data.objective_queue.economic_intel(o.id);
+            objective_ev_q(caps, &o.kind, o.priority, asset, claim_threat_for(room), econ, MAX_TRAVEL_BUDGET, travel)
         };
         let commit_threshold_q = quantize_ev(COMMIT_EV_THRESHOLD);
         // Rank the claimable (unclaimed, non-backoff, EV-positive) objectives by EV desc; tie → smaller id
@@ -2003,8 +2031,21 @@ fn compute_squad_orders(
         no_hostile_towers,
         !enemy_safe_mode,
     );
-    let ready_to_depart =
-        crate::military::formation::ready_to_depart_gate(&member_positions, requested_slots, uncontested);
+    // REACH BUG #2 — the PROCEED gate is Lanchester P(win)-driven (win-or-stall), NOT composition-
+    // completeness (operator: combat-ev-economic-and-pwin-gating). The composition COUNT gate below
+    // (`ready_to_depart_gate`) still SIZES the spawn and is the legacy/uncontested proceed path. But the
+    // PRIMARY proceed decision is now: would the CURRENT PRESENT force WIN OR STALL (won't lose) against the
+    // target's defense? If so, holding for the full roster is pointless — DEPLOY even with incomplete
+    // archetypes. We reuse `present_force_wins_or_stalls`, which is the EXACT inverse of the present-force
+    // RETREAT condition `decide_squad` uses (same `assess_engage` Lanchester model, same `ENGAGE_BALANCE_BAND`)
+    // — so the proceed gate and the retreat gate can never disagree about what "losing" means. A force that
+    // would LOSE does NOT proceed (no trickle-to-death: a losing present force keeps holding for more roster
+    // via the count gate, and `present_force_wins_or_stalls` requires `our_strength > 0` so a zero-fighting
+    // roster never deploys into a defended room). The view/centroid here are the SAME ones `decide_squad`
+    // assessed this tick.
+    let present_wins_or_stalls = screeps_combat_decision::present_force_wins_or_stalls(&view, decision.center);
+    let ready_to_depart = present_wins_or_stalls
+        || crate::military::formation::ready_to_depart_gate(&member_positions, requested_slots, uncontested);
 
     if let Some(ctx) = squad_contexts.get_mut(squad_entity) {
         if !ready_to_depart {
@@ -2071,14 +2112,21 @@ fn compute_squad_orders(
                     *slot = Some(rally); // an in-room member is counted at the rally for the gather quorum
                 }
             }
-            let quorum_now = screeps_combat_decision::rally::gather_quorum_met(
-                &gather_positions,
-                rally,
-                requested_slots,
-                uncontested,
-                fighter_gathered,
-                screeps_combat_decision::rally::RALLY_GATHER_RADIUS,
-            );
+            // REACH BUG #2 — the gather→assault transition is ALSO P(win)-driven: if the PRESENT (gathered)
+            // force already WINS-OR-STALLS against the target, advance the assault without waiting for the
+            // near-full roster to mass at the rally (the contested `gather_quorum_met` count quorum). The
+            // count quorum stays as the legacy/under-strength path (a force that does NOT yet win-or-stall
+            // still masses before committing — no trickle-to-death). Same win-or-stall predicate as the
+            // proceed gate above, so the two cohesion gates agree.
+            let quorum_now = present_wins_or_stalls
+                || screeps_combat_decision::rally::gather_quorum_met(
+                    &gather_positions,
+                    rally,
+                    requested_slots,
+                    uncontested,
+                    fighter_gathered,
+                    screeps_combat_decision::rally::RALLY_GATHER_RADIUS,
+                );
             // FIX A (assault latch): once the gather quorum FIRST fires, LATCH the assault and thereafter take
             // the assault branch WITHOUT re-evaluating the quorum — so members dying/lagging crossing
             // enemy-held neighbours can't un-commit it (the contested in_room<->travel oscillation, BUG A).
@@ -2544,11 +2592,11 @@ mod tests {
 
         // value_e is unaffected by defense, so EV is directly comparable across the two threat profiles.
         // No towers in EITHER case — the ONLY difference is the hostile-creep force.
-        let val = value_e(project_value_kind(&kind), &project_intel(&kind, priority, 0.0, None));
+        let val = value_e(project_value_kind(&kind, None), &project_intel(&kind, priority, 0.0, None, None));
         assert!(val > 0.0, "Denial value_e must be positive for a comparable EV");
 
         // (b) CONTROL — genuinely undefended (no intel at all): undefended binary → P(win)=1.0 → EV == value_e.
-        let ev_undefended = objective_ev_q(caps, &kind, priority, 0.0, None, 1_500, 0);
+        let ev_undefended = objective_ev_q(caps, &kind, priority, 0.0, None, None, 1_500, 0);
         assert_eq!(
             ev_undefended,
             quantize_ev(val),
@@ -2573,7 +2621,7 @@ mod tests {
             hostile_creeps: vec![attacker],
             ..Default::default() // NO towers (hostile_tower_positions empty), no safe mode, no breach hits
         };
-        let ev_creep_defended = objective_ev_q(caps, &kind, priority, 0.0, Some(&threat), 1_500, 0);
+        let ev_creep_defended = objective_ev_q(caps, &kind, priority, 0.0, Some(&threat), None, 1_500, 0);
 
         // The whole point: pricing the enemy creeps makes a creep-defended objective NO LONGER a free win.
         assert!(

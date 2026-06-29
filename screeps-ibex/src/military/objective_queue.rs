@@ -216,12 +216,30 @@ pub struct CombatObjectiveData {
 
 // ─── Runtime layer: CombatObjectiveQueue (ephemeral resource) ────────────────
 
+/// Transient, COMPUTED economic facts the producer attaches to an objective so the EV auction values the
+/// room by the **economy it unlocks** (ADR 0032 §"economic-value-unlocked"), not a coarse priority proxy.
+/// Energy-equivalent, all per-tick except `horizon`. Filled by `war.rs` from the PURE
+/// [`crate::room_economics::room_net_roi`] kernel; consumed by `squad_manager`'s `project_intel` →
+/// `value_e`'s `FarmCore`/`FarmSourceKeeper`/economic arms. **NEVER serialized** (lives on the ephemeral
+/// runtime entry, like `claimed_by`) — so no `WORLD_FORMAT_VERSION` bump; it self-heals each scan (the
+/// producer re-attaches it every offense pass).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EconomicIntel {
+    /// Net energy/tick the controlled room yields (gross − hold − mining − haul − cpu), floored at 0.
+    pub net_income_per_tick: f32,
+    /// Horizon (ticks) the income accrues over — the total economic value is `net_income_per_tick × horizon`.
+    pub horizon: f32,
+}
+
 /// Per-tick runtime state for a single objective.
 #[derive(Debug, Clone, Default)]
 pub struct ObjectiveRuntimeEntry {
     /// The squad (its `SquadContext` entity) currently assigned to this objective,
     /// if any. NEVER serialized — self-heals on reset, cannot dangle.
     pub claimed_by: Option<Entity>,
+    /// COMPUTED economic value of controlling the objective's room (ADR 0032 §economic-value-unlocked).
+    /// Transient (never serialized); re-attached each offense scan by the producer.
+    pub economic_intel: Option<EconomicIntel>,
 }
 
 /// Runtime combat objective queue resource. Holds a working copy of the
@@ -302,6 +320,18 @@ impl CombatObjectiveQueue {
     /// Which squad (if any) holds the given objective.
     pub fn claimed_by(&self, id: ObjectiveId) -> Option<Entity> {
         self.runtime.get(&id).and_then(|r| r.claimed_by)
+    }
+
+    /// Attach the producer's COMPUTED economic value of controlling this objective's room (ADR 0032
+    /// §economic-value-unlocked). Transient (never serialized); the EV auction reads it via
+    /// [`Self::economic_intel`]. The producer re-attaches it every offense scan.
+    pub fn set_economic_intel(&mut self, id: ObjectiveId, intel: EconomicIntel) {
+        self.runtime.entry(id).or_default().economic_intel = Some(intel);
+    }
+
+    /// The transient economic value (if any) the producer attached to this objective's room.
+    pub fn economic_intel(&self, id: ObjectiveId) -> Option<EconomicIntel> {
+        self.runtime.get(&id).and_then(|r| r.economic_intel)
     }
 
     /// True if the objective is currently claimed by a (live) squad.
