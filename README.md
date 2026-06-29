@@ -181,7 +181,6 @@ screeps-ibex/
 ├── screeps-foreman-bench/   # Offline room-planner benchmark (host-only)
 ├── screeps-ibex-eval/       # Evaluation harness (host-only)
 │
-├── js_src/                  # The in-game JS loader (reference copy)
 ├── docs/                    # Design documentation (architecture decision records)
 ├── Cargo.toml               # Workspace root; patches screeps-game-api + member crates
 ├── rust-toolchain.toml      # Pins nightly + the wasm32 target

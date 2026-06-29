@@ -22,8 +22,6 @@ This file provides structured context for AI agents and developers working on th
 screeps-ibex/
 ├── Cargo.toml              # Workspace root; patches screeps-game-api and submodule crates
 ├── .gitmodules             # Git submodules (screeps-cache, screeps-machine, screeps-rover, etc.)
-├── js_src/                 # JS entrypoint that loads and calls WASM
-├── js_tools/               # Legacy deploy script (optional user-customization escape hatch; screeps-pack is the primary deploy tool)
 ├── screeps-pack/           # [excluded] THE deploy tool: rust-native build+upload, npm-free (P0.A13)
 ├── screeps-server-kit/     # [excluded] generic private-server toolkit (lifecycle/bootstrap/capture)
 ├── screeps-ibex-eval/      # [excluded] ibex evaluation policy (smoke gates, baselines)
