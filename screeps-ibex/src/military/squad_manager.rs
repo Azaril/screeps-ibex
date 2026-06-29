@@ -380,12 +380,10 @@ fn project_defense(threat: Option<&crate::military::threatmap::RoomThreatData>) 
         towers,
         breach_hits: td.breach_rampart_hits,
         objective_hits: 0,
-        // The hostile-creep DPS is NOT priced here: `pairing_ev`/`pairing_p_win` (the EV path this profile
-        // feeds) read the enemy via the separate `EnemyForce` argument, NOT `DefenseProfile.enemy_dps`
-        // (that field is read only by `optimize_composition`/force-sizing, a different path). `objective_ev_q`
-        // builds the `EnemyForce` from the same threat intel and passes it as the `enemy` arg — leaving an
-        // `enemy_dps` here would imply the enemy is priced twice / falsely suggest this path reads it.
-        enemy_dps: 0.0,
+        // ADR 0031 #41: the hostile-creep dps is carried on the single [`EnemyForce`] channel that
+        // `pairing_ev`/`pairing_p_win` read via the separate `enemy` argument (built by `project_enemy` from
+        // the same threat intel). `DefenseProfile` is STRUCTURE-only now (no `enemy_dps` field), so there is no
+        // dead channel here to keep at 0 — the footgun is gone.
         repair_per_tick: 0.0,
         safe_mode: td.safe_mode_active,
     }
@@ -472,9 +470,9 @@ fn objective_ev_q(
     let val = value_e(project_value_kind(kind, economic), &intel);
     let defense = project_defense(threat);
     // Price the hostile CREEP force the P(win) is judged against (the EV-wiring fix): `pairing_p_win` reads
-    // the enemy via this `EnemyForce` arg, NOT `DefenseProfile.enemy_dps`. Passing `None` let a room defended
-    // ONLY by hostile creeps (no energized towers, objective_hits=0) read as `undefended` → P(win)=1.0 against
-    // a room full of attackers, inflating EV for creep-defended Harass/Dismantle/Farm/Defend objectives.
+    // the enemy via this single `EnemyForce` arg (ADR 0031 #41 — the one enemy-creep channel). Passing `None`
+    // let a room defended ONLY by hostile creeps (no energized towers, objective_hits=0) read as `undefended`
+    // → P(win)=1.0 against a room full of attackers, inflating EV for creep-defended Harass/Dismantle/Farm/Defend.
     // Derive the force from the room's scouted threat exactly as war.rs's owned-defense path does (war.rs
     // ~486-492): dps/heal from the threat totals, hits=0 (creeps, not a structure objective), count/boosted
     // from the per-creep intel.
@@ -2581,8 +2579,9 @@ mod tests {
 
     /// EV-WIRING REGRESSION (ADR 0032 v1.1 verifier-found): the per-squad auction EV must price the hostile
     /// CREEP force. A room defended ONLY by hostile creeps (no energized towers, objective_hits=0) used to read
-    /// as `undefended` in `pairing_p_win` (because `objective_ev_q` passed `enemy: None` and the scouted DPS was
-    /// written to the dead `DefenseProfile.enemy_dps` that path never reads) → P(win)=1.0 against a room full of
+    /// as `undefended` in `pairing_p_win` (because `objective_ev_q` passed `enemy: None`; the scouted DPS had no
+    /// channel that `pairing_p_win` reads — pre-ADR-0031-#41 it was written to the dead `DefenseProfile.enemy_dps`,
+    /// now that field is gone) → P(win)=1.0 against a room full of
     /// attackers, inflating EV for creep-defended offense/defense. The fix builds an `EnemyForce` from the
     /// threat and passes it as the `enemy` arg. This test is deterministic + offline (no game state): it drives
     /// `objective_ev_q` exactly as the bot does and proves (a) a creep-defended objective now scores a LOWER EV

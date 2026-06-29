@@ -89,6 +89,23 @@ Every force-producing site routes through `decide_doctrine(...).and_then(|d| pla
 
 Dismantle counts as strength: `assess_engage`'s `our_strength` adds `dismantle_power`, **gated on a hostile structure being present** (the P0a correction — adding dismantle to `our_dps` everywhere mis-scores it as anti-creep in creep-killability, so the fix is scoped to the structure-engagement strength only; CreepClearWins-safe). A WORK+HEAL siege now reads positive strength and engages instead of retreating at t0.
 
+### 2(f) Single enemy-force source of truth (#41)
+
+Enemy CREEP combat power had **two** representations: `DefenseProfile.enemy_dps` (read by the structure-SIZING path `assess`) and `EnemyForce.dps` (read by the EV path `optimize_composition`/`pairing_p_win` + `clear_force`). They were kept disjoint by a "don't double-count" convention (each path read only one), which made `DefenseProfile.enemy_dps` **dead in the modern EV/optimize path** and forced every floor/predicate that touched the enemy to remember BOTH channels — the heal-floor and owned-floor work both had to AND `defense.enemy_dps == 0` with `enemy_force.dps == 0` (`defense_confirmed_undefended`). A footgun: a producer that updated one channel and not the other would silently desync the survivability sizing from the P(win) sizing.
+
+**Decision (#41): `EnemyForce` is the SINGLE SOURCE OF TRUTH for enemy creep combat power, read by BOTH paths.**
+
+- `assess(profile, enemy_dps, budget)` (`force_sizing.rs`) takes the enemy creep dps as an **explicit argument**, threaded by `emit_requirement` from `enemy_force.map(|e| e.dps).unwrap_or(0.0)`. It folds into `incoming` for the breach out-heal and into the post-drain out-heal exactly as the removed field did — the **breach** branch and the just-landed **drain** branch both now read the `EnemyForce` value.
+- The `enemy_dps` field is **removed from `DefenseProfile`**, which is now purely the STRUCTURE channel (towers / breach_hits / objective_hits / repair_per_tick / safe_mode). Every literal that set it (in `force_sizing.rs` tests, `doctrine.rs`, `composition.rs` tests, the eval, the bot producers) drops it.
+- **Producers** (`war.rs` InvaderCore + ResourceDenial arms, `squad_manager::project_defense`, the eval's `derive_profile`) no longer write `defense.enemy_dps`; the same site already builds the `EnemyForce` carrying the enemy creep dps (war.rs's `estimated_enemy_dps`, the eval's `defender_force`/`enemy_force_of`).
+- The **confirmed-undefended** predicate now reads ONE channel (`enemy_force.dps`); the dead `defense.enemy_dps == 0` term is gone.
+
+**Reconciliation.** The review flagged a possible latent inconsistency — `war.rs` set `defense.enemy_dps = threat.estimated_dps` while the EV path built `EnemyForce` from `estimated_enemy_dps`. In the as-built code these are the **same value**: `AttackCandidate.estimated_enemy_dps` is itself assigned `threat_data.estimated_dps` at the producer, and `threatmap.estimated_dps` is the room's Σ Attack/RangedAttack dps. So the unification is **read-equivalent** — `assess` now reads the identical dps it read before, just from the one channel. The eval calibration is preserved because `derive_profile.enemy_dps` and `defender_force().dps` both sum the SAME defender creeps' attack+ranged power; the `OracleCalibration`/`SizingWins` beds are creep-free (`defender_force` returns `None` → dps 0 either way), and `CreepClearWins` uses `clear_force` directly (untouched). **NO double price:** `assess` consumes the value to size survivability heal; the EV path consumes it for P(win) — different consumers of one value.
+
+**Not a code change here (#41 cross-ref):** `EnemyForce.dps` is the Attack/RangedAttack dps only — `dps == 0` ≠ harmless (a CLAIM declaimer / WORK dismantler / lone HEAL creep can be dangerous at dps 0). Harmlessness is a SEPARATE signal (`hostile_warrants_defender`, computed from parts at the threatmap producer). Cross-ref the owned-floor closure in ADR 0027.
+
+**WFV:** none — `DefenseProfile`/`EnemyForce`/`ForceAssessment` are transient compute structs, not `Serialize`.
+
 ---
 
 ## 3. Invariants
@@ -100,6 +117,7 @@ Dismantle counts as strength: `assess_engage`'s `our_strength` adds `dismantle_p
 - **No silent static.** A defer is an explicit `None`; there is no hidden constructor fallback anywhere.
 - **No quad/duo/solo naming (D14).** Size and shape are DERIVED from member count, never named; a "quad"/"duo"/"solo" in fielded-squad code is a design smell.
 - Calibration discipline: anti-creep fires only when `enemy_force.dps > 0`, so creep-free beds stay unperturbed; every producer keeps `defender_heal_parts_for_dps` for heal parity.
+- **Single enemy-force channel (#41, §2(f)).** Enemy creep combat power lives on ONE struct — `EnemyForce` — read by both the structure-sizing `assess` (via `emit_requirement`) and the EV path. `DefenseProfile` carries NO enemy-creep dps; a re-introduced `DefenseProfile.enemy_dps` (or any second enemy-dps channel a predicate has to AND) is a design smell.
 
 ---
 

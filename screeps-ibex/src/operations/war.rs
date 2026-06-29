@@ -1137,7 +1137,9 @@ impl WarOperation {
                             towers,
                             breach_hits: threat_data.breach_rampart_hits,
                             objective_hits: core_hits,
-                            enemy_dps: threat_data.estimated_dps,
+                            // ADR 0031 #41: the enemy CREEP dps is no longer carried here — the single
+                            // [`EnemyForce`] channel (built below from `estimated_enemy_dps`, the SAME
+                            // `threat_data.estimated_dps`) is the one source `assess` + the EV path read.
                             repair_per_tick: threat_data.repair_per_tick as f32,
                             safe_mode: threat_data.safe_mode_active,
                         };
@@ -1249,7 +1251,8 @@ impl WarOperation {
                             towers,
                             breach_hits: 0,
                             objective_hits: 0,
-                            enemy_dps: threat_data.estimated_dps,
+                            // ADR 0031 #41: enemy CREEP dps lives on the single [`EnemyForce`] channel (built
+                            // below from `estimated_enemy_dps`), not here — `assess` + the EV path read that.
                             repair_per_tick: threat_data.repair_per_tick as f32,
                             safe_mode: threat_data.safe_mode_active,
                         };
@@ -2141,7 +2144,6 @@ mod tests {
             towers: (0..n).map(|_| TowerThreat { range_to_assault: 10, energy: 1000 }).collect(),
             breach_hits: 0,
             objective_hits: 0,
-            enemy_dps: 0.0,
             repair_per_tick: 0.0,
             safe_mode: false,
         }
