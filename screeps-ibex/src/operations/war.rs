@@ -4,7 +4,7 @@ use screeps_combat_decision::composition::{CompositionParams, SquadComposition, 
 use screeps_combat_decision::doctrine::{
     decide_doctrine, default_doctrines, defense_doctrines, plan_engagement, DoctrineObjective, EnemyCoordination, EnemyForce, EngagementContext,
 };
-use screeps_combat_decision::force_sizing::{win_probability, DefenseProfile, TowerThreat, HOLD_MARGIN};
+use screeps_combat_decision::force_sizing::{win_probability, AssaultMode, DefenseProfile, TowerThreat, HOLD_MARGIN};
 use crate::military::objective_queue::{
     ForceRequirement, ObjectiveKind, ObjectiveOwner, ObjectiveRequest, OBJECTIVE_PRIORITY_CRITICAL, OBJECTIVE_PRIORITY_HIGH,
     OBJECTIVE_PRIORITY_LOW, OBJECTIVE_PRIORITY_MEDIUM,
@@ -1405,7 +1405,10 @@ impl WarOperation {
             // gated raid) DEFERS an unwinnable / negative-EV room (and needs scouted defense to judge it); an
             // ALWAYS-FIELD doctrine (operator-flag raid / harass) fields the EV-best force regardless (sized to
             // the threat + the default floor). Unaffordable / unreachable ⇒ skip — never feed a squad to its death.
-            let objective: Option<(ObjectiveKind, f32, SquadComposition)> = if doctrine.honor_verdict() && candidate.defense.is_none() {
+            // ADR 0031 #39 P3 — carry the oracle's chosen AssaultMode alongside the sized composition so it can
+            // be attached to the objective's ephemeral runtime entry (→ the SquadManager's `StrategyInfo` →
+            // the `DrainBreach` strategy + the squad's drain stance). `None` ⇒ no oracle ran (the direct path).
+            let objective: Option<(ObjectiveKind, f32, SquadComposition, AssaultMode)> = if doctrine.honor_verdict() && candidate.defense.is_none() {
                 // A gated doctrine needs the scouted defense to judge winnability; without it, don't commit.
                 None
             } else {
@@ -1451,7 +1454,7 @@ impl WarOperation {
                                     candidate.room, plan.assessment.mode, plan.assessment.est_ticks, doctrine.name(),
                                     plan.required.immune_struct_parts + plan.required.anti_creep_parts, plan.required.heal_parts, pwin * 100.0, spawn_cost, plan.assessment.reason
                                 );
-                                Some((kind, priority, sized))
+                                Some((kind, priority, sized, plan.assessment.mode))
                             }
                         } else {
                             info!("[War]   Skip {} -- can't field the required force at {} energy; defer", candidate.room, member_energy);
@@ -1461,7 +1464,7 @@ impl WarOperation {
                 }
             };
 
-            let Some((kind, priority, composition)) = objective else {
+            let Some((kind, priority, composition, assault_mode)) = objective else {
                 continue;
             };
 
@@ -1487,6 +1490,13 @@ impl WarOperation {
                     .ttl(OFFENSE_OBJECTIVE_TTL),
                 game::time(),
             );
+            // ADR 0031 #39 P3 — attach the oracle's chosen AssaultMode to the ephemeral runtime entry so the
+            // SquadManager's drive builds `StrategyInfo.assault_mode = Some(Drain)` → the `DrainBreach`
+            // strategy fires (the patient drain profile) AND the squad gets `drain_stance = true` (the
+            // winnability path treats finite towers as drainable, not a permanent blocker). Transient — re-
+            // attached every scan (no WFV bump); `Breach` is attached too (a no-op for the strategy/stance,
+            // which key on `Drain`), so a re-assessed room that flips OUT of drain clears the stance next scan.
+            system_data.combat_objective_queue.set_assault_mode(obj_id, assault_mode);
             // Attach the COMPUTED economic value of CONTROLLING the room (reach-bug #3, ADR 0032
             // §economic-value-unlocked) so the EV auction values a winnable economic core by the remote it
             // unlocks (the `value_e` FarmCore/economic arm) instead of the ~0 `Denial` proxy. Transient —

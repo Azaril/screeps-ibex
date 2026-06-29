@@ -1402,6 +1402,10 @@ impl<'a> System<'a> for SquadManagerSystem {
                 ),
                 None => continue,
             };
+            // ADR 0031 #39 P3 — the oracle's chosen assault mode for this objective (the war producer attached
+            // it to the ephemeral runtime entry). `Some(Drain)` → the drive fires the `DrainBreach` strategy +
+            // sets the squad's drain stance; `None`/`Some(Breach)` → the byte-unchanged direct breach/engage.
+            let assault_mode = data.objective_queue.assault_mode(*obj_id);
             compute_squad_orders(
                 &data.room_data,
                 &data.mapping,
@@ -1411,6 +1415,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 *obj_id,
                 target_room,
                 formation,
+                assault_mode,
                 &mut room_layers,
                 debug,
                 requested_slots,
@@ -1825,6 +1830,7 @@ fn compute_squad_orders(
     obj_id: ObjectiveId,
     target_room: RoomName,
     formation: bool,
+    assault_mode: Option<screeps_combat_decision::force_sizing::AssaultMode>,
     room_layers: &mut HashMap<RoomName, (LocalCostMatrix, PositionLayers)>,
     debug: bool,
     requested_slots: usize,
@@ -1918,10 +1924,12 @@ fn compute_squad_orders(
         // no-progress counter (a fast-follow; the sim already validates the stalemate-disengage path).
         engage_objective: screeps_combat_decision::EngageObjective::Destroy,
         enemy_stalled: false,
-        // ADR 0031 #39: the drain stance is NOT wired into the live bot at P1 (drain comps don't reach the
-        // bot until the tactic is proven + threaded in P2/P3). The bot takes the byte-unchanged breach/
-        // engage path; the drain exception is exercised only via the sim (the proving vehicle).
-        drain_stance: false,
+        // ADR 0031 #39 P3: the drain stance is now THREADED from the oracle. `Some(Drain)` (the war producer
+        // ran `plan_engagement` and picked the tower-drain for this objective) → `drain_stance = true`, so the
+        // winnability path treats the FINITE towers as drainable (not a permanent unwinnable blocker) WHILE the
+        // drain sustains, holds the falloff standoff, then advances once they're dry. `None`/`Some(Breach)` →
+        // `false` → the byte-unchanged direct breach/engage path (the non-drain behavior is preserved exactly).
+        drain_stance: matches!(assault_mode, Some(screeps_combat_decision::force_sizing::AssaultMode::Drain)),
     };
 
     // Build the target room's movement cost matrix (terrain walls baked in — the headless
@@ -1947,10 +1955,12 @@ fn compute_squad_orders(
     // ADR 0026 — pick the weight profile by objective class + room information (instead of one fixed
     // default). StructureBreach = an explicit dismantle objective OR a room whose only remaining hostiles
     // are structures (creeps cleared → switch to breaching the ring); everything else is open-creep
-    // combat. v1 keys on `enemy_safe_mode` (the in-scope safe-mode veto); `assault_mode` is the
-    // force-sizing follow-on (None ⇒ a towered base defaults to a straight breach).
+    // combat. Keys on `enemy_safe_mode` (the safe-mode veto) AND `assault_mode` (ADR 0031 #39 P3 — the
+    // oracle's chosen mode the war producer attached): `Some(Drain)` → the `DrainBreach` strategy (the
+    // patient drain profile that holds the standoff through the soak); `None`/`Some(Breach)` → the straight
+    // breach (byte-unchanged). The strategy registry keys only on `Drain`, so `Breach` is inert here.
     let class = classify_objective(formation, !structures.is_empty(), !hostiles.is_empty());
-    let strat_ctx = StrategyContext { class, info: StrategyInfo { enemy_safe_mode, assault_mode: None } };
+    let strat_ctx = StrategyContext { class, info: StrategyInfo { enemy_safe_mode, assault_mode } };
     let tactics = decide_strategy(&strat_ctx, &default_strategies());
 
     let decision = match room_layers.get(&target_room) {

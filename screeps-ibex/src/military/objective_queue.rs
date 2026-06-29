@@ -32,6 +32,7 @@
 
 use crate::serialize::*;
 use screeps_combat_decision::composition::SquadComposition;
+use screeps_combat_decision::force_sizing::AssaultMode;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 use specs::prelude::*;
@@ -240,6 +241,16 @@ pub struct ObjectiveRuntimeEntry {
     /// COMPUTED economic value of controlling the objective's room (ADR 0032 §economic-value-unlocked).
     /// Transient (never serialized); re-attached each offense scan by the producer.
     pub economic_intel: Option<EconomicIntel>,
+    /// ADR 0031 #39 P3 — the force-sizing oracle's chosen [`AssaultMode`] for this objective (`Some(Drain)`
+    /// when the producer's `plan_engagement` picked the tower-drain, else `Some(Breach)`; `None` until the
+    /// producer runs the oracle). TRANSIENT (never serialized — lives on the ephemeral runtime entry, like
+    /// `claimed_by`/`economic_intel`), so it costs NO `WORLD_FORMAT_VERSION` bump and SELF-HEALS each scan:
+    /// the war producer re-attaches it every offense pass, and a reloaded squad re-derives it the next scan
+    /// (a per-tick / re-asserted decision, not persisted state — the [[prefer-per-tick-optimal]] discipline).
+    /// The `SquadManager` drive reads it to build `StrategyInfo.assault_mode` → fires the `DrainBreach`
+    /// strategy + sets the squad's drain stance. `None` (no producer ran the oracle) ⇒ the byte-unchanged
+    /// direct breach/engage path.
+    pub assault_mode: Option<AssaultMode>,
 }
 
 /// Runtime combat objective queue resource. Holds a working copy of the
@@ -332,6 +343,19 @@ impl CombatObjectiveQueue {
     /// The transient economic value (if any) the producer attached to this objective's room.
     pub fn economic_intel(&self, id: ObjectiveId) -> Option<EconomicIntel> {
         self.runtime.get(&id).and_then(|r| r.economic_intel)
+    }
+
+    /// ADR 0031 #39 P3 — attach the force-sizing oracle's chosen [`AssaultMode`] for this objective (the
+    /// producer's `plan_engagement().assessment.mode`). Transient (never serialized); re-attached every
+    /// offense scan, so it self-heals on a VM reset like `economic_intel`/`claimed_by`.
+    pub fn set_assault_mode(&mut self, id: ObjectiveId, mode: AssaultMode) {
+        self.runtime.entry(id).or_default().assault_mode = Some(mode);
+    }
+
+    /// The transient assault mode (if any) the producer attached to this objective. `None` ⇒ no oracle ran →
+    /// the manager takes the byte-unchanged direct breach/engage path.
+    pub fn assault_mode(&self, id: ObjectiveId) -> Option<AssaultMode> {
+        self.runtime.get(&id).and_then(|r| r.assault_mode)
     }
 
     /// True if the objective is currently claimed by a (live) squad.
