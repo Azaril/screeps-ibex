@@ -155,15 +155,22 @@ drain coordination untouched. The drain tactic is now wired END-TO-END — oracl
 `assault_mode`, the multi-member comp coordinates (tank-forward soak + heal-the-tank) BOTH in-sim and live;
 remaining = a LIVE confirmation soak + the LOW/not-live-reachable FOLLOW-UP 2 (mixed-tower hardening).
 
-**FOLLOW-UP 2 (LOW, NOT live-reachable) — mixed finite+infinite-tower base.** The soak
-(`tower_dps_at_drain_standoff` + `finite_drain_towers`) counts only FINITE towers, while `assess_engage`'s
-`drain_stance` relaxation drops the ENTIRE tower dps when the drain sustains — so a MIXED finite+infinite base
-would under-size heal (ignoring the never-draining tower's standoff fire) and not re-veto for it. Unreachable
-with live data (real Screeps towers cap at 1000 energy, always < the 50k "infinite" sentinel; the ≥50k concept
-exists only for synthetic eval/foreman 100k fixtures, never mixed with finite towers in a realistic bed).
-Optional hardening (defense-in-depth): in `assess()` refuse Drain if any energized tower has energy ≥
-`DRAIN_INFINITE_TOWER_ENERGY`, and/or mirror by making `drain_exempt_tower_dps` drop only the FINITE towers'
-contribution in `assess_engage`.
+**FOLLOW-UP 2 — mixed finite+infinite-tower hardening — DONE 2026-06-29** (decision `<mixed>`; defense-in-depth,
+behavior-neutral live). A MIXED finite+infinite-tower base would have under-sized the soak (counting only finite
+towers) while `assess_engage` exempted the ENTIRE tower dps when draining → a committed-but-unsustainable drain.
+BOTH guards landed: **(A)** `assess()` refuses Drain if any energized tower has energy ≥
+`DRAIN_INFINITE_TOWER_ENERGY` (`has_energized_infinite_tower`, force_sizing.rs) → a mixed-infinite base falls to
+the heavy-assault/unwinnable path (you can't bleed an infinite tower + its standoff fire isn't sized for); **(B)**
+`assess_engage`'s drain exemption drops ONLY the FINITE towers' contribution (`exempt_finite_tower_dps`;
+`counted_tower_dps = tower_dps − exempt`) so the never-draining infinite tower's standoff fire STILL counts in the
+unwinnable veto — consistent with the finite-only soak. **Pure-finite is byte-unchanged** (all-finite → exempt ==
+tower_dps → counted == 0, identical to the old all-or-nothing). +2 tests (mixed-base refused + infinite counted;
+pure-finite control still Drains). NOT live-reachable (real towers cap at 1000 < the 50k sentinel). No WFV bump.
+
+> **Drain is now CLOSED OUT end-to-end:** oracle decides `AssaultMode::Drain` + sizes a sustainable TOUGH+HEAL
+> comp → bot threads `assault_mode` (1b) → multi-member tank-forward soak + heal-the-tank coordination (in-sim
+> AND live, 1) → mixed finite+infinite-tower hardened (2). Remaining = an opportunistic LIVE confirmation soak
+> (a towered finite-energy winnable target appearing in range).
 
 ---
 
