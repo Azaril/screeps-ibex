@@ -2089,16 +2089,20 @@ fn compute_squad_orders(
             //      `rally::gather_quorum_met` kernel the sim also calls), transition to the assault.
             //   3. ASSAULT — advance the box-formation anchor rally→target on the short final leg (cohesion
             //      applies HERE, where the members are already massed). This is where the anchor box belongs.
-            let centroid = decision
-                .center
-                .or_else(|| member_views.iter().find_map(|m| m.pos))
-                .unwrap_or_else(|| Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), target_room));
             // The assault target: a focus if we already see one, else the target-room centre.
             let assault_target = decision
                 .focus
                 .map(|f| f.pos)
                 .unwrap_or_else(|| Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), target_room));
-            let rally = screeps_combat_decision::rally::shared_rally_point(centroid, assault_target, uncontested);
+            // ADR 0034 D2/D3 (RC-2): derive the rally from the SCATTER-ROBUST kernel over the member
+            // positions — for a far/cross-quadrant scatter it biases the staging room onto the FURTHEST
+            // member's approach corridor and validates placement (on the approach line, strictly closer
+            // to the target than the laggard, a real room), instead of feeding the raw (D1 world-coord)
+            // centroid as the approach. For a same-room/tight squad it is byte-identical to the legacy
+            // `shared_rally_point`. The centroid still feeds the engage/win-or-stall frame as
+            // `decision.center` (computed once in `decide_squad`).
+            let rally =
+                screeps_combat_decision::rally::shared_rally_point_for_members(&member_positions, assault_target, uncontested);
 
             // Has a FIGHTER gathered at the rally OR already in the target room? (No healer-only assault.) A
             // fighter has melee or ranged. FIX A counts an in-target-room fighter as "gathered" so an
