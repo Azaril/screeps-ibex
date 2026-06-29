@@ -120,17 +120,31 @@ unsustainable target (`tank_sustain >= drain_damage` veto → unwinnable), never
 `drain_stance` fire live. Offline-proven incl. an oracle-driven end-to-end test (drain stance DERIVED from
 `assess().mode==Drain`, not hardcoded).
 
-**FOLLOW-UP 1 (the substantive one) — MULTI-member tank-forward heal-the-tank coordination.** A SINGLE-member
-drain works end-to-end, and the oracle correctly picks Drain + sizes a multi-member TOUGH+HEAL comp, but a
-*multi-member assembled* soak does not yet KILL — it `RosterWiped`s
-(`finite_multi_tower_drain_bed_oracle_picks_drain_but_assembled_soak_needs_tank_forward_coord`, honestly
-RED-pending). Root: the SIZING is right but the runtime **positioning/coordination** isn't — the healers don't
-keep the *tank* alive while it soaks. Design direction (a tactic/positioning concern — `DrainBreach` strategy +
-ADR 0019 positioning, NOT the sizing): (a) place the **TANK forward** at the drain standoff (it absorbs the
-tower fire); (b) keep the **HEALERS** within heal range *behind* the tank, targeting the tank (not spread/
-self-healing); (c) sustain (Σ heal ≥ falloff tower dps on the tank) until the finite towers bleed to 0, then
-resume the normal advance/breach. This is the gate between "the oracle picks drain" (done) and "the drain comp
-actually clears a towered target" (the live win).
+**FOLLOW-UP 1 (the substantive one) — MULTI-member tank-forward heal coordination — DONE IN-SIM 2026-06-29**
+(decision `96474f2` / eval `8b41eee`). The oracle-sized multi-member drain comp was RosterWiping (sizing
+right, runtime coordination wrong — all members bunched at the standoff so the healers ate tower fire + died).
+Built (pure tactics, lib.rs): `drain_tank_index` (max `hits_max`, stable lowest-index tie-break);
+`drain_member_goals` via `project_from_nest` (pure integer geometry) — the **TANK** to the falloff standoff
+(forward; it is the towers' single nearest focus), every other living member **ONE tile behind**
+(`DRAIN_HEALER_SETBACK=1`, keeping the range-1 12×/part heal rate the drain-sustain math assumes);
+`assign_heals_drain` force-pins in-range healers onto the **TANK first** (idle spill to the generic triage).
+Scoped to an active `SquadMovement::Drain` directive (the non-drain heal/positioning path is byte-unchanged).
+RED→GREEN: the bed is renamed `multi_member_drain_soak_kills_with_tank_forward_coordination`, assertion flipped
+`!Killed`→`Killed` — an 8-member comp soaks the 4-tower falloff, healers heal the tank from behind, the finite
+towers bleed dry, the squad breaches → genuine `Killed{form 300, engage 217}`. No WFV bump.
+> **Safety is POSITIONAL, not falloff** (verify note): at the falloff floor (range ≥20) standoff-vs-standoff+1
+> eat the same per-tower damage; the healers are safe because the tower AI **focuses the creep CLOSEST to the
+> core** (= the forward tank). Correct vs a focus-closest defender (the sim model + the common live tower
+> script); a hypothetical focus-LOWEST-HITS AI could draw healer fire. Acceptable.
+
+**FOLLOW-UP 1b (NEW, OPEN) — LIVE drain wiring.** The per-member `member_goals` (tank-forward / healers-behind)
+are honored by the SIM adapter (`squad.rs:407`) and the live `SquadManager` mapping (`squad_manager.rs:2384`),
+BUT that per-member squad-movement override is only read by the **anchorless** `decide_movement` path and is
+**inert for a live siege FORMATION** (`squad_manager.rs:2376-2378`) — so the coordination is proven IN-SIM and
+is **behavior-neutral on the live bot** until drain comps reach the live anchorless path (the broader
+"drain-comp-not-yet-fielded-live" P-follow-up). Next: route the live drain assault through the anchorless
+per-member-goal path (or have the formation path honor `member_goals` in drain) so the live drain comp
+coordinates as the sim proves. This is the remaining gate to a LIVE towered-target clear via drain.
 
 **FOLLOW-UP 2 (LOW, NOT live-reachable) — mixed finite+infinite-tower base.** The soak
 (`tower_dps_at_drain_standoff` + `finite_drain_towers`) counts only FINITE towers, while `assess_engage`'s
