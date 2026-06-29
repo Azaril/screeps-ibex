@@ -44,10 +44,19 @@ feature-complete; only the non-blocking polish below remains.
   today by war.rs's 2–3 HIGH rescouts within the 500t window — adequate margin, not a hard guarantee.
   Consider `STRONGHOLD_RESCOUT_INTERVAL < THREAT_DATA_MAX_AGE` for a hard close. (Unaffordable high-level
   strongholds left to self-collapse is a *deliberate* economic gate, not a gap.)
-- **Owned-room intel-floor refinement** — `project_intel` floors owned-room danger by
-  `priority_implied_danger`, bypassing `value_e`'s dps=0 curve, so a harmless dps=0 scout in an OWNED
-  room still pulls a CRITICAL defender (neighbours already fixed via `observe_neighbours`). Floor only
-  on STALE/missing intel; use known-zero danger on fresh intel.
+- ~~**Owned-room intel-floor refinement**~~ — **INVESTIGATED 2026-06-28 → NOT A BUG (closed, no change).**
+  The concern was that `project_intel`'s `danger.max(priority_implied_danger(priority))` floor (squad_manager.rs)
+  makes a "harmless dps=0 scout" in an owned room pull a CRITICAL defender. It does NOT: a *truly* harmless
+  scout (MOVE-only, no Attack/RangedAttack/Work/Claim/Heal) fails `hostile_warrants_defender`
+  (war_decision.rs:221) at the PRODUCER, so war.rs never emits a `Defend`/`Secure` objective for it — it never
+  reaches `project_intel`. The floor is **correct + load-bearing** for the cases that DO reach it: a warranted
+  threat whose `estimated_dps == 0` because it carries no Attack/RangedAttack parts but IS dangerous — a
+  **CLAIM declaimer, a WORK dismantler, a HEAL creep** (`estimated_dps` counts only Attack/RangedAttack,
+  threatmap.rs). Trusting `dps==0` there (the attempted "fix") starves their `Defend` value to 0 → the
+  `value_e(Defend)=asset·defense_risk(0)=0` objective is dropped by the EV claim filter → a **declaimer takes
+  an owned room unopposed** (a HIGH-severity regression the adversarial verify caught; reverted). LESSON:
+  `estimated_dps==0` ≠ harmless — the harmlessness signal is `hostile_warrants_defender` (parts), and the
+  producer already applies it. Cross-refs the dual-DPS/`estimated_dps`-overload review (ADR 0031 candidate).
 
 ## Problem (Docker soak, 2026-06-27)
 
