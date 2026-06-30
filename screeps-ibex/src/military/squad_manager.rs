@@ -88,6 +88,18 @@ pub struct SquadFormingProgress {
     /// quorum from live positions (a massed bloc re-latches immediately; a still-scattered one re-gathers).
     /// Cleared on retire alongside the other per-objective trackers.
     assault_latched: std::collections::BTreeSet<ObjectiveId>,
+    /// ADR 0035 D4 (the LOST-IN-ROOM verdict carrier): objective ids whose squad's PREVIOUS-tick combat
+    /// verdict over the REAL in-room view was a GENUINE LOSE — `engaged_once && in_room_any &&
+    /// !present_force_wins_or_stalls(view, center)` — stamped by Phase B (`compute_squad_orders`, AFTER
+    /// `apply_squad_decision` latches `engaged_once`). Phase A reads membership for `retreated_from_contact`
+    /// (the abandon signal) WITHOUT rebuilding the SquadView — so abandon is carried from B's real-intel
+    /// assessment, not recomputed in A. This is the EXACT inverse of `present_force_wins_or_stalls` (the lose
+    /// SUBSET), NOT `ctx.state == Retreating` (a SUPERSET that also includes a critical/low-avg-HP retreat on
+    /// a WINNABLE fight — the false-abandon this carrier fixes). Ephemeral (a `BTreeSet`, NOT serialized — no
+    /// `WORLD_FORMAT_VERSION` bump): on a VM reload it re-derives next tick from the live in-room assessment.
+    /// Cleared on retire alongside `assault_latched`. Membership only (insert/remove/contains — no iteration
+    /// on a result-affecting path), so determinism is preserved.
+    lost_in_room: std::collections::BTreeSet<ObjectiveId>,
     /// ADR 0034 D5 (RC-4/RC-8 — per-member travel progress): (objective, member-entity) → that member's
     /// last-observed room-distance to the shared rally. The travel lease refreshes while a MAJORITY of
     /// present members are CLOSING (vs the old single MIN-over-members signal that one stuck member could pin
@@ -1135,6 +1147,16 @@ impl<'a> System<'a> for SquadManagerSystem {
                     (wiped, ctx.focus_target.is_some(), ctx.engaged_once, in_room, !ctx.members.is_empty(), present, dist, dists)
                 })
                 .unwrap_or((false, false, false, false, false, 0, None, Vec::new()));
+            // ADR 0035 D4: the squad's PREVIOUS-tick LOSE VERDICT over the REAL in-room view, CARRIED from
+            // Phase B (`compute_squad_orders` stamps `lost_in_room` AFTER `apply_squad_decision`) — the
+            // GENUINE lose `engaged_once && in_room_any && !present_force_wins_or_stalls`, NOT the broader
+            // `ctx.state == Retreating` superset (which also fires for a critical-HP / low-avg / stalemate
+            // retreat on a WINNABLE fight — exactly the false-abandon this carrier replaces). Reading the
+            // carrier here is the EXACT INVERSE of `present_force_wins_or_stalls`, so the abandon verdict
+            // (built below) cannot disagree with whether the squad is actually LOSING — and we do NOT rebuild
+            // the SquadView in Phase A (the lose verdict is carried, not recomputed). Ephemeral membership
+            // read (NOT serialized — no `WORLD_FORMAT_VERSION` bump; `contains`, no result-affecting iteration).
+            let lost_in_room = data.forming_progress.lost_in_room.contains(&obj_id);
 
             // FIX 2 (rally-stall): a forming squad legitimately sitting at home assembling its roster has
             // no focus, so the base +400 lease lapses and the kernel would retire it mid-form → re-field →
@@ -1245,6 +1267,17 @@ impl<'a> System<'a> for SquadManagerSystem {
                 // the objective lifecycle: the producer withdraws on controller-neutral / re-arm → objective_gone.
                 declaiming: is_declaim && in_target_room && has_members,
                 reassign_available,
+                // ADR 0035 D4 (ABANDON-ON-UNWINNABLE-CONTACT): reached + engaged + the real in-room P(win) =
+                // LOSE. The kernel splits this from a clean clear so a lost fight is BACKED OFF (GaveUp +
+                // mark_unwinnable), not withdrawn-as-clean (which invited an instant re-field → the
+                // reach↔retreat spiral). `lost_in_room` is the GENUINE lose verdict carried from Phase B (the
+                // EXACT inverse of `present_force_wins_or_stalls` over the real in-room view) — NOT
+                // `ctx.state == Retreating`, which is a SUPERSET that also fires for a critical-HP / low-avg /
+                // stalemate retreat on a WINNABLE fight (that false-abandon retired bloodied-but-winning
+                // squads mid-fight + backed off winnable rooms). It already encodes `engaged_once &&
+                // in_room_any`; the `engaged_once && in_target_room` here is a defensive re-gate so it never
+                // fires en route or before contact even if the carrier is momentarily stale.
+                retreated_from_contact: engaged_once && in_target_room && lost_in_room,
             };
             let action = lifecycle::reconcile(snapshot);
             if let lifecycle::ReconcileAction::Retire { reason, withdraw, mark_unwinnable } = action {
@@ -1275,8 +1308,18 @@ impl<'a> System<'a> for SquadManagerSystem {
                 }
                 if withdraw {
                     data.objective_queue.withdraw(obj_id); // clean win — clear the objective so no one re-fields it
+                    // ADR 0035 D6: a GENUINE Resolved clear (the only path that sets `withdraw`) is a REAL win
+                    // — RESET the give-up backoff for the room so a later legitimate target there is not
+                    // suppressed by a stale abandon record. (`mark_unwinnable` is the anti-flicker latch; a
+                    // real win clears it.) No-op when the room was never marked unwinnable.
+                    if let Some(room) = squad_room {
+                        data.objective_queue.clear_unwinnable(room);
+                    }
                 } else if mark_unwinnable {
-                    // Defense is exempt (kernel never sets this for is_defend) — we never abandon an owned room.
+                    // ADR 0035 D4/D6: an abandon (GaveUp/Wiped/unwinnable-contact) BACKS the room off — the
+                    // exponential backoff IS the anti-flicker latch. Called ONCE per de-commit (this Retire
+                    // branch runs once then `continue`s). Defense is exempt (kernel never sets this for
+                    // is_defend) — we never abandon an owned room.
                     if let Some(room) = squad_room {
                         data.objective_queue.mark_unwinnable(room, now);
                     }
@@ -1295,6 +1338,9 @@ impl<'a> System<'a> for SquadManagerSystem {
                 data.forming_progress.last_engaged.remove(&obj_id);
                 // FIX A: clear the assault latch so a RE-FIELD (new generation) re-derives the quorum.
                 data.forming_progress.assault_latched.remove(&obj_id);
+                // ADR 0035 D4: clear the lost-in-room verdict carrier so a RE-FIELD re-derives it from the
+                // live in-room assessment (no stale lose verdict bleeding into a fresh generation).
+                data.forming_progress.lost_in_room.remove(&obj_id);
                 // ADR 0034 D4/D5/D8: clear the per-member rally/target distance + solo-stall trackers so a
                 // RE-FIELD re-derives them (a new generation's members must not inherit a stale block streak).
                 clear_member_trackers(&mut data.forming_progress, obj_id);
@@ -1349,6 +1395,9 @@ impl<'a> System<'a> for SquadManagerSystem {
                 data.forming_progress.last_phase.remove(&obj_id);
                 data.forming_progress.last_engaged.remove(&obj_id);
                 data.forming_progress.assault_latched.remove(&obj_id);
+                // ADR 0035 D4: clear the lost-in-room verdict carrier under the OLD id (reassign is a NON-LOSS
+                // terminal so it is false here, but re-key hygiene matches the other per-objective trackers).
+                data.forming_progress.lost_in_room.remove(&obj_id);
                 // ADR 0034 D4/D5/D8: a reassigned squad gets fresh per-member rally/target/stall trackers at
                 // the new target (the old block streak is meaningless against the new rally corridor).
                 clear_member_trackers(&mut data.forming_progress, obj_id);
@@ -2128,12 +2177,29 @@ fn compute_squad_orders(
     // Still LOAD-BEARING for the trickle-guard: a GENUINELY-UNKNOWN room (source `None`: unmapped AND no live
     // vision) is NOT reliable → NOT uncontested → keep the hard full-roster rally (never trust no-vision
     // emptiness). The fix ONLY relaxes the requirement from CURRENT live vision to RELIABLE intel (cache counts).
-    let intel_reliable = intel_source.is_reliable();
+    // ADR 0035 D3 (the C7 fix — RC-11 parity). The pre-fix uncontested classifier passed
+    // `intel_source.is_reliable()` (Cached || LiveVisible) as the intel arg. But an empty-CACHED towered
+    // room is RELIABLE-yet-VACUOUS: `is_reliable()=true` while the cache shows no towers because none were
+    // VISIBLE last scout, not because there are none — so `uncontested` flipped true, `shared_rally_point`
+    // staged AT the target centre, and the squad walked into the towers (the live W4N5 reach↔retreat
+    // spiral). D9 already gated the win-or-stall FAST-PATH on `== LiveVisible` (deliberately NOT
+    // `is_reliable()`), but the uncontested classifier on the SAME path still trusted `is_reliable()` — the
+    // two intel predicates disagreed about what "real intel" means. Fix: feed the uncontested classifier the
+    // SAME real-intel notion as the fast-path (`have_target_intel`, computed below) — a non-empty DTO set
+    // (we actually SEE a hostile/structure) OR an on-arrival LIVE read. An empty-Cached towered room then
+    // classifies CONTESTED → the rally stages ONE ROOM SHORT (out of tower range) → the squad masses + only
+    // advances on the gather quorum, instead of trickling into tower range. A LEGITIMATE LiveVisible-empty
+    // room (a member stands in it and SEES it clear) still classifies uncontested. `rally_intel_reliable`
+    // (`is_reliable()`) is RETAINED for its legacy boundary-oscillation concern but is no longer the gate the
+    // uncontested classifier reads — the two were conflated; this decouples them. Pure per-tick recompute of
+    // the ephemeral DTOs + the existing `intel_source` — no serialized state, no WORLD_FORMAT_VERSION bump.
+    let uncontested_intel =
+        !hostiles.is_empty() || !structures.is_empty() || intel_source == CombatIntelSource::LiveVisible;
     let no_hostile_towers = !structures
         .iter()
         .any(|s| s.structure_type == StructureType::Tower && s.ownership == screeps_combat_decision::Ownership::Hostile);
     let uncontested = crate::military::formation::target_is_uncontested(
-        intel_reliable,
+        uncontested_intel,
         hostiles.is_empty(),
         no_hostile_towers,
         !enemy_safe_mode,
@@ -2164,8 +2230,10 @@ fn compute_squad_orders(
     // re-enables the instant real DTOs arrive (room visible/cached non-empty). This PRESERVES the P(win)
     // win-or-stall for REAL-intel targets (operator directive, D7) but stops it firing on vacuous no-intel
     // wins. Pure read of the ephemeral DTOs + the existing `intel_source` — no serialized state, no WFV bump.
-    let have_target_intel =
-        !hostiles.is_empty() || !structures.is_empty() || intel_source == CombatIntelSource::LiveVisible;
+    // ADR 0035 D3: this is the SAME real-intel predicate the uncontested classifier now reads
+    // (`uncontested_intel`, above) — ONE source of truth for "real intel" on this path (the C7 inconsistency
+    // between the fast-path gate and the uncontested classifier is closed; they can no longer disagree).
+    let have_target_intel = uncontested_intel;
     let fast_path_allowed = screeps_combat_decision::winnable_fast_path_allowed(present_wins_or_stalls, have_target_intel);
     let ready_to_depart = fast_path_allowed
         || crate::military::formation::ready_to_depart_gate(&member_positions, requested_slots, uncontested);
@@ -2455,6 +2523,29 @@ fn compute_squad_orders(
         if should_drop_anchor_for_drain(&decision) {
             ctx.squad_path = None;
         }
+    }
+
+    // ── ADR 0035 D4 (the LOST-IN-ROOM verdict carrier — stamp for Phase A's `retreated_from_contact`).
+    // The DANGER this fixes: deriving abandon from `ctx.state == Retreating` is WRONG because `Retreating` is
+    // a SUPERSET of the lose verdict — `decide_squad` also retreats a WINNING fight on a critical-HP member
+    // (`any_critical`), a low squad-average (`avg < retreat_threshold`), or a kiting stalemate
+    // (`stalemate_disengage`). A squad WINNING a real fight whose focus-fired member dips <25% HP would then
+    // read `retreated_from_contact=true` in Phase A → `unwinnable_contact` → the WINNABLE room is backed off
+    // and the bloodied-but-winning squad retired MID-FIGHT (the false-abandon). So carry the GENUINE lose
+    // verdict instead: `engaged_once && in_room_any && !present_wins_or_stalls` — the EXACT inverse of
+    // `present_force_wins_or_stalls` over the REAL in-room view (in-room ⇒ LiveVisible ⇒ assessed over the
+    // real towers, no vacuous win). `present_wins_or_stalls` + `in_room_any` are already computed THIS tick
+    // above; `engaged_once` is re-read AFTER `apply_squad_decision` latched it. A critical/low-avg/stalemate
+    // retreat on a winnable fight has `present_wins_or_stalls=true` ⇒ NOT lost ⇒ NOT abandoned (it holds /
+    // wins). Membership insert/remove on the ephemeral `lost_in_room` set (NOT serialized → no WFV bump; no
+    // iteration on a result-affecting path → determinism preserved). Phase A reads `contains` — the lose
+    // verdict is CARRIED from Phase B, never recomputed in Phase A (the no-view-rebuild-in-A property).
+    let engaged_once_for_lose = squad_contexts.get(squad_entity).map(|c| c.engaged_once).unwrap_or(false);
+    let lost_in_room = engaged_once_for_lose && in_room_any && !present_wins_or_stalls;
+    if lost_in_room {
+        forming_progress.lost_in_room.insert(obj_id);
+    } else {
+        forming_progress.lost_in_room.remove(&obj_id);
     }
 
     // ───────────────────────── INTROSPECTION TRACE (logging only) ─────────────────────────

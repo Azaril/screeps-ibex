@@ -1321,6 +1321,34 @@ impl WarOperation {
             .count() as u32;
 
         for candidate in candidates {
+            // ── ADR 0035 D5 (the A4 fix — the MISSING producer-side backoff consumer). The abandon latch
+            //    (`mark_unwinnable`, set by the SquadManager when a reached squad retreats from an unwinnable
+            //    fight — D4) records an exponential give-up backoff per room. PRE-FIX war.rs NEVER consulted
+            //    it, so a just-abandoned room was re-upserted as an offense objective the very next scan →
+            //    Phase C re-fielded the same squad on the same vacuous intel → the reach↔retreat spiral. SKIP
+            //    a candidate whose room is in backoff. To avoid PERMANENTLY abandoning it, REGISTER a re-scout
+            //    so the room is re-assessed with FRESH intel when the backoff expires (mirrors the stale-data
+            //    re-scout above — register, don't dispatch; observer-preferred). The auction's reassign
+            //    candidate set + Phase C's claim path ALREADY exclude `is_unwinnable_now` (squad_manager.rs
+            //    `feasible_per_row` / the claimable filter), so this producer skip closes the last hole.
+            if system_data.combat_objective_queue.is_unwinnable_now(candidate.room, current_tick) {
+                let has_attack_objective = system_data
+                    .combat_objective_queue
+                    .objectives
+                    .iter()
+                    .any(|o| o.owner == ObjectiveOwner::Attack && o.kind.room() == candidate.room);
+                let rescout_priority = offense_rescout_priority(has_attack_objective);
+                system_data
+                    .visibility
+                    .request(VisibilityRequest::new(candidate.room, rescout_priority, VisibilityRequestFlags::ALL));
+                if war_debug {
+                    info!(
+                        "[War]   Skip {} -- in give-up backoff (ADR 0035 D5); requested re-scout (priority={})",
+                        candidate.room, rescout_priority
+                    );
+                }
+                continue;
+            }
             // Project the candidate into the doctrine registry's bot-agnostic engagement context (ADR
             // 0026 §9.6) and let it pick the objective's sized composition — the SAME selection + sizing
             // the eval runs (parity; no divergent inline logic). The bot keeps the two concerns the pure

@@ -1,6 +1,6 @@
 # ADR 0035 — Scout-before-commit + Abandon-on-unwinnable-contact (the VACUOUS-INTEL ENGAGE CASCADE)
 
-- **Status:** Proposed (2026-06-30)
+- **Status:** Proposed (2026-06-30) — **Phase E1 (D3+D4+D5+D6, the oscillation-stopper) DONE** (decision `9d27db4`, eval `1032405`, super; no WFV bump). D3 = uncontested classifier now requires `==LiveVisible`/non-empty (RC-11 parity, not `is_reliable()`). D4 = reconcile distinguishes retreated-from-contact (gated on the GENUINE lose verdict `engaged_once && in_room && !present_force_wins_or_stalls`, carried WFV-neutrally via a `lost_in_room` BTreeSet in the ephemeral `SquadFormingProgress` — **not** the over-broad `Retreating` state, which would falsely abandon a winnable bloodied squad) from cleared. D5 = war.rs offense producer + auction reassign set skip `is_unwinnable_now`. D6 = `mark_unwinnable` backoff latch + `clear_unwinnable` on a genuine clear. **E2 (D1/D2 scout-before-commit selection/sizing) remains.**
 - **One line:** A squad commits to a TOWERED room on EMPTY/STALE intel, reaches it (now that RC-11 unfroze
   travel), discovers it cannot win, and oscillates reach↔retreat forever with no abandon. Fix: make
   target-selection, force-sizing, AND the `target_is_uncontested` rally classification require REAL
