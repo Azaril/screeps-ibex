@@ -523,9 +523,11 @@ impl Engaged {
         let structures: Vec<_> = structures_raw.iter().map(structure_to_dto).collect();
 
         let orders = tick_orders.map(|o| CreepOrders {
-            // The resolved focus *creep* (`resolve_creep()` is `None` for structure targets, which
-            // are scanned per-creep) and the resolved heal target — mirroring the prior logic.
-            focus: o.attack_target.and_then(|t| t.resolve_creep()).map(|c| FocusTarget { pos: c.pos(), id: c.try_raw_id() }),
+            // ADR 0036 D3: resolve the focus INCLUDING structures (`resolve_focus` keeps a structure as a
+            // position-only `id:None` focus instead of dropping it via `resolve_creep()`), so the seam
+            // focus-fires the squad's value-sorted structure pick (a tower / the core) instead of relying
+            // on the undirected in-range fallback. A creep focus still resolves by id (live pos + raw id).
+            focus: o.attack_target.and_then(|t| t.resolve_focus()).map(|(pos, id)| FocusTarget { pos, id }),
             heal_target: o.heal_target.and_then(|id| id.resolve()).map(|c| FocusTarget { pos: c.pos(), id: c.try_raw_id() }),
         });
 
@@ -624,7 +626,9 @@ impl Engaged {
         let structures: Vec<_> = structures_raw.iter().map(structure_to_dto).collect();
 
         let creep_orders = CreepOrders {
-            focus: orders.attack_target.and_then(|t| t.resolve_creep()).map(|c| FocusTarget { pos: c.pos(), id: c.try_raw_id() }),
+            // ADR 0036 D3: resolve the focus INCLUDING structures (see `execute_combat_via_seam`) so the
+            // anchorless movement brain knows the structure focus for its approach gradient too.
+            focus: orders.attack_target.and_then(|t| t.resolve_focus()).map(|(pos, id)| FocusTarget { pos, id }),
             heal_target: orders.heal_target.and_then(|id| id.resolve()).map(|c| FocusTarget { pos: c.pos(), id: c.try_raw_id() }),
         };
         let squad = SquadStateDto {

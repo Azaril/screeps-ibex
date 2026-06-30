@@ -1,6 +1,6 @@
 # ADR 0036 — Opportunistic Structure Targeting (threat × value)
 
-Status: PROPOSED (2026-06-30)
+Status: PROPOSED (2026-06-30) — **Phase S1 (D1+D2+D3+D4+D5) DONE** (decision `64aee70`, agent `7bdf1fd`, eval `b63c7fa`, super; no WFV bump). D1 `struct_target_value = strategic_value + threat_removed` (energized tower's real DPS via `tower_attack_damage_at_range`); D2 focus-selection consumes that one order (deleted `structure_rank`, which had ranked a live tower below a spawn); D3 `resolve_focus` keeps a Structure target as `(pos, None)` so the job focus-fires it; D4 `should_drop_anchor_for_structure_siege` (scoped to `focus.id.is_none()`) drops the anchor like DRAIN so the approach gradient closes to range. **D1/D2 + the raze are sim-proven (decision/eval); D3/D4 are bot-crate and STRUCTURALLY UNREACHABLE by the eval (it doesn't depend on the bot crate; ManagedSimSquad is anchorless) — verified by code-trace + the LIVE soak (the RC-11 sim-gap class).** **Remaining: S2 (D6 — stop salvage Declaiming a room with a live core) + the live raze confirmation.**
 Cross-refs: ADR 0019 (combat position selection), ADR 0020 (EV target/kill calc),
 ADR 0025 (EV position×action kernel), ADR 0026 §9 (the "enters but does nothing"
 invader-core bug), ADR 0031 (capability-driven force composition / dismantle weapon

@@ -2527,6 +2527,16 @@ fn compute_squad_orders(
         if should_drop_anchor_for_drain(&decision) {
             ctx.squad_path = None;
         }
+        // ADR 0036 D4 — STRUCTURE-SIEGE REACH. A core/tower/spawn focus (`focus.id.is_none()`) sits on an
+        // impassable tile, so the standoff anchor parks the formation SHORT of weapon range and the squad
+        // never razes it (ADR 0026 §9). Drop the anchor — same runtime pattern as the drain drop above —
+        // so the job routes ANCHORLESS and each member follows its kernel `member_goal` downhill to range
+        // 3, then fires (D3). Scoped to a populated-plan structure siege (the helper requires Engaged +
+        // member_goals set ⇒ the kernel ran ⇒ non-kiting), so a CREEP formation keeps its anchor + slots
+        // byte-unchanged. (Drain already returned above for a Drain directive; this covers a normal siege.)
+        if should_drop_anchor_for_structure_siege(&decision) {
+            ctx.squad_path = None;
+        }
     }
 
     // ── ADR 0035 D4 (the LOST-IN-ROOM verdict carrier — stamp for Phase A's `retreated_from_contact`).
@@ -2706,6 +2716,24 @@ fn compute_squad_orders(
 /// are honored live. Pure + testable so the drain-only scoping is provable offline without a live job.
 fn should_drop_anchor_for_drain(decision: &SquadDecision) -> bool {
     matches!(decision.movement, SquadMovement::Drain { .. })
+}
+
+/// ADR 0036 D4 — should the formation anchor be dropped this tick because the squad is sieging a
+/// STRUCTURE (a core/tower/spawn focus, `focus.id.is_none()`) with no kiting threat? The standoff anchor
+/// (`standoff_one_tile`) parks the formation SHORT of weapon range against an impassable structure tile —
+/// the ADR 0026 §9 "enters but does nothing" failure: the slotted members may never land within range 3
+/// of the core, and the kernel's own approach gradient (the `member_goals` flood downhill to weapon
+/// range) is INERT while an anchor is set (the job takes the slot-based formation mover). Dropping the
+/// anchor — EXACTLY as the DRAIN path does — routes the job through the anchorless `execute_decide_movement`,
+/// so each member moves to its kernel `member_goal` and closes to range, then fires (D3). Scoped to a
+/// STRUCTURE focus with a populated kernel plan (`member_goals` set ⇒ the kernel ran ⇒ Engaged + NON-kiting:
+/// the kernel block is gated on `!should_kite`, so a creep formation that needs to hold/kite has EMPTY
+/// member_goals and keeps its anchor + slots byte-unchanged). Pure + testable so the scoping is provable
+/// offline. Runtime anchor-drop (the same pattern as drain/rally/skirmish) → no WFV bump.
+fn should_drop_anchor_for_structure_siege(decision: &SquadDecision) -> bool {
+    matches!(decision.state, SquadOrderState::Engaged)
+        && decision.focus.is_some_and(|f| f.id.is_none())
+        && decision.member_goals.iter().any(|g| g.is_some())
 }
 
 /// Write a `SquadDecision` into the `SquadContext`: the combat state, the shared focus, and per-member
@@ -3226,6 +3254,42 @@ mod tests {
         assert!(!should_drop_anchor_for_drain(&decision_for(SquadMovement::Advance { goal, range: 0 })));
         assert!(!should_drop_anchor_for_drain(&decision_for(SquadMovement::Kite { goal })));
         assert!(!should_drop_anchor_for_drain(&decision_for(SquadMovement::Hold)));
+    }
+
+    #[test]
+    fn structure_siege_anchor_drop_predicate_is_scoped_to_a_kernel_planned_structure_focus() {
+        // ADR 0036 D4 — the anchor is dropped ONLY for a structure-focus siege with a populated kernel plan
+        // (Engaged + focus.id.is_none() + member_goals set), so CREEP formations keep their anchor + slots
+        // byte-unchanged and an empty-plan (kiting) structure case is untouched.
+        use crate::combat::FocusTarget;
+        let r = room("W5N5");
+        let p = |x: u8, y: u8| Position::new(RoomCoordinate::new(x).unwrap(), RoomCoordinate::new(y).unwrap(), r);
+        let goal = p(25, 25);
+        let base = |state: SquadOrderState, focus: Option<FocusTarget>, member_goals: Vec<Option<Position>>| SquadDecision {
+            state,
+            focus,
+            movement: SquadMovement::Advance { goal, range: 0 },
+            center: Some(goal),
+            cohesion_radius: 1,
+            heal_assignments: Vec::new(),
+            focus_assignments: Vec::new(),
+            orientation: None,
+            member_goals,
+            member_intents: Vec::new(),
+        };
+        let struct_focus = Some(FocusTarget { pos: p(27, 25), id: None });
+        let creep_focus = Some(FocusTarget { pos: p(27, 25), id: Some("0123456789abcdef01234567".parse::<RawObjectId>().unwrap()) });
+
+        // FIRES: Engaged + structure focus + a populated kernel plan (non-kiting siege).
+        assert!(should_drop_anchor_for_structure_siege(&base(SquadOrderState::Engaged, struct_focus, vec![Some(goal)])));
+        // NOT a creep focus (a creep formation keeps its anchor).
+        assert!(!should_drop_anchor_for_structure_siege(&base(SquadOrderState::Engaged, creep_focus, vec![Some(goal)])));
+        // NOT when member_goals are empty (the kernel didn't run ⇒ kiting/forming — keep the anchor).
+        assert!(!should_drop_anchor_for_structure_siege(&base(SquadOrderState::Engaged, struct_focus, vec![None, None])));
+        // NOT when not Engaged (forming/moving keep their travel anchor).
+        assert!(!should_drop_anchor_for_structure_siege(&base(SquadOrderState::Moving, struct_focus, vec![Some(goal)])));
+        // NOT with no focus at all.
+        assert!(!should_drop_anchor_for_structure_siege(&base(SquadOrderState::Engaged, None, vec![Some(goal)])));
     }
 
     /// ADR 0031 §2(g) FOLLOW-UP 1b — the LIVE drain routing, end-to-end over the reconcile drain-gate

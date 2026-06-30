@@ -270,6 +270,19 @@ impl AttackTarget {
             AttackTarget::Structure(_) => None,
         }
     }
+
+    /// ADR 0036 D3 — resolve this target into a `(pos, id)` focus pair the combat seam can focus-fire,
+    /// INCLUDING structures (the old `resolve_creep()` dropped them → undirected fire). A creep resolves
+    /// by id (its live position + raw id); a STRUCTURE resolves to its fixed tile with `id = None` — the
+    /// seam's `attack_with_orders`/`translate_intents` already handle a position-only structure focus, so
+    /// the squad's value-sorted structure pick (a tower / the core) becomes DIRECTED fire, not a happens-
+    /// to-be-in-range fallback. A creep that has died (id no longer resolves) yields `None`.
+    pub fn resolve_focus(&self) -> Option<(Position, Option<RawObjectId>)> {
+        match self {
+            AttackTarget::Creep(_) => self.resolve_creep().map(|c| (c.pos(), c.try_raw_id())),
+            AttackTarget::Structure(pos) => Some((*pos, None)),
+        }
+    }
 }
 
 /// Per-creep orders from the mission to the job for a single tick.
@@ -1039,6 +1052,16 @@ impl<'a> System<'a> for RunSquadUpdateSystem {
 mod tests {
     use super::*;
     use specs::{Builder, World, WorldExt};
+
+    #[test]
+    fn attack_target_resolve_focus_keeps_structures_as_position_only() {
+        // ADR 0036 D3 — a structure target resolves to a (pos, id:None) focus the seam can focus-fire,
+        // instead of being DROPPED by the old `resolve_creep()` (which returned None for structures).
+        let r: RoomName = "W5N5".parse().unwrap();
+        let p = Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), r);
+        assert_eq!(AttackTarget::Structure(p).resolve_focus(), Some((p, None)), "a structure focus survives as a position-only target");
+        // (The creep arm calls the live `resolve()`, which needs a game object — covered by the seam tests.)
+    }
 
     /// L5 (ADR 0026 §9.10): the box formation scales to an N-blob — `count == 4` is the 2×2, larger
     /// force-sized squads fill a compact square with DISTINCT offsets (no member stacks on the anchor as
