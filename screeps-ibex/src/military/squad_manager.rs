@@ -441,6 +441,10 @@ fn project_defense(threat: Option<&crate::military::threatmap::RoomThreatData>) 
         // dead channel here to keep at 0 — the footgun is gone.
         repair_per_tick: 0.0,
         safe_mode: td.safe_mode_active,
+        // ADR 0035 D1: derive the tri-state tower intel from the existing threat fields (threat data present
+        // here ⇒ empty list is ScoutedEmpty, non-empty is Seen). Keeps the manager's runtime profile
+        // classification consistent with war.rs's commit-side derivation. No new serialized state.
+        tower_intel: screeps_combat_decision::force_sizing::tower_intel_from(td.hostile_tower_positions.is_empty(), true),
     }
 }
 

@@ -4,7 +4,9 @@ use screeps_combat_decision::composition::{CompositionParams, SquadComposition, 
 use screeps_combat_decision::doctrine::{
     decide_doctrine, default_doctrines, defense_doctrines, plan_engagement, DoctrineObjective, EnemyCoordination, EnemyForce, EngagementContext,
 };
-use screeps_combat_decision::force_sizing::{win_probability, AssaultMode, DefenseProfile, TowerThreat, HOLD_MARGIN};
+use screeps_combat_decision::force_sizing::{
+    should_defer_offense_commit, tower_intel_from, win_probability, AssaultMode, DefenseProfile, TowerIntel, TowerThreat, HOLD_MARGIN,
+};
 use crate::military::objective_queue::{
     ForceRequirement, ObjectiveKind, ObjectiveOwner, ObjectiveRequest, OBJECTIVE_PRIORITY_CRITICAL, OBJECTIVE_PRIORITY_HIGH,
     OBJECTIVE_PRIORITY_LOW, OBJECTIVE_PRIORITY_MEDIUM,
@@ -104,6 +106,10 @@ pub struct AttackCandidate {
     /// room unlocks a reservable mining remote (the reach-bug #3 fix — an undefended lvl0 core in our
     /// remote is worth the remote's income, not ~0). `None` for sources with no controllable economy.
     pub economic_roi: Option<f32>,
+    /// ADR 0035 D2 — the `last_seen` tick of the threat data the `defense` profile was derived from, so the
+    /// selection loop can apply the CONTENT-staleness gate (`should_defer_offense_commit`) to an empty-tower
+    /// (`ScoutedEmpty`) profile WITHOUT re-reading the threat component. 0 for candidates with no `defense`.
+    pub defense_last_seen: u32,
 }
 
 // Defender selection (the former `DefenseEscalation` 3-bucket) now lives on the doctrine registry —
@@ -880,6 +886,7 @@ impl WarOperation {
                     target_pos: Some(pos),
                     defense: None,
                     economic_roi: None,
+                    defense_last_seen: 0,
                 });
             }
         }
@@ -917,7 +924,14 @@ impl WarOperation {
             cand.estimated_enemy_dps = td.estimated_attack_dps;
             cand.estimated_enemy_heal = td.estimated_heal;
             cand.has_safe_mode = td.safe_mode_active;
-            cand.defense = Some(DefenseProfile { towers, safe_mode: td.safe_mode_active, ..Default::default() });
+            // ADR 0035 D1: derive tower intel for the enriched flag room (threat data was found here).
+            cand.defense = Some(DefenseProfile {
+                towers,
+                safe_mode: td.safe_mode_active,
+                tower_intel: tower_intel_from(td.hostile_tower_positions.is_empty(), true),
+                ..Default::default()
+            });
+            cand.defense_last_seen = td.last_seen;
         }
 
         if war_debug {
@@ -1142,6 +1156,11 @@ impl WarOperation {
                             // `threat_data.estimated_attack_dps`) is the one source `assess` + the EV path read.
                             repair_per_tick: threat_data.repair_per_tick as f32,
                             safe_mode: threat_data.safe_mode_active,
+                            // ADR 0035 D1: derive the tri-state tower intel from the EXISTING threat fields
+                            // (no new serialized state). `threat_data` exists here (the scan requires it), so
+                            // an empty tower list ⇒ `ScoutedEmpty` (vacuous — re-scout-gated by D2 below),
+                            // a non-empty list ⇒ `Seen` (size to the real towers).
+                            tower_intel: tower_intel_from(threat_data.hostile_tower_positions.is_empty(), true),
                         };
                         // P-OBJ #23 lifetime-aware: skip a core that will self-decay before a squad can
                         // realistically form, travel, and clear its HP (the W4N2 collapse-race that wastes a
@@ -1183,6 +1202,7 @@ impl WarOperation {
                                 target_pos: Some(core_pos),
                                 defense: Some(defense),
                                 economic_roi,
+                                defense_last_seen: threat_data.last_seen,
                             });
                         }
                     }
@@ -1255,6 +1275,9 @@ impl WarOperation {
                             // below from `estimated_enemy_dps`), not here — `assess` + the EV path read that.
                             repair_per_tick: threat_data.repair_per_tick as f32,
                             safe_mode: threat_data.safe_mode_active,
+                            // ADR 0035 D1: derive tower intel from the existing threat fields (no new
+                            // serialized state). Empty tower list with threat data present ⇒ `ScoutedEmpty`.
+                            tower_intel: tower_intel_from(threat_data.hostile_tower_positions.is_empty(), true),
                         };
                         candidates.push(AttackCandidate {
                             room: room_name,
@@ -1268,6 +1291,7 @@ impl WarOperation {
                             target_pos: None,
                             defense: Some(defense),
                             economic_roi: None,
+                            defense_last_seen: threat_data.last_seen,
                         });
                     }
                 }
@@ -1439,6 +1463,46 @@ impl WarOperation {
             // ADR 0031 #39 P3 — carry the oracle's chosen AssaultMode alongside the sized composition so it can
             // be attached to the objective's ephemeral runtime entry (→ the SquadManager's `StrategyInfo` →
             // the `DrainBreach` strategy + the squad's drain stance). `None` ⇒ no oracle ran (the direct path).
+            // ── ADR 0035 D1/D2 (SCOUT-BEFORE-COMMIT, the C2–C6 commit-half fix) ──────────────────────────
+            // A gated doctrine (`honor_verdict`: core / siege / gated raid) must NOT size a squad against a
+            // VACUOUS empty-tower defense. The 200-tick `last_seen` gate above is about recency of ANY vision;
+            // THIS is the CONTENT-staleness gate (`SCOUT_RECONFIRM_TICKS`, distinct + tighter): a room whose
+            // last snapshot showed ZERO towers but is older than the re-confirm window may have energized
+            // towers since (the W4N5 cascade — empty profile ⇒ p_win_proxy=1.0 ⇒ sized to ZERO tower DPS ⇒
+            // under-built squad). DEFER it: register a HIGH re-scout (register-don't-dispatch, observer-
+            // preferred) and SKIP committing this scan — UPSTREAM of `plan_engagement`, so the oracle NEVER
+            // sees an empty-stale profile (no oracle math change). A FRESH (`< SCOUT_RECONFIRM_TICKS`) empty
+            // snapshot is TRUSTED (just scouted clear ⇒ proceeds); a `Seen` (real towers) profile is ALWAYS
+            // trusted and sizes against the REAL towers (never under-sized — the gate only defers empty-stale).
+            // ALWAYS-FIELD doctrines (operator-flag raid / harass) are exempt — `honor_verdict()` is false, so
+            // operator intent still fields them on whatever intel they have.
+            if doctrine.honor_verdict() {
+                let intel = candidate.defense.as_ref().map(|d| d.tower_intel).unwrap_or(TowerIntel::NeverSeen);
+                if should_defer_offense_commit(intel, candidate.defense_last_seen, current_tick) {
+                    let has_attack_objective = system_data
+                        .combat_objective_queue
+                        .objectives
+                        .iter()
+                        .any(|o| o.owner == ObjectiveOwner::Attack && o.kind.room() == candidate.room);
+                    // Re-confirming an empty-tower CORE/ATTACK target is an active offense decision → HIGH so
+                    // it preempts the claim CRITICAL/HIGH visibility flood (same escalation the stale gate uses).
+                    let rescout_priority = offense_rescout_priority(has_attack_objective || candidate.target_pos.is_some());
+                    system_data
+                        .visibility
+                        .request(VisibilityRequest::new(candidate.room, rescout_priority, VisibilityRequestFlags::ALL));
+                    if war_debug {
+                        info!(
+                            "[War]   Defer {} -- empty-tower intel stale ({}t > {} re-confirm); re-scout (priority={}) before committing (ADR 0035 D2)",
+                            candidate.room,
+                            current_tick.saturating_sub(candidate.defense_last_seen),
+                            screeps_combat_decision::force_sizing::SCOUT_RECONFIRM_TICKS,
+                            rescout_priority
+                        );
+                    }
+                    continue;
+                }
+            }
+
             let objective: Option<(ObjectiveKind, f32, SquadComposition, AssaultMode)> = if doctrine.honor_verdict() && candidate.defense.is_none() {
                 // A gated doctrine needs the scouted defense to judge winnability; without it, don't commit.
                 None
@@ -1771,7 +1835,20 @@ fn economic_rank_score(base: f32, economic_roi: Option<f32>, defense: &DefensePr
     } else {
         const TOWER_DPS_HALF: f32 = 300.0; // ~one mid-range tower's DPS halves the proxy
         let tdps = tower_dps_at_assault(&defense.towers).max(0.0);
-        TOWER_DPS_HALF / (TOWER_DPS_HALF + tdps)
+        let proxy = TOWER_DPS_HALF / (TOWER_DPS_HALF + tdps);
+        // ADR 0035 D1 (defense-in-depth, in case D2's gate is bypassed): a VACUOUS empty-tower profile
+        // (`ScoutedEmpty`) would otherwise read tdps=0 ⇒ proxy=1.0 ⇒ outrank a genuinely-`Seen`-clear room.
+        // CLAMP it to a penalty ceiling so a never-confirmed-empty room never floats to the top of the
+        // candidate list. `Seen` (real towers, even zero) and `NeverSeen` keep the full curve — a
+        // Seen-recent-CLEAR room (empty towers, but seen-with-towers-elsewhere ⇒ Seen) ranks high as before.
+        // The branch is on a discrete enum (not a float), and the result stays a CONTINUOUS sort key, so the
+        // determinism fence (no float→discrete branch) holds.
+        const SCOUTED_EMPTY_PROXY_CEILING: f32 = 0.5;
+        if matches!(defense.tower_intel, TowerIntel::ScoutedEmpty) {
+            proxy.min(SCOUTED_EMPTY_PROXY_CEILING)
+        } else {
+            proxy
+        }
     };
     base + p_win_proxy * ECON_RANK_ROI_SCALE * roi.max(0.0)
 }
@@ -2166,7 +2243,9 @@ mod tests {
     // ── Reach-bug #3: economic-value-unlocked target EV ranking (ADR 0032) ──
 
     /// A defense profile with `n` energized mid-range towers (range 10 each) at the assault — the death-trap
-    /// knob for the P(win) proxy. `towers=0` ⇒ undefended.
+    /// knob for the P(win) proxy. `towers=0` ⇒ undefended. `tower_intel = Seen` (a genuinely-scouted room),
+    /// so the ADR 0035 D1 `ScoutedEmpty` rank penalty does NOT apply — these tests pin the pre-existing
+    /// economic-ranking behavior for a CONFIRMED room.
     fn defense_with_towers(n: usize) -> DefenseProfile {
         DefenseProfile {
             towers: (0..n).map(|_| TowerThreat { range_to_assault: 10, energy: 1000 }).collect(),
@@ -2174,6 +2253,7 @@ mod tests {
             objective_hits: 0,
             repair_per_tick: 0.0,
             safe_mode: false,
+            tower_intel: TowerIntel::Seen,
         }
     }
 
@@ -2213,5 +2293,112 @@ mod tests {
         let mut sm = defense_with_towers(0);
         sm.safe_mode = true;
         assert_eq!(economic_rank_score(base, Some(roi), &sm), base, "safe mode → no winnable economy");
+    }
+
+    // ── ADR 0035 D1: the ScoutedEmpty rank penalty (defense-in-depth, in case D2's gate is bypassed) ──
+
+    /// A VACUOUS empty-tower room (`ScoutedEmpty`) must NOT outrank a genuinely-`Seen`-clear room of the SAME
+    /// economy: its P(win) proxy is clamped to a penalty ceiling so it stops floating to the top of the
+    /// candidate list. A `Seen`-clear room (real intel, zero towers) keeps its full proxy and ranks high.
+    #[test]
+    fn scouted_empty_room_ranks_below_a_seen_clear_room() {
+        let base = 50.0_f32;
+        let roi = crate::room_economics::room_net_roi(&crate::room_economics::RoomEconomyFacts::reservable_remote(2, 3)).net_roi as f32;
+
+        // A genuinely-Seen, undefended (zero-tower) room — full proxy (1.0), ranks high.
+        let seen_clear = defense_with_towers(0); // tower_intel = Seen, towers = []
+        // The SAME zero-tower economy but VACUOUS (empty-Cached, never re-confirmed) — penalized proxy.
+        let mut scouted_empty = defense_with_towers(0);
+        scouted_empty.tower_intel = TowerIntel::ScoutedEmpty;
+
+        let seen_rank = economic_rank_score(base, Some(roi), &seen_clear);
+        let empty_rank = economic_rank_score(base, Some(roi), &scouted_empty);
+
+        assert!(
+            seen_rank > empty_rank,
+            "a Seen-clear room ({seen_rank}) must out-rank a vacuous ScoutedEmpty room ({empty_rank})"
+        );
+        // The penalty is a clamp, not a wipe: a vacuous room still ranks ABOVE its bare base (so it stays a
+        // candidate to be re-scouted, never permanently buried).
+        assert!(empty_rank > base, "the penalized vacuous room still lifts above base ({empty_rank} > {base})");
+    }
+
+    // ── ADR 0035 D2: the scout-before-commit SELECTION decision (the C2–C6 commit-half integration) ──
+    //
+    // war.rs's offense loop needs `game::*` + a full SystemData, so it is not unit-testable directly. This
+    // exercises the EXACT predicate the gate evaluates over a synthetic `AttackCandidate` — the wiring is the
+    // proof (per ADR 0035 §3.2): a gated doctrine over an empty-STALE profile DEFERS (re-scout, no commit);
+    // a `Seen` profile and a FRESH empty profile PROCEED. RED pre-fix: an empty-stale candidate would size
+    // to ZERO towers and commit; GREEN post-fix: it is deferred upstream of the oracle.
+
+    /// The committed gate predicate, lifted out of the offense loop verbatim: a GATED doctrine defers when the
+    /// candidate's tower intel is `ScoutedEmpty` and the empty snapshot is content-stale.
+    use screeps_combat_decision::force_sizing::SCOUT_RECONFIRM_TICKS;
+
+    fn would_defer_commit(candidate: &AttackCandidate, honor_verdict: bool, now: u32) -> bool {
+        if !honor_verdict {
+            return false; // always-field doctrines (operator raid/harass) are exempt.
+        }
+        let intel = candidate.defense.as_ref().map(|d| d.tower_intel).unwrap_or(TowerIntel::NeverSeen);
+        should_defer_offense_commit(intel, candidate.defense_last_seen, now)
+    }
+
+    fn core_candidate(tower_intel: TowerIntel, last_seen: u32) -> AttackCandidate {
+        let mut defense = defense_with_towers(0); // zero towers — the vacuous shape
+        defense.tower_intel = tower_intel;
+        AttackCandidate {
+            room: "W4N5".parse().unwrap(),
+            source: TargetSource::InvaderCore { level: 1 },
+            score: 50.0,
+            tower_count: 0,
+            estimated_enemy_dps: 0.0,
+            estimated_enemy_heal: 0.0,
+            has_safe_mode: false,
+            estimated_roi: None,
+            target_pos: None,
+            defense: Some(defense),
+            economic_roi: None,
+            defense_last_seen: last_seen,
+        }
+    }
+
+    #[test]
+    fn empty_stale_core_is_deferred_not_committed() {
+        let now = 100_000u32;
+        // The W4N5 cascade shape: a gated CORE candidate whose only tower snapshot is empty AND content-stale.
+        let stale = core_candidate(TowerIntel::ScoutedEmpty, now - (SCOUT_RECONFIRM_TICKS + 1));
+        assert!(
+            would_defer_commit(&stale, true, now),
+            "an empty-STALE gated candidate must DEFER (re-scout before committing), not size to zero towers"
+        );
+    }
+
+    #[test]
+    fn seen_and_fresh_empty_cores_proceed_to_sizing() {
+        let now = 100_000u32;
+        // A genuinely-Seen profile (real towers) ALWAYS proceeds — sized to the real towers, never under-sized.
+        let mut seen = core_candidate(TowerIntel::Seen, now - 10_000);
+        seen.defense.as_mut().unwrap().towers = vec![TowerThreat { range_to_assault: 10, energy: 1000 }];
+        assert!(!would_defer_commit(&seen, true, now), "a Seen candidate must proceed to sizing against the real towers");
+
+        // A FRESH empty snapshot (just scouted clear, inside the re-confirm window) is trusted ⇒ proceeds.
+        let fresh = core_candidate(TowerIntel::ScoutedEmpty, now - 1);
+        assert!(!would_defer_commit(&fresh, true, now), "a freshly-scouted-clear room must proceed (no needless defer)");
+
+        // An ALWAYS-FIELD doctrine (operator intent) is exempt even on an empty-stale profile.
+        let stale = core_candidate(TowerIntel::ScoutedEmpty, now - (SCOUT_RECONFIRM_TICKS + 1));
+        assert!(!would_defer_commit(&stale, false, now), "always-field doctrines field on whatever intel they have");
+    }
+
+    // Determinism fence: the gate predicate is integer-only (no float→discrete branch), so it is stable
+    // across runs regardless of HashMap iteration order — `would_defer_commit` over the same inputs is equal.
+    #[test]
+    fn defer_decision_is_deterministic() {
+        let now = 100_000u32;
+        let c = core_candidate(TowerIntel::ScoutedEmpty, now - (SCOUT_RECONFIRM_TICKS + 1));
+        let first = would_defer_commit(&c, true, now);
+        for _ in 0..16 {
+            assert_eq!(would_defer_commit(&c, true, now), first, "defer decision must be deterministic");
+        }
     }
 }
