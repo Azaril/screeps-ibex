@@ -66,3 +66,9 @@
 	path = screeps-combat-eval
 	url = https://github.com/Azaril/screeps-combat-eval.git
 	branch = master
+[submodule "screeps-sim-core"]
+	path = screeps-sim-core
+	url = https://github.com/Azaril/screeps-sim-core.git
+[submodule "screeps-rover-eval"]
+	path = screeps-rover-eval
+	url = https://github.com/Azaril/screeps-rover-eval.git

@@ -9,9 +9,9 @@
 # reqwest / rayon / image), so the wasm aliases build the whole workspace EXCEPT
 # them. A bare `cargo build` and `cargo test-host` DO build/test them, on host.
 [alias]
-clippy-wasm = ["clippy", "--workspace", "--exclude", "screeps-rest-api", "--exclude", "screeps-pack", "--exclude", "screeps-prospector", "--exclude", "screeps-server-kit", "--exclude", "screeps-foreman-bench", "--exclude", "screeps-ibex-eval", "--target", "wasm32-unknown-unknown"]
-check-wasm = ["check", "--workspace", "--exclude", "screeps-rest-api", "--exclude", "screeps-pack", "--exclude", "screeps-prospector", "--exclude", "screeps-server-kit", "--exclude", "screeps-foreman-bench", "--exclude", "screeps-ibex-eval", "--target", "wasm32-unknown-unknown"]
-build-wasm = ["build", "--workspace", "--exclude", "screeps-rest-api", "--exclude", "screeps-pack", "--exclude", "screeps-prospector", "--exclude", "screeps-server-kit", "--exclude", "screeps-foreman-bench", "--exclude", "screeps-ibex-eval", "--target", "wasm32-unknown-unknown"]
+clippy-wasm = ["clippy", "--workspace", "--exclude", "screeps-rest-api", "--exclude", "screeps-pack", "--exclude", "screeps-prospector", "--exclude", "screeps-server-kit", "--exclude", "screeps-foreman-bench", "--exclude", "screeps-ibex-eval", "--exclude", "screeps-rover-eval", "--target", "wasm32-unknown-unknown"]
+check-wasm = ["check", "--workspace", "--exclude", "screeps-rest-api", "--exclude", "screeps-pack", "--exclude", "screeps-prospector", "--exclude", "screeps-server-kit", "--exclude", "screeps-foreman-bench", "--exclude", "screeps-ibex-eval", "--exclude", "screeps-rover-eval", "--target", "wasm32-unknown-unknown"]
+build-wasm = ["build", "--workspace", "--exclude", "screeps-rest-api", "--exclude", "screeps-pack", "--exclude", "screeps-prospector", "--exclude", "screeps-server-kit", "--exclude", "screeps-foreman-bench", "--exclude", "screeps-ibex-eval", "--exclude", "screeps-rover-eval", "--target", "wasm32-unknown-unknown"]
 test-host = ["test"]
 
 # (An earlier `paths` override here was removed — cargo does not apply `paths`

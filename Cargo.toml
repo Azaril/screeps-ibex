@@ -10,6 +10,9 @@ members = [
     "screeps-timing-annotate",
     "screeps-foreman",
     "screeps-visual",
+    # The shared, combat-agnostic movement/world simulation kernel (ADR 0033) — extracted from
+    # screeps-combat-engine; both the combat sim and screeps-rover-eval build on it. host+wasm.
+    "screeps-sim-core",
     "screeps-combat-engine",
     "screeps-combat-decision",
     # The sim glue. Now that it depends only on workspace members (decision + engine + rover),
@@ -33,6 +36,9 @@ members = [
     # wasm aliases (.cargo/config.toml) --exclude every host-only crate.
     "screeps-foreman-bench",
     "screeps-ibex-eval",
+    # The rover pathing/movement benchmark (ADR 0033) — host-only measurement layer over the
+    # screeps-sim-core kernel; excluded from the wasm aliases.
+    "screeps-rover-eval",
 ]
 # No `exclude`: every crate directory in this repo is now a workspace member.
 
@@ -64,6 +70,9 @@ screeps-visual = { path = "screeps-visual" }
 
 [patch.'https://github.com/Azaril/screeps-common']
 screeps-common = { path = "screeps-common" }
+
+[patch.'https://github.com/Azaril/screeps-sim-core']
+screeps-sim-core = { path = "screeps-sim-core" }
 
 [patch.'https://github.com/Azaril/screeps-combat-engine']
 screeps-combat-engine = { path = "screeps-combat-engine" }
