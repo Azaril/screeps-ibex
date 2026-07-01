@@ -56,3 +56,6 @@ runs/
 # Bench / planner output (PNGs, plan JSON, score reports) #
 ###########################################################
 output/
+
+# temp combat render outputs (not committed)
+combat-renders/
