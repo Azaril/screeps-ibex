@@ -278,6 +278,11 @@ agent `2a4f790` (consumes `member_intents`), super `fc841c8`. Gates: decision 12
 (`action_oscillation_rate` metric — positional gate already passes), the **bot's per-creep action wiring**
 to `member_intents` (positioning is already kernel-driven; the bot is undeployed), and the tournament tune.
 
+**IMPLEMENTED (current state as of 2026-07-01):** kernel `plan_squad_ev` live + per-creep action wiring
+landed 2026-06-25 (steps 1–3); step 4 (`action_oscillation_rate` metric) in progress. Gates green
+(decision / agent / eval). Downstream combat work has since landed + deployed to MMO on top of this
+kernel: ADR 0027/0031/0032/0034/0035/0036/0037 (rally/engage/structure/tower-defense).
+
 Build steps (each a green checkpoint commit):
 
 1. ✅ **Sim engine-correctness.** Patch `resolve.rs::filtered_actions` so the sim mirrors the real engine table (rangedHeal drops `rangedAttack`+`rangedMassAttack`; confirm dismantle/attackController drops) + a parity unit test vs `intents.js`. This makes the harness a faithful oracle for the kernel; it is sim-correctness, not back-compat.

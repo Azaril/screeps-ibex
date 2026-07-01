@@ -1,6 +1,6 @@
 # ADR 0031 — Capability-driven force composition
 
-- **Status:** Accepted
+- **Status:** Accepted + IMPLEMENTED (2026-06-27). RequiredForce vector, `emit_requirement`, `assemble_force` (monotonic `1..=MAX_SIZED_MEMBERS`), `optimize_composition` (tuned per 0031b), `ForceDoctrine` (seven activators), single-`EnemyForce` unify (§2(f), `97d9944`) all code-complete in decision+bot. OPEN follow-ups: Tier-2 weapon-archetype into EV search (§2(e)); Tier-3 param axes (0031a §4); escalate-vs-abandon on `assemble_force`=`None` (#38).
 - **Date:** 2026-06-27
 - **One line:** Consolidates ADR 0026 §9 / 0029 / 0030 and **supersedes their `template() + sized_for` sizing mechanism**, replacing it with a capability-vector emitter, a deterministic role-distribution assembler (bridging to an EV optimizer), and a pure-classifier doctrine driving one squad-generation path.
 
@@ -89,7 +89,7 @@ Every force-producing site routes through `decide_doctrine(...).and_then(|d| pla
 
 Dismantle counts as strength: `assess_engage`'s `our_strength` adds `dismantle_power`, **gated on a hostile structure being present** (the P0a correction — adding dismantle to `our_dps` everywhere mis-scores it as anti-creep in creep-killability, so the fix is scoped to the structure-engagement strength only; CreepClearWins-safe). A WORK+HEAL siege now reads positive strength and engages instead of retreating at t0.
 
-### 2(f) Single enemy-force source of truth (#41)
+### 2(f) Single enemy-force source of truth (#41) — DONE (`97d9944`)
 
 Enemy CREEP combat power had **two** representations: `DefenseProfile.enemy_dps` (read by the structure-SIZING path `assess`) and `EnemyForce.dps` (read by the EV path `optimize_composition`/`pairing_p_win` + `clear_force`). They were kept disjoint by a "don't double-count" convention (each path read only one), which made `DefenseProfile.enemy_dps` **dead in the modern EV/optimize path** and forced every floor/predicate that touched the enemy to remember BOTH channels — the heal-floor and owned-floor work both had to AND `defense.enemy_dps == 0` with `enemy_force.dps == 0` (`defense_confirmed_undefended`). A footgun: a producer that updated one channel and not the other would silently desync the survivability sizing from the P(win) sizing.
 
@@ -206,7 +206,7 @@ pure-finite control still Drains). NOT live-reachable (real towers cap at 1000 <
 - **Tier-2/3 archetype + drain + EHP-grading** — promote weapon `archetype` into the EV search (D17; the biggest remaining gap = the original WORK-siege-vs-guard failure); add a tower-present acceptance bed that *requires* `tough > 0` so the EHP ladder is graded; add the drain/kite cost-side branch + `engage_range` for the unboosted-vs-multi-tower path. Plan + ranges: 0031a §4; results so far: 0031b §4.
 - **Formation-enum footprint cleanup** — `FormationShape::Box2x2`/`Line` and `military/formation.rs`'s hardcoded 2×2 overlay (`is_valid_quad_position`, `apply_quad_cost_overlay`) are silently wrong for 5–8 members; generalize to footprint-driven formation from member count.
 - **P6 position-weights re-sweep** — re-run the ADR-0019 position-utility / exploitability tuning + re-sweep weights now that the optimizer changes which forces are fielded (the `CompositionParams` Tier-1 sweep itself is DONE — 0031b).
-- **Higher-power multi-squad strategies** — the response to a `None` defer (scale the blob / coordinate multiple squads / boost) is a separate strategy-layer ADR; the composition layer's job ends at "best single squad, or None."
+- **Higher-power multi-squad strategies (escalate-vs-abandon on `assemble_force`=`None`, #38)** — the response to a `None` defer (scale the blob / coordinate multiple squads / boost) is a separate strategy-layer ADR; the composition layer's job ends at "best single squad, or None." Tracked as #38.
 
 ---
 
@@ -233,3 +233,5 @@ pure-finite control still Drains). NOT live-reachable (real towers cap at 1000 <
 ---
 
 > **Evolution.** Built across P0–P4b (committed: P0a Layer-A brain fix `5db5e08`; P2 `emit_requirement` `778e93d`/`ac61b0b`/`6bd8e1b`; P3 `assemble_force` `5079bf8`/`38fd534`/`da79345`; P4a pure-classifier unification `4691c00`/`54da38c`/`0fb1370`). **P4b landed alongside this consolidation:** the ≈13 `SquadComposition` constructors + `sized_for` + the static `BodyType` shapes (now `Sized`-only) deleted, the orphaned catalog `bodies::*_body` removed, all call sites migrated, and `WORLD_FORMAT_VERSION` 18→19. **The EV optimizer landed (D14/D16/D17):** `force_ceiling`'s presumed budget is deleted as a producer — `optimize_composition` is the per-candidate EV decision (over-power × TOUGH ladders, `assemble_force` builds each candidate), and `force_ceiling`'s 3+5 math survives only as the renamed `optimizer_ceiling_budget` for `emit_requirement`'s winnability-assess. **The Tier-1 `CompositionParams` tournament sweep landed + the seeds are confirmed-optimal-across-regimes and KEPT** (no `default()` change; ADR 0031b, grounded in 0031a's four-bot survey). **Remaining:** the budget-free `emit_requirement` (retires `optimizer_ceiling_budget`), the Tier-2/3 archetype/drain/EHP-grading sweep (D17 / 0031a §4 / 0031b §4), the formation-enum footprint cleanup, and the P6 position-weights re-sweep. See `docs/design/0031a-force-composition-tunable-params.md` (params) + `docs/design/0031b-force-composition-tuning-results.md` (results).
+>
+> **Current state as of 2026-07-01.** Code-complete in decision+bot: the `RequiredForce` capability vector, `emit_requirement`, `assemble_force` (monotonic over `1..=MAX_SIZED_MEMBERS`), `optimize_composition` (tuned per 0031b), `ForceDoctrine` (the seven activators), and the single-`EnemyForce` unification (§2(f), `97d9944`). Landed alongside sibling combat ADRs 0027/0032/0034/0035/0036/0037 (rally/engage/structure/tower-defense done + deployed to MMO). OPEN follow-ups only: Tier-2 weapon-archetype into the EV search (§2(e)/D17); Tier-3 param axes (0031a §4); escalate-vs-abandon on `assemble_force`=`None` (#38, the Deferred multi-squad bullet).

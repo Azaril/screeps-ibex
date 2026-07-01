@@ -1,9 +1,25 @@
 # ADR 0027 — Combat Objective/Squad Lifecycle Rework (P-OBJ #23)
 
-Status: IMPLEMENTED 2026-06-27 (super `e4bbf0f`; WFV 17→18); **EXTENDED 2026-06-28 —
-reach/engage hardened end-to-end across a live soak (see "Update 2026-06-28" below).**
+Status: **Accepted + COMPLETE** (2026-06-27, extended 2026-06-28). v1 end-to-end on master:
+commitment lease, resolve-vs-give-up, whole-squad **Reassign**, **threat-centric defense**,
+**v1.1 auction** (ADR 0032), **Salvage P1–P3**. WFV history **18→20→22**. **All produced combat
+objectives are on v1.** (First landed super `e4bbf0f` WFV 17→18; the reach/engage hardening +
+reassignment + auction + salvage migration are all on master — see the ledger + updates below.)
 Companion to ADR 0008 (squad lifecycle) and ADR 0026 §9 (doctrine selection/sizing).
 Task #23 / #25.
+
+> **Current state as of 2026-07-01.** v1 is feature-complete and **deployed to MMO**. Since the
+> 2026-06-28 ledger below, the reach/engage/robustness follow-ups landed as their own ADRs:
+> **ADR 0031** (force sizing / drain — drain closed out end-to-end), **ADR 0032** (the EV auction:
+> v1.1→v1.2 global Hungarian→v2 Merge column — COMPLETE), **ADR 0034** (rally/travel/convergence
+> robustness — renew-in-transit, scatter-robust shared rally, movement-failure escalation),
+> **ADR 0035** (scout-before-commit + abandon-on-unwinnable-contact — the reach↔retreat oscillation
+> fix), **ADR 0036** (opportunistic RAZE structure targeting + salvage defers a live-core room to
+> the offense `Dismantle`), and **ADR 0037** (tower-aware neighbour defense — route towered rooms to
+> the offense oracle, MMO-safe). The lifecycle/movement backlog items #1–#7 below are addressed by
+> ADR 0034/0035; consult those ADRs for their as-built status. This ADR's own scope (objective
+> lifecycle + reassignment + auction wiring + salvage v1 migration) is **done**; nothing in the
+> "CURRENT" / "remaining work" sections below is still open under 0027.
 
 ## Status ledger (2026-06-28)
 
@@ -38,12 +54,14 @@ StayPut / Recycle / Merge are chosen in one global EV-optimal solve. The combat 
 feature-complete; only the non-blocking polish below remains.
 
 **FUTURE (non-blocking polish):**
-- **SK rescout-margin hardening** (non-blocking follow-up) — `THREAT_DATA_MAX_AGE=500` <
-  `STRONGHOLD_RESCOUT_INTERVAL=1500`: if intel fully expires before a re-scout lands, a known-stronghold SK
-  room can drop out of `threat_rooms` (stopping both war.rs's >200t rescout AND offense eval). Backstopped
-  today by war.rs's 2–3 HIGH rescouts within the 500t window — adequate margin, not a hard guarantee.
-  Consider `STRONGHOLD_RESCOUT_INTERVAL < THREAT_DATA_MAX_AGE` for a hard close. (Unaffordable high-level
-  strongholds left to self-collapse is a *deliberate* economic gate, not a gap.)
+- ~~**SK rescout-margin hardening**~~ — **DONE 2026-06-28 (super `d301324`, no WFV).** The stale relation
+  was `STRONGHOLD_RESCOUT_INTERVAL=1500 > THREAT_DATA_MAX_AGE=500`: intel expired before the re-probe →
+  a known-stronghold SK room dropped out of `threat_rooms` (stopping BOTH the offense eval AND the
+  in-join `>200t has_known_core` backstop) → the room was abandoned (never farmed, never cleared). FIX:
+  `THREAT_DATA_MAX_AGE` made `pub`; `STRONGHOLD_RESCOUT_INTERVAL` is now DERIVED = `THREAT_DATA_MAX_AGE/2`
+  (=250, 2× margin) with a `const _` compile-time assert that hard-fails the build if the relation ever
+  inverts — one peek/250t, no scout storm. (Unaffordable high-level strongholds left to self-collapse
+  remain a *deliberate* economic gate, not a gap.)
 - ~~**Owned-room intel-floor refinement**~~ — **INVESTIGATED 2026-06-28 → NOT A BUG (closed, no change).**
   The concern was that `project_intel`'s `danger.max(priority_implied_danger(priority))` floor (squad_manager.rs)
   makes a "harmless dps=0 scout" in an owned room pull a CRITICAL defender. It does NOT: a *truly* harmless
@@ -185,6 +203,15 @@ collapsed from 5–13 to ~1).
 
 ### Polish / follow-up backlog (priority order)
 
+> **Current state as of 2026-07-01 — this backlog is addressed; nothing here is still open under 0027.**
+> #1 (threat-centric defense) landed as v1's `Secure{threat_room}` + reassignment (see the ledger + the
+> "Squad reassignment" design below). #2/#3/#4 (engaged-en-route, far-target stall, hold-station) and the
+> rally/travel robustness are addressed by **ADR 0034** (renew-in-transit, scatter-robust shared rally,
+> movement-failure escalation, majority-progress lease) and **ADR 0035** (scout-before-commit +
+> abandon-on-unwinnable-contact — the reach↔retreat oscillation). #5 (reassign survivors) + #6 (forming
+> tail / merge) landed via v2's Merge→Bk transfer column (**ADR 0032**). Consult those ADRs for as-built
+> detail; the entries below are retained for historical root-cause context.
+
 **Lifecycle / movement (this ADR):**
 1. **Defense targeting — intercept the threat, don't garrison empty owned rooms** *(highest value)*.
    The Defend producer (`war.rs:421-428`) targets the OWNED room, but the enemy roams the NEIGHBOR
@@ -218,15 +245,21 @@ collapsed from 5–13 to ~1).
    base a breach can't out-heal is drainable; EV-guarded — never an infinite-energy tower / unsustainable
    target, never downgrades a winning breach); the bot threads `assault_mode` via the ephemeral
    `ObjectiveRuntimeEntry` → `StrategyInfo` so the previously-inert `DrainBreach` / `move_to_drain_standoff`
-   / `drain_stance` fire live (no WFV bump). **FOLLOW-UPS:** (a) a MULTI-member assembled soak doesn't yet
-   KILL — needs **tank-forward heal-the-tank coordination** (healers must position to heal the soaking tank);
-   single-member + the oracle decision are proven. (b) LOW, NOT live-reachable: a MIXED finite+infinite-tower
-   base under-sizes the soak (live towers cap at 1000 energy < the 50k sentinel; synthetic-fixture-only) —
-   optional hardening = refuse Drain if any energized tower ≥ `DRAIN_INFINITE_TOWER_ENERGY`.
+   / `drain_stance` fire live (no WFV bump). **BOTH FOLLOW-UPS NOW DONE (drain CLOSED OUT end-to-end,
+   ADR 0031 §2(g)):** (a) tank-forward heal-the-tank coordination proven in-sim AND wired live (super
+   `e05d5e8` `should_drop_anchor_for_drain` drops the formation anchor so a drain comp routes anchorless
+   to its member_goals — tank forward at the standoff, healers one tile behind); (b) mixed
+   finite+infinite-tower hardening landed (super `86d5c42`, decision bump). No WFV.
 10. `member_energy>3000` PREFERRED-clamp lift; budget-free `emit_requirement` (retire
     `optimizer_ceiling_budget`).
 
-## Design — Squad reassignment (backlog #1 + #5) [PROPOSED 2026-06-28]
+## Design — Squad reassignment (backlog #1 + #5) [IMPLEMENTED]
+
+> **Current state as of 2026-07-01.** This design is **IMPLEMENTED**: v1 = whole-squad **Reassign** +
+> **threat-centric defense** (`Secure{threat_room}`, `Defend{owned}` demoted) landed in super `4f41da8`
+> (**WFV 20**); v2 = the transfer/merge pending-slot primitive landed as ADR 0032's **Merge→Bk** column
+> (super `a03ee91`). The design text below is retained as-authored; the **Phasing** note at the end was
+> the accurate forward plan and both phases are now done.
 
 Subsumes backlog **#1 (defense targeting)** + **#5 (reassign survivors)**, and removes the
 retire→re-field churn for non-loss terminals. Chosen shape: **threat-centric defense (Option B)**

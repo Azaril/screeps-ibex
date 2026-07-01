@@ -9,6 +9,19 @@ members; + lane contention) AND combat effectiveness (squads lose defended fight
 lifecycle), ADR 0027 (objective/squad lifecycle rework), ADR 0023/0023a (the combat sim
 harness), ADR 0026 §9 (doctrine sizing). Task #23 / #25.
 
+> **Current state as of 2026-07-01 (combat-feature-set audit).** Still IN PROGRESS. Sharpened
+> open items: **K0 (rally), K1 (spawn-throughput reproducing the 3/5 stall), K2 (FSM transitions)
+> are LANDED + GREEN** — K0/K1 are live via the bot re-exports, K2 is the canonical unit-tested
+> spec that the harness drives (bot `machine!` adoption still deferred by design). **K3 (fielding —
+> `slots_to_spawn` wrapping `sized_for`/`build_body`) and K4 (claim pacing — `claim_pacing`) have
+> their pure kernels BUILT + tested in `screeps-combat-decision`, but the BOT adapter wiring is
+> still PENDING** (no live caller of `slots_to_spawn`/`claims_allowed` yet — the harness driver is
+> their only consumer). This harness is **the final offline gate for full lifecycle / force-sizing
+> validation.** The surrounding combat work has since landed + deployed to MMO: rally/travel
+> convergence (ADR 0034), scout-before-commit/abandon-on-contact (ADR 0035), opportunistic
+> structure targeting (ADR 0036), tower-aware neighbour defense (ADR 0037), plus the
+> capability-driven composition + EV assignment reworks (ADR 0031/0031a/0031b/0032).
+
 > **Forward note (2026-06-29):** [ADR 0033](0033-rover-pathing-sim-and-benchmark.md) (Proposed) extracts the engine's movement mechanism into `screeps-sim-core` and renames `CombatWorld`→`SimWorld` / `resolve_tick`→`resolve_combat_tick`; this lifecycle harness becomes a consumer of `sim-core`, and the `CombatWorld` / `resolve_tick` references below read as their `Sim*` / split successors. No design change here. (The `Colony` model stays in `combat-eval`, outside the kernel.)
 
 ## Problem — live tuning is not converging
@@ -111,15 +124,20 @@ spread-0). The only new ordering surface is the spawn queue — modeled as a **d
     Calling `next_state` up-front would move those, a behavior risk on a *working* FSM that is
     not the bug. So the kernel is the canonical, tested spec (a sync note sits above the live
     `machine!`); the harness drives `next_state`; full bot adoption waits for a tick refactor.
-- **K3 — fielding (LANDED).** `fielding::slots_to_spawn(composition, filled, best_capacity,
-  per_member_cap, priority, move_profile)` wraps the shared `sized_for`/`build_body`/
-  `PREFERRED_MEMBER_ENERGY`: one `QueuedSpawn` per UNFILLED slot, body built at
-  `min(best_capacity, per_member_cap)`, a slot no in-range home can build is skipped (the
-  `None` stall), `id` = slot index. 3 tests.
-- **K4 — claim pacing (LANDED).** `claim_pacing::claims_allowed(active, forming,
-  max_concurrent, max_forming)` = the tighter of the two headrooms — reproduces the
-  forming-cap LOCKUP (a stuck-forming squad blocks all new claims, the `forming-cap=1`
-  zeroing seen live). 3 tests.
+- **K3 — fielding (KERNEL BUILT; BOT WIRING PENDING).** `fielding::slots_to_spawn(composition,
+  filled, best_capacity, per_member_cap, priority, move_profile)` wraps the shared
+  `sized_for`/`composition::build_body`/`PREFERRED_MEMBER_ENERGY`: one `QueuedSpawn` per UNFILLED
+  slot, body built at `min(best_capacity, per_member_cap)`, a slot no in-range home can build is
+  skipped (the `None` stall), `id` = slot index. 3 tests. **Pure kernel is landed + green in
+  `screeps-combat-decision::fielding`; the harness driver consumes it, but no BOT adapter calls it
+  yet** (the live fielding path — `slots_to_spawn`→`build_body` token broadcast — is still to be
+  wired to `queue_slot_spawn`).
+- **K4 — claim pacing (KERNEL BUILT; BOT WIRING PENDING).** `claim_pacing::claims_allowed(active,
+  forming, max_concurrent, max_forming)` = the tighter of the two headrooms — reproduces the
+  forming-cap LOCKUP (a stuck-forming squad blocks all new claims, the `forming-cap=1` zeroing seen
+  live). 3 tests. **Pure kernel is landed + green in `screeps-combat-decision::claim_pacing`; the
+  harness driver consumes it, but the BOT claim-pacing adapter (gating `field_new_squad` on
+  `claims_allowed`) is still PENDING.**
 
 ### Forming-phase colony driver (LANDED)
 
@@ -257,8 +275,10 @@ Still-open spawn/form issues surfaced by live verification (2026-06-27):
   producer re-sizes a player room to 1-2 members — under-sized = the combat-effectiveness layer).
   The rally gate is now robust to it, but the oscillation/under-sizing itself wants a fix.
 
-Done: K0–K4 kernels; the forming-phase driver (3/5 stall + above-economy-completes); the
-**engine-engage handoff** (`run_lifecycle` — full form→engage→kill offline + deterministic);
+Done: K0–K2 kernels LANDED + GREEN (K0/K1 live via bot re-exports, K2 canonical spec driven by
+the harness); K3/K4 pure kernels BUILT + green (BOT adapter wiring still PENDING — the harness
+driver is their only consumer today); the forming-phase driver (3/5 stall + above-economy-completes);
+the **engine-engage handoff** (`run_lifecycle` — full form→engage→kill offline + deterministic);
 the 87.5 backfire diagnosis (combat-effectiveness, not spawn-priority); **renew** (Phase B-renew
 + spawn-adjacent rally, `ebf3623`); the **rally-gate fix** (depart on requested-present, robust to
 oscillating size — `bf021dd`, the live W9N8 stuck-at-1/1).

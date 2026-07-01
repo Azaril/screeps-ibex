@@ -1,6 +1,14 @@
 # ADR 0034 — Rally / Travel / Convergence Robustness (far-home convergence, rally-room selection, renew-in-transit)
 
-Status: **Proposed** (2026-06-29)
+Status: **Accepted**; **Phases 0–2 IMPLEMENTED + deployed** (world-coord centroid, member-failure escalation
++ majority-progress lease, renew-in-transit). **OPEN:** Phase 3 (contested-oscillation production-path proof,
+test-only), Phase 4 (param-sweep convergence gates S1/S2/S3), Phase 1.5 (unreachable-target objective abort),
+F-C (D6c renewable-rally-bias live wiring). See §2.2. _(Proposed 2026-06-29; accepted/landed 2026-07-01.)_
+
+> **CURRENT STATE (as of 2026-07-01):** Phase 0 (`36bb340`), Phase 1 (`7567702`), Phase 2 (`8bdf3e5`), and the
+> RC-11 intel gate (`2e7461d`) have all LANDED on master and deployed to MMO. The rally/engage/structure/
+> tower-defense combat feature set (ADRs 0027 / 0031 / 0032 / 0034 / 0035 / 0036 / 0037) is done + deployed.
+> The per-phase headers below are annotated with as-built status; the remaining open work is enumerated in §2.2.
 
 > Filename note: the originating task named `0033-rally-travel-convergence-robustness.md`, but `0033` is
 > already taken by [ADR 0033](0033-rover-pathing-sim-and-benchmark.md) (rover-pathing sim + benchmark). This
@@ -148,7 +156,7 @@ purely composition-completeness — see RC-9.
 - `screeps-ibex/src/military/squad_manager.rs` (~2135 `present_wins_or_stalls`, ~2286 `quorum_now`, ~2301
   latch), `screeps-combat-decision/src/lib.rs:~1430` (`present_force_wins_or_stalls`, vacuous-win), `military/formation.rs:~235`
   (`init_squad_path_if_needed` arbitrary-first-member anchor), `jobs/squad_combat.rs:~1043` (`cross_room_formation_target` edge-hold).
-- **FIX (D9, ✅ DONE — decision + super, no WFV bump):** gate the win-or-stall fast-path on **real target
+- **FIX (D9, ✅ DONE — decision + super `2e7461d`, no WFV bump):** gate the win-or-stall fast-path on **real target
   intel**: `winnable_fast_path_allowed(present_wins_or_stalls, have_target_intel)` where
   `have_target_intel = !hostiles.is_empty() || !structures.is_empty() || intel_source == LiveVisible`, applied
   at **both** `ready_to_depart` and `quorum_now` (via `squad_is_gathered`). An unscouted "win vs zero enemies"
@@ -186,6 +194,26 @@ symptoms.
 - **`run_v1_flow`/`run_offense_flow`** (`:1110`/`:1437`): multi-objective + reassign, **travel = tick counter**.
 
 ### 2.2 What the sim MISSES (the gaps that hide the far-home stall)
+
+> **CURRENT STATE (as of 2026-07-01) — closed vs OPEN.** Phases 0–2 CLOSED most of these gaps and are deployed:
+> - **CLOSED:** G1/G2 (real centroid/rally geometry, far/cross-quadrant scatter) — Phase 0 (`36bb340`).
+>   G3/G6 (production-path member positioning + per-member vs min-distance progress) — Phase 1 (`7567702`).
+>   G4 (TTL burn + renew-at-rally) — Phase 2 (`8bdf3e5`). The RC-11 vacuous-win formation freeze — D9 (`2e7461d`).
+> - **OPEN (tracked below / in §4):**
+>   - **Phase 3** — contested-oscillation (S2) on the PRODUCTION path (`run_lifecycle_churn_extended`), currently
+>     only proven in the isolated spatial driver. Test-only, no production-code change expected (confirms D7).
+>   - **Phase 4** — wire S1/S2/S3 as `ParamScore` convergence gates in `param_sweep.rs` (permanent offline
+>     regression fence). Test/harness-only.
+>   - **Phase 1.5** — objective-level abort for a genuinely-unreachable target (single-member / fully-blocked
+>     squad): detected today (`MOVE-BLOCKED` + stall counter) but NOT resolved (waits out `MAX_TRAVEL_BUDGET`).
+>     An objective-layer decision (abort / mark-unreachable / reassign / reroute), see §3 D4 AS-BUILT.
+>   - **F-C (D6c)** — renewable-rally-bias (bias the staging room toward a friendly spawn) is **sim-only**; the
+>     live bot carries S3 via home-renew. Live wiring is a documented follow-up (see Phase 2 AS-BUILT).
+>   - Phase-2 in-code follow-ups F1 (`Recycle` verdict currently `Hold`s) / F2 (`RALLY_TRAVEL_PER_ROOM` flat 50t).
+>
+> G7 (engine cross-room movement) remains explicitly OUT OF SCOPE. The table below is retained as the original
+> gap analysis; the CLOSED gaps are historical.
+
 | Gap | Where | Consequence |
 |---|---|---|
 | **G1 — real centroid/rally geometry** is never exercised. The spatial driver uses `WPos` grid + `travel.rally` *given*; the rally unit test hand-rolls a local stepper. Neither calls `cohesion::centroid()` then `rally::shared_rally_point()` over real cross-quadrant rooms. | `cohesion.rs:24`, `rally.rs:209`, harness `WPos` model | **RC-1/RC-2 (the headline) are completely invisible offline.** The wrong-room rally is never computed in a test. |
@@ -344,7 +372,7 @@ only after the corresponding RED sim exists.
   scatter geometries where the centroid bearing ≠ the laggard bearing. No WFV bump. Live-deployed; soak showed
   reach jump from 0 → 20 `in_room=true`, confirming the geometry fix.
 
-### Phase 1 — Production-path far-home stall repro (RC-3/RC-4/RC-8/RC-10, sim gap G3/G6) — ✅ DONE (eval + super, no WFV bump)
+### Phase 1 — Production-path far-home stall repro (RC-3/RC-4/RC-8/RC-10, sim gap G3/G6) — ✅ DONE (eval + super `7567702`, no WFV bump)
 - **RED:** build `run_lifecycle_churn_extended` (§2.3.2) — per-member real `Position`s, production rally
   geometry, solo step, per-tick gather + latch, `Arrived` gated on `gathered`, per-member + min distance.
   Reproduce S1 (far-home stall) as `OscillatedNeverGathered`/`LapsedInTravel`. Add the blocked-path model
@@ -359,7 +387,7 @@ only after the corresponding RED sim exists.
   self-healing on reload) → no WFV bump. **Known gap:** single-member / fully-blocked unreachable target →
   Phase 1.5 (objective-level abort), see §3 D4.
 
-### Phase 2 — Renew-in-transit repro (RC-5/RC-6/RC-7, sim gap G4) — ✅ DONE (decision `4f72088`, eval `ec23ee2`, super, no WFV bump)
+### Phase 2 — Renew-in-transit repro (RC-5/RC-6/RC-7, sim gap G4) — ✅ DONE (decision `4f72088`, eval `ec23ee2`, super `8bdf3e5`, no WFV bump)
 - **RED:** add the TTL/renew-at-rally model (§2.3.3). Reproduce S3 (slow far-home form) as
   `ChurnedNeverDeployed` (early members age out) and a far member arriving below the fight buffer.
 - **GREEN:** land D6 (lifetime gate + renew while holding/rallying + renewable-rally bias from D3). S3 →
@@ -398,9 +426,10 @@ travel through hostile territory needs engine-proof fidelity (a NICE-TO-HAVE, no
 ---
 
 ## 5. Consequences
-- **No `WORLD_FORMAT_VERSION` bump** expected: the rally is re-derived fresh each tick (D7), the centroid fix
-  is pure math, and the renew/lifetime gates add no serialized state (ephemeral per-objective trackers, like
-  `assault_latched`). Confirm at implementation time per the standing WFV discipline.
+- **No `WORLD_FORMAT_VERSION` bump** — CONFIRMED across Phases 0–2 + D9 (as of 2026-07-01): the rally is
+  re-derived fresh each tick (D7), the centroid fix is pure math, and the renew/lifetime gates add no
+  serialized state (ephemeral per-objective trackers, like `assault_latched`; the Phase-1 stall trackers live
+  in the `SquadFormingProgress` Default resource, self-healing on reload). No phase bumped WFV.
 - The fix is provable offline end-to-end (the operator's load-bearing requirement) before any live deploy.
 - Risk: D2's "furthest-member approach" can over-bias the rally toward a single far outlier — bounded by D3's
   validation (must stay closer to the target than the furthest member) and D8's escalation.
