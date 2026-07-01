@@ -1048,9 +1048,20 @@ fn cross_room_formation_target(creep_pos: Position, target: Position, dest_room:
     if creep_pos.room_name() == target.room_name() {
         return Some(target);
     }
-    if Some(creep_pos.room_name()) == dest_room {
-        // Crossed into the destination room ahead of the anchor — wait here, don't get expelled.
-        return Some(creep_pos);
+    if let Some(dest) = dest_room {
+        // Ahead of the anchor toward the destination — wait here, don't get expelled backward. This
+        // holds for ANY room closer to the destination than the slot's room, not just the FINAL dest
+        // room: on a ≥3-room path a member that raced into a TRANSIT room ahead of the lagging anchor
+        // would otherwise be sent to its own room's exit edge back toward the anchor, where the engine
+        // bounces it in and out of the exit tile forever. Room-grid Chebyshev distance (same metric as
+        // formation.rs / squad_manager's `room_distance`).
+        let room_dist = |a: RoomName| -> u32 {
+            let d = a - dest;
+            d.0.unsigned_abs().max(d.1.unsigned_abs())
+        };
+        if room_dist(creep_pos.room_name()) < room_dist(target.room_name()) {
+            return Some(creep_pos);
+        }
     }
 
     // The target is in a different room. Guide the creep toward the room
@@ -1398,5 +1409,24 @@ mod tests {
         assert_ne!(r, slot, "it is NOT sent to the slot in the rear room — it cannot follow the cross-room box");
         let on_edge = r.x().u8() == 0 || r.x().u8() == 49 || r.y().u8() == 0 || r.y().u8() == 49;
         assert!(on_edge, "a third-room member edge-holds toward the slot — the freeze the intel gate avoids");
+    }
+
+    /// Border-oscillation regression (operator-observed, multi-room path): a member that has raced
+    /// AHEAD of the lagging anchor into a TRANSIT room (not the final destination) must HOLD, not be
+    /// expelled to its own room's exit edge back toward the anchor. Path W7N4 → W7N3 → W7N2: the anchor
+    /// is held in the rear (W7N4), the member is one room ahead in the transit room (W7N3), the final
+    /// destination is W7N2. The old branch-2 check only held for the FINAL dest room, so the member was
+    /// sent to W7N3's north edge (back toward W7N4) — where the engine bounces it in and out of the exit
+    /// tile forever. Being closer to the destination than its slot, it must hold.
+    #[test]
+    fn transit_room_member_ahead_of_anchor_holds_not_expelled() {
+        let creep = pos(25, 25, "W7N3"); // one room ahead of the anchor, in a transit room
+        let slot = pos(25, 25, "W7N4"); // anchor/slot held in the rear room
+        let dest = Some("W7N2".parse::<RoomName>().unwrap()); // final destination, one room beyond the transit room
+        assert_eq!(
+            cross_room_formation_target(creep, slot, dest),
+            Some(creep),
+            "a member ahead of the anchor in a transit room must hold, not be expelled back to its exit ring"
+        );
     }
 }
