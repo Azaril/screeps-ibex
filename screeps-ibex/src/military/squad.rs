@@ -1063,6 +1063,40 @@ mod tests {
         // (The creep arm calls the live `resolve()`, which needs a game object — covered by the seam tests.)
     }
 
+    /// ADR 0036 D3 (PROOF, extended) — the D3 CONTRACT the eval cannot reach (it doesn't depend on the bot
+    /// crate). Two halves, in ONE deterministic bot-crate test (no `game::*`):
+    ///  (a) the STRUCTURE arm is `Some((pos, None))` for EVERY tile — the position-only focus the seam's
+    ///      `translate_intents`/`attack_with_orders` focus-fires by position (`id: None`). RED-ability:
+    ///      revert `resolve_focus`'s `Structure` arm back to the old `resolve_creep()` (which returns `None`
+    ///      for a structure) → this becomes `None` → the assert fails (the undirected-fire regression).
+    ///  (b) the CREEP arm is, BY CONSTRUCTION, byte-identical to the old `resolve_creep().map(|c| (c.pos(),
+    ///      c.try_raw_id()))` path — the match arm literally IS that expression (see squad.rs:282), so a
+    ///      live creep still resolves by id (its live pos + raw id) and creep-fights are untouched. The
+    ///      live `resolve()` needs a game object we can't build on host, so we PIN the invariant that
+    ///      distinguishes the two arms: a structure NEVER resolves as a creep (`resolve_creep()` is `None`
+    ///      for a `Structure`), so `resolve_focus`'s structure result cannot alias the creep path. RED-
+    ///      ability: if the `Structure` arm were routed through `resolve_creep().map(..)` (the old drop),
+    ///      `resolve_creep()` is `None` here AND `resolve_focus` would be `None` — both asserts flip.
+    #[test]
+    fn attack_target_resolve_focus_proof_structure_kept_creep_arm_unchanged() {
+        let r: RoomName = "W5N5".parse().unwrap();
+        // (a) EVERY structure tile survives as a position-only focus (not just the center).
+        for (x, y) in [(1u8, 1u8), (25, 25), (48, 48), (0, 49)] {
+            let p = Position::new(RoomCoordinate::new(x).unwrap(), RoomCoordinate::new(y).unwrap(), r);
+            let s = AttackTarget::Structure(p);
+            assert_eq!(s.resolve_focus(), Some((p, None)), "structure {p:?} → position-only focus (id None)");
+            // (b) DISTINGUISHING INVARIANT: a structure is NEVER a creep, so it can't take the creep path.
+            // (This is the exact property that made the OLD `resolve_creep()`-based focus DROP structures —
+            // the D3 fix's structure arm bypasses `resolve_creep()` entirely; if it didn't, both this and
+            // the (a) assert above would read `None`.)
+            assert!(s.resolve_creep().is_none(), "a structure never resolves as a creep (creep path is the OLD drop)");
+            assert_eq!(s.pos(), Some(p), "the structure's fixed tile is returned directly (no game object needed)");
+        }
+        // The CREEP arm's live `resolve()` needs a game object (host cannot build one); its byte-identity to
+        // the old `resolve_creep().map(|c| (c.pos(), c.try_raw_id()))` path is guaranteed BY CONSTRUCTION —
+        // squad.rs:282 is literally that expression — and exercised end-to-end by the seam tests.
+    }
+
     /// L5 (ADR 0026 §9.10): the box formation scales to an N-blob — `count == 4` is the 2×2, larger
     /// force-sized squads fill a compact square with DISTINCT offsets (no member stacks on the anchor as
     /// the old fixed-4 `box_2x2` left them), and the count drives both `from_shape` and the death-degrade

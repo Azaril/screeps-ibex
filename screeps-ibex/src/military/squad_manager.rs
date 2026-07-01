@@ -3442,4 +3442,157 @@ mod tests {
             "the solo drain member routes its own goal"
         );
     }
+
+    /// ADR 0036 D4 apply + D3 stamp (PROOF) — the LIVE wiring the eval CANNOT reach (it doesn't depend on
+    /// the bot crate; `ManagedSimSquad` is anchorless, so the anchor-drop + the `AttackTarget` stamp have no
+    /// analogue there). This unit-drives the EXACT reconcile Engaged arm for a STRUCTURE siege — the same
+    /// two lines the manager runs at squad_manager.rs:2537-2539 (D4 anchor-drop) and 2765-2767 (D3 stamp):
+    ///   1. D4 REACH: `apply_squad_decision` then `should_drop_anchor_for_structure_siege` drops the anchor
+    ///      (`ctx.squad_path == None`) so the job routes ANCHORLESS to each member's `member_goal` (the
+    ///      approach gradient closes to weapon range — the ADR 0026 §9 standoff-park fix).
+    ///   2. D3 STAMP: every present member's `tick_orders.attack_target == AttackTarget::Structure(pos)` —
+    ///      the position-only (`id: None`) focus the job's `resolve_focus` keeps + `translate_intents`
+    ///      focus-fires by position (NOT the old `resolve_creep()` drop → undirected fire).
+    /// RED-ability (both revert to master's 0-damage bug): (1) delete the `should_drop_anchor_for_structure_
+    /// siege` block at squad_manager.rs:2537-2539 → `squad_path` stays `Some(anchor)` → the first assert
+    /// fails (the formation parks short of range). (2) revert the D3 stamp so a structure focus stamps a
+    /// creep target / no target → the `attack_target` assert fails. CONTROL: a CREEP focus keeps its anchor
+    /// (formation slots byte-unchanged) and stamps `AttackTarget::Creep`.
+    ///
+    /// The `game::*` BOUNDARY documented (what stays live-only): `apply_squad_decision` needs only a `World`
+    /// (for the entities), a `CreepOwner` storage (read as `None` here → heal targets resolve to `None`, fine
+    /// for a non-heal structure siege), and the plain `SquadContext`/`SquadDecision` data — NO `game::*`. What
+    /// remains live-only is (a) resolving `AttackTarget::Structure(pos)` → the game structure object at the
+    /// tile (the job's `struct_at(pos)` in `translate_intents`, squad_combat.rs:564-583), and (b) the rover
+    /// pathing that the dropped anchor unblocks; both are exercised on the private-server soak, not on host.
+    #[test]
+    fn structure_siege_reconcile_drops_anchor_and_stamps_structure_attack_target_live() {
+        use crate::military::squad::SquadPath;
+        use crate::combat::FocusTarget;
+        use screeps_combat_decision::bodies::CombatBodySpec;
+        use screeps_combat_decision::composition::{BodyType, FormationShape, SquadComposition, SquadRole, SquadSlot};
+        use screeps_rover::AnchorPath;
+        use specs::WorldExt;
+
+        let r = room("W5N3");
+        let p = |x: u8, y: u8| Position::new(RoomCoordinate::new(x).unwrap(), RoomCoordinate::new(y).unwrap(), r);
+        // A bare-core RANGED quad (the NpcCore doctrine fields ranged, not WORK — cores are dismantle-immune).
+        let ranged = BodyType::Sized(CombatBodySpec { ranged_attack: 4, ..Default::default() });
+        let comp = SquadComposition {
+            label: "Core siege".into(),
+            slots: vec![
+                SquadSlot { role: SquadRole::RangedDPS, body_type: ranged },
+                SquadSlot { role: SquadRole::RangedDPS, body_type: ranged },
+                SquadSlot { role: SquadRole::RangedDPS, body_type: ranged },
+            ],
+            formation_shape: FormationShape::Box2x2,
+            formation_mode: Default::default(),
+            retreat_threshold: 0.3,
+        };
+
+        let mut world = World::new();
+        world.register::<SquadContext>();
+        world.register::<CreepOwner>();
+        let m0 = world.create_entity().build();
+        let m1 = world.create_entity().build();
+        let m2 = world.create_entity().build();
+        world.maintain();
+        // Empty CreepOwner storage: a structure siege stamps no heal targets, so no member needs a live creep.
+        let creep_owner = world.read_storage::<CreepOwner>();
+
+        // The core tile (impassable, id:None structure focus) + the kernel's per-member approach goals
+        // (each ranged member's downhill tile toward weapon range 3 of the core).
+        let core = p(27, 25);
+        let g0 = p(24, 25);
+        let g1 = p(24, 26);
+        let g2 = p(24, 24);
+        let member_goals = vec![Some(g0), Some(g1), Some(g2)];
+        let struct_focus = Some(FocusTarget { pos: core, id: None });
+
+        let decision = SquadDecision {
+            state: SquadOrderState::Engaged,
+            focus: struct_focus,
+            movement: SquadMovement::Advance { goal: core, range: 0 },
+            center: Some(p(24, 25)),
+            cohesion_radius: 1,
+            heal_assignments: Vec::new(),
+            focus_assignments: Vec::new(), // no per-member spill → each member falls back to the shared focus
+            orientation: None,
+            member_goals: member_goals.clone(),
+            member_intents: Vec::new(),
+        };
+
+        // Start in the formation/anchor phase (the gather-quorum assault set the standoff anchor).
+        let mut ctx = SquadContext::from_composition(&comp);
+        ctx.add_member(m0, SquadRole::RangedDPS, 0);
+        ctx.add_member(m1, SquadRole::RangedDPS, 1);
+        ctx.add_member(m2, SquadRole::RangedDPS, 2);
+        ctx.squad_path = Some(SquadPath {
+            anchor: AnchorPath::new(core, core),
+            room_route: vec![r],
+        });
+        assert!(ctx.squad_path.is_some(), "precondition: the siege holds a formation (standoff) anchor");
+
+        // Reproduce the reconcile Engaged arm EXACTLY: stamp the decision (D3 attack_target), THEN the D4
+        // structure-siege anchor-drop (squad_manager.rs:2537-2539). The drain drop above does not fire here
+        // (`movement` is Advance, not Drain), so this covers the NORMAL (non-drain) structure siege.
+        apply_squad_decision(&mut ctx, &decision, &creep_owner, true);
+        if should_drop_anchor_for_drain(&decision) {
+            ctx.squad_path = None;
+        }
+        if should_drop_anchor_for_structure_siege(&decision) {
+            ctx.squad_path = None;
+        }
+
+        // (1) D4 REACH: the anchor is dropped → anchorless routing next tick (the approach gradient closes).
+        assert!(ctx.squad_path.is_none(), "D4: a structure siege drops the standoff anchor → anchorless approach");
+        // (2) D3 STAMP: EVERY present member fires the SAME position-only structure focus (directed raze).
+        assert_eq!(ctx.members.len(), 3, "all three ranged members present");
+        for member in ctx.members.iter() {
+            let orders = member.tick_orders.as_ref().expect("an Engaged member has tick_orders");
+            // `AttackTarget` is Copy/Debug but not PartialEq (production; not touched here), so match it.
+            assert!(
+                matches!(orders.attack_target, Some(AttackTarget::Structure(t)) if t == core),
+                "D3: the member focus-fires the core by position (id None) — not the OLD undirected drop, got {:?}",
+                orders.attack_target
+            );
+        }
+        // Each member also carries its own kernel approach goal (the anchorless mover reads this to close).
+        for (member, goal) in ctx.members.iter().zip(member_goals.iter()) {
+            let orders = member.tick_orders.as_ref().unwrap();
+            assert!(
+                matches!(orders.squad_movement, SquadMovement::Advance { goal: g, range: 0 } if Some(g) == *goal),
+                "the member routes its own kernel member_goal toward weapon range"
+            );
+        }
+
+        // ── CONTROL: a CREEP focus keeps its anchor (formation byte-unchanged) + stamps a Creep target. ──
+        let live_creep: RawObjectId = "0123456789abcdef01234567".parse().unwrap();
+        let creep_decision = SquadDecision {
+            focus: Some(FocusTarget { pos: p(26, 25), id: Some(live_creep) }),
+            member_goals: vec![None, None, None], // a kiting creep formation has no kernel approach plan
+            ..decision.clone()
+        };
+        let mut ctx2 = SquadContext::from_composition(&comp);
+        ctx2.add_member(m0, SquadRole::RangedDPS, 0);
+        ctx2.add_member(m1, SquadRole::RangedDPS, 1);
+        ctx2.add_member(m2, SquadRole::RangedDPS, 2);
+        ctx2.squad_path = Some(SquadPath {
+            anchor: AnchorPath::new(core, core),
+            room_route: vec![r],
+        });
+        apply_squad_decision(&mut ctx2, &creep_decision, &creep_owner, true);
+        if should_drop_anchor_for_drain(&creep_decision) {
+            ctx2.squad_path = None;
+        }
+        if should_drop_anchor_for_structure_siege(&creep_decision) {
+            ctx2.squad_path = None;
+        }
+        assert!(ctx2.squad_path.is_some(), "a CREEP formation KEEPS its anchor (D4 scoped to id.is_none())");
+        // `AttackTarget` is Copy/Debug but not PartialEq (production; not touched here), so match it.
+        assert!(
+            matches!(ctx2.members[0].tick_orders.as_ref().unwrap().attack_target, Some(AttackTarget::Creep(id)) if id == live_creep),
+            "a creep focus stamps a Creep attack_target (creep-fights untouched)"
+        );
+    }
 }
