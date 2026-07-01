@@ -226,9 +226,25 @@ fn room_distance(a: RoomName, b: RoomName) -> u32 {
 /// → solo-travel. A previously-fired latch (`assault_latched`) keeps the assault committed. This is the one
 /// place the freeze-vs-reach distinction is decided, factored out so the conditional fix is unit-tested
 /// without the live world plumbing.
+///
+/// ADR 0037 T2 (HARDEN — the "thin dangerous tail"): the count-quorum branch that advances the anchor is
+/// ITSELF gated on `present_wins_or_stalls` — the SAME winnability veto the fast-path (`winnable_fast_path_
+/// allowed`) already carries. Before this, a bare 1-slot force could meet its OWN count quorum
+/// (`gather_quorum_met`) and advance the box anchor across a border into towers for ~1 tick before the
+/// retreat gate flipped it. Now an UNWINNABLE-sized force (`present_wins_or_stalls == false`) NEVER advances
+/// the anchor via the count quorum either — no border-crossing precedes the abandon. This is GENERAL
+/// hardening (any unwinnable target, not just the towered-neighbour Secure of ADR 0037). It does NOT
+/// deadlock a legitimate assault: `present_wins_or_stalls` is vacuously TRUE against an UNSCOUTED/no-intel
+/// room (RC-11), so a scattered no-intel squad that MASSES at the rally still advances via the count quorum
+/// — only a REAL-intel LOSING assessment (`false`, the exact inverse of the retreat gate) is vetoed. A
+/// previously-fired latch (`assault_latched`) still keeps a committed assault — unchanged.
 fn squad_is_gathered(present_wins_or_stalls: bool, have_target_intel: bool, gather_quorum_met: bool, assault_latched: bool) -> bool {
+    // The count-quorum advance now carries the winnability veto too: an unwinnable-sized present force never
+    // advances the anchor, even if it meets its own (bare) count quorum. `present_wins_or_stalls` is the SAME
+    // predicate the fast-path uses (and vacuously TRUE with no intel, so a legitimate no-intel mass proceeds).
+    let count_quorum_advances = gather_quorum_met && present_wins_or_stalls;
     let quorum_now =
-        screeps_combat_decision::winnable_fast_path_allowed(present_wins_or_stalls, have_target_intel) || gather_quorum_met;
+        screeps_combat_decision::winnable_fast_path_allowed(present_wins_or_stalls, have_target_intel) || count_quorum_advances;
     quorum_now || assault_latched
 }
 
@@ -2933,7 +2949,8 @@ mod tests {
             "co-located squad WITH real intel still latches the assault — the win-or-stall is preserved (D7)"
         );
         // A scattered no-intel squad that has MASSED at the rally (count quorum met) also assaults — the
-        // legacy count-gate path still works without the fast-path.
+        // legacy count-gate path still works without the fast-path. `present_wins_or_stalls` is vacuously
+        // TRUE here (no-intel), so the ADR 0037 T2 count-quorum winnability gate does NOT block it.
         assert!(
             squad_is_gathered(true, false, /*count_quorum_met*/ true, false),
             "once massed at the rally (count quorum met) the squad assaults via the legacy gate"
@@ -2942,6 +2959,42 @@ mod tests {
         assert!(
             squad_is_gathered(false, false, false, /*assault_latched*/ true),
             "a fired assault latch keeps the squad committed (FIX-A latch preserved)"
+        );
+    }
+
+    /// ADR 0037 T2 (HARDEN — the count-quorum anchor-advance winnability veto). A bare/under-sized force
+    /// that meets its OWN count quorum but would LOSE the assessment (`present_wins_or_stalls == false`,
+    /// a REAL-intel losing verdict — e.g. a floor squad against powered towers) must NOT advance the anchor
+    /// across the border. RED before the fix (the count quorum alone latched `gathered=true` → the box anchor
+    /// stepped a member into tower range for ~1 tick before the retreat gate flipped it — the thin dangerous
+    /// tail). A WINNABLE/stalling assessment (`true`) STILL advances via the count quorum (no deadlock).
+    #[test]
+    fn t2_count_quorum_advance_is_gated_on_winnability() {
+        // UNWINNABLE + count quorum met + no fast-path/latch ⇒ must NOT advance (the hardening).
+        assert!(
+            !squad_is_gathered(
+                /*present_wins_or_stalls*/ false,
+                /*have_target_intel*/ true,
+                /*count_quorum_met*/ true,
+                /*assault_latched*/ false
+            ),
+            "an UNWINNABLE-sized force meeting its own count quorum must NOT advance the anchor into towers (T2 tail fix)"
+        );
+        // WINNABLE/stalling + count quorum met ⇒ STILL advances (a legitimate contested assault is unaffected).
+        assert!(
+            squad_is_gathered(
+                /*present_wins_or_stalls*/ true,
+                /*have_target_intel*/ true,
+                /*count_quorum_met*/ true,
+                /*assault_latched*/ false
+            ),
+            "a WINNABLE/stalling contested assault STILL advances via the count quorum — the gate only blocks the unwinnable case"
+        );
+        // Even UNWINNABLE, a previously-fired latch keeps a committed assault (FIX-A dominates; the retreat
+        // gate — not the anchor advance — is what pulls a losing committed squad back).
+        assert!(
+            squad_is_gathered(false, true, true, /*assault_latched*/ true),
+            "a fired latch still keeps a committed assault (the retreat gate handles a losing committed squad)"
         );
     }
 
