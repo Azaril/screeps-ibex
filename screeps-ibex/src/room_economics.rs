@@ -119,6 +119,29 @@ impl RoomEconomyFacts {
             horizon: DEFAULT_HOLD_HORIZON,
         }
     }
+
+    /// An OWNED (claimed) colony's own room: sources restore to the owned yield (3000/cycle, identical to a
+    /// reserved room — the upside claiming unlocks over a neutral room's 1500), are mined and hauled
+    /// **INTERNALLY** (a small intra-room `internal_haul_tiles`, **distance-independent** — a claimed room
+    /// self-hauls to its OWN storage, it is NOT a remote hauled from a parent colony), and need NO standing
+    /// reserver (`HoldModel::None`). These are the facts a claim-selection scorer passes for a claim target's
+    /// intrinsic value (ADR 0038 §2 D4).
+    ///
+    /// Distinct from [`reservable_remote`](Self::reservable_remote), which values a REMOTE held at range and so
+    /// passes the parent-distance as `haul_tiles`. Passing the claim distance here would drive `net_roi` to 0
+    /// well within claimer reach (haul term) and, multiplied by a rising unlock fraction, would re-create the
+    /// expansion stall this ADR removes (ADR 0038 §2 C-DEFECT-1). Distance enters claim value ONLY through the
+    /// adapter's `unlock_fraction × support_decay`, never through this kernel's haul term.
+    pub fn owned_colony(source_count: u32, internal_haul_tiles: u32) -> Self {
+        Self {
+            source_count,
+            source_capacity: SOURCE_ENERGY_RESERVED_CAPACITY,
+            haul_tiles: internal_haul_tiles,
+            hold_model: HoldModel::None,
+            hold_body_cost: 0,
+            horizon: DEFAULT_HOLD_HORIZON,
+        }
+    }
 }
 
 /// The scored economics: gross income, net e/t, and the total energy-equivalent over the horizon (what the

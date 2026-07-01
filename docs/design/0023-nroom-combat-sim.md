@@ -4,6 +4,8 @@ Status: **Slices S1–S5 DONE 2026-06-24** (P-ENGINE substantially complete). Im
 
 ## Architecture finding (what the sim does — and doesn't)
 
+> **Update (2026-06-29, post-P-MOVE+):** the bullet below stating the sim "does NOT run the bot's rover/`MovementSystem`/`AnchorPath`" describes the **S1 cut and is now stale.** Since P-MOVE+ (task #30, this doc's status line) the sim **does** run the live rover `MovementSystem` + resolver via `resolve_moves_via_system` to produce move directions. What remains true is narrower: the sim never *measures* rover quality (route optimality / fatigue / congestion / ops) — it scores combat. That measurement gap is [ADR 0033](0033-rover-pathing-sim-and-benchmark.md), which also **extracts** this engine's combat-agnostic movement mechanism (world / terrain / body / contention / fatigue / edge-exit / recording) into a new shared `screeps-sim-core` crate both sims depend on, landing two fidelity fixes there (roads + loaded-CARRY). After that extraction `screeps-combat-engine` = `screeps-sim-core` + the combat layer (`CombatState` + `resolve_combat_tick`), and the engine's movement types are renamed `Combat*`→`Sim*` (`CombatWorld`→`SimWorld`, `CombatTerrain`→`SimTerrain`, `resolve_tick`→`resolve_combat_tick`); the movement claims below hold unchanged, just from the lower crate under the new names.
+
 Verified by reading the crate:
 
 - **The engine is a deterministic tick over a `CombatWorld`.** `resolve.rs::resolve_tick` takes an `Intents` (per-creep combat actions **+ move `Direction`s**, tower actions) and resolves it (two-phase accumulate-then-apply combat + the `movement.rs` same-tile-contention port). It does **not** pathfind.

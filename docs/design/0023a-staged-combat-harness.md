@@ -6,6 +6,8 @@ multi-squad opponent forces, including single and multi-room objectives. Split i
 evaluation and validation stages so generation and validation can be swapped. The evaluation just
 needs a run-until predicate or condition."*
 
+> **Forward note (2026-06-29):** the `CombatWorld` / `resolve_tick` / `Intents` types in the API sketches below are renamed + split by [ADR 0033](0033-rover-pathing-sim-and-benchmark.md) (Proposed): `CombatWorld`→`sim_core::SimWorld`, `resolve_tick`→`resolve_movement_tick` (sim-core) + `resolve_combat_tick` (combat-engine), `Intents`→`MoveIntents` + `CombatIntents`. Read them as their successors; the staged Generation / Evaluation / Validation design is unchanged.
+
 ## Why
 The P-FORCE oracle-calibration tournament (`combat-eval/src/oracle_calibration.rs`, the WIN) proved the
 seam works — but it **welds the three concerns together**: `generate()` builds a single-room bed +

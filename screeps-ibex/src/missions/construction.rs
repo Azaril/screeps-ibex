@@ -2,10 +2,12 @@ use super::data::*;
 use super::missionsystem::*;
 use crate::room::roomplansystem::*;
 use crate::serialize::*;
+use crate::spawnsystem::site_blocks_spawn;
 use screeps::*;
 use screeps_common::Location as PlanLocation;
 use screeps_foreman::plan::{BuildStep, CleanupFilter, ExecutionFilter, ExistingStructure};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 #[allow(deprecated)]
 use specs::error::NoError;
 use specs::saveload::*;
@@ -30,15 +32,42 @@ struct ConstructionFilter<'a> {
     /// that road adjacency checks can see sites we have already decided
     /// to place (but that don't exist in the game world yet).
     placed_this_batch: Vec<PlanLocation>,
+    /// Tiles adjacent to a spawn that is mid-spawn this tick. An obstacle-type
+    /// site placed here would seal the in-flight creep's birth exit and wedge
+    /// the spawn permanently (see [`Self::new`]); such sites are deferred until
+    /// the spawn is idle.
+    spawning_exit_tiles: HashSet<(u8, u8)>,
 }
 
 impl<'a> ConstructionFilter<'a> {
     fn new(room: &'a Room, room_level: u8) -> Self {
+        // Collect the exit tiles of every spawn that is mid-spawn this tick.
+        // `spawnCreep`'s directional constraint is applied only at BIRTH, so a
+        // tile that is free when a spawn STARTS (and therefore passed the
+        // site-aware direction check) can be sealed mid-spawn by a freshly placed
+        // obstacle site — and a blocked exit slips spawnTime +1/tick forever,
+        // wedging the spawn permanently. Deferring an obstacle site on these
+        // tiles until the spawn is idle closes the "construction site placed while
+        // a spawn is pending" half of the RCL-up deadlock. It is harmless: such a
+        // tile is a non-approach neighbour the plan wants an extension on, so a
+        // one-cycle delay only postpones it until the spawn next goes idle.
+        let mut spawning_exit_tiles = HashSet::new();
+        for spawn in room.find(find::MY_SPAWNS, None) {
+            if spawn.spawning().is_some() {
+                let p = spawn.pos();
+                let loc = PlanLocation::from_xy(p.x().u8(), p.y().u8());
+                for n in loc.neighbors() {
+                    spawning_exit_tiles.insert((n.x(), n.y()));
+                }
+            }
+        }
+
         ConstructionFilter {
             room,
             room_level,
             min_rcl_for_walls: 4,
             placed_this_batch: Vec::new(),
+            spawning_exit_tiles,
         }
     }
 }
@@ -70,6 +99,13 @@ impl<'a> ExecutionFilter for ConstructionFilter<'a> {
         // one cycle.
         if step.structure_type == StructureType::Road && !has_adjacent_structure_or_site(step.location, self.room, &self.placed_this_batch)
         {
+            return false;
+        }
+
+        // Defer an obstacle-type site that would seal the exit of a spawn that is
+        // mid-spawn this tick — placing it would wedge the spawn permanently (the
+        // directional constraint is applied only at birth). See `new`.
+        if site_blocks_spawn(step.structure_type) && self.spawning_exit_tiles.contains(&(step.location.x(), step.location.y())) {
             return false;
         }
 

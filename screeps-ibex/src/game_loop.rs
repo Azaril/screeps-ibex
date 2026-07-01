@@ -669,7 +669,14 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// `ColonyMission` Incubate + `MiningOutpostMission` Mine states (positional struct-field removals).
 /// (The inert `ObjectiveKind::Escort` / `FarmKind::Core` / `FarmKind::PowerBank` variants
 /// were KEPT as planned-future per the ADRs, so the objective-queue enums are unchanged.)
-const WORLD_FORMAT_VERSION: u32 = 22;
+/// 23 = ADR 0038 (expansion reach-gating + economic claim value): `ClaimOperation` DROPS the serialized
+/// `current_search_radius: u32` + `frontier_truncated: bool` fields (the adaptive-radius ratchet is removed —
+/// the BFS now searches the full claimer-viable range every cycle, gated only on claimer reach). Removing two
+/// interior struct fields is a positional bincode shape change on the persisted `ClaimOperation`, so old
+/// payloads can't decode → one loud reset (folds into the MMO deploy reset). (The v6 note above added those
+/// two fields; v23 removes them. Claim scoring now uses the pure `room_net_roi`/`claim_economics` kernels —
+/// per-tick transient, not serialized. `ClaimFeatures` field add/removes are `#[serde(default)]`, no bump.)
+const WORLD_FORMAT_VERSION: u32 = 23;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode

@@ -395,10 +395,6 @@ pub struct ClaimFeatures {
     /// Prevents picking vastly inferior rooms just to fill the mission cap.
     /// Default: 0.15.
     pub max_score_delta: f32,
-    /// Weight applied to the room plan score (from screeps-foreman) when
-    /// scoring claim candidates. A good room with a poor layout should be
-    /// penalised. Default: 2.0.
-    pub plan_score_weight: f32,
     /// Ticks between full BFS re-discovery cycles. Room topology is static and
     /// ownership changes slowly, so this can be long. Default: 500.
     pub discover_interval: u32,
@@ -429,20 +425,41 @@ pub struct ClaimFeatures {
     /// Default: 50.
     pub max_room_cap: u32,
 
-    // ── Adaptive radius + cannibalization scoring (Workstream B) ────────
-    /// Tightest claim search radius (BFS room-hops) and the policy floor on
-    /// claim distance. Derived, not arbitrary: remote mining is radius 1, so
-    /// two colonies need ~`2*1 + 2 = 4` hops to avoid overlapping remote
-    /// rings. Default: 4. (No max — the upper bound is dynamic via build
-    /// feasibility.)
-    pub min_search_radius: u32,
-    /// Weight of the distance sub-score in candidate scoring. Higher = the
-    /// frontier stays tighter. Default: 2.0 (up from the old 0.5).
-    pub distance_score_weight: f32,
-    /// Multiplicative penalty applied to a distance-1 candidate's total
-    /// score — a sourced room one hop away is one an existing room could
-    /// remote-mine, so claiming it cannibalizes. Default: 0.3.
-    pub adjacent_claim_penalty: f32,
+    // ── Economic (net-ROI) claim value (ADR 0038 §2 Part B) ─────────────
+    /// Distance (BFS room-hops) at which `unlock_fraction` reaches 1.0 — the
+    /// point two colonies' radius-1 remote-mining rings become disjoint.
+    /// Derived, not arbitrary: remote mining is radius 1, so two colonies need
+    /// ~`2*1 + 2 = 4` hops to avoid overlapping remote rings. This is the SOFT
+    /// sprawl-curve knee, NOT a hard claim floor (a closer room still scores
+    /// low-but-nonzero and stays claimable as a last resort). Default: 4.
+    pub ring_separation_hops: u32,
+    /// Nonzero floor of `unlock_fraction` at distance 1 — the anti-stall
+    /// constant that keeps a cannibalizing neighbour claimable rather than
+    /// hard-zeroed. Default: 0.05.
+    pub unlock_floor: f32,
+    /// Support-decay rate per hop (reciprocal form `1/(1+k*d)`) — a mild tilt
+    /// against far rooms; never a gate (the hard reach cutoff is
+    /// `is_claim_feasible`). Default: 0.05.
+    pub support_decay_k: f32,
+    /// Intra-room haul tiles used for a claim target's INTRINSIC owned-colony
+    /// ROI — distance-independent (a claimed room self-hauls to its own
+    /// storage). Default: 25.
+    pub internal_haul_tiles: u32,
+    /// Net-ROI (energy-equivalent) normaliser mapping the intrinsic value to a
+    /// ~0–1 score for the `max_score_delta` gate + viz. Scale only; does not
+    /// affect ranking. Default: 26000.0 (≈ a 2-source owned ring room's net-ROI).
+    pub roi_reference: f32,
+    /// Per-tracked-room addend to the re-discovery interval — scales the
+    /// re-scout cadence by search-area size so a large frontier is re-scanned
+    /// proportionally less often (ADR 0038 D3). Default: 10.
+    pub rediscover_ticks_per_room: u32,
+    /// Cap on the formulaic re-discovery interval. Default: 5000.
+    pub max_discover_interval: u32,
+    /// Per-unknown-room addend to the scouting window — lets scouts reach a
+    /// larger frontier before Select (ADR 0038 D3). Default: 5.
+    pub scout_ticks_per_room: u32,
+    /// Cap on the formulaic scouting window. Default: 2500.
+    pub max_scouting_window: u32,
 
     // ── Threat-aware expansion lifecycle (ADR 0017) ─────────────────────
     /// Master kill-switch for the pre-claim safety gate, the builder threat
@@ -473,7 +490,6 @@ impl Default for ClaimFeatures {
             visualize: false,
             max_concurrent_missions: 2,
             max_score_delta: 0.15,
-            plan_score_weight: 2.0,
             discover_interval: 500,
             scouting_window: 200,
             remote_build_interval: 50,
@@ -482,9 +498,15 @@ impl Default for ClaimFeatures {
             healthy_bucket_floor: 8000,
             min_room_cap: 1,
             max_room_cap: 50,
-            min_search_radius: 4,
-            distance_score_weight: 2.0,
-            adjacent_claim_penalty: 0.3,
+            ring_separation_hops: 4,
+            unlock_floor: 0.05,
+            support_decay_k: 0.05,
+            internal_haul_tiles: 25,
+            roi_reference: 26_000.0,
+            rediscover_ticks_per_room: 10,
+            max_discover_interval: 5000,
+            scout_ticks_per_room: 5,
+            max_scouting_window: 2500,
             safety_gate: true,
             intel_freshness_ticks: 250,
             max_claimer_deaths: 2,
@@ -492,6 +514,20 @@ impl Default for ClaimFeatures {
             abort_persistence_ticks: 50,
             avoid_cooldown_ticks: 5000,
         }
+    }
+}
+
+#[cfg(test)]
+mod claim_feature_tests {
+    use super::ClaimFeatures;
+
+    /// Pin the claim ring-separation default to 4 (= `2·remote_range(1) + 2`, the radius-1 remote-mining reach)
+    /// so a config change is a deliberate edit (ADR 0038 D5). The model side is pinned in
+    /// `claim_economics::tests::ring_sep_tracks_config_default`; the adapter carries this value into the model,
+    /// so the two cannot silently drift.
+    #[test]
+    fn ring_separation_default_matches_remote_ring_math() {
+        assert_eq!(ClaimFeatures::default().ring_separation_hops, 4);
     }
 }
 

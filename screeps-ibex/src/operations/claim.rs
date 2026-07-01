@@ -61,16 +61,6 @@ pub struct ClaimOperation {
     home_rooms: Vec<RoomName>,
     /// Unknown rooms (no entity/visibility) from the last Discover pass.
     unknown_rooms: Vec<RoomName>,
-    /// Adaptive BFS search radius (room-hops). Starts tight at
-    /// `min_search_radius`, widens only when the ring is fully scouted, there
-    /// is capacity, more reachable map exists, and nothing good was found —
-    /// then re-tightens (hugs the nearest good candidate). The upper bound is
-    /// dynamic (claim-creep reach), so there is no static max config.
-    current_search_radius: u32,
-    /// Whether the last Discover BFS stopped at the radius cap with a live
-    /// expandable frontier (more reachable map exists) vs. exhausting it
-    /// (boxed in by hostiles/closed rooms). Gates widening.
-    frontier_truncated: bool,
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -93,15 +83,37 @@ impl ClaimOperation {
             candidates: Vec::new(),
             home_rooms: Vec::new(),
             unknown_rooms: Vec::new(),
-            // Default to the policy floor; clamped to configured min on first
-            // discover and adjusted by the ratchet thereafter.
-            current_search_radius: 4,
-            frontier_truncated: false,
         }
     }
 
     pub fn claim_missions(&self) -> &EntityVec<Entity> {
         &self.claim_missions
+    }
+
+    /// Re-discovery cadence scaled by the tracked search-area size (ADR 0038 D3): the more reachable rooms the
+    /// last discover surfaced, the longer before we re-BFS + re-prioritise scouts — so a large frontier is
+    /// re-scanned proportionally less often and scouting can complete instead of thrashing. Small/dense
+    /// empires stay near the base interval.
+    fn discover_interval_eff(&self, features: &crate::features::ClaimFeatures) -> u32 {
+        let tracked = (self.candidates.len() + self.unknown_rooms.len()) as u32;
+        features
+            .discover_interval
+            .saturating_add(features.rediscover_ticks_per_room.saturating_mul(tracked))
+            .min(features.max_discover_interval.max(features.discover_interval))
+    }
+
+    /// Scouting window scaled so scouts can physically reach the frontier ring (~`TICKS_PER_HOP` per hop) plus
+    /// a per-unknown term (ADR 0038 D3). Bounded by `max_scouting_window`; the coverage-early-exit still fires
+    /// Select sooner when the reachable ring is covered, so this only raises the ceiling.
+    fn scouting_window_eff(&self, features: &crate::features::ClaimFeatures) -> u32 {
+        let radius = crate::missions::utility::max_claim_radius_hops();
+        let travel = crate::missions::utility::TICKS_PER_HOP.saturating_mul(radius);
+        let unknown = self.unknown_rooms.len() as u32;
+        features
+            .scouting_window
+            .saturating_add(travel)
+            .saturating_add(features.scout_ticks_per_room.saturating_mul(unknown))
+            .min(features.max_scouting_window.max(features.scouting_window.saturating_add(travel)))
     }
 
     const VISIBILITY_TIMEOUT: u32 = 20000;
@@ -152,58 +164,6 @@ impl ClaimOperation {
         Some(candidate_room_data)
     }
 
-    fn source_score(system_data: &mut OperationExecutionSystemData, room_entity: Entity) -> Option<(f32, f32)> {
-        let room_data = system_data.room_data.get(room_entity)?;
-        let static_visibility_data = room_data.get_static_visibility_data()?;
-        let sources = static_visibility_data.sources().len();
-
-        if sources == 0 {
-            return None;
-        }
-
-        let score = sources.min(2) as f32 / 2.0;
-
-        Some((score, 4.0))
-    }
-
-    fn walkability_score(system_data: &mut OperationExecutionSystemData, room_entity: Entity) -> Option<(f32, f32)> {
-        let room_data = system_data.room_data.get(room_entity)?;
-        let static_visibility_data = room_data.get_static_visibility_data()?;
-        let statistics = static_visibility_data.terrain_statistics();
-
-        let walkable_tiles = statistics.walkable_tiles();
-
-        if walkable_tiles == 0 {
-            return None;
-        }
-
-        // Use plains ratio directly as a 0.0–1.0 score. Swampy rooms score
-        // lower but are no longer hard-rejected — the old 0.75 threshold
-        // eliminated most rooms.
-        let plains_ratio = statistics.plain_tiles() as f32 / statistics.walkable_tiles() as f32;
-
-        Some((plains_ratio, 1.0))
-    }
-
-    /// Raw distance preference (0–1), peaking at the own-remote-ring band
-    /// (~4–5) and disfavouring closer rooms (which would share/cannibalize an
-    /// existing room's remotes). Never zero ≥ distance 1, so a far room stays
-    /// selectable as a last resort — tight but not stuck. `None` for distance 0
-    /// (the home room itself).
-    fn distance_score(distance: u32) -> Option<f32> {
-        match distance {
-            0 => None,
-            1 => Some(0.05),
-            2 => Some(0.2),
-            3 => Some(0.45),
-            4 => Some(1.0),
-            5 => Some(0.9),
-            6 => Some(0.7),
-            7 => Some(0.5),
-            _ => Some(0.35),
-        }
-    }
-
     /// Return a plan quality score (0–1) for a room that has a valid plan.
     /// Returns `None` if the room has no plan data or the plan failed.
     fn plan_score(system_data: &mut OperationExecutionSystemData, room_entity: Entity) -> Option<f32> {
@@ -213,50 +173,48 @@ impl ClaimOperation {
         Some(plan.score.total)
     }
 
-    /// Score a candidate room, returning the weighted total and raw sub-scores.
-    /// Returns `None` if the room lacks visibility data or fails any scoring
-    /// criterion.
+    /// Score a candidate room via the unified economic value (ADR 0038 §2 Part B):
+    /// `intrinsic owned-colony net-ROI × unlock_fraction(distance) × support_decay(distance) × plan_quality`.
+    /// The intrinsic ROI is distance-INDEPENDENT (a claimed room self-hauls internally); distance enters only
+    /// through `unlock_fraction` (the sprawl / anti-cannibalization term) and `support_decay`. Returns `None`
+    /// only if the room has no visibility or no sources (no exploitable economy — also excluded by the viable
+    /// gate). A not-yet-planned room scores with a neutral plan factor so it stays pursued; the HARD
+    /// "no valid plan ⇒ no claim" gate is enforced at commit (ADR 0038 D7).
     fn score_candidate(
         system_data: &mut OperationExecutionSystemData,
         room_entity: Entity,
         distance: u32,
         features: &crate::features::ClaimFeatures,
     ) -> Option<(f32, CandidateSubScores)> {
-        let (source_raw, source_w) = Self::source_score(system_data, room_entity)?;
-        let (walk_raw, walk_w) = Self::walkability_score(system_data, room_entity)?;
-        let dist_raw = Self::distance_score(distance)?;
-        let dist_w = features.distance_score_weight;
-
-        // Plan score is optional — rooms without a plan yet are scored without
-        // this component (weight excluded from total).
-        let plan_raw = Self::plan_score(system_data, room_entity);
-        let (plan_contribution, plan_w) = match plan_raw {
-            Some(raw) => (raw * features.plan_score_weight, features.plan_score_weight),
-            None => (0.0, 0.0),
+        let source_count = {
+            let room_data = system_data.room_data.get(room_entity)?;
+            let static_visibility_data = room_data.get_static_visibility_data()?;
+            static_visibility_data.sources().len() as u32
         };
-
-        let total_weight = source_w + walk_w + dist_w + plan_w;
-        if total_weight <= 0.0 {
+        if source_count == 0 {
             return None;
         }
 
-        let mut total = (source_raw * source_w + walk_raw * walk_w + dist_raw * dist_w + plan_contribution) / total_weight;
+        // Optional plan-quality (a valid plan's 0–1 total); `None` while the room is not yet planned.
+        let plan_total = Self::plan_score(system_data, room_entity);
 
-        // Heavy cannibalization penalty: a sourced room one hop from an owned
-        // room is one that room could remote-mine, so claiming it splits the
-        // franchise. Multiplicative so it dominates without distorting the
-        // moderate 4-vs-5-vs-6 preference.
-        if distance == 1 {
-            total *= features.adjacent_claim_penalty;
-        }
+        let params = crate::claim_economics::ClaimValueParams {
+            ring_separation_hops: features.ring_separation_hops,
+            unlock_floor: features.unlock_floor as f64,
+            support_decay_k: features.support_decay_k as f64,
+            internal_haul_tiles: features.internal_haul_tiles,
+            roi_reference: features.roi_reference as f64,
+        };
+
+        let cv = crate::claim_economics::claim_value(source_count, distance, plan_total, &params);
 
         Some((
-            total,
+            cv.value,
             CandidateSubScores {
-                source: source_raw,
-                walkability: walk_raw,
-                distance: dist_raw,
-                plan: plan_raw,
+                roi: cv.roi,
+                unlock: cv.unlock,
+                decay: cv.decay,
+                plan: plan_total,
             },
         ))
     }
@@ -275,12 +233,11 @@ impl ClaimOperation {
             return;
         }
 
-        // Adaptive search radius, clamped to [min_search_radius, dynamic claim
-        // reach]. The ratchet in run_select moves it between cycles.
-        let min_radius = system_data.features.claim.min_search_radius;
-        let max_radius = crate::missions::utility::max_claim_radius_hops().max(min_radius);
-        let radius = self.current_search_radius.clamp(min_radius, max_radius);
-        self.current_search_radius = radius;
+        // Search the full claimer-viable range every cycle — the only real limit on what we may claim is
+        // claimer reach (`is_claim_feasible` at commit), so the BFS explores exactly that far. No adaptive
+        // ratchet: a far viable room is found on the first discover, not after N widening cycles (ADR 0038
+        // D1/D2). Each new colony re-seeds the BFS, so the frontier crawls outward toward the world edge.
+        let radius = crate::missions::utility::max_claim_radius_hops().max(1);
 
         let gather_system_data = GatherSystemData {
             entities: system_data.entities,
@@ -295,10 +252,6 @@ impl ClaimOperation {
         let home_rooms = gather_home_rooms(&gather_system_data, 2);
 
         let gathered_data = gather_candidate_rooms(&gather_system_data, &home_rooms, radius, Self::gather_candidate_room_data);
-
-        // Cache whether there is more reachable map beyond the current radius
-        // (feeds the widen decision in run_select).
-        self.frontier_truncated = gathered_data.frontier_truncated();
 
         // Build cached candidates from BFS results.
         self.candidates = gathered_data
@@ -446,9 +399,9 @@ impl ClaimOperation {
                 candidate.score = Some((
                     -1.0,
                     CandidateSubScores {
-                        source: 0.0,
-                        walkability: 0.0,
-                        distance: 0.0,
+                        roi: 0.0,
+                        unlock: 0.0,
+                        decay: 0.0,
                         plan: None,
                     },
                 ));
@@ -526,20 +479,16 @@ impl ClaimOperation {
             return false;
         }
 
-        // A candidate that could actually be committed (viable + at/above the
-        // min claim distance) must also have DYNAMIC intel fresh enough to pass
-        // the commit-time safety re-check — otherwise "covered" fires in a tick
-        // (candidates score instantly from static data), Select runs while the
-        // intel is stale, and the claim is rejected on staleness before any
-        // scout could refresh it. Holding coverage here lets the scout queue
-        // (kept alive in refresh_visibility_requests) bring the intel current;
-        // the scouting-window timeout in run_operation bounds the wait, so an
-        // unreachable room can't stall selection forever.
+        // A viable candidate (one that could actually be committed) must also have DYNAMIC intel fresh enough
+        // to pass the commit-time safety re-check — otherwise "covered" fires in a tick (candidates score
+        // instantly from static data), Select runs while the intel is stale, and the claim is rejected on
+        // staleness before any scout could refresh it. Holding coverage here lets the scout queue (kept alive
+        // in refresh_visibility_requests) bring the intel current; the scouting-window timeout in
+        // run_operation bounds the wait, so an unreachable room can't stall selection forever.
         let freshness = system_data.features.claim.intel_freshness_ticks;
-        let min_claim_distance = system_data.features.claim.min_search_radius;
         for candidate in &self.candidates {
             let viable = candidate.score.map(|(s, _)| s >= 0.0).unwrap_or(false);
-            if !viable || candidate.distance < min_claim_distance {
+            if !viable {
                 continue;
             }
             let fresh = system_data
@@ -598,10 +547,6 @@ impl ClaimOperation {
         // Final scoring pass for any candidates still unscored.
         self.try_score_candidates(system_data, features);
 
-        // Coverage snapshot BEFORE pruning (prune drops unscored, which would
-        // otherwise make coverage trivially "complete"). Gates the widen step.
-        let covered = self.scouting_coverage_complete(system_data);
-
         let total_before_prune = self.candidates.len();
         let unscored = self.candidates.iter().filter(|c| c.score.is_none()).count();
         let hostile = self
@@ -622,11 +567,14 @@ impl ClaimOperation {
             self.candidates.len()
         );
 
-        // Sort by score descending.
+        // Sort by a total, deterministic order: quantized score DESC, then room name ASC (ADR 0038 D8). The
+        // quantization stops f64 rounding from splitting a genuine tie, and the room-name tie-break removes the
+        // seed-flaky HashMap iteration order the BFS would otherwise leak into equal-scored candidates
+        // ([[sim-determinism-fence]]).
         self.candidates.sort_by(|a, b| {
-            let sa = a.score.map(|(s, _)| s).unwrap_or(0.0);
-            let sb = b.score.map(|(s, _)| s).unwrap_or(0.0);
-            sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal).reverse()
+            let qa = crate::claim_economics::claim_rank_quantize(a.score.map(|(s, _)| s).unwrap_or(0.0));
+            let qb = crate::claim_economics::claim_rank_quantize(b.score.map(|(s, _)| s).unwrap_or(0.0));
+            qb.cmp(&qa).then(a.room_name.cmp(&b.room_name))
         });
 
         // Log the ranked candidates.
@@ -634,35 +582,19 @@ impl ClaimOperation {
             if let Some((score, sub)) = candidate.score {
                 let plan_label = sub.plan.map(|p| format!(" plan={:.2}", p)).unwrap_or_default();
                 info!(
-                    "ClaimOp [Select]:   #{} {} score={:.3} (source={:.2} walk={:.2} dist={:.2}{}) dist={} homes=[{}]",
+                    "ClaimOp [Select]:   #{} {} score={:.3} (roi={:.2} unlock={:.2} decay={:.2}{}) dist={} homes=[{}]",
                     i + 1,
                     candidate.room_name,
                     score,
-                    sub.source,
-                    sub.walkability,
-                    sub.distance,
+                    sub.roi,
+                    sub.unlock,
+                    sub.decay,
                     plan_label,
                     candidate.distance,
                     candidate.home_rooms.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(","),
                 );
             }
         }
-
-        // Adaptive-radius inputs (used by the distance gate below and the
-        // ratchet at the end). A "good" candidate sits in the own-remote-ring
-        // band (distance >= the policy floor); closer rooms cannibalize an
-        // existing room's remotes.
-        let min_claim_distance = features.min_search_radius;
-        let max_radius = crate::missions::utility::max_claim_radius_hops().max(min_claim_distance);
-        let nearest_good = self
-            .candidates
-            .iter()
-            .filter(|c| c.distance >= min_claim_distance)
-            .map(|c| c.distance)
-            .min();
-        // Last resort: only claim a below-floor (cannibalizing) room when boxed
-        // in at the max radius with no good candidate anywhere.
-        let allow_penalized = self.current_search_radius >= max_radius && nearest_good.is_none();
 
         // Live affordability veto: don't START a new claim while CPU is
         // genuinely stressed (Conserve/Critical). Use the governor tier — which
@@ -766,16 +698,10 @@ impl ClaimOperation {
                     break;
                 }
 
-                // Own-remote-ring floor: skip a too-close room (it would share
-                // an existing room's remote franchise) unless we are boxed in at
-                // the max radius with nothing better.
-                if candidate.distance < min_claim_distance && !allow_penalized {
-                    info!(
-                        "ClaimOp [Select]: candidate {} at distance {} below min claim distance {}, skipping (would cannibalize remotes)",
-                        candidate.room_name, candidate.distance, min_claim_distance
-                    );
-                    continue;
-                }
+                // No distance floor (ADR 0038 D2): the anti-cannibalization preference is scored, not gated —
+                // a too-close room already scores near-zero via `unlock_fraction`, so it is only ever chosen as
+                // a last resort, and a dense/boxed empire still expands. The sole hard reach gate is
+                // `is_claim_feasible` (per-home, below).
 
                 // Commit-time safety re-validation (ADR 0017): intel can change
                 // during the scouting window, and "absence of fresh intel is not
@@ -910,29 +836,9 @@ impl ClaimOperation {
             }
         }
 
-        // ── Adaptive radius ratchet ──────────────────────────────────────
-        // Hug just out to the nearest good candidate (re-tighten); if none and
-        // the ring is fully covered with capacity and more reachable map beyond
-        // it, widen by one; otherwise hold (boxed in / no capacity / still
-        // scouting).
-        let new_radius = match nearest_good {
-            Some(d) => d.clamp(min_claim_distance, max_radius),
-            None => {
-                if available_rooms > 0 && covered && self.frontier_truncated {
-                    (self.current_search_radius + 1).min(max_radius)
-                } else {
-                    self.current_search_radius.clamp(min_claim_distance, max_radius)
-                }
-            }
-        };
-
-        if new_radius != self.current_search_radius {
-            info!(
-                "ClaimOp [Select]: search radius {} -> {} (nearest_good={:?} covered={} truncated={} avail={})",
-                self.current_search_radius, new_radius, nearest_good, covered, self.frontier_truncated, available_rooms,
-            );
-        }
-        self.current_search_radius = new_radius.clamp(min_claim_distance, max_radius);
+        // No adaptive-radius ratchet (ADR 0038 D1): the BFS searches the full claimer-viable range every
+        // discover cycle, so there is no radius to widen/re-tighten. Expansion reach grows only by claiming
+        // (each new colony re-seeds the BFS outward).
 
         // Transition back to Idle, recording the current tick for the
         // re-discover interval.
@@ -1221,7 +1127,7 @@ impl Operation for ClaimOperation {
             ClaimPhase::Idle => {
                 let elapsed = self.phase_tick.map(|t| game::time().saturating_sub(t)).unwrap_or(u32::MAX);
 
-                if elapsed >= features.claim.discover_interval {
+                if elapsed >= self.discover_interval_eff(&features.claim) {
                     // Readiness gate: all owned rooms must be RCL >= 2.
                     if min_rcl >= 2 {
                         self.run_discover(system_data);
@@ -1239,7 +1145,7 @@ impl Operation for ClaimOperation {
                 // the scouting window caps out — whichever comes first.
                 let covered = self.scouting_coverage_complete(system_data);
 
-                if covered || elapsed >= features.claim.scouting_window {
+                if covered || elapsed >= self.scouting_window_eff(&features.claim) {
                     if covered {
                         info!("ClaimOp [Scouting]: reachable ring covered after {} ticks, selecting", elapsed);
                     }
@@ -1266,30 +1172,6 @@ mod tests {
         // Full bucket, flat trend → Normal tier, comfortably above the
         // healthy-bucket floor.
         GovernorSnapshot::compute(10_000, 0.0, 500.0)
-    }
-
-    // ── distance_score: own-remote-ring band, never-zero falloff ────────────
-
-    #[test]
-    fn distance_score_peaks_at_four_and_disfavours_close() {
-        assert_eq!(ClaimOperation::distance_score(0), None);
-        // Peak at 4.
-        assert_eq!(ClaimOperation::distance_score(4), Some(1.0));
-        // Strictly increasing up to the peak (close rooms disfavoured).
-        let d1 = ClaimOperation::distance_score(1).unwrap();
-        let d2 = ClaimOperation::distance_score(2).unwrap();
-        let d3 = ClaimOperation::distance_score(3).unwrap();
-        let d4 = ClaimOperation::distance_score(4).unwrap();
-        assert!(d1 < d2 && d2 < d3 && d3 < d4, "{d1} {d2} {d3} {d4}");
-        // Distance 1 is heavily disfavoured.
-        assert!(d1 <= 0.1);
-        // Declining but never zero beyond the peak (selectable as last resort).
-        let d5 = ClaimOperation::distance_score(5).unwrap();
-        let d6 = ClaimOperation::distance_score(6).unwrap();
-        let d7 = ClaimOperation::distance_score(7).unwrap();
-        let d20 = ClaimOperation::distance_score(20).unwrap();
-        assert!(d4 > d5 && d5 > d6 && d6 > d7, "{d4} {d5} {d6} {d7}");
-        assert!(d20 > 0.0);
     }
 
     // ── compute_maximum_rooms: dynamic, self-tuning cap ─────────────────────

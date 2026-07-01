@@ -14,6 +14,84 @@ use specs::*;
 use std::cell::*;
 use std::rc::*;
 
+/// The controller link's active-priority intake is gated to a horizon of this
+/// many ticks of expected drain. A link refills at most once per cooldown
+/// (= Chebyshev distance to the sending link, ≤ ~25 for a hub↔controller pair),
+/// so 30 ticks of drain comfortably covers a full refill cycle without
+/// starving the upgrader — while keeping the advertised demand small enough
+/// that surplus link energy overflows to the storage link instead of soaking
+/// the 800-capacity controller buffer.
+const CONTROLLER_LINK_BUFFER_TICKS: u32 = 30;
+
+/// At or above this fraction of its (gated) buffer the controller link defers to
+/// storage: it advertises its remaining deficit at `None` priority instead of
+/// `Low`. A `Low` deposit unconditionally out-ranks the storage link's `None`
+/// deposit in the link router, so without this a nearly-full link keeps winning
+/// the small top-offs and pins itself full — and the surplus never reaches
+/// storage. Demoted to `None`, those top-offs lose the router's value ranking to
+/// storage's much larger free capacity, so the link hovers at the threshold and
+/// the surplus flows to storage. Most visible at RCL≤7, where there is no drain
+/// gate and the buffer is the link's full 800 capacity.
+const CONTROLLER_LINK_DEFER_FILL: f32 = 0.75;
+
+/// Pure decision for what (if anything) a controller link should advertise as a
+/// `Link` deposit, given its energy `capacity`/`used`/`free` and the
+/// controller's expected per-tick drain.
+///
+/// `expected_drain_per_tick`:
+///   - `Some(rate)` — controller at max RCL, where the engine caps upgrade at
+///     `CONTROLLER_MAX_UPGRADE_PER_TICK` e/t. Only request enough to keep
+///     `rate × CONTROLLER_LINK_BUFFER_TICKS` buffered so the surplus overflows
+///     to the storage link's `None` deposit instead of being soaked into the
+///     controller buffer (the RCL8 storage-link starvation root cause).
+///   - `None` — below max RCL, where upgrading is the growth bottleneck and the
+///     real drain is bounded by upgrader WORK (not the engine cap); keep the
+///     whole link topped.
+///
+/// Priority escalates as the buffer runs low (so a starving upgrader still wins
+/// energy under contention) and de-escalates to `None` once the buffer is mostly
+/// full (see [`CONTROLLER_LINK_DEFER_FILL`]), so a nearly-topped link no longer
+/// out-prioritizes storage and the surplus flows there. Returns `None` (no
+/// request at all) only once the buffer is at or over target.
+fn controller_link_deposit(
+    capacity: u32,
+    used: u32,
+    free: u32,
+    expected_drain_per_tick: Option<u32>,
+) -> Option<(TransferPriority, u32)> {
+    let target_buffer = match expected_drain_per_tick {
+        Some(drain) => drain.saturating_mul(CONTROLLER_LINK_BUFFER_TICKS).min(capacity),
+        None => capacity,
+    };
+
+    let deficit = target_buffer.saturating_sub(used).min(free);
+
+    if deficit == 0 {
+        return None;
+    }
+
+    let fill_fraction = if target_buffer == 0 {
+        1.0
+    } else {
+        (used as f32) / (target_buffer as f32)
+    };
+
+    let priority = if fill_fraction < 0.25 {
+        TransferPriority::High
+    } else if fill_fraction < 0.5 {
+        TransferPriority::Medium
+    } else if fill_fraction < CONTROLLER_LINK_DEFER_FILL {
+        TransferPriority::Low
+    } else {
+        // Mostly full: defer to storage (still advertise the deficit so the link
+        // can top off if storage can't take the energy, but at `None` so it no
+        // longer out-prioritizes storage).
+        TransferPriority::None
+    };
+
+    Some((priority, deficit))
+}
+
 pub struct RoomTransferMission {
     owner: EntityOption<Entity>,
     room_data: Entity,
@@ -204,7 +282,19 @@ impl RoomTransferMission {
 
             Self::request_transfer_for_source_links(transfer, structure_data);
             Self::request_transfer_for_storage_links(transfer, structure_data);
-            Self::request_transfer_for_controller_links(transfer, structure_data);
+
+            // Gate the controller link's active-priority intake to the
+            // controller's expected drain. At max RCL the engine caps upgrade
+            // at CONTROLLER_MAX_UPGRADE_PER_TICK e/t, so only that much needs
+            // buffering and the surplus can overflow to storage; below max the
+            // controller is the growth bottleneck so keep it fully fed (None).
+            let expected_drain_per_tick = room_data
+                .get_structures()
+                .and_then(|structures| structures.controllers().iter().map(|controller| controller.level()).max())
+                .filter(|level| controller_levels(*level as u32).is_none())
+                .map(|_| CONTROLLER_MAX_UPGRADE_PER_TICK);
+
+            Self::request_transfer_for_controller_links(transfer, structure_data, expected_drain_per_tick);
 
             Ok(())
         })
@@ -484,24 +574,33 @@ impl RoomTransferMission {
         }
     }
 
-    fn request_transfer_for_controller_links(transfer: &mut dyn TransferRequestSystem, structure_data: &StructureData) {
+    fn request_transfer_for_controller_links(
+        transfer: &mut dyn TransferRequestSystem,
+        structure_data: &StructureData,
+        expected_drain_per_tick: Option<u32>,
+    ) {
         for link_id in &structure_data.controller_links {
             if let Some(link) = link_id.resolve() {
-                let free_capacity = link.store().get_free_capacity(Some(ResourceType::Energy));
+                let capacity = link.store().get_capacity(Some(ResourceType::Energy));
+                let used_capacity = link.store().get_used_capacity(Some(ResourceType::Energy));
+                // Safe on general stores (engine-mechanics folklore row 26).
+                let free_capacity = link.store().get_free_capacity(Some(ResourceType::Energy)).max(0) as u32;
 
-                if free_capacity > 1 {
+                // Demand is gated to the expected drain and escalates as the
+                // buffer runs low (see `controller_link_deposit`).
+                if let Some((priority, amount)) =
+                    controller_link_deposit(capacity, used_capacity, free_capacity, expected_drain_per_tick)
+                {
                     let transfer_request = TransferDepositRequest::new(
                         TransferTarget::Link(link.remote_id()),
                         Some(ResourceType::Energy),
-                        TransferPriority::Low,
-                        free_capacity as u32,
+                        priority,
+                        amount,
                         TransferType::Link,
                     );
 
                     transfer.request_deposit(transfer_request);
                 }
-
-                let used_capacity = link.store().get_used_capacity(Some(ResourceType::Energy));
 
                 let transfer_request = TransferWithdrawRequest::new(
                     TransferTarget::Link(link.remote_id()),
@@ -634,5 +733,75 @@ impl Mission for RoomTransferMission {
         self.link_transfer(system_data)?;
 
         Ok(MissionResult::Running)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // At max RCL the controller drains only CONTROLLER_MAX_UPGRADE_PER_TICK (15)
+    // e/t, so the gated buffer is 15 * CONTROLLER_LINK_BUFFER_TICKS (30) = 450,
+    // below the 800 link capacity.
+    const MAX_LEVEL_DRAIN: Option<u32> = Some(CONTROLLER_MAX_UPGRADE_PER_TICK);
+
+    // Pin (RCL8 storage-link starvation fix): once the controller link holds its
+    // gated buffer, it advertises NO active deposit, so source links fall through
+    // to the storage link (None) in link_transfer and the surplus reaches storage.
+    // This is the regression the operator observed: the controller link soaking
+    // all link energy via its old unconditional free-capacity Low deposit.
+    #[test]
+    fn controller_link_full_gated_buffer_requests_nothing() {
+        assert_eq!(controller_link_deposit(800, 450, 350, MAX_LEVEL_DRAIN), None);
+        // Over-buffered (e.g. just before an upgrader drains it) — still nothing.
+        assert_eq!(controller_link_deposit(800, 600, 200, MAX_LEVEL_DRAIN), None);
+    }
+
+    // Pin: below the buffer, the controller link tops up only its (small) gated
+    // deficit — not the full free capacity — so the rest overflows to storage.
+    #[test]
+    fn controller_link_tops_up_only_the_gated_deficit() {
+        // used 300 of a 450 buffer -> deficit 150, fill 0.667 -> Low.
+        assert_eq!(controller_link_deposit(800, 300, 500, MAX_LEVEL_DRAIN), Some((TransferPriority::Low, 150)));
+    }
+
+    // Pin (operator requirement): priority escalates as the buffer runs low so a
+    // starving upgrader still wins energy under contention.
+    #[test]
+    fn controller_link_escalates_priority_when_low() {
+        // < 25% of buffer (used 100/450 = 0.22) -> High.
+        assert_eq!(controller_link_deposit(800, 100, 700, MAX_LEVEL_DRAIN), Some((TransferPriority::High, 350)));
+        // Empty -> High, request the whole buffer.
+        assert_eq!(controller_link_deposit(800, 0, 800, MAX_LEVEL_DRAIN), Some((TransferPriority::High, 450)));
+        // 25%-50% (used 200/450 = 0.44) -> Medium.
+        assert_eq!(controller_link_deposit(800, 200, 600, MAX_LEVEL_DRAIN), Some((TransferPriority::Medium, 250)));
+    }
+
+    // Pin: below max RCL (None) the controller is the growth bottleneck, so
+    // while the link is below the defer threshold it out-prioritizes storage,
+    // escalating as it empties.
+    #[test]
+    fn controller_link_below_max_prioritizes_until_threshold() {
+        // 12.5% full -> High, full deficit.
+        assert_eq!(controller_link_deposit(800, 100, 700, None), Some((TransferPriority::High, 700)));
+        // 37.5% full -> Medium.
+        assert_eq!(controller_link_deposit(800, 300, 500, None), Some((TransferPriority::Medium, 500)));
+        // 62.5% full (below the 0.75 defer threshold) -> Low.
+        assert_eq!(controller_link_deposit(800, 500, 300, None), Some((TransferPriority::Low, 300)));
+    }
+
+    // Pin (operator requirement, RCL≤7): once the link is mostly full it defers
+    // to storage. The remaining (small) deficit is advertised at None, NOT Low,
+    // so source links stop pinning the link full and the surplus reaches storage.
+    #[test]
+    fn controller_link_defers_to_storage_when_nearly_full() {
+        // At the 0.75 defer threshold -> None (not Low).
+        assert_eq!(controller_link_deposit(800, 600, 200, None), Some((TransferPriority::None, 200)));
+        // A small top-off near the brim -> None.
+        assert_eq!(controller_link_deposit(800, 720, 80, None), Some((TransferPriority::None, 80)));
+        // Completely full -> no request at all.
+        assert_eq!(controller_link_deposit(800, 800, 0, None), None);
+        // Same defer behaviour at max RCL: used 400 of the 450 buffer -> None.
+        assert_eq!(controller_link_deposit(800, 400, 400, MAX_LEVEL_DRAIN), Some((TransferPriority::None, 50)));
     }
 }

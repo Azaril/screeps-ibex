@@ -12,6 +12,7 @@ mod cleanup;
 // tiny crate instead of the whole bot. Re-exported as `crate::combat` so the live adapters in
 // `jobs::squad_combat` / `missions::attack_mission` (the only `game::*` users) keep their paths.
 pub use screeps_combat_decision as combat;
+mod claim_economics;
 mod constants;
 mod cpugovernor;
 mod creep;

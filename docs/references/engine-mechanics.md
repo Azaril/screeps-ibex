@@ -180,7 +180,7 @@ Applied at netting time (NOT at intent time), walking the body **from index 0**:
 ### 2.9 Safe mode and spawn-blocking
 
 - During safe mode, hostiles in the room cannot attack/rangedAttack/rMA/heal/dismantle at all (guard in every combat intent, e.g. `creeps/attack.js:30-32`) and do not block the owner's movement (`movement.js:22`). Safe-mode **charges** are bought by a creep with `generateSafeMode` (1,000 ghodium per charge, `creeps/generateSafeMode.js:19-24`) and granted free on each controller level-up (`creeps/upgradeController.js:77`); **activation** consumes a charge and is gated by cooldown, upgrade-block, and the downgrade clock — §2.12 covers the gates an attacker can force shut. Duration 20,000, cooldown 50,000 (`engine/processor/intents/controllers/activateSafeMode.js:11-22`, `common/constants.js:242-244`).
-- **You cannot spawn-block with creeps**: if every exit tile is blocked and a hostile occupies a candidate tile, the newborn **kills the hostile and spawns on its tile** ("spawnstomp", `engine/processor/intents/spawns/_born-creep.js:53-77`). If some non-chosen direction is free, the spawn waits instead (`:55-67`); blocked spawns retry every tick (`spawns/tick.js:26`).
+- **You cannot spawn-block with creeps**: if every exit tile is blocked and a hostile occupies a candidate tile, the newborn **kills the hostile and spawns on its tile** ("spawnstomp", `engine/processor/intents/spawns/_born-creep.js:53-77`). If some non-chosen direction is free, the spawn waits instead (`:55-67`); blocked spawns retry every tick (`spawns/tick.js:26`). **But spawnstomp only triggers with a hostile present** — a spawn whose own `directions` are all sealed by own construction sites / creeps / walls has no escape and wedges permanently (§3.6).
 
 ### 2.10 Derived sustain math (kiting, drain, quads)
 
@@ -239,7 +239,7 @@ Grounds ADR 0008's planned `Downgrade{room}` / `Claim{room}` objectives. Each fa
 
 ### 3.1 Spawn time and the throughput ceiling — VERIFIED constants
 
-`needTime = CREEP_SPAWN_TIME(3) × body.length`; body silently truncated to `MAX_CREEP_SIZE(50)` (`engine/processor/intents/spawns/create-creep.js:36,49`). One creep at a time per spawn (`:11-13`). The creep emerges when `gameTime >= spawning.spawnTime−1`; a blocked exit slips spawnTime +1/tick (`spawns/tick.js:17-27`). `PWR_OPERATE_SPAWN` multiplies needTime ×[0.9, 0.7, 0.5, 0.35, 0.2] (`create-creep.js:51-54`); `PWR_DISRUPT_SPAWN` freezes progress (`spawns/tick.js:13-15`).
+`needTime = CREEP_SPAWN_TIME(3) × body.length`; body silently truncated to `MAX_CREEP_SIZE(50)` (`engine/processor/intents/spawns/create-creep.js:36,49`). One creep at a time per spawn (`:11-13`). The creep emerges when `gameTime >= spawning.spawnTime−1`; a blocked exit slips spawnTime +1/tick (`spawns/tick.js:17-27`) — indefinitely if the block is permanent, e.g. a `directions`-constrained spawn whose exits take obstacle construction sites (§3.6). `PWR_OPERATE_SPAWN` multiplies needTime ×[0.9, 0.7, 0.5, 0.35, 0.2] (`create-creep.js:51-54`); `PWR_DISRUPT_SPAWN` freezes progress (`spawns/tick.js:13-15`).
 
 **The hard production ceiling** (3 ticks/part × 1500-tick lifetime):
 
@@ -279,6 +279,17 @@ Energy per TTL-tick of renew ≈ spawn cost / 1500 — identical energy efficien
 - Each spawn self-charges +1 energy/tick while room spawn+extension energy < 300 (`spawns/tick.js:43-47`) — a drained room always recovers spawn ability.
 - Excess spawns/extensions beyond the RCL allowance are switched `off`, keeping those closest to the controller (`_calc_spawns.js:9-22`); `CONTROLLER_STRUCTURES.spawn = {…, 7:2, 8:3}` (`common/constants.js:215`).
 - Spawnstomp: §2.9.
+
+### 3.6 Birth placement & directional spawning (the deadlock surface) — VERIFIED
+
+The `directions` argument of `spawnCreep` is **validated only for format, never for tile availability**, and the constraint is applied only at BIRTH — not at the `spawnCreep` call. That split is what lets a directional spawn wedge a room.
+
+- **Call time (`spawns/create-creep.js:21-34`):** `directions` is checked solely for shape — an array of integers 1–8, de-duplicated (`:26-33`). There is NO check that any chosen tile is free, so `spawnCreep(body, name, {directions})` returns `OK` even when every chosen tile is blocked; the directions are merely stored in `spawning.directions` (`:56-63`).
+- **Birth time (`spawns/_born-creep.js`):** once `gameTime >= spawnTime−1` (`spawns/tick.js:17`), the engine walks the allowed directions (`spawning.directions`, else all 8 — `:17-20`) and places the creep on the **first** unoccupied tile (`:23-34,42-50`). A tile is occupied if it holds an `OBSTACLE_OBJECT_TYPES` object **OR a `constructionSite` whose `structureType ∈ OBSTACLE_OBJECT_TYPES`** (`:12-15`, ownership NOT checked), or a creep (`movement.isTileBusy`, `:29`), or a wall without a road (`:30`). `OBSTACLE_OBJECT_TYPES` (`common/constants.js:85`) excludes only road/container/rampart/extractor among buildables — so an **extension/tower/lab/link/storage/spawn/wall construction site blocks the birth tile exactly like the finished structure**.
+- **No free allowed tile ⇒ permanent wedge.** If every allowed direction is blocked and **no hostile** sits on a chosen tile, `_born-creep` returns `false` (`:78`) and `spawns/tick.js:25-27` resets `spawnTime = 1+gameTime` — the spawn re-tries forever, produces nothing, and holds its lane. The spawnstomp escape (§2.9) is the only recovery, and it fires **only when a hostile occupies a chosen tile** (`:53-76`); it does nothing for a self-inflicted block (own construction sites, own creeps, walls).
+- **The asymmetry that matters:** creep camping is **transient** (creeps move, the tile frees), but a construction site is **permanent** (it persists until built, then becomes the obstacle structure). So constraining `directions` onto a tile that takes an obstacle-type construction site wedges the spawn indefinitely — whereas an unconstrained spawn (`directions` omitted) tries all 8 and the engine itself skips the blocked tiles.
+
+**Design implication (grounds `spawnsystem.rs` / `missions/construction.rs`):** any code that passes `directions` must exclude tiles holding obstacle-type construction sites (the engine won't — it only finds out at birth) and must never constrain a spawn to a set that can be fully sealed (fall back to an unconstrained spawn rather than a permanent wedge); placement code must not drop an obstacle-type construction site onto a mid-spawn spawn's exit tiles. The classic trigger is RCL level-up: a fresh extension ring is placed as construction sites on (or beside) a spawn's exits while a creep is mid-spawn. Cross-ref: spawnstomp §2.9, exit slip §3.1.
 
 ---
 

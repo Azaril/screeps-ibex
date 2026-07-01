@@ -54,6 +54,21 @@ fn structure_blocks_spawn(structure: &StructureObject) -> bool {
     }
 }
 
+/// Whether a construction site of `structure_type` blocks a creep from being
+/// spawned onto its tile. Mirrors the engine's born-creep obstacle test
+/// (`_born-creep.js`: a `constructionSite` whose `structureType` is in
+/// `OBSTACLE_OBJECT_TYPES` blocks placement). Roads, containers, ramparts and
+/// extractors are not obstacle types, so their sites are standable; every other
+/// site type blocks. `pub(crate)` so the construction mission (the placement-side
+/// half of the deadlock fix) can reuse the exact same predicate to avoid dropping
+/// a blocking site onto a spawn exit.
+pub(crate) fn site_blocks_spawn(structure_type: StructureType) -> bool {
+    !matches!(
+        structure_type,
+        StructureType::Road | StructureType::Container | StructureType::Rampart | StructureType::Extractor
+    )
+}
+
 /// Live room facts used to choose a safe spawn-out direction when the plan's
 /// approaches are unavailable or all blocked. Built lazily, at most once per
 /// room per tick (only when a spawn actually fires), so the `find`/terrain cost
@@ -65,7 +80,7 @@ struct LiveSpawnContext {
 }
 
 impl LiveSpawnContext {
-    fn build(room: &Room, structures: &RoomStructureData) -> LiveSpawnContext {
+    fn build(room: &Room, structures: &RoomStructureData, construction_sites: &[ConstructionSite]) -> LiveSpawnContext {
         let terrain = FastRoomTerrain::new(room.get_terrain().get_raw_buffer().to_vec());
         let creep_tiles = room
             .find(find::CREEPS, None)
@@ -75,7 +90,7 @@ impl LiveSpawnContext {
                 (p.x().u8(), p.y().u8())
             })
             .collect();
-        let blocked_tiles = structures
+        let mut blocked_tiles: HashSet<(u8, u8)> = structures
             .all()
             .iter()
             .filter(|s| structure_blocks_spawn(s))
@@ -84,6 +99,22 @@ impl LiveSpawnContext {
                 (p.x().u8(), p.y().u8())
             })
             .collect();
+        // Fold obstacle-type construction sites into the blocked set. The engine
+        // refuses to place a newborn onto a tile holding an obstacle-type site
+        // (`_born-creep.js`), and because `spawnCreep`'s `directions` are checked
+        // only at BIRTH (not at call time), a direction set whose every tile is
+        // blocked wedges the spawn (+1 spawnTime/tick) PERMANENTLY -- unlike a
+        // creep camping a tile, a site never moves. This is the RCL-up deadlock:
+        // a fresh extension/tower site landing on a spawn approach. Counting
+        // sites here lets `safe_spawn_directions` exclude those tiles in Tier 1
+        // and Tier 2 and fall through to the unconstrained Tier 3, where the
+        // engine itself picks a genuinely free tile.
+        for site in construction_sites {
+            if site_blocks_spawn(site.structure_type()) {
+                let p = site.pos();
+                blocked_tiles.insert((p.x().u8(), p.y().u8()));
+            }
+        }
         LiveSpawnContext {
             terrain,
             creep_tiles,
@@ -404,7 +435,15 @@ impl SpawnQueueSystem {
                         break;
                     }
 
-                    let live = live_ctx.get_or_insert_with(|| LiveSpawnContext::build(&room, &structures));
+                    let live = live_ctx.get_or_insert_with(|| {
+                        // Construction sites are needed so obstacle-type sites on a
+                        // spawn exit are treated as blocked (fix A). Fetched lazily
+                        // here so the `find` cost is only paid when a spawn actually
+                        // fires (cached per room per tick by RoomData).
+                        let sites_ref = room_data.get_construction_sites();
+                        let sites: &[ConstructionSite] = sites_ref.as_deref().map(|v| v.as_slice()).unwrap_or(&[]);
+                        LiveSpawnContext::build(&room, &structures, sites)
+                    });
                     let directions = Self::safe_spawn_directions(spawn.pos(), &spawn_approaches, live);
 
                     match Self::spawn_creep(spawn, &request.body, &directions) {
@@ -614,5 +653,71 @@ mod tests {
             .expect("expected requests for room");
 
         assert_eq!(priorities, vec![100.0, 75.0, 25.0, 25.0]);
+    }
+
+    /// Pin: the construction-site obstacle predicate matches the engine's
+    /// `OBSTACLE_OBJECT_TYPES` test in `_born-creep.js` — road/container/
+    /// rampart/extractor sites are standable; everything else blocks.
+    #[test]
+    fn site_blocks_spawn_matches_engine_obstacle_set() {
+        // Standable site types (the engine never blocks born-creep on these).
+        assert!(!site_blocks_spawn(StructureType::Road));
+        assert!(!site_blocks_spawn(StructureType::Container));
+        assert!(!site_blocks_spawn(StructureType::Rampart));
+        assert!(!site_blocks_spawn(StructureType::Extractor));
+        // Obstacle site types that seal a spawn exit at birth.
+        assert!(site_blocks_spawn(StructureType::Extension));
+        assert!(site_blocks_spawn(StructureType::Tower));
+        assert!(site_blocks_spawn(StructureType::Spawn));
+        assert!(site_blocks_spawn(StructureType::Storage));
+        assert!(site_blocks_spawn(StructureType::Lab));
+    }
+
+    /// Build a `LiveSpawnContext` over all-plain terrain with the given blocked
+    /// tiles (simulating obstacle structures/sites) and no creeps.
+    fn live_ctx_with_blocked(blocked: &[(u8, u8)]) -> LiveSpawnContext {
+        LiveSpawnContext {
+            terrain: FastRoomTerrain::new(vec![0u8; ROOM_COORD_MAX as usize * ROOM_COORD_MAX as usize]),
+            creep_tiles: HashSet::new(),
+            blocked_tiles: blocked.iter().copied().collect(),
+        }
+    }
+
+    fn spawn_pos_25_25() -> Position {
+        let room: RoomName = "W1N1".parse().unwrap();
+        Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), room)
+    }
+
+    /// Fix A: a planner approach carrying a (site-)blocked tile is dropped from
+    /// the Tier-1 result while a free approach is kept — so the engine is never
+    /// handed a direction it cannot place a creep onto.
+    #[test]
+    fn safe_spawn_directions_excludes_blocked_approach() {
+        let spawn = spawn_pos_25_25();
+        // Two planner approaches: Top (25,24) and Right (26,25).
+        let approaches = vec![PlanTileLocation::from_xy(25, 24), PlanTileLocation::from_xy(26, 25)];
+        // A blocking site sits on the Top approach only.
+        let live = live_ctx_with_blocked(&[(25, 24)]);
+
+        let dirs = SpawnQueueSystem::safe_spawn_directions(spawn, &approaches, &live);
+
+        assert!(dirs.contains(&Direction::Right), "the free approach is kept");
+        assert!(!dirs.contains(&Direction::Top), "the blocked approach is excluded");
+    }
+
+    /// Fix A: when every planner approach is blocked, Tier 1 is empty and the
+    /// selector falls through to the Tier-2 interior fallback — but it NEVER
+    /// offers the blocked tile, so the spawn cannot be wedged onto it.
+    #[test]
+    fn safe_spawn_directions_never_offers_a_blocked_tile() {
+        let spawn = spawn_pos_25_25();
+        // The room's single approach (Top) is sealed by a site.
+        let approaches = vec![PlanTileLocation::from_xy(25, 24)];
+        let live = live_ctx_with_blocked(&[(25, 24)]);
+
+        let dirs = SpawnQueueSystem::safe_spawn_directions(spawn, &approaches, &live);
+
+        assert!(!dirs.is_empty(), "falls through to Tier-2 interior tiles (open terrain)");
+        assert!(!dirs.contains(&Direction::Top), "the blocked tile is never offered as a direction");
     }
 }
