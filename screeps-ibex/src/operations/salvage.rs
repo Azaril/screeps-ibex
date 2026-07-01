@@ -42,6 +42,77 @@ const ASSUMED_SPAWN_LEAD_TICKS: u32 = 150;
 /// rooms use the tighter `derelict_sighting_due_at` schedule instead.
 const HOSTILE_INTEL_RECHECK_TICKS: u32 = 10_000;
 
+/// Intel + live facts a room presents to the salvage admission gate, distilled
+/// so the eligibility decision is a PURE function (host-testable without
+/// `game::*` / a live `RoomData`). Populated in `run_operation` from the
+/// dynamic-visibility intel plus a live structure read; consumed by
+/// [`salvage_eligible`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct SalvageEligibilityFacts {
+    /// Controller owned by a hostile player (the derelict-takeover path).
+    pub owner_hostile: bool,
+    /// Controller unowned (the neutral-remnant strip path).
+    pub owner_neutral: bool,
+    /// Hostile controller confirmed derelict (militarily dead over the confirm
+    /// window with actionable-age intel).
+    pub confirmed_derelict: bool,
+    /// Controller reserved by a hostile player (invader cores / defended enemy
+    /// remote) — excludes a neutral room from the strip path.
+    pub reservation_hostile: bool,
+    /// Controller reserved by us / an ally — not ours to strip.
+    pub reservation_friendly: bool,
+    /// Any observed military capability (combat creeps / active spawns / armed
+    /// towers).
+    pub militarily_active: bool,
+    /// Neutral-room intel fresh enough to act on.
+    pub updated_within_action_age: bool,
+    /// Foreign owned structures observed (the loot/dismantle remnants).
+    pub hostile_structures: bool,
+    /// A LIVE invader core stands in the room (read from live structures this
+    /// tick — dead cores never appear in `find(STRUCTURES)`). ADR 0036 D6: a
+    /// room with a live core is NOT salvage-eligible; it belongs to the offense
+    /// `Dismantle` (KillImmuneStructure → RANGED) path, which is the only role
+    /// that can raze the dismantle-immune core. Salvage would spawn WORK
+    /// dismantlers (a no-op on the core) + a Declaim objective that only
+    /// neutralises the controller, leaving the core to re-reserve. Once the core
+    /// is razed (gone → this is `false` again) the room re-qualifies with no
+    /// permanent lockout.
+    pub has_live_invader_core: bool,
+}
+
+/// Pure salvage admission gate (ADR 0036 D6, host-tested): may Salvage admit
+/// this room? Encodes the two eligibility paths — hostile-owned confirmed
+/// derelict, and neutral with foreign remnants — AND the D6 no-live-core guard.
+///
+/// D6: while a LIVE invader core stands, the room is DEFERRED to the offense
+/// `Dismantle` path (the only role that razes the immune core). Salvage never
+/// admits it. When the core is razed (core-free again) and the controller is
+/// neutral, the room salvages exactly as before — no permanent lockout.
+pub(crate) fn salvage_eligible(facts: &SalvageEligibilityFacts) -> bool {
+    // D6: a live invader core belongs to offense (War) — defer regardless of
+    // how the room's ownership/derelict intel classifies it.
+    if facts.has_live_invader_core {
+        return false;
+    }
+
+    if facts.owner_hostile {
+        // Hostile-owned rooms must be confirmed derelict.
+        facts.confirmed_derelict
+    } else if facts.owner_neutral {
+        // Neutral rooms qualify when militarily quiet with foreign remnants
+        // observed. Reserved neutral rooms are excluded: a hostile reservation
+        // means invader cores or a defended enemy remote, a friendly one is not
+        // ours to strip.
+        !facts.reservation_hostile
+            && !facts.reservation_friendly
+            && !facts.militarily_active
+            && facts.updated_within_action_age
+            && facts.hostile_structures
+    } else {
+        false
+    }
+}
+
 /// Pure EV gate (host-tested): is the recoverable value worth the creep
 /// spawn energy, given travel distance? Strategic rooms (future mining
 /// outposts) bypass the margin — clearing them has value beyond the energy
@@ -468,22 +539,39 @@ impl Operation for SalvageOperation {
                 .map(|s| !s.sources().is_empty())
                 .unwrap_or(false);
 
+            // ADR 0036 D6: a LIVE invader core (present in live structures this
+            // tick — dead cores never appear in `find(STRUCTURES)`) routes the
+            // room to the offense `Dismantle` (KillImmuneStructure → RANGED)
+            // path in war.rs, the ONLY role that razes the dismantle-immune
+            // core. Salvage must not admit it (its WORK dismantlers no-op on the
+            // core and its Declaim only neutralises the controller). Read from
+            // best-effort live structures; on a non-visible tick this reads
+            // `false` (no lockout — the room re-qualifies once the core is razed
+            // and gone).
+            let has_live_invader_core = room_data.get_structures().map(|s| !s.invader_cores().is_empty()).unwrap_or(false);
+
             // Hostile-owned rooms must be confirmed derelict; neutral rooms
             // qualify when militarily quiet with foreign remnants observed.
-            // Reserved neutral rooms are excluded: a hostile reservation means
-            // invader cores or a defended enemy remote, a friendly one is not
-            // ours to strip.
-            let eligible = if dynamic_visibility_data.owner().hostile() {
-                dynamic_visibility_data.confirmed_derelict(features.derelict.confirm_ticks, features.derelict.action_max_age)
-            } else if dynamic_visibility_data.owner().neutral() {
-                !dynamic_visibility_data.reservation().hostile()
-                    && !dynamic_visibility_data.reservation().friendly()
-                    && !dynamic_visibility_data.militarily_active()
-                    && dynamic_visibility_data.updated_within(features.derelict.action_max_age)
-                    && dynamic_visibility_data.hostile_structures()
-            } else {
-                false
+            let facts = SalvageEligibilityFacts {
+                owner_hostile: dynamic_visibility_data.owner().hostile(),
+                owner_neutral: dynamic_visibility_data.owner().neutral(),
+                confirmed_derelict: dynamic_visibility_data
+                    .confirmed_derelict(features.derelict.confirm_ticks, features.derelict.action_max_age),
+                reservation_hostile: dynamic_visibility_data.reservation().hostile(),
+                reservation_friendly: dynamic_visibility_data.reservation().friendly(),
+                militarily_active: dynamic_visibility_data.militarily_active(),
+                updated_within_action_age: dynamic_visibility_data.updated_within(features.derelict.action_max_age),
+                hostile_structures: dynamic_visibility_data.hostile_structures(),
+                has_live_invader_core,
             };
+            let eligible = salvage_eligible(&facts);
+
+            if diagnostics && has_live_invader_core {
+                info!(
+                    "[salvage-diag] {} deferred to offense: live invader core present (ADR 0036 D6)",
+                    room_data.name
+                );
+            }
 
             // A confirmed-derelict room with sources we can act on is a
             // takeover target (clear → de-claim → mine), not churn — pull it
@@ -712,6 +800,104 @@ mod tests {
             loot_other,
             dismantle_hits,
         }
+    }
+
+    // ── ADR 0036 D6: salvage-vs-offense routing for core rooms ──────────────
+
+    /// A genuinely-derelict, core-FREE hostile room: confirmed derelict → still
+    /// salvages (the preserved baseline).
+    fn derelict_core_free() -> SalvageEligibilityFacts {
+        SalvageEligibilityFacts {
+            owner_hostile: true,
+            owner_neutral: false,
+            confirmed_derelict: true,
+            reservation_hostile: false,
+            reservation_friendly: false,
+            militarily_active: false,
+            updated_within_action_age: true,
+            hostile_structures: true,
+            has_live_invader_core: false,
+        }
+    }
+
+    /// A neutral room with foreign remnants and no core: still salvages.
+    fn neutral_remnant_core_free() -> SalvageEligibilityFacts {
+        SalvageEligibilityFacts {
+            owner_hostile: false,
+            owner_neutral: true,
+            confirmed_derelict: false,
+            reservation_hostile: false,
+            reservation_friendly: false,
+            militarily_active: false,
+            updated_within_action_age: true,
+            hostile_structures: true,
+            has_live_invader_core: false,
+        }
+    }
+
+    #[test]
+    fn d6_live_core_room_is_not_salvage_eligible() {
+        // RED pre-fix: salvage admitted it. GREEN: a LIVE invader core defers to
+        // the offense Dismantle path — NOT salvage-eligible, on either path.
+        let hostile_with_core = SalvageEligibilityFacts {
+            has_live_invader_core: true,
+            ..derelict_core_free()
+        };
+        assert!(!salvage_eligible(&hostile_with_core));
+
+        let neutral_with_core = SalvageEligibilityFacts {
+            has_live_invader_core: true,
+            ..neutral_remnant_core_free()
+        };
+        assert!(!salvage_eligible(&neutral_with_core));
+    }
+
+    #[test]
+    fn d6_core_free_derelict_room_still_salvages() {
+        // Preserve: a genuinely-derelict core-FREE room still salvages.
+        assert!(salvage_eligible(&derelict_core_free()));
+        assert!(salvage_eligible(&neutral_remnant_core_free()));
+    }
+
+    #[test]
+    fn d6_razed_room_requalifies_no_lockout() {
+        // A room whose core was RAZED (now core-free) re-qualifies: same facts,
+        // core flag flips false → eligible again. No permanent lockout.
+        let mut room = derelict_core_free();
+        room.has_live_invader_core = true;
+        assert!(!salvage_eligible(&room), "live core defers");
+        room.has_live_invader_core = false; // core razed + gone
+        assert!(salvage_eligible(&room), "razed room re-qualifies");
+    }
+
+    #[test]
+    fn eligibility_paths_unchanged_for_core_free_rooms() {
+        // Guard the two existing paths are byte-equivalent when there is no
+        // core: hostile needs confirmed derelict; neutral excludes reserved /
+        // militarily-active / stale rooms.
+        assert!(!salvage_eligible(&SalvageEligibilityFacts {
+            confirmed_derelict: false,
+            ..derelict_core_free()
+        }));
+        assert!(!salvage_eligible(&SalvageEligibilityFacts {
+            reservation_hostile: true,
+            ..neutral_remnant_core_free()
+        }));
+        assert!(!salvage_eligible(&SalvageEligibilityFacts {
+            militarily_active: true,
+            ..neutral_remnant_core_free()
+        }));
+        assert!(!salvage_eligible(&SalvageEligibilityFacts {
+            updated_within_action_age: false,
+            ..neutral_remnant_core_free()
+        }));
+        assert!(!salvage_eligible(&SalvageEligibilityFacts {
+            hostile_structures: false,
+            ..neutral_remnant_core_free()
+        }));
+        // A room owned by neither hostile nor neutral (ours / friendly) is never
+        // eligible.
+        assert!(!salvage_eligible(&SalvageEligibilityFacts::default()));
     }
 
     #[test]
