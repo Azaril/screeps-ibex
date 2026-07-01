@@ -1348,6 +1348,56 @@ impl WarOperation {
                     }
                 }
             }
+
+            // ── ADR 0037 Stage T3: route a TOWERED neighbour to the offense/winnability oracle ──────────
+            // A towered adjacent room is a STATIC OFFENSE problem (clear the towers iff winnable), not a
+            // defense reflex — T1 exposed its tower DPS, T2 suppressed the bare Secure. Here we CONFIRM the
+            // towered room is routed to offense through the SAME EV + winnability + affordability gates the
+            // offense already applies, with **no new aggression**: the worthwhile cases (a stronghold core /
+            // a hostile-owned economic room) are ALREADY produced as candidates by the `InvaderCore` and
+            // `ResourceDenial` arms above; the common no-EV case (a lone dismantler under towers in a hostile
+            // player room with no core / no economic pull — the live W13N56) yields `None` from the
+            // MMO-SAFETY gate and is IGNORED. This block adds NO candidate itself (the arms above own that);
+            // it is the completeness confirmation + observability seam for the T3 routing decision. The
+            // winnability + affordability VETO stays downstream (the launch loop), so a worthwhile-but-
+            // unwinnable / unaffordable towered room is still dropped there — this only reasons about CANDIDACY.
+            let is_towered = tower_count > 0 && neighbour_tower_dps(threat_data) > 0.0;
+            if is_towered {
+                // `economic_roi` mirrors the ResourceDenial arm's controllable-economy signal: a hostile-
+                // owned room within denial range with a real economy pulls a positive net-ROI; a bare
+                // dismantler-under-towers room pulls none. (Reuse the InvaderCore economic value if present.)
+                let already_candidate = candidates.iter().any(|c| c.room == room_name);
+                let reason = towered_neighbour_offense_reason(
+                    invader_core.is_some(),
+                    room_owner_hostile,
+                    // A worthwhile hostile-owned economy is exactly the ResourceDenial arm's gate above
+                    // (`attack_players && economy>150k && dist<=6`); mirror it as a positive-ROI signal so
+                    // the gate reasons over the SAME worthwhile condition (no new/divergent EV logic).
+                    (room_owner_hostile
+                        && features.military.attack_players
+                        && !all_npc
+                        && threat_data.threat_level >= ThreatLevel::PlayerScout
+                        && system_data.economy.total_stored_energy > 150_000
+                        && min_distance <= 6)
+                        .then_some(1.0_f32),
+                );
+                if war_debug {
+                    match reason {
+                        Some(_) if already_candidate => info!(
+                            "[War]   T3: towered neighbour {} routed to offense (worthwhile: {:?}); candidate already built by the offense arm",
+                            room_name, reason
+                        ),
+                        Some(_) => info!(
+                            "[War]   T3: towered neighbour {} is offense-worthy ({:?}) but its arm produced no candidate (gated upstream)",
+                            room_name, reason
+                        ),
+                        None => info!(
+                            "[War]   T3: towered neighbour {} has NO worthwhile offense target -- IGNORED (MMO-safe: no new aggression)",
+                            room_name
+                        ),
+                    }
+                }
+            }
         }
 
         // ── 3. Deduplicate: keep highest-scored candidate per room ───────
@@ -1905,6 +1955,44 @@ fn economic_rank_score(base: f32, economic_roi: Option<f32>, defense: &DefensePr
     base + p_win_proxy * ECON_RANK_ROI_SCALE * roi.max(0.0)
 }
 
+/// ADR 0037 Stage T3 — is a suppressed TOWERED neighbour worth routing to the offense/winnability oracle?
+///
+/// T1 exposed a neighbour's energized-tower DPS (`tower_danger`); T2 SUPPRESSES the bare `danger==0 &&
+/// tower_danger>0` Secure (a floor defender can never beat towers). A towered adjacent room is a STATIC
+/// OFFENSE problem — clear the towers *iff* winnable — not a defense reflex. T3 routes such a neighbour to
+/// the offense scan, but ONLY when it carries an offense-WORTHY reason. This helper is the MMO-SAFETY gate:
+/// it returns `true` ONLY for a room the offense already considers worthwhile, so T3 introduces **no new
+/// aggression** — it is a completeness confirmation, not a hand-coded attack.
+///
+/// A towered neighbour is offense-worthy iff EITHER:
+///   (a) it holds an INVADER CORE (a stronghold: core + loot) — the offense already targets this
+///       (war.rs `InvaderCore` arm, sized + winnability-gated); OR
+///   (b) it is a HOSTILE-OWNED player room whose CONTROL unlocks economic value AND `attack_players` is on
+///       — the offense's `ResourceDenial`/`GatedPlayerRaid` arm already sizes + winnability-gates a raid.
+///
+/// The common **W13N56 case** — a lone dismantler under towers in a hostile player room with NO core and NO
+/// economic pull — returns `false`: NO candidate, IGNORED. That is the MMO-safety guarantee: the EXISTING
+/// EV/worthwhile gate (NOT a new attack) keeps the bot from attacking random adjacent player bases. The
+/// winnability + affordability VETO stays downstream (the launch loop), so even a worthwhile-but-unwinnable
+/// (towers too strong for an affordable force) room is still ignored — this only decides CANDIDACY.
+///
+/// Pure + deterministic (no `game::*`, no float→discrete branch on a continuous key). Host-tested below.
+fn towered_neighbour_offense_reason(has_invader_core: bool, room_owner_hostile: bool, controllable_economic_roi: Option<f32>) -> Option<TargetSource> {
+    if has_invader_core {
+        // A stronghold — already an offense target (the `InvaderCore` arm builds + sizes + gates it). The
+        // routing is a no-op here (the arm produces the candidate); we report the reason for observability.
+        return Some(TargetSource::InvaderCore { level: 0 });
+    }
+    // A hostile-owned room whose CONTROL unlocks economic value → the `ResourceDenial` arm's gated raid.
+    // A hostile-owned room with NO controllable economy (the W13N56 dismantler-under-towers case) is NOT
+    // worthwhile → `None` (ignored). A NON-owned towered neighbour (no core, no hostile owner) is likewise
+    // `None`: nothing to take, no aggression.
+    if room_owner_hostile && controllable_economic_roi.is_some_and(|v| v > 0.0) {
+        return Some(TargetSource::ResourceDenial);
+    }
+    None
+}
+
 /// Classify the enemy's coordination for the doctrine sizing math (ADR 0026 §9.4, Q1 confirmed
 /// 2026-06-26): `Coordinated` UNLESS a positive NPC signal — the safe over-spend default, since
 /// under-sizing a real player loses creeps while over-sizing an NPC only spends. Rung-1 doctrines are all
@@ -2451,6 +2539,79 @@ mod tests {
         let first = would_defer_commit(&c, true, now);
         for _ in 0..16 {
             assert_eq!(would_defer_commit(&c, true, now), first, "defer decision must be deterministic");
+        }
+    }
+
+    // ── ADR 0037 Stage T3: route a towered neighbour to the offense/winnability oracle (MMO-SAFE) ──────
+    //
+    // The offense scan needs `game::*` + a full SystemData, so the routing seam is not unit-testable
+    // directly. `towered_neighbour_offense_reason` is the PURE MMO-SAFETY gate the seam evaluates over each
+    // towered neighbour: it returns `Some(reason)` ONLY for a room the offense already considers worthwhile
+    // (a stronghold core / a hostile-owned economic room), so T3 adds NO new aggression. These tests pin the
+    // RED→GREEN contract: worthwhile+ ⇒ an offense reason (candidate flows through the existing gates); no-EV
+    // (the W13N56 dismantler-under-towers case) ⇒ NO reason ⇒ IGNORED.
+
+    /// GREEN — a towered neighbour holding an INVADER CORE (a stronghold: core + loot) is offense-worthy: the
+    /// `InvaderCore` arm already builds + sizes + winnability-gates the candidate. T3 routes (confirms) it.
+    #[test]
+    fn t3_towered_stronghold_is_an_offense_reason() {
+        // has_invader_core = true ⇒ worthwhile regardless of ownership/economy.
+        assert!(
+            matches!(towered_neighbour_offense_reason(true, false, None), Some(TargetSource::InvaderCore { .. })),
+            "a towered stronghold (core) is an offense target"
+        );
+        assert!(
+            matches!(towered_neighbour_offense_reason(true, true, Some(9000.0)), Some(TargetSource::InvaderCore { .. })),
+            "core presence dominates — still a core objective"
+        );
+    }
+
+    /// GREEN — a HOSTILE-OWNED towered room whose CONTROL unlocks a real economy is offense-worthy: the
+    /// `ResourceDenial`/`GatedPlayerRaid` arm sizes + winnability-gates a raid. T3 routes it.
+    #[test]
+    fn t3_towered_hostile_economic_room_is_an_offense_reason() {
+        assert!(
+            matches!(towered_neighbour_offense_reason(false, true, Some(9000.0)), Some(TargetSource::ResourceDenial)),
+            "a hostile-owned towered room with a controllable economy is a sized+gated raid target"
+        );
+    }
+
+    /// RED→GREEN + the MMO-SAFETY guarantee — a towered neighbour with NO worthwhile offense target yields
+    /// NO reason ⇒ NO candidate ⇒ IGNORED. This is the live W13N56 case: a lone dismantler under towers in a
+    /// hostile player room with no core and no economic pull. The bot must NOT auto-attack it.
+    #[test]
+    fn t3_dismantler_under_towers_no_ev_is_ignored() {
+        // Hostile-owned, towered, but NO core and NO controllable economy (roi None / non-positive).
+        assert!(
+            towered_neighbour_offense_reason(false, true, None).is_none(),
+            "MMO-SAFE: a hostile player room with no core / no economic pull is IGNORED (no new aggression)"
+        );
+        assert!(
+            towered_neighbour_offense_reason(false, true, Some(0.0)).is_none(),
+            "a non-positive economy is not worthwhile — still ignored"
+        );
+        // A NON-owned towered neighbour (no core, no hostile owner) — nothing to take.
+        assert!(
+            towered_neighbour_offense_reason(false, false, Some(9000.0)).is_none(),
+            "a non-owned towered room with no core is not a target (economy signal alone does not attack)"
+        );
+        assert!(
+            towered_neighbour_offense_reason(false, false, None).is_none(),
+            "a bare non-owned towered neighbour is ignored"
+        );
+    }
+
+    /// Determinism fence: the gate is pure boolean/Option logic (no float→discrete branch on a continuous
+    /// key — the only float compare is `> 0.0`, a threshold gate), so it is stable across runs.
+    #[test]
+    fn t3_offense_reason_is_deterministic() {
+        let first = towered_neighbour_offense_reason(false, true, Some(9000.0)).is_some();
+        for _ in 0..16 {
+            assert_eq!(
+                towered_neighbour_offense_reason(false, true, Some(9000.0)).is_some(),
+                first,
+                "T3 gate must be deterministic"
+            );
         }
     }
 }
