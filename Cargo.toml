@@ -83,6 +83,11 @@ screeps-combat-decision = { path = "screeps-combat-decision" }
 [patch.'https://github.com/Azaril/screeps-combat-agent']
 screeps-combat-agent = { path = "screeps-combat-agent" }
 
+# screeps-rover-eval reuses combat-eval's real-terrain fixtures + layout-capture pattern for its
+# realistic base-traffic scenarios (ADR 0033 §D2/§D6), so combat-eval is now a git dep of a member.
+[patch.'https://github.com/Azaril/screeps-combat-eval']
+screeps-combat-eval = { path = "screeps-combat-eval" }
+
 # Host-side tool crates: redirect their inter-crate git deps to the local member
 # paths so cross-crate edits are picked up without a push (server-kit is not a
 # dependency of any member, so it needs no patch entry).
