@@ -136,7 +136,7 @@ pub fn score_sk_farm(inp: &SkRoiInputs) -> SkRoiScore {
 use super::data::*;
 use super::operationsystem::*;
 use crate::missions::data::*;
-use crate::missions::sourcekeeperfarm::{sk_room_has_stronghold, SourceKeeperFarmMission};
+use crate::missions::sourcekeeperfarm::{sk_room_has_stronghold, sk_suppression_composition, SourceKeeperFarmMission};
 use crate::room::gather::*;
 use crate::room::visibilitysystem::*;
 use crate::serialize::*;
@@ -149,12 +149,13 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 
-/// Estimated total body-energy of the `duo_sk_farmer` (SK ranged attacker
-/// 10RA+10MOVE+1HEAL ≈ 2250, SK healer 10HEAL+12MOVE ≈ 3100), for the
-/// suppression e/t term. Refined to the real composition cost in K2c.
-const SK_DUO_BODY_COST: u32 = 5350;
-/// Largest single duo body (the healer) — the home must spawn it in one piece.
-const SK_DUO_MAX_BODY_COST: u32 = 3100;
+// REC-027: the hand-computed `SK_DUO_BODY_COST = 5350` / `SK_DUO_MAX_BODY_COST = 3100` constants (stale
+// remnants of the deleted duo template — the doctrine-sized comp actually fields ~9,000e across 3
+// members, so SK net-ROI was overstated ~2.4 e/t) are GONE: the scorer now prices the REAL
+// `sk_suppression_composition` (the same sizing the farm mission requests), and affordability is
+// "the comp assembles at the home's capacity" (every member is per-member-capped by construction, so a
+// separate largest-body check is redundant). ADR 0030 D18 delivered.
+
 /// Min home RCL to consider an SK farm at all (the affordability check below is
 /// the real gate; this just trims the home set cheaply).
 const SK_HOME_MIN_RCL: u32 = 6;
@@ -335,11 +336,15 @@ impl Operation for SourceKeeperOperation {
                 continue;
             };
 
+            // REC-027: price the REAL doctrine-sized suppression comp at the strongest home's capacity —
+            // the same comp the farm mission will request — so the ROI gate and the fielded force agree.
+            // `None` ⇔ no home can field even one member ⇒ unaffordable (the cost input is then moot).
+            let suppression_comp = sk_suppression_composition(home_capacity);
             let inputs = SkRoiInputs {
                 live_sources,
                 haul_tiles: candidate.distance() * TILES_PER_ROOM,
-                suppression_cost: SK_DUO_BODY_COST,
-                affordable: home_capacity >= SK_DUO_MAX_BODY_COST,
+                suppression_cost: suppression_comp.as_ref().map(|c| c.estimated_cost(home_capacity)).unwrap_or(0),
+                affordable: suppression_comp.is_some(),
                 contested,
                 cpu_ok,
                 military_free: true, // TODO(K2c-2/W): yield to active defense / declared war
@@ -396,12 +401,15 @@ impl Operation for SourceKeeperOperation {
 mod tests {
     use super::*;
 
-    /// A clean 3-source candidate with all gates open and a typical duo cost.
+    /// A clean 3-source candidate with all gates open and the REAL doctrine-sized suppression cost
+    /// (REC-027: `sk_suppression_composition(5600).estimated_cost` = 9,000e — pinned in
+    /// `missions::sourcekeeperfarm::tests` — replacing the stale hand-computed 5,350 that overstated SK
+    /// net-ROI ~2.4 e/t).
     fn nearby() -> SkRoiInputs {
         SkRoiInputs {
             live_sources: 3,
             haul_tiles: 50, // one room away
-            suppression_cost: 5350,
+            suppression_cost: 9_000,
             affordable: true,
             contested: false,
             cpu_ok: true,
@@ -462,8 +470,9 @@ mod tests {
 
     #[test]
     fn hysteresis_keeps_a_marginal_farm_but_will_not_start_one() {
-        // ~250 tiles lands net ≈ 3.2 e/t — inside the band [MIN−h, MIN) = [2, 5).
-        let marginal = SkRoiInputs { haul_tiles: 250, ..nearby() };
+        // At the real 9,000e suppression cost (REC-027): net(t) = 40 − 6.0 (suppression) − 1.533 (mining)
+        // − 0.12667·t (haul + cpu) — ~230 tiles lands net ≈ 3.3 e/t, inside the band [MIN−h, MIN) = [2, 5).
+        let marginal = SkRoiInputs { haul_tiles: 230, ..nearby() };
         let fresh = score_sk_farm(&marginal);
         let committed = score_sk_farm(&SkRoiInputs { already_committed: true, ..marginal });
 

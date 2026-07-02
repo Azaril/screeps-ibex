@@ -327,21 +327,6 @@ impl Default for TickOrders {
     }
 }
 
-// ─── Heal assignment ────────────────────────────────────────────────────────
-
-/// A computed heal assignment for one healer creep this tick.
-#[derive(Clone, Debug)]
-pub struct HealAssignment {
-    /// Entity of the healer creep.
-    pub healer: Entity,
-    /// Entity of the target to heal.
-    pub target: Entity,
-    /// Screeps object ID of the target creep for direct game API resolution.
-    pub target_id: Option<ObjectId<Creep>>,
-    /// Expected heal amount (12 per HEAL part adjacent, 4 per HEAL part ranged).
-    pub expected_heal: u32,
-}
-
 // ─── Squad member ───────────────────────────────────────────────────────────
 
 /// Per-member status reported back to the squad each tick.
@@ -576,149 +561,6 @@ impl SquadContext {
         }
     }
 
-    /// Compute optimal heal assignments for this tick.
-    ///
-    /// Algorithm:
-    /// 1. Collect all members that need healing, sorted by urgency.
-    ///    Urgency = damage deficit + predicted incoming damage (from last tick).
-    /// 2. Collect all healers with their heal capacity and position.
-    /// 3. Greedily assign healers to the most urgent targets, preferring
-    ///    adjacent heal (12 HP/part) over ranged heal (4 HP/part).
-    /// 4. Avoid over-healing: once a target's deficit is covered, move on.
-    pub fn compute_heal_assignments(&self, creep_owners: Option<&ReadStorage<'_, CreepOwner>>) -> Vec<HealAssignment> {
-        let mut assignments = Vec::new();
-
-        // Collect healers.
-        let healers: Vec<_> = self.members.iter().filter(|m| m.heal_power > 0 && m.position.is_some()).collect();
-
-        if healers.is_empty() {
-            return assignments;
-        }
-
-        // Collect targets needing healing, with their urgency score.
-        struct HealTarget {
-            entity: Entity,
-            creep_id: Option<ObjectId<Creep>>,
-            pos: Position,
-            deficit: u32,
-            predicted_damage: u32,
-            remaining_deficit: u32,
-        }
-
-        let mut targets: Vec<HealTarget> = self
-            .members
-            .iter()
-            .filter(|m| m.max_hits > 0 && m.position.is_some())
-            .filter(|m| m.current_hits < m.max_hits || m.damage_taken_last_tick > 0)
-            .map(|m| {
-                let deficit = m.max_hits - m.current_hits;
-                let predicted = m.damage_taken_last_tick;
-                let creep_id = creep_owners.and_then(|co| co.get(m.entity)).map(|co| co.owner);
-                HealTarget {
-                    entity: m.entity,
-                    creep_id,
-                    pos: m.position.unwrap(),
-                    deficit,
-                    predicted_damage: predicted,
-                    remaining_deficit: deficit + predicted,
-                }
-            })
-            .collect();
-
-        // Sort by urgency: highest remaining deficit first.
-        targets.sort_by_key(|t| std::cmp::Reverse(t.remaining_deficit));
-
-        // Track which healers have been assigned.
-        let mut assigned_healers: Vec<bool> = vec![false; healers.len()];
-
-        for target in targets.iter_mut() {
-            if target.remaining_deficit == 0 {
-                continue;
-            }
-
-            // Find the best available healer for this target.
-            let mut best_healer_idx: Option<usize> = None;
-            let mut best_heal_amount: u32 = 0;
-            let mut best_ranged = false;
-
-            for (i, healer) in healers.iter().enumerate() {
-                if assigned_healers[i] {
-                    continue;
-                }
-
-                let healer_pos = healer.position.unwrap();
-                let range = healer_pos.get_range_to(target.pos);
-
-                let (heal_amount, ranged) = if range <= 1 {
-                    (healer.heal_power * 12, false)
-                } else if range <= 3 {
-                    (healer.heal_power * 4, true)
-                } else {
-                    continue; // Out of range.
-                };
-
-                // Prefer the healer that provides the most healing.
-                // Break ties by preferring adjacent heal.
-                if heal_amount > best_heal_amount || (heal_amount == best_heal_amount && !ranged && best_ranged) {
-                    best_healer_idx = Some(i);
-                    best_heal_amount = heal_amount;
-                    best_ranged = ranged;
-                }
-            }
-
-            if let Some(idx) = best_healer_idx {
-                assigned_healers[idx] = true;
-
-                // Cap heal amount to avoid over-healing.
-                let effective_heal = best_heal_amount.min(target.remaining_deficit);
-                target.remaining_deficit = target.remaining_deficit.saturating_sub(effective_heal);
-
-                assignments.push(HealAssignment {
-                    healer: healers[idx].entity,
-                    target: target.entity,
-                    target_id: target.creep_id,
-                    expected_heal: effective_heal,
-                });
-            }
-        }
-
-        // Any unassigned healers with heal power should pre-heal the member
-        // taking the most predicted damage (proactive healing).
-        for (i, healer) in healers.iter().enumerate() {
-            if assigned_healers[i] {
-                continue;
-            }
-
-            // Find the member taking the most predicted damage that isn't fully healed.
-            let best_preemptive = self
-                .members
-                .iter()
-                .filter(|m| m.position.is_some() && m.entity != healer.entity)
-                .filter(|m| {
-                    let healer_pos = healer.position.unwrap();
-                    healer_pos.get_range_to(m.position.unwrap()) <= 3
-                })
-                .max_by_key(|m| m.damage_taken_last_tick);
-
-            if let Some(target) = best_preemptive {
-                if target.damage_taken_last_tick > 0 || target.current_hits < target.max_hits {
-                    let healer_pos = healer.position.unwrap();
-                    let range = healer_pos.get_range_to(target.position.unwrap());
-                    let creep_id = creep_owners.and_then(|co| co.get(target.entity)).map(|co| co.owner);
-
-                    assignments.push(HealAssignment {
-                        healer: healer.entity,
-                        target: target.entity,
-                        target_id: creep_id,
-                        expected_heal: if range > 1 { healer.heal_power * 4 } else { healer.heal_power * 12 },
-                    });
-                }
-            }
-        }
-
-        assignments
-    }
-
     /// Find the member with the lowest HP fraction (legacy simple priority).
     pub fn update_heal_priority(&mut self) {
         let lowest = self
@@ -732,24 +574,6 @@ impl SquadContext {
             });
 
         *self.heal_priority = lowest.map(|m| m.entity);
-    }
-
-    /// Apply computed heal assignments to member tick orders.
-    /// Call after `compute_heal_assignments()` and after tick orders have been
-    /// initialized for all members.
-    pub fn apply_heal_assignments(&mut self, assignments: &[HealAssignment]) {
-        for assignment in assignments {
-            if let Some(member) = self.members.iter_mut().find(|m| m.entity == assignment.healer) {
-                if let Some(ref mut orders) = member.tick_orders {
-                    orders.heal_target = assignment.target_id;
-                } else {
-                    member.tick_orders = Some(TickOrders {
-                        heal_target: assignment.target_id,
-                        ..Default::default()
-                    });
-                }
-            }
-        }
     }
 
     /// Remove members whose entity is no longer alive.
@@ -774,59 +598,12 @@ impl SquadContext {
             .all(|m| m.position.map(|p| p.get_range_to(pos) <= range).unwrap_or(false))
     }
 
-    // ─── Retreat coordination ─────────────────────────────────────────────
-
-    /// Compute a shared retreat position for the squad.
-    /// Returns the centroid of all living members, biased away from hostiles.
-    /// This keeps the squad together instead of scattering.
-    pub fn compute_retreat_centroid(&self) -> Option<Position> {
-        let living: Vec<_> = self.members.iter().filter(|m| m.position.is_some()).collect();
-
-        if living.is_empty() {
-            return None;
-        }
-
-        // Compute centroid of living members.
-        let room_name = living[0].position.unwrap().room_name();
-        let sum_x: i32 = living.iter().map(|m| m.position.unwrap().x().u8() as i32).sum();
-        let sum_y: i32 = living.iter().map(|m| m.position.unwrap().y().u8() as i32).sum();
-        let count = living.len() as i32;
-        let cx = (sum_x / count).clamp(1, 48) as u8;
-        let cy = (sum_y / count).clamp(1, 48) as u8;
-
-        Some(Position::new(
-            RoomCoordinate::new(cx).unwrap_or(RoomCoordinate::new(25).unwrap()),
-            RoomCoordinate::new(cy).unwrap_or(RoomCoordinate::new(25).unwrap()),
-            room_name,
-        ))
-    }
-
-    /// Issue retreat tick orders for all members.
-    /// Members move toward the retreat rally point (or centroid) to stay together,
-    /// with heal assignments applied so healers prioritize damaged squad members.
-    pub fn issue_retreat_orders(&mut self, rally_point: Option<Position>, creep_owners: Option<&ReadStorage<'_, CreepOwner>>) {
-        let retreat_pos = rally_point.or(self.rally_point).or_else(|| self.compute_retreat_centroid());
-
-        // Compute heal assignments for the retreat.
-        let heal_assignments = self.compute_heal_assignments(creep_owners);
-
-        // Set movement orders: all members move toward the retreat position.
-        for member in self.members.iter_mut() {
-            let movement = if let Some(pos) = retreat_pos {
-                TickMovement::MoveTo(pos)
-            } else {
-                TickMovement::Flee
-            };
-
-            member.tick_orders = Some(TickOrders {
-                movement,
-                ..Default::default()
-            });
-        }
-
-        // Apply heal assignments on top of movement orders.
-        self.apply_heal_assignments(&heal_assignments);
-    }
+    // NOTE (REC-016): the former `compute_retreat_centroid` / `issue_retreat_orders` retreat path (and
+    // the `compute_heal_assignments` machinery it was the last consumer of) is DELETED, not kept. Its doc
+    // claimed a "biased away from hostiles" centroid but computed NO bias, and it averaged cross-room
+    // member coordinates as in-room (0–49) values stamped into the FIRST member's room — a garbage rally.
+    // The Retreating arm of `apply_squad_decision` now consumes the kernel's threat-priced kite goal
+    // (`decision.movement`) + the kernel heal triage (`decision.heal_assignments`) — the sim-parity path.
 
     // ─── Formation management ───────────────────────────────────────────
 

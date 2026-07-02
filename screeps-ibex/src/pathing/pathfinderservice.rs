@@ -56,6 +56,29 @@ fn should_recompute_route(missing: bool, expired: bool, tier: Tier) -> bool {
     missing || (expired && tier != Tier::Critical)
 }
 
+/// Pricing-policy discriminator for the inter-room route cache (REC-024).
+/// Routes computed under different room-pricing policies must never share
+/// cache entries: the claim oracle DENIES hostile-owned corridor rooms (the
+/// mover's `HostileBehavior::Deny`) while the standard policy only up-prices
+/// them — one `(from, to)` pair can be reachable under one policy and not the
+/// other. The tag IS the pricing contract: every caller passing a given
+/// policy must supply the same pricing function, because cached answers are
+/// shared across callers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RoutePolicy {
+    /// Legacy live-visibility pricing (`game::rooms()`, see
+    /// [`standard_room_cost`]): hostile-owned rooms cost 10.0 but stay
+    /// traversable. Every pre-REC-024 caller (war travel estimates, salvage,
+    /// build feasibility) stays here — military routes must still price a
+    /// route TO a hostile-owned target room.
+    Standard,
+    /// Economy/claim-corridor pricing from cached `RoomData` intel
+    /// (`routepricing::economy_route_cost`): hostile rooms are DENIED, exactly
+    /// like the claimer's own mover (`HostileBehavior::Deny`), so the reach
+    /// oracle can never approve a corridor the creep will refuse to walk.
+    ClaimCorridor,
+}
+
 /// A cached inter-room route answer (`Copy` — returned by value so the
 /// service borrow ends at the call).
 #[derive(Debug, Clone, Copy)]
@@ -91,7 +114,10 @@ pub struct PathfinderService {
     denied: u32,
     /// Inter-room route cache (ephemeral — survives within a VM
     /// lifecycle, not across resets; entries lazily populated, TTL'd).
-    routes: HashMap<(RoomName, RoomName), CachedRoute>,
+    /// Keyed by [`RoutePolicy`] as well as the endpoints so answers computed
+    /// under different pricing policies never contaminate each other
+    /// (REC-024).
+    routes: HashMap<(RoomName, RoomName, RoutePolicy), CachedRoute>,
 }
 
 impl Default for PathfinderService {
@@ -169,7 +195,24 @@ impl PathfinderService {
             .map(|(_, candidate)| candidate)
     }
 
-    /// Cached inter-room route distance, computing on miss.
+    /// Cached inter-room route distance under the [`RoutePolicy::Standard`]
+    /// legacy pricing, computing on miss. See [`Self::route_distance_via`]
+    /// for the cache/budget semantics.
+    pub fn route_distance(&mut self, from: RoomName, to: RoomName, current_tick: u32) -> CachedRoute {
+        self.route_distance_via(from, to, current_tick, RoutePolicy::Standard, &standard_room_cost)
+    }
+
+    /// Convenience: estimated travel ticks, or None if unreachable.
+    pub fn travel_ticks(&mut self, from: RoomName, to: RoomName, current_tick: u32) -> Option<u32> {
+        self.travel_ticks_via(from, to, current_tick, RoutePolicy::Standard, &standard_room_cost)
+    }
+
+    /// Cached inter-room route distance under a caller-supplied pricing
+    /// policy, computing on miss. The pricing POLICY belongs to the caller
+    /// (`room_cost`: per-room cost, `None` = deny/impassable); the route
+    /// algorithm, budget, and cache stay here (the no-one-off-pathfinding
+    /// rule). `policy` keys the cache — see [`RoutePolicy`] for the
+    /// same-policy-same-pricer contract.
     ///
     /// Bucket-guarded (P1.B1 / ADR 0004 step 1): under a Critical tier,
     /// TTL-expired entries are served STALE instead of recomputed —
@@ -180,8 +223,15 @@ impl PathfinderService {
     /// is not the storm. Each compute charges the pool
     /// [`FIND_ROUTE_NOMINAL_OPS`] (admission control — only TTL
     /// refreshes yield to an exhausted pool).
-    pub fn route_distance(&mut self, from: RoomName, to: RoomName, current_tick: u32) -> CachedRoute {
-        let entry = self.routes.get(&(from, to));
+    pub fn route_distance_via(
+        &mut self,
+        from: RoomName,
+        to: RoomName,
+        current_tick: u32,
+        policy: RoutePolicy,
+        room_cost: &dyn Fn(RoomName) -> Option<f64>,
+    ) -> CachedRoute {
+        let entry = self.routes.get(&(from, to, policy));
         let missing = entry.is_none();
         let expired = entry
             .map(|entry| current_tick.saturating_sub(entry.cached_at) > ROUTE_TTL)
@@ -190,17 +240,25 @@ impl PathfinderService {
         if should_recompute_route(missing, expired, self.tier) {
             let granted = self.take_ops(FIND_ROUTE_NOMINAL_OPS);
             if missing || granted > 0 {
-                let route = Self::compute_route(from, to, current_tick);
-                self.routes.insert((from, to), route);
+                let route = Self::compute_route(from, to, current_tick, room_cost);
+                self.routes.insert((from, to, policy), route);
             }
         }
 
-        *self.routes.get(&(from, to)).expect("route entry just ensured")
+        *self.routes.get(&(from, to, policy)).expect("route entry just ensured")
     }
 
-    /// Convenience: estimated travel ticks, or None if unreachable.
-    pub fn travel_ticks(&mut self, from: RoomName, to: RoomName, current_tick: u32) -> Option<u32> {
-        let entry = self.route_distance(from, to, current_tick);
+    /// Convenience: estimated travel ticks under a caller-supplied pricing
+    /// policy, or None if unreachable.
+    pub fn travel_ticks_via(
+        &mut self,
+        from: RoomName,
+        to: RoomName,
+        current_tick: u32,
+        policy: RoutePolicy,
+        room_cost: &dyn Fn(RoomName) -> Option<f64>,
+    ) -> Option<u32> {
+        let entry = self.route_distance_via(from, to, current_tick, policy, room_cost);
         if entry.reachable {
             Some(entry.travel_ticks)
         } else {
@@ -208,7 +266,7 @@ impl PathfinderService {
         }
     }
 
-    fn compute_route(from: RoomName, to: RoomName, tick: u32) -> CachedRoute {
+    fn compute_route(from: RoomName, to: RoomName, tick: u32, room_cost: &dyn Fn(RoomName) -> Option<f64>) -> CachedRoute {
         if from == to {
             return CachedRoute {
                 hops: 0,
@@ -218,27 +276,11 @@ impl PathfinderService {
             };
         }
 
-        // Use find_route with a room cost callback that avoids hostile rooms.
-        let options = game::map::FindRouteOptions::new().room_callback(|room_name, _from_room| {
-            // High cost for hostile rooms, normal for others.
-            // Closed rooms are handled internally by find_route.
-            if let Some(room) = game::rooms().get(room_name) {
-                if let Some(controller) = room.controller() {
-                    if controller.my() {
-                        return 1.0;
-                    }
-                    if controller.owner().is_some() {
-                        // Owned by someone else -- high cost to avoid.
-                        return 10.0;
-                    }
-                    if controller.reservation().is_some() {
-                        return 2.0;
-                    }
-                }
-            }
-            // Default cost for unknown/neutral rooms.
-            2.0
-        });
+        // find_route with the caller's room pricing; `None` maps to an
+        // infinite cost, which the engine treats as impassable. Closed rooms
+        // are handled internally by find_route.
+        let options =
+            game::map::FindRouteOptions::new().room_callback(|room_name, _from_room| room_cost(room_name).unwrap_or(f64::INFINITY));
 
         match game::map::find_route(from, to, Some(options)) {
             Ok(steps) => {
@@ -258,6 +300,33 @@ impl PathfinderService {
             },
         }
     }
+}
+
+/// The [`RoutePolicy::Standard`] legacy pricing (the pre-REC-024 inline
+/// callback, verbatim): live `game::rooms()` visibility only — an INVISIBLE
+/// room (most remote corridors) always prices at the 2.0 default, and
+/// hostile-owned rooms are up-priced but never denied. Kept for the callers
+/// whose routes must remain traversable to (or through) hostile territory
+/// (war travel estimates); economy reach oracles should price from cached intel
+/// instead (`routepricing::economy_route_cost` under
+/// [`RoutePolicy::ClaimCorridor`]).
+fn standard_room_cost(room_name: RoomName) -> Option<f64> {
+    if let Some(room) = game::rooms().get(room_name) {
+        if let Some(controller) = room.controller() {
+            if controller.my() {
+                return Some(1.0);
+            }
+            if controller.owner().is_some() {
+                // Owned by someone else -- high cost to avoid.
+                return Some(10.0);
+            }
+            if controller.reservation().is_some() {
+                return Some(2.0);
+            }
+        }
+    }
+    // Default cost for unknown/neutral rooms.
+    Some(2.0)
 }
 
 #[cfg(test)]

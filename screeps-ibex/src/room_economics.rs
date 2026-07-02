@@ -50,9 +50,16 @@ const CREEP_LIFETIME: f64 = 1500.0;
 const WORK_COST: f64 = 100.0;
 const CARRY_COST: f64 = 50.0;
 const MOVE_COST: f64 = 50.0;
-/// `BODYPART_COST[CLAIM]` — a reserver is one CLAIM (600) + one MOVE (50); the hold cost of *controlling* a
-/// reservable remote (keeping the reservation up so the sources yield the reserved 3000/cycle).
+/// `BODYPART_COST[CLAIM]` — the hold cost of *controlling* a reservable remote (keeping the reservation
+/// up so the sources yield the reserved 3000/cycle) prices the reserver body from this.
 const CLAIM_COST: f64 = 600.0;
+/// `CREEP_CLAIM_LIFE_TIME` — any body carrying CLAIM lives 600 ticks, NOT the 1500 of `CREEP_LIFE_TIME`
+/// (REC-028: the reserver hold was amortized over 1500, understating it ~2.5×).
+const CLAIM_LIFETIME: f64 = 600.0;
+/// CLAIM parts on the reserver body: a reservation decays 1/tick and each CLAIM adds 1/tick, so ONE
+/// CLAIM only treads water — NET-POSITIVE reservation needs ≥ 2 CLAIM (REC-028; cf. the reserver body in
+/// `missions/utility.rs`). The hold prices 2 CLAIM + 2 MOVE.
+const RESERVER_CLAIM_PARTS: f64 = 2.0;
 /// Rough per-tile pathfinding-CPU charge (in energy-equivalent e/t) so distant rooms are penalised even
 /// when the haul body alone would pencil out (ADR 0018 §3.2 — same figure the SK scorer uses).
 const CPU_PENALTY_PER_TILE: f64 = 0.02;
@@ -175,9 +182,12 @@ pub fn room_net_roi(facts: &RoomEconomyFacts) -> RoomEconomyValue {
     let n = facts.source_count as f64;
     let gross = n * facts.source_capacity.max(0.0) / SOURCE_REGEN_TICKS;
 
-    // Hold cost (e/t): the standing force that keeps the room CONTROLLED.
+    // Hold cost (e/t): the standing force that keeps the room CONTROLLED. REC-028: the reserver is a
+    // ≥2-CLAIM body (1 CLAIM only treads water against the 1/tick reservation decay) amortized over the
+    // 600-tick CLAIM lifetime — (2×600 + 2×50) / 600 ≈ 2.17 e/t, not the (1×650)/1500 ≈ 0.43 the pre-fix
+    // model charged (a ~1.7 e/t over-valuation of every reservable remote, inflating far-remote ROI).
     let hold = match facts.hold_model {
-        HoldModel::Reserve => (CLAIM_COST + MOVE_COST) / CREEP_LIFETIME,
+        HoldModel::Reserve => (RESERVER_CLAIM_PARTS * (CLAIM_COST + MOVE_COST)) / CLAIM_LIFETIME,
         HoldModel::Suppress => facts.hold_body_cost as f64 / CREEP_LIFETIME,
         HoldModel::None => 0.0,
     };
@@ -258,9 +268,32 @@ mod tests {
             source_capacity: SOURCE_ENERGY_RESERVED_CAPACITY,
             haul_tiles: 5,
             hold_model: HoldModel::Suppress,
-            hold_body_cost: 5350, // the SK duo body cost (ops::sourcekeeper SK_DUO_BODY_COST)
+            // The REAL doctrine-sized SK suppression comp cost (REC-027: `sk_suppression_composition`,
+            // pinned at 9,000e in missions::sourcekeeperfarm::tests — the stale 5,350 figure is gone).
+            hold_body_cost: 9_000,
             horizon: DEFAULT_HOLD_HORIZON,
         });
         assert!(suppress.net_per_tick < reserve.net_per_tick, "suppression hold is dearer than a reserver");
+    }
+
+    /// REC-028 PIN — the reserver hold's arithmetic, recomputed (EP-8.3): a net-positive reservation body
+    /// is 2 CLAIM (1,200e) + 2 MOVE (100e) = 1,300e, and a CLAIM body lives `CREEP_CLAIM_LIFE_TIME` = 600
+    /// ticks — so the true hold is 1300/600 ≈ 2.1667 e/t. The pre-fix model charged (600+50)/1500 ≈ 0.433
+    /// e/t (one CLAIM, amortized over the 1500-tick lifetime CLAIM bodies never reach) — a ~1.7 e/t
+    /// under-charge that over-valued every reservable remote, most visibly the far ones.
+    #[test]
+    fn reserver_hold_prices_the_claim_lifetime_and_two_claim_body() {
+        let with_hold = room_net_roi(&RoomEconomyFacts::reservable_remote(2, 2));
+        let without_hold = room_net_roi(&RoomEconomyFacts {
+            hold_model: HoldModel::None,
+            ..RoomEconomyFacts::reservable_remote(2, 2)
+        });
+        let hold = without_hold.net_per_tick - with_hold.net_per_tick;
+        let expected = (2.0 * (600.0 + 50.0)) / 600.0; // 2.1666… e/t
+        assert!(
+            (hold - expected).abs() < 1e-9,
+            "reserve hold = 2×(CLAIM 600 + MOVE 50) / 600-tick CLAIM lifetime ≈ 2.167 e/t, got {hold}"
+        );
+        assert!(hold > 2.0, "the true hold is ~5× the pre-fix 0.433 e/t figure");
     }
 }

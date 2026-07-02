@@ -18,7 +18,8 @@
 //! - **`support_decay(d)`** — a mild reciprocal far-room establishment/logistics penalty; strictly positive,
 //!   never a gate (the hard reach cutoff is `is_claim_feasible`).
 //! - **`plan_quality(R)`** — the SOFT plan-quality multiplier (floored; missing = neutral). The HARD "no valid
-//!   plan ⇒ no claim" gate lives in the pipeline (the viable `can_plan` + the mission-creation defer), NOT here.
+//!   plan ⇒ no claim" gate lives in the pipeline (the viable `can_plan` exclusion, the score-time failed-plan
+//!   reject, and the commit-time plan-VALIDITY gate — REC-025), NOT here.
 //!
 //! Pure + bit-deterministic (scalar `f64`, no `HashMap`, no `game::*`); the claim adapter in `operations::claim`
 //! gathers the facts and calls this — mirroring the `room_economics`/`war.rs` split ADR 0032 sanctioned.
@@ -88,9 +89,11 @@ pub fn support_decay(distance: u32, k: f64) -> f64 {
 }
 
 /// SOFT plan-quality multiplier (ADR 0038 D7): floored to `[0.1, 1.0]` for a present plan (a low-but-valid plan
-/// must not hard-zero an otherwise-claimable room); neutral `1.0` for a not-yet-planned room (so it stays in
-/// the ranked set and its plan gets requested). The HARD "no valid plan ⇒ no claim" gate is a pipeline
-/// invariant (the viable `can_plan` exclusion + the mission-creation defer), NOT this multiplier.
+/// must not hard-zero an otherwise-claimable room); neutral `1.0` for a NOT-YET-PLANNED room (so it stays in
+/// the ranked set and its plan gets requested). A FAILED plan must never reach here as `None` — the claim
+/// adapter rejects it upstream (score-time reject + commit-time validity gate, REC-025), because the neutral
+/// mapping would rank an unbuildable room above planned-but-mediocre ones. The HARD "no valid plan ⇒ no claim"
+/// gate is a pipeline invariant, NOT this multiplier.
 pub fn plan_quality(plan_total: Option<f32>) -> f64 {
     match plan_total {
         Some(p) => 0.1 + 0.9 * (p.clamp(0.0, 1.0) as f64),
@@ -103,6 +106,16 @@ pub fn plan_quality(plan_total: Option<f32>) -> f64 {
 /// HashMap-iteration-order-independent order.
 pub fn claim_rank_quantize(value: f32) -> i64 {
     (value as f64 * 1000.0).round() as i64
+}
+
+/// Whether the claim pipeline may commit a candidate at `distance`, given the anti-cannibalization patience
+/// rule (ADR 0038 D9). A room closer than `ring_separation_hops` overlaps an existing colony's radius-1
+/// remote-mining ring, so it is claimed only as a LAST RESORT — once `scouting_covered` (the reachable far
+/// frontier is fully scouted or given up, so nothing farther is coming). Far (`>= ring`) candidates are always
+/// claimable. Converges (no stall): coverage completes as far unknowns gain visibility or are marked
+/// unreachable, so a genuinely boxed-in empire still claims its closest option once the frontier is exhausted.
+pub fn may_claim_below_ring(distance: u32, ring_separation_hops: u32, scouting_covered: bool) -> bool {
+    distance >= ring_separation_hops || scouting_covered
 }
 
 /// THE unified claim value (ADR 0038 §2 Part B). Intrinsic owned-colony ROI (distance-independent) × unlock ×
@@ -263,5 +276,24 @@ mod tests {
     fn support_never_gates_at_reach_ceiling() {
         // The farthest feasible room (d = max_claim_radius_hops() = 11) is still strictly claimable.
         assert!(claim_value(1, REACH_CEILING, None, &params()).value > 0.0);
+    }
+
+    // ── may_claim_below_ring: cannibalization patience (ADR 0038 D9) ─────────
+
+    #[test]
+    fn far_rooms_are_never_gated_by_patience() {
+        // A room at or beyond the ring never cannibalizes, so it claims regardless of coverage.
+        assert!(may_claim_below_ring(4, 4, false));
+        assert!(may_claim_below_ring(8, 4, false));
+    }
+
+    #[test]
+    fn close_rooms_wait_for_coverage_then_claim() {
+        // A cannibalizing room is deferred while the far frontier is still being scouted...
+        assert!(!may_claim_below_ring(1, 4, false));
+        assert!(!may_claim_below_ring(3, 4, false));
+        // ...and becomes a claimable last resort once coverage is complete (no farther option).
+        assert!(may_claim_below_ring(1, 4, true));
+        assert!(may_claim_below_ring(3, 4, true));
     }
 }

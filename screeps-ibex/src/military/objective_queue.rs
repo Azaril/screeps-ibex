@@ -284,7 +284,18 @@ impl CombatObjectiveQueue {
             existing.priority = existing.priority.max(request.priority);
             existing.expires_at = existing.expires_at.max(expires_at);
             existing.force = request.force;
-            existing.deadline = request.deadline;
+            // REC-005: a producer re-assert must NEVER lower or clear the commitment-lease deadline. All
+            // war.rs producers pass `deadline: None` and re-assert every 1–2 ticks, so writing the
+            // producer's value verbatim wiped the manager's lease each re-assert → `deadline_lapsed` was
+            // false forever → the give-up machinery (`gave_up`) could never fire and claimed objectives
+            // never expired (it also broke the ADR 0027 lease-bridges-VM-reset property — the lease is
+            // serialized precisely so it survives a reset the ephemeral claim does not). Keep the max;
+            // only a LATER producer deadline may extend it. The manager stays the sole lease writer for
+            // claimed objectives (`set_deadline` on claim/field/refresh).
+            existing.deadline = match (existing.deadline, request.deadline) {
+                (Some(cur), Some(new)) => Some(cur.max(new)),
+                (cur, new) => cur.or(new),
+            };
             existing.owner = request.owner;
             let id = existing.id;
             self.runtime.entry(id).or_default();
@@ -431,8 +442,11 @@ impl CombatObjectiveQueue {
     }
 
     /// Stamp/refresh an objective's commitment `deadline` (the manager's lease — see [`Self::expire`]).
-    /// No-op if the objective is gone. The producer's `request` also writes `deadline`, but the manager
-    /// re-stamps each tick a squad is live, so the lease is manager-owned regardless of producer silence.
+    /// No-op if the objective is gone. The manager is the SOLE lease writer for a claimed objective: it
+    /// stamps the lease at field/reassign time and refreshes it only on `KeepRefreshLease` (in-room
+    /// focus / forming progress / travel progress — the reconcile kernel's bounded refresh paths), NOT
+    /// every tick. A producer's `request` can only RAISE an existing deadline, never lower or clear it
+    /// (REC-005 — a per-tick producer re-assert must not disarm the give-up machinery by wiping the lease).
     pub fn set_deadline(&mut self, id: ObjectiveId, deadline: Option<u32>) {
         if let Some(o) = self.objectives.iter_mut().find(|o| o.id == id) {
             o.deadline = deadline;
@@ -717,6 +731,32 @@ mod tests {
         q.release_entity(squad);
         q.expire(1000 + DEFAULT_OBJECTIVE_TTL + 60);
         assert!(q.get(id).is_none(), "released + past-TTL objective is dropped");
+    }
+
+    /// REC-005: a producer re-assert (upsert) must never LOWER or CLEAR the manager's commitment-lease
+    /// deadline. War.rs producers re-assert every 1–2 ticks with `deadline: None`; pre-fix the upsert
+    /// wrote that verbatim, wiping the lease each re-assert → `deadline_lapsed` was false forever → the
+    /// give-up machinery was permanently disarmed for every producer-refreshed objective.
+    #[test]
+    fn request_upsert_never_lowers_or_clears_the_deadline() {
+        let mut q = CombatObjectiveQueue::default();
+        let id = q.request(farm_request("W5N5", 10.0), 1000);
+        // The manager stamps its commitment lease.
+        q.set_deadline(id, Some(1400));
+        // A producer re-assert with NO deadline (the universal war.rs shape) must not clear the lease.
+        q.request(farm_request("W5N5", 10.0), 1001);
+        assert_eq!(q.get(id).unwrap().deadline, Some(1400), "a deadline-less re-assert keeps the lease armed");
+        // An EARLIER producer deadline must not lower it.
+        q.request(farm_request("W5N5", 10.0).deadline(Some(1200)), 1002);
+        assert_eq!(q.get(id).unwrap().deadline, Some(1400), "an earlier deadline never lowers the lease");
+        // A LATER producer deadline may extend it (max-merge, like priority/TTL).
+        q.request(farm_request("W5N5", 10.0).deadline(Some(1600)), 1003);
+        assert_eq!(q.get(id).unwrap().deadline, Some(1600), "a later deadline extends the lease");
+        // And a producer deadline on a lease-less objective still arms it (the original request behavior).
+        let id2 = q.request(farm_request("W6N6", 10.0), 1000);
+        assert_eq!(q.get(id2).unwrap().deadline, None);
+        q.request(farm_request("W6N6", 10.0).deadline(Some(1500)), 1001);
+        assert_eq!(q.get(id2).unwrap().deadline, Some(1500), "None + Some arms the lease");
     }
 
     /// P-OBJ #23: the manager's serialized commitment `deadline` keeps an objective alive past its TTL

@@ -6,6 +6,7 @@ use crate::spawnsystem::site_blocks_spawn;
 use screeps::*;
 use screeps_common::Location as PlanLocation;
 use screeps_foreman::plan::{BuildStep, CleanupFilter, ExecutionFilter, ExistingStructure};
+use screeps_foreman::terrain::FastRoomTerrain;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 #[allow(deprecated)]
@@ -37,10 +38,86 @@ struct ConstructionFilter<'a> {
     /// the spawn permanently (see [`Self::new`]); such sites are deferred until
     /// the spawn is idle.
     spawning_exit_tiles: HashSet<(u8, u8)>,
+    /// Per-spawn free-birth-tile budgets (REC-050, see [`Self::new`] and
+    /// [`placement_seals_spawn`]) for EVERY my-spawn, idle ones included.
+    /// Consumed by [`Self::added_placement`] as the batch approves obstacle
+    /// sites, so a batch can never collectively seal what no single placement
+    /// would.
+    spawn_birth_tiles: Vec<SpawnBirthTiles>,
+}
+
+/// Free birth tiles around one spawn, tracked through a placement batch
+/// (REC-050). Split into the two tiers `safe_spawn_directions`
+/// (spawnsystem.rs) actually draws from: planner-approved approaches (Tier 1)
+/// and interior fallback neighbours (Tier 2). Tier 3 (unconstrained) is
+/// wedge-immune — the engine re-evaluates every tile at birth — so it needs
+/// no budget.
+struct SpawnBirthTiles {
+    /// Planner-approved approach tiles adjacent to this spawn that are
+    /// currently free. While one is free, the spawn's direction set is the
+    /// approaches (Tier 1), which plan-driven sites never target — so
+    /// interior placements are safe.
+    free_approaches: HashSet<(u8, u8)>,
+    /// Free interior (non-border) neighbours — the Tier-2 fallback direction
+    /// set used when no approach is adjacent/free (off-plan spawns, young
+    /// rooms). Tier 2 additionally skips dead-end pockets, which this budget
+    /// deliberately ignores: counting a pocket as an escape slightly
+    /// under-defers in that corner, accepted since the planner's
+    /// ReachabilityLayer keeps a real approach existing.
+    free_interior: HashSet<(u8, u8)>,
+}
+
+/// REC-050 kernel: whether placing an obstacle-type site at `tile` would seal
+/// this spawn's LAST viable birth tile. `spawnCreep`'s `directions` are built
+/// at spawn START from tick-start data — a site created this tick is not
+/// visible in game state until the NEXT tick — and are checked only at BIRTH,
+/// so a batch that seals every tile the direction set can use wedges the
+/// newborn permanently (+1 spawnTime/tick forever; unlike a camping creep, a
+/// site never moves). Deferring ONLY the last-tile placement (instead of every
+/// spawn neighbour whenever the room might spawn) keeps spawn-adjacent
+/// extensions buildable in busy colonies, whose spawn queues are rarely empty.
+fn placement_seals_spawn(tile: (u8, u8), spawn: &SpawnBirthTiles) -> bool {
+    if spawn.free_approaches.contains(&tile) {
+        // Never consume the last free planner approach: the spawn-start
+        // direction set (Tier 1) still SEES it as free and would be fully
+        // sealed at birth. Plans never place obstacles on their own approach
+        // tiles, so this firing at all is a plan defect (logged loudly).
+        return spawn.free_approaches.len() == 1;
+    }
+    if spawn.free_approaches.is_empty() && spawn.free_interior.contains(&tile) {
+        // No free approach ⇒ the direction set is the Tier-2 interior
+        // fallback; keep at least one member free through the batch.
+        return spawn.free_interior.len() == 1;
+    }
+    false
+}
+
+/// Whether a creep can NOT be born onto this tile: terrain wall, an obstacle
+/// structure, or an obstacle-type construction site. Structures reuse
+/// `site_blocks_spawn` on the structure type — identical to spawnsystem's
+/// `structure_blocks_spawn` except built ramparts, which `site_blocks_spawn`
+/// treats as standable unconditionally (a HOSTILE rampart adjacent to our own
+/// spawn is not a configuration worth a second predicate). Creeps are
+/// deliberately ignored: they move, a site does not.
+fn tile_blocks_birth(room: &Room, terrain: &FastRoomTerrain, x: u8, y: u8) -> bool {
+    if terrain.is_wall(x, y) {
+        return true;
+    }
+    let pos = RoomPosition::new(x, y, room.name());
+    if room
+        .look_for_at(look::STRUCTURES, &pos)
+        .iter()
+        .any(|s| site_blocks_spawn(s.structure_type()))
+    {
+        return true;
+    }
+    room.look_for_at(look::CONSTRUCTION_SITES, &pos)
+        .iter()
+        .any(|s| site_blocks_spawn(s.structure_type()))
 }
 
 impl<'a> ConstructionFilter<'a> {
-    fn new(room: &'a Room, room_level: u8) -> Self {
+    fn new(room: &'a Room, room_level: u8, spawn_approaches: &[PlanLocation]) -> Self {
         // Collect the exit tiles of every spawn that is mid-spawn this tick.
         // `spawnCreep`'s directional constraint is applied only at BIRTH, so a
         // tile that is free when a spawn STARTS (and therefore passed the
@@ -51,15 +128,49 @@ impl<'a> ConstructionFilter<'a> {
         // a spawn is pending" half of the RCL-up deadlock. It is harmless: such a
         // tile is a non-approach neighbour the plan wants an extension on, so a
         // one-cycle delay only postpones it until the spawn next goes idle.
+        //
+        // REC-050 extends this to the SAME-TICK START race: `RunMissionSystem`
+        // (this filter) runs BEFORE `SpawnQueueSystem` (game_loop.rs), so a
+        // spawn that is IDLE right now can start spawning later this very tick
+        // with a direction set built from tick-start data that cannot see the
+        // sites this batch approves. The mid-spawn set above cannot cover it, so
+        // every my-spawn additionally gets a free-birth-tile budget and
+        // `should_place` defers any placement that would consume a spawn's last
+        // free tile (see `placement_seals_spawn`). This is unconditional rather
+        // than gated on "spawn queue non-empty": the queue is only partially
+        // populated while missions are still running, and an obstacle on a
+        // spawn's only exit is just as wedging whenever it NEXT spawns.
         let mut spawning_exit_tiles = HashSet::new();
+        let mut spawn_birth_tiles = Vec::new();
+        let terrain = FastRoomTerrain::new(room.get_terrain().get_raw_buffer().to_vec());
         for spawn in room.find(find::MY_SPAWNS, None) {
+            let p = spawn.pos();
+            let loc = PlanLocation::from_xy(p.x().u8(), p.y().u8());
             if spawn.spawning().is_some() {
-                let p = spawn.pos();
-                let loc = PlanLocation::from_xy(p.x().u8(), p.y().u8());
                 for n in loc.neighbors() {
                     spawning_exit_tiles.insert((n.x(), n.y()));
                 }
             }
+
+            let mut free_approaches = HashSet::new();
+            let mut free_interior = HashSet::new();
+            for n in loc.neighbors() {
+                let (nx, ny) = (n.x(), n.y());
+                if tile_blocks_birth(room, &terrain, nx, ny) {
+                    continue;
+                }
+                if spawn_approaches.iter().any(|a| a.x() == nx && a.y() == ny) {
+                    free_approaches.insert((nx, ny));
+                } else if nx > 0 && ny > 0 && nx < 49 && ny < 49 {
+                    // Border tiles are excluded like Tier 2 does — a direction
+                    // set never offers them, so they are not escapes.
+                    free_interior.insert((nx, ny));
+                }
+            }
+            spawn_birth_tiles.push(SpawnBirthTiles {
+                free_approaches,
+                free_interior,
+            });
         }
 
         ConstructionFilter {
@@ -68,6 +179,7 @@ impl<'a> ConstructionFilter<'a> {
             min_rcl_for_walls: 4,
             placed_this_batch: Vec::new(),
             spawning_exit_tiles,
+            spawn_birth_tiles,
         }
     }
 }
@@ -105,8 +217,27 @@ impl<'a> ExecutionFilter for ConstructionFilter<'a> {
         // Defer an obstacle-type site that would seal the exit of a spawn that is
         // mid-spawn this tick — placing it would wedge the spawn permanently (the
         // directional constraint is applied only at birth). See `new`.
-        if site_blocks_spawn(step.structure_type) && self.spawning_exit_tiles.contains(&(step.location.x(), step.location.y())) {
-            return false;
+        if site_blocks_spawn(step.structure_type) {
+            let xy = (step.location.x(), step.location.y());
+            if self.spawning_exit_tiles.contains(&xy) {
+                return false;
+            }
+            // REC-050: also defer a placement that would seal ANY spawn's last
+            // free birth tile — the mid-spawn set above cannot see a spawn that
+            // STARTS spawning later this same tick with a direction set built
+            // from tick-start data (see `new`). Loud (EP-3.1): if this recurs
+            // at the construction cadence, the PLAN wants an obstacle on a
+            // spawn's only exit — a plan defect worth eyes, not a silent defer.
+            if self.spawn_birth_tiles.iter().any(|s| placement_seals_spawn(xy, s)) {
+                log::warn!(
+                    "Construction {}: deferring {:?} site at ({},{}) — it would seal a spawn's last free birth tile (same-tick spawn-start race / single-approach geometry, REC-050)",
+                    self.room.name(),
+                    step.structure_type,
+                    xy.0,
+                    xy.1
+                );
+                return false;
+            }
         }
 
         true
@@ -114,6 +245,17 @@ impl<'a> ExecutionFilter for ConstructionFilter<'a> {
 
     fn added_placement(&mut self, step: &BuildStep) {
         self.placed_this_batch.push(step.location);
+        // REC-050: an approved obstacle placement consumes its tile from every
+        // spawn's free-birth budget, so a LATER placement in the same batch
+        // cannot collectively seal a direction set that no single placement
+        // would (the spawn-start direction set sees NONE of this batch).
+        if site_blocks_spawn(step.structure_type) {
+            let xy = (step.location.x(), step.location.y());
+            for spawn in self.spawn_birth_tiles.iter_mut() {
+                spawn.free_approaches.remove(&xy);
+                spawn.free_interior.remove(&xy);
+            }
+        }
     }
 }
 
@@ -280,7 +422,7 @@ impl Mission for ConstructionMission {
                         // Success-charged budget: place up to (cap - current) NEW
                         // sites this cycle, skipping (not counting) failures.
                         let max_new = (system_data.features.construction.max_construction_sites - existing_sites as i32).max(0) as u32;
-                        let mut filter = ConstructionFilter::new(&room, room_level);
+                        let mut filter = ConstructionFilter::new(&room, room_level, &plan.spawn_approaches);
                         let ops = plan.get_build_operations(room_level, &mut filter);
                         let create_ops = ops
                             .iter()
@@ -339,5 +481,70 @@ impl Mission for ConstructionMission {
         }
 
         Ok(MissionResult::Running)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tiles(approaches: &[(u8, u8)], interior: &[(u8, u8)]) -> SpawnBirthTiles {
+        SpawnBirthTiles {
+            free_approaches: approaches.iter().copied().collect(),
+            free_interior: interior.iter().copied().collect(),
+        }
+    }
+
+    /// Pin (REC-050 single-approach geometry): with no free planner approach,
+    /// an obstacle placement on the spawn's ONLY free interior birth tile is
+    /// deferred — the spawn-start direction set (built from tick-start data,
+    /// blind to sites created this tick) would be fully sealed at birth and
+    /// the spawn wedges permanently. A placement anywhere else never defers.
+    #[test]
+    fn sealing_the_last_free_birth_tile_is_deferred() {
+        let single = tiles(&[], &[(25, 24)]);
+        assert!(placement_seals_spawn((25, 24), &single));
+        assert!(!placement_seals_spawn((30, 30), &single), "an unrelated tile never defers");
+
+        // With a second free tile the direction set survives the placement.
+        let double = tiles(&[], &[(25, 24), (26, 25)]);
+        assert!(!placement_seals_spawn((25, 24), &double));
+        assert!(!placement_seals_spawn((26, 25), &double));
+    }
+
+    /// Pin (REC-050): a batch can seal collectively what no single placement
+    /// would. After the first of two free tiles is consumed
+    /// (`added_placement`), the second placement IS the last tile and must
+    /// defer — the spawn-start direction set is blind to BOTH just-approved
+    /// sites and would be fully sealed at birth.
+    #[test]
+    fn batch_placements_consume_the_birth_budget() {
+        let mut budget = tiles(&[], &[(25, 24), (26, 25)]);
+        assert!(!placement_seals_spawn((25, 24), &budget), "first of two is allowed");
+        budget.free_interior.remove(&(25, 24)); // what added_placement does
+        assert!(placement_seals_spawn((26, 25), &budget), "second (now last) must defer");
+    }
+
+    /// Pin (REC-050): a free planner approach makes interior placements safe —
+    /// the spawn-start direction set is then Tier 1 (the approaches), which
+    /// plan-driven sites never target. The LAST free approach itself is still
+    /// protected (defence-in-depth against a defective plan that places an
+    /// obstacle on its own approach tile).
+    #[test]
+    fn free_approach_exempts_interior_but_is_itself_protected() {
+        let budget = tiles(&[(25, 26)], &[(25, 24)]);
+        assert!(
+            !placement_seals_spawn((25, 24), &budget),
+            "interior tile is safe while an approach is free (Tier-1 direction set)"
+        );
+        assert!(
+            placement_seals_spawn((25, 26), &budget),
+            "the sole free approach must never be sealed"
+        );
+
+        // Two free approaches: consuming one is fine.
+        let two = tiles(&[(25, 26), (24, 25)], &[]);
+        assert!(!placement_seals_spawn((25, 26), &two));
+        assert!(!placement_seals_spawn((24, 25), &two));
     }
 }

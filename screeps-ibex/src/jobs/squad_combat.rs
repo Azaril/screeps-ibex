@@ -889,6 +889,14 @@ impl Retreating {
                 TickMovement::Flee => {
                     flee_from_hostiles(tick_context);
                 }
+                // REC-016: a retreating manager squad carries the kernel's threat-priced kite/withdraw
+                // goal on `squad_movement` (the manager dropped the anchor + stamped `Formation`) — route
+                // it through the SAME anchorless `decide_movement` path Engaged uses, instead of the
+                // undirected per-creep flee. This is the sim-parity half: the sim honors the Retreating
+                // kite goal; live used to discard it (squads "retreated" in place inside tower range).
+                TickMovement::Formation => {
+                    Engaged::execute_decide_movement(creep, creep_pos, orders, tick_context);
+                }
                 _ => {
                     flee_from_hostiles(tick_context);
                 }
@@ -1036,13 +1044,15 @@ fn get_formation_target(
 /// anchor's `virtual_pos`) and the squad's `dest_room` (the anchor's destination room).
 ///
 /// - **Same room as the slot** → move to the slot.
-/// - **Already crossed into `dest_room` while the anchor still lags in the rear room** → HOLD in
-///   place (`creep_pos`). This is the W7N3 border-ping-pong fix: while the boundary-hold quorum gate
-///   freezes `virtual_pos` in the rear room, every slot resolves to the rear room, so a member that
-///   has already entered the destination room would otherwise be sent back to its own room's exit
-///   ring — where the engine bounces it across the boundary, in and out, forever. Holding lets the
-///   laggards/anchor close up; normal slot-following resumes the moment the anchor advances into the
-///   destination room (then the same-room branch above fires).
+/// - **Already crossed into `dest_room` while the anchor still lags in the rear room** → HOLD one step
+///   INSIDE the room ([`hold_tile_inward`] — REC-019: a hold ON the border ring is bounced back across
+///   the boundary by the engine's unconditional relocation, so the hold tile must be interior). This is
+///   the W7N3 border-ping-pong fix: while the boundary-hold quorum gate freezes `virtual_pos` in the
+///   rear room, every slot resolves to the rear room, so a member that has already entered the
+///   destination room would otherwise be sent back to its own room's exit ring — where the engine
+///   bounces it across the boundary, in and out, forever. Holding lets the laggards/anchor close up;
+///   normal slot-following resumes the moment the anchor advances into the destination room (then the
+///   same-room branch above fires).
 /// - **Otherwise** → head to the current room's edge toward the slot's room (world-coord direction).
 fn cross_room_formation_target(creep_pos: Position, target: Position, dest_room: Option<RoomName>) -> Option<Position> {
     if creep_pos.room_name() == target.room_name() {
@@ -1060,7 +1070,11 @@ fn cross_room_formation_target(creep_pos: Position, target: Position, dest_room:
             d.0.unsigned_abs().max(d.1.unsigned_abs())
         };
         if room_dist(creep_pos.room_name()) < room_dist(target.room_name()) {
-            return Some(creep_pos);
+            // REC-019: "hold in place" is NOT stable ON the border ring — the engine's UNCONDITIONAL
+            // border relocation (`move.js:32`, the same mechanism ADR 0033 M5 root-caused) moves any
+            // creep standing on an exit tile across the boundary every tick, so a just-crossed member
+            // handed its own edge tile bounces in and out forever. Step the hold one tile INWARD.
+            return Some(hold_tile_inward(creep_pos));
         }
     }
 
@@ -1093,6 +1107,23 @@ fn cross_room_formation_target(creep_pos: Position, target: Position, dest_room:
         RoomCoordinate::new(edge_y).ok()?,
         creep_pos.room_name(),
     ))
+}
+
+/// REC-019: a stable HOLD tile for `pos` — the same tile when already interior, else one step off the
+/// border ring (x/y clamped into `1..=48`). A creep cannot hold ON an exit tile: the engine relocates it
+/// across the boundary unconditionally each tick (`move.js:32`), so an exit-tile "hold" is a permanent
+/// two-room bounce. Falls back to `pos` on the (unreachable) coordinate-construction failure — never
+/// panics on the tick path.
+fn hold_tile_inward(pos: Position) -> Position {
+    let x = pos.x().u8().clamp(1, 48);
+    let y = pos.y().u8().clamp(1, 48);
+    if x == pos.x().u8() && y == pos.y().u8() {
+        return pos; // interior — already a stable hold
+    }
+    match (RoomCoordinate::new(x), RoomCoordinate::new(y)) {
+        (Ok(cx), Ok(cy)) => Position::new(cx, cy, pos.room_name()),
+        _ => pos,
+    }
 }
 
 // ─── SquadCombatJob ─────────────────────────────────────────────────────────
@@ -1138,6 +1169,18 @@ impl SquadCombatJob {
         self.context.squad_entity = Some(SquadRef::from_entity(squad_entity));
         self.context.combat_response_start = None;
         self.state = SquadCombatState::move_to_room();
+    }
+
+    /// REC-009 — re-couple this job's squad ref to the (possibly reload-remapped) squad entity WITHOUT
+    /// touching the FSM state or target room (unlike [`Self::rebind_to_squad`], which is a full transfer
+    /// to a different squad). The serialized `SquadRef` (raw index + generation) cannot survive a VM
+    /// reload — marker-recreated entities get fresh generations, so validate-on-access fails and
+    /// `recall_decision` would walk the whole roster home to recycle. `SquadContext.members` is
+    /// `ConvertSaveload`-remapped (correct post-reload), so the `SquadManager` re-stamps members→jobs
+    /// from that surviving side every tick (before `RunJobSystem` — see the manager's REC-009 pass).
+    /// The deeper alternative is a minted stable `SquadId`; this is the interim light fix.
+    pub fn restamp_squad_ref(&mut self, squad_entity: Entity) {
+        self.context.squad_entity = Some(SquadRef::from_entity(squad_entity));
     }
 }
 
@@ -1328,6 +1371,46 @@ mod tests {
     use super::{cross_room_formation_target, recall_decision};
     use screeps::{Position, RoomCoordinate, RoomName};
 
+    /// REC-009 — `restamp_squad_ref` re-couples a stale (reload-dead) squad ref WITHOUT touching the FSM
+    /// or target room. Post-reload, marker-recreated squad entities get fresh index/generation, so the
+    /// job's serialized `SquadRef` fails validate-on-access and `recall_decision` would walk the WHOLE
+    /// roster home to recycle mid-assault; the manager's per-tick restamp (from the
+    /// `ConvertSaveload`-remapped `SquadContext.members` side) repairs the ref before any job runs.
+    /// Contrast pinned: `rebind_to_squad` (a merge transfer) deliberately RESETS the FSM — the restamp
+    /// must not, or every tick would knock an engaged member back to MoveToRoom.
+    #[test]
+    fn restamp_squad_ref_repairs_a_stale_ref_without_resetting_the_fsm() {
+        use super::{SquadCombatJob, SquadCombatState};
+        use specs::{Builder, World, WorldExt};
+        let mut world = World::new();
+        let old_squad = world.create_entity().build();
+        let room: RoomName = "W5N5".parse().unwrap();
+        let mut job = SquadCombatJob::new_with_squad(room, old_squad);
+        job.state = SquadCombatState::engaged(); // mid-assault when the VM reload hits
+        // The reload: the old squad entity is gone; the squad is marker-recreated at a fresh generation.
+        world.delete_entity(old_squad).unwrap();
+        world.maintain();
+        let new_squad = world.create_entity().build();
+        // Stale: the serialized ref no longer resolves → `recall_decision` would tear the roster down.
+        assert_eq!(
+            job.context.squad_entity.unwrap().resolve(&world.entities()),
+            None,
+            "the reloaded ref is stale (fresh generation) — the REC-009 failure precondition"
+        );
+        job.restamp_squad_ref(new_squad);
+        assert_eq!(
+            job.context.squad_entity.unwrap().resolve(&world.entities()),
+            Some(new_squad),
+            "the restamp re-couples the job to the remapped squad entity"
+        );
+        assert_eq!(
+            job.state.status_description(),
+            SquadCombatState::engaged().status_description(),
+            "the FSM is untouched — restamp is identity repair, not a rebind/reset"
+        );
+        assert_eq!(job.context.target_room, room, "the target room is untouched");
+    }
+
     /// ADR 0032 v2 — the zero-orphan recall decision. A merge-transfer SURPLUS (a creep bound to a LIVE
     /// squad it is NOT rostered in) recalls to recycle, exactly like the classic retired-squad orphan; a
     /// rostered member of a live squad never does; a job with no squad is never touched by this path.
@@ -1353,20 +1436,44 @@ mod tests {
     }
 
     /// Regression for the W7N3 border ping-pong: a formation member that has already crossed into the
-    /// squad's destination room while the anchor is still held in the rear room must HOLD in place,
-    /// NOT be handed an exit-edge tile (which the engine bounces back across the boundary).
+    /// squad's destination room while the anchor is still held in the rear room must HOLD, NOT be handed
+    /// an exit-edge tile (which the engine bounces back across the boundary). REC-019 refinement: a
+    /// just-crossed member stands ON the entry edge (y == 0 here) — its hold tile must be ONE STEP
+    /// INWARD, because the engine's unconditional border relocation (`move.js:32`) bounces a creep
+    /// standing on an exit tile across the boundary every tick — "hold at own tile" was itself the bounce.
     #[test]
-    fn crossed_member_holds_instead_of_being_expelled() {
-        // Lead member is inside the destination room (W7N3) at its top edge; the anchor/slot is still
-        // frozen in the rear room (W7N4).
+    fn crossed_member_holds_one_step_inward_instead_of_being_expelled() {
+        // Lead member is inside the destination room (W7N3) ON its top edge (just crossed); the
+        // anchor/slot is still frozen in the rear room (W7N4).
         let lead = pos(36, 0, "W7N3");
         let slot_in_rear = pos(25, 25, "W7N4");
         let dest = Some("W7N3".parse::<RoomName>().unwrap());
         assert_eq!(
             cross_room_formation_target(lead, slot_in_rear, dest),
-            Some(lead),
-            "a member already in the destination room must hold, not be expelled to the exit ring"
+            Some(pos(36, 1, "W7N3")),
+            "a border-tile holder steps one tile inward — an exit-tile hold is engine-bounced (REC-019)"
         );
+        // An INTERIOR member ahead of the anchor still holds at its own tile (the db4ad3c behavior).
+        let interior = pos(36, 5, "W7N3");
+        assert_eq!(
+            cross_room_formation_target(interior, slot_in_rear, dest),
+            Some(interior),
+            "an interior member already in the destination room holds in place"
+        );
+    }
+
+    /// REC-019 — the inward clamp itself: every border coordinate (x/y ∈ {0,49}) steps into `1..=48`
+    /// toward the room interior; interior tiles are returned unchanged. Covers all four edges + a corner.
+    #[test]
+    fn hold_tile_inward_steps_off_every_border_ring_tile() {
+        use super::hold_tile_inward;
+        assert_eq!(hold_tile_inward(pos(0, 25, "W1N1")), pos(1, 25, "W1N1"), "west edge steps east");
+        assert_eq!(hold_tile_inward(pos(49, 25, "W1N1")), pos(48, 25, "W1N1"), "east edge steps west");
+        assert_eq!(hold_tile_inward(pos(25, 0, "W1N1")), pos(25, 1, "W1N1"), "north edge steps south");
+        assert_eq!(hold_tile_inward(pos(25, 49, "W1N1")), pos(25, 48, "W1N1"), "south edge steps north");
+        assert_eq!(hold_tile_inward(pos(0, 49, "W1N1")), pos(1, 48, "W1N1"), "corner steps diagonally inward");
+        assert_eq!(hold_tile_inward(pos(25, 25, "W1N1")), pos(25, 25, "W1N1"), "interior tile unchanged");
+        assert_eq!(hold_tile_inward(pos(1, 48, "W1N1")), pos(1, 48, "W1N1"), "1..=48 ring already stable");
     }
 
     #[test]

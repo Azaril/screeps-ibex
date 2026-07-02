@@ -394,6 +394,22 @@ impl ClaimOperation {
                 }
             }
 
+            // A room whose requested plan FAILED is unclaimable NOW (REC-025):
+            // score it negative like the hostile reject — otherwise
+            // `plan_score` → None maps to `plan_quality`'s NEUTRAL 1.0 and an
+            // unbuildable room outranks planned-but-mediocre rooms while the
+            // commit gate skips it every cycle (a permanent phantom top
+            // candidate). Deliberately the SAME kernel as the commit-time
+            // gate (`plan_commit_gate`) so the two sites cannot drift.
+            // Discover's `can_plan` already excludes rooms whose plans failed
+            // BEFORE the cycle; this closes the mid-cycle window (a plan
+            // requested at commit that fails during scouting). The next
+            // discover re-evaluates fresh, so a later successful replan makes
+            // the room claimable again.
+            if plan_commit_gate(system_data.room_plan_data.get(room_entity).map(|plan| plan.valid())) == PlanCommitGate::SkipInvalid {
+                reject = true;
+            }
+
             if reject {
                 // Mark as unscoreable by setting a negative score.
                 candidate.score = Some((
@@ -547,6 +563,12 @@ impl ClaimOperation {
         // Final scoring pass for any candidates still unscored.
         self.try_score_candidates(system_data, features);
 
+        // Coverage snapshot BEFORE pruning (prune drops unscored, which would trivially "complete" coverage).
+        // Gates the cannibalization-patience check below: a below-ring (cannibalizing) room is only claimed
+        // once the reachable far frontier is fully scouted-or-given-up (ADR 0038 D9), so a closer room never
+        // pre-empts a farther one that is merely still being scouted.
+        let covered = self.scouting_coverage_complete(system_data);
+
         let total_before_prune = self.candidates.len();
         let unscored = self.candidates.iter().filter(|c| c.score.is_none()).count();
         let hostile = self
@@ -698,10 +720,20 @@ impl ClaimOperation {
                     break;
                 }
 
-                // No distance floor (ADR 0038 D2): the anti-cannibalization preference is scored, not gated —
-                // a too-close room already scores near-zero via `unlock_fraction`, so it is only ever chosen as
-                // a last resort, and a dense/boxed empire still expands. The sole hard reach gate is
-                // `is_claim_feasible` (per-home, below).
+                // Cannibalization patience (ADR 0038 D9): a below-ring room overlaps an existing colony's
+                // radius-1 remote-mining ring, so it is claimed only as a LAST RESORT — once scouting coverage
+                // is complete (the reachable far frontier is fully scouted-or-given-up and offers nothing
+                // better). While farther rooms may still be scouted, a closer room must NOT pre-empt them. This
+                // is NOT the old hard floor: it is gated on coverage (converges as far unknowns resolve), never
+                // on a radius ratchet, so a genuinely boxed-in empire still expands once the frontier is
+                // exhausted. Far (>= ring) candidates are never gated here; they claim as soon as scored.
+                if !crate::claim_economics::may_claim_below_ring(candidate.distance, features.ring_separation_hops, covered) {
+                    info!(
+                        "ClaimOp [Select]: candidate {} at distance {} < ring {} deferred (waiting for farther rooms; frontier not yet fully scouted)",
+                        candidate.room_name, candidate.distance, features.ring_separation_hops
+                    );
+                    continue;
+                }
 
                 // Commit-time safety re-validation (ADR 0017): intel can change
                 // during the scouting window, and "absence of fresh intel is not
@@ -744,44 +776,89 @@ impl ClaimOperation {
                     }
                 };
 
-                let room_data = match system_data.room_data.get_mut(candidate_entity) {
-                    Some(d) => d,
+                // Plan gate (ADR 0038 D7 / REC-025): checked on VALIDITY, not
+                // just presence. A plan that FAILED during the scouting window
+                // previously passed the old `is_none()` presence check and the
+                // room could be claimed despite being unbuildable — an
+                // irreversible GCL commit (`should_abandon_claim` never fires
+                // without hostiles), violating claim_economics' "no valid plan
+                // ⇒ no claim" contract.
+                match plan_commit_gate(system_data.room_plan_data.get(candidate_entity).map(|p| p.valid())) {
+                    PlanCommitGate::RequestPlan => {
+                        info!(
+                            "ClaimOp [Select]: top candidate {} has no room plan, requesting one",
+                            candidate.room_name
+                        );
+                        system_data.room_plan_queue.request(RoomPlanRequest::new(candidate_entity, 0.5));
+                        continue;
+                    }
+                    PlanCommitGate::SkipInvalid => {
+                        warn!(
+                            "ClaimOp [Select]: top candidate {} has a FAILED room plan — hard skip (no valid plan ⇒ no claim); re-requesting a plan (roomplansystem's replan backoff still applies)",
+                            candidate.room_name
+                        );
+                        system_data.room_plan_queue.request(RoomPlanRequest::new(candidate_entity, 0.5));
+                        continue;
+                    }
+                    PlanCommitGate::Proceed => {}
+                }
+
+                let mission_data = system_data.mission_data;
+
+                let has_claim_mission = match system_data.room_data.get(candidate_entity) {
+                    Some(room_data) => room_data
+                        .get_missions()
+                        .iter()
+                        .any(|mission_entity| mission_data.get(*mission_entity).as_mission_type::<ClaimMission>().is_some()),
                     None => {
                         info!("ClaimOp [Select]: top candidate {} has no room data, skipping", candidate.room_name);
                         continue;
                     }
                 };
 
-                // Ensure a room plan exists for the room.
-                if system_data.room_plan_data.get(candidate_entity).is_none() {
-                    info!(
-                        "ClaimOp [Select]: top candidate {} has no room plan, requesting one",
-                        candidate.room_name
-                    );
-                    system_data.room_plan_queue.request(RoomPlanRequest::new(candidate_entity, 0.5));
-                    continue;
-                }
-
-                let mission_data = system_data.mission_data;
-
-                let has_claim_mission = room_data
-                    .get_missions()
-                    .iter()
-                    .any(|mission_entity| mission_data.get(*mission_entity).as_mission_type::<ClaimMission>().is_some());
-
                 if has_claim_mission {
-                    info!("ClaimOp [Select]: top candidate {} already has a claim mission", room_data.name);
+                    info!("ClaimOp [Select]: top candidate {} already has a claim mission", candidate.room_name);
                 } else {
-                    // Eligible homes: not already committed, able to AFFORD a
-                    // claimer ([Claim, Move] = 650 energy ⇒ ~RCL 3 capacity —
-                    // an RCL 2 home would silently fail create_body), and within
-                    // CLAIM-creep reach (travel-time feasibility; claim
-                    // feasibility implies the colony is also build-feasible).
+                    // Eligible homes: restricted to `candidate.home_rooms` — the
+                    // Discover BFS reached this candidate from exactly those homes
+                    // through hostile-free corridors (`can_expand` prunes
+                    // hostile-owned rooms), so intersecting transfers the BFS's
+                    // reachability guarantee to the chosen home instead of
+                    // re-deriving it over ALL owned rooms (REC-024). Each
+                    // surviving home must additionally be uncommitted, able to
+                    // AFFORD a claimer ([Claim, Move] = 650 energy ⇒ ~RCL 3
+                    // capacity — an RCL 2 home would silently fail create_body),
+                    // and within CLAIM-creep reach (below; claim feasibility
+                    // implies the colony is also build-feasible).
                     let candidate_name = candidate.room_name;
                     let claimer_cost = Part::Claim.cost() + Part::Move.cost();
+
+                    // Reach-oracle route pricing (REC-024): cached-intel pricing
+                    // that DENIES hostile rooms — the same predicate the
+                    // claimer's own mover applies (`HostileBehavior::Deny`) —
+                    // instead of the legacy `game::rooms()` callback, which
+                    // cannot see invisible corridor rooms and priced
+                    // hostile-owned ones at a traversable default. The pricing
+                    // POLICY lives here with the caller; the route algorithm and
+                    // cache stay in `PathfinderService` (no-one-off-pathfinding).
+                    let derelict_pathing_on = system_data.features.derelict.on;
+                    let mapping = system_data.mapping;
+                    let room_datas = &*system_data.room_data;
+                    let route_cost = |room: RoomName| -> Option<f64> {
+                        let intel = mapping
+                            .get_room(&room)
+                            .and_then(|e| room_datas.get(e))
+                            .and_then(|rd| rd.get_dynamic_visibility_data())
+                            .map(crate::pathing::routepricing::RouteRoomIntel::from_dynamic);
+                        crate::pathing::routepricing::economy_route_cost(intel, derelict_pathing_on)
+                    };
+
                     let mut home_room_entities: Vec<Entity> = Vec::new();
                     for (entity, home_room_name, _max_level) in home_room_data.iter() {
                         if used_home_rooms.contains(entity) {
+                            continue;
+                        }
+                        if !candidate.home_rooms.contains(home_room_name) {
                             continue;
                         }
                         let energy_capacity = game::rooms()
@@ -791,17 +868,29 @@ impl ClaimOperation {
                         if energy_capacity < claimer_cost {
                             continue;
                         }
-                        if crate::missions::utility::is_claim_feasible(system_data.pathfinder, *home_room_name, candidate_name) {
+                        let route = system_data.pathfinder.route_distance_via(
+                            *home_room_name,
+                            candidate_name,
+                            game::time(),
+                            crate::pathing::pathfinderservice::RoutePolicy::ClaimCorridor,
+                            &route_cost,
+                        );
+                        if claim_route_feasible(route) {
                             home_room_entities.push(*entity);
                         }
                     }
 
                     if home_room_entities.is_empty() {
                         info!(
-                            "ClaimOp [Select]: top candidate {} has no eligible home rooms (all used, can't afford a claimer, or not claim-reachable)",
-                            room_data.name
+                            "ClaimOp [Select]: top candidate {} has no eligible home rooms (all used, can't afford a claimer, or not claim-reachable through hostile-free corridors)",
+                            candidate.room_name
                         );
                     } else {
+                        let Some(room_data) = system_data.room_data.get_mut(candidate_entity) else {
+                            info!("ClaimOp [Select]: top candidate {} has no room data, skipping", candidate.room_name);
+                            continue;
+                        };
+
                         info!(
                             "ClaimOp [Select]: creating claim mission for {} (score={:.3})",
                             room_data.name,
@@ -1161,6 +1250,43 @@ impl Operation for ClaimOperation {
     }
 }
 
+/// Commit-time plan-gate decision (ADR 0038 D7 / REC-025). Input: whether
+/// plan data exists for the candidate and, if so, whether the plan is VALID
+/// (`RoomPlanData::valid()` — `Failed` plans carry data but no plan).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlanCommitGate {
+    /// No plan data at all — request one and defer the candidate this cycle.
+    RequestPlan,
+    /// Plan data present but the plan FAILED: presence is not validity — a
+    /// hard, loud skip (claim_economics' "no valid plan ⇒ no claim"
+    /// contract). Claiming anyway wedges a GCL slot on an unbuildable room.
+    SkipInvalid,
+    /// A valid plan exists — the candidate may be committed.
+    Proceed,
+}
+
+fn plan_commit_gate(plan_valid: Option<bool>) -> PlanCommitGate {
+    match plan_valid {
+        None => PlanCommitGate::RequestPlan,
+        Some(false) => PlanCommitGate::SkipInvalid,
+        Some(true) => PlanCommitGate::Proceed,
+    }
+}
+
+/// Claim-corridor reach (REC-024): the same lifetime arithmetic as
+/// `missions::utility::is_claim_feasible` — travel plus the 50-tick arrival
+/// margin must fit the 600-tick CLAIM lifetime — expressed over the route
+/// directly. With `travel_ticks = hops × 50` the bound is exactly
+/// `hops ≤ max_claim_radius_hops()` (= 11, pinned in `missions::utility`),
+/// which avoids duplicating the private lifetime constants. The margin is
+/// thin against the hop model's terrain blindness (a `[CLAIM, MOVE]` claimer
+/// pays ~5 ticks per swamp tile); the compensating conservatism is in the
+/// route PRICING (unscouted rooms dispreferred — see
+/// `routepricing::UNSCOUTED_ROUTE_COST`), not here.
+fn claim_route_feasible(route: crate::pathing::pathfinderservice::CachedRoute) -> bool {
+    route.reachable && route.hops <= crate::missions::utility::max_claim_radius_hops()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1248,5 +1374,56 @@ mod tests {
         assert_eq!(ClaimOperation::compute_maximum_rooms(&f, budget, healthy_governor(), 2, 5), 5);
         // With abundant GCL, the max_room_cap safety bound (50) applies.
         assert_eq!(ClaimOperation::compute_maximum_rooms(&f, budget, healthy_governor(), 2, 100), 50);
+    }
+
+    // ── Commit-time plan gate (REC-025) ─────────────────────────────────────
+
+    /// Pin (REC-025): plan PRESENCE is not plan VALIDITY. The old commit gate
+    /// checked `room_plan_data.is_none()` only, so a plan that FAILED during
+    /// the scouting window passed and the room could be claimed despite being
+    /// unbuildable — an irreversible GCL commit (`should_abandon_claim` never
+    /// fires without hostiles). A failed plan must be a hard skip, distinct
+    /// from the missing-plan defer that requests planning.
+    ///
+    /// This one kernel drives BOTH halves of the fix: `SkipInvalid` is the
+    /// commit-time hard skip AND the score-time negative marking in
+    /// `try_score_candidates` (a failed plan scores as UNCLAIMABLE rather
+    /// than letting `plan_score` → None map to `plan_quality`'s neutral 1.0,
+    /// which ranked an unbuildable room above planned-but-mediocre ones).
+    /// `RequestPlan` (missing ≠ failed) must stay neutral-scoreable so a
+    /// not-yet-planned room keeps being pursued.
+    #[test]
+    fn plan_commit_gate_distinguishes_missing_from_failed() {
+        assert_eq!(plan_commit_gate(None), PlanCommitGate::RequestPlan);
+        assert_eq!(plan_commit_gate(Some(false)), PlanCommitGate::SkipInvalid);
+        assert_eq!(plan_commit_gate(Some(true)), PlanCommitGate::Proceed);
+    }
+
+    // ── Claim-corridor reach (REC-024) ──────────────────────────────────────
+
+    /// Pin (REC-024): the commit-time reach check over a priced route must be
+    /// EXACTLY `missions::utility::is_claim_feasible`'s lifetime arithmetic —
+    /// travel (hops × 50) + 50-tick arrival margin within the 600-tick CLAIM
+    /// lifetime ⇔ hops ≤ max_claim_radius_hops() = 11 — and an unreachable
+    /// route (every corridor denied by the mover-aligned pricing) must be
+    /// infeasible, never defaulted.
+    #[test]
+    fn claim_route_feasibility_matches_the_utility_reach_gate() {
+        let route = |hops: u32, reachable: bool| crate::pathing::pathfinderservice::CachedRoute {
+            hops,
+            travel_ticks: hops.saturating_mul(50),
+            cached_at: 0,
+            reachable,
+        };
+        // Boundary: 11 hops (550 + 50 = 600) is the last feasible distance.
+        assert!(claim_route_feasible(route(11, true)));
+        assert!(!claim_route_feasible(route(12, true)));
+        // Same room / short hops are trivially feasible.
+        assert!(claim_route_feasible(route(0, true)));
+        assert!(claim_route_feasible(route(1, true)));
+        // A denied corridor means NOT claimable from that home, regardless of
+        // the nominal hop count.
+        assert!(!claim_route_feasible(route(2, false)));
+        assert!(!claim_route_feasible(route(u32::MAX, false)));
     }
 }

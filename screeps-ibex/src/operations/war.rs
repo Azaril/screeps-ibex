@@ -5,7 +5,8 @@ use screeps_combat_decision::doctrine::{
     decide_doctrine, default_doctrines, defense_doctrines, plan_engagement, DoctrineObjective, EnemyCoordination, EnemyForce, EngagementContext,
 };
 use screeps_combat_decision::force_sizing::{
-    should_defer_offense_commit, tower_intel_from, win_probability, AssaultMode, DefenseProfile, TowerIntel, TowerThreat, HOLD_MARGIN,
+    should_defer_offense_commit, tower_dps_at_assault, tower_dps_at_drain_standoff, tower_intel_from, win_probability, AssaultMode,
+    DefenseProfile, StructureThreat, TowerIntel, TowerThreat,
 };
 use crate::military::objective_queue::{
     ForceRequirement, ObjectiveKind, ObjectiveOwner, ObjectiveRequest, OBJECTIVE_PRIORITY_CRITICAL, OBJECTIVE_PRIORITY_HIGH,
@@ -113,6 +114,11 @@ pub struct AttackCandidate {
     pub tower_count: u32,
     pub estimated_enemy_dps: f32,
     pub estimated_enemy_heal: f32,
+    /// Σ hostile creep hits from the threat scan (REC-031): the kill-in-time pool `RaidCreeps`'
+    /// `clear_force` grinds within the on-site window, and the optimizer's `required_kill` guard term.
+    /// Was hardwired 0 at the `EnemyForce` build — the 0029-D7 "sized to clear in the window" term never
+    /// engaged. 0 for candidates with no threat intel.
+    pub estimated_enemy_hits: u32,
     pub has_safe_mode: bool,
     /// For power banks: estimated ROI (power value vs energy cost).
     pub estimated_roi: Option<f32>,
@@ -154,6 +160,77 @@ pub struct AttackCandidate {
 /// for the owned-room scan's existing call sites + tests.
 pub fn hostile_warrants_defender(parts: &[Part]) -> bool {
     screeps_combat_decision::war_decision::hostile_warrants_defender(parts)
+}
+
+/// The channel-split defense threat picture (REC-013, operator directive 2026-07-01 + REC-032), folded
+/// from the SHARED threatmap analysis ([`analyze_hostile_creep`] — boost-aware, ×4 on boosted parts) so
+/// the owned-room/remote defense scans stop hand-rolling `30/10/12` part loops that ignored boosts
+/// (a boosted raider was under-sized up to 4× on this path).
+struct DefenseThreat {
+    /// The Lanchester CREEP channel: real Attack/RangedAttack dps + heal + summed hits — what
+    /// `clear_force` sizes kill/heal against. `dps` carries NO dismantle proxy (WORK does no creep
+    /// damage; heal is NEVER sized against WORK).
+    enemy: EnemyForce,
+    /// The STRUCTURE channel: Σ hostile WORK × `DISMANTLE_POWER` (50/tick vs structures), gated on our
+    /// actually owning dismantle-able structures. Feeds the kill-in-breach-window arm, never the dps.
+    dismantle_dps: f32,
+    /// The RANKING/priority danger (creep dps + the `dismantle_danger` urgency PROXY). Tie-break /
+    /// priority ONLY — the proxy may rank, it must never size (the REC-013 separation).
+    ranking_danger: f32,
+}
+
+/// Fold the analyzed hostile bodies into the channel-split [`DefenseThreat`]. Pure over the plain
+/// [`HostileCreepInfo`] data (host-tested below); the only non-pure step upstream is
+/// [`analyze_hostile_creep`] over the live creeps.
+fn defense_threat_from(infos: &[HostileCreepInfo], has_targetable_structures: bool) -> DefenseThreat {
+    let dps: f32 = infos.iter().map(|i| i.melee_dps + i.ranged_dps).sum();
+    let heal: f32 = infos.iter().map(|i| i.heal_per_tick).sum();
+    let hits: u32 = infos.iter().map(|i| i.hits).sum();
+    let work_parts: usize = infos.iter().map(|i| i.work_parts as usize).sum();
+    let enemy = EnemyForce {
+        dps,
+        heal,
+        hits,
+        count: infos.len() as u32,
+        boosted: infos.iter().any(|i| i.boosted),
+    };
+    let dismantle_dps = if has_targetable_structures {
+        (work_parts as u32 * screeps::constants::DISMANTLE_POWER) as f32
+    } else {
+        0.0
+    };
+    let ranking_danger = dps + screeps_combat_decision::war_decision::dismantle_danger(work_parts, has_targetable_structures);
+    DefenseThreat { enemy, dismantle_dps, ranking_danger }
+}
+
+/// Build the [`StructureThreat`] context for the structure-defense arm from OUR room's structures
+/// (REC-013): the key-structure effective HP is the WEAKEST of the directive's rampart/tower/spawn set
+/// (the breach window's denominator), and our ENERGIZED towers are counted so the kernel can price their
+/// fire on the dismantler (conservatively, at the falloff floor). `None` when no key structure exists or
+/// the enemy has no WORK channel. Repair counter-pressure is not tracked bot-side yet → 0 (conservative:
+/// a shorter window ⇒ a bigger defender).
+fn structure_threat_from(structures: &crate::room::data::RoomStructureData, dismantle_dps: f32) -> Option<StructureThreat> {
+    if dismantle_dps <= 0.0 {
+        return None;
+    }
+    let key_structure_hits = structures
+        .ramparts()
+        .iter()
+        .map(|r| r.hits())
+        .chain(structures.spawns().iter().map(|s| s.hits()))
+        .chain(structures.towers().iter().filter(|t| t.my()).map(|t| t.hits()))
+        .min()?;
+    let own_energized_towers = structures
+        .towers()
+        .iter()
+        .filter(|t| t.my() && t.store().get_used_capacity(Some(ResourceType::Energy)) >= TOWER_ENERGY_COST)
+        .count() as u32;
+    Some(StructureThreat {
+        dismantle_dps,
+        key_structure_hits,
+        own_energized_towers,
+        repair_per_tick: 0.0,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -270,10 +347,12 @@ impl WarOperation {
 
         struct DefenseNeed {
             room_entity: Entity,
-            estimated_dps: f32,
-            estimated_heal: f32,
-            hostile_count: usize,
-            any_boosted: bool,
+            /// The channel-split threat (REC-013): creep dps/heal/hits + the structure dismantle channel
+            /// + the ranking danger. See [`DefenseThreat`].
+            threat: DefenseThreat,
+            /// OUR asset context for the structure-defense sizing arm — `Some` only when a hostile WORK
+            /// channel threatens a key structure we actually hold.
+            structure_threat: Option<StructureThreat>,
         }
 
         struct RoomDefenseState {
@@ -367,7 +446,7 @@ impl WarOperation {
                 // idempotent (keyed by room), so re-asserting each scan is safe.
 
                 // A hostile WORK part is a dismantle threat — but only where we own structures for it to tear
-                // down (ramparts/walls/base). Gate the dismantle danger on our structure presence: a
+                // down (ramparts/walls/base). Gate the dismantle channel on our structure presence: a
                 // dismantler in our defended base breaches us and must be killed; one where we hold nothing has
                 // nothing to dismantle and is harmless (the same principle as the ADR 0037 towered-neighbour
                 // suppression, made explicit). Attack/RangedAttack stay dangerous regardless — they threaten
@@ -384,36 +463,23 @@ impl WarOperation {
                     })
                     .unwrap_or(true); // an owned + visible room normally has a spawn — default to defending
 
-                let mut estimated_dps: f32 = 0.0;
-                let mut estimated_heal: f32 = 0.0;
-                let mut any_boosted = false;
-                let mut work_parts: usize = 0;
-
-                for hostile in &hostiles {
-                    for part_info in hostile.body().iter() {
-                        if part_info.hits() == 0 {
-                            continue;
-                        }
-                        if part_info.boost().is_some() {
-                            any_boosted = true;
-                        }
-                        match part_info.part() {
-                            Part::Attack => estimated_dps += 30.0,
-                            Part::RangedAttack => estimated_dps += 10.0,
-                            Part::Heal => estimated_heal += 12.0,
-                            Part::Work => work_parts += 1,
-                            _ => {}
-                        }
-                    }
-                }
-                estimated_dps += screeps_combat_decision::war_decision::dismantle_danger(work_parts, has_our_structures);
+                // REC-032: fold the SHARED threatmap analysis (boost-aware, ×4) instead of a hand-rolled
+                // 30/10/12 part loop that ignored boosts; REC-013: the fold keeps the CREEP channel
+                // (dps/heal/hits) and the STRUCTURE channel (WORK × DISMANTLE_POWER) SEPARATE — the
+                // dismantle-danger proxy survives only in `ranking_danger` (priority tie-break), it never
+                // reaches the Lanchester sizing again.
+                let infos: Vec<HostileCreepInfo> = hostiles.iter().map(|c| analyze_hostile_creep(c)).collect();
+                let threat = defense_threat_from(&infos, has_our_structures);
+                // The structure-defense arm's asset context (REC-013): the weakest key structure the
+                // dismantler could breach + our energized towers already firing on it.
+                let structure_threat = room_data
+                    .get_structures()
+                    .and_then(|s| structure_threat_from(&s, threat.dismantle_dps));
 
                 Some(DefenseNeed {
                     room_entity: entity,
-                    estimated_dps,
-                    estimated_heal,
-                    hostile_count: hostiles.len(),
-                    any_boosted,
+                    threat,
+                    structure_threat,
                 })
             })
             .collect();
@@ -447,14 +513,15 @@ impl WarOperation {
                 screeps_combat_decision::war_decision::OwnedRoom { room: rd.name, value }
             })
             .collect();
-        // The observed threats (the rooms where hostiles were seen this scan). `danger` = estimated DPS so
+        // The observed threats (the rooms where hostiles were seen this scan). `danger` = the RANKING danger
+        // (creep dps + the dismantle-danger urgency PROXY — REC-013: the proxy may RANK, it never SIZES) so
         // two equal-priority threats break ties by who is more dangerous.
         let owned_threats_for_kernel: Vec<screeps_combat_decision::war_decision::Threat<RoomName>> = rooms_needing_defense
             .iter()
-            .filter_map(|need| system_data.room_data.get(need.room_entity).map(|rd| (rd.name, need.estimated_dps)))
+            .filter_map(|need| system_data.room_data.get(need.room_entity).map(|rd| (rd.name, need.threat.ranking_danger)))
             // ADR 0037 T1: owned-room threats carry no neighbour-tower signal (an owned room's own towers are
             // ours; a defender there is sized to the creep dps). `tower_danger` is the neighbour signal only.
-            .map(|(room, dps)| screeps_combat_decision::war_decision::Threat { room, danger: dps, tower_danger: 0.0 })
+            .map(|(room, danger)| screeps_combat_decision::war_decision::Threat { room, danger, tower_danger: 0.0 })
             .collect();
 
         // The Chebyshev room distance the kernel + the neighbour builder need (the only spatial fact).
@@ -564,13 +631,10 @@ impl WarOperation {
             // UNIFIED defender selection (ADR 0026 §9.10 L3): the `GarrisonDefense` doctrine selects the
             // shape from the threat (the former `DefenseEscalation::from_threat` thresholds, now on the
             // registry). An owned-room attacker may be a player → `Coordinated` (the Q1 safe default).
-            let threat = EnemyForce {
-                dps: need.estimated_dps,
-                heal: need.estimated_heal,
-                hits: 0,
-                count: need.hostile_count as u32,
-                boosted: need.any_boosted,
-            };
+            // REC-013: `threat.enemy` is the pure CREEP channel (dps carries no dismantle proxy; `hits`
+            // is the real summed pool the structure-defense arm chews — `ClearCreeps`' clear_force keeps
+            // its own hits=0 sizing, so the creep-clear math is unchanged).
+            let threat = need.threat.enemy;
             let ctx = EngagementContext {
                 objective: DoctrineObjective::ClearCreeps,
                 coordination: EnemyCoordination::Coordinated,
@@ -593,7 +657,12 @@ impl WarOperation {
             // ADR 0031 D15: the SINGLE generation path — the doctrine driver assembles the defender (no
             // hardcoded `solo_ranged` fallback). Always-field, so it returns the threat-sized force or the
             // minimal floor; `None` only if no home can build even one member (then skip — can't spawn).
-            let Some(composition) = decide_doctrine(&ctx, &defense_docs).and_then(|d| screeps_combat_decision::doctrine::plan_engagement(d, &ctx, None).composition) else {
+            // REC-013: the STRUCTURE channel rides its own seam — the driver's structure-defense arm sizes
+            // the killer to the breach window (heal is never sized against WORK).
+            let Some(composition) = decide_doctrine(&ctx, &defense_docs).and_then(|d| {
+                screeps_combat_decision::doctrine::plan_engagement_with_structure_threat(d, &ctx, None, need.structure_threat.as_ref())
+                    .composition
+            }) else {
                 continue;
             };
             // ADR 0027 v1: emit `Secure{threat_room}` at the kernel-decided priority (the asset-priority
@@ -608,8 +677,8 @@ impl WarOperation {
                 .map(|e| e.priority)
                 .unwrap_or(OBJECTIVE_PRIORITY_CRITICAL);
             info!(
-                "[War] Secure objective for threat room {} prio={:.0} (dps={:.0}, heal={:.0}, count={})",
-                room_name, priority, need.estimated_dps, need.estimated_heal, need.hostile_count
+                "[War] Secure objective for threat room {} prio={:.0} (dps={:.0}, heal={:.0}, dismantle={:.0}, count={})",
+                room_name, priority, threat.dps, threat.heal, need.threat.dismantle_dps, threat.count
             );
             // Threat-centric defense (ADR 0027 Option B): the clear objective sits at the THREAT's room as a
             // `Secure` (an intercept is mechanically "go to room X + clear its hostiles" = Secure). The
@@ -789,7 +858,7 @@ impl WarOperation {
         // Invader creeps in rooms we've reserved disrupt remote mining.
         // Spawn a solo or duo defense depending on invader strength.
 
-        let remote_rooms_with_invaders: Vec<(Entity, f32, f32, usize)> = (system_data.entities, &*system_data.room_data)
+        let remote_rooms_with_invaders: Vec<(Entity, EnemyForce)> = (system_data.entities, &*system_data.room_data)
             .join()
             .filter_map(|(entity, room_data)| {
                 let dynamic_vis = room_data.get_dynamic_visibility_data()?;
@@ -819,23 +888,11 @@ impl WarOperation {
                     return None;
                 }
 
-                let mut dps: f32 = 0.0;
-                let mut heal: f32 = 0.0;
-                for inv in &invaders {
-                    for part_info in inv.body().iter() {
-                        if part_info.hits() == 0 {
-                            continue;
-                        }
-                        match part_info.part() {
-                            Part::Attack => dps += 30.0,
-                            Part::RangedAttack => dps += 10.0,
-                            Part::Heal => heal += 12.0,
-                            _ => {}
-                        }
-                    }
-                }
-
-                Some((entity, dps, heal, invaders.len()))
+                // REC-032: the SHARED threatmap analysis (boost-aware) replaces the hand-rolled 30/10/12
+                // fold. A reserved remote holds none of OUR key structures → no structure channel
+                // (`has_targetable_structures = false`, same principle as the neighbour path's WORK=0).
+                let infos: Vec<HostileCreepInfo> = invaders.iter().map(|c| analyze_hostile_creep(c)).collect();
+                Some((entity, defense_threat_from(&infos, false).enemy))
             })
             .collect();
 
@@ -847,7 +904,7 @@ impl WarOperation {
         // ownership self-termination; the producer re-asserts while invaders are
         // present and the manager retires the squad (TTL lapse) once they're gone.
         let defense_docs = defense_doctrines();
-        for (room_entity, dps, heal, count) in remote_rooms_with_invaders {
+        for (room_entity, threat) in remote_rooms_with_invaders {
             let room_name = match system_data.room_data.get(room_entity) {
                 Some(rd) => rd.name,
                 None => continue,
@@ -855,7 +912,6 @@ impl WarOperation {
             // UNIFIED defender selection (ADR 0026 §9.10 L3): the `GarrisonDefense` doctrine sizes the
             // shape. Remote invaders are NPCs → `Individual`. (The shape thresholds harmonize to the former
             // `from_threat` set — practically Solo/Duo for the small invader forces this path sees.)
-            let threat = EnemyForce { dps, heal, hits: 0, count: count as u32, boosted: false };
             let ctx = EngagementContext {
                 objective: DoctrineObjective::ClearCreeps,
                 coordination: EnemyCoordination::Individual,
@@ -879,7 +935,7 @@ impl WarOperation {
             };
             info!(
                 "[War] Defend objective for remote room {} (dps={:.0}, heal={:.0}, count={})",
-                room_name, dps, heal, count
+                room_name, threat.dps, threat.heal, threat.count
             );
             // Remote-invader cleanup is MEDIUM — below owned-room defense (CRITICAL)
             // and operator defend-flags (HIGH), above SK farming (LOW). So under the
@@ -952,6 +1008,7 @@ impl WarOperation {
                     tower_count: 0,
                     estimated_enemy_dps: 0.0,
                     estimated_enemy_heal: 0.0,
+                    estimated_enemy_hits: 0,
                     has_safe_mode: false,
                     estimated_roi: None,
                     // The flag tile = the assault position (used by the L4 enrichment below for the tower
@@ -996,6 +1053,8 @@ impl WarOperation {
                 .collect();
             cand.estimated_enemy_dps = td.estimated_attack_dps;
             cand.estimated_enemy_heal = td.estimated_heal;
+            // REC-031: the real summed defender pool — the kill-in-time term the sizing grinds through.
+            cand.estimated_enemy_hits = td.hostile_creeps.iter().map(|c| c.hits).sum();
             cand.has_safe_mode = td.safe_mode_active;
             // ADR 0035 D1: derive tower intel for the enriched flag room (threat data was found here).
             cand.defense = Some(DefenseProfile {
@@ -1064,10 +1123,20 @@ impl WarOperation {
                     .objectives
                     .iter()
                     .any(|o| o.owner == ObjectiveOwner::Attack && o.kind.room() == room_name);
+                // REC-034: `invader_cores()` is LIVE-ONLY (`#[serde(skip)]`) — exactly when this stale
+                // branch fires (>200t blind) it reads empty, so the HIGH escalation never fired for a
+                // known SK stronghold and the MEDIUM re-scout lost to the claim visibility flood (the room
+                // then silently dropped from `threat_rooms` at THREAT_DATA_MAX_AGE). For an SK room, fall
+                // back to the PERSISTED stronghold signal (`sk_room_has_stronghold` — in an unclaimable SK
+                // room the persisted `hostile_structures` flag can only be a stronghold). Non-SK rooms keep
+                // the live-only read: a player's persisted structures must not escalate every re-scout.
                 let has_known_core = room_entity
                     .and_then(|e| system_data.room_data.get(e))
-                    .and_then(|rd| rd.get_structures())
-                    .map(|s| !s.invader_cores().is_empty())
+                    .map(|rd| {
+                        rd.get_structures().map(|s| !s.invader_cores().is_empty()).unwrap_or(false)
+                            || (rd.get_static_visibility_data().map(|svd| svd.is_source_keeper()).unwrap_or(false)
+                                && crate::missions::sourcekeeperfarm::sk_room_has_stronghold(rd))
+                    })
                     .unwrap_or(false);
                 let rescout_priority = offense_rescout_priority(has_attack_objective || has_known_core);
                 system_data
@@ -1270,6 +1339,7 @@ impl WarOperation {
                                 tower_count,
                                 estimated_enemy_dps: threat_data.estimated_attack_dps,
                                 estimated_enemy_heal: threat_data.estimated_heal,
+                                estimated_enemy_hits: threat_data.hostile_creeps.iter().map(|c| c.hits).sum(),
                                 has_safe_mode: false,
                                 estimated_roi: None,
                                 target_pos: Some(core_pos),
@@ -1359,6 +1429,7 @@ impl WarOperation {
                             tower_count,
                             estimated_enemy_dps: threat_data.estimated_attack_dps,
                             estimated_enemy_heal: threat_data.estimated_heal,
+                            estimated_enemy_hits: threat_data.hostile_creeps.iter().map(|c| c.hits).sum(),
                             has_safe_mode,
                             estimated_roi: None,
                             target_pos: None,
@@ -1552,7 +1623,9 @@ impl WarOperation {
                 enemy_force: Some(EnemyForce {
                     dps: candidate.estimated_enemy_dps,
                     heal: candidate.estimated_enemy_heal,
-                    hits: 0,
+                    // REC-031: the real summed defender pool from the threat scan — `RaidCreeps`' 0029-D7
+                    // kill-in-time term (and the optimizer's required_kill guard) was dead at a hardwired 0.
+                    hits: candidate.estimated_enemy_hits,
                     count: 0,
                     boosted: false,
                 }),
@@ -1662,15 +1735,22 @@ impl WarOperation {
                                 );
                                 None
                             } else {
-                                // R4: log the fielded force's win confidence.
-                                let pwin = win_probability(
-                                    plan.required.heal_parts as f32 * 12.0,
-                                    plan.assessment.required_heal_per_tick / HOLD_MARGIN,
-                                );
+                                // R4 (REC-029): log the FIELDED comp's model-consistent hold confidence —
+                                // its actual heal capability vs the assessment-MODE incoming (a Drain is
+                                // sized + fought at the falloff standoff it soaks; a Breach at point-blank),
+                                // the same p_survive model the EV optimizer scored it with. The old number
+                                // divided the PRE-ladder requirement by a HOLD_MARGIN the drain heal never
+                                // carried — it matched neither the model nor the fielded force.
+                                let caps = sized.capabilities(member_energy);
+                                let mode_tower_dps = match plan.assessment.mode {
+                                    AssaultMode::Drain => tower_dps_at_drain_standoff(&ctx.defense.towers),
+                                    AssaultMode::Breach => tower_dps_at_assault(&ctx.defense.towers),
+                                };
+                                let p_hold = win_probability(caps.heal_per_tick as f32, mode_tower_dps + candidate.estimated_enemy_dps);
                                 info!(
-                                    "[War]   {} via {:?} (~{} ticks): {} sized to {} ranged + {} heal parts, P(win)~{:.0}% (cost {}, {})",
+                                    "[War]   {} via {:?} (~{} ticks): {} sized to {} ranged + {} heal parts, P(hold)~{:.0}% (cost {}, {})",
                                     candidate.room, plan.assessment.mode, plan.assessment.est_ticks, doctrine.name(),
-                                    plan.required.immune_struct_parts + plan.required.anti_creep_parts, plan.required.heal_parts, pwin * 100.0, spawn_cost, plan.assessment.reason
+                                    plan.required.immune_struct_parts + plan.required.anti_creep_parts, plan.required.heal_parts, p_hold * 100.0, spawn_cost, plan.assessment.reason
                                 );
                                 Some((kind, priority, sized, plan.assessment.mode))
                             }
@@ -2025,6 +2105,21 @@ fn classify_coordination(candidate: &AttackCandidate) -> EnemyCoordination {
     }
 }
 
+/// REC-015 — the sizing-home set must MATCH the spawning-home set: `best_force_budget` sizes the comp at
+/// a chosen home's capacity, but the SquadManager's Phase-B spawn loop only queues at homes within
+/// Chebyshev ≤ this of the target (`squad_manager::MAX_SPAWN_DISTANCE` — private there, mirrored here
+/// with this cross-reference; keep the two in sync). Pre-fix the sizing picked ANY reachable home, so a
+/// comp sized at a strong 11-room home could be unbuildable at every in-range home — the roster then
+/// churned silent 3000-tick form/give-up cycles.
+const MAX_SPAWN_DISTANCE: u32 = 10;
+
+/// Is `home` within the SquadManager's spawn range of `target` (Chebyshev room distance — the same
+/// metric `squad_manager::room_distance` uses)? The REC-015 sizing-side filter.
+fn home_in_spawn_range(home: RoomName, target: RoomName) -> bool {
+    let d = home - target;
+    d.0.unsigned_abs().max(d.1.unsigned_abs()) <= MAX_SPAWN_DISTANCE
+}
+
 /// The best (longest on-site) launch window for a squad attacking `target` from any home room (ADR 0020
 /// §12.2 / ADR 0031 D16): returns `(onsite_window, member_energy)` — the EV optimizer
 /// ([`optimize_composition`], called via [`plan_engagement`]) presumes NO reference squad, so this no
@@ -2032,8 +2127,9 @@ fn classify_coordination(candidate: &AttackCandidate) -> EnemyCoordination {
 /// `onsite_window` = `CREEP_LIFE_TIME − spawn − travel` (via [`SquadComposition::estimated_combat_time`] over
 /// a per-member-capped probe shape, the same window the old `force_ceiling` reported); `member_energy` is the
 /// chosen home's capacity (the optimizer sizes the fielded force at the SAME energy the spawn path uses, so
-/// the affordability check and the actual spawn agree). Picks the home that yields the most on-site time.
-/// `None` if no home can reach the target.
+/// the affordability check and the actual spawn agree). Picks the home that yields the most on-site time
+/// among the homes the spawn loop will actually use (REC-015: within [`MAX_SPAWN_DISTANCE`]).
+/// `None` if no in-range home can reach the target.
 fn best_force_budget(
     fighter: SquadRole,
     home_rooms: &[RoomName],
@@ -2042,6 +2138,11 @@ fn best_force_budget(
 ) -> Option<(u32, u32)> {
     let mut best: Option<(u32, u32)> = None; // (onsite_window, member_energy)
     for &home in home_rooms {
+        // REC-015: never size at a home the Phase-B spawn filter will exclude — the comp must be
+        // buildable where it will actually be spawned.
+        if !home_in_spawn_range(home, target) {
+            continue;
+        }
         let Some(room) = game::rooms().get(home) else {
             continue;
         };
@@ -2216,6 +2317,86 @@ mod tests {
         assert!(!hostile_warrants_defender(&[Part::Tough, Part::Move]));
         // Empty body.
         assert!(!hostile_warrants_defender(&[]));
+    }
+
+    // ── REC-013 / REC-032: the channel-split defense threat fold ─────────────────────────────────────
+
+    fn info(melee_dps: f32, ranged_dps: f32, heal: f32, hits: u32, work_parts: u32, boosted: bool) -> HostileCreepInfo {
+        HostileCreepInfo {
+            position: Position::new(
+                RoomCoordinate::new(25).expect("valid coordinate"),
+                RoomCoordinate::new(25).expect("valid coordinate"),
+                "W4N5".parse().expect("valid room name"),
+            ),
+            owner: "somePlayer".to_string(),
+            hits,
+            hits_max: hits,
+            melee_dps,
+            ranged_dps,
+            heal_per_tick: heal,
+            tough_hp: 0.0,
+            work_parts,
+            boosted,
+        }
+    }
+
+    /// REC-013 PIN (operator directive 2026-07-01) — the channel split: a 25-WORK dismantler contributes
+    /// ZERO to the Lanchester creep-dps channel (WORK does no creep damage — heal is never sized against
+    /// it), 25 × 50 = 1250 to the STRUCTURE dismantle channel (where we hold structures), and only the
+    /// 15/WORK urgency PROXY (375) to the RANKING danger. Pre-fix the proxy was folded into
+    /// `estimated_dps` → `EnemyForce.dps`, sizing a ~15k-energy phantom garrison.
+    #[test]
+    fn defense_threat_splits_the_dismantler_channels() {
+        let dismantler = [info(0.0, 0.0, 0.0, 3_500, 25, false)];
+        let t = defense_threat_from(&dismantler, true);
+        assert_eq!(t.enemy.dps, 0.0, "WORK never reaches the creep-dps (Lanchester) channel");
+        assert_eq!(t.enemy.hits, 3_500, "the real hit pool rides EnemyForce.hits (the kill-in-window denominator)");
+        assert_eq!(t.dismantle_dps, 1250.0, "25 WORK × DISMANTLE_POWER 50 on the structure channel");
+        assert_eq!(
+            t.ranking_danger,
+            25.0 * screeps_combat_decision::war_decision::DISMANTLE_DANGER_PER_WORK,
+            "the urgency proxy survives ONLY in the ranking danger"
+        );
+
+        // Where we hold NOTHING dismantle-able, the structure channel is 0 and the proxy vanishes too
+        // (same principle as the ADR 0037 neighbour suppression).
+        let elsewhere = defense_threat_from(&dismantler, false);
+        assert_eq!(elsewhere.dismantle_dps, 0.0);
+        assert_eq!(elsewhere.ranking_danger, 0.0);
+    }
+
+    /// REC-032 PIN — the fold consumes the SHARED threatmap analysis, so BOOSTED figures pass through
+    /// intact: a T3-boosted 10-ATTACK raider analyzes to 10 × 30 × 4 = 1200 melee dps, and the defense
+    /// scan must size against THAT — the replaced hand-rolled 30/10/12 loop read it as 300 (a 4×
+    /// under-size). Heal and mixed swarms sum across bodies.
+    #[test]
+    fn defense_threat_carries_boosted_analysis_through() {
+        let swarm = [
+            info(1200.0, 0.0, 0.0, 2_500, 0, true), // boosted melee raider (threatmap ×4 already applied)
+            info(0.0, 100.0, 48.0, 1_800, 0, false), // ranged + a little self-heal
+        ];
+        let t = defense_threat_from(&swarm, true);
+        assert_eq!(t.enemy.dps, 1300.0, "boost-adjusted dps sums straight through (no 30/10 re-derivation)");
+        assert_eq!(t.enemy.heal, 48.0);
+        assert_eq!(t.enemy.hits, 4_300, "hit pools sum across the swarm");
+        assert_eq!(t.enemy.count, 2);
+        assert!(t.enemy.boosted, "any boosted body flags the force");
+        assert_eq!(t.ranking_danger, 1300.0, "no WORK ⇒ ranking == creep dps");
+    }
+
+    // ── REC-015: the sizing-home set matches the spawn-home set ─────────────────────────────────────
+
+    /// The sizing-side range filter mirrors `squad_manager::MAX_SPAWN_DISTANCE` (Chebyshev ≤ 10): a home
+    /// the Phase-B spawn loop would exclude must never be the home a comp is SIZED at (the unbuildable-
+    /// slot roster stall). Boundary pinned: 10 in, 11 out.
+    #[test]
+    fn sizing_home_range_matches_the_spawn_filter() {
+        let target: RoomName = "W10N10".parse().unwrap();
+        assert!(home_in_spawn_range("W10N10".parse().unwrap(), target), "same room");
+        assert!(home_in_spawn_range("W0N10".parse().unwrap(), target), "exactly MAX_SPAWN_DISTANCE (10) is in range");
+        assert!(home_in_spawn_range("W20N20".parse().unwrap(), target), "Chebyshev: (10,10) → 10, still in range");
+        assert!(!home_in_spawn_range("W21N10".parse().unwrap(), target), "11 rooms out is beyond the spawn filter");
+        assert_eq!(MAX_SPAWN_DISTANCE, 10, "keep in sync with squad_manager::MAX_SPAWN_DISTANCE (private there)");
     }
 
     // Pin (IBEX-044): cadence checks must not underflow when the persisted
@@ -2514,6 +2695,7 @@ mod tests {
             tower_count: 0,
             estimated_enemy_dps: 0.0,
             estimated_enemy_heal: 0.0,
+            estimated_enemy_hits: 0,
             has_safe_mode: false,
             estimated_roi: None,
             target_pos: None,

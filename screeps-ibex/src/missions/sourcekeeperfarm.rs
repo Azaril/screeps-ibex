@@ -86,6 +86,16 @@ const SK_KEEPER_HP: u32 = 5000;
 /// does not churn scouts — at most one peek per 250t while the stronghold stands.
 const STRONGHOLD_RESCOUT_INTERVAL: u32 = crate::military::threatmap::THREAT_DATA_MAX_AGE / 2;
 
+/// REC-034 — the stronghold re-probe's fulfillment priority: MEDIUM, not LOW. The INTERVAL fix above
+/// guarantees the probe is *requested* in time, but at `VISIBILITY_PRIORITY_LOW` the request routinely
+/// LOST its scout to the expansion (claim) CRITICAL/HIGH visibility flood pre-RCL8 (no observers), so the
+/// known-stronghold room still went blind and dropped out of the war.rs `threat_rooms` join at
+/// `THREAT_DATA_MAX_AGE` — the same starvation band FIX C had to escalate on the offense side. MEDIUM is
+/// the minimal robust raise: it out-ranks the opportunistic border refreshes without competing with
+/// genuine CRITICAL defense intel; war.rs's HIGH `has_known_core` backstop (now keyed on the PERSISTED
+/// stronghold signal, REC-034's other half) covers the >200t-stale escalation.
+const STRONGHOLD_RESCOUT_PRIORITY: f32 = crate::room::visibilitysystem::VISIBILITY_PRIORITY_MEDIUM;
+
 // Compile-time guard for the invariant above: the re-probe MUST out-pace threat
 // expiry so the known-stronghold SK room stays in the war.rs `threat_rooms` join.
 // This assert IS the regression fence — a future change to either constant that
@@ -126,6 +136,35 @@ pub fn sk_room_has_stronghold(room_data: &RoomData) -> bool {
         .get_dynamic_visibility_data()
         .map(|dynamic| dynamic.hostile_structures())
         .unwrap_or(false)
+}
+
+/// THE doctrine-sized SK suppression composition at `member_energy` — the ONE sizing shared by the farm
+/// mission's `Farm{sk}` objective request (below) and the `SourceKeeperOperation` ROI scorer's
+/// suppression-cost input (REC-027: the scorer previously carried a hand-computed
+/// `SK_DUO_BODY_COST = 5350` from the deleted duo template, while the doctrine actually fields ~9,000e /
+/// 3 members — overstating SK net-ROI ~2.4 e/t; the "refine in K2c" was never done). Pure over the
+/// keeper's engine-fixed stats (`plan_engagement` is pure), so it is host-testable and the ROI figure can
+/// never drift from the fielded force again. `None` ⇔ no home affords even one member at this energy.
+pub fn sk_suppression_composition(member_energy: u32) -> Option<screeps_combat_decision::composition::SquadComposition> {
+    use screeps_combat_decision::doctrine;
+    let ctx = doctrine::EngagementContext {
+        objective: doctrine::DoctrineObjective::Suppress,
+        coordination: doctrine::EnemyCoordination::Individual,
+        defense: Default::default(),
+        enemy_force: Some(doctrine::EnemyForce { dps: SK_KEEPER_MELEE_DPS, heal: 0.0, hits: SK_KEEPER_HP, count: 1, boosted: false }),
+        importance: 0.0,
+        member_energy,
+        // Suppress is winnable-by-construction + kited — plan_engagement assembles it directly (no EV
+        // search), so target_value / window are inert here; Default knobs at the member energy.
+        target_value: 1_000_000.0,
+        onsite_window: 1400,
+        params: screeps_combat_decision::composition::CompositionParams { member_energy, ..Default::default() },
+        // Inert here (Suppress is direct-assembled, bypassing the always-field floor), but the keeper is
+        // a PRESENT, known hazard → not confirmed-undefended.
+        defense_intel_reliable: false,
+    };
+    let sk_doctrines = doctrine::sk_doctrines();
+    doctrine::decide_doctrine(&ctx, &sk_doctrines).and_then(|d| doctrine::plan_engagement(d, &ctx, None).composition)
 }
 
 #[derive(Clone, ConvertSaveload)]
@@ -400,7 +439,7 @@ impl Mission for SourceKeeperFarmMission {
             if game::time().is_multiple_of(STRONGHOLD_RESCOUT_INTERVAL) {
                 system_data.visibility.request(VisibilityRequest::new(
                     sk_room,
-                    VISIBILITY_PRIORITY_LOW,
+                    STRONGHOLD_RESCOUT_PRIORITY,
                     VisibilityRequestFlags::ALL,
                 ));
             }
@@ -427,7 +466,6 @@ impl Mission for SourceKeeperFarmMission {
         // supplies the keeper as the observed `enemy_force`; the doctrine sizes `duo_sk_farmer` (falling
         // back to the template when no home affords the sized duo). Behavior-identical to the prior inline
         // sizing — the keeper has no heal (engine-fixed body).
-        use screeps_combat_decision::doctrine;
         let home_energy = self
             .home_room_datas
             .iter()
@@ -436,26 +474,10 @@ impl Mission for SourceKeeperFarmMission {
             .map(|r| r.energy_capacity_available())
             .max()
             .unwrap_or(0);
-        let ctx = doctrine::EngagementContext {
-            objective: doctrine::DoctrineObjective::Suppress,
-            coordination: doctrine::EnemyCoordination::Individual,
-            defense: Default::default(),
-            enemy_force: Some(doctrine::EnemyForce { dps: SK_KEEPER_MELEE_DPS, heal: 0.0, hits: SK_KEEPER_HP, count: 1, boosted: false }),
-            importance: 0.0,
-            member_energy: home_energy,
-            // Suppress is winnable-by-construction + kited — plan_engagement assembles it directly (no EV
-            // search), so target_value / window are inert here; Default knobs at the home's member energy.
-            target_value: 1_000_000.0,
-            onsite_window: 1400,
-            params: screeps_combat_decision::composition::CompositionParams { member_energy: home_energy, ..Default::default() },
-            // Inert here (Suppress is direct-assembled, bypassing the always-field floor), but the keeper is
-            // a PRESENT, known hazard → not confirmed-undefended.
-            defense_intel_reliable: false,
-        };
-        let sk_doctrines = doctrine::sk_doctrines();
         // ADR 0031 D15: the doctrine driver assembles the suppression force (no hardcoded `duo_sk_farmer`
-        // fallback). `None` only if no home affords even one member at this energy → skip (can't spawn).
-        if let Some(comp) = doctrine::decide_doctrine(&ctx, &sk_doctrines).and_then(|d| doctrine::plan_engagement(d, &ctx, None).composition) {
+        // fallback) — via the ONE shared sizing [`sk_suppression_composition`] the ROI scorer also prices
+        // (REC-027). `None` only if no home affords even one member at this energy → skip (can't spawn).
+        if let Some(comp) = sk_suppression_composition(home_energy) {
             // MEDIUM (not LOW): the SK duo must FORM to mine, but at LOW its slots map to SPAWN_MEDIUM
             // (`spawn_priority_for`) — below economy — so it lost every spawn lane to miners/haulers and
             // stalled at 1/3 forever (the long-standing zero-SK-farm). At MEDIUM its forming slots map to
@@ -489,8 +511,39 @@ impl Mission for SourceKeeperFarmMission {
 
 #[cfg(test)]
 mod tests {
-    use super::STRONGHOLD_RESCOUT_INTERVAL;
+    use super::{sk_suppression_composition, STRONGHOLD_RESCOUT_INTERVAL, STRONGHOLD_RESCOUT_PRIORITY};
     use crate::military::threatmap::THREAT_DATA_MAX_AGE;
+    use crate::room::visibilitysystem::{VISIBILITY_PRIORITY_LOW, VISIBILITY_PRIORITY_MEDIUM};
+
+    /// REC-027 PIN — the SK suppression cost figure the ROI scorer prices IS the doctrine-sized comp, and
+    /// this pins its current arithmetic so any doctrine/assembler drift is a conscious, reviewed change
+    /// (the stale hand-computed `SK_DUO_BODY_COST = 5350` sat ~2.4 e/t below reality for months).
+    /// Recomputed (EP-8.3): keeper melee 168 × HOLD_MARGIN 1.3 = 218.4 → ⌈218.4/12⌉ = 19 HEAL → 2 healers
+    /// (10-part cap at the 3000e per-member ceiling; 10 HEAL + 10 MOVE = 3,000e each); keeper 5,000 hits ÷
+    /// (34t kill window × 10 RANGED_ATTACK_POWER) = 15 RANGED → 1 kiter (15 RA + 15 MOVE = 3,000e).
+    /// Total: 3 members, 9,000e.
+    #[test]
+    fn sk_suppression_comp_cost_matches_the_doctrine_sizing() {
+        let comp = sk_suppression_composition(5600).expect("an RCL7 home affords the suppression comp");
+        assert_eq!(comp.member_count(), 3, "2 healers + 1 kiter: {}", comp.label);
+        assert_eq!(comp.estimated_cost(5600), 9_000, "the REAL fielded cost (not the stale 5,350): {}", comp.label);
+        // Unaffordable energy ⇒ None (the scorer's affordability gate rides the same call).
+        assert!(sk_suppression_composition(100).is_none(), "no member fields at 100e");
+    }
+
+    /// REC-034 PIN — the stronghold re-probe must be fulfilled, not just requested: at LOW it starved
+    /// under the expansion (claim) CRITICAL/HIGH visibility flood pre-RCL8, so the known-stronghold room
+    /// still went blind between probes. MEDIUM is the raise; the relation (> LOW) is the load-bearing part.
+    /// (Deliberately a runtime assert over consts — a greppable test-suite spec, like the interval twin.)
+    #[allow(clippy::assertions_on_constants)]
+    #[test]
+    fn stronghold_rescout_priority_outranks_the_starved_low_band() {
+        assert_eq!(STRONGHOLD_RESCOUT_PRIORITY, VISIBILITY_PRIORITY_MEDIUM);
+        assert!(
+            STRONGHOLD_RESCOUT_PRIORITY > VISIBILITY_PRIORITY_LOW,
+            "the probe must out-rank the LOW band that lost every scout to the claim flood (REC-034)"
+        );
+    }
 
     /// ADR 0027 SK-rescout-margin invariant: the stronghold re-probe MUST fire
     /// strictly before a room's `RoomThreatData` expires, or a known-stronghold

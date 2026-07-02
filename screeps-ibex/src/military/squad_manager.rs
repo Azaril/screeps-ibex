@@ -118,6 +118,24 @@ pub struct SquadFormingProgress {
     /// "stalled" (the old single MIN signal) and one moving lead can't mask a stuck bulk. Ephemeral (NOT
     /// serialized — no WFV bump). Cleared on retire.
     member_target_dist: std::collections::BTreeMap<(ObjectiveId, u32), u32>,
+    /// REC-003 (the Retreating liveness bound): objective id → the tick the squad ENTERED `Retreating`
+    /// this stretch. Any non-Retreating tick (a genuine re-engage, travel, forming) removes the entry;
+    /// past [`MAX_RETREAT_BUDGET`] the reconcile kernel force-aborts (`retreat_budget_exhausted`).
+    /// Ephemeral (NOT serialized — no WFV bump; a VM reload restarts the clock, still bounded). Cleared
+    /// on retire/reassign.
+    retreating_since: std::collections::BTreeMap<ObjectiveId, u32>,
+    /// REC-036 (the `enemy_stalled` input): objective id → (last-observed total alive enemy hits,
+    /// consecutive in-room ticks that sum did NOT decrease). Mirrors the sim driver's stalemate tracking
+    /// (combat-agent `ManagedSimSquad`) so the live bot and the sim report the one input the stalemate
+    /// valve reads the SAME way. Accumulates ONLY while a member is in the target room (cached intel is
+    /// frozen while nobody is there — an en-route squad must not accrue a vacuous stall from a constant
+    /// snapshot). Ephemeral (NOT serialized — no WFV bump). Cleared on retire/reassign + on room exit.
+    enemy_stall: std::collections::BTreeMap<ObjectiveId, (u32, u32)>,
+    /// REC-015b (EP-3.5 warn-once latch): (objective, slot_index) pairs whose `build_body → None`
+    /// roster-stall has ALREADY been warned this fielded generation, so the unconditional warning fires
+    /// once per stalled slot instead of every tick. Cleared on retire/reassign (a re-field re-warns).
+    /// Ephemeral (NOT serialized — no WFV bump); logging only, never control flow.
+    build_body_warned: std::collections::BTreeSet<(ObjectiveId, usize)>,
 }
 
 /// ADR 0034 D8 (RC-8): the TIGHTER per-member solo-travel stall window — consecutive ticks a member makes no
@@ -178,7 +196,9 @@ const MAX_FORMING_SQUADS: usize = 2;
 /// below this so a slow/contested form does not bleed out its early members to old age before the roster
 /// completes (ADR 0028 — the live no-renew member-death; `request_renew` previously had zero callers). The
 /// spawn system's renew pass only uses spawns no pending spawn claimed + is gated on room energy, so this
-/// never starves spawning or a poor colony.
+/// never starves spawning or a poor colony. REC-017: this is now the FLOOR of the distance-aware
+/// [`renew_required_ttl`] — the renew threshold scales up to the D6a deployment requirement for far
+/// targets (the flat 300 saturated held members BELOW the gate's `dist·50+100` and zombied them).
 const RENEW_WHILE_FORMING_TTL: u32 = 300;
 
 /// Max room distance from a candidate home to the objective room for that home to
@@ -205,8 +225,19 @@ const MAX_FORMING_BUDGET: u32 = 3000;
 
 /// Deep-reach fix (Break #2 travel half) — absolute bound on the travel-phase lease refresh. A full-roster
 /// squad that has not arrived within this many ticks of departing home gives up. Covers the longest realistic
-/// multi-room hop (MAX_SPAWN_DISTANCE=10 rooms ≈ 500 tiles) with margin.
+/// multi-room hop (MAX_SPAWN_DISTANCE=10 rooms ≈ 500 tiles) with margin. REC-004: the departure stamp is
+/// CUMULATIVE across enter→retreat→re-enter cycles (cleared only on `engaged_once` or retire), so this
+/// budget also bounds the first-contact-lose bounce loop rather than resetting on every room poke.
 const MAX_TRAVEL_BUDGET: u32 = 1000;
+
+/// REC-003 — the Retreating liveness budget (EP-2.7 bounded liveness, NOT hysteresis): a squad that sits
+/// in `Retreating` this many ticks without re-engaging is force-aborted (`GaveUp` + backoff) by the
+/// reconcile kernel. The engage/retreat dead band (retreat ≤ −band, re-engage ≥ +band AND HP above the
+/// re-engage band) can otherwise park a squad `Retreating` forever while its in-room focus refreshes the
+/// lease each tick. 600 covers a full worst-realistic heal-back (a multi-member deficit at ranged-heal
+/// rates is a few hundred ticks) plus margin, and stays well under `CREEP_LIFE_TIME` so the slot is freed
+/// with most of a lifetime to spare.
+const MAX_RETREAT_BUDGET: u32 = 600;
 
 /// Chebyshev distance between two rooms.
 fn room_distance(a: RoomName, b: RoomName) -> u32 {
@@ -298,6 +329,68 @@ fn forming_state(
     let forming = has_members && !engaged_once && requested_slots > 0 && present_count < requested_slots;
     let forming_progress = forming && present_count > prev_present;
     (forming, forming_progress)
+}
+
+/// REC-004(b): whether the travel-departure clock (`departed_at`) may be CLEARED this tick. Only once the
+/// squad has GENUINELY engaged (the travel phase is over for this generation) — never on a transient
+/// `in_target_room` poke. Pre-fix the stamp was deleted on EVERY non-traveling tick, so an
+/// enter→instant-retreat→re-enter cycle reset `MAX_TRAVEL_BUDGET` each pass and the E1 bounce loop was
+/// unbounded. Retire/reassign clear the stamp separately (the per-generation reset). Pure.
+fn clear_departure_clock(traveling: bool, engaged_once: bool) -> bool {
+    !traveling && engaged_once
+}
+
+/// REC-004(a): the LOST-IN-ROOM verdict the manager stamps for Phase A's `retreated_from_contact` —
+/// in-room + a REAL hostile threat + the genuine in-room LOSE (`!present_force_wins_or_stalls`). The
+/// threat gate is load-bearing: `present_force_wins_or_stalls` is FALSE for `our_strength == 0`, so a
+/// zero-fighting-strength roster standing in a QUIET room (a declaimer; a healers-only remnant) would
+/// otherwise read "losing" and back the room off. No `engaged_once` gate (the REC-004 first-contact
+/// fix — see the kernel's `unwinnable_contact`). Pure so the empty-room protection is host-testable.
+fn lost_in_room_verdict(in_room_any: bool, hostile_threat_present: bool, present_wins_or_stalls: bool) -> bool {
+    in_room_any && hostile_threat_present && !present_wins_or_stalls
+}
+
+/// REC-036: one step of the per-objective enemy-stall tracker — `(prev_enemy_hits, stall_ticks)` →
+/// the new pair given this tick's total alive enemy hits. The sim driver's exact rule (combat-agent
+/// `ManagedSimSquad`): the streak grows while the sum does not DECREASE (kills/damage shrink it;
+/// heal-back/reinforcement keep it flat-or-up = no headway) and resets on any decrease. Pure.
+fn advance_enemy_stall(prev: Option<(u32, u32)>, enemy_hits_now: u32) -> (u32, u32) {
+    let stall = match prev {
+        Some((prev_hits, stall)) if enemy_hits_now >= prev_hits => stall.saturating_add(1),
+        _ => 0,
+    };
+    (enemy_hits_now, stall)
+}
+
+/// REC-017 — the renew-to-SUFFICIENCY TTL target for a member held/forming at a home room, from its
+/// room-distance to the objective. The D6a lifetime gate releases a member only at
+/// `ttl ≥ (dist_to_rally + rally_to_target)·RALLY_TRAVEL_PER_ROOM + FIGHT_BUFFER`, while the old flat
+/// `RENEW_WHILE_FORMING_TTL` (300) saturated held members BELOW that requirement from ~4 rooms out —
+/// permanent hold+renew zombies the D8 quorum then dropped. Journey model: `dist_to_target + 2` rooms —
+/// the rally sits on the approach corridor at most one room off the member→target line plus one room
+/// short of the target, so the +2 margin upper-bounds the gate's `dist_to_rally + rally_to_target` for
+/// every in-range geometry (`MAX_SPAWN_DISTANCE` bounds the distances; the pin test proves the cover).
+/// `RALLY_TRAVEL_PER_ROOM` is a plains-speed model — terrain-OPTIMISTIC — but the margin + ceiling make
+/// over-estimation the failure direction (renew closer to full), never under (the zombie direction).
+/// Clamped to `[RENEW_WHILE_FORMING_TTL, RENEW_TARGET_TTL]`: the floor preserves the forming-phase renew
+/// behaviour for near targets; the ceiling is the shared renew target the gate itself checks against.
+fn renew_required_ttl(dist_to_target: u32) -> u32 {
+    use screeps_combat_decision::rally::{FIGHT_BUFFER, RALLY_TRAVEL_PER_ROOM, RENEW_TARGET_TTL};
+    dist_to_target
+        .saturating_add(2)
+        .saturating_mul(RALLY_TRAVEL_PER_ROOM)
+        .saturating_add(FIGHT_BUFFER)
+        .clamp(RENEW_WHILE_FORMING_TTL, RENEW_TARGET_TTL)
+}
+
+/// REC-017 — whether a too-short-TTL member HOLDS (for the Phase-B renew) instead of committing to the
+/// rally crawl. Holding is only meaningful AT A HOME ROOM — that is where a spawn exists for the renew
+/// pass to top it up at. A short member caught MID-FIELD has no renew source: holding it freezes it at
+/// its current tile until old age (the D6a zombie), so it COMMITS instead — already en route, it
+/// contributes what life it has and never pins the quorum on a member that can never renew. A member
+/// already at the rally never holds (holding would un-gather the bloc). Pure.
+fn should_hold_for_renew(decision: screeps_combat_decision::rally::CommitDecision, at_home_room: bool, at_rally: bool) -> bool {
+    at_home_room && !at_rally && !matches!(decision, screeps_combat_decision::rally::CommitDecision::Commit)
 }
 
 /// FIGHTER-FIRST spawn ordering (deep-reach fix — Break #1): the slot indices of `slots` reordered so the
@@ -1023,6 +1116,9 @@ pub struct SquadManagerSystemData<'a> {
     objective_queue: Write<'a, CombatObjectiveQueue>,
     forming_progress: Write<'a, SquadFormingProgress>,
     squad_contexts: WriteStorage<'a, SquadContext>,
+    // REC-009: the member jobs' squad-ref re-stamp (the reload-stable-identity light fix) writes each
+    // rostered creep's `SquadCombatJob.squad_entity` from the surviving `SquadContext.members` side.
+    jobs: WriteStorage<'a, crate::jobs::data::JobData>,
     spawn_queue: Write<'a, SpawnQueue>,
     room_data: ReadStorage<'a, RoomData>,
     // ADR 0032 v1.1: the per-room scouted intel the EV-of-pairing helper reads (threat danger → value_e for a
@@ -1133,7 +1229,7 @@ impl<'a> System<'a> for SquadManagerSystem {
             // Snapshot the squad facts (Copy) in one borrow.
             // ADR 0034 D5: also collect PER-MEMBER (entity, room-distance-to-target) so the travel lease can
             // refresh on a MAJORITY closing (not the single min). `member_dists` is empty while forming.
-            let (wiped, has_focus, engaged_once, in_target_room, has_members, present_count, target_dist, member_dists) = data
+            let (wiped, has_focus, engaged_once, in_target_room, has_members, present_count, target_dist, member_dists, state_retreating) = data
                 .squad_contexts
                 .get(squad_entity)
                 .map(|ctx| {
@@ -1164,9 +1260,20 @@ impl<'a> System<'a> for SquadManagerSystem {
                                 .collect()
                         })
                         .unwrap_or_default();
-                    (wiped, ctx.focus_target.is_some(), ctx.engaged_once, in_room, !ctx.members.is_empty(), present, dist, dists)
+                    (
+                        wiped,
+                        ctx.focus_target.is_some(),
+                        ctx.engaged_once,
+                        in_room,
+                        !ctx.members.is_empty(),
+                        present,
+                        dist,
+                        dists,
+                        // REC-003: last tick's squad state — feeds the time-in-Retreating clock below.
+                        ctx.state == SquadState::Retreating,
+                    )
                 })
-                .unwrap_or((false, false, false, false, false, 0, None, Vec::new()));
+                .unwrap_or((false, false, false, false, false, 0, None, Vec::new(), false));
             // ADR 0035 D4: the squad's PREVIOUS-tick LOSE VERDICT over the REAL in-room view, CARRIED from
             // Phase B (`compute_squad_orders` stamps `lost_in_room` AFTER `apply_squad_decision`) — the
             // GENUINE lose `engaged_once && in_room_any && !present_force_wins_or_stalls`, NOT the broader
@@ -1211,13 +1318,30 @@ impl<'a> System<'a> for SquadManagerSystem {
             // target room (positional progress), BOUNDED by an absolute travel clock from the departure tick.
             let full_roster = requested_slots_for_form > 0 && present_count >= requested_slots_for_form;
             let traveling = full_roster && !engaged_once && !in_target_room && has_members;
+            // REC-004(b): the departure stamp is CUMULATIVE for this generation — cleared only once the
+            // squad genuinely ENGAGES (or on retire/reassign), never on a transient `in_target_room`
+            // poke. Deleting it on every non-traveling tick reset `MAX_TRAVEL_BUDGET` on each
+            // enter→instant-retreat→re-enter cycle, unbounding the first-contact bounce loop (E1).
             let departed_at = if traveling {
                 *data.forming_progress.departed_at.entry(obj_id).or_insert(now)
             } else {
-                data.forming_progress.departed_at.remove(&obj_id);
+                if clear_departure_clock(traveling, engaged_once) {
+                    data.forming_progress.departed_at.remove(&obj_id);
+                }
                 now
             };
             let travel_budget_remaining = now.saturating_sub(departed_at) < MAX_TRAVEL_BUDGET;
+            // ── REC-003: the time-in-Retreating clock. Entered on the first Retreating tick; ANY
+            // non-Retreating tick (a genuine re-engage per `can_reengage`, travel, forming) clears it —
+            // "time in Retreating WITHOUT re-engage". Past MAX_RETREAT_BUDGET the kernel force-aborts
+            // (its terminal dominates the in-room focus-refresh that made the state absorbing). ──
+            let retreat_budget_exhausted = if state_retreating {
+                let since = *data.forming_progress.retreating_since.entry(obj_id).or_insert(now);
+                now.saturating_sub(since) >= MAX_RETREAT_BUDGET
+            } else {
+                data.forming_progress.retreating_since.remove(&obj_id);
+                false
+            };
             // ── ADR 0034 D5 (RC-4/RC-8 — per-member + MAJORITY travel progress). Refresh the travel lease
             // while a MAJORITY of PRESENT members are CLOSING distance on the target (or arrived in it), NOT
             // while the single closest is. The old MIN-over-members signal let ONE stuck member pin the lease
@@ -1287,17 +1411,20 @@ impl<'a> System<'a> for SquadManagerSystem {
                 // the objective lifecycle: the producer withdraws on controller-neutral / re-arm → objective_gone.
                 declaiming: is_declaim && in_target_room && has_members,
                 reassign_available,
-                // ADR 0035 D4 (ABANDON-ON-UNWINNABLE-CONTACT): reached + engaged + the real in-room P(win) =
-                // LOSE. The kernel splits this from a clean clear so a lost fight is BACKED OFF (GaveUp +
+                // ADR 0035 D4 (ABANDON-ON-UNWINNABLE-CONTACT): reached + the real in-room P(win) = LOSE.
+                // The kernel splits this from a clean clear so a lost fight is BACKED OFF (GaveUp +
                 // mark_unwinnable), not withdrawn-as-clean (which invited an instant re-field → the
                 // reach↔retreat spiral). `lost_in_room` is the GENUINE lose verdict carried from Phase B (the
-                // EXACT inverse of `present_force_wins_or_stalls` over the real in-room view) — NOT
-                // `ctx.state == Retreating`, which is a SUPERSET that also fires for a critical-HP / low-avg /
-                // stalemate retreat on a WINNABLE fight (that false-abandon retired bloodied-but-winning
-                // squads mid-fight + backed off winnable rooms). It already encodes `engaged_once &&
-                // in_room_any`; the `engaged_once && in_target_room` here is a defensive re-gate so it never
-                // fires en route or before contact even if the carrier is momentarily stale.
-                retreated_from_contact: engaged_once && in_target_room && lost_in_room,
+                // EXACT inverse of `present_force_wins_or_stalls` over the real in-room view, gated on a real
+                // hostile threat) — NOT `ctx.state == Retreating`, which is a SUPERSET that also fires for a
+                // critical-HP / low-avg / stalemate retreat on a WINNABLE fight (that false-abandon retired
+                // bloodied-but-winning squads mid-fight + backed off winnable rooms). REC-004: deliberately
+                // NOT gated on `engaged_once` — a FIRST-CONTACT lose goes Moving→Retreating without ever
+                // latching Engaged (FIX B1 latches only in-room Engaged) and must still abandon, or the
+                // border-tower bounce loop is unbounded. The `in_target_room` re-gate keeps a momentarily
+                // stale carrier from firing after the squad has left the room.
+                retreated_from_contact: in_target_room && lost_in_room,
+                retreat_budget_exhausted,
             };
             let action = lifecycle::reconcile(snapshot);
             if let lifecycle::ReconcileAction::Retire { reason, withdraw, mark_unwinnable } = action {
@@ -1361,6 +1488,11 @@ impl<'a> System<'a> for SquadManagerSystem {
                 // ADR 0035 D4: clear the lost-in-room verdict carrier so a RE-FIELD re-derives it from the
                 // live in-room assessment (no stale lose verdict bleeding into a fresh generation).
                 data.forming_progress.lost_in_room.remove(&obj_id);
+                // REC-003/REC-036/REC-015b: the retreat clock, enemy-stall streak, and build-body warn
+                // latch are per-generation too — a re-field restarts them (and re-warns a stalled slot).
+                data.forming_progress.retreating_since.remove(&obj_id);
+                data.forming_progress.enemy_stall.remove(&obj_id);
+                data.forming_progress.build_body_warned.retain(|&(oid, _)| oid != obj_id);
                 // ADR 0034 D4/D5/D8: clear the per-member rally/target distance + solo-stall trackers so a
                 // RE-FIELD re-derives them (a new generation's members must not inherit a stale block streak).
                 clear_member_trackers(&mut data.forming_progress, obj_id);
@@ -1418,6 +1550,11 @@ impl<'a> System<'a> for SquadManagerSystem {
                 // ADR 0035 D4: clear the lost-in-room verdict carrier under the OLD id (reassign is a NON-LOSS
                 // terminal so it is false here, but re-key hygiene matches the other per-objective trackers).
                 data.forming_progress.lost_in_room.remove(&obj_id);
+                // REC-003/REC-036/REC-015b re-key hygiene: fresh retreat clock / stall streak / warn latch
+                // at the new target.
+                data.forming_progress.retreating_since.remove(&obj_id);
+                data.forming_progress.enemy_stall.remove(&obj_id);
+                data.forming_progress.build_body_warned.retain(|&(oid, _)| oid != obj_id);
                 // ADR 0034 D4/D5/D8: a reassigned squad gets fresh per-member rally/target/stall trackers at
                 // the new target (the old block streak is meaningless against the new rally corridor).
                 clear_member_trackers(&mut data.forming_progress, obj_id);
@@ -1451,6 +1588,31 @@ impl<'a> System<'a> for SquadManagerSystem {
             live_managed.push((squad_entity, obj_id));
         }
 
+        // ── REC-009 (reload-stable squad identity — the LIGHT fix): re-stamp every rostered member's
+        // job squad-ref from `SquadContext.members` each tick. The job's serialized `SquadRef` (raw
+        // index + generation) cannot survive a VM reload — marker-recreated entities get fresh
+        // generations, so validate-on-access fails on every member and `recall_decision` walks the WHOLE
+        // roster home to recycle mid-assault (a full squad disband per reload). `SquadContext.members`
+        // is `ConvertSaveload`-remapped (correct post-reload) and the manager owns BOTH sides, so
+        // members→jobs is re-coupled here from the surviving side — before any job runs this tick
+        // (`SquadManagerSystem` is ordered ahead of `RunJobSystem` in `for_each_system!`, so no member
+        // ever observes its own stale ref). Unconditional (two integer stores per member per tick — no
+        // resolve/compare needed). The DEEPER alternative is a minted stable `SquadId` (persisted
+        // counter + a per-tick id→Entity map, the planned identity I1/I2 work); this per-tick restamp is
+        // the bounded interim that removes the reload-disband class without a serialized-shape change. ──
+        for (squad_entity, _obj_id) in &live_managed {
+            let member_entities: Vec<Entity> = data
+                .squad_contexts
+                .get(*squad_entity)
+                .map(|ctx| ctx.members.iter().map(|m| m.entity).collect())
+                .unwrap_or_default();
+            for member in member_entities {
+                if let Some(crate::jobs::data::JobData::SquadCombat(job)) = data.jobs.get_mut(member) {
+                    job.restamp_squad_ref(*squad_entity);
+                }
+            }
+        }
+
         // ── Phase B: field rosters (spawn unfilled slots) for live squads. ──
         for (squad_entity, obj_id) in &live_managed {
             // Read the composition off the objective each tick (the producer owns it).
@@ -1479,7 +1641,18 @@ impl<'a> System<'a> for SquadManagerSystem {
                 if already_filled {
                     continue;
                 }
-                queue_slot_spawn(&mut data.spawn_queue, &homes, slot, slot_index, target_room, *squad_entity, spawn_priority, debug);
+                queue_slot_spawn(
+                    &mut data.spawn_queue,
+                    &homes,
+                    slot,
+                    slot_index,
+                    target_room,
+                    *squad_entity,
+                    *obj_id,
+                    spawn_priority,
+                    &mut data.forming_progress.build_body_warned,
+                    debug,
+                );
             }
         }
 
@@ -1498,12 +1671,13 @@ impl<'a> System<'a> for SquadManagerSystem {
         // while a departed/traveling member is intrinsically excluded (no home-room match). The per-member
         // home-room filter is the bound; the spawn system's free-spawn + energy gate is the economy guard.
         for (squad_entity, obj_id) in &live_managed {
-            let requested = data
-                .objective_queue
-                .get(*obj_id)
-                .and_then(|o| o.force.squads.first())
-                .map(|c| c.slots.len())
-                .unwrap_or(0);
+            let (requested, renew_target_room) = match data.objective_queue.get(*obj_id) {
+                Some(obj) => (
+                    obj.force.squads.first().map(|c| c.slots.len()).unwrap_or(0),
+                    objective_target(&obj.kind).1,
+                ),
+                None => continue,
+            };
             let Some(ctx) = data.squad_contexts.get(*squad_entity) else {
                 continue;
             };
@@ -1511,8 +1685,18 @@ impl<'a> System<'a> for SquadManagerSystem {
                 continue; // unknown roster — no renew (legacy parity)
             }
             // Collect first (immutable ctx + creep_owner borrow), then issue (mutable spawn_queue). A member is
-            // renewed iff it is AT A HOME ROOM (still holding/rallying near a home spawn) and below the TTL
-            // threshold — a departed/traveling member is far from any home room and is intrinsically skipped.
+            // renewed iff it is AT A HOME ROOM (still holding/rallying near a home spawn) and below its
+            // renew-to-SUFFICIENCY target — a departed/traveling member is far from any home room and is
+            // intrinsically skipped.
+            //
+            // REC-017 (the D6a zombie fix): the renew threshold is `renew_required_ttl(dist-to-target)` —
+            // the deployment requirement the D6a lifetime gate will actually check (journey + FIGHT_BUFFER,
+            // ceilinged at RENEW_TARGET_TTL) — NOT the flat `RENEW_WHILE_FORMING_TTL`. The flat 300 floor
+            // stopped renewing a held member below the gate's `dist·50+100` requirement (>300 from ~4 rooms
+            // out), so the member saturated at ~300 TTL, never reached `Commit`, and was renewed forever
+            // while the D8 quorum dropped it — a permanent N−1 zombie slot. Renewing to sufficiency lets
+            // the gate release it; the spawn system's free-spawn + room-energy gate is still the economy
+            // guard, and the ceiling bounds the ask.
             let renews: Vec<(Entity, Entity, u32)> = ctx
                 .members
                 .iter()
@@ -1520,7 +1704,8 @@ impl<'a> System<'a> for SquadManagerSystem {
                     let pos = m.position?;
                     let home = homes.iter().find(|h| h.name == pos.room_name())?;
                     let ttl = data.creep_owner.get(m.entity).and_then(|co| co.owner.resolve()).and_then(|c| c.ticks_to_live())?;
-                    (ttl < RENEW_WHILE_FORMING_TTL).then_some((home.entity, m.entity, ttl))
+                    let required = renew_required_ttl(room_distance(pos.room_name(), renew_target_room));
+                    (ttl < required).then_some((home.entity, m.entity, ttl))
                 })
                 .collect();
             for (room, member, ttl) in renews {
@@ -1560,6 +1745,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 &data.mapping,
                 &mut data.squad_contexts,
                 &data.creep_owner,
+                &homes,
                 *squad_entity,
                 *obj_id,
                 target_room,
@@ -1713,7 +1899,9 @@ fn queue_slot_spawn(
     slot_index: usize,
     target_room: RoomName,
     squad_entity: Entity,
+    obj_id: ObjectiveId,
     priority: f32,
+    build_body_warned: &mut std::collections::BTreeSet<(ObjectiveId, usize)>,
     debug: bool,
 ) {
     // Size the member's body ONCE to the STRONGEST in-range home (capped by the body's
@@ -1744,12 +1932,17 @@ fn queue_slot_spawn(
         // Even the strongest in-range home can't build it (template min OR the sized spec) — don't field
         // an undersized one. (A sized slot that doesn't fit was already vetoed upstream by sized_for.)
         None => {
-            // This is a silent roster-stall point: the slot is NEVER queued, so the squad rallies forever
-            // at present<full. Surface it so an over-sized per-member spec (or no strong-enough in-range
-            // home) is diagnosable instead of invisible.
-            if debug {
+            // REC-015b: this is a silent roster-stall point — the slot is NEVER queued, so the squad
+            // rallies forever at present<full and churns 3000-tick form/give-up cycles. LOUD
+            // unconditionally (an over-sized per-member spec, or no strong-enough in-range home, must be
+            // diagnosable without the debug flag), latched once per (objective, slot) per fielded
+            // generation (EP-3.5 — repeating warnings get a latch; the latch clears on retire/reassign so
+            // a re-field re-warns). A seg-57 counter is the follow-up — the metrics block lives outside
+            // this fix's file ownership (see the reconciliation ledger).
+            if build_body_warned.insert((obj_id, slot_index)) {
                 log::warn!(
-                    "[SpawnQueue] slot={} role={:?} target={} CANNOT BUILD: build_body None at best_cap={} (per-member spec exceeds the strongest IN-RANGE home, or >50 parts) — slot never queued, roster stalls here",
+                    "[SpawnQueue] obj={:?} slot={} role={:?} target={} CANNOT BUILD: build_body None at best_cap={} (per-member spec exceeds the strongest IN-RANGE home, or >50 parts) — slot never queued, roster stalls here (warn-once per generation)",
+                    obj_id,
                     slot_index,
                     slot.role,
                     target_room,
@@ -1985,6 +2178,7 @@ fn compute_squad_orders(
     mapping: &EntityMappingData,
     squad_contexts: &mut WriteStorage<SquadContext>,
     creep_owner: &ReadStorage<CreepOwner>,
+    homes: &[HomeRoom],
     squad_entity: Entity,
     obj_id: ObjectiveId,
     target_room: RoomName,
@@ -2071,6 +2265,33 @@ fn compute_squad_orders(
         .map(|c| !c.my() && c.safe_mode().unwrap_or(0) > 0)
         .unwrap_or(false);
 
+    // FIX B1 (engaged-en-route latch input) — whether ANY living member stands in the target room.
+    // Hoisted above the view build because the REC-036 stall tracker below also gates on it (only an
+    // in-room squad can be making — or failing to make — headway on the enemy).
+    let in_room_any = member_views
+        .iter()
+        .any(|m| m.pos.map(|p| p.room_name() == target_room).unwrap_or(false));
+
+    // ── REC-036 — wire `enemy_stalled` (the stalemate-disengage input) from per-objective enemy-HP
+    // progress, mirroring the sim driver's definition EXACTLY (combat-agent `ManagedSimSquad`: total
+    // alive enemy hits not DECREASING for `ENEMY_STALL_TICKS` consecutive ticks ⇒ stalled) — sim/live
+    // parity for the one input the stalemate valve reads. Live-only guard: accumulate ONLY while a
+    // member is in the target room (the sim squad always is) — cached intel is FROZEN while nobody is
+    // there, so an en-route squad would otherwise accrue a vacuous stall from a constant snapshot. The
+    // valve itself additionally requires Destroy intent + a balance below the engage band (decide_squad),
+    // so a winning grind or a creepless structure siege (balance clamps positive) never trips it. On a
+    // trip: Retreating → the exit is REC-003's retreat bound / re-engage — the disengage composes with
+    // the lifecycle bounds instead of oscillating. Ephemeral tracker — no serialized state, no WFV bump.
+    let enemy_stalled = if in_room_any {
+        let enemy_hits_now: u32 = hostiles.iter().filter(|h| h.hits > 0).map(|h| h.hits).sum();
+        let advanced = advance_enemy_stall(forming_progress.enemy_stall.get(&obj_id).copied(), enemy_hits_now);
+        forming_progress.enemy_stall.insert(obj_id, advanced);
+        advanced.1 >= screeps_combat_decision::ENEMY_STALL_TICKS
+    } else {
+        forming_progress.enemy_stall.remove(&obj_id);
+        false
+    };
+
     let view = SquadView {
         members: &member_views,
         hostiles: &hostiles,
@@ -2079,10 +2300,10 @@ fn compute_squad_orders(
         current_state,
         enemy_safe_mode,
         // Offense closes in and finishes the enemy (the close-to-kill gradient is now live). `Hold` is
-        // for a future pin/harass objective. enemy_stalled stays false until SquadContext tracks the
-        // no-progress counter (a fast-follow; the sim already validates the stalemate-disengage path).
+        // for a future pin/harass objective. `enemy_stalled` is the REC-036 per-objective no-headway
+        // streak computed above (the sim-parity signal the stalemate disengage reads).
         engage_objective: screeps_combat_decision::EngageObjective::Destroy,
-        enemy_stalled: false,
+        enemy_stalled,
         // ADR 0031 #39 P3: the drain stance is now THREADED from the oracle. `Some(Drain)` (the war producer
         // ran `plan_engagement` and picked the tower-drain for this objective) → `drain_stance = true`, so the
         // winnability path treats the FINITE towers as drainable (not a permanent unwinnable blocker) WHILE the
@@ -2144,15 +2365,12 @@ fn compute_squad_orders(
     let all_arrived = member_views
         .iter()
         .all(|m| m.pos.map(|p| p.room_name() == target_room).unwrap_or(false));
-    // FIX B1 (engaged-en-route latch): whether ANY living member stands in the target room. The
-    // `engaged_once` latch is gated on this so a squad whose VISIBLE target room has a hostile while it is
-    // still TRAVELING (a proximity-free focus, no member in-room) does NOT latch engaged_once en route —
-    // which would permanently kill its travel lease (`traveling` requires `!engaged_once`) and freeze it
-    // mid-hop. Latch only once a member is actually IN the room (decide_squad still picks the focus per-tick;
-    // only the PERMANENT latch is gated). Uncontested clears still latch on arrival — unchanged.
-    let in_room_any = member_views
-        .iter()
-        .any(|m| m.pos.map(|p| p.room_name() == target_room).unwrap_or(false));
+    // FIX B1 (engaged-en-route latch): `in_room_any` (hoisted above the view build) gates the
+    // `engaged_once` latch so a squad whose VISIBLE target room has a hostile while it is still TRAVELING
+    // (a proximity-free focus, no member in-room) does NOT latch engaged_once en route — which would
+    // permanently kill its travel lease (`traveling` requires `!engaged_once`) and freeze it mid-hop.
+    // Latch only once a member is actually IN the room (decide_squad still picks the focus per-tick; only
+    // the PERMANENT latch is gated). Uncontested clears still latch on arrival — unchanged.
 
     // P-OBJ #23 killer diagnostic: the squad is fully in the target room but `decide_squad` found NOTHING
     // to attack. This one line classifies the live no-engage failure: hostiles=0 structs=0 => empty room
@@ -2475,15 +2693,22 @@ fn compute_squad_orders(
                                 screeps_combat_decision::rally::RENEW_TARGET_TTL,
                             );
                             // Hold a member that is short of sufficiency (renewable: top it up at home;
-                            // hopeless: recycle is a follow-up — for now HOLD so it can't trickle in doomed).
-                            // A member already AT the rally (range <= gather radius) never holds — it has
-                            // arrived; holding it would un-gather the bloc.
-                            hold_for_renew = !matches!(decision, screeps_combat_decision::rally::CommitDecision::Commit)
-                                && pos.get_range_to(rally) > screeps_combat_decision::rally::RALLY_GATHER_RADIUS;
+                            // hopeless-but-at-home: still hold — unreachable only beyond in-range
+                            // geometry, see renew_required_ttl). A member already AT the rally (range <=
+                            // gather radius) never holds — it has arrived; holding it would un-gather the
+                            // bloc. REC-017: hold ONLY at a HOME ROOM — that is where a spawn exists for
+                            // the Phase-B renew (now distance-aware, renew_required_ttl) to top it up at.
+                            // A short member caught MID-FIELD has no renew source: holding it froze it at
+                            // its current tile until old-age death (the D6a zombie) — it now COMMITS
+                            // instead (already en route, it contributes what life it has and never pins
+                            // the quorum on a member that can never renew).
+                            let at_home_room = homes.iter().any(|h| h.name == pos.room_name());
+                            let at_rally = pos.get_range_to(rally) <= screeps_combat_decision::rally::RALLY_GATHER_RADIUS;
+                            hold_for_renew = should_hold_for_renew(decision, at_home_room, at_rally);
                             if hold_for_renew && debug {
                                 log::info!(
-                                    "[Lifecycle] LIFETIME-HOLD squad={:?} obj={:?} member={:?} ttl={} dist_to_rally={} rally_to_target={} decision={:?} (hold+renew before the crawl, RC-7)",
-                                    squad_entity, obj_id, member.entity, ttl, dist_to_rally, rally_to_target, decision
+                                    "[Lifecycle] LIFETIME-HOLD squad={:?} obj={:?} member={:?} ttl={} dist_to_rally={} rally_to_target={} decision={:?} at_home={} (hold+renew-to-sufficiency before the crawl, RC-7/REC-017)",
+                                    squad_entity, obj_id, member.entity, ttl, dist_to_rally, rally_to_target, decision, at_home_room
                                 );
                             }
                         }
@@ -2527,7 +2752,7 @@ fn compute_squad_orders(
             // Arrived + SKIRMISH: drop the anchor so `Engaged` kites via `decide_movement` (O1).
             ctx.squad_path = None;
         }
-        apply_squad_decision(ctx, &decision, creep_owner, in_room_any);
+        apply_squad_decision(ctx, &decision, creep_owner, target_room, in_room_any);
         // ADR 0031 §2(g) FOLLOW-UP 1b — LIVE DRAIN WIRING. The drain tank-forward / healers-behind
         // per-member goals (`decision.member_goals`, stamped onto each member's `tick_orders.squad_movement`
         // in `apply_squad_decision` above) are honored IN-SIM but INERT on the live bot when a Dismantle is
@@ -2562,16 +2787,21 @@ fn compute_squad_orders(
     // (`stalemate_disengage`). A squad WINNING a real fight whose focus-fired member dips <25% HP would then
     // read `retreated_from_contact=true` in Phase A → `unwinnable_contact` → the WINNABLE room is backed off
     // and the bloodied-but-winning squad retired MID-FIGHT (the false-abandon). So carry the GENUINE lose
-    // verdict instead: `engaged_once && in_room_any && !present_wins_or_stalls` — the EXACT inverse of
-    // `present_force_wins_or_stalls` over the REAL in-room view (in-room ⇒ LiveVisible ⇒ assessed over the
-    // real towers, no vacuous win). `present_wins_or_stalls` + `in_room_any` are already computed THIS tick
-    // above; `engaged_once` is re-read AFTER `apply_squad_decision` latched it. A critical/low-avg/stalemate
-    // retreat on a winnable fight has `present_wins_or_stalls=true` ⇒ NOT lost ⇒ NOT abandoned (it holds /
-    // wins). Membership insert/remove on the ephemeral `lost_in_room` set (NOT serialized → no WFV bump; no
-    // iteration on a result-affecting path → determinism preserved). Phase A reads `contains` — the lose
-    // verdict is CARRIED from Phase B, never recomputed in Phase A (the no-view-rebuild-in-A property).
-    let engaged_once_for_lose = squad_contexts.get(squad_entity).map(|c| c.engaged_once).unwrap_or(false);
-    let lost_in_room = engaged_once_for_lose && in_room_any && !present_wins_or_stalls;
+    // verdict instead: `in_room_any && hostile_threat_present && !present_wins_or_stalls` — the EXACT
+    // inverse of `present_force_wins_or_stalls` over the REAL in-room view (in-room ⇒ LiveVisible ⇒
+    // assessed over the real towers, no vacuous win), gated on a REAL hostile threat (hostile creeps, a
+    // hostile tower, or enemy safe mode) so a zero-strength-but-unthreatened roster in a quiet room — a
+    // declaimer, a healers-only remnant — never reads as "losing" (`wins_or_stalls` is false at
+    // our_strength==0). REC-004: deliberately NOT gated on `engaged_once` — a FIRST-CONTACT lose (the
+    // border-tower geometry: instant-unwinnable flips Moving→Retreating before Engaged ever latches) must
+    // stamp the carrier too, or the abandon terminal never fires and the enter→retreat→re-enter loop is
+    // unbounded. A critical/low-avg/stalemate retreat on a winnable fight has `present_wins_or_stalls=true`
+    // ⇒ NOT lost ⇒ NOT abandoned (it holds / wins). Membership insert/remove on the ephemeral
+    // `lost_in_room` set (NOT serialized → no WFV bump; no iteration on a result-affecting path →
+    // determinism preserved). Phase A reads `contains` — the lose verdict is CARRIED from Phase B, never
+    // recomputed in Phase A (the no-view-rebuild-in-A property).
+    let hostile_threat_present = !hostiles.is_empty() || !no_hostile_towers || enemy_safe_mode;
+    let lost_in_room = lost_in_room_verdict(in_room_any, hostile_threat_present, present_wins_or_stalls);
     if lost_in_room {
         forming_progress.lost_in_room.insert(obj_id);
     } else {
@@ -2592,9 +2822,7 @@ fn compute_squad_orders(
             .unwrap_or((SquadState::Forming, false, false));
 
         let present = member_positions.iter().filter(|p| p.is_some()).count();
-        let in_room_any = member_views
-            .iter()
-            .any(|m| m.pos.map(|p| p.room_name() == target_room).unwrap_or(false));
+        // (`in_room_any` is the hoisted definition above — one source for the latch, tracker, and trace.)
         // Closest member's room-distance to the target (None ⇒ no member has a body yet).
         let target_dist = member_views
             .iter()
@@ -2752,13 +2980,39 @@ fn should_drop_anchor_for_structure_siege(decision: &SquadDecision) -> bool {
         && decision.member_goals.iter().any(|g| g.is_some())
 }
 
+/// Apply the pure heal assignments: resolve member indices → the target's creep ObjectId, then set each
+/// assigned healer's `heal_target`. (Indices match `member_views`, built in the same order as
+/// `ctx.members`.) Resolve first to avoid an aliasing borrow. Shared by the Engaged and Retreating arms
+/// of [`apply_squad_decision`] — the kernel's `assign_heals` triage is computed for both states.
+fn stamp_heal_assignments(ctx: &mut SquadContext, decision: &SquadDecision, creep_owner: &ReadStorage<CreepOwner>) {
+    let heal_targets: Vec<(usize, Option<ObjectId<Creep>>)> = decision
+        .heal_assignments
+        .iter()
+        .map(|a| {
+            let target_id = ctx.members.get(a.target_idx).and_then(|m| creep_owner.get(m.entity)).map(|co| co.owner);
+            (a.healer_idx, target_id)
+        })
+        .collect();
+    for (healer_idx, target_id) in heal_targets {
+        if let Some(orders) = ctx.members.get_mut(healer_idx).and_then(|m| m.tick_orders.as_mut()) {
+            orders.heal_target = target_id;
+        }
+    }
+}
+
 /// Write a `SquadDecision` into the `SquadContext`: the combat state, the shared focus, and per-member
 /// orders. The per-member `movement` stays `Formation` — for a manager squad (no anchor) the job
 /// routes it through the pure `decide_movement` (§5 ⚑ job-owns-movement), reading the squad's shared
 /// directive (`squad_movement`/`squad_center`/`squad_cohesion_radius`) the manager stamps here so the
-/// block kites/advances as one. Heal *assignment* still reuses `SquadContext::compute_heal_assignments`
-/// until that migrates into `decide_squad` (Step 7).
-fn apply_squad_decision(ctx: &mut SquadContext, decision: &SquadDecision, creep_owner: &ReadStorage<CreepOwner>, in_room_any: bool) {
+/// block kites/advances as one. Heal *assignment* is the kernel's `decision.heal_assignments`
+/// (stamped via [`stamp_heal_assignments`]).
+fn apply_squad_decision(
+    ctx: &mut SquadContext,
+    decision: &SquadDecision,
+    creep_owner: &ReadStorage<CreepOwner>,
+    target_room: RoomName,
+    in_room_any: bool,
+) {
     ctx.state = order_state_to_squad(decision.state);
     // FIX B1: latch `engaged_once` ONLY when the squad is Engaged AND a member is actually IN the target
     // room. `decide_squad` sets `Engaged` purely from `focus.is_some()` with NO proximity gate (lib.rs), so a
@@ -2770,15 +3024,65 @@ fn apply_squad_decision(ctx: &mut SquadContext, decision: &SquadDecision, creep_
         ctx.engaged_once = true; // P-OBJ #23: latch reaching combat (drives resolve vs give-up in Phase A)
     }
     ctx.focus_target = decision.focus.map(|f| f.pos);
+    // A member's in-room test for the per-member order gating below. A member with NO position (still
+    // spawning — no body in the world) is treated as in-room: its orders are inert until it has a body,
+    // and it has no travel order worth preserving.
+    let member_in_room = |pos: Option<Position>| pos.is_none_or(|p| p.room_name() == target_room);
+    let has_anchor = ctx.squad_path.is_some();
 
     match decision.state {
         SquadOrderState::Retreating => {
-            ctx.issue_retreat_orders(None, Some(creep_owner));
+            // ── REC-016: consume the kernel's threat-priced kite/withdraw goal instead of huddling. ──
+            // `decide_squad_with_pathing` computes `decision.movement` (a `Kite { goal }` from the scored
+            // kite search, or `Hold` when the centroid is already the safest tile) for the Retreating
+            // state — the sim honors it; live previously discarded it and converged members on their OWN
+            // centroid (`issue_retreat_orders(None, ..)`), i.e. squads sat in tower range "retreating" in
+            // place (and a cross-room roster's in-room coordinate average was stamped into the first
+            // member's room — garbage). Stamp the directive on the sim-parity path: `Formation` movement
+            // + `squad_movement` — the job's anchorless `decide_movement` route (its critical-HP flee /
+            // melee-evade / cohesion precedence keeps the withdrawing block together). A member already
+            // OUT of the target room gets `Flee` instead — a cross-room kite goal is meaningless to it,
+            // and local flee is the safe withdraw wherever it stands.
+            for member in ctx.members.iter_mut() {
+                let movement = if member_in_room(member.position) { TickMovement::Formation } else { TickMovement::Flee };
+                member.tick_orders = Some(TickOrders {
+                    movement,
+                    squad_movement: decision.movement,
+                    squad_center: decision.center,
+                    squad_cohesion_radius: decision.cohesion_radius,
+                    ..Default::default()
+                });
+            }
+            stamp_heal_assignments(ctx, decision, creep_owner);
+            // An anchor would route the job through the slot-based formation mover, which IGNORES
+            // `squad_movement` — drop it so the anchorless path reads the kite goal (the same runtime
+            // anchor-drop pattern as drain/structure-siege; no serialized-shape change).
+            ctx.squad_path = None;
         }
         SquadOrderState::Engaged => {
             // Per-member focus with damage spill (ADR 0020 §4.2); index aligns with view.members
             // (built from ctx.members in order). `None` ⇒ the shared focus.
+            //
+            // REC-002: the order overwrite is GATED on in-room presence (mirroring the FIX B1 latch
+            // gating). `decide_squad` returns Engaged purely from `focus.is_some()` over the target
+            // room's CACHED DTOs — no proximity — so for any scouted target this arm used to overwrite
+            // EVERY member's orders, bulldozing the rally-hold / solo-travel-to-shared-rally /
+            // lifetime-hold orders stamped earlier in `compute_squad_orders`: members fell through to
+            // individual room navigation and the squad trickled in member-by-member (the P-OBJ #23
+            // trickle the rally machinery exists to kill). Now only IN-room members (and unspawned ones —
+            // inert) get the attack/formation stamp; an out-of-room member KEEPS its earlier rally/travel
+            // orders, or — if the assault anchor is advancing and it has none — follows the anchor (the
+            // non-engaged arm's behavior), or self-drives via the job fallback.
             for (i, member) in ctx.members.iter_mut().enumerate() {
+                if !member_in_room(member.position) {
+                    if member.tick_orders.is_none() && has_anchor {
+                        member.tick_orders = Some(TickOrders {
+                            movement: TickMovement::Formation,
+                            ..Default::default()
+                        });
+                    }
+                    continue;
+                }
                 let focus = decision.focus_assignments.get(i).copied().flatten().or(decision.focus);
                 let attack_target = focus.map(|f| f.id.map(AttackTarget::Creep).unwrap_or(AttackTarget::Structure(f.pos)));
                 // ADR 0019 §8: a member with its own goal (a pure-support healer's heal-coverage tile)
@@ -2801,34 +3105,22 @@ fn apply_squad_decision(ctx: &mut SquadContext, decision: &SquadDecision, creep_
                     ..Default::default()
                 });
             }
-            // Apply the pure heal assignments (Step 7): resolve member indices → the target's creep
-            // ObjectId, then set each assigned healer's heal_target. (Indices match `member_views`,
-            // built in the same order as `ctx.members`.) Resolve first to avoid an aliasing borrow.
-            let heal_targets: Vec<(usize, Option<ObjectId<Creep>>)> = decision
-                .heal_assignments
-                .iter()
-                .map(|a| {
-                    let target_id = ctx.members.get(a.target_idx).and_then(|m| creep_owner.get(m.entity)).map(|co| co.owner);
-                    (a.healer_idx, target_id)
-                })
-                .collect();
-            for (healer_idx, target_id) in heal_targets {
-                if let Some(orders) = ctx.members.get_mut(healer_idx).and_then(|m| m.tick_orders.as_mut()) {
-                    orders.heal_target = target_id;
-                }
-            }
+            stamp_heal_assignments(ctx, decision, creep_owner);
         }
         // Forming / Moving (traveling, no engagement yet). When the manager has set a travel
         // anchor (O1), emit a bare `Formation` directive so the job's `MoveToRoom` follows the
         // anchor (cohesive travel) instead of self-driving per-creep. Without an anchor (no layout
-        // / no path) this is a no-op and the job falls back to plain room navigation.
+        // / no path) this is a no-op and the job falls back to plain room navigation. Existing
+        // per-member orders (rally hold / solo travel) are preserved — this arm only FILLS gaps.
         _ => {
-            if ctx.squad_path.is_some() {
+            if has_anchor {
                 for member in ctx.members.iter_mut() {
-                    member.tick_orders = Some(TickOrders {
-                        movement: TickMovement::Formation,
-                        ..Default::default()
-                    });
+                    if member.tick_orders.is_none() {
+                        member.tick_orders = Some(TickOrders {
+                            movement: TickMovement::Formation,
+                            ..Default::default()
+                        });
+                    }
                 }
             }
         }
@@ -3422,7 +3714,7 @@ mod tests {
         assert!(ctx.squad_path.is_some(), "precondition: the squad holds a formation anchor");
 
         // Reproduce the reconcile drain-gate exactly: stamp the decision, THEN the drain anchor-drop.
-        apply_squad_decision(&mut ctx, &drain_decision, &creep_owner, true);
+        apply_squad_decision(&mut ctx, &drain_decision, &creep_owner, r, true);
         if should_drop_anchor_for_drain(&drain_decision) {
             ctx.squad_path = None;
         }
@@ -3455,7 +3747,7 @@ mod tests {
             anchor: AnchorPath::new(nest, nest),
             room_route: vec![r],
         });
-        apply_squad_decision(&mut ctx2, &advance_decision, &creep_owner, true);
+        apply_squad_decision(&mut ctx2, &advance_decision, &creep_owner, r, true);
         if should_drop_anchor_for_drain(&advance_decision) {
             ctx2.squad_path = None;
         }
@@ -3484,7 +3776,7 @@ mod tests {
             anchor: AnchorPath::new(nest, nest),
             room_route: vec![r],
         });
-        apply_squad_decision(&mut ctx3, &solo_decision, &creep_owner, true);
+        apply_squad_decision(&mut ctx3, &solo_decision, &creep_owner, r, true);
         if should_drop_anchor_for_drain(&solo_decision) {
             ctx3.squad_path = None;
         }
@@ -3589,7 +3881,7 @@ mod tests {
         // Reproduce the reconcile Engaged arm EXACTLY: stamp the decision (D3 attack_target), THEN the D4
         // structure-siege anchor-drop (squad_manager.rs:2537-2539). The drain drop above does not fire here
         // (`movement` is Advance, not Drain), so this covers the NORMAL (non-drain) structure siege.
-        apply_squad_decision(&mut ctx, &decision, &creep_owner, true);
+        apply_squad_decision(&mut ctx, &decision, &creep_owner, r, true);
         if should_drop_anchor_for_drain(&decision) {
             ctx.squad_path = None;
         }
@@ -3634,7 +3926,7 @@ mod tests {
             anchor: AnchorPath::new(core, core),
             room_route: vec![r],
         });
-        apply_squad_decision(&mut ctx2, &creep_decision, &creep_owner, true);
+        apply_squad_decision(&mut ctx2, &creep_decision, &creep_owner, r, true);
         if should_drop_anchor_for_drain(&creep_decision) {
             ctx2.squad_path = None;
         }
@@ -3646,6 +3938,280 @@ mod tests {
         assert!(
             matches!(ctx2.members[0].tick_orders.as_ref().unwrap().attack_target, Some(AttackTarget::Creep(id)) if id == live_creep),
             "a creep focus stamps a Creep attack_target (creep-fights untouched)"
+        );
+    }
+
+    /// REC-004(a) — the lost-in-room carrier requires a REAL hostile threat, in-room presence, and the
+    /// genuine LOSE verdict. The threat gate is load-bearing: `present_force_wins_or_stalls` is FALSE at
+    /// `our_strength == 0`, so without it a declaimer / healers-only remnant standing in a QUIET room
+    /// would read "losing" and back the room off.
+    #[test]
+    fn lost_in_room_verdict_requires_a_real_threat() {
+        assert!(lost_in_room_verdict(true, true, false), "in-room + threat + losing = lost");
+        assert!(
+            !lost_in_room_verdict(true, false, false),
+            "NO hostile threat: a zero-strength roster in a quiet room (declaimer / healer remnant) is NOT losing"
+        );
+        assert!(!lost_in_room_verdict(true, true, true), "winning-or-stalling is never lost (the false-abandon guard)");
+        assert!(!lost_in_room_verdict(false, true, false), "not in the room: no real-intel verdict to carry");
+    }
+
+    /// REC-004(b) — the travel-departure clock is CUMULATIVE per generation: only a genuine engage (or
+    /// retire/reassign, which drop the tracker) may clear it. Pre-fix the stamp was deleted on every
+    /// non-traveling tick, so each transient `in_target_room` poke reset `MAX_TRAVEL_BUDGET` and the
+    /// enter→instant-retreat→re-enter loop was unbounded (the E1 border-tower geometry).
+    #[test]
+    fn departure_clock_clears_only_on_engage() {
+        assert!(!clear_departure_clock(true, false), "still traveling — never clear");
+        assert!(!clear_departure_clock(true, true), "still traveling — never clear");
+        assert!(
+            !clear_departure_clock(false, false),
+            "a transient in-room poke without engaging does NOT reset the travel budget (REC-004b)"
+        );
+        assert!(clear_departure_clock(false, true), "a genuine engage ends the travel phase — the clock may clear");
+    }
+
+    /// REC-036 — the enemy-stall streak mirrors the sim driver exactly (combat-agent `ManagedSimSquad`):
+    /// it grows while the total alive enemy hits do not DECREASE (out-healed / reinforced = no headway)
+    /// and resets on any decrease (damage landed / a kill). The threshold constant is shared with the
+    /// decision crate so live and sim report the stalemate input the same way.
+    #[test]
+    fn enemy_stall_streak_grows_only_without_hp_progress() {
+        assert_eq!(advance_enemy_stall(None, 5_000), (5_000, 0), "first in-room reading starts a fresh streak");
+        assert_eq!(advance_enemy_stall(Some((5_000, 3)), 5_000), (5_000, 4), "flat (out-healed) grows the streak");
+        assert_eq!(advance_enemy_stall(Some((5_000, 3)), 6_000), (6_000, 4), "healed-up/reinforced is also no headway");
+        assert_eq!(advance_enemy_stall(Some((5_000, 30)), 4_990), (4_990, 0), "any decrease (damage landed) resets");
+        // Parity pin: the shared threshold matches the sim driver's historical STALL_LIMIT (=40,
+        // combat-agent squad.rs) — the two surfaces must report the one stalemate input identically.
+        assert_eq!(screeps_combat_decision::ENEMY_STALL_TICKS, 40, "sim/live stall-threshold parity");
+    }
+
+    /// REC-017 — the renew-to-sufficiency target must COVER the D6a lifetime gate's requirement for every
+    /// in-range rally geometry (rally ≤ one room off the member→target corridor, ≤ one room short of the
+    /// target), or a held member renews short of the gate and zombies again. The incident: the flat
+    /// `RENEW_WHILE_FORMING_TTL` (300) saturated held members below the gate's `dist·50 + 100` from ~4
+    /// rooms out — renewed forever, never `Commit`, dropped from the quorum (a permanent N−1 slot).
+    #[test]
+    fn renew_required_ttl_covers_the_d6a_gate_requirement() {
+        use screeps_combat_decision::rally::{
+            lifetime_sufficient_for_deployment, CommitDecision, FIGHT_BUFFER, RALLY_TRAVEL_PER_ROOM, RENEW_TARGET_TTL,
+        };
+        for d in 0..=11u32 {
+            let renewed = renew_required_ttl(d);
+            assert!(
+                (RENEW_WHILE_FORMING_TTL..=RENEW_TARGET_TTL).contains(&renewed),
+                "renew target clamped to [floor, ceiling] (d={d}, got {renewed})"
+            );
+            // The rally-geometry cover: dist_to_rally ∈ {d−1, d, d+1}, rally_to_target ∈ {0, 1}.
+            for dtr in [d.saturating_sub(1), d, d + 1] {
+                for rtt in [0u32, 1] {
+                    let gate_required = (dtr + rtt) * RALLY_TRAVEL_PER_ROOM + FIGHT_BUFFER;
+                    assert!(
+                        renewed >= gate_required,
+                        "renew target {renewed} must reach the gate requirement {gate_required} (d={d} dtr={dtr} rtt={rtt})"
+                    );
+                    // And the gate itself RELEASES a member renewed to that target — the zombie is broken.
+                    assert_eq!(
+                        lifetime_sufficient_for_deployment(renewed, dtr, rtt, FIGHT_BUFFER, RENEW_TARGET_TTL),
+                        CommitDecision::Commit,
+                        "a member renewed to sufficiency commits (d={d} dtr={dtr} rtt={rtt})"
+                    );
+                }
+            }
+        }
+        // The REC-017 incident shape: at 4 rooms the gate needs ≥400 while the old flat floor stopped at 300.
+        assert!(renew_required_ttl(4) >= 400, "the ≥4-room target must renew past the old 300 saturation point");
+        // Far targets clamp to the shared renew ceiling (the gate's own `renew_ceiling`).
+        assert_eq!(renew_required_ttl(100), screeps_combat_decision::rally::RENEW_TARGET_TTL);
+    }
+
+    /// REC-017 — hold-for-renew fires ONLY at a home room (where a spawn exists for the renew pass). A
+    /// short-TTL member caught MID-FIELD commits instead of freezing at its current tile until old age
+    /// (the D6a zombie); a member already at the rally never holds (it would un-gather the bloc).
+    #[test]
+    fn hold_for_renew_only_at_a_home_room() {
+        use screeps_combat_decision::rally::CommitDecision;
+        assert!(should_hold_for_renew(CommitDecision::RenewThenCommit, true, false), "short + at home → hold + renew");
+        assert!(
+            !should_hold_for_renew(CommitDecision::RenewThenCommit, false, false),
+            "short + MID-FIELD → commit (no renew source there — holding was the zombie)"
+        );
+        assert!(!should_hold_for_renew(CommitDecision::Commit, true, false), "sufficient TTL never holds");
+        assert!(!should_hold_for_renew(CommitDecision::RenewThenCommit, true, true), "already at the rally never holds");
+        // Hopeless-at-home still holds: unreachable within MAX_SPAWN_DISTANCE geometry (renew_required_ttl
+        // ceilings below the gate only beyond in-range distances) — pinned so a change here is deliberate.
+        assert!(should_hold_for_renew(CommitDecision::Recycle, true, false));
+    }
+
+    /// REC-002 — the Engaged-arm order overwrite is GATED on per-member in-room presence. `decide_squad`
+    /// returns Engaged from `focus.is_some()` over CACHED target-room DTOs with no proximity gate, so
+    /// pre-fix this arm overwrote EVERY member's `tick_orders` — bulldozing the rally-hold / solo-travel
+    /// orders stamped earlier in `compute_squad_orders`, and the squad trickled in member-by-member
+    /// toward any scouted target (the P-OBJ #23 trickle the rally machinery exists to kill). RED before
+    /// the fix: the out-of-room member's `MoveTo(rally)` was replaced by Formation+attack orders.
+    #[test]
+    fn rec002_engaged_arm_preserves_out_of_room_travel_orders() {
+        use crate::combat::FocusTarget;
+        use crate::military::squad::SquadPath;
+        use screeps_combat_decision::bodies::CombatBodySpec;
+        use screeps_combat_decision::composition::{BodyType, FormationShape, SquadComposition, SquadRole, SquadSlot};
+        use screeps_rover::AnchorPath;
+        use specs::WorldExt;
+
+        let target = room("W5N5");
+        let p = |x: u8, y: u8, r: RoomName| Position::new(RoomCoordinate::new(x).unwrap(), RoomCoordinate::new(y).unwrap(), r);
+        let p_in = p(25, 25, target);
+        let p_out = p(25, 25, room("W7N5"));
+        let rally = p(25, 4, room("W6N5"));
+        let focus_pos = p(27, 25, target);
+
+        let ranged = BodyType::Sized(CombatBodySpec { ranged_attack: 4, ..Default::default() });
+        let comp = SquadComposition {
+            label: "Gate".into(),
+            slots: vec![
+                SquadSlot { role: SquadRole::RangedDPS, body_type: ranged },
+                SquadSlot { role: SquadRole::RangedDPS, body_type: ranged },
+            ],
+            formation_shape: FormationShape::Box2x2,
+            formation_mode: Default::default(),
+            retreat_threshold: 0.3,
+        };
+
+        let mut world = World::new();
+        world.register::<SquadContext>();
+        world.register::<CreepOwner>();
+        let m0 = world.create_entity().build();
+        let m1 = world.create_entity().build();
+        world.maintain();
+        let creep_owner = world.read_storage::<CreepOwner>();
+
+        let decision = SquadDecision {
+            state: SquadOrderState::Engaged,
+            focus: Some(FocusTarget { pos: focus_pos, id: None }),
+            movement: SquadMovement::Advance { goal: focus_pos, range: 0 },
+            center: Some(p_in),
+            cohesion_radius: 1,
+            heal_assignments: Vec::new(),
+            focus_assignments: Vec::new(),
+            orientation: None,
+            member_goals: Vec::new(),
+            member_intents: Vec::new(),
+        };
+
+        let mut ctx = SquadContext::from_composition(&comp);
+        ctx.add_member(m0, SquadRole::RangedDPS, 0);
+        ctx.add_member(m1, SquadRole::RangedDPS, 1);
+        ctx.get_member_mut(m0).unwrap().position = Some(p_in);
+        ctx.get_member_mut(m1).unwrap().position = Some(p_out);
+        // The solo-travel phase stamped the laggard's rally order earlier THIS tick.
+        ctx.get_member_mut(m1).unwrap().tick_orders =
+            Some(TickOrders { movement: TickMovement::MoveTo(rally), ..Default::default() });
+
+        apply_squad_decision(&mut ctx, &decision, &creep_owner, target, true);
+
+        // The IN-room member gets the engage stamp (attack target + formation directive).
+        let in_orders = ctx.get_member(m0).unwrap().tick_orders.as_ref().expect("in-room member is ordered");
+        assert!(matches!(in_orders.attack_target, Some(AttackTarget::Structure(t)) if t == focus_pos));
+        assert!(matches!(in_orders.movement, TickMovement::Formation));
+        // The OUT-of-room member KEEPS its solo-travel order (pre-fix: overwritten → the trickle).
+        let out_orders = ctx.get_member(m1).unwrap().tick_orders.as_ref().expect("laggard keeps its orders");
+        assert!(
+            matches!(out_orders.movement, TickMovement::MoveTo(r) if r == rally),
+            "the laggard's rally/travel order survives the Engaged overwrite (REC-002), got {:?}",
+            out_orders.movement
+        );
+        assert!(out_orders.attack_target.is_none(), "no attack stamp for a member that is not in the room");
+
+        // An out-of-room member with NO earlier order follows an advancing assault anchor (gap-fill —
+        // the pre-existing non-engaged-arm behavior, preserved for the latched cross-border assault).
+        let mut ctx2 = SquadContext::from_composition(&comp);
+        ctx2.add_member(m0, SquadRole::RangedDPS, 0);
+        ctx2.add_member(m1, SquadRole::RangedDPS, 1);
+        ctx2.get_member_mut(m0).unwrap().position = Some(p_in);
+        ctx2.get_member_mut(m1).unwrap().position = Some(p_out);
+        ctx2.squad_path = Some(SquadPath { anchor: AnchorPath::new(rally, focus_pos), room_route: vec![target] });
+        apply_squad_decision(&mut ctx2, &decision, &creep_owner, target, true);
+        let out2 = ctx2.get_member(m1).unwrap().tick_orders.as_ref().expect("anchored laggard is ordered");
+        assert!(
+            matches!(out2.movement, TickMovement::Formation),
+            "an order-less out-of-room member follows the assault anchor (gap-fill)"
+        );
+    }
+
+    /// REC-016 — the Retreating arm consumes the kernel's threat-priced kite goal (`decision.movement`)
+    /// on the sim-parity path (`Formation` movement + `squad_movement`), drops the formation anchor (the
+    /// slot-based formation mover IGNORES `squad_movement`), and gives an already-out-of-room member a
+    /// local `Flee` (a cross-room kite goal is meaningless to it). RED before the fix: every member got
+    /// `MoveTo(own centroid)` — the squad "retreated" in place inside tower range, and a cross-room
+    /// roster's in-room coordinate average was stamped into the first member's room (garbage).
+    #[test]
+    fn rec016_retreating_arm_stamps_kite_goal_and_drops_anchor() {
+        use crate::military::squad::SquadPath;
+        use screeps_combat_decision::bodies::CombatBodySpec;
+        use screeps_combat_decision::composition::{BodyType, FormationShape, SquadComposition, SquadRole, SquadSlot};
+        use screeps_rover::AnchorPath;
+        use specs::WorldExt;
+
+        let target = room("W5N5");
+        let p = |x: u8, y: u8, r: RoomName| Position::new(RoomCoordinate::new(x).unwrap(), RoomCoordinate::new(y).unwrap(), r);
+        let p_in = p(30, 25, target);
+        let p_out = p(25, 25, room("W6N5"));
+        let kite_goal = p(5, 25, target);
+
+        let ranged = BodyType::Sized(CombatBodySpec { ranged_attack: 4, ..Default::default() });
+        let comp = SquadComposition {
+            label: "Withdraw".into(),
+            slots: vec![
+                SquadSlot { role: SquadRole::RangedDPS, body_type: ranged },
+                SquadSlot { role: SquadRole::RangedDPS, body_type: ranged },
+            ],
+            formation_shape: FormationShape::Box2x2,
+            formation_mode: Default::default(),
+            retreat_threshold: 0.3,
+        };
+
+        let mut world = World::new();
+        world.register::<SquadContext>();
+        world.register::<CreepOwner>();
+        let m0 = world.create_entity().build();
+        let m1 = world.create_entity().build();
+        world.maintain();
+        let creep_owner = world.read_storage::<CreepOwner>();
+
+        let decision = SquadDecision {
+            state: SquadOrderState::Retreating,
+            focus: None,
+            movement: SquadMovement::Kite { goal: kite_goal },
+            center: Some(p_in),
+            cohesion_radius: 1,
+            heal_assignments: Vec::new(),
+            focus_assignments: Vec::new(),
+            orientation: None,
+            member_goals: Vec::new(),
+            member_intents: Vec::new(),
+        };
+
+        let mut ctx = SquadContext::from_composition(&comp);
+        ctx.add_member(m0, SquadRole::RangedDPS, 0);
+        ctx.add_member(m1, SquadRole::RangedDPS, 1);
+        ctx.get_member_mut(m0).unwrap().position = Some(p_in);
+        ctx.get_member_mut(m1).unwrap().position = Some(p_out);
+        ctx.squad_path = Some(SquadPath { anchor: AnchorPath::new(p_in, kite_goal), room_route: vec![target] });
+
+        apply_squad_decision(&mut ctx, &decision, &creep_owner, target, true);
+
+        assert!(ctx.squad_path.is_none(), "the anchor is dropped so the anchorless job path reads the kite goal");
+        let in_orders = ctx.get_member(m0).unwrap().tick_orders.as_ref().expect("in-room member is ordered");
+        assert!(matches!(in_orders.movement, TickMovement::Formation), "sim-parity routing: Formation → decide_movement");
+        assert!(
+            matches!(in_orders.squad_movement, SquadMovement::Kite { goal } if goal == kite_goal),
+            "the kernel's threat-priced kite goal is CONSUMED live (previously computed and discarded)"
+        );
+        assert_eq!(in_orders.squad_center, Some(p_in), "the cohesion frame rides along for the block withdraw");
+        let out_orders = ctx.get_member(m1).unwrap().tick_orders.as_ref().expect("out-of-room member is ordered");
+        assert!(
+            matches!(out_orders.movement, TickMovement::Flee),
+            "an out-of-room member withdraws locally — no cross-room garbage goal (the old centroid bug)"
         );
     }
 }
