@@ -366,9 +366,28 @@ impl WarOperation {
                 // No de-dup guard needed: the `Defend` objective upsert below is
                 // idempotent (keyed by room), so re-asserting each scan is safe.
 
+                // A hostile WORK part is a dismantle threat — but only where we own structures for it to tear
+                // down (ramparts/walls/base). Gate the dismantle danger on our structure presence: a
+                // dismantler in our defended base breaches us and must be killed; one where we hold nothing has
+                // nothing to dismantle and is harmless (the same principle as the ADR 0037 towered-neighbour
+                // suppression, made explicit). Attack/RangedAttack stay dangerous regardless — they threaten
+                // our CREEPS, not structures.
+                let has_our_structures = room_data
+                    .get_structures()
+                    .map(|s| {
+                        !s.ramparts().is_empty()
+                            || !s.walls().is_empty()
+                            || !s.spawns().is_empty()
+                            || !s.towers().is_empty()
+                            || !s.extensions().is_empty()
+                            || !s.storages().is_empty()
+                    })
+                    .unwrap_or(true); // an owned + visible room normally has a spawn — default to defending
+
                 let mut estimated_dps: f32 = 0.0;
                 let mut estimated_heal: f32 = 0.0;
                 let mut any_boosted = false;
+                let mut work_parts: usize = 0;
 
                 for hostile in &hostiles {
                     for part_info in hostile.body().iter() {
@@ -382,10 +401,12 @@ impl WarOperation {
                             Part::Attack => estimated_dps += 30.0,
                             Part::RangedAttack => estimated_dps += 10.0,
                             Part::Heal => estimated_heal += 12.0,
+                            Part::Work => work_parts += 1,
                             _ => {}
                         }
                     }
                 }
+                estimated_dps += screeps_combat_decision::war_decision::dismantle_danger(work_parts, has_our_structures);
 
                 Some(DefenseNeed {
                     room_entity: entity,
