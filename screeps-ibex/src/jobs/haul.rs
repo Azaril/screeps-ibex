@@ -232,7 +232,8 @@ impl Delivery {
             }
         }
 
-        tick_delivery(tick_context, &mut self.deposits, HaulState::idle)
+        // Civilian: the delivery leg bids its carried-cargo rate on the numeric lane (decision (4)).
+        tick_delivery(tick_context, &mut self.deposits, true, HaulState::idle)
     }
 }
 

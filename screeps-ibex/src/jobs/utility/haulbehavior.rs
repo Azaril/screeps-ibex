@@ -417,11 +417,17 @@ where
 
     if !creep.pos().is_near_to(pos) {
         if action_flags.consume(SimultaneousActionFlags::MOVE) {
+            // Live w-as-priority (ADR 0033 §D5.4 hauler arm, ratified decision (4)): the pickup
+            // leg bids its expected cargo rate in the (Low, Normal) numeric band. Every caller
+            // of this helper is CIVILIAN (haul/harvest/upgrade/build — see `tick_delivery`'s
+            // `bid_cargo_value` for the one military-shared seam).
+            let bid = crate::pathing::value::haul_move_bid(creep, pos);
             tick_context
                 .runtime_data
                 .movement
                 .move_to(tick_context.runtime_data.creep_entity, pos)
-                .range(1);
+                .range(1)
+                .priority_value(bid);
         }
 
         return None;
@@ -501,8 +507,18 @@ pub fn visualize_pickup(_describe_data: &mut JobDescribeData, _ticket: &Transfer
     // Visualization is handled by the central RenderSystem.
 }
 
+/// `bid_cargo_value`: whether the delivery leg's move request bids the quantized §D5.4 cargo
+/// rate on the numeric priority lane (ADR 0033 live adoption, ratified decision (4)). CIVILIAN
+/// callers (haul/harvest) pass `true`; the MILITARY caller (dismantle — salvage delivery) passes
+/// `false` and keeps its enum tier THIS pass: military w needs war-layer objective EV, frozen
+/// with operations/war.rs (unblock-after-merge).
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn tick_delivery<F, R>(tick_context: &mut JobTickContext, tickets: &mut Vec<TransferDepositTicket>, next_state: F) -> Option<R>
+pub fn tick_delivery<F, R>(
+    tick_context: &mut JobTickContext,
+    tickets: &mut Vec<TransferDepositTicket>,
+    bid_cargo_value: bool,
+    next_state: F,
+) -> Option<R>
 where
     F: Fn() -> R,
 {
@@ -518,11 +534,14 @@ where
 
             if !creep_pos.is_near_to(pos) {
                 if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
-                    tick_context
+                    let mut builder = tick_context
                         .runtime_data
                         .movement
-                        .move_to(tick_context.runtime_data.creep_entity, pos)
-                        .range(1);
+                        .move_to(tick_context.runtime_data.creep_entity, pos);
+                    builder.range(1);
+                    if bid_cargo_value {
+                        builder.priority_value(crate::pathing::value::haul_move_bid(creep, pos));
+                    }
                 }
 
                 return None;
@@ -579,11 +598,15 @@ where
 
         if !creep_pos.is_near_to(pos) {
             if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
+                // Sole caller is link-mine (CIVILIAN) dumping to its link/container: bid the
+                // carried-cargo rate like every other haul leg (decision (4)).
+                let bid = crate::pathing::value::haul_move_bid(creep, pos);
                 tick_context
                     .runtime_data
                     .movement
                     .move_to(tick_context.runtime_data.creep_entity, pos)
-                    .range(1);
+                    .range(1)
+                    .priority_value(bid);
             }
 
             return None;

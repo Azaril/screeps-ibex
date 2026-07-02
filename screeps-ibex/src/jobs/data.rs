@@ -50,6 +50,33 @@ impl JobData {
         }
     }
 
+    /// MILITARY vs CIVILIAN for the live idle-disposition split (ADR 0033 M5 live adoption,
+    /// operator-ratified 2026-07-01 decision (3)): a request-less MILITARY creep is HOLDING —
+    /// an in-position fighter that decided to act, not move, this tick — and registers as an
+    /// `Immovable` hold (never displaced; shoving it out of formation was the combat-agent
+    /// `register_idle_creeps: false` finding, combat-agent/src/pathing.rs `combat_mover_config`).
+    /// A request-less CIVILIAN is parked junk and registers as a shoveable Low idle
+    /// (`set_idle_creep_positions`). Conservative by construction: war-adjacent jobs
+    /// (squad combat, raid/dismantle in hostile rooms, de-claim) are military; pure economy
+    /// (harvest/haul/build/upgrade/mine) and unarmed solo travellers (scout/reserve/claim) are
+    /// civilian. Callers must default UNKNOWN/no-job to MILITARY — mis-classifying a fighter as
+    /// shoveable breaks formations, a hauler held `Immovable` merely costs a detour. Exhaustive
+    /// match (no wildcard) so a new job variant forces this decision.
+    pub fn is_military(&self) -> bool {
+        match self {
+            JobData::SquadCombat(_) | JobData::Dismantle(_) | JobData::Declaim(_) => true,
+            JobData::Harvest(_)
+            | JobData::Upgrade(_)
+            | JobData::Build(_)
+            | JobData::StaticMine(_)
+            | JobData::LinkMine(_)
+            | JobData::Haul(_)
+            | JobData::Scout(_)
+            | JobData::Reserve(_)
+            | JobData::Claim(_) => false,
+        }
+    }
+
     pub fn as_job(&mut self) -> &mut dyn Job {
         match self {
             JobData::Harvest(ref mut data) => data,

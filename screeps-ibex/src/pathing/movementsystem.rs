@@ -23,6 +23,7 @@ pub struct MovementUpdateSystemData<'a> {
     movement_results: WriteExpect<'a, MovementResults<Entity>>,
     creep_owner: ReadStorage<'a, CreepOwner>,
     creep_movement_data: WriteStorage<'a, CreepRoverData>,
+    job_data: ReadStorage<'a, crate::jobs::data::JobData>,
     room_data: ReadStorage<'a, RoomData>,
     mapping: Read<'a, EntityMappingData>,
     cost_matrix_cache: WriteExpect<'a, CostMatrixCache>,
@@ -222,7 +223,64 @@ impl<'a> System<'a> for MovementUpdateSystem {
     type SystemData = MovementUpdateSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        let movement_data = std::mem::replace(&mut *data.movement, MovementData::new());
+        let mut movement_data = std::mem::replace(&mut *data.movement, MovementData::new());
+
+        // IDLE DISPOSITION (ADR 0033 §M4 F2 / M5 live adoption, operator-ratified 2026-07-01
+        // decision (3)): every living owned creep with NO movement request this tick becomes a
+        // resolver-known stationary occupant, split by job class (`JobData::is_military`):
+        //
+        //  - MILITARY → an `Immovable` HOLD request (move_to own tile, range 0): NEVER displaced
+        //    (try_shove's enum check, rover resolver.rs) — a request-less fighter is holding
+        //    formation, and shoving it out was the combat-sim finding that forced combat-agent's
+        //    `register_idle_creeps: false` opt-out. `allow_shove(true)` does NOT consent to
+        //    displacement here (the `Immovable` enum vetoes first); it only keeps the arrived
+        //    hold in the resolver's occupancy view — Pass 1 drops no-shove/no-swap arrived
+        //    requests to `Arrived` without a `ResolvedCreep` entry, which would leave the holder
+        //    invisible and movers pathing into it optimistically (the `failed_into_parked`
+        //    class). `allow_swap(false)` is inert defence-in-depth (no desired tile ⇒ never a
+        //    swap candidate).
+        //  - CIVILIAN → a shoveable Low idle via `set_idle_creep_positions` (below): movers route
+        //    around it deliberately, displace it outright when they carry real priority
+        //    (synthesized lowest-anchor entries), and idle-denial dances still climb the stuck
+        //    ladder (denial-as-stuck) — the two mechanisms that made registration safe in the
+        //    rover-eval corpus.
+        //  - UNKNOWN/no job → MILITARY: mis-classifying a fighter as shoveable breaks formations;
+        //    a parked civilian held `Immovable` merely costs passers-by a detour.
+        //
+        // CPU shape: ONE pass over owned creeps; `resolve()` + `pos()` paid only for creeps
+        // WITHOUT a request (requesters skip at `contains_request`). Holds add to
+        // `request_count()` and thus slightly overstate the 0.2-CPU/move reserve below (they
+        // never issue a move) — conservative direction, small military-idle counts. The idle map
+        // is the only per-tick allocation. Creeps with `CreepOwner` are post-spawn by
+        // construction (`WaitForSpawnSystem` inserts it only once `spawning()` is false).
+        //
+        // Determinism: the specs join iterates ascending entity index; the idle map keeps the
+        // first-seen (lowest) entity on a (degenerate, live-impossible) stacked tile via
+        // `or_insert` — a pure function of the world, never of HashMap iteration order (the
+        // sim-core `rover_driver` registration pattern, kept in LIVE parity).
+        let mut idle_creep_positions: std::collections::HashMap<Position, Entity> = std::collections::HashMap::new();
+        for (entity, creep_owner) in (&data.entities, &data.creep_owner).join() {
+            if movement_data.contains_request(&entity) {
+                continue;
+            }
+            let creep = match creep_owner.id().resolve() {
+                Some(creep) => creep,
+                None => continue, // dead this tick; CleanupCreepsSystem reaps the entity
+            };
+            let creep_pos = HasPosition::pos(&creep);
+
+            let military = data.job_data.get(entity).map(|job| job.is_military()).unwrap_or(true);
+            if military {
+                movement_data
+                    .move_to(entity, creep_pos)
+                    .range(0)
+                    .priority(MovementPriority::Immovable)
+                    .allow_shove(true)
+                    .allow_swap(false);
+            } else {
+                idle_creep_positions.entry(creep_pos).or_insert(entity);
+            }
+        }
 
         let mut external = MovementSystemExternalProvider {
             entities: &data.entities,
@@ -249,6 +307,10 @@ impl<'a> System<'a> for MovementUpdateSystem {
         system.set_reuse_path_length(pathing_features.reuse_path_length);
         system.set_max_shove_depth(pathing_features.max_shove_depth);
         system.set_friendly_creep_distance(pathing_features.friendly_creep_distance);
+
+        // Civilian idlers collected above: consumed by exactly one process() (rover takes the
+        // map per tick, so a stale registration can never leak).
+        system.set_idle_creep_positions(idle_creep_positions);
 
         let tick_limit = screeps::game::cpu::tick_limit();
         let get_cpu = screeps::game::cpu::get_used;

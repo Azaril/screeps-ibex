@@ -135,7 +135,9 @@ impl Delivery {
     }
 
     fn tick(&mut self, _state_context: &mut DismantleJobContext, tick_context: &mut JobTickContext) -> Option<DismantleState> {
-        tick_delivery(tick_context, &mut self.deposits, DismantleState::finished_delivery)
+        // MILITARY (JobData::is_military): no cargo-value bid — dismantle keeps its enum tier
+        // until military w lands (war-layer EV, frozen with operations/war.rs).
+        tick_delivery(tick_context, &mut self.deposits, false, DismantleState::finished_delivery)
     }
 }
 

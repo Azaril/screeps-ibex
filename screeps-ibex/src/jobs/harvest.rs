@@ -265,7 +265,8 @@ impl Delivery {
             consume_resource_from_deposits(&mut self.deposits, ResourceType::Energy, consumed_energy);
         }
 
-        tick_delivery(tick_context, &mut self.deposits, HarvestState::finished_delivery)
+        // Civilian: the delivery leg bids its carried-cargo rate on the numeric lane (decision (4)).
+        tick_delivery(tick_context, &mut self.deposits, true, HarvestState::finished_delivery)
     }
 }
 
