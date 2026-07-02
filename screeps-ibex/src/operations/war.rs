@@ -1778,7 +1778,38 @@ impl WarOperation {
                                 Some((kind, priority, sized, plan.assessment.mode))
                             }
                         } else {
-                            info!("[War]   Skip {} -- can't field the required force at {} energy; defer", candidate.room, member_energy);
+                            // ADR 0031 §5 #38 — ESCALATE-vs-ABANDON on `assemble_force` = None. The target is
+                            // winnable (or always-field) and reachable, but no in-range home can BUILD the
+                            // required force: either every rung exceeds the 8-member cap (the composition
+                            // layer's terminal defer — a higher-power response is a strategy-layer / multi-squad
+                            // call, D10) or no member fields at this home's `member_energy`. PRE-#38 this was a
+                            // silent per-scan re-try (log + skip, re-upserted next scan forever). Make the
+                            // decision EXPLICIT + LOUD + COUNTED, never a silent drop:
+                            //   - ABANDON: record a give-up (`mark_unwinnable` — the SAME counted, exponentially
+                            //     backed-off latch a mid-fight abandon uses, D4/D5), so the top-of-loop
+                            //     `is_unwinnable_now` skip stops the spin instead of re-fielding every scan.
+                            //   - ESCALATE (the hedge, not a permanent give-up): register a re-scout so the room
+                            //     is re-assessed with FRESH intel when the backoff expires (a grown home may
+                            //     then afford it, or better intel may shrink the required force) — mirroring the
+                            //     D5 backoff re-scout (register-don't-dispatch, observer-preferred). `clear_unwinnable`
+                            //     on a later winnable re-scan drops the record, so a genuinely-winnable room recovers.
+                            // The None has two structural causes (the assembler's terminal defers) — the required
+                            // force exceeds the single-squad member cap (a strategy-layer multi-squad call) OR no
+                            // member fields at this home's energy — and both take the SAME abandon+backoff+re-scout.
+                            warn!(
+                                "[War]   Abandon {} -- can't field the required force at {} energy (over the single-squad cap or unaffordable per-member); backing off + re-scout (ADR 0031 #38)",
+                                candidate.room, member_energy
+                            );
+                            system_data.combat_objective_queue.mark_unwinnable(candidate.room, current_tick);
+                            let has_attack_objective = system_data
+                                .combat_objective_queue
+                                .objectives
+                                .iter()
+                                .any(|o| o.owner == ObjectiveOwner::Attack && o.kind.room() == candidate.room);
+                            let rescout_priority = offense_rescout_priority(has_attack_objective || candidate.target_pos.is_some());
+                            system_data
+                                .visibility
+                                .request(VisibilityRequest::new(candidate.room, rescout_priority, VisibilityRequestFlags::ALL));
                             None
                         }
                     }
@@ -2770,6 +2801,30 @@ mod tests {
         for _ in 0..16 {
             assert_eq!(would_defer_commit(&c, true, now), first, "defer decision must be deterministic");
         }
+    }
+
+    /// ADR 0031 §5 #38 PIN — ESCALATE-vs-ABANDON on `assemble_force` = None. The offense loop needs `game::*`
+    /// + a full SystemData, so the loop itself is not unit-testable; this pins the CONTRACT the loop's abandon
+    /// branch relies on: after `mark_unwinnable(room)` (the counted, backed-off ABANDON the None site now
+    /// records instead of silently re-trying every scan), the SAME `is_unwinnable_now` check at the TOP of the
+    /// loop SUPPRESSES re-selection of that room (no re-field spin) — and `clear_unwinnable` on a later winnable
+    /// re-scan drops the record so a genuinely-winnable room RECOVERS (the escalate hedge closes the loop). The
+    /// backoff math itself is pinned in `objective_queue.rs`; this pins that the war.rs site closes the spin.
+    #[test]
+    fn abandon_on_unfieldable_force_suppresses_respin_and_recovers() {
+        use crate::military::objective_queue::CombatObjectiveQueue;
+        let mut q = CombatObjectiveQueue::default();
+        let room: RoomName = "W4N5".parse().unwrap();
+        let now = 50_000u32;
+        // Before the abandon the room is selectable (not backed off).
+        assert!(!q.is_unwinnable_now(room, now), "a fresh room is not in backoff");
+        // The #38 abandon: record the give-up (loud + counted). The top-of-loop `is_unwinnable_now` skip then
+        // suppresses the per-scan re-field spin the silent-continue used to cause.
+        q.mark_unwinnable(room, now);
+        assert!(q.is_unwinnable_now(room, now), "an abandoned room is suppressed from re-selection (no re-field spin)");
+        // The escalate hedge: a genuinely-winnable room recovers when its record is cleared (the winnable re-scan).
+        q.clear_unwinnable(room);
+        assert!(!q.is_unwinnable_now(room, now), "clearing the give-up (winnable re-scan) recovers the room — never a permanent abandon");
     }
 
     // ── ADR 0037 Stage T3: route a towered neighbour to the offense/winnability oracle (MMO-SAFE) ──────
