@@ -388,6 +388,31 @@ fn repair_entity_integrity(world: &mut World) {
         }
     }
 
+    // ── JobData: scrub the SquadCombatJob→squad reference ─────────────
+    //
+    // REC-009b: `SquadCombatJob.context.squad_entity` is a marker-converted `EntityOption<Entity>` so it
+    // round-trips through the `SerializeMarker` natively — but the specs `ConvertSaveload for Entity`
+    // marker lookup PANICS at serialize if the target squad has no marker (a retired/deleted squad whose
+    // marker is gone; see [[ecs-dangling-ref-serialize]]). A creep whose squad retired mid-tick still
+    // carries that ref until the next manager pass, so scrub it to `None` here — the same serialize-time
+    // backstop the mission/operation/squad refs above rely on, with the same `is_valid` predicate.
+    {
+        let entities = world.entities();
+        let markers = world.read_storage::<SerializeMarker>();
+        let mut jobs = world.write_storage::<JobData>();
+
+        let is_valid = |e: Entity| -> bool { entities.is_alive(e) && markers.get(e).is_some() };
+
+        for (entity, job) in (&entities, &mut jobs).join() {
+            if let Some(squad) = job.squad_ref() {
+                if !is_valid(squad) {
+                    error!("INTEGRITY: dead squad ref {:?} scrubbed from SquadCombatJob on entity {:?}", squad, entity);
+                    job.repair_entity_refs(&is_valid);
+                }
+            }
+        }
+    }
+
     // ── Repair dead children (clear via child_complete) ─────────────────
     if !dead_children.is_empty() {
         let missions = world.read_storage::<MissionData>();
@@ -685,7 +710,17 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// v23 payload saved before those fields would misalign silently at the tip. One loud
 /// reset instead (folds into the pending MMO deploy reset). Found by the 2026-07-01
 /// reconciliation review (REC-001, docs/reviews/reconciliation-2026-07-01.md).
-const WORLD_FORMAT_VERSION: u32 = 24;
+/// 25 = reload-stable squad identity, native fix (REC-009b): `SquadCombatJob`'s `squad_entity` changes
+/// from a plain-serde `SquadRef { index, generation }` to a marker-converted `EntityOption<Entity>`, and
+/// the enclosing `SquadCombatJob`/`SquadCombatJobContext` switch from `#[derive(Serialize, Deserialize)]`
+/// to `#[derive(ConvertSaveload)]` so `JobData`'s existing `ConvertSaveload` derive remaps the ref through
+/// the `SerializeMarker` on save/load (the same round-trip `SquadContext.members` uses). This makes the
+/// ref survive a VM reload natively (replacing the interim per-tick restamp) — but it is a positional
+/// shape change inside the serialized `JobData` (a struct field type change + the plain-serde→marker-id
+/// encoding change), so a v24 payload can't decode → one loud reset (folds into the pending MMO deploy
+/// reset). The specs `ConvertSaveload for Entity` dangling-serialize panic is guarded by scrubbing a
+/// dead/unmarked squad ref to `None` in `repair_entity_integrity` before serialize.
+const WORLD_FORMAT_VERSION: u32 = 25;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode

@@ -1113,8 +1113,9 @@ fn solve_global_reassignment(
 /// donor is now EMPTY delete its squad entity DIRECTLY via `world.delete_entity` (the SAME route
 /// `retire_squad` uses — neither goes through `EntityCleanupQueue`). The direct delete is SAFE precisely
 /// because the donor has shed ALL its members (the creeps were TRANSFERRED, not orphaned/deleted): an empty
-/// donor holds no live member refs, and creeps hold a non-`ConvertSaveload` `Option<SquadRef>` (validate-on-
-/// access), so no dangling Entity ref survives to serialize. The now-filled receiver slot is dropped from the
+/// donor holds no live member refs, and any creep whose job still points at the deleted donor is scrubbed to
+/// `None` by the serialize-time `repair_entity_integrity` backstop (REC-009b), so no dangling Entity ref
+/// survives to serialize. The now-filled receiver slot is dropped from the
 /// spawn queue automatically: Phase B checks `is_slot_filled(slot_index)`, which becomes true once the
 /// transferred member occupies it.
 ///
@@ -1883,30 +1884,12 @@ impl<'a> System<'a> for SquadManagerSystem {
             live_managed.push((squad_entity, obj_id));
         }
 
-        // ── REC-009 (reload-stable squad identity — the LIGHT fix): re-stamp every rostered member's
-        // job squad-ref from `SquadContext.members` each tick. The job's serialized `SquadRef` (raw
-        // index + generation) cannot survive a VM reload — marker-recreated entities get fresh
-        // generations, so validate-on-access fails on every member and `recall_decision` walks the WHOLE
-        // roster home to recycle mid-assault (a full squad disband per reload). `SquadContext.members`
-        // is `ConvertSaveload`-remapped (correct post-reload) and the manager owns BOTH sides, so
-        // members→jobs is re-coupled here from the surviving side — before any job runs this tick
-        // (`SquadManagerSystem` is ordered ahead of `RunJobSystem` in `for_each_system!`, so no member
-        // ever observes its own stale ref). Unconditional (two integer stores per member per tick — no
-        // resolve/compare needed). The DEEPER alternative is a minted stable `SquadId` (persisted
-        // counter + a per-tick id→Entity map, the planned identity I1/I2 work); this per-tick restamp is
-        // the bounded interim that removes the reload-disband class without a serialized-shape change. ──
-        for (squad_entity, _obj_id) in &live_managed {
-            let member_entities: Vec<Entity> = data
-                .squad_contexts
-                .get(*squad_entity)
-                .map(|ctx| ctx.members.iter().map(|m| m.entity).collect())
-                .unwrap_or_default();
-            for member in member_entities {
-                if let Some(crate::jobs::data::JobData::SquadCombat(job)) = data.jobs.get_mut(member) {
-                    job.restamp_squad_ref(*squad_entity);
-                }
-            }
-        }
+        // REC-009b: the interim per-tick members→jobs restamp is GONE. The job's `squad_entity` is now the
+        // marker-converted `EntityOption<Entity>` (serialize.rs) inside the `ConvertSaveload`-derived
+        // `JobData`, so it round-trips through the `SerializeMarker` natively — the reloaded job resolves to
+        // the reloaded squad entity with no manual re-coupling. (The `repair_entity_integrity` backstop
+        // scrubs a dead/unmarked squad ref to `None` before serialize, guarding the specs
+        // `ConvertSaveload for Entity` dangling panic.)
 
         // ── Phase B: field rosters (spawn unfilled slots) for live squads. ──
         for (squad_entity, obj_id) in &live_managed {

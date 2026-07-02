@@ -4,7 +4,8 @@
 //! and the live mover (screeps-rover, priced by
 //! `MovementSystemExternalProvider::get_room_cost` in
 //! `pathing/movementsystem.rs`) must agree on which rooms an economy creep may
-//! traverse. ADR 0038 made `is_claim_feasible` the SOLE reach gate for
+//! traverse. ADR 0038 made `claim_route_feasible` (priced under
+//! `RoutePolicy::ClaimCorridor`) the SOLE reach gate for
 //! expansion, so an oracle that prices a hostile corridor as merely expensive
 //! approves routes the claimer's own mover (`HostileBehavior::Deny`) refuses
 //! to walk — claimers die en route or `PathNotFound`-loop, the soft-stall

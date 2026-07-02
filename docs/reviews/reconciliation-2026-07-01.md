@@ -36,6 +36,17 @@ All findings were fixed across two parallel-lane waves, each gated by the full t
 - **0031b tournament re-tune** under `w_energy=1.0` (REC-011 changed the EV-selection surface). Requires running the `#[ignore]`d eval sweeps; a separate compute task.
 - **Standing backlog (§6)** — the docs-declared open work (0008a tiers, 0020 §11 S5–S7, 0028 K3/K4 wiring, 0030 EngagementTempo, 0031 Tier-2 archetype, etc.) is unchanged; these were never in scope for this reconciliation's fix waves.
 
+**LANDED — Close-out wave (2026-07-02, workflow `wf_014bad8d-c70`, one sub-agent per task + adversarial review across correctness/design/generalization/OSS-quality):**
+- **REC-009b** — native marker fix: `SquadRef` → `EntityOption<Entity>` (marker-converted via `JobData`'s `ConvertSaveload`), `repair_entity_integrity` scrubs a dead squad ref pre-serialize, restamp deleted, **WFV 24 → 25**, full serialize/deserialize round-trip pin. Both reviewers PASS (2 accepted MINOR nits: a defensively-redundant `is_valid` guard; a `NoError` import-attribute inconsistency vs sibling job modules — non-blocking, build warning-clean).
+- **REC-068** — RESOLVED = **not-a-defect** (SK logs accurately describe the post-REC-034 paths; no fabricated change, EP-8.2).
+- **REC-071r** — routepricing.rs stale `is_claim_feasible` comment corrected.
+
+**REC-062 — REVERTED, deferred (2026-07-02).** The out-healed-turtle disengage was implemented and its first cut caught a BLOCKING structure-siege bug in review (fixed), but the full harness battery then exposed a *second, deeper* regression: `positioning_oscillation_stays_low_across_designed` failed at **designed#0 = 17.6%** (baseline 0.5%) — a period-2 engage↔retreat oscillation, exactly the behavior the operator forbids. Root cause: the trigger's structure exemption is `our_dismantle == 0` (WORK only), but a **ranged/attack squad razing a structure** with no creeps present has `our_dismantle == 0`, `enemy_strength == 0` (no killable creeps), `harmless_incoming` (no incoming), and a falsely-tripped `enemy_stalled` (which watches only *creep* HP, flat during a raze) → it disengages from a target it is actively destroying, then re-engages. A guard on `enemy_strength == 0` doesn't help (it's *true* for a pure structure). **The `enemy_stalled` signal (creep-HP-only) fundamentally cannot distinguish an unrazable turtle from a slow ranged structure-raze; a correct fix needs a structure-progress signal (target-hits-not-decreasing) plumbed through the harness + squad_manager — real work not warranted for a P3.** T-B's `combat-decision/src/lib.rs` change was reverted to `aa02581`; the harness is green again. **REC-062 stays OPEN.** (REC-036's kiting/reinforcement stalemate disengage remains live and correct.)
+
+**Checkbox reconciliation (2026-07-02):** §2/§3b/§4 checkboxes were flipped to match reality — they had gone stale (this doc's own §0 said DONE while the detail boxes still read open, the exact aggregator-drift the review is about). Every ticked box corresponds to a committed fix; the non-`[x]` boxes are **REC-052 `[~]`** (partial — (c) landed, (a)/(b) deliberately not fixed) and **REC-062 `[ ]`** (reverted/deferred, above).
+
+**STILL OPEN after close-out:** **REC-062** (deferred — needs a structure-progress signal, above), **REC-052(a)(b)** (accepted-as-is, load-bearing), and the **0031b re-tune** (tuning, separate compute task). Everything else in §2–§4 and §3a/§3b is committed.
+
 **NOT TOUCHED (other workstreams, left uncommitted in-tree):** `features.rs` (expansion/economic-claim ADR 0038 D9 tuning), `docs/design/0040-*` (stress-energy/economy-sim ADR).
 
 The per-finding checkboxes in §2 and the ledger entries in §3/§3a/§3b are the detailed record; this section is the authoritative at-a-glance status.
@@ -67,77 +78,77 @@ Work top-down. M-A gates **any** deploy (including Docker soak of current HEAD).
 - [x] **REC-001** Bump `WORLD_FORMAT_VERSION` 23→24 (two unbumped serialized-shape changes in rover `StuckState`) — landed `ce7069e`; attributions corrected per REC-060
 
 ### M-B — Squad lifecycle liveness (immortal/zombie/trickle squads)
-- [ ] **REC-002** Gate the Engaged-arm order overwrite on in-room presence (rally/quorum bypass)
-- [ ] **REC-003** Bound `Retreating` (absorbing state + indefinitely refreshed lease)
-- [ ] **REC-004** Stamp `lost_in_room` on first-contact LOSE; stop resetting the travel clock per room poke
-- [ ] **REC-005** Producer re-assert must never wipe the commitment-lease deadline
+- [x] **REC-002** Gate the Engaged-arm order overwrite on in-room presence (rally/quorum bypass)
+- [x] **REC-003** Bound `Retreating` (absorbing state + indefinitely refreshed lease)
+- [x] **REC-004** Stamp `lost_in_room` on first-contact LOSE; stop resetting the travel clock per room poke
+- [x] **REC-005** Producer re-assert must never wipe the commitment-lease deadline
 - [x] **REC-009** Reload-stable squad identity — interim per-tick re-stamp LANDED (`7180573`)
-- [ ] **REC-009b** Proper native fix: `SquadRef` → `EntityOption<Entity>` (marker-converted) + backstop scrub + delete restamp + **WFV 24→25** *(reconciled from the entity-handling facts, 2026-07-02; see §3 REC-009)*
-- [ ] **REC-016** Consume the kite/retreat goal in live retreat orders (stop centroid-huddling under fire)
-- [ ] **REC-017** Renew-to-sufficiency actually reaches the D6a gate's required TTL; hold only at home rooms
-- [ ] **REC-019** Border-tile "hold" must step inward (engine relocation bounces exit-tile holders)
-- [ ] **REC-022** Gate the `has_focus` lease refresh on target-room presence
-- [ ] **REC-036** Wire `enemy_stalled` (stalemate disengage can currently never fire)
+- [x] **REC-009b** Proper native fix: `SquadRef` → `EntityOption<Entity>` (marker-converted) + backstop scrub + delete restamp + **WFV 24→25** *(reconciled from the entity-handling facts, 2026-07-02; see §3 REC-009)*
+- [x] **REC-016** Consume the kite/retreat goal in live retreat orders (stop centroid-huddling under fire)
+- [x] **REC-017** Renew-to-sufficiency actually reaches the D6a gate's required TTL; hold only at home rooms
+- [x] **REC-019** Border-tile "hold" must step inward (engine relocation bounces exit-tile holders)
+- [x] **REC-022** Gate the `has_focus` lease refresh on target-room presence
+- [x] **REC-036** Wire `enemy_stalled` (stalemate disengage can currently never fire)
 
 ### M-C — Defense valuation, auction & claim loop
-- [ ] **REC-006** Value defense by the protected asset (remote income / owned-room value), not `energy_capacity_available` of the threat room
-- [ ] **REC-007** Defense-ness derived from ownership, not the `Defend` enum variant (own-room unwinnable-backoff inversion)
-- [ ] **REC-008** Defense claims must not queue behind the offense forming cap (and must not increment it)
-- [ ] **REC-010** Gone-objective reassign rows: class/caps from the squad, not `CapClass::Offense` + defaults
-- [ ] **REC-018** `project_defense`: real tower ranges, not hardcoded 25
-- [ ] **REC-020** Reassign matrix: per-row travel from squad position; caps from surviving bodies
-- [ ] **REC-021** Merge-donor cleanup (forming clocks, claim release, skip same-tick Phase-B spawns)
-- [ ] **REC-023** Seed `claimed_by` from managed squads on the first post-reload tick (Duplicate-retire race)
-- [ ] **REC-037** Reassign feasibility checks spawn range; log/count the no-home-in-range slot skip
-- [ ] **REC-040** Whole-squad Reassign rebinds member jobs
-- [ ] **REC-041** Producer re-assert sets (not only raises) priority
+- [x] **REC-006** Value defense by the protected asset (remote income / owned-room value), not `energy_capacity_available` of the threat room
+- [x] **REC-007** Defense-ness derived from ownership, not the `Defend` enum variant (own-room unwinnable-backoff inversion)
+- [x] **REC-008** Defense claims must not queue behind the offense forming cap (and must not increment it)
+- [x] **REC-010** Gone-objective reassign rows: class/caps from the squad, not `CapClass::Offense` + defaults
+- [x] **REC-018** `project_defense`: real tower ranges, not hardcoded 25
+- [x] **REC-020** Reassign matrix: per-row travel from squad position; caps from surviving bodies
+- [x] **REC-021** Merge-donor cleanup (forming clocks, claim release, skip same-tick Phase-B spawns)
+- [x] **REC-023** Seed `claimed_by` from managed squads on the first post-reload tick (Duplicate-retire race)
+- [x] **REC-037** Reassign feasibility checks spawn range; log/count the no-home-in-range slot skip
+- [x] **REC-040** Whole-squad Reassign rebinds member jobs
+- [x] **REC-041** Producer re-assert sets (not only raises) priority
 
 ### M-D — Force sizing, structure threat & economics accuracy
-- [ ] **REC-011** Make the EV optimizer's cost term bind (currency-consistent `w_energy`, or marginal-EV-per-energy selection)
-- [ ] **REC-013** **[operator directive 2026-07-01]** Dismantle = first-class *structure*-threat channel in `EnemyForce`; size defense to kill-in-breach-window; never fold the danger proxy into creep-dps; heal never sized against WORK
-- [ ] **REC-012** Fix the `hits==0` + heal-dominant "unwinnable" degenerate (veto on budget, not requirement)
-- [ ] **REC-014** Score drain comps against standoff tower dps, not point-blank
-- [ ] **REC-015** Unbuildable-slot stall logs loudly + sizing homes restricted to spawn-range homes
-- [ ] **REC-031** Thread real enemy `hits` into `RaidCreeps` (kill-in-time term currently dead)
-- [ ] **REC-032** Replace the three inline dps folds with the kernel estimators (inline folds ignore boosts)
-- [ ] **REC-026** `BodyType::estimated_cost`/`part_count` cover CLAIM
-- [ ] **REC-027** SK suppression cost constant → real sized-comp cost
-- [ ] **REC-028** Reserver hold amortized over 600-tick CLAIM lifetime
-- [ ] **REC-034** SK stronghold rescout fulfillment priority (LOW→MEDIUM or persisted-structure `has_known_core`)
+- [x] **REC-011** Make the EV optimizer's cost term bind (currency-consistent `w_energy`, or marginal-EV-per-energy selection)
+- [x] **REC-013** **[operator directive 2026-07-01]** Dismantle = first-class *structure*-threat channel in `EnemyForce`; size defense to kill-in-breach-window; never fold the danger proxy into creep-dps; heal never sized against WORK
+- [x] **REC-012** Fix the `hits==0` + heal-dominant "unwinnable" degenerate (veto on budget, not requirement)
+- [x] **REC-014** Score drain comps against standoff tower dps, not point-blank
+- [x] **REC-015** Unbuildable-slot stall logs loudly + sizing homes restricted to spawn-range homes
+- [x] **REC-031** Thread real enemy `hits` into `RaidCreeps` (kill-in-time term currently dead)
+- [x] **REC-032** Replace the three inline dps folds with the kernel estimators (inline folds ignore boosts)
+- [x] **REC-026** `BodyType::estimated_cost`/`part_count` cover CLAIM
+- [x] **REC-027** SK suppression cost constant → real sized-comp cost
+- [x] **REC-028** Reserver hold amortized over 600-tick CLAIM lifetime
+- [x] **REC-034** SK stronghold rescout fulfillment priority (LOW→MEDIUM or persisted-structure `has_known_core`)
 
 ### M-E — Expansion & movement
-- [ ] **REC-024** Claim reach oracle prices hostile rooms like the claimer's mover does (or intersect homes with the BFS set)
-- [ ] **REC-025** Claim commit gate checks plan *validity*, not just presence
-- [ ] **REC-045** Sort-build the two remaining resolver collision maps (determinism defence-in-depth)
-- [ ] **REC-050** Close the same-tick spawn-exit placement race
+- [x] **REC-024** Claim reach oracle prices hostile rooms like the claimer's mover does (or intersect homes with the BFS set)
+- [x] **REC-025** Claim commit gate checks plan *validity*, not just presence
+- [x] **REC-045** Sort-build the two remaining resolver collision maps (determinism defence-in-depth)
+- [x] **REC-050** Close the same-tick spawn-exit placement race
 
 ### M-F — Polish, hygiene & docs
 *(wave-1 diff-review residuals REC-061..071 land here / in their owning lane — see §3b)*
-- [ ] REC-029 R4 P(win) log wrong for drain/optimized comps
-- [ ] REC-030 Stale `force_ceiling` rustdoc links
-- [ ] REC-033 Safe-mode veto asymmetry between the two EV paths (drift trap)
-- [ ] REC-035 Member travel trackers keyed by recyclable `Entity::id()`
-- [ ] REC-038 Drain/siege anchor create-then-drop per-tick churn
-- [ ] REC-039 Pin the three uncoordinated retreat HP bands
-- [ ] REC-042 Stale `withdraw_removes_objective_and_runtime` doc comment
-- [ ] REC-043 Declaim withdraw is a post-reload no-op
-- [ ] REC-044 `objective_queue.rs:589` unwraps → `let-else`
-- [ ] REC-046 Cost-matrix seg-55 writes route through the MemoryArbiter
-- [ ] REC-047 `salvage.rs:816` expect → `let-else`
-- [ ] REC-048 Pin the war.rs:2081 cross-crate "heal probe fieldable at 550e" invariant
-- [ ] REC-049 Gate (or counter-ize) the ungated `[SquadTrace] MOVE-BLOCKED` line
+- [x] REC-029 R4 P(win) log wrong for drain/optimized comps
+- [x] REC-030 Stale `force_ceiling` rustdoc links
+- [x] REC-033 Safe-mode veto asymmetry between the two EV paths (drift trap)
+- [x] REC-035 Member travel trackers keyed by recyclable `Entity::id()`
+- [x] REC-038 Drain/siege anchor create-then-drop per-tick churn
+- [x] REC-039 Pin the three uncoordinated retreat HP bands
+- [x] REC-042 Stale `withdraw_removes_objective_and_runtime` doc comment
+- [x] REC-043 Declaim withdraw is a post-reload no-op
+- [x] REC-044 `objective_queue.rs:589` unwraps → `let-else`
+- [x] REC-046 Cost-matrix seg-55 writes route through the MemoryArbiter
+- [x] REC-047 `salvage.rs:816` expect → `let-else`
+- [x] REC-048 Pin the war.rs:2081 cross-crate "heal probe fieldable at 550e" invariant
+- [x] REC-049 Gate (or counter-ize) the ungated `[SquadTrace] MOVE-BLOCKED` line
 - [x] REC-051 Fix stale rover budget-contract comment line refs — landed in rover `b61e3ee`
-- [ ] **REC-057** Breach-objective withdraw gate self-invalidating (spawn-and-vanish loop) *(from §3a sweep)*
-- [ ] **REC-058** Dismantle unreachable-target wedge (reachability-filter selection + `requires_dismantling` + no-progress bail) *(from §3a sweep)*
-- [ ] **REC-059** Salvage error-exit paths skip objective withdraws (`stand_down()` helper) *(from §3a sweep)*
-- [ ] REC-052 Spawn-band soft spots (head-of-line blocking across homes; SK refill recurrence; CRITICAL-defense band tie)
-- [ ] DOC-1..DOC-7 (§4) — applied by the DOC lane 2026-07-01, pending commit
+- [x] **REC-057** Breach-objective withdraw gate self-invalidating (spawn-and-vanish loop) *(from §3a sweep)*
+- [x] **REC-058** Dismantle unreachable-target wedge (reachability-filter selection + `requires_dismantling` + no-progress bail) *(from §3a sweep)*
+- [x] **REC-059** Salvage error-exit paths skip objective withdraws (`stand_down()` helper) *(from §3a sweep)*
+- [~] REC-052 Spawn-band soft spots — **PARTIAL**: (c) CRITICAL-defense intra-band edge LANDED (`spawn_priority_for` +0.5, wave-2 `f834cb3`); (a) head-of-line blocking across homes and (b) SK-refill recurrence intentionally NOT fixed — the `spawnsystem.rs:434-435` head-of-line break is load-bearing for the forming-squad energy-banking design, and a fix would need hysteresis (rejected). Accepted as-is.
+- [x] DOC-1..DOC-7 (§4) — applied by the DOC lane 2026-07-01, pending commit
 
 ### M-G — Sim/live parity (combat-agent harness fidelity; after M-B lands)
-- [ ] **REC-053** Per-member sim travel gate (kill the whole-squad combat blackout)
-- [ ] **REC-054** Verify REC-016 closes the Retreating divergence; make both sides identical
-- [ ] **REC-055** Port the combat-High/support-Normal movement-priority split into the live bot; align flee shove flag
-- [ ] **REC-056** Anchor parity for Engaged members (port to live or drop from sim)
+- [x] **REC-053** Per-member sim travel gate (kill the whole-squad combat blackout)
+- [x] **REC-054** Verify REC-016 closes the Retreating divergence; make both sides identical
+- [x] **REC-055** Port the combat-High/support-Normal movement-priority split into the live bot; align flee shove flag
+- [x] **REC-056** Anchor parity for Engaged members (port to live or drop from sim)
 - [x] **REC-060** Correct the v24 WFV history SHA attributions — fixed in `game_loop.rs` + REC-001
 
 ---
@@ -297,17 +308,17 @@ Git archaeology: `denied_by_idle` originated rover `5a9fe9e` (super `553a618`); 
 
 Six scoped diff reviewers over the wave-1 composite; verdict **zero P1/P2 commit-blockers** (independent recomputation confirmed the REC-011 EV ladder, REC-012/013 sizing math; no serialized-shape changes; composite builds + 1182 tests green). All residuals below are P3 follow-ups (the spend-limit cut the refuter pass short for the kernel/war-econ scopes, so those carry review-confidence, not double-adjudicated; the expansion-movement three were adversarially confirmed). None reopened a wave-2 item. Rolled into M-F/wave-2.
 
-- [ ] **REC-061 · P3** `combat-decision/src/lifecycle.rs:292` — `resolved` + `retreat_budget_exhausted` can co-fire in one tick → `Retire{Resolved, withdraw, mark_unwinnable}`, breaking the pre-diff `mark_unwinnable ⇒ loss-reason` invariant (benign one-tick race; make resolved dominate the exhaust terminal).
-- [ ] **REC-062 · P3** `combat-decision/src/lib.rs:1537` — REC-036's headline out-healed-turtle STILL can't disengage: unkillable enemies are excluded from `enemy_strength` so balance clamps +1000 while the stall valve needs balance<200. `enemy_stalled` now fires only for kiting/reinforcement stalemates; the turtle case needs a separate signal. (REC-036 partially delivered — note in the ledger.)
-- [ ] **REC-063 · P3** `combat-decision/src/lib.rs:972` — `ENEMY_STALL_TICKS`/combat-agent `STALL_LIMIT` parity rests on two unlinked `40` literals; combat-agent should import the shared const (2-line submodule change; parity pin exists but doesn't enforce cross-crate).
-- [ ] **REC-064 · P3** `combat-decision/src/force_sizing.rs:605` — the overlay's "stays-assemblable" clamp uses `max_dismantle_dps` (a WORK ceiling ~2250) — latent; only `GarrisonDefense` threads the structure channel today, so harmless until a `DismantleStructure` objective does.
-- [ ] **REC-065 · P3** `war.rs` — one-sided `MAX_SPAWN_DISTANCE` sync (REC-015a mirrored the literal; a same-crate `pub(crate)` fold would tie them).
-- [ ] **REC-066 · P3** `combat-decision/src/war_decision.rs` `estimate_danger` (V-6) — boost-blind: a boosted-WORK dismantler under-sizes the structure-defense channel up to 4× (threatmap models ×4; this kernel path doesn't).
-- [ ] **REC-067 · P3** neighbour-intercept sizing (V-6) — the kernel DTO drops enemy boost, so a boosted neighbour raider under-sizes the defender.
-- [ ] **REC-068 · P3** `war.rs` — a stale SK skip-log message left by the REC-034 rewire.
-- [ ] **REC-069 · P3** `operations/claim.rs:845` (adversarially CONFIRMED) — the `candidate.home_rooms` intersection is minimal-distance-only (gather BFS records homes only at first-visit distance), so a farther-but-eligible home is silently excluded; sticky when a corridor near the nearest home stays hostile-reserved. Fix: fall back to the full owned-home set with the ClaimCorridor route check when the intersection empties. Single-home empires unaffected.
-- [ ] **REC-070 · P3** `missions/construction.rs:102` (adversarially CONFIRMED) — REC-050's birth budget is creep-blind while `safe_spawn_directions` free-tile counting is creep-aware: a creep camping the sole approach can let an interior placement seal the last birth tile (narrow same-tick corner). Plus the plan-defect defer warn repeats every 50-tick pass with no once-latch/counter (EP-3.5). Document the creep divergence + add a warn latch.
-- [ ] **REC-071 · P3** `operations/claim.rs:720` + `claim_economics.rs:19/85` (adversarially CONFIRMED) — REC-024 orphaned `missions::utility::is_claim_feasible` (zero functional callers, no KEEP marker) and left stale comments naming it the live gate; editing the dead fn would silently fork the reach policy. Delete or KEEP-annotate; fix the comments (EP-2.6/10.5).
+- [x] **REC-061 · P3** `combat-decision/src/lifecycle.rs:292` — `resolved` + `retreat_budget_exhausted` can co-fire in one tick → `Retire{Resolved, withdraw, mark_unwinnable}`, breaking the pre-diff `mark_unwinnable ⇒ loss-reason` invariant (benign one-tick race; make resolved dominate the exhaust terminal).
+- [ ] **REC-062 · P3 — DEFERRED (attempted + reverted 2026-07-02, see §0)** `combat-decision/src/lib.rs` — the out-healed-turtle disengage. `enemy_stalled` (creep-HP-only) cannot distinguish an unrazable turtle from a slow ranged structure-raze, so every `enemy_stalled`-based disengage either misses the turtle or oscillates on a structure-raze (harness `designed#0` 0.5%→17.6%). Needs a structure-progress signal (target-hits-not-decreasing) plumbed through the harness + squad_manager — real work, not warranted for a P3. REC-036's kiting/reinforcement stalemate disengage stays live.
+- [x] **REC-063 · P3** `combat-decision/src/lib.rs:972` — `ENEMY_STALL_TICKS`/combat-agent `STALL_LIMIT` parity rests on two unlinked `40` literals; combat-agent should import the shared const (2-line submodule change; parity pin exists but doesn't enforce cross-crate).
+- [x] **REC-064 · P3** `combat-decision/src/force_sizing.rs:605` — the overlay's "stays-assemblable" clamp uses `max_dismantle_dps` (a WORK ceiling ~2250) — latent; only `GarrisonDefense` threads the structure channel today, so harmless until a `DismantleStructure` objective does.
+- [x] **REC-065 · P3** `war.rs` — one-sided `MAX_SPAWN_DISTANCE` sync (REC-015a mirrored the literal; a same-crate `pub(crate)` fold would tie them).
+- [x] **REC-066 · P3** `combat-decision/src/war_decision.rs` `estimate_danger` (V-6) — boost-blind: a boosted-WORK dismantler under-sizes the structure-defense channel up to 4× (threatmap models ×4; this kernel path doesn't).
+- [x] **REC-067 · P3** neighbour-intercept sizing (V-6) — the kernel DTO drops enemy boost, so a boosted neighbour raider under-sizes the defender.
+- [x] **REC-068 · P3** `war.rs` — a stale SK skip-log message left by the REC-034 rewire. **RESOLVED = NOT-A-DEFECT** (close-out 2026-07-02, adversarially verified): the SK/stronghold log messages accurately describe the post-REC-034 code paths; no fabricated change made (EP-8.2).
+- [x] **REC-069 · P3** `operations/claim.rs:845` (adversarially CONFIRMED) — the `candidate.home_rooms` intersection is minimal-distance-only (gather BFS records homes only at first-visit distance), so a farther-but-eligible home is silently excluded; sticky when a corridor near the nearest home stays hostile-reserved. Fix: fall back to the full owned-home set with the ClaimCorridor route check when the intersection empties. Single-home empires unaffected.
+- [x] **REC-070 · P3** `missions/construction.rs:102` (adversarially CONFIRMED) — REC-050's birth budget is creep-blind while `safe_spawn_directions` free-tile counting is creep-aware: a creep camping the sole approach can let an interior placement seal the last birth tile (narrow same-tick corner). Plus the plan-defect defer warn repeats every 50-tick pass with no once-latch/counter (EP-3.5). Document the creep divergence + add a warn latch.
+- [x] **REC-071 · P3** `operations/claim.rs:720` + `claim_economics.rs:19/85` (adversarially CONFIRMED) — REC-024 orphaned `missions::utility::is_claim_feasible` (zero functional callers, no KEEP marker) and left stale comments naming it the live gate; editing the dead fn would silently fork the reach policy. Delete or KEEP-annotate; fix the comments (EP-2.6/10.5).
 
 Docs-scope P3 nits (self-fixed in the artifact 2026-07-01): the M-G checklist mis-nesting and the V-6 false "lane D rewrites war_decision.rs" premise were corrected inline; remaining minor drift (§0a line refs, plan-header WFV phrasing) folded into the DOC lane's own follow-up.
 
@@ -317,13 +328,13 @@ Docs-scope P3 nits (self-fixed in the artifact 2026-07-01): the M-G checklist mi
 
 The June-30 refresh (`61a31d3`) fixed the per-ADR headers; staleness now concentrates in the **aggregators**.
 
-- [ ] **DOC-1 · P1** — `docs/plans/combat-overhaul-plan.md` self-declares "THE source of truth for combat/war STATUS and REMAINING WORK" but is frozen at the 2026-06-19 / WFV-14 era (code: WFV 23; "I identity UNSTARTED" vs `SquadRef` landed WFV 17; "S spawning UNSTARTED" is OBE; §4D pre-deploy framing vs deployed state; no mention of ADR 0022 or the 0025–0038 wave). **Fix:** update it to current state, or demote the SSOT claim with a pointer to ADR 0022 + per-ADR ledgers. Its still-accurate residue (worth keeping): `military_free` hardcoded (sourcekeeper.rs:345 TODO), `Escort` kind inert (game_loop.rs:670, no producer), `MAX_CONCURRENT_SQUADS=4` static, `decide_towers` genuinely unbuilt.
-- [ ] **DOC-2 · P1** — ADR 0028 header "In progress / final offline gate" mislabels a complete harness; the real open item — K3 `slots_to_spawn` (fielding.rs:17) / K4 `claims_allowed` (claim_pacing.rs:15) have **zero bot call sites** — is tracked nowhere; the mid-stream "squads lose defended engagements" diagnosis has no recorded resolution measurement.
-- [ ] **DOC-3 · P2** — `docs/design/README.md` index: zero rows for ADRs 0034–0039; 0033 row "Proposed" vs M0–M5 landed; 0019/0020/0032 rows contradict their own refreshed docs.
-- [ ] **DOC-4 · P2** — ADR 0030 §6 pseudocode (`present_force_is_winnable`/`EngagementTempo`/`WAVE_DPS_MARGIN`) reads implementation-ready but none of it exists (only the interim quorum gate; 0.75-ratio reverted `9705b6a`). Add a NOT-YET-IMPLEMENTED banner.
-- [ ] **DOC-5 · P2** — ADR 0025 "Accepted" hides the open action half: `action_oscillation_rate` metric absent; bot does not consume `member_intents` (kernel emits at lib.rs:2144, zero bot call sites) — tracked only in §11 #12.
-- [ ] **DOC-6 · P2** — ADR 0026a header "Proposed / unvalidated" — validation happened 2026-06-26 (spacing SHIPPED strategy.rs:73-75; ranged_duel_kite REJECTED; rest deferred/superseded).
-- [ ] **DOC-7 · P3** — Cell/fragment fixes: ADR 0020 §12.2 "OPEN — R-attack" vs §12.6+code DONE; ADR 0029 §7 table's PlayerRaid/GatedPlayerRaid conflation + §10 #2 "D7 held for review" (landed `efa3336`); ADR 0033 header line-2 vestigial "Remaining M4/M5" fragment; ADR 0038 "not yet committed" (committed at `cf5e8be`; only the MMO deploy/reset is pending); ADR 0025a residual object anomaly (~15–20%) has NO tracker/owner anywhere — assign one; ADR 0027 header date lag.
+- [x] **DOC-1 · P1** — `docs/plans/combat-overhaul-plan.md` self-declares "THE source of truth for combat/war STATUS and REMAINING WORK" but is frozen at the 2026-06-19 / WFV-14 era (code: WFV 23; "I identity UNSTARTED" vs `SquadRef` landed WFV 17; "S spawning UNSTARTED" is OBE; §4D pre-deploy framing vs deployed state; no mention of ADR 0022 or the 0025–0038 wave). **Fix:** update it to current state, or demote the SSOT claim with a pointer to ADR 0022 + per-ADR ledgers. Its still-accurate residue (worth keeping): `military_free` hardcoded (sourcekeeper.rs:345 TODO), `Escort` kind inert (game_loop.rs:670, no producer), `MAX_CONCURRENT_SQUADS=4` static, `decide_towers` genuinely unbuilt.
+- [x] **DOC-2 · P1** — ADR 0028 header "In progress / final offline gate" mislabels a complete harness; the real open item — K3 `slots_to_spawn` (fielding.rs:17) / K4 `claims_allowed` (claim_pacing.rs:15) have **zero bot call sites** — is tracked nowhere; the mid-stream "squads lose defended engagements" diagnosis has no recorded resolution measurement.
+- [x] **DOC-3 · P2** — `docs/design/README.md` index: zero rows for ADRs 0034–0039; 0033 row "Proposed" vs M0–M5 landed; 0019/0020/0032 rows contradict their own refreshed docs.
+- [x] **DOC-4 · P2** — ADR 0030 §6 pseudocode (`present_force_is_winnable`/`EngagementTempo`/`WAVE_DPS_MARGIN`) reads implementation-ready but none of it exists (only the interim quorum gate; 0.75-ratio reverted `9705b6a`). Add a NOT-YET-IMPLEMENTED banner.
+- [x] **DOC-5 · P2** — ADR 0025 "Accepted" hides the open action half: `action_oscillation_rate` metric absent; bot does not consume `member_intents` (kernel emits at lib.rs:2144, zero bot call sites) — tracked only in §11 #12.
+- [x] **DOC-6 · P2** — ADR 0026a header "Proposed / unvalidated" — validation happened 2026-06-26 (spacing SHIPPED strategy.rs:73-75; ranged_duel_kite REJECTED; rest deferred/superseded).
+- [x] **DOC-7 · P3** — Cell/fragment fixes: ADR 0020 §12.2 "OPEN — R-attack" vs §12.6+code DONE; ADR 0029 §7 table's PlayerRaid/GatedPlayerRaid conflation + §10 #2 "D7 held for review" (landed `efa3336`); ADR 0033 header line-2 vestigial "Remaining M4/M5" fragment; ADR 0038 "not yet committed" (committed at `cf5e8be`; only the MMO deploy/reset is pending); ADR 0025a residual object anomaly (~15–20%) has NO tracker/owner anywhere — assign one; ADR 0027 header date lag.
 
 ---
 

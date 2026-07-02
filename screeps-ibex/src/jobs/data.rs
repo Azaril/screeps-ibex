@@ -41,12 +41,28 @@ impl JobData {
         }
     }
 
-    /// Extract a generation-safe reference to this job's squad, if any.
-    /// Returns `None` for non-squad jobs.
-    pub fn squad_ref(&self) -> Option<crate::military::squad::SquadRef> {
+    /// The squad entity this job coordinates with, if any (`None` for non-squad jobs). The stored ref is
+    /// the marker-converted (`EntityOption<Entity>`) squad handle (REC-009b); callers must still
+    /// `is_alive`-guard it (a recycled/dead slot is not a live squad).
+    pub fn squad_ref(&self) -> Option<Entity> {
         match self {
-            JobData::SquadCombat(ref data) => data.context.squad_entity,
+            JobData::SquadCombat(ref data) => *data.context.squad_entity,
             _ => None,
+        }
+    }
+
+    /// Serialize-time backstop for this job's cross-entity references: scrub any dangling `Entity` ref to
+    /// `None` so the specs `ConvertSaveload for Entity` marker lookup cannot panic at serialize time
+    /// (`[[ecs-dangling-ref-serialize]]`). `is_valid` is the same `is_alive(e) && markers.get(e).is_some()`
+    /// predicate the other `repair_entity_integrity` passes use. Only `SquadCombat` carries such a ref (its
+    /// `squad_entity`); every other variant is a no-op. REC-009b.
+    pub fn repair_entity_refs(&mut self, is_valid: &dyn Fn(Entity) -> bool) {
+        if let JobData::SquadCombat(ref mut data) = self {
+            if let Some(squad) = *data.context.squad_entity {
+                if !is_valid(squad) {
+                    *data.context.squad_entity = None;
+                }
+            }
         }
     }
 

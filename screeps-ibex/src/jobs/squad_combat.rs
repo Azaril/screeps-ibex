@@ -4,21 +4,30 @@ use super::jobsystem::*;
 use super::utility::movebehavior::*;
 use crate::military::formation::virtual_anchor_target;
 use crate::military::squad::*;
+use crate::serialize::EntityOption;
 use crate::visualization::SummaryContent;
 use screeps::*;
 use screeps_machine::*;
 use screeps_rover::*;
 use serde::*;
-use specs::Entity;
+#[allow(deprecated)]
+use specs::error::NoError;
+use specs::saveload::*;
+use specs::*;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, ConvertSaveload)]
 pub struct SquadCombatJobContext {
     target_room: RoomName,
-    /// Squad entity ID for coordinated behavior.
-    #[serde(default)]
-    pub(crate) squad_entity: Option<SquadRef>,
+    /// The squad entity this member coordinates with. Marker-converted (`EntityOption<Entity>`) so
+    /// `JobData`'s `#[derive(ConvertSaveload)]` remaps it through the `SerializeMarker` on save/load —
+    /// the same round-trip `SquadContext.members` uses (REC-009b). The old `SquadRef{index,generation}`
+    /// was plain serde, so it bypassed the marker remap and went stale after every reload (the recycled-
+    /// generation aliasing the interim per-tick restamp masked). Resolved via a live `is_alive` read-guard
+    /// so a recycled/dead slot yields `None`; the `repair_entity_integrity` backstop scrubs it to `None`
+    /// before serialize when the squad is dead/unmarked (guards the specs `ConvertSaveload for Entity`
+    /// dangling-serialize panic — the original reason `SquadRef` was plain data).
+    pub(crate) squad_entity: EntityOption<Entity>,
     /// Tick when we entered the combat response state (for timeout).
-    #[serde(default)]
     combat_response_start: Option<u32>,
 }
 
@@ -158,7 +167,7 @@ impl MoveToRoom {
         // objective resolved/given-up), OR this creep is a merge-transfer SURPLUS the spawn callback declined
         // to roster (ADR 0032 v2), DON'T trek on to the now-abandoned/over-rostered objective room — recall to
         // the nearest home spawn and recycle, so a surplus/orphan is never stranded mid-travel on a room edge.
-        if should_recall_to_recycle(state_context.squad_entity, creep_entity, tick_context) {
+        if should_recall_to_recycle(*state_context.squad_entity, creep_entity, tick_context) {
             let hostiles = get_hostile_creeps(creep_pos.room_name(), tick_context);
             if hostiles.is_empty() {
                 Engaged::recall_to_recycle(creep, creep_pos, creep_entity, tick_context);
@@ -169,7 +178,7 @@ impl MoveToRoom {
         // ADR 0027 v1.1 P2: a DECLAIM squad member that has reached the target room transitions to Engaged
         // (which runs the declaim drive — move-to-controller + strike). A declaimer carries no combat parts,
         // so it does not need the formation-assault path; reaching the room is enough to start striking.
-        if squad_attack_controller_pos(state_context.squad_entity, tick_context).is_some()
+        if squad_attack_controller_pos(*state_context.squad_entity, tick_context).is_some()
             && creep_pos.room_name() == state_context.target_room
         {
             return Some(SquadCombatState::engaged());
@@ -187,14 +196,14 @@ impl MoveToRoom {
         }
 
         // Check squad retreat signal.
-        if let Some(squad_state) = get_squad_state(state_context.squad_entity, tick_context) {
+        if let Some(squad_state) = get_squad_state(*state_context.squad_entity, tick_context) {
             if squad_state == SquadState::Retreating {
                 return Some(SquadCombatState::retreating());
             }
         }
 
         // Check for squad formation movement orders (keeps squad grouped during travel).
-        let tick_orders = get_tick_orders(state_context.squad_entity, creep_entity, tick_context);
+        let tick_orders = get_tick_orders(*state_context.squad_entity, creep_entity, tick_context);
 
         // MOVEMENT-STALL FIX (ADR 0028 K0): SOLO travel to the shared rally. The manager stamps a
         // `MoveTo(rally)` order during the travel-to-rally phase (no formation anchor) — each member paths
@@ -241,7 +250,7 @@ impl MoveToRoom {
 
         if let Some(ref orders) = tick_orders {
             if matches!(orders.movement, TickMovement::Formation) {
-                if let Some(target_tile) = get_formation_target(state_context.squad_entity, creep_entity, tick_context, creep_pos) {
+                if let Some(target_tile) = get_formation_target(*state_context.squad_entity, creep_entity, tick_context, creep_pos) {
                     tick_context
                         .runtime_data
                         .movement
@@ -254,7 +263,7 @@ impl MoveToRoom {
                     // creeps from engaging while the rest of the squad is
                     // still gathering at a room boundary.
                     if creep_pos.room_name() == state_context.target_room {
-                        let squad_ready = get_squad_state(state_context.squad_entity, tick_context)
+                        let squad_ready = get_squad_state(*state_context.squad_entity, tick_context)
                             .map(|s| s >= SquadState::Moving)
                             .unwrap_or(true);
                         if squad_ready {
@@ -287,7 +296,7 @@ impl CombatResponse {
         let creep_entity = tick_context.runtime_data.creep_entity;
 
         // Check squad retreat signal.
-        if let Some(squad_state) = get_squad_state(state_context.squad_entity, tick_context) {
+        if let Some(squad_state) = get_squad_state(*state_context.squad_entity, tick_context) {
             if squad_state == SquadState::Retreating {
                 return Some(SquadCombatState::retreating());
             }
@@ -319,7 +328,7 @@ impl CombatResponse {
         }
 
         // Fight back with all applicable body parts.
-        let tick_orders = get_tick_orders(state_context.squad_entity, creep_entity, tick_context);
+        let tick_orders = get_tick_orders(*state_context.squad_entity, creep_entity, tick_context);
         let focus_creep: Option<Creep> = tick_orders
             .as_ref()
             .and_then(|o| o.attack_target.as_ref())
@@ -467,10 +476,10 @@ impl Engaged {
         let creep_entity = tick_context.runtime_data.creep_entity;
 
         // Read tick orders from squad context if available.
-        let tick_orders = get_tick_orders(state_context.squad_entity, creep_entity, tick_context);
+        let tick_orders = get_tick_orders(*state_context.squad_entity, creep_entity, tick_context);
 
         // Check squad retreat signal.
-        if let Some(squad_state) = get_squad_state(state_context.squad_entity, tick_context) {
+        if let Some(squad_state) = get_squad_state(*state_context.squad_entity, tick_context) {
             if squad_state == SquadState::Retreating {
                 return Some(SquadCombatState::retreating());
             }
@@ -495,7 +504,7 @@ impl Engaged {
         // strikes when the block clears (else HOLDS adjacent — the manager's lease keeps it committed across
         // the cadence; see `declaiming` in squad_manager). Inert for every combat squad (returns early only
         // when the squad target is `AttackController`).
-        if let Some(controller_pos) = squad_attack_controller_pos(state_context.squad_entity, tick_context) {
+        if let Some(controller_pos) = squad_attack_controller_pos(*state_context.squad_entity, tick_context) {
             drive_declaim(controller_pos, tick_context);
             return None;
         }
@@ -518,7 +527,7 @@ impl Engaged {
                     // pathfinding-scored kite/advance goal the manager stamped on the orders) — the job
                     // issues the request (§5 ⚑ job-owns-movement). decide_movement's own precedence
                     // (critical-HP flee, immediate melee-evade, cohesion rejoin) keeps the block together.
-                    if squad_has_anchor(state_context.squad_entity, tick_context) {
+                    if squad_has_anchor(*state_context.squad_entity, tick_context) {
                         execute_formation_movement(state_context, creep_entity, orders, tick_context);
                     } else {
                         // Engaged → apply the REC-056 anti-scatter anchor (the sim anchors Engaged members).
@@ -766,7 +775,7 @@ impl Engaged {
         // on a room edge" scatter), recall to the nearest home spawn and recycle, reclaiming part of the body
         // energy. A LIVE squad's rostered member is never recalled — `should_recall_to_recycle` requires
         // either an unresolvable squad or this creep being absent from its `members`.
-        let orphaned = should_recall_to_recycle(state_context.squad_entity, creep_entity, tick_context);
+        let orphaned = should_recall_to_recycle(*state_context.squad_entity, creep_entity, tick_context);
         if orphaned && hostiles.is_empty() {
             Self::recall_to_recycle(creep, creep_pos, creep_entity, tick_context);
             return;
@@ -877,7 +886,7 @@ impl Retreating {
         let creep_entity = tick_context.runtime_data.creep_entity;
 
         // Check squad state -- re-engage if squad says so.
-        let squad_state = get_squad_state(state_context.squad_entity, tick_context);
+        let squad_state = get_squad_state(*state_context.squad_entity, tick_context);
         let squad_wants_engage = squad_state
             .map(|s| s == SquadState::Engaged || s == SquadState::Moving)
             .unwrap_or(false);
@@ -901,7 +910,7 @@ impl Retreating {
         }
 
         // Read tick orders for coordinated retreat.
-        let tick_orders = get_tick_orders(state_context.squad_entity, creep_entity, tick_context);
+        let tick_orders = get_tick_orders(*state_context.squad_entity, creep_entity, tick_context);
 
         // Pipeline B: Ranged mass attack while retreating.
         if has_active_part(creep, Part::RangedAttack) {
@@ -1068,7 +1077,7 @@ fn execute_formation_movement(
 ) {
     let creep_pos = tick_context.runtime_data.owner.pos();
     let moved = (|| {
-        let target_tile = get_formation_target(state_context.squad_entity, creep_entity, tick_context, creep_pos)?;
+        let target_tile = get_formation_target(*state_context.squad_entity, creep_entity, tick_context, creep_pos)?;
         tick_context
             .runtime_data
             .movement
@@ -1101,12 +1110,12 @@ fn execute_formation_movement(
 /// after spawn or before PreRunSquadUpdate has synced this member's position)
 /// so that all squad members get a valid formation target and move together.
 fn get_formation_target(
-    squad: Option<SquadRef>,
+    squad: Option<Entity>,
     creep_entity: Entity,
     tick_context: &JobTickContext,
     creep_pos_fallback: Position,
 ) -> Option<Position> {
-    let entity = squad?.resolve(tick_context.system_data.entities)?;
+    let entity = resolve_squad(squad, tick_context.system_data.entities)?;
     let squad_ctx = tick_context.system_data.squad_contexts.get(entity)?;
     let member = squad_ctx.get_member(creep_entity)?;
     let virtual_pos = squad_ctx.squad_path.as_ref().map(|p| p.anchor.virtual_pos)?;
@@ -1207,7 +1216,7 @@ fn hold_tile_inward(pos: Position) -> Position {
 
 // ─── SquadCombatJob ─────────────────────────────────────────────────────────
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, ConvertSaveload)]
 pub struct SquadCombatJob {
     pub context: SquadCombatJobContext,
     pub state: SquadCombatState,
@@ -1219,7 +1228,7 @@ impl SquadCombatJob {
         SquadCombatJob {
             context: SquadCombatJobContext {
                 target_room,
-                squad_entity: None,
+                squad_entity: None.into(),
                 combat_response_start: None,
             },
             state: SquadCombatState::move_to_room(),
@@ -1230,7 +1239,7 @@ impl SquadCombatJob {
         SquadCombatJob {
             context: SquadCombatJobContext {
                 target_room,
-                squad_entity: Some(SquadRef::from_entity(squad_entity)),
+                squad_entity: Some(squad_entity).into(),
                 combat_response_start: None,
             },
             state: SquadCombatState::move_to_room(),
@@ -1245,27 +1254,28 @@ impl SquadCombatJob {
     /// to the receiver) so the creep ends up owned by EXACTLY ONE squad.
     pub fn rebind_to_squad(&mut self, target_room: RoomName, squad_entity: Entity) {
         self.context.target_room = target_room;
-        self.context.squad_entity = Some(SquadRef::from_entity(squad_entity));
+        self.context.squad_entity = Some(squad_entity).into();
         self.context.combat_response_start = None;
         self.state = SquadCombatState::move_to_room();
     }
+}
 
-    /// REC-009 — re-couple this job's squad ref to the (possibly reload-remapped) squad entity WITHOUT
-    /// touching the FSM state or target room (unlike [`Self::rebind_to_squad`], which is a full transfer
-    /// to a different squad). The serialized `SquadRef` (raw index + generation) cannot survive a VM
-    /// reload — marker-recreated entities get fresh generations, so validate-on-access fails and
-    /// `recall_decision` would walk the whole roster home to recycle. `SquadContext.members` is
-    /// `ConvertSaveload`-remapped (correct post-reload), so the `SquadManager` re-stamps members→jobs
-    /// from that surviving side every tick (before `RunJobSystem` — see the manager's REC-009 pass).
-    /// The deeper alternative is a minted stable `SquadId`; this is the interim light fix.
-    pub fn restamp_squad_ref(&mut self, squad_entity: Entity) {
-        self.context.squad_entity = Some(SquadRef::from_entity(squad_entity));
+/// Resolve a (possibly stale/dead) squad ref to the live squad entity, or `None`. REC-009b: the ref is
+/// now marker-converted (`EntityOption<Entity>`) so it survives a VM reload natively (the marker remap
+/// rewrites it to the reloaded squad entity); the `is_alive` read-guard covers the recycled/dead-slot
+/// case (a member holding a ref to a since-retired squad resolves to `None`, which drives `recall_decision`).
+fn resolve_squad(squad: Option<Entity>, entities: &specs::world::EntitiesRes) -> Option<Entity> {
+    let entity = squad?;
+    if entities.is_alive(entity) {
+        Some(entity)
+    } else {
+        None
     }
 }
 
 /// Look up the squad state for a job that may or may not be in a squad.
-fn get_squad_state(squad: Option<SquadRef>, tick_context: &JobTickContext) -> Option<SquadState> {
-    let entity = squad?.resolve(tick_context.system_data.entities)?;
+fn get_squad_state(squad: Option<Entity>, tick_context: &JobTickContext) -> Option<SquadState> {
+    let entity = resolve_squad(squad, tick_context.system_data.entities)?;
     let squad_ctx = tick_context.system_data.squad_contexts.get(entity)?;
     Some(squad_ctx.state)
 }
@@ -1287,9 +1297,9 @@ fn recall_decision(has_squad_ref: bool, squad_resolves: bool, creep_is_rostered:
 
 /// Whether this creep should RECALL-to-recycle rather than soldier on (the live adapter over
 /// [`recall_decision`]). Resolves the squad + membership from the world, then defers to the pure predicate.
-fn should_recall_to_recycle(squad: Option<SquadRef>, creep_entity: Entity, tick_context: &JobTickContext) -> bool {
+fn should_recall_to_recycle(squad: Option<Entity>, creep_entity: Entity, tick_context: &JobTickContext) -> bool {
     let has_squad_ref = squad.is_some();
-    let resolved = squad.and_then(|s| s.resolve(tick_context.system_data.entities));
+    let resolved = resolve_squad(squad, tick_context.system_data.entities);
     let squad_resolves = resolved.is_some();
     // Only meaningful when the squad resolves; default `true` (rostered) otherwise so `recall_decision`'s
     // `!squad_resolves` arm alone drives the unresolved case.
@@ -1304,8 +1314,8 @@ fn should_recall_to_recycle(squad: Option<SquadRef>, creep_entity: Entity, tick_
 /// `SquadTarget::AttackController`. `None` for every combat squad — so the declaim drive below is inert for
 /// all existing objectives. The position is read off the squad's shared `SquadContext.target` (set by the
 /// manager from the `Declaim` objective), so every member of the declaim squad sees the same tile.
-fn squad_attack_controller_pos(squad: Option<SquadRef>, tick_context: &JobTickContext) -> Option<Position> {
-    let entity = squad?.resolve(tick_context.system_data.entities)?;
+fn squad_attack_controller_pos(squad: Option<Entity>, tick_context: &JobTickContext) -> Option<Position> {
+    let entity = resolve_squad(squad, tick_context.system_data.entities)?;
     let squad_ctx = tick_context.system_data.squad_contexts.get(entity)?;
     match squad_ctx.target {
         Some(SquadTarget::AttackController { position }) => Some(position),
@@ -1355,9 +1365,8 @@ fn drive_declaim(controller_pos: Position, tick_context: &mut JobTickContext) {
 /// Whether the squad has a populated anchor path (`SquadPath`). Anchor-driven
 /// formation movement only applies when one exists; manager-fielded squads
 /// (P2.G3) have none and own their movement via the job (kiting).
-fn squad_has_anchor(squad: Option<SquadRef>, tick_context: &JobTickContext) -> bool {
-    squad
-        .and_then(|s| s.resolve(tick_context.system_data.entities))
+fn squad_has_anchor(squad: Option<Entity>, tick_context: &JobTickContext) -> bool {
+    resolve_squad(squad, tick_context.system_data.entities)
         .and_then(|e| tick_context.system_data.squad_contexts.get(e))
         .map(|ctx| ctx.squad_path.is_some())
         .unwrap_or(false)
@@ -1415,8 +1424,8 @@ fn get_hostile_structures(room_name: RoomName, tick_context: &JobTickContext) ->
 }
 
 /// Look up tick orders for a specific creep from the squad context.
-fn get_tick_orders(squad: Option<SquadRef>, creep_entity: Entity, tick_context: &JobTickContext) -> Option<TickOrders> {
-    let entity = squad?.resolve(tick_context.system_data.entities)?;
+fn get_tick_orders(squad: Option<Entity>, creep_entity: Entity, tick_context: &JobTickContext) -> Option<TickOrders> {
+    let entity = resolve_squad(squad, tick_context.system_data.entities)?;
     let squad_ctx = tick_context.system_data.squad_contexts.get(entity)?;
     let member = squad_ctx.get_member(creep_entity)?;
     member.tick_orders.clone()
@@ -1450,44 +1459,141 @@ mod tests {
     use super::{cross_room_formation_target, recall_decision};
     use screeps::{Position, RoomCoordinate, RoomName};
 
-    /// REC-009 — `restamp_squad_ref` re-couples a stale (reload-dead) squad ref WITHOUT touching the FSM
-    /// or target room. Post-reload, marker-recreated squad entities get fresh index/generation, so the
-    /// job's serialized `SquadRef` fails validate-on-access and `recall_decision` would walk the WHOLE
-    /// roster home to recycle mid-assault; the manager's per-tick restamp (from the
-    /// `ConvertSaveload`-remapped `SquadContext.members` side) repairs the ref before any job runs.
-    /// Contrast pinned: `rebind_to_squad` (a merge transfer) deliberately RESETS the FSM — the restamp
-    /// must not, or every tick would knock an engaged member back to MoveToRoom.
+    /// REC-009b — the NATIVE reload-stable squad identity. The job's `squad_entity` is a marker-converted
+    /// `EntityOption<Entity>` inside the `ConvertSaveload`-derived `JobData`, so a full serialize →
+    /// deserialize cycle (rebuilding the marker allocator into a FRESH world) remaps the ref to the reloaded
+    /// squad entity — no per-tick restamp needed. Both halves are pinned:
+    ///  (a) a FIELDED squad + member job round-trips: the reloaded job's `squad_entity` resolves to the
+    ///      reloaded squad entity (fresh index/generation, so a plain `SquadRef` would have gone stale here);
+    ///  (b) a DEAD-squad ref serializes safely — `repair_entity_integrity` scrubs the ref to `None` (the
+    ///      `is_alive && marker` predicate) BEFORE serialize, so the specs `ConvertSaveload for Entity`
+    ///      marker-lookup panic (the reason `SquadRef` was plain data) never fires.
     #[test]
-    fn restamp_squad_ref_repairs_a_stale_ref_without_resetting_the_fsm() {
-        use super::{SquadCombatJob, SquadCombatState};
-        use specs::{Builder, World, WorldExt};
-        let mut world = World::new();
-        let old_squad = world.create_entity().build();
+    fn fielded_squad_job_round_trips_squad_ref_and_dead_ref_scrubs_safely() {
+        use super::SquadCombatJob;
+        use crate::jobs::data::JobData;
+        use crate::military::squad::SquadContext;
+        use crate::serialize::{SerializeMarker, SerializeMarkerAllocator};
+        use bincode::{DefaultOptions, Deserializer, Serializer};
+        use screeps_combat_decision::composition::{
+            BodyType, FormationMode, FormationShape, SquadComposition, SquadRole, SquadSlot,
+        };
+        use specs::saveload::{DeserializeComponents, MarkedBuilder, SerializeComponents};
+        use specs::{Builder, Entity, Join, World, WorldExt};
+
+        fn build_world() -> World {
+            let mut world = World::new();
+            world.register::<SquadContext>();
+            world.register::<JobData>();
+            world.register::<SerializeMarker>();
+            world.insert(SerializeMarkerAllocator::new());
+            world
+        }
+
+        // A minimal 1-slot squad composition (a solo ranged member).
+        let comp = SquadComposition {
+            label: "REC-009b pin".into(),
+            slots: vec![SquadSlot {
+                role: SquadRole::RangedDPS,
+                body_type: BodyType::Sized(Default::default()),
+            }],
+            formation_shape: FormationShape::None,
+            formation_mode: FormationMode::Loose,
+            retreat_threshold: 0.5,
+        };
         let room: RoomName = "W5N5".parse().unwrap();
-        let mut job = SquadCombatJob::new_with_squad(room, old_squad);
-        job.state = SquadCombatState::engaged(); // mid-assault when the VM reload hits
-        // The reload: the old squad entity is gone; the squad is marker-recreated at a fresh generation.
-        world.delete_entity(old_squad).unwrap();
-        world.maintain();
-        let new_squad = world.create_entity().build();
-        // Stale: the serialized ref no longer resolves → `recall_decision` would tear the roster down.
+
+        // ── World 1: a fielded squad with one rostered member whose job binds the squad. ──
+        let mut w1 = build_world();
+        // The member creep is marked so it round-trips (the squad rosters a real entity).
+        let member = w1.create_entity().marked::<SerializeMarker>().build();
+        let mut ctx = SquadContext::from_composition(&comp);
+        ctx.add_member(member, SquadRole::RangedDPS, 0);
+        let squad = w1.create_entity().with(ctx).marked::<SerializeMarker>().build();
+        let job = SquadCombatJob::new_with_squad(room, squad);
+        assert_eq!(*job.context.squad_entity, Some(squad), "the fresh job binds the live squad");
+        w1.write_storage::<JobData>()
+            .insert(member, JobData::SquadCombat(job))
+            .unwrap();
+
+        // Serialize the (SquadContext, JobData) storages with markers, exactly like the world save.
+        let mut buffer = Vec::<u8>::new();
+        {
+            let mut serializer = Serializer::new(&mut buffer, DefaultOptions::new());
+            SerializeComponents::<std::convert::Infallible, SerializeMarker>::serialize(
+                &(&w1.read_storage::<SquadContext>(), &w1.read_storage::<JobData>()),
+                &w1.entities(),
+                &w1.read_storage::<SerializeMarker>(),
+                &mut serializer,
+            )
+            .expect("serialize round-trips (no dangling-entity panic — the squad + member are marked)");
+        }
+
+        // ── World 2: a FRESH world (fresh entity allocator ⇒ fresh index/generation) reloads the save. ──
+        let mut w2 = build_world();
+        {
+            let entities = w2.entities();
+            let mut squads = w2.write_storage::<SquadContext>();
+            let mut jobs = w2.write_storage::<JobData>();
+            let mut markers = w2.write_storage::<SerializeMarker>();
+            let mut alloc = w2.write_resource::<SerializeMarkerAllocator>();
+            let mut deserializer = Deserializer::from_slice(&buffer, DefaultOptions::new());
+            DeserializeComponents::<std::convert::Infallible, SerializeMarker>::deserialize(
+                &mut (&mut squads, &mut jobs),
+                &entities,
+                &mut markers,
+                &mut alloc,
+                &mut deserializer,
+            )
+            .expect("deserialize succeeds");
+        }
+        w2.maintain();
+
+        // (a) The reloaded job's squad ref resolves to the RELOADED squad entity (marker-remapped). Find
+        // the reloaded squad by its single member; the ref must point at THAT entity, not a stale handle.
+        let (reloaded_squad, reloaded_job_ref): (Entity, Option<Entity>) = {
+            let squads = w2.read_storage::<SquadContext>();
+            let jobs = w2.read_storage::<JobData>();
+            let entities = w2.entities();
+            let (squad_entity, _) = (&entities, &squads).join().next().expect("the squad reloaded");
+            let member_entity = squads.get(squad_entity).unwrap().members[0].entity;
+            let job_ref = match jobs.get(member_entity).expect("the member's job reloaded") {
+                JobData::SquadCombat(j) => *j.context.squad_entity,
+                _ => panic!("expected a SquadCombat job"),
+            };
+            (squad_entity, job_ref)
+        };
         assert_eq!(
-            job.context.squad_entity.unwrap().resolve(&world.entities()),
-            None,
-            "the reloaded ref is stale (fresh generation) — the REC-009 failure precondition"
+            reloaded_job_ref,
+            Some(reloaded_squad),
+            "the job's squad ref natively remaps to the reloaded squad entity (no restamp)"
         );
-        job.restamp_squad_ref(new_squad);
-        assert_eq!(
-            job.context.squad_entity.unwrap().resolve(&world.entities()),
-            Some(new_squad),
-            "the restamp re-couples the job to the remapped squad entity"
+        assert!(
+            w2.entities().is_alive(reloaded_job_ref.unwrap()),
+            "the remapped squad entity is live in the reloaded world"
         );
-        assert_eq!(
-            job.state.status_description(),
-            SquadCombatState::engaged().status_description(),
-            "the FSM is untouched — restamp is identity repair, not a rebind/reset"
-        );
-        assert_eq!(job.context.target_room, room, "the target room is untouched");
+
+        // (b) A DEAD-squad ref must serialize safely. Build a job bound to an UNMARKED, then deleted squad;
+        // the `repair_entity_integrity` predicate (`is_alive(e) && markers.get(e).is_some()`) scrubs it to
+        // `None` before serialize, so the specs `ConvertSaveload for Entity` marker lookup can't panic.
+        let mut w3 = build_world();
+        let dead_squad = w3.create_entity().build(); // no marker
+        let dead_job = SquadCombatJob::new_with_squad(room, dead_squad);
+        w3.delete_entity(dead_squad).unwrap();
+        w3.maintain();
+        let markers3 = w3.read_storage::<SerializeMarker>();
+        let entities3 = w3.entities();
+        let is_valid = |e: Entity| -> bool { entities3.is_alive(e) && markers3.get(e).is_some() };
+        assert_eq!(*dead_job.context.squad_entity, Some(dead_squad), "precondition: the ref is set");
+        let mut job_data = JobData::SquadCombat(dead_job);
+        job_data.repair_entity_refs(&is_valid);
+        match &job_data {
+            JobData::SquadCombat(j) => assert_eq!(
+                *j.context.squad_entity, None,
+                "a dead/unmarked squad ref is scrubbed to None → serialize cannot panic"
+            ),
+            _ => unreachable!(),
+        }
     }
 
     /// ADR 0032 v2 — the zero-orphan recall decision. A merge-transfer SURPLUS (a creep bound to a LIVE
