@@ -1,5 +1,7 @@
 use super::data::*;
 use super::operationsystem::*;
+use crate::military::objective_queue::{ForceRequirement, ObjectiveKind, ObjectiveOwner, ObjectiveRequest, OBJECTIVE_PRIORITY_MEDIUM};
+use crate::military::threatmap::ThreatLevel;
 use crate::missions::claim::*;
 use crate::missions::data::*;
 use crate::missions::remotebuild::*;
@@ -10,12 +12,50 @@ use crate::serialize::*;
 use crate::visualization::{CandidateSubScores, SummaryContent};
 use log::*;
 use screeps::*;
+use screeps_combat_decision::composition::CompositionParams;
+use screeps_combat_decision::doctrine::{
+    decide_doctrine, defense_doctrines, plan_engagement, DoctrineObjective, EnemyCoordination, EnemyForce, EngagementContext,
+};
+use screeps_combat_decision::force_sizing::DefenseProfile;
 use serde::{Deserialize, Serialize};
 #[allow(deprecated)]
 use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 use std::collections::HashSet;
+
+/// The heaviest hostile combat DPS an Escort pre-clear will screen against (ADR 0017 escort/pre-clear;
+/// combat-overhaul-plan.md §W3). Above this the room is not a MARGINAL claim target but a genuine
+/// contest — a claimer has no business there, so the escort is a NO-OP and the safety gate keeps
+/// rejecting the candidate (the war/harass lane owns real assaults, not the claim pipeline). A
+/// bot-side named constant (EP-4.6): calibration lands as a reviewed diff, not runtime config. Sized at
+/// ~a single ATTACK creep's worth of DPS (2×ATTACK = 60), the "light screen" a claim escort should
+/// clear ahead of the claimer without widening aggression.
+const ESCORT_MAX_SCREEN_DPS: f32 = 60.0;
+
+/// On-site window (ticks) a claim-escort screen has to deliver its clear — a normal-lifetime defender
+/// mirroring the war.rs defense window. Feeds the composition optimizer's `deliverable` term.
+const ESCORT_ONSITE_WINDOW: u32 = 1400;
+
+/// EV target value handed to the escort composition optimizer. Mirrors the war.rs defense target value:
+/// high enough that "EV > commit" ⇔ "winnable" so a winnable light screen is never deferred for low value.
+const ESCORT_TARGET_VALUE: f32 = 1_000_000.0;
+
+/// TTL (ticks) for an `Escort` pre-clear objective. UNLIKE the war/defense scans — which re-assert every
+/// 1–40 ticks and so run tiny TTLs (`DEFEND_OBJECTIVE_TTL` 60 / `OFFENSE_OBJECTIVE_TTL` 100) — the escort
+/// is re-asserted only ONCE per claim discover cycle (`emit_escort_objectives` fires from `run_select`,
+/// which runs after the full Idle→Discover→Scouting→Select loop). That re-assert gap is
+/// `discover_interval_eff` (500..=1500) + `scouting_window_eff` (≥200) ≈ 700..~4000 ticks, so the queue's
+/// default 200-tick TTL would lapse the escort between cycles and it could vanish mid-pre-clear (right
+/// while a claimer is spawning/en-route/clearing). Size the TTL to bridge BOTH the claimer's journey the
+/// escort screens — spawn (~hundreds) + travel (≤ `max_claim_radius_hops` 11 × `TICKS_PER_HOP` 50 = 550) +
+/// the on-site clear window (`ESCORT_ONSITE_WINDOW` 1400) — AND a worst-case re-assert gap (a
+/// `max_discover_interval` 1500 cycle). 4000 clears the journey ceiling (~2500) plus a full slow cycle
+/// with margin. Still AUTHORITATIVE (`.authoritative()`): a cleared threat / completed claim simply stops
+/// re-asserting and the objective lapses within one cycle — the TTL only prevents a spurious mid-journey
+/// gap, it does not latch a stale escort (the manager also retires the squad on world-state). A bot-side
+/// named constant (EP-4.6): calibration lands as a reviewed diff, not runtime config.
+const ESCORT_OBJECTIVE_TTL: u32 = 4000;
 
 /// Phase of the claim pipeline state machine.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -570,6 +610,11 @@ impl ClaimOperation {
         // pre-empts a farther one that is merely still being scouted.
         let covered = self.scouting_coverage_complete(system_data);
 
+        // Escort pre-clear (ADR 0017; combat-overhaul-plan.md §W3): emit an Escort screen for any MARGINAL
+        // threatened candidate BEFORE the prune below drops the threat-rejected ones. A NO-OP for clean
+        // claims and for any threat too heavy to be a light screen (see `escort_screen_decision`).
+        self.emit_escort_objectives(system_data, features);
+
         let total_before_prune = self.candidates.len();
         let unscored = self.candidates.iter().filter(|c| c.score.is_none()).count();
         let hostile = self
@@ -961,6 +1006,183 @@ impl ClaimOperation {
         self.phase = ClaimPhase::Idle;
     }
 
+    // ── Escort pre-clear producer (ADR 0017; combat-overhaul-plan.md §W3) ────
+
+    /// For each scored candidate that is a MARGINAL claim target — one the claim pipeline is actually
+    /// pursuing (viable: controller + sources + neutral owner + plannable) but whose target carries a
+    /// detected-but-modest creep threat the pre-claim safety gate rejects — emit an `Escort{room}`
+    /// objective so a small defensive screen clears/screens the room ahead of the claimer, instead of
+    /// losing the claimer into it. Called from `run_select` BEFORE the hostile/unscored prune, so the
+    /// rejected-by-threat candidates (marked with a negative score) are still present.
+    ///
+    /// Conservative by construction — the EXACT NO-OP conditions (this loop `continue`s or
+    /// [`escort_screen_decision`] returns `false`, so no escort is emitted):
+    /// - **Feature off** — `!features.on || !features.safety_gate` (the whole pre-claim safety lifecycle
+    ///   rides the `safety_gate` master kill-switch; this producer disables with it).
+    /// - **No intel** — the candidate has no room entity, no `RoomData`, or no cached dynamic-visibility
+    ///   read; or the read is stale (`intel_fresh` — ADR 0017: absence of fresh intel is NOT safety).
+    /// - **Not in the pursued set** — the room is EXPANSION-AVOIDED (deliberately abandoned) or UNPLANNABLE
+    ///   (`plan_commit_gate == SkipInvalid`); both mirror `try_score_candidates` so the escort never reaches
+    ///   into a room the claim pipeline itself would not pursue.
+    /// - **Not claimable at all** — a hostile/friendly OWNER or a blocked RESERVATION (claiming is
+    ///   impossible regardless of threat — the war/harass lane's business, not the claim escort's).
+    /// - **Clean claim** — `!warrants_attention` (`ThreatLevel::None`): a threat-free candidate never
+    ///   produces an escort (no wasted screens).
+    /// - **Threat arm did not reject** — `!threat_present`: the room is claimable as-is (e.g. a lone 0-DPS
+    ///   `PlayerScout` that `warrants_attention` but `is_claim_target_safe` treats as CLEAN); a screen here
+    ///   would be redundant AND widen aggression toward a room outside the contested set.
+    /// - **Too heavy for a light screen** — a hostile TOWER at the edge, an inbound NUKE, a `PlayerSiege`,
+    ///   or `attack_dps` over the [`ESCORT_MAX_SCREEN_DPS`] ceiling: a full assault the claim pipeline must
+    ///   never provoke (no aggression widening).
+    /// - **Unfieldable this tick** — no in-range home can build even the minimal screen composition.
+    ///
+    /// The escort keys on the pre-claim safety gate's THREAT arm ONLY. `threat_present` mirrors that arm
+    /// verbatim (`threat_level >= PlayerRaid` OR `estimated_attack_dps > 0.0`), NOT the full set of signals
+    /// `is_claim_target_safe` consumes (the owner/reservation guards above are producer-side claimability
+    /// filters, not the safety gate's non-threat rejection reasons). It reads only the always-cached dynamic
+    /// visibility plus the existing `RoomThreatData`, inventing no new scouting. It sizes the screen through
+    /// the SAME doctrine driver (`decide_doctrine` then `plan_engagement`, `ClearCreeps`) that war.rs uses
+    /// for defense, and upserts onto the SAME `CombatObjectiveQueue` the `SquadManager` pulls.
+    fn emit_escort_objectives(&self, system_data: &mut OperationExecutionSystemData, features: &crate::features::ClaimFeatures) {
+        // The escort producer is part of the pre-claim safety lifecycle (ADR 0017); when that whole
+        // machinery is switched off, produce nothing.
+        if !features.on || !features.safety_gate {
+            return;
+        }
+
+        let now = game::time();
+        let defense_docs = defense_doctrines();
+
+        for candidate in &self.candidates {
+            let Some(room_entity) = system_data.mapping.get_room(&candidate.room_name) else {
+                continue;
+            };
+            let Some(room_data) = system_data.room_data.get(room_entity) else {
+                continue;
+            };
+            let Some(dynamic) = room_data.get_dynamic_visibility_data() else {
+                continue;
+            };
+
+            // Restrict to candidates the claim pipeline is ACTUALLY pursuing — a room viable-but-for-threat,
+            // NOT one rejected for a non-threat reason (ESCORT-W3 §W3 contract; ADR 0017). The escort fires
+            // only when the room's SOLE blocker is a marginal creep presence; a room rejected for avoidance
+            // or an unbuildable plan is scored -1.0 in `try_score_candidates` too, so gating on "negative
+            // score" alone would leak. Mirror the SAME viability signals `try_score_candidates` checks so the
+            // two sites cannot drift:
+            //  (1) EXPANSION-AVOIDANCE — a room the bot DELIBERATELY abandoned; no claimer will ever follow.
+            //  (2) UNPLANNABLE — `plan_commit_gate == SkipInvalid`; a room the bot can NEVER claim.
+            // Either would otherwise spawn+dispatch a real screen squad into a room outside the pursued set
+            // (wasted energy/CPU/squad-slot + aggression widened into non-claim rooms). Both guards are the
+            // pure `escort_candidate_viable` kernel (pin-tested).
+            let avoided = system_data.expansion_avoidance.is_avoided(candidate.room_name, now);
+            let plan_gate = plan_commit_gate(system_data.room_plan_data.get(room_entity).map(|plan| plan.valid()));
+            if !escort_candidate_viable(avoided, plan_gate) {
+                continue;
+            }
+
+            let threat = system_data.threat_data.get(room_entity);
+
+            // Gather the cheap threat/intel signals — exactly the inputs the pre-claim safety gate reads.
+            // `threat_present` mirrors the THREAT arm of `is_claim_target_safe` verbatim (`threat_level >=
+            // PlayerRaid` OR `estimated_attack_dps > 0.0`) so the escort fires exactly for the rooms that gate
+            // rejects on threat — not for a harmless 0-DPS presence (a lone scout) the gate would claim.
+            let (attack_dps, heal, count, warrants_attention, threat_present, siege, nukes) = match threat {
+                Some(t) => (
+                    t.estimated_attack_dps,
+                    t.estimated_heal,
+                    t.hostile_creeps.len() as u32,
+                    t.warrants_attention(),
+                    t.threat_level >= ThreatLevel::PlayerRaid || t.estimated_attack_dps > 0.0,
+                    t.threat_level >= ThreatLevel::PlayerSiege,
+                    !t.incoming_nukes.is_empty(),
+                ),
+                None => (0.0, 0.0, 0, false, false, false, false),
+            };
+
+            let inputs = EscortScreenInputs {
+                intel_fresh: dynamic.updated_within(features.intel_freshness_ticks),
+                owner_hostile: dynamic.owner().hostile(),
+                owner_friendly: dynamic.owner().friendly(),
+                reservation_blocked: dynamic.reservation().hostile() || dynamic.reservation().friendly(),
+                tower_present: dynamic.tower_dps_at_edge().is_some(),
+                nukes_incoming: nukes,
+                siege,
+                warrants_attention,
+                threat_present,
+                attack_dps,
+            };
+
+            // Kernel: a marginal-threatened candidate warrants a screen; everything else is a NO-OP. On a
+            // `true` verdict the screen is sized directly off the observed `attack_dps` (certified within
+            // the light-screen ceiling by the kernel).
+            if !escort_screen_decision(inputs, ESCORT_MAX_SCREEN_DPS) {
+                continue;
+            }
+
+            // Size a MINIMAL screen through the same doctrine driver war.rs uses for defense: a
+            // `ClearCreeps` clear against the modest observed force. Size the members to the strongest
+            // BFS-home's spawn capacity (the screen spawns from a real colony, not the unowned target).
+            let member_energy = candidate
+                .home_rooms
+                .iter()
+                .filter_map(|r| game::rooms().get(*r))
+                .map(|r| r.energy_capacity_available())
+                .max()
+                .unwrap_or(0);
+
+            let ctx = EngagementContext {
+                objective: DoctrineObjective::ClearCreeps,
+                coordination: EnemyCoordination::Coordinated,
+                defense: DefenseProfile::default(),
+                enemy_force: Some(EnemyForce {
+                    dps: attack_dps,
+                    heal,
+                    hits: 0,
+                    count: count.max(1),
+                    boosted: false,
+                }),
+                importance: 0.0,
+                member_energy,
+                target_value: ESCORT_TARGET_VALUE,
+                onsite_window: ESCORT_ONSITE_WINDOW,
+                params: CompositionParams {
+                    member_energy,
+                    ..Default::default()
+                },
+                // A PRESENT (if modest) creep threat drives the screen — never confirmed-undefended.
+                defense_intel_reliable: false,
+            };
+
+            let Some(composition) = decide_doctrine(&ctx, &defense_docs).and_then(|d| plan_engagement(d, &ctx, None).composition) else {
+                // No in-range home can build even the minimal screen — skip (can't field it this tick).
+                continue;
+            };
+
+            info!(
+                "ClaimOp [Escort]: marginal claim target {} carries a light threat (dps={:.0}, heal={:.0}, count={}) — emitting Escort screen",
+                candidate.room_name, attack_dps, heal, count,
+            );
+
+            // Upsert the Escort objective. `authoritative` so a de-escalating threat's priority decays
+            // each scan (REC-041) — the escort follows the current threat, never latches a stale one.
+            system_data.combat_objective_queue.request(
+                ObjectiveRequest::new(
+                    ObjectiveKind::Escort { room: candidate.room_name },
+                    OBJECTIVE_PRIORITY_MEDIUM,
+                    ForceRequirement::single(composition),
+                )
+                .owner(ObjectiveOwner::Claim)
+                // Sized to bridge the claimer's spawn+travel+clear journey plus a full slow discover cycle
+                // (see `ESCORT_OBJECTIVE_TTL`): re-asserted only once per claim Select cycle, so the queue's
+                // default 200-tick TTL would lapse it mid-pre-clear.
+                .ttl(ESCORT_OBJECTIVE_TTL)
+                .authoritative(),
+                now,
+            );
+        }
+    }
+
     // ── Visualization from cache ────────────────────────────────────────────
 
     /// Populate visualization data from cached state. Runs every tick when viz
@@ -1313,6 +1535,102 @@ fn claim_route_feasible(route: crate::pathing::pathfinderservice::CachedRoute) -
     route.reachable && route.hops <= crate::missions::utility::max_claim_radius_hops()
 }
 
+/// The cheap threat/intel signals for an Escort screen decision on one claim candidate. All primitives
+/// (EP-6.2 pure-by-design) so the decision kernel stays `game::*`-free and pin-testable. Sourced from the
+/// candidate's dynamic-visibility read + optional `RoomThreatData` — the SAME intel the pre-claim safety
+/// gate consumes; the escort producer invents no new scouting.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct EscortScreenInputs {
+    /// Fresh clean intel required (ADR 0017: absence of fresh intel is NOT safety) — a stale read is no
+    /// basis to dispatch a screen. `false` ⇒ never emit (re-scout instead).
+    intel_fresh: bool,
+    /// The room's owner is a foreign player. A hostile-OWNED room is not a marginal claim target at all
+    /// (claimController is impossible there); it belongs to the war/harass lane, never the claim escort.
+    owner_hostile: bool,
+    /// The room's owner is an ally. Not claimable — no escort.
+    owner_friendly: bool,
+    /// A foreign player holds/contests the reservation (`claimController` ⇒ ERR_INVALID_TARGET). Not a
+    /// marginal claim target.
+    reservation_blocked: bool,
+    /// A hostile tower can hit the room edge. A towered room is a full assault, not a light screen — a
+    /// claim escort must never be sized to beat towers (that would widen aggression). NO-OP.
+    tower_present: bool,
+    /// A nuke is inbound. Never screen a claimer into it. NO-OP.
+    nukes_incoming: bool,
+    /// The canonical threat kind is at least `PlayerSiege` — a sustained heavy force, not marginal. NO-OP.
+    siege: bool,
+    /// The room has SOME threat worth attention (`ThreatLevel != None`). When `false` the claim is CLEAN
+    /// and the escort is a strict NO-OP (don't spawn escorts for clean claims).
+    warrants_attention: bool,
+    /// The room is rejected by the THREAT arm of the pre-claim safety gate specifically — i.e.
+    /// `threat_level >= PlayerRaid` OR `estimated_attack_dps > 0.0` (the exact predicate
+    /// `is_claim_target_safe` rejects on). When `false` the safety gate treats the room as CLAIMABLE
+    /// (e.g. a lone enemy `PlayerScout` with 0 attack DPS: it `warrants_attention` yet is claimed
+    /// normally), so a screen here would be redundant AND widen aggression toward a room outside the
+    /// contested set → NO-OP. This is the signal that makes the escort's firing set exactly "the room the
+    /// claim pipeline is pursuing but the safety gate's threat arm rejected", not the broader
+    /// `warrants_attention` set (which includes harmless 0-DPS presences).
+    threat_present: bool,
+    /// Summed hostile combat DPS (melee + ranged). Must be within [`ESCORT_MAX_SCREEN_DPS`] — a genuinely
+    /// light presence a small screen can clear. Above the ceiling the room is a real contest → NO-OP.
+    attack_dps: f32,
+}
+
+/// Producer-level viability guards for the Escort producer (the two filters `emit_escort_objectives`
+/// applies BEFORE the threat/screen kernel), extracted pure (EP-6.2) so the producer's full filtering —
+/// not just the screen kernel — is pin-testable without game fixtures. Returns `true` only when the room
+/// is one the claim pipeline is ACTUALLY pursuing: NOT expansion-avoided AND its plan is not commit-invalid
+/// (`PlanCommitGate::SkipInvalid`). Mirrors the SAME viability signals `try_score_candidates` checks so the
+/// two sites cannot drift; a `false` here means a screen would be fielded into a room outside the pursued
+/// set (wasted energy/CPU/squad-slot + aggression widened into non-claim rooms). Note `RequestPlan` (no
+/// plan yet) is NOT a rejection: only `SkipInvalid` (a FAILED plan — the room can never be built/claimed)
+/// blocks the escort, matching the commit gate's "presence is not validity" contract.
+fn escort_candidate_viable(avoided: bool, plan_gate: PlanCommitGate) -> bool {
+    !avoided && plan_gate != PlanCommitGate::SkipInvalid
+}
+
+/// A pure decision: should a claim candidate get an `Escort{room}` pre-clear screen (ADR 0017 expansion
+/// pre-clear; combat-overhaul-plan.md §W3)? Returns `true` only for a MARGINAL threatened claim candidate:
+/// one the bot would otherwise pursue but whose target carries a detected-but-modest creep presence.
+/// Returns `false` (NO-OP) for a clean claim (no escorts on clean rooms), for a room that is unclaimable
+/// for a NON-threat reason (hostile/friendly owner, blocked reservation — the war lane's business, not the
+/// claim escort's), and for a threat too heavy to be a light defensive screen (towers, nukes, siege, or DPS
+/// over the screen ceiling — never widen aggression). Deliberately conservative: the escort is a
+/// Secure-adjacent screen, never a full assault. The caller sizes the screen off `inputs.attack_dps` — a
+/// `true` verdict certifies that DPS is within [`ESCORT_MAX_SCREEN_DPS`], i.e. a light presence a small
+/// screen can clear; the kernel screens (yes/no), it does not transform the force.
+fn escort_screen_decision(inputs: EscortScreenInputs, max_screen_dps: f32) -> bool {
+    // Stale intel is not a basis to commit a screen (ADR 0017) — re-scout instead.
+    if !inputs.intel_fresh {
+        return false;
+    }
+    // Not a marginal CLAIM target: a hostile/friendly owner or a contested reservation makes claiming
+    // impossible regardless of threat. Those rooms are the war/harass lane's, not the claim escort's —
+    // emitting here would widen aggression into rooms we cannot claim.
+    if inputs.owner_hostile || inputs.owner_friendly || inputs.reservation_blocked {
+        return false;
+    }
+    // A clean claim: strict NO-OP (no escorts on clean rooms).
+    if !inputs.warrants_attention {
+        return false;
+    }
+    // The safety gate's THREAT arm did not reject this room — it is claimable as-is (e.g. a lone 0-DPS
+    // `PlayerScout`, which `warrants_attention` but `is_claim_target_safe` treats as CLEAN). A screen here
+    // would be redundant and widen aggression toward a room outside the contested set → NO-OP.
+    if !inputs.threat_present {
+        return false;
+    }
+    // Too heavy to be a light defensive screen — a full assault the claim pipeline must never provoke.
+    if inputs.tower_present || inputs.nukes_incoming || inputs.siege {
+        return false;
+    }
+    // Only a genuinely MODEST creep presence gets a screen; above the ceiling it is a real contest.
+    if inputs.attack_dps > max_screen_dps {
+        return false;
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1451,5 +1769,261 @@ mod tests {
         // the nominal hop count.
         assert!(!claim_route_feasible(route(2, false)));
         assert!(!claim_route_feasible(route(u32::MAX, false)));
+    }
+
+    // ── Escort pre-clear producer (ADR 0017; combat-overhaul-plan.md §W3) ────
+
+    /// A CLEAN, viable claim candidate (no threat) that a MARGINAL-threatened one shares every field
+    /// with except the threat signals. Fresh intel, neutral owner/reservation, no towers/nukes/siege.
+    fn clean_inputs() -> EscortScreenInputs {
+        EscortScreenInputs {
+            intel_fresh: true,
+            owner_hostile: false,
+            owner_friendly: false,
+            reservation_blocked: false,
+            tower_present: false,
+            nukes_incoming: false,
+            siege: false,
+            warrants_attention: false,
+            threat_present: false,
+            attack_dps: 0.0,
+        }
+    }
+
+    /// A marginal threatened candidate: same clean room, but a modest creep presence (within the screen
+    /// ceiling) worth attention AND rejected by the safety gate's threat arm (`threat_present`).
+    fn marginal_inputs() -> EscortScreenInputs {
+        EscortScreenInputs {
+            warrants_attention: true,
+            threat_present: true,
+            attack_dps: 30.0,
+            ..clean_inputs()
+        }
+    }
+
+    /// Pin (§W3): the escort is EMITTED for a marginal threatened claim target — a viable room the bot is
+    /// pursuing whose target carries a detected-but-modest creep threat within the light-screen ceiling.
+    #[test]
+    fn escort_emitted_for_marginal_threatened_claim() {
+        assert!(
+            escort_screen_decision(marginal_inputs(), ESCORT_MAX_SCREEN_DPS),
+            "a modest creep threat on a viable claim target gets a screen"
+        );
+    }
+
+    /// Pin (§W3): the escort is a strict NO-OP for a CLEAN claim — no threat, no screen (don't spawn
+    /// escorts for clean claims). This is the "must not fire on clean rooms" half of the requirement.
+    #[test]
+    fn escort_not_emitted_for_clean_claim() {
+        assert!(
+            !escort_screen_decision(clean_inputs(), ESCORT_MAX_SCREEN_DPS),
+            "a clean claim target never produces an escort"
+        );
+    }
+
+    /// Pin (no aggression widening): a threat too HEAVY to be a light defensive screen is a NO-OP — a
+    /// towered room, an inbound nuke, a siege-level force, or DPS over the ceiling. The claim pipeline
+    /// must never provoke a full assault; those rooms stay the war/harass lane's business.
+    #[test]
+    fn escort_not_emitted_for_heavy_threat_no_aggression_widening() {
+        // Over the light-screen DPS ceiling → not marginal.
+        let over_dps = EscortScreenInputs {
+            attack_dps: ESCORT_MAX_SCREEN_DPS + 1.0,
+            ..marginal_inputs()
+        };
+        assert!(!escort_screen_decision(over_dps, ESCORT_MAX_SCREEN_DPS), "DPS over the ceiling is a real contest");
+
+        // A towered room is a full assault, not a screen.
+        assert!(
+            !escort_screen_decision(
+                EscortScreenInputs {
+                    tower_present: true,
+                    ..marginal_inputs()
+                },
+                ESCORT_MAX_SCREEN_DPS
+            ),
+            "a towered room is never a claim escort"
+        );
+
+        // An inbound nuke.
+        assert!(
+            !escort_screen_decision(
+                EscortScreenInputs {
+                    nukes_incoming: true,
+                    ..marginal_inputs()
+                },
+                ESCORT_MAX_SCREEN_DPS
+            ),
+            "never screen a claimer into an inbound nuke"
+        );
+
+        // A siege-level force.
+        assert!(
+            !escort_screen_decision(
+                EscortScreenInputs {
+                    siege: true,
+                    ..marginal_inputs()
+                },
+                ESCORT_MAX_SCREEN_DPS
+            ),
+            "a siege is not a marginal claim target"
+        );
+    }
+
+    /// Pin (no aggression widening): a room unclaimable for a NON-threat reason — a hostile or friendly
+    /// owner, or a blocked reservation — is a NO-OP even with a modest threat. Those belong to the
+    /// war/harass lane; the claim escort must not reach into rooms it could never claim anyway.
+    #[test]
+    fn escort_not_emitted_for_unclaimable_owner_or_reservation() {
+        for bad in [
+            EscortScreenInputs {
+                owner_hostile: true,
+                ..marginal_inputs()
+            },
+            EscortScreenInputs {
+                owner_friendly: true,
+                ..marginal_inputs()
+            },
+            EscortScreenInputs {
+                reservation_blocked: true,
+                ..marginal_inputs()
+            },
+        ] {
+            assert!(
+                !escort_screen_decision(bad, ESCORT_MAX_SCREEN_DPS),
+                "a non-claimable room is never a claim escort"
+            );
+        }
+    }
+
+    /// Pin (ADR 0017: absence of fresh intel is NOT safety): a marginal threat on STALE intel is a NO-OP
+    /// — re-scout rather than dispatch a screen on an old read.
+    #[test]
+    fn escort_not_emitted_on_stale_intel() {
+        assert!(
+            !escort_screen_decision(
+                EscortScreenInputs {
+                    intel_fresh: false,
+                    ..marginal_inputs()
+                },
+                ESCORT_MAX_SCREEN_DPS
+            ),
+            "stale intel is no basis to commit a screen"
+        );
+    }
+
+    /// Pin (ESCORT-W3 Finding 2 — no aggression widening + no redundant escort): a room that
+    /// `warrants_attention` but is NOT rejected by the safety gate's threat arm (a lone enemy
+    /// `PlayerScout`: `estimated_attack_dps == 0`, `threat_level < PlayerRaid`, so
+    /// `is_claim_target_safe` treats it as CLEAN and claims it normally) is a strict NO-OP — no
+    /// redundant screen, no combat squad fielded toward a room outside the contested set.
+    #[test]
+    fn escort_not_emitted_for_harmless_lone_scout() {
+        let lone_scout = EscortScreenInputs {
+            warrants_attention: true,
+            threat_present: false,
+            attack_dps: 0.0,
+            ..clean_inputs()
+        };
+        assert!(
+            !escort_screen_decision(lone_scout, ESCORT_MAX_SCREEN_DPS),
+            "a lone 0-DPS scout the safety gate treats as claimable never gets an escort"
+        );
+    }
+
+    /// Pin (boundary): the light-screen DPS ceiling is inclusive — a threat exactly AT the ceiling is
+    /// still a marginal screen; one tick over is a contest.
+    #[test]
+    fn escort_dps_ceiling_is_inclusive() {
+        assert!(
+            escort_screen_decision(
+                EscortScreenInputs {
+                    attack_dps: ESCORT_MAX_SCREEN_DPS,
+                    ..marginal_inputs()
+                },
+                ESCORT_MAX_SCREEN_DPS
+            ),
+            "DPS exactly at the ceiling is still a light screen"
+        );
+    }
+
+    // ── Producer-level filtering (emit_escort_objectives, kernel-composed) ────
+    //
+    // `emit_escort_objectives` needs a live specs `World` + JS-bound `RoomData` dynamic visibility to run
+    // end-to-end (heavy fixtures — EP-6.2). Its filtering beyond the screen kernel is entirely the two pure
+    // viability guards; these tests compose them EXACTLY as the producer does (viability guard →
+    // `escort_screen_decision`) so the producer's filter set is pinned directly.
+
+    /// Model of one candidate the producer walks: the viability inputs (avoidance + plan gate) plus the
+    /// screen inputs. Mirrors the producer's per-candidate signal gather.
+    struct ProducerCandidate {
+        avoided: bool,
+        plan_gate: PlanCommitGate,
+        screen: EscortScreenInputs,
+    }
+
+    /// Whether the producer would emit an Escort for this candidate — the EXACT filtering chain of
+    /// `emit_escort_objectives` (the pure viability guard, then the screen kernel).
+    fn producer_emits(c: &ProducerCandidate) -> bool {
+        escort_candidate_viable(c.avoided, c.plan_gate) && escort_screen_decision(c.screen, ESCORT_MAX_SCREEN_DPS)
+    }
+
+    /// Pin (§W3 producer filtering): across a mixed candidate set, the producer emits EXACTLY one Escort —
+    /// only for the genuine threat-rejected VIABLE candidate. A plan-invalid candidate with a modest
+    /// threat, an avoidance-cooldown candidate with a modest threat, and a clean positively-scored viable
+    /// candidate all yield NO escort. This is the producer-level counterpart to the kernel pins (which the
+    /// review noted were the only coverage).
+    #[test]
+    fn producer_emits_only_for_viable_threat_rejected_candidate() {
+        let candidates = [
+            // (1) Plan-invalid (FAILED plan) + a modest threat → NO escort: unbuildable, never pursued.
+            ProducerCandidate {
+                avoided: false,
+                plan_gate: PlanCommitGate::SkipInvalid,
+                screen: marginal_inputs(),
+            },
+            // (2) Avoidance-cooldown + a modest threat → NO escort: deliberately abandoned, never pursued.
+            ProducerCandidate {
+                avoided: true,
+                plan_gate: PlanCommitGate::Proceed,
+                screen: marginal_inputs(),
+            },
+            // (3) Clean, positively-scored viable candidate → NO escort: no threat, no screen.
+            ProducerCandidate {
+                avoided: false,
+                plan_gate: PlanCommitGate::Proceed,
+                screen: clean_inputs(),
+            },
+            // (4) Genuine threat-rejected VIABLE candidate → the SOLE escort.
+            ProducerCandidate {
+                avoided: false,
+                plan_gate: PlanCommitGate::Proceed,
+                screen: marginal_inputs(),
+            },
+        ];
+
+        assert!(!producer_emits(&candidates[0]), "a plan-invalid candidate is never escorted");
+        assert!(!producer_emits(&candidates[1]), "an avoidance-cooldown candidate is never escorted");
+        assert!(!producer_emits(&candidates[2]), "a clean viable candidate is never escorted");
+        assert!(producer_emits(&candidates[3]), "the viable threat-rejected candidate is escorted");
+
+        let emitted = candidates.iter().filter(|c| producer_emits(c)).count();
+        assert_eq!(emitted, 1, "exactly one Escort across the mixed candidate set");
+    }
+
+    /// Pin: the viability guard is orthogonal to the threat kernel — a marginal threat that WOULD screen is
+    /// still suppressed by EITHER producer-level guard (avoidance OR plan-invalid). `RequestPlan` (no plan
+    /// yet) is NOT a rejection (only a FAILED plan blocks), matching the commit gate's presence-≠-validity
+    /// contract, so a viable-but-unplanned marginal candidate still passes the viability guard.
+    #[test]
+    fn producer_viability_guard_suppresses_independently_of_threat() {
+        assert!(escort_candidate_viable(false, PlanCommitGate::Proceed), "viable: not avoided, plan proceeds");
+        assert!(
+            escort_candidate_viable(false, PlanCommitGate::RequestPlan),
+            "no plan yet is not a rejection — only a FAILED plan blocks the escort"
+        );
+        assert!(!escort_candidate_viable(true, PlanCommitGate::Proceed), "avoided rooms are never viable");
+        assert!(!escort_candidate_viable(false, PlanCommitGate::SkipInvalid), "FAILED plans are never viable");
+        assert!(!escort_candidate_viable(true, PlanCommitGate::SkipInvalid), "both guards failing is not viable");
     }
 }

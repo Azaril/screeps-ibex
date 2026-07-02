@@ -106,11 +106,10 @@ pub enum ObjectiveKind {
     /// Clear + suppress a farmable resource room (power bank / source keeper / core).
     Farm { kind: FarmKind, room: RoomName },
     /// Pre-clear + escort a marginal claim target while the claimer commits.
-    /// **Planned-future, no producer yet** (defined + manager-handled; claimers are unescorted
-    /// today). Planned producer = the claim/build escort in `claim.rs` — combat-overhaul-plan.md
-    /// §W3 ("`Escort{room}` pre-clear producer in `claim.rs` for marginal claim targets"; :168
-    /// "W3 adds one") + ADR 0017 expansion pre-clear. ADR 0030 classifies it (`SingleLifetime`,
-    /// win-in-time pre-clear while the claimer commits).
+    /// Produced by `ClaimOperation::emit_escort_objectives` in `claim.rs` — combat-overhaul-plan.md
+    /// §W3 ("`Escort{room}` pre-clear producer in `claim.rs` for marginal claim targets") + ADR 0017
+    /// expansion pre-clear — and fielded end-to-end by the `SquadManager`. ADR 0030 classifies it
+    /// (`SingleLifetime`, win-in-time pre-clear while the claimer commits).
     Escort { room: RoomName },
     /// Neutralize a derelict controller (`attackController`) so the waiting mining outpost can take the room
     /// over (ADR 0027 v1.1 P2). `controller` is the controller tile (the squad's `AttackController` target);
