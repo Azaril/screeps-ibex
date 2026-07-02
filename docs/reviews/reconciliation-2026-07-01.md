@@ -2,7 +2,39 @@
 
 **Scope:** all work landed 2026-06-08 → HEAD `d3fe2b9` (2026-07-01): ~540 superproject commits + ~240 submodule commits (combat-decision 87, combat-eval 72, rover 29, combat-agent 27, engine 12, sim-core 7, rover-eval 8), ADRs 0008a–0039, and the aggregator docs. Reviewed by six parallel deep-review lenses (ADR-vs-code reconciliation; objective/auction lifecycle; rally/travel/tactics; force-sizing/EV; rover-sim/movement/expansion; build/tests + cross-cutting invariants), findings verified against code at HEAD. **Code is ground truth** — doc claims were checked against it, not the reverse.
 
-**How to use this doc:** §2 is the tracking checklist (work the milestones top-down; tick boxes as fixes land). §3 is the detailed findings ledger (REC-###) with evidence and fix specs. §4 is documentation debt (DOC-#). §5 is the reconciled ADR status table. §6 is the already-declared open work harvested from the docs (not new findings — the standing backlog). §7 is what NOT to re-flag. §8 is residual coverage gaps.
+**How to use this doc:** §0 is the implementation status (what has landed). §2 is the tracking checklist (work the milestones top-down; tick boxes as fixes land). §3 is the detailed findings ledger (REC-###) with evidence and fix specs. §4 is documentation debt (DOC-#). §5 is the reconciled ADR status table. §6 is the already-declared open work harvested from the docs (not new findings — the standing backlog). §7 is what NOT to re-flag. §8 is residual coverage gaps.
+
+---
+
+## 0. Implementation status (updated 2026-07-02)
+
+All findings were fixed across two parallel-lane waves, each gated by the full test battery + an adversarial diff-review (per-finding, two-refuter adjudication). **Every wave was committed with zero surviving P1/P2 review findings.** WORLD_FORMAT_VERSION is **24** (bumped once, for REC-001); no other serialized-shape change was introduced. Final composite: **1201 workspace tests green, wasm build + clippy-wasm clean.**
+
+**LANDED — Wave A (M-A):** REC-001 (WFV 23→24), REC-051, REC-060 — commit `ce7069e` + rover `b61e3ee`.
+
+**LANDED — Wave 1** (combat-decision `e2e841e`, combat-eval `a233693`, rover `1d0edb7`; super code `7180573`, docs `99cc142`):
+- M-B lifecycle: REC-002, 003, 004, 005, 009, 015b, 016, 017, 019, 022, 036
+- M-D sizing/structure-threat/econ: REC-011, 012, 013, 014, 015a, 026, 027, 028, 029, 030, 031, 032, 033, 034, 048
+- M-E expansion/movement: REC-024, 025, 045, 050
+- Docs: DOC-1..7
+
+**LANDED — Residual sweep (§3a):** REC-053..060 discovered + adjudicated; V-1/V-2 refuted-or-clean, V-7 CLEARED (ADOPTED), V-5 no new shape changes.
+
+**LANDED — Wave 2** (combat-decision `aa02581`, combat-agent `d0b3965`, combat-eval `d392b3e`; super `f834cb3`):
+- M-C defense valuation & auction: REC-006, 007, 008, 010, 018, 020, 021, 023, 035, 037, 038, 040, 041, 042, 044, 052(c)
+- M-F salvage/dismantle/hygiene: REC-043, 046, 047, 057, 058, 059, 069, 070, 071
+- M-G sim/live parity: REC-039, 049, 053, 054, 055, 056, 063
+- Kernel residuals: REC-061, 064, 065, 066, 067
+
+**STILL OPEN (deferred, not blocking):**
+- **REC-062 (P3)** — REC-036's out-healed-turtle disengage is only partially delivered (unkillable enemies are excluded from `enemy_strength` so the stall valve can't see the turtle case; needs a separate signal). `enemy_stalled` works for kiting/reinforcement stalemates.
+- **REC-068 (P3)** — the "stale SK skip-log" could not be confidently located; lane C found the candidate logs read as current and declined to "fix" correct code (EP-8.2). May not be a real defect.
+- **Trivial comment sweeps:** `pathing/routepricing.rs:7` and `features.rs:443` still name the deleted `is_claim_feasible` (features.rs belongs to the concurrent expansion workstream — sweep when next touched).
+- **Standing backlog (§6)** — the docs-declared open work (0008a tiers, 0020 §11 S5–S7, 0028 K3/K4 wiring, 0030 EngagementTempo, 0031 Tier-2 archetype, etc.) is unchanged; these were never in scope for this reconciliation's fix waves.
+
+**NOT TOUCHED (other workstreams, left uncommitted in-tree):** `features.rs` (expansion/economic-claim ADR 0038 D9 tuning), `docs/design/0040-*` (stress-energy/economy-sim ADR).
+
+The per-finding checkboxes in §2 and the ledger entries in §3/§3a/§3b are the detailed record; this section is the authoritative at-a-glance status.
 
 ---
 
