@@ -39,11 +39,17 @@ machine!(
 
 impl MoveToController {
     fn tick(&mut self, state_context: &mut ClaimJobContext, tick_context: &mut JobTickContext) -> Option<ClaimState> {
-        tick_move_to_position(
+        // Live w-as-priority, CLAIM travel (ADR 0033 §D5.4 claim rail): the job carries no
+        // pre-priced claim value (ADR 0038's room_net_roi lands at MISSION level; plumbing it
+        // here would add a serialized field = WFV bump, deliberately avoided), so bid the HARD
+        // FLOOR V/S_REF with V = the claimer's own body cost (`pathing::value::claim_travel_bid`).
+        let bid = crate::pathing::value::claim_travel_bid(tick_context.runtime_data.owner);
+        tick_move_to_position_with_bid(
             tick_context,
             state_context.claim_target.pos().into(),
             1,
             None,
+            Some(bid),
             ClaimState::claim_controller,
         )
     }

@@ -65,11 +65,16 @@ where
 
     if !creep_pos.in_range_to(target_position, 3) {
         if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
+            // Live w-as-priority, BUILD work-travel leg (ADR 0033 §D5.4 worker rail): every tick
+            // en route is `alive_WORK × BUILD_POWER` e/t of conversion foregone — bid exactly
+            // that in the civilian (Low, Normal) band (`pathing::value::worker_travel_bid`).
+            let bid = crate::pathing::value::worker_travel_bid(creep, BUILD_POWER);
             tick_context
                 .runtime_data
                 .movement
                 .move_to(tick_context.runtime_data.creep_entity, target_position)
-                .range(3);
+                .range(3)
+                .priority_value(bid);
         }
 
         return None;

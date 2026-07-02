@@ -84,11 +84,17 @@ where
 
     if !creep_pos.in_range_to(target_position, 3) {
         if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
+            // Live w-as-priority, UPGRADE work-travel leg (ADR 0033 §D5.4 worker rail):
+            // `alive_WORK × UPGRADE_CONTROLLER_POWER` e/t of conversion foregone per tick en
+            // route (`pathing::value::worker_travel_bid` — k=1, so upgraders rank below
+            // same-body builders on contested tiles, per the ratified k split).
+            let bid = crate::pathing::value::worker_travel_bid(creep, UPGRADE_CONTROLLER_POWER);
             tick_context
                 .runtime_data
                 .movement
                 .move_to(tick_context.runtime_data.creep_entity, target_position)
-                .range(3);
+                .range(3)
+                .priority_value(bid);
         }
 
         return None;
@@ -140,11 +146,15 @@ where
 
     if !creep_pos.is_near_to(target_position) {
         if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
+            // Live w-as-priority, CLAIM final-approach leg: same hard floor as the job's
+            // MoveToController state (V/S_REF, V = body cost — see jobs/claim.rs).
+            let bid = crate::pathing::value::claim_travel_bid(creep);
             tick_context
                 .runtime_data
                 .movement
                 .move_to(tick_context.runtime_data.creep_entity, target_position)
-                .range(1);
+                .range(1)
+                .priority_value(bid);
         }
 
         return None;
@@ -185,11 +195,15 @@ where
 
     if !creep_pos.is_near_to(target_position) {
         if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
+            // Live w-as-priority, RESERVE final-approach leg: the claim-rail hard floor
+            // (V/S_REF, V = body cost — see jobs/reserve.rs).
+            let bid = crate::pathing::value::claim_travel_bid(creep);
             tick_context
                 .runtime_data
                 .movement
                 .move_to(tick_context.runtime_data.creep_entity, target_position)
-                .range(1);
+                .range(1)
+                .priority_value(bid);
         }
 
         return None;

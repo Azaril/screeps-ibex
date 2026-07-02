@@ -297,6 +297,19 @@ pub struct TickOrders {
     /// encoding keeps every existing serialized value decodable.
     #[serde(skip)]
     pub member_intents: Vec<crate::combat::CombatIntent>,
+    /// ADR 0033 slice 7 (§D5.4 military rail, live) — the squad's BINDING member's ABSOLUTE numeric
+    /// movement-priority bid on the shared i64 lane: `MovementPriority::Normal.anchor_value() +
+    /// clamp(quantize_milli(R_O), 1, 999_999)` with `R_O = p_win · value_e / est_ticks` (the manager
+    /// computes it once per squad per tick — `squad_objective_bid` in squad_manager.rs). `Some` ONLY on
+    /// the critical-path laggard (max range-to-target, ties lowest entity id); every other member stays
+    /// `None` and keeps its plain enum tier — so the whole squad's requests are otherwise unchanged and
+    /// the (Normal, High) band keeps every military request ≥ every civilian w-bid ((Low, Normal) band)
+    /// by construction. The job applies it via `priority_value` in place of the enum `priority` on the
+    /// member's movement request (squad_combat.rs `apply_squad_move_priority`). Ephemeral
+    /// (`#[serde(skip)]` on an always-`None`-at-serialize struct — byte-neutral, no WFV bump), matching
+    /// the combat-gate fixture shape proven in combat-eval's `mover_adjudication.rs`.
+    #[serde(skip)]
+    pub priority_bid: Option<i64>,
 }
 
 impl Default for TickOrders {
@@ -309,6 +322,7 @@ impl Default for TickOrders {
             squad_center: None,
             squad_cohesion_radius: 0,
             member_intents: Vec::new(),
+            priority_bid: None,
         }
     }
 }

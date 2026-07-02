@@ -221,9 +221,22 @@ pub struct PathingMetrics {
     /// Movement results the rover gave up on this tick (path not
     /// found / stuck past threshold / blocked) — the IBEX-015 signal,
     /// surfaced for telemetry; job-level RECOVERY lands with the Inc-6
-    /// transient-tolerance work (ADR 0003 A6).
+    /// transient-tolerance work (ADR 0003 A6). NOTE this is the rover
+    /// SELF-REPORTED give-up LEVEL: a persisting `Stuck ≥ 10` episode
+    /// re-counts every tick, so it is NOT rate-comparable with the
+    /// offline failed-move classes — [`Self::wasted_moves`] is.
     #[serde(default)]
     pub move_failures: u32,
+    /// G-13 TRUE wasted moves this tick (ADR 0033 §D8 L6; the
+    /// rover-eval `bench.rs` "G-13 canary alignment" note, gap (1)):
+    /// move intents the rover ISSUED last tick that the engine did not
+    /// execute — creep position unchanged and `fatigue == 0` at the
+    /// next tick's reconciliation. Event-count aligned with the offline
+    /// `IntentAudit` failed-move family (no blocking-chain attribution:
+    /// offline stays the diagnostic layer, this is the alarm layer).
+    /// 0 for writers predating the field.
+    #[serde(default)]
+    pub wasted_moves: u32,
     /// Mission-side ops pool this tick (P1.B4; tier-scaled).
     #[serde(default)]
     pub mission_ops_pool: u32,

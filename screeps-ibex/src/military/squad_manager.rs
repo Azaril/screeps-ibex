@@ -682,7 +682,7 @@ fn defense_asset_value(
 use screeps_combat_decision::assignment::{
     build_ev_matrix_with_merge, role_bit, solve_assignment, CapClass, ColumnKind, MatrixParams, ObjectiveCell, SquadRow,
 };
-use screeps_combat_decision::composition::{pairing_ev, quantize_ev, PairingParams, SquadCapabilities};
+use screeps_combat_decision::composition::{pairing_ev, pairing_p_win, quantize_ev, PairingParams, SquadCapabilities};
 use screeps_combat_decision::doctrine::EnemyForce;
 use screeps_combat_decision::force_sizing::{DefenseProfile, TowerThreat};
 use screeps_combat_decision::objective_value::{value_e, ObjectiveIntel, ObjectiveValueKind};
@@ -880,6 +880,85 @@ fn objective_ev_q(
     let enemy = project_enemy(threat);
     let ev = pairing_ev(caps, &defense, enemy, val, onsite_window, travel_rooms, &PairingParams::default());
     quantize_ev(ev)
+}
+
+// ═══ ADR 0033 slice 7 — §D5.4 MILITARY w-AS-PRIORITY (live). ═══════════════════════════════════════════
+//
+// The squad's objective rate `R_O = p_win · value_e / est_ticks` (rover-eval value.rs
+// `SquadRef::objective_rate` — the RATIFIED reference kernel) priced from the SAME projection helpers the
+// EV auction uses (`project_*` → `value_e`, `pairing_p_win` over the squad's SURVIVING caps), quantized to
+// integer milli-e/t and anchored into the (Normal, High) band of the shared i64 priority lane. Computed
+// ONCE per squad per tick in Phase B2 (cheap scalar math over already-projected intel); ONLY the squad's
+// BINDING member (the critical-path laggard — §D5.4 decision (1)) carries it, via
+// `TickOrders::priority_bid` → the job's `priority_value` (squad_combat.rs). The mover-side combat gate
+// for exactly this bid shape PASSED offline (combat-eval mover_adjudication.rs, 2026-07-01: outcomes
+// neutral, first blood earlier, pinch damage +8%).
+
+/// Binding-member bid offset band inside (Normal, High): `Normal.anchor_value() + [1, 999_999]` — always
+/// ABOVE every enum-Normal request (and the whole civilian (Low, Normal) w band), always BELOW a squadmate's
+/// enum `High` anchor (the adjudicated fixture shape: the damage carrier stops out-bidding its own escorts).
+const MILITARY_BID_MIN: i64 = 1;
+const MILITARY_BID_MAX: i64 = 999_999;
+
+/// The squad's ABSOLUTE numeric lane bid for its binding member: `Normal_anchor +
+/// clamp(round(R_O · 1000), 1, 999_999)` (milli-e/t quantization — rover-eval `quantize_w`'s lane). Pure
+/// scalar math; the single float product is quantized to an integer BEFORE it can reach any ordering (the
+/// determinism fence). `est_ticks` — the oracle's on-site estimate when the producer attached one
+/// (war.rs `set_est_ticks`), else the manager's generous on-site window proxy (`MAX_TRAVEL_BUDGET`, the
+/// same proxy the reassign matrix's `MatrixParams.onsite_window` uses).
+fn military_priority_bid(p_win: f32, value_e: f32, est_ticks: u32) -> i64 {
+    let r_o_milli = (f64::from(p_win) * f64::from(value_e) * 1000.0 / f64::from(est_ticks.max(1))).round() as i64;
+    screeps_rover::MovementPriority::Normal.anchor_value() + r_o_milli.clamp(MILITARY_BID_MIN, MILITARY_BID_MAX)
+}
+
+/// Price this squad's per-tick binding-member movement bid from the live objective + scouted intel
+/// (`R_O = p_win · value_e / est_ticks`): `p_win` = `pairing_p_win` over the squad's SURVIVING caps
+/// ([`caps_from_members`] — what it actually still fields) vs the projected defense/enemy (the SAME
+/// kernels/projections the EV auction runs); `value_e` = the objective's energy-equivalent unlock
+/// ([`project_value_kind`]/[`project_intel`]/[`defense_asset_value`] — economic-unlock valued, never
+/// force-elimination); `est_ticks` = the oracle's attached estimate or the window proxy. Ephemeral —
+/// recomputed every tick, nothing serialized, no WFV bump. Returns `None` for an unpriceable squad
+/// (no context — nothing to bid).
+fn squad_objective_bid(
+    data: &SquadManagerSystemData,
+    obj: &super::objective_queue::CombatObjective,
+    homes: &[HomeRoom],
+    squad_entity: Entity,
+) -> Option<i64> {
+    let ctx = data.squad_contexts.get(squad_entity)?;
+    let caps = caps_from_members(&ctx.members, &data.creep_owner);
+    let room = obj.kind.room();
+    let threat = data.mapping.get_room(&room).and_then(|e| data.threat_data.get(e));
+    let econ = data.objective_queue.economic_intel(obj.id);
+    let intel = project_intel(&obj.kind, obj.priority, defense_asset_value(data, obj, homes, econ), threat, econ);
+    let val = value_e(project_value_kind(&obj.kind, econ), &intel);
+    let defense = project_defense(threat);
+    let enemy = project_enemy(threat);
+    let p_win = pairing_p_win(caps, &defense, enemy, MAX_TRAVEL_BUDGET, &PairingParams::default());
+    let est_ticks = data.objective_queue.est_ticks(obj.id).unwrap_or(MAX_TRAVEL_BUDGET);
+    Some(military_priority_bid(p_win, val, est_ticks))
+}
+
+/// §D5.4 decision (1) BINDING member, live approximation: the critical-path laggard = the member with the
+/// MAX world-Chebyshev range to the squad's current target among members NOT yet in position (range > 0);
+/// ties break to the LOWEST stable id. `None` when every positioned member is already at range 0 (all in
+/// position — nobody is binding, the squad keeps pure enum tiers this tick) or no member has a position.
+/// Pure over `(Option<Position>, id)` pairs in roster order — host-testable, no ECS/game reads.
+fn binding_member_index(members: &[(Option<Position>, u32)], target: Position) -> Option<usize> {
+    let mut best: Option<(u32, u32, usize)> = None; // (range, id, index)
+    for (i, (pos, id)) in members.iter().enumerate() {
+        let Some(pos) = pos else { continue };
+        let range = pos.get_range_to(target);
+        if range == 0 {
+            continue; // in position — never the laggard
+        }
+        best = match best {
+            Some((br, bid, _)) if range > br || (range == br && *id < bid) => Some((range, *id, i)),
+            None => Some((range, *id, i)),
+            keep => keep,
+        };
+    }
+    best.map(|(_, _, i)| i)
 }
 
 /// ADR 0032 v1.2 — the GLOBAL EV-maximizing REASSIGN matching (the Hungarian kernel, run ONCE per scan).
@@ -2085,6 +2164,13 @@ impl<'a> System<'a> for SquadManagerSystem {
             // it to the ephemeral runtime entry). `Some(Drain)` → the drive fires the `DrainBreach` strategy +
             // sets the squad's drain stance; `None`/`Some(Breach)` → the byte-unchanged direct breach/engage.
             let assault_mode = data.objective_queue.assault_mode(*obj_id);
+            // ADR 0033 slice 7 (§D5.4 military w-as-priority): price this squad's objective rate `R_O`
+            // ONCE per tick (scalar math over the same projected intel the EV auction reads) BEFORE the
+            // mutable order pass; `compute_squad_orders` stamps it on the binding member's tick orders.
+            let priority_bid = data
+                .objective_queue
+                .get(*obj_id)
+                .and_then(|obj| squad_objective_bid(&data, obj, &homes, *squad_entity));
             compute_squad_orders(
                 &data.room_data,
                 &data.mapping,
@@ -2102,6 +2188,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 now,
                 deadline,
                 &mut data.forming_progress,
+                priority_bid,
             );
         }
 
@@ -2563,6 +2650,9 @@ fn compute_squad_orders(
     now: u32,
     deadline: Option<u32>,
     forming_progress: &mut SquadFormingProgress,
+    // ADR 0033 slice 7 — the squad's precomputed §D5.4 binding-member numeric priority bid
+    // (`squad_objective_bid`); stamped on exactly ONE member's tick orders at the end of this pass.
+    priority_bid: Option<i64>,
 ) {
     // Read the roster's cached status (immutable). `pos`/`has_ranged` feed the centroid + the kite
     // plan; `has_ranged` resolves the creep body (the adapter's job — the pure crate stays JS-free).
@@ -3191,6 +3281,27 @@ fn compute_squad_orders(
         if should_drop_anchor_for_structure_siege(&decision) {
             ctx.squad_path = None;
         }
+        // ── ADR 0033 slice 7 (§D5.4 decision (1)) — stamp the BINDING member's numeric priority bid. ──
+        // After every order arm above has stamped its tick orders, hand the squad's precomputed `R_O` bid
+        // (`squad_objective_bid`, once per squad per tick) to exactly ONE member: the critical-path
+        // laggard (max range to the squad's current target among members not yet in position, ties lowest
+        // entity id — the live approximation of the max-`ttr` member rover-eval's `annotate_squad`
+        // selects). The target frame = the decision's focus tile when one exists, else the target-room
+        // centre (the same fallback the assault path uses). Everyone else keeps `priority_bid: None` (the
+        // plain enum tier), so the squad's requests are otherwise unchanged — the adjudicated fixture
+        // shape. A binding member whose arm stamped no orders this tick (job self-drives) simply carries
+        // no bid — the safe degradation, never a fabricated order.
+        if let Some(bid) = priority_bid {
+            let bid_target = decision.focus.map(|f| f.pos).unwrap_or_else(|| {
+                Position::new(RoomCoordinate::new(25).unwrap(), RoomCoordinate::new(25).unwrap(), target_room)
+            });
+            let roster: Vec<(Option<Position>, u32)> = ctx.members.iter().map(|m| (m.position, m.entity.id())).collect();
+            if let Some(ix) = binding_member_index(&roster, bid_target) {
+                if let Some(orders) = ctx.members.get_mut(ix).and_then(|m| m.tick_orders.as_mut()) {
+                    orders.priority_bid = Some(bid);
+                }
+            }
+        }
     }
 
     // ── ADR 0035 D4 (the LOST-IN-ROOM verdict carrier — stamp for Phase A's `retreated_from_contact`).
@@ -3556,6 +3667,68 @@ fn apply_squad_decision(
 mod tests {
     use super::*;
     use crate::military::objective_queue::FarmKind;
+
+    /// ADR 0033 slice 7 — the §D5.4 military bid lands in the (Normal, High) band by construction:
+    /// `Normal_anchor + clamp(quantized R_O, 1, 999_999)`. Every point of the clamp is pinned: a
+    /// mid-band rate, the zero/negative floor (a safe-mode `p_win = 0` squad still outbids every
+    /// enum-Normal/civilian request by exactly 1 milli-e/t), and the ceiling (a huge unlock never
+    /// reaches the squadmates' `High` anchor — the adjudicated carrier-below-escorts ordering).
+    #[test]
+    fn military_priority_bid_stays_strictly_inside_the_normal_high_band() {
+        use screeps_rover::MovementPriority;
+        let normal = MovementPriority::Normal.anchor_value();
+        let high = MovementPriority::High.anchor_value();
+        // R_O = 0.75 · 40_000 / 800 = 37.5 e/t ⇒ 37_500 milli-e/t above the Normal anchor (exact).
+        assert_eq!(military_priority_bid(0.75, 40_000.0, 800), normal + 37_500);
+        // p_win = 0 (safe mode veto) ⇒ the floor: still strictly above Normal.
+        assert_eq!(military_priority_bid(0.0, 40_000.0, 800), normal + MILITARY_BID_MIN);
+        // A huge unlock ceilings strictly below High (the escorts' enum anchor).
+        let huge = military_priority_bid(1.0, 1.0e9, 1);
+        assert_eq!(huge, normal + MILITARY_BID_MAX);
+        assert!(huge < high, "the binding member's bid never outbids a squadmate's High anchor");
+        // est_ticks = 0 is floored at 1 (no divide-by-zero on a degenerate oracle estimate).
+        assert_eq!(military_priority_bid(1.0, 500.0, 0), normal + 500_000);
+    }
+
+    /// ADR 0033 slice 7 — the live binding-member approximation (§D5.4 decision (1)): max
+    /// range-to-target among members NOT in position; ties to the LOWEST stable id; positionless
+    /// members never bind; an all-in-position (or all-positionless) roster binds nobody.
+    #[test]
+    fn binding_member_is_the_max_range_laggard_with_lowest_id_ties() {
+        let target = pos_in(25, 25, "W5N5");
+        let members = vec![
+            (Some(pos_in(20, 25, "W5N5")), 7u32),  // range 5
+            (Some(pos_in(10, 25, "W5N5")), 3u32),  // range 15 — the laggard
+            (None, 1u32),                          // unspawned: never binds
+            (Some(pos_in(25, 25, "W5N5")), 2u32),  // range 0: in position, never binds
+        ];
+        assert_eq!(binding_member_index(&members, target), Some(1), "max range binds");
+        // Tie at range 15: the LOWER id (index 2, id 4) wins over (index 0, id 9).
+        let tied = vec![
+            (Some(pos_in(10, 25, "W5N5")), 9u32),
+            (Some(pos_in(20, 25, "W5N5")), 1u32),
+            (Some(pos_in(40, 25, "W5N5")), 4u32), // range 15, id 4 < 9
+        ];
+        assert_eq!(binding_member_index(&tied, target), Some(2), "ties break to the lowest id");
+        // Cross-room laggard: world-absolute Chebyshev outranks the in-room member.
+        let cross = vec![
+            (Some(pos_in(24, 25, "W5N5")), 2u32),
+            (Some(pos_in(25, 25, "W6N5")), 5u32), // a full room west — far larger world range
+        ];
+        assert_eq!(binding_member_index(&cross, target), Some(1), "cross-room range is world-absolute");
+        // Everyone in position (or bodyless) ⇒ nobody binds (pure enum tiers this tick).
+        let done = vec![(Some(target), 1u32), (None, 2u32)];
+        assert_eq!(binding_member_index(&done, target), None);
+        assert_eq!(binding_member_index(&[], target), None);
+    }
+
+    fn pos_in(x: u8, y: u8, r: &str) -> Position {
+        Position::new(
+            RoomCoordinate::new(x).unwrap(),
+            RoomCoordinate::new(y).unwrap(),
+            r.parse::<RoomName>().unwrap(),
+        )
+    }
 
     fn room(name: &str) -> RoomName {
         name.parse().expect("valid room name")

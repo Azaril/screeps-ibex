@@ -41,11 +41,16 @@ machine!(
 
 impl MoveToController {
     fn tick(&mut self, state_context: &mut ReserveJobContext, tick_context: &mut JobTickContext) -> Option<ReserveState> {
-        tick_move_to_position(
+        // Live w-as-priority, RESERVE travel: same claim-rail hard floor as ClaimJob (V/S_REF
+        // with V = body cost — see jobs/claim.rs and `pathing::value::claim_travel_bid`); no
+        // serialized outpost-value field exists to carry a real V (WFV-avoidance, deliberate).
+        let bid = crate::pathing::value::claim_travel_bid(tick_context.runtime_data.owner);
+        tick_move_to_position_with_bid(
             tick_context,
             state_context.reserve_target.pos().into(),
             1,
             None,
+            Some(bid),
             ReserveState::sign_controller,
         )
     }

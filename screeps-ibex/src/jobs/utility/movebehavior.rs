@@ -138,6 +138,24 @@ pub fn tick_move_to_room<F, R>(
 where
     F: Fn() -> R,
 {
+    tick_move_to_room_with_bid(tick_context, room_name, room_options, None, next_state)
+}
+
+/// [`tick_move_to_room`] with an optional civilian w-bid (`pathing::value`, ADR 0033 §D5.4
+/// decision (4)) on the numeric priority lane. A SEPARATE entry point rather than a signature
+/// change so enum-tier callers (squad_combat's formation travel in particular) stay byte-
+/// identical; `None` = the historical enum-only `Normal` ordering.
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn tick_move_to_room_with_bid<F, R>(
+    tick_context: &mut JobTickContext,
+    room_name: RoomName,
+    room_options: Option<RoomOptions>,
+    priority_value: Option<i64>,
+    next_state: F,
+) -> Option<R>
+where
+    F: Fn() -> R,
+{
     let creep = tick_context.runtime_data.owner;
 
     // Arrived once we are actually IN the target room.
@@ -170,6 +188,10 @@ where
             .move_to(tick_context.runtime_data.creep_entity, target_pos.into());
 
         builder.range(range);
+
+        if let Some(value) = priority_value {
+            builder.priority_value(value);
+        }
 
         if let Some(room_options) = room_options {
             builder.room_options(room_options);
@@ -288,6 +310,24 @@ pub fn tick_move_to_position<F, R>(
 where
     F: Fn() -> R,
 {
+    tick_move_to_position_with_bid(tick_context, position, range, room_options, None, next_state)
+}
+
+/// [`tick_move_to_position`] with an optional civilian w-bid (`pathing::value`, ADR 0033 §D5.4
+/// decision (4)) on the numeric priority lane — same separate-entry-point rationale as
+/// [`tick_move_to_room_with_bid`]; `None` = the historical enum-only ordering.
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn tick_move_to_position_with_bid<F, R>(
+    tick_context: &mut JobTickContext,
+    position: RoomPosition,
+    range: u32,
+    room_options: Option<RoomOptions>,
+    priority_value: Option<i64>,
+    next_state: F,
+) -> Option<R>
+where
+    F: Fn() -> R,
+{
     let creep = tick_context.runtime_data.owner;
 
     if creep.pos().in_range_to(position.clone().into(), range) {
@@ -301,6 +341,10 @@ where
             .move_to(tick_context.runtime_data.creep_entity, position.into());
 
         builder.range(range);
+
+        if let Some(value) = priority_value {
+            builder.priority_value(value);
+        }
 
         if let Some(room_options) = room_options {
             builder.room_options(room_options);

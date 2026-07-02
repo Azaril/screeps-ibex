@@ -1722,7 +1722,9 @@ impl WarOperation {
                 }
             }
 
-            let objective: Option<(ObjectiveKind, f32, SquadComposition, AssaultMode)> = if doctrine.honor_verdict() && candidate.defense.is_none() {
+            // ADR 0033 slice 7: the tuple also carries `assessment.est_ticks` — the §D5.4 objective-rate
+            // denominator (`R_O = p_win · value_e / est_ticks`) attached to the runtime entry below.
+            let objective: Option<(ObjectiveKind, f32, SquadComposition, AssaultMode, u32)> = if doctrine.honor_verdict() && candidate.defense.is_none() {
                 // A gated doctrine needs the scouted defense to judge winnability; without it, don't commit.
                 None
             } else {
@@ -1775,7 +1777,7 @@ impl WarOperation {
                                     candidate.room, plan.assessment.mode, plan.assessment.est_ticks, doctrine.name(),
                                     plan.required.immune_struct_parts + plan.required.anti_creep_parts, plan.required.heal_parts, p_hold * 100.0, spawn_cost, plan.assessment.reason
                                 );
-                                Some((kind, priority, sized, plan.assessment.mode))
+                                Some((kind, priority, sized, plan.assessment.mode, plan.assessment.est_ticks))
                             }
                         } else {
                             // ADR 0031 §5 #38 — ESCALATE-vs-ABANDON on `assemble_force` = None. The target is
@@ -1816,7 +1818,7 @@ impl WarOperation {
                 }
             };
 
-            let Some((kind, priority, composition, assault_mode)) = objective else {
+            let Some((kind, priority, composition, assault_mode, est_ticks)) = objective else {
                 continue;
             };
 
@@ -1851,6 +1853,11 @@ impl WarOperation {
             // attached every scan (no WFV bump); `Breach` is attached too (a no-op for the strategy/stance,
             // which key on `Drain`), so a re-assessed room that flips OUT of drain clears the stance next scan.
             system_data.combat_objective_queue.set_assault_mode(obj_id, assault_mode);
+            // ADR 0033 slice 7 (§D5.4 military w-as-priority): attach the oracle's on-site conversion
+            // estimate as the objective-rate denominator (`R_O = p_win · value_e / est_ticks`) the
+            // SquadManager's binding-member movement bid reads. Same transient re-attach-every-scan
+            // idiom as `set_assault_mode` above — no WFV bump, self-heals on a VM reset.
+            system_data.combat_objective_queue.set_est_ticks(obj_id, est_ticks);
             // Attach the COMPUTED economic value of CONTROLLING the room (reach-bug #3, ADR 0032
             // §economic-value-unlocked) so the EV auction values a winnable economic core by the remote it
             // unlocks (the `value_e` FarmCore/economic arm) instead of the ~0 `Denial` proxy. Transient —

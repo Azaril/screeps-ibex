@@ -87,6 +87,34 @@ fn hp_fraction(creep: &Creep) -> f32 {
     creep.hits() as f32 / max as f32
 }
 
+// ─── §D5.4 military w-as-priority (ADR 0033 slice 7) ────────────────────────
+//
+// The manager prices `R_O = p_win · value_e / est_ticks` once per squad per tick and stamps the
+// ABSOLUTE numeric lane bid (`Normal_anchor + clamp(quantize_milli(R_O), 1, 999_999)` — the
+// (Normal, High) band) on exactly ONE member's `TickOrders::priority_bid`: the binding critical-path
+// laggard (squad_manager.rs `squad_objective_bid`/`binding_member_index`). The job applies it here:
+// the binding member's movement request rides the numeric lane; every other member keeps its plain
+// enum tier — the exact fixture shape the offline combat gate adjudicated (combat-eval
+// mover_adjudication.rs: outcomes neutral, first blood earlier, pinch damage +8%).
+
+/// The member's stamped numeric bid, if it is this tick's binding member.
+fn squad_priority_bid(tick_orders: &Option<TickOrders>) -> Option<i64> {
+    tick_orders.as_ref().and_then(|o| o.priority_bid)
+}
+
+/// Apply the §D5.4 priority: the binding member's numeric `R_O` bid on the shared i64 lane, or the
+/// arm's historical enum tier for everyone else (`None` ⇒ byte-identical to the pre-slice behavior).
+fn apply_squad_move_priority<H>(req: &mut MovementRequestBuilder<'_, H>, tier: MovementPriority, bid: Option<i64>) {
+    match bid {
+        Some(value) => {
+            req.priority_value(value);
+        }
+        None => {
+            req.priority(tier);
+        }
+    }
+}
+
 /// REC-049 (EP-3.5) — surface a rally-unreachable MOVE-BLOCKED once per VM instead of spamming
 /// `log::info!` per blocked member per tick. The signal is diagnostic only (the SquadManager reads the
 /// same position-stagnation and owns the escalation), so a once-per-VM latch (EP-1.1c logging-only,
@@ -231,12 +259,12 @@ impl MoveToRoom {
                         // the per-tick flood.
                         warn_move_blocked_once(creep_entity, creep_pos.room_name(), rally, &failure);
                     }
-                    tick_context
-                        .runtime_data
-                        .movement
-                        .move_to(creep_entity, rally)
-                        .range(1)
-                        .priority(MovementPriority::High);
+                    // §D5.4: the binding laggard bids the squad's numeric R_O for its rally leg —
+                    // exactly the member whose arrival the whole objective waits on.
+                    let bid = squad_priority_bid(&tick_orders);
+                    let mut mr = tick_context.runtime_data.movement.move_to(creep_entity, rally);
+                    mr.range(1);
+                    apply_squad_move_priority(&mut mr, MovementPriority::High, bid);
                     return None;
                 }
                 // HOLD (rally/forming phase): the rally gate has not released — hold at home next to the
@@ -259,12 +287,10 @@ impl MoveToRoom {
         if let Some(ref orders) = tick_orders {
             if matches!(orders.movement, TickMovement::Formation) {
                 if let Some(target_tile) = get_formation_target(*state_context.squad_entity, creep_entity, tick_context, creep_pos) {
-                    tick_context
-                        .runtime_data
-                        .movement
-                        .move_to(creep_entity, target_tile)
-                        .range(0)
-                        .priority(MovementPriority::High);
+                    let bid = orders.priority_bid;
+                    let mut mr = tick_context.runtime_data.movement.move_to(creep_entity, target_tile);
+                    mr.range(0);
+                    apply_squad_move_priority(&mut mr, MovementPriority::High, bid);
 
                     // Only transition to Engaged when the squad itself has
                     // progressed past Rallying. This prevents individual
@@ -441,15 +467,13 @@ impl CombatResponse {
                     flee_from_hostiles(tick_context);
                 }
                 TickMovement::Formation | TickMovement::Hold => {
-                    Self::kite_toward_objective(tick_context, state_context);
+                    Self::kite_toward_objective(tick_context, state_context, orders.priority_bid);
                 }
                 TickMovement::MoveTo(pos) => {
-                    tick_context
-                        .runtime_data
-                        .movement
-                        .move_to(creep_entity, *pos)
-                        .range(1)
-                        .priority(MovementPriority::High);
+                    let bid = orders.priority_bid;
+                    let mut mr = tick_context.runtime_data.movement.move_to(creep_entity, *pos);
+                    mr.range(1);
+                    apply_squad_move_priority(&mut mr, MovementPriority::High, bid);
                 }
                 // ADR 0034 D4-F1: an undeployable member flagged Recycle — recall + recycle even here
                 // (it can never usefully deploy). Only reached if the lifetime gate flags a member already
@@ -459,25 +483,22 @@ impl CombatResponse {
                 }
             }
         } else {
-            Self::kite_toward_objective(tick_context, state_context);
+            Self::kite_toward_objective(tick_context, state_context, None);
         }
 
         None
     }
 
-    fn kite_toward_objective(tick_context: &mut JobTickContext, state_context: &SquadCombatJobContext) {
+    fn kite_toward_objective(tick_context: &mut JobTickContext, state_context: &SquadCombatJobContext, bid: Option<i64>) {
         let creep_entity = tick_context.runtime_data.creep_entity;
         let target_pos = Position::new(
             RoomCoordinate::new(25).unwrap(),
             RoomCoordinate::new(25).unwrap(),
             state_context.target_room,
         );
-        tick_context
-            .runtime_data
-            .movement
-            .move_to(creep_entity, target_pos)
-            .range(20)
-            .priority(MovementPriority::High);
+        let mut mr = tick_context.runtime_data.movement.move_to(creep_entity, target_pos);
+        mr.range(20);
+        apply_squad_move_priority(&mut mr, MovementPriority::High, bid);
     }
 }
 
@@ -549,12 +570,10 @@ impl Engaged {
                     }
                 }
                 TickMovement::MoveTo(pos) => {
-                    tick_context
-                        .runtime_data
-                        .movement
-                        .move_to(creep_entity, *pos)
-                        .range(1)
-                        .priority(MovementPriority::High);
+                    let bid = orders.priority_bid;
+                    let mut mr = tick_context.runtime_data.movement.move_to(creep_entity, *pos);
+                    mr.range(1);
+                    apply_squad_move_priority(&mut mr, MovementPriority::High, bid);
                 }
                 TickMovement::Flee => {
                     flee_from_hostiles(tick_context);
@@ -754,6 +773,12 @@ impl Engaged {
         // sides now produce the same shooter-wins-forward-tile semantics.
         let is_combat = has_active_part(creep, Part::Attack) || has_active_part(creep, Part::RangedAttack);
         let move_priority = if is_combat { MovementPriority::High } else { MovementPriority::Normal };
+        // §D5.4 (ADR 0033 slice 7): the binding member's numeric R_O bid replaces its enum tier on the
+        // MoveTo (only — flee keeps its own semantics). Note the band interplay with REC-055: a binding
+        // COMBAT member's bid (Normal_anchor + offset < High_anchor) deliberately slots BELOW its
+        // escorts' High — the adjudicated shape ("the damage carrier stops out-bidding its own escorts
+        // for the forward tile"; pinch damage +8% under exactly this ordering).
+        let bid = orders.priority_bid;
         // REC-056: the anti-scatter anchor for an Engaged squad — the resolver may only shove/swap this
         // member within `cohesion_radius` of the squad centroid, so the block can't be pushed off its
         // scored tiles (mirrors the sim's Engaged `with_anchor`). Only when Engaged AND the orders carry a
@@ -770,7 +795,8 @@ impl Engaged {
                         .runtime_data
                         .movement
                         .move_to(creep_entity, target);
-                    mr.range(range as u32).priority(move_priority);
+                    mr.range(range as u32);
+                    apply_squad_move_priority(&mut mr, move_priority, bid);
                     if let Some(anchor) = anchor {
                         mr.anchor(anchor);
                     }
@@ -1000,12 +1026,10 @@ impl Retreating {
         if let Some(ref orders) = tick_orders {
             match &orders.movement {
                 TickMovement::MoveTo(pos) => {
-                    tick_context
-                        .runtime_data
-                        .movement
-                        .move_to(creep_entity, *pos)
-                        .range(1)
-                        .priority(MovementPriority::High);
+                    let bid = orders.priority_bid;
+                    let mut mr = tick_context.runtime_data.movement.move_to(creep_entity, *pos);
+                    mr.range(1);
+                    apply_squad_move_priority(&mut mr, MovementPriority::High, bid);
                 }
                 TickMovement::Flee => {
                     flee_from_hostiles(tick_context);
@@ -1112,26 +1136,22 @@ fn execute_formation_movement(
     tick_context: &mut JobTickContext,
 ) {
     let creep_pos = tick_context.runtime_data.owner.pos();
+    // §D5.4 (ADR 0033 slice 7): the binding member's numeric R_O bid rides its formation-slot move too.
+    let bid = orders.priority_bid;
     let moved = (|| {
         let target_tile = get_formation_target(*state_context.squad_entity, creep_entity, tick_context, creep_pos)?;
-        tick_context
-            .runtime_data
-            .movement
-            .move_to(creep_entity, target_tile)
-            .range(0)
-            .priority(MovementPriority::High);
+        let mut mr = tick_context.runtime_data.movement.move_to(creep_entity, target_tile);
+        mr.range(0);
+        apply_squad_move_priority(&mut mr, MovementPriority::High, bid);
         Some(())
     })();
 
     if moved.is_none() {
         // Fallback: no squad path or layout -- move toward focus target.
         if let Some(target_pos) = orders.attack_target.as_ref().and_then(|t| t.pos()) {
-            tick_context
-                .runtime_data
-                .movement
-                .move_to(creep_entity, target_pos)
-                .range(1)
-                .priority(MovementPriority::High);
+            let mut mr = tick_context.runtime_data.movement.move_to(creep_entity, target_pos);
+            mr.range(1);
+            apply_squad_move_priority(&mut mr, MovementPriority::High, bid);
         }
     }
 }

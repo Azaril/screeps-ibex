@@ -81,6 +81,9 @@ pub struct MetricsState {
     movement_ops_consumed: u32,
     movement_repaths: u32,
     movement_failures: u32,
+    /// G-13 TRUE wasted moves (issued-vs-moved reconciliation, ADR 0033
+    /// §D8 L6) — see [`Self::record_wasted_moves`].
+    movement_wasted: u32,
     /// Self-tuning CPU cost model: EMA of per-tick `game::cpu::get_used()`
     /// (None until the first sample / load-seed) and the fold count. Drives
     /// the dynamic expansion room cap; persisted in the seg-57 block and
@@ -104,6 +107,7 @@ impl Default for MetricsState {
             movement_ops_consumed: 0,
             movement_repaths: 0,
             movement_failures: 0,
+            movement_wasted: 0,
             cpu_used_ema: None,
             cpu_samples: 0,
         }
@@ -129,8 +133,22 @@ impl MetricsState {
 
     /// Movement results the rover gave up on this tick (P1.D6 / IBEX-015:
     /// the previously-dead detection signal, surfaced; recovery = Inc 6).
+    /// This is the SELF-REPORTED give-up LEVEL (`Failed` + `Stuck ≥ 10`;
+    /// a persisting stuck episode re-counts every tick) — the TRUE
+    /// per-event rate is [`Self::record_wasted_moves`]; both are emitted.
     pub fn record_movement_failures(&mut self, count: u32) {
         self.movement_failures = count;
+    }
+
+    /// The G-13 TRUE wasted-move count for the tick (ADR 0033 §D8 L6, the
+    /// rover-eval bench.rs alignment note's gap (1)): move intents rover
+    /// actually ISSUED last tick that the engine did not execute — creep
+    /// position unchanged and `fatigue == 0` at this tick's
+    /// reconciliation (`pathing::movementsystem`, the
+    /// `IntentRecordingCreep` seam). The live analogue of the offline
+    /// `IntentAudit` failed-move classes, aligned as an EVENT count.
+    pub fn record_wasted_moves(&mut self, count: u32) {
+        self.movement_wasted = count;
     }
 
     /// A component-pipeline deserialization failure, INCLUDING the
@@ -393,6 +411,7 @@ impl MetricsSystem {
                     ops_pool: data.state.movement_ops_cap,
                     repath_count: data.state.movement_repaths,
                     move_failures: data.state.movement_failures,
+                    wasted_moves: data.state.movement_wasted,
                     mission_ops_pool: mission_pool,
                     mission_ops_used: mission_used,
                 }

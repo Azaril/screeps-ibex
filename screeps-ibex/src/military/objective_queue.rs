@@ -250,6 +250,14 @@ pub struct ObjectiveRuntimeEntry {
     /// strategy + sets the squad's drain stance. `None` (no producer ran the oracle) ⇒ the byte-unchanged
     /// direct breach/engage path.
     pub assault_mode: Option<AssaultMode>,
+    /// ADR 0033 slice 7 (§D5.4 military w-as-priority) — the oracle's estimated on-site ticks to convert
+    /// the objective (`plan_engagement().assessment.est_ticks`), the denominator of the squad's objective
+    /// rate `R_O = p_win · value_e / est_ticks` (the binding member's numeric movement bid). TRANSIENT
+    /// (never serialized — the same self-healing runtime-entry idiom as `assault_mode`; the producer
+    /// re-attaches it every offense scan, so no `WORLD_FORMAT_VERSION` bump). `None` (no oracle ran —
+    /// defense/harass producers) ⇒ the manager falls back to its generous on-site window proxy
+    /// (`MAX_TRAVEL_BUDGET`, the same proxy the reassign matrix uses).
+    pub est_ticks: Option<u32>,
 }
 
 /// Runtime combat objective queue resource. Holds a working copy of the
@@ -374,6 +382,19 @@ impl CombatObjectiveQueue {
     /// the manager takes the byte-unchanged direct breach/engage path.
     pub fn assault_mode(&self, id: ObjectiveId) -> Option<AssaultMode> {
         self.runtime.get(&id).and_then(|r| r.assault_mode)
+    }
+
+    /// ADR 0033 slice 7 — attach the oracle's estimated on-site conversion ticks
+    /// (`ForceAssessment::est_ticks`) for the §D5.4 objective rate `R_O = p_win · value_e / est_ticks`.
+    /// Transient (never serialized); re-attached every offense scan alongside [`Self::set_assault_mode`].
+    pub fn set_est_ticks(&mut self, id: ObjectiveId, est_ticks: u32) {
+        self.runtime.entry(id).or_default().est_ticks = Some(est_ticks);
+    }
+
+    /// The transient oracle est-ticks (if any) the producer attached. `None` ⇒ no oracle ran → the
+    /// manager's R_O falls back to its on-site window proxy.
+    pub fn est_ticks(&self, id: ObjectiveId) -> Option<u32> {
+        self.runtime.get(&id).and_then(|r| r.est_ticks)
     }
 
     /// True if the objective is currently claimed by a (live) squad.

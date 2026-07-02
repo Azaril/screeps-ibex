@@ -72,7 +72,18 @@ impl MoveToRoom {
 
         let room_options = RoomOptions::new(HostileBehavior::HighCost);
 
-        let result = tick_move_to_room(tick_context, room_target, Some(room_options), ScoutState::pick_target);
+        // Live w-as-priority, SCOUT leg (ADR 0033 §D5.4 role table): value-of-information has no
+        // landed kernel, so the scout bids the DECLARED intel floor — rover-eval value.rs
+        // decision (3)'s EPSILON_INTEL, a 1×MOVE scout's amortized upkeep (see
+        // `pathing::value::SCOUT_INTEL_BID`). Scouts yield every contested tile to real
+        // cargo/work bids but still outrank shoveable idles.
+        let result = tick_move_to_room_with_bid(
+            tick_context,
+            room_target,
+            Some(room_options),
+            Some(crate::pathing::value::SCOUT_INTEL_BID),
+            ScoutState::pick_target,
+        );
 
         if result.is_some() {
             // Arrived at target room — release claim and clear target.
