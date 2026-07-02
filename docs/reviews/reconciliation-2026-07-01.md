@@ -26,10 +26,14 @@ All findings were fixed across two parallel-lane waves, each gated by the full t
 - M-G sim/live parity: REC-039, 049, 053, 054, 055, 056, 063
 - Kernel residuals: REC-061, 064, 065, 066, 067
 
-**STILL OPEN (deferred, not blocking):**
+**OPEN — being fixed in the 2026-07-02 close-out workflow (one sub-agent per task, adversarially reviewed):**
+- **REC-009b** — proper native entity-system fix (above): `EntityOption<Entity>` + backstop + WFV 24→25.
 - **REC-062 (P3)** — REC-036's out-healed-turtle disengage is only partially delivered (unkillable enemies are excluded from `enemy_strength` so the stall valve can't see the turtle case; needs a separate signal). `enemy_stalled` works for kiting/reinforcement stalemates.
-- **REC-068 (P3)** — the "stale SK skip-log" could not be confidently located; lane C found the candidate logs read as current and declined to "fix" correct code (EP-8.2). May not be a real defect.
-- **Trivial comment sweeps:** `pathing/routepricing.rs:7` and `features.rs:443` still name the deleted `is_claim_feasible` (features.rs belongs to the concurrent expansion workstream — sweep when next touched).
+- **REC-068 (P3)** — the "stale SK skip-log" could not be confidently located; lane C found the candidate logs read as current and declined to "fix" correct code (EP-8.2). Investigate → fix if real, else close as not-a-defect.
+- **REC-071r (trivial)** — `pathing/routepricing.rs:7` still names the deleted `is_claim_feasible` (`features.rs:443` belongs to the concurrent expansion workstream — left for them).
+
+**OPEN — tuning, NOT a code fix (out of the close-out workflow):**
+- **0031b tournament re-tune** under `w_energy=1.0` (REC-011 changed the EV-selection surface). Requires running the `#[ignore]`d eval sweeps; a separate compute task.
 - **Standing backlog (§6)** — the docs-declared open work (0008a tiers, 0020 §11 S5–S7, 0028 K3/K4 wiring, 0030 EngagementTempo, 0031 Tier-2 archetype, etc.) is unchanged; these were never in scope for this reconciliation's fix waves.
 
 **NOT TOUCHED (other workstreams, left uncommitted in-tree):** `features.rs` (expansion/economic-claim ADR 0038 D9 tuning), `docs/design/0040-*` (stress-energy/economy-sim ADR).
@@ -67,7 +71,8 @@ Work top-down. M-A gates **any** deploy (including Docker soak of current HEAD).
 - [ ] **REC-003** Bound `Retreating` (absorbing state + indefinitely refreshed lease)
 - [ ] **REC-004** Stamp `lost_in_room` on first-contact LOSE; stop resetting the travel clock per room poke
 - [ ] **REC-005** Producer re-assert must never wipe the commitment-lease deadline
-- [ ] **REC-009** Reload-stable squad identity for member jobs (`SquadRef` → minted `SquadId` or per-tick re-stamp)
+- [x] **REC-009** Reload-stable squad identity — interim per-tick re-stamp LANDED (`7180573`)
+- [ ] **REC-009b** Proper native fix: `SquadRef` → `EntityOption<Entity>` (marker-converted) + backstop scrub + delete restamp + **WFV 24→25** *(reconciled from the entity-handling facts, 2026-07-02; see §3 REC-009)*
 - [ ] **REC-016** Consume the kite/retreat goal in live retreat orders (stop centroid-huddling under fire)
 - [ ] **REC-017** Renew-to-sufficiency actually reaches the D6a gate's required TTL; hold only at home rooms
 - [ ] **REC-019** Border-tile "hold" must step inward (engine relocation bounces exit-tile holders)
@@ -168,7 +173,17 @@ Severity: P1 = must fix before relying on the subsystem; P2 = wrong behavior wit
 `squad_manager.rs:1587-1603` (forming count exempts `Defend` only), `:1649` (`while … forming < MAX_FORMING_SQUADS` gates every claim), `:1680` (`forming += 1` unconditionally). Two routine offense squads forming + a fresh base assault → the CRITICAL defense objective cannot be claimed until an offense roster completes (up to 3,000t — effectively unbounded given REC-005). **Fix:** per-kind cap: defense-class claims bypass the forming gate and don't increment it; only `active < MAX_CONCURRENT_SQUADS` applies (consider defense preemption above the active cap — see REC-023 note). EP-4.3.
 
 **REC-009 · P1 · CONFIRMED (chain) — Member jobs' `SquadRef` cannot survive a VM reload: every reload disbands all fielded squads**
-`military/squad.rs:39-52` (raw index+generation, plain serde), `jobs/squad_combat.rs:14-19` (NOT marker-remapped), recall at `:1162-1179`/`:122-131`. After reload, marker-recreated entities get fresh indices/generations → every member job's ref fails validate-on-access → `recall_decision` walks the whole roster home to recycle mid-assault, then the manager respawns from scratch. The `SquadContext.members` side (ConvertSaveload) survives correctly; the job side defeats it. This is the planned identity I1/I2 work — upgraded here because the ADR 0027 recall path converts a stale ref from "idle" into active roster teardown. **Fix:** minted stable `SquadId` (persisted counter + per-tick id→Entity map), or manager re-stamps member jobs' binding each tick, or marker-remap the ref. EP-1.7.
+`military/squad.rs:39-52` (raw index+generation, plain serde), `jobs/squad_combat.rs:14-19` (NOT marker-remapped), recall at `:1162-1179`/`:122-131`. After reload, marker-recreated entities get fresh indices/generations → every member job's ref fails validate-on-access → `recall_decision` walks the whole roster home to recycle mid-assault, then the manager respawns from scratch. The `SquadContext.members` side (ConvertSaveload) survives correctly; the job side defeats it. This is the planned identity I1/I2 work — upgraded here because the ADR 0027 recall path converts a stale ref from "idle" into active roster teardown. EP-1.7.
+
+**Interim fix LANDED (wave 1, `7180573`):** the manager re-stamps every rostered member's job `squad_entity` each tick from `SquadContext.members` (which DOES survive), before `RunJobSystem`, so a stale ref never reaches `recall_decision`. Works, but it's a manual per-tick reverse-index rebuild rather than native serialization.
+
+**RECONCILED with entity-handling facts (2026-07-02) — the three "or" options are NOT equivalent; the middle one is wrong to reinvent:**
+- specs `Entity {index, generation}` is a *runtime handle* into the current `World`'s allocation table; on deserialize the `World` is rebuilt and every entity is re-created through `SimpleMarkerAllocator` (game_loop.rs:767), so pre-reset index/generation are meaningless afterward. **Raw entity handles are NOT stable across resets.**
+- The *stable* cross-reset identity is the **marker** (`SimpleMarker<SerializeMarkerTag>`, a persisted `u64`, serialize.rs:12). `ConvertSaveload` transparently rewrites entity *references* through it (`Entity → marker id` on save, `marker id → new Entity` on load). This is already how `SquadContext.members: EntityVec<SquadMember>` (`SquadMember.entity: Entity`, `#[derive(ConvertSaveload)]`, squad.rs:333) round-trips — the working precedent. Squad entities are already `.marked::<SerializeMarker>()` (squad_manager.rs:2349).
+- `SquadRef` breaks *because* it is plain `Serialize`/`Deserialize` (squad.rs:32 comment: "plain data — NOT a `ConvertSaveload`-serialized reference"). It was written that way deliberately (WFV-17 note game_loop.rs:643) to sidestep the specs `ConvertSaveload for Entity` **dangling-serialize panic** ([[ecs-dangling-ref-serialize]]: the built-in unwraps if the target has no marker) — a dangling-safe/reset-unsafe trade.
+- A minted `SquadId` (persisted counter + id→Entity map) would **reinvent exactly what the marker allocator already provides** — reject it.
+
+**Proper end-state (REC-009b, open):** switch `squad_entity: Option<SquadRef>` → the marker-converting `EntityOption<Entity>` (serialize.rs:137) so `JobData`'s existing `#[derive(ConvertSaveload)]` remaps it natively; add the job→squad ref to the `repair_entity_integrity` backstop (game_loop.rs:228-403) — which already scrubs every other cross-entity ref pre-serialize via `is_alive(e) && markers.get(e).is_some()` — so a dead squad can't trigger the serialize panic; keep an `is_alive` read-guard for the recycled-slot case; **delete the per-tick restamp** (no longer needed). This is a serialized-shape change ⇒ **WFV 24 → 25** (one loud reset, folds into the next deploy). Uses the entity system natively; no new ID mapping.
 
 **REC-010 · P1 · CONFIRMED — Gone-objective reassign rows default to `CapClass::Offense` with default caps**
 `squad_manager.rs:648-650`, gate math `:764-769` (gone objective ⇒ `stay_ev = INFEASIBLE_EV` ⇒ any feasible column passes). `Reassign` fires precisely when the objective is gone — exactly when class/caps can't be read off it. A freed declaimer (CLAIM+MOVE only) prices `p_kill=1` against an intel-less core `Dismantle` and rebinds onto a target it cannot scratch, then stands forever (REC-005). **Fix:** class/caps from the squad itself (persisted target variant → class; live bodies → caps); unknown class ⇒ reassign-infeasible. EP-2.9.
