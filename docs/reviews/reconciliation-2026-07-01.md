@@ -8,7 +8,11 @@
 
 ## 0. Implementation status (updated 2026-07-02)
 
-All findings were fixed across two parallel-lane waves, each gated by the full test battery + an adversarial diff-review (per-finding, two-refuter adjudication). **Every wave was committed with zero surviving P1/P2 review findings.** WORLD_FORMAT_VERSION is **24** (bumped once, for REC-001); no other serialized-shape change was introduced. Final composite: **1201 workspace tests green, wasm build + clippy-wasm clean.**
+**FULL-PASS COMPLETE (2026-07-02).** Every REC finding, DOC item, and the entire §6 [CODE] backlog is resolved (implemented, or verified NOT-A-DEFECT / DEFERRED-with-reason); the 0031b re-tune ran (seeds validated); ADR 0041 (combat boost layer) drafted; **the whole thing built at WORLD_FORMAT_VERSION 26 and deployed to MMO** (operator go-ahead — a loud reset of the live colony). Final composite: **1227 workspace tests green, wasm build + clippy-wasm clean.** Operator directive mid-pass: WFV bumps are fine, target a clean design with no tech debt ([[wfv-fine-clean-design-no-debt]]) — so U-TOWER (WFV 25→26) and other items were done to their proper end-state rather than deferred. Recurring theme confirmed: the harvested §6 backlog substantially overstated the open work (sub-batch 2 alone found D14/D12/D13/D17 already resolved by the ADR 0031 rewrite) — the same stale-aggregator problem the reconciliation was about.
+
+**WFV history this pass:** 23→24 (REC-001), 24→25 (REC-009b native entity fix), 25→26 (U-TOWER focus-id plumbing). All other changes shape-neutral.
+
+Earlier phase summary — all findings were fixed across two parallel-lane waves + a close-out + backlog tranches, each gated by the full test battery + an adversarial diff-review (per-finding, two-refuter adjudication). **Every wave/tranche was committed with zero surviving P1/P2 review findings.**
 
 **LANDED — Wave A (M-A):** REC-001 (WFV 23→24), REC-051, REC-060 — commit `ce7069e` + rover `b61e3ee`.
 
