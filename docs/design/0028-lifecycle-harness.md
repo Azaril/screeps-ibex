@@ -1,23 +1,37 @@
 # ADR 0028 — Engine-backed Offline Lifecycle Harness (P-OBJ)
 
-Status: IN PROGRESS 2026-06-27. **All five kernels K0–K4 + the forming-phase driver + the
+Status: **HARNESS COMPLETE; K3/K4 BOT WIRING OPEN** (status corrected 2026-07-01 — this header
+previously read "IN PROGRESS / the final offline gate", which mislabelled a complete harness).
+**All five kernels K0–K4 + the forming-phase driver + the
 ENGINE-ENGAGE HANDOFF LANDED** (`screeps-combat-eval/src/harness/lifecycle.rs` — the full
 `objective→form→travel→engage→kill` chain is offline + deterministic). The harness then
 diagnosed the live 87.5 backfire (see §Diagnosis) and now tests single/multi-room spawning +
-rally/renew. **Both layers are broken: the spawn/form layer (no renew → stuck forms lose
-members; + lane contention) AND combat effectiveness (squads lose defended fights).** Companion to ADR 0008 (squad
+rally/renew. **Both layers were broken at that mid-stream point: the spawn/form layer (no renew → stuck forms lose
+members; + lane contention) AND combat effectiveness (squads lose defended fights).** *(2026-07-01: renew has
+since landed — `ebf3623`; the combat-effectiveness half is the open verification item in the current-state
+note below.)* Companion to ADR 0008 (squad
 lifecycle), ADR 0027 (objective/squad lifecycle rework), ADR 0023/0023a (the combat sim
 harness), ADR 0026 §9 (doctrine sizing). Task #23 / #25.
 
-> **Current state as of 2026-07-01 (combat-feature-set audit).** Still IN PROGRESS. Sharpened
-> open items: **K0 (rally), K1 (spawn-throughput reproducing the 3/5 stall), K2 (FSM transitions)
+> **Current state as of 2026-07-01 (reconciliation review).** **The HARNESS itself is COMPLETE** —
+> `run_forming`, `run_lifecycle`, and the defended drivers
+> `run_defended_lifecycle`/`run_defended_lifecycle_with(_params)` all exist and run the full
+> `objective→form→travel→engage→kill` chain offline + deterministically
+> (`screeps-combat-eval/src/harness/lifecycle.rs`). What remains open is BOT WIRING, not harness work:
+> **K0 (rally), K1 (spawn-throughput reproducing the 3/5 stall), K2 (FSM transitions)
 > are LANDED + GREEN** — K0/K1 are live via the bot re-exports, K2 is the canonical unit-tested
 > spec that the harness drives (bot `machine!` adoption still deferred by design). **K3 (fielding —
-> `slots_to_spawn` wrapping `sized_for`/`build_body`) and K4 (claim pacing — `claim_pacing`) have
+> `slots_to_spawn`, `fielding.rs:17`) and K4 (claim pacing — `claims_allowed`, `claim_pacing.rs:15`) have
 > their pure kernels BUILT + tested in `screeps-combat-decision`, but the BOT adapter wiring is
-> still PENDING** (no live caller of `slots_to_spawn`/`claims_allowed` yet — the harness driver is
-> their only consumer). This harness is **the final offline gate for full lifecycle / force-sizing
-> validation.** The surrounding combat work has since landed + deployed to MMO: rally/travel
+> still OPEN** (ZERO bot call sites of `slots_to_spawn`/`claims_allowed` — the harness driver is
+> their only consumer; tracked in the standing backlog,
+> [`../reviews/reconciliation-2026-07-01.md`](../reviews/reconciliation-2026-07-01.md) §6). This harness remains
+> **the offline gate for full lifecycle / force-sizing validation.**
+> **Open verification item:** the mid-stream diagnosis below ("the real failure is combat
+> effectiveness: squads lose their defended engagements") has **no recorded resolution measurement**
+> in this doc — defended-engage work landed later (ADR 0031/0031b sizing + the winnability gates), but a
+> `run_defended_lifecycle` pass/fail measurement closing this ADR's own diagnosis was never recorded here.
+> The surrounding combat work has since landed + deployed to MMO: rally/travel
 > convergence (ADR 0034), scout-before-commit/abandon-on-contact (ADR 0035), opportunistic
 > structure targeting (ADR 0036), tower-aware neighbour defense (ADR 0037), plus the
 > capability-driven composition + EV assignment reworks (ADR 0031/0031a/0031b/0032).

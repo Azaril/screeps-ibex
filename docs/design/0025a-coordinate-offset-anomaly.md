@@ -44,6 +44,11 @@ align column-major for the majority, matching this.
 
 ## 2. Residual anomaly (OPEN — the "other anomaly")
 
+> **Tracking/owner (2026-07-01):** this residual is now tracked in the standing backlog —
+> [`../reviews/reconciliation-2026-07-01.md`](../reviews/reconciliation-2026-07-01.md) §6, row "0025a §2"
+> ("Root-cause residual object anomaly (~15–20% wall-aligned; snap_to_open masks)") — so it is no longer
+> an orphaned open item.
+
 Even under the correct column-major decode, **~15–20% of objects still read as wall**, and crucially
 **no single global transform fixes them** (tested: 8 dihedral symmetries × ±2 translations, on authoritative
 data). It is not even per-room consistent:

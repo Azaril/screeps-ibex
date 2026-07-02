@@ -28,7 +28,7 @@
 Work top-down. M-A gates **any** deploy (including Docker soak of current HEAD). M-B/M-C contain the P1s that explain "squads misbehave live" — fix and offline-prove (0028 lifecycle harness) before the planned P3 re-soak / P4 MMO deploy.
 
 ### M-A — Deploy blocker
-- [ ] **REC-001** Bump `WORLD_FORMAT_VERSION` 23→24 (two unbumped serialized-shape changes in rover `StuckState`)
+- [x] **REC-001** Bump `WORLD_FORMAT_VERSION` 23→24 (two unbumped serialized-shape changes in rover `StuckState`) — landed `ce7069e`; attributions corrected per REC-060
 
 ### M-B — Squad lifecycle liveness (immortal/zombie/trickle squads)
 - [ ] **REC-002** Gate the Engaged-arm order overwrite on in-room presence (rally/quorum bypass)
@@ -75,6 +75,7 @@ Work top-down. M-A gates **any** deploy (including Docker soak of current HEAD).
 - [ ] **REC-050** Close the same-tick spawn-exit placement race
 
 ### M-F — Polish, hygiene & docs
+*(wave-1 diff-review residuals REC-061..071 land here / in their owning lane — see §3b)*
 - [ ] REC-029 R4 P(win) log wrong for drain/optimized comps
 - [ ] REC-030 Stale `force_ceiling` rustdoc links
 - [ ] REC-033 Safe-mode veto asymmetry between the two EV paths (drift trap)
@@ -88,9 +89,19 @@ Work top-down. M-A gates **any** deploy (including Docker soak of current HEAD).
 - [ ] REC-047 `salvage.rs:816` expect → `let-else`
 - [ ] REC-048 Pin the war.rs:2081 cross-crate "heal probe fieldable at 550e" invariant
 - [ ] REC-049 Gate (or counter-ize) the ungated `[SquadTrace] MOVE-BLOCKED` line
-- [ ] REC-051 Fix stale rover budget-contract comment line refs
+- [x] REC-051 Fix stale rover budget-contract comment line refs — landed in rover `b61e3ee`
+- [ ] **REC-057** Breach-objective withdraw gate self-invalidating (spawn-and-vanish loop) *(from §3a sweep)*
+- [ ] **REC-058** Dismantle unreachable-target wedge (reachability-filter selection + `requires_dismantling` + no-progress bail) *(from §3a sweep)*
+- [ ] **REC-059** Salvage error-exit paths skip objective withdraws (`stand_down()` helper) *(from §3a sweep)*
 - [ ] REC-052 Spawn-band soft spots (head-of-line blocking across homes; SK refill recurrence; CRITICAL-defense band tie)
-- [ ] DOC-1..DOC-7 (§4)
+- [ ] DOC-1..DOC-7 (§4) — applied by the DOC lane 2026-07-01, pending commit
+
+### M-G — Sim/live parity (combat-agent harness fidelity; after M-B lands)
+- [ ] **REC-053** Per-member sim travel gate (kill the whole-squad combat blackout)
+- [ ] **REC-054** Verify REC-016 closes the Retreating divergence; make both sides identical
+- [ ] **REC-055** Port the combat-High/support-Normal movement-priority split into the live bot; align flee shove flag
+- [ ] **REC-056** Anchor parity for Engaged members (port to live or drop from sim)
+- [x] **REC-060** Correct the v24 WFV history SHA attributions — fixed in `game_loop.rs` + REC-001
 
 ---
 
@@ -100,8 +111,8 @@ Severity: P1 = must fix before relying on the subsystem; P2 = wrong behavior wit
 
 ### P1
 
-**REC-001 · P1 · CONFIRMED — Two serialized-shape changes landed after the WFV 23 bump without a bump**
-`screeps-rover/src/movementsystem.rs:99-100` (`denied_by_idle`, rover `0535352` / super `5ef27bc`) and `:103-104` (`ticks_since_repath`, rover `5a9fe9e` / super `553a618`) — both **after** the 22→23 bump at `cf5e8be`. They sit inside `StuckState` → `CreepRoverData`, which is in the bincode world-save tuple (`game_loop.rs:498`). Bincode is positional; the project's own WFV doc (`game_loop.rs:627-635`) states trailing `#[serde(default)]` does **not** make old payloads decode safely — the in-code comment citing "the `last_distance` precedent" is wrong (that field shipped with the struct). A WFV-23 world saved pre-`553a618` and loaded at HEAD decodes as **silent misaligned garbage** — the exact failure class WFV exists to prevent. Blast radius today: private/Docker worlds (WFV 23 never MMO-deployed). **Fix:** bump 23→24 with a history entry; correct the rover comment. EP-5.2, EP-5.3, EP-3.1.
+**REC-001 · P1 · CONFIRMED — Two serialized-shape changes landed after the WFV 23 bump without a bump** ✅ **FIXED** (WFV 24 landed at `ce7069e`; SHA attributions corrected per REC-060)
+`screeps-rover/src/movementsystem.rs:99-100` (`denied_by_idle`, rover `5a9fe9e` / super `553a618`) and `:103-104` (`ticks_since_repath`, rover `b61e3ee` / super `b6b9c0d`) — both **after** the 22→23 bump at `cf5e8be`. They sit inside `StuckState` → `CreepRoverData`, which is in the bincode world-save tuple (`game_loop.rs:498`). Bincode is positional; the project's own WFV doc (`game_loop.rs:627-635`) states trailing `#[serde(default)]` does **not** make old payloads decode safely — the in-code comment citing "the `last_distance` precedent" is wrong (that field shipped with the struct). A WFV-23 world saved pre-`553a618` and loaded at HEAD decodes as **silent misaligned garbage** — the exact failure class WFV exists to prevent. Blast radius today: private/Docker worlds (WFV 23 never MMO-deployed). **Fix:** bump 23→24 with a history entry; correct the rover comment. EP-5.2, EP-5.3, EP-3.1.
 
 **REC-002 · P1 · CONFIRMED — Engaged-state order overwrite bypasses the entire rally/mass/quorum machinery for any scouted target**
 `squad_manager.rs:2761-2803` (`apply_squad_decision`), `combat-decision/src/lib.rs:1507-1511`, `jobs/squad_combat.rs:203-239`. `compute_squad_orders` stamps rally-hold / solo-travel orders, then unconditionally calls `apply_squad_decision`, whose Engaged arm overwrites **every member's `tick_orders`**. `decide_squad` returns Engaged purely from `focus.is_some()` (computed over the target room's *cached* DTOs, no proximity gate) — FIX B1 gated only the `engaged_once` latch on `in_room_any` (:2769), not the orders. Members in transit fall through to individual `tick_move_to_room`; the rally, solo-travel-to-shared-rally, gather-quorum and ADR 0037 T2b anchor gates steer only the unused anchor. **Failure:** a forming 1/4 squad vs a scouted core departs solo member-by-member — the exact P-OBJ #23 trickle the ADR 0034 wave was built to kill; the RC-11/rally fixes are live only for no-intel or losing targets. **Fix:** gate the Engaged arm's order overwrite on `in_room_any` (stamp attack targets for in-room members only), or pass the manager phase in and let rally/travel orders take precedence. EP-2.7.
@@ -207,6 +218,52 @@ HEAD `d3fe2b9` folds `war_decision::dismantle_danger` (15/WORK, documented as an
 **REC-051 · CONFIRMED** — rover movementsystem.rs:589-590 cites stale ibex line numbers for the budget-contract call sites (now :331/:334). Contract doc for the None=unlimited semantics — keep accurate. EP-10.5.
 **REC-052 · noted** — Spawn-band soft spots (no starvation found overall): (a) a banking 85-priority request head-of-line blocks the ≤75 lanes of EVERY in-range home on unaffordable ticks (shared token, squad_manager.rs:1789-1799 + spawnsystem.rs:434-435); (b) standing SK farm refill recurs in the 85 band each duo lifetime; (c) CRITICAL defense maps to the same 85 as MEDIUM offense — no intra-band edge for base defenders.
 
+### §3a — Post-review findings (residual verification sweep, 2026-07-01, workflow `wf_38ac77db-f02`)
+
+Six read-only verifiers over the §8 items, every finding adjudicated by two adversarial refuters (correctness + reachability). Eight survived; refuted/cleared outcomes recorded in §8.
+
+**REC-053 · P2 · CONFIRMED — sim TRAVEL gate is all-or-nothing and state-blind (whole-squad combat blackout)**
+`screeps-combat-agent/src/squad.rs:546`: if ANY living member is outside the objective room, `step()` returns early with move-only intents for the WHOLE squad — no `decide_combat`/heal — and force-marches even a kernel-ordered fleeing member back (`MoveTo{objective, range 1}`). Live has no analogue (per-creep `SquadCombatJob` fights every tick; crossed members HOLD per `db4ad3c`). Any lifecycle proof with border-adjacent engagement (the eval corpus places attackers AT the room entry) shows deaths/oscillation live would not produce. **Fix:** scope the travel gate per-member; keep `decide_combat` for in-room members; skip forced re-entry while `Retreating`. EP-6.4. Cluster: G.
+
+**REC-054 · P2 · CONFIRMED — sim-vs-live Retreating orchestration diverges (opposite semantics from the same kernel)**
+Sim applies `decision.movement` (kite plan) uniformly (`squad.rs:653-660`); live intercepts Retreating with `issue_retreat_orders` (rally/centroid), never reading the kite plan. Retreat proofs on the sim exercise a path live never runs; the live retreat-to-rally bug family (`e6daacb` class) cannot reproduce in the harness. **Note:** wave-1 REC-016 makes LIVE consume the kite goal — landing REC-016 closes this divergence in the direction the sim already implements; afterwards verify the two sides are identical and delete the sim-only assumption comments. EP-6.4. Cluster: G (verify-after-B).
+
+**REC-055 · P2 · CONFIRMED — movement-priority split patched in the harness instead of the bot**
+Sim grants `MovementPriority::High` only to combat-bodied members (`squad.rs:720`), leaving healer-MoveTo/Flee at Normal; live issues EVERY member's MoveTo at High (`squad_combat.rs:662`; note live Flee is also High via the `MovementRequest::flee` constructor — the review's combat-Flee cell was corrected by the refuters; live flee also sets `allow_shove=false` vs sim `shove=true`). The sim's own comment admits the split exists because the neutral tie-break "can park the shooter one tile out of range" — the pathology was patched sim-side only. **Fix:** port the combat-High/support-Normal split into `execute_decide_movement` (preferred — the sim measured the pathology), align the flee shove flag, and make both sides identical. EP-6.4. Cluster: G.
+
+**REC-056 · P3 · CONFIRMED — sim-only `AnchorConstraint` on Engaged members (sim cohesion overstates live)**
+`squad.rs:733-738` anchors every Engaged member's request to the centroid (radius 2); live squad moves carry no anchor (only `movebehavior.rs:113` mark_working uses one), so an equal-priority squadmate or a 5-tick-stuck civilian can shove an engaged member outside cohesion range live (bounded by the kernel's rejoin precedence — hence P3). **Fix:** add the same anchor in `execute_decide_movement` when orders carry squad_center + cohesion radius and state is Engaged (or remove from sim); keep the sides identical. EP-6.4. Cluster: G.
+
+**REC-057 · P2 · CONFIRMED — breach-objective withdraw gate is self-invalidating (spawn-and-vanish loop)**
+`missions/salvage.rs:845-851/:948-956`: `breach_surplus` requires the home's `free_spawns > 0` EVERY tick; any body assembling (including the breach squad's own member) zeroes it → explicit `withdraw()` kills the objective outright (the claim/deadline lease protects only against TTL lapse) → reconcile fires `objective_gone` → the fielded squad is retired mid-form/travel → spawn frees → re-emit mints a NEW ObjectiveId → repeat. Fielding the squad falsifies the gate that emitted it; the breach never completes. **Fix:** `free_spawns > 0` gates FIRST emit only; once the room is tracked in `SalvageBreachTracker`, keep re-asserting and withdraw only on corridor-open/standdown/hard energy floor. EP-4.4, EP-2.7. Cluster: F.
+
+**REC-058 · P2 · CONFIRMED — dismantle unreachable-target wedge (selection and movement disagree about structures)**
+`jobs/utility/dismantlebehavior.rs:385-392`: the `nearest_by_path` fallback searches with NO cost-matrix ("structures are ignored" by design, pathfinderservice.rs) and selects sealed-behind-Impassable structures; the rover then finds no path; `tick_dismantle` returns None forever (no timeout, no stuck feedback — `check_movement_failure`'s only consumer is squad_combat). `requires_dismantling` shares scope but not reachability, so the mission never completes and respawns a wedging dismantler every generation (~3.1k energy each). Once all reachable targets are razed, the wedge is the deterministic end-state of any >2M-hit-ring derelict room. **Fix:** reachability-filter both selection AND `requires_dismantling` (flood with structures-as-blockers — pricing policy, per the no-one-off-pathfinding rule), plus an N-ticks-no-progress bail in `tick_dismantle` (EP-2.7). Cluster: F.
+
+**REC-059 · P3 · CONFIRMED — salvage error-exit paths skip the FIX-1 objective withdraws**
+`missions/salvage.rs:627` (pre_run "No home rooms" Err) + `:668-669` (`?` early returns): mission aborts via missionsystem cleanup WITHOUT `withdraw_breach_objective`/`withdraw_declaim_objective`; a squad-claimed objective survives under the claim/deadline lease (its manager re-stamps every tick), so the squad keeps chewing a room no producer vouches for (bounded by squad-lifecycle sentinels). Refiners narrowed it: the breach leak needs the target room not-live-visible on the abort tick (common — squad en route); the Declaim path leaks even when visible (it REFRESHES on the final tick). `SalvageBreachTracker` entry also leaks. **Fix:** centralize teardown in a `stand_down()` helper called from every non-Running exit. EP-3.3. Cluster: F.
+
+**REC-060 · P3 · CONFIRMED — the v24 WFV history entry (and REC-001 above) misattributed both fields' origin SHAs** ✅ **FIXED**
+Git archaeology: `denied_by_idle` originated rover `5a9fe9e` (super `553a618`); `ticks_since_repath` originated rover `b61e3ee` (super `b6b9c0d`). The originally-cited pairs were wrong (one swapped, one introduced neither field). No wire risk — both predate the v24 bump at tip; the defect was the forensic record. Corrected in `game_loop.rs` v24 entry + the REC-001 text above. EP-10.5.
+
+### §3b — Wave-1 diff-review residuals (adversarial review of the fix diffs, workflow `wf_191c1c1a-3b9`, 2026-07-01)
+
+Six scoped diff reviewers over the wave-1 composite; verdict **zero P1/P2 commit-blockers** (independent recomputation confirmed the REC-011 EV ladder, REC-012/013 sizing math; no serialized-shape changes; composite builds + 1182 tests green). All residuals below are P3 follow-ups (the spend-limit cut the refuter pass short for the kernel/war-econ scopes, so those carry review-confidence, not double-adjudicated; the expansion-movement three were adversarially confirmed). None reopened a wave-2 item. Rolled into M-F/wave-2.
+
+- [ ] **REC-061 · P3** `combat-decision/src/lifecycle.rs:292` — `resolved` + `retreat_budget_exhausted` can co-fire in one tick → `Retire{Resolved, withdraw, mark_unwinnable}`, breaking the pre-diff `mark_unwinnable ⇒ loss-reason` invariant (benign one-tick race; make resolved dominate the exhaust terminal).
+- [ ] **REC-062 · P3** `combat-decision/src/lib.rs:1537` — REC-036's headline out-healed-turtle STILL can't disengage: unkillable enemies are excluded from `enemy_strength` so balance clamps +1000 while the stall valve needs balance<200. `enemy_stalled` now fires only for kiting/reinforcement stalemates; the turtle case needs a separate signal. (REC-036 partially delivered — note in the ledger.)
+- [ ] **REC-063 · P3** `combat-decision/src/lib.rs:972` — `ENEMY_STALL_TICKS`/combat-agent `STALL_LIMIT` parity rests on two unlinked `40` literals; combat-agent should import the shared const (2-line submodule change; parity pin exists but doesn't enforce cross-crate).
+- [ ] **REC-064 · P3** `combat-decision/src/force_sizing.rs:605` — the overlay's "stays-assemblable" clamp uses `max_dismantle_dps` (a WORK ceiling ~2250) — latent; only `GarrisonDefense` threads the structure channel today, so harmless until a `DismantleStructure` objective does.
+- [ ] **REC-065 · P3** `war.rs` — one-sided `MAX_SPAWN_DISTANCE` sync (REC-015a mirrored the literal; a same-crate `pub(crate)` fold would tie them).
+- [ ] **REC-066 · P3** `combat-decision/src/war_decision.rs` `estimate_danger` (V-6) — boost-blind: a boosted-WORK dismantler under-sizes the structure-defense channel up to 4× (threatmap models ×4; this kernel path doesn't).
+- [ ] **REC-067 · P3** neighbour-intercept sizing (V-6) — the kernel DTO drops enemy boost, so a boosted neighbour raider under-sizes the defender.
+- [ ] **REC-068 · P3** `war.rs` — a stale SK skip-log message left by the REC-034 rewire.
+- [ ] **REC-069 · P3** `operations/claim.rs:845` (adversarially CONFIRMED) — the `candidate.home_rooms` intersection is minimal-distance-only (gather BFS records homes only at first-visit distance), so a farther-but-eligible home is silently excluded; sticky when a corridor near the nearest home stays hostile-reserved. Fix: fall back to the full owned-home set with the ClaimCorridor route check when the intersection empties. Single-home empires unaffected.
+- [ ] **REC-070 · P3** `missions/construction.rs:102` (adversarially CONFIRMED) — REC-050's birth budget is creep-blind while `safe_spawn_directions` free-tile counting is creep-aware: a creep camping the sole approach can let an interior placement seal the last birth tile (narrow same-tick corner). Plus the plan-defect defer warn repeats every 50-tick pass with no once-latch/counter (EP-3.5). Document the creep divergence + add a warn latch.
+- [ ] **REC-071 · P3** `operations/claim.rs:720` + `claim_economics.rs:19/85` (adversarially CONFIRMED) — REC-024 orphaned `missions::utility::is_claim_feasible` (zero functional callers, no KEEP marker) and left stale comments naming it the live gate; editing the dead fn would silently fork the reach policy. Delete or KEEP-annotate; fix the comments (EP-2.6/10.5).
+
+Docs-scope P3 nits (self-fixed in the artifact 2026-07-01): the M-G checklist mis-nesting and the V-6 false "lane D rewrites war_decision.rs" premise were corrected inline; remaining minor drift (§0a line refs, plan-header WFV phrasing) folded into the DOC lane's own follow-up.
+
 ---
 
 ## 4. Documentation reconciliation (DOC-#)
@@ -272,7 +329,7 @@ The June-30 refresh (`61a31d3`) fixed the per-ADR headers; staleness now concent
 | 0031/0031a §5/§2B | Budget-free emit_requirement (retire optimizer_ceiling_budget); **Tier-2 weapon-archetype in EV search (the measured WORK-siege-vs-guard failure — highest-priority composition follow-up)**; tough_fraction tunable + tower bed; attack_to_heal_mix; engage_range as tuned dimension; escalate-vs-abandon on assemble_force=None (#38); FormationShape 5–8 members (2x2 overlay silently wrong); P6 re-sweep | M–L |
 | 0034 §2.2/§3 | Phase-3 contested-oscillation on production churn path; phase-4 S1/S2/S3 as ParamScore gates; 1.5 objective-level abort for unreachable targets; F-C renewable-rally-bias live wiring; D4-F1 explicit recycle job; D4-F2 RALLY_TRAVEL_PER_ROOM terrain tuning (see REC-017) | S–M |
 | 0035 §2 | FU1 explicit scout-first pipeline; FU2 committed-but-never-engages give-up — deferred pending soak evidence (operator 2026-06-30) | L |
-| 0033 end-state | Military w-as-priority arm (unblock condition satisfied — war.rs merged); dense-crowd N≥40 ops-saturation chip; kite member-goal scoring excluding held tiles; MovementTickStats through kernel driver; **live Docker soak before MMO (operator go-ahead required)** | S–L |
+| 0033 end-state | Military w-as-priority arm (unblock condition satisfied — war.rs merged); ~~dense-crowd N≥40 ops-saturation chip~~ **CLOSED 2026-07-01 by the concurrent rover workstream (slice 6, super `b6b9c0d`)**; kite member-goal scoring excluding held tiles; MovementTickStats through kernel driver; **live Docker soak before MMO (operator go-ahead required)** | S–L |
 | 0038 | MMO deploy of the WFV 22→23 (now →24, REC-001) loud reset | S |
 | 0039 §3 | P1 real terrain into render driver; P2 formation-cohesion kernel extraction; P3 unified engine-backed self-play; P4 tournament render corpus (paused workstream) | S–L |
 | plan §5 | U-TOWER `decide_towers` pure fn (genuinely unbuilt); K2c-2 real yield-to-defense predicate replacing `military_free:true` + farm retirement; K-RECONCILE shared ensure_source_mining + outpost defender → Defend objective; K4 SK mineral mining; W3 Escort producer; W2/W4 war supervisor trim/posture; power-bank farming (needs own ADR) | M–XL |
@@ -289,15 +346,15 @@ The June-30 refresh (`61a31d3`) fixed the per-ADR headers; staleness now concent
 
 ---
 
-## 8. Residual coverage gaps (verify before treating as cleared)
+## 8. Residual coverage gaps — RESOLVED by the 2026-07-01 verification sweep (`wf_38ac77db-f02`), except V-6
 
-- V-1: kite EV kernel `dist_to_target` flood keyed `(u8,u8)` without room — does `plan_squad_ev` guard cross-room member positions? (flagged in passing, untraced)
-- V-2: `scout.rs` visibility-fulfillment half of `d3352f2` — not deep-reviewed.
-- V-3: screeps-combat-agent submodule FSM/mover internals (sim-side driver) — log-skimmed only.
-- V-4: `jobs/utility/dismantle*.rs` (15eb4f0's job side) and `operations/salvage.rs` flow body — seam-reviewed only.
-- V-5: field-level serialized-shape audit is complete for `cf5e8be..HEAD` and spot-checked for `296c973..cf5e8be`; earlier windows verified at bump-history level only.
-- V-6: `war_decision.rs` kernel internals (emit_defense/neighbour_threats) — reviewed at call seams.
-- V-7: 0025 §12 Stage-4 re-tuned constants — run recorded, adoption not; confirm current seeds are the intended ones.
+- V-1: **REFUTED as an executable defect** (mechanism real, blocked by a guard). The kernel DOES coordinate-alias cross-room members (`kernel.rs:672` transplants member-local (x,y) into the centroid's room for the matrix/threat/flood reads), but the aliased goal cannot execute: `squad_combat.rs` Engaged::tick returns `move_to_room()` for out-of-target-room members BEFORE the anchorless dispatch, and MoveToRoom never reads `squad_movement`. Hygiene follow-up (optional, wave 2+): room-filter `ev_members` + debug_assert kernel-room membership so the latent aliasing can't resurface under refactor. Also refuted: the heal-ledger misclassification variant.
+- V-2: **VERIFIED GOOD.** The scout half of `d3352f2` is correct (Fix A Chebyshev≤10 provably over-approximates the BFS gate; Fix B two-pass budgeting closes the real deadlock; no aggression widening in the lvl0-core unblock). One chip-grade residual (mission-scoped scouts self-target globally → theoretical false `mark_unreachable`) was refuted on reachability (claim floods are episodic, capped at 2500 ticks; war's HIGH re-assert wins every quiet gap) — recorded here as a smell, not a finding.
+- V-3: **3×P2 + 1×P3 CONFIRMED** → REC-053..056 (§3a). The sim harness diverges from live in ways that make lifecycle proofs unsound near borders/retreats/tile-contention — must land before trusting M-B's offline proofs on those axes.
+- V-4: **2×P2 + 1×P3 CONFIRMED** → REC-057..059 (§3a).
+- V-5: **No further unbumped shape changes found** in the pre-v22 windows; the one finding was the v24 entry's own SHA misattribution → REC-060 (fixed). Bump history 14→24 is now field-level-verified end to end.
+- V-6: `war_decision.rs` kernel internals — still open; assigned to the wave-1 bot-war-econ diff reviewer. (Correction: lane D did NOT edit this file — the earlier deferral premise was wrong; the review covers the stable kernel against war.rs's post-REC-013 consumption.)
+- V-7: **CLEARED — ADOPTED.** Stage-4 winners live in the ADR 0026 strategy layer (`strategy.rs open_combat()` = a1-i6-tight + spacing 2; `breach()` = a1-i4-def), which is what the bot fights with; `KernelParams::default()` is test-only/fallback by design. The 0031b sweep tuned `CompositionParams` only. ADR 0025's open-block corrected accordingly.
 
 ## 9. Method note
 

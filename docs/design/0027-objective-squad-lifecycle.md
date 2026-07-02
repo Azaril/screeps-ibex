@@ -1,6 +1,6 @@
 # ADR 0027 — Combat Objective/Squad Lifecycle Rework (P-OBJ #23)
 
-Status: **Accepted + COMPLETE** (2026-06-27, extended 2026-06-28). v1 end-to-end on master:
+Status: **Accepted + COMPLETE** (2026-06-27, extended 2026-06-28; status refreshed 2026-06-30, `61a31d3`). v1 end-to-end on master:
 commitment lease, resolve-vs-give-up, whole-squad **Reassign**, **threat-centric defense**,
 **v1.1 auction** (ADR 0032), **Salvage P1–P3**. WFV history **18→20→22**. **All produced combat
 objectives are on v1.** (First landed super `e4bbf0f` WFV 17→18; the reach/engage hardening +

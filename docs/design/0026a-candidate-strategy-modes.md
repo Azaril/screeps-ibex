@@ -1,9 +1,9 @@
 # ADR 0026a — Candidate strategy modes (ideation catalog)
 
-- **Status:** PROPOSED / UNVALIDATED (2026-06-26). Companion to [ADR 0026](0026-combat-strategy-selection.md). These are ideation outputs (6-lens proposal → dedup → exploitability/testability vet), NOT yet tournament-validated on the (bug-fixed, bit-deterministic) sim. The validation phase prunes this list and records measured results before any wire-in to the `CombatStrategy` registry.
+- **Status:** **EVALUATED (2026-06-26)** — the tournament validation this header once awaited RAN on the bit-deterministic sim; measured verdicts in §Validation results below. Net: the **spacing lever SHIPPED** (`open_combat` spacing 1→2 — live in `screeps-combat-decision/src/strategy.rs`, `open_combat()` `spacing_coef: 2`); **`ranged_duel_kite` REJECTED** by the tournament (lost its own target bed, −329); **`anti_aoe_spread` SUPERSEDED** by the spacing-2 base; the remaining six modes (`focus_ball`, `anti_kite_chase`, `defensive_hold`, `drain_spread`, `drain_breach_handoff`, `safe_mode_countdown`) **DEFERRED** pending new signals/beds. Companion to [ADR 0026](0026-combat-strategy-selection.md). These are ideation outputs (6-lens proposal → dedup → exploitability/testability vet). *(The original "Proposed / unvalidated" header went stale once the 2026-06-26 tournament ran — corrected 2026-07-01.)*
 - **Prereq:** the edge-exit two-creeps-on-a-tile engine fix must land first (it changes cross-room/base-attack dynamics); then re-tune the general profiles; then validate each situational mode on its target bed under the `exploitability` ship-gate.
 
-`KernelParams = {approach, incumbency, discohesion, cohesion_k, spacing}`. Current shipped profiles: `default {2,3,10,3,1}`, `open_combat {1,6,20,2,1}`, `breach {1,4,10,3,1}`, `breach_drain {1,6,10,3,1}`.
+`KernelParams = {approach, incumbency, discohesion, cohesion_k, spacing}`. Shipped profiles as of authoring: `default {2,3,10,3,1}`, `open_combat {1,6,20,2,1}`, `breach {1,4,10,3,1}`, `breach_drain {1,6,10,3,1}`. *(Post-validation, `open_combat` is now `{1,6,20,2,2}` — the spacing 1→2 ship; the others are unchanged at HEAD, `strategy.rs`.)*
 
 ## Catalog (ranked by the vetting agent)
 

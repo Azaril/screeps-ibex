@@ -6,6 +6,25 @@
 - **Builds on (kept):** ADR 0019 (`score_tile` term math, as `mhp` scalars), ADR 0020 (Lanchester engage gate, EV target kill-budget + spill, force sizing), ADR 0024 (hierarchical positioning: shared threat field + reachability flood + one target-flood).
 - **Crates:** `screeps-combat-decision` (kernel), `screeps-combat-agent` (adapter), `screeps-combat-eval` (harness).
 
+> **Open as of 2026-07-01 (reconciliation review) — the action half of this ADR is still open:**
+> - **`action_oscillation_rate` metric (build step 4, §7 #4, §8): NOT implemented** — no such symbol
+>   anywhere in the workspace; the positional `oscillation_rate` gate passes but is blind to
+>   action-thrash (the regression §7 #4 says this design is most likely to cause).
+> - **The bot does NOT consume the kernel's `member_intents`** (§11 #12): the kernel emits them
+>   (`SquadDecision.member_intents`, decision `lib.rs`) and the sim adapter consumes them
+>   (`combat-agent/src/squad.rs`), but the bot's per-creep ACTION path is still
+>   `TickOrders.attack_target` → `SquadCombatJob` — zero bot call sites (the bot only constructs empty
+>   `member_intents` in test fixtures).
+> - ~~§12 Stage-4 re-tune adoption unrecorded~~ **RESOLVED (V-7 verification, 2026-07-01): ADOPTED.**
+>   The Stage-4 winners live in the ADR 0026 strategy-selection layer, which is what the bot fights
+>   with (`decide_strategy(default_strategies())`): `strategy.rs` `open_combat()` = a1-i6-tight
+>   (+spacing 2 from the 0026a re-tune), `breach()` = a1-i4-def. `KernelParams::default()`
+>   (`kernel.rs:283`, still the old a2-i3-def seed) is reachable only from tests and the
+>   never-fights fallback — deliberately NOT the adoption vehicle. The 0031b sweep tuned
+>   `CompositionParams` only and superseded nothing here.
+>
+> Tracked in the standing backlog: [`../reviews/reconciliation-2026-07-01.md`](../reviews/reconciliation-2026-07-01.md) §6 (the "0025 §4/§11/§12" row); §8 V-7 is CLEARED.
+
 ### Build directives (operator, 2026-06-24)
 
 This is a **clean replacement**, optimized for the best-designed system with the least technical debt — not a backward-compatible migration:

@@ -1,14 +1,25 @@
 # Combat Overhaul — Master Status & Plan
 
 - **Owner:** William Archbell
-- **Last updated:** 2026-06-19
-- **This is the source of truth for combat/war STATUS and REMAINING WORK.** Forward-looking status lives here; landed-task detail (commit SHAs, per-task validation cells) lives in [`../execution/phase-2.md`](../execution/phase-2.md); design rationale lives in ADR [0008](../design/0008-combat-and-squad-architecture.md) (+ tactics annex [0008a](../design/0008a-combat-tactics.md)).
+- **Last updated:** 2026-07-01 (demoted to HISTORICAL — see the status note below; body content is the 2026-06-19 state)
+- **⚠ As of 2026-07-01 this plan is HISTORICAL — it is NOT the source of truth for combat/war status.** It is frozen at the 2026-06-19 / WFV-14 era; the combat program has since moved through ADR [0022](../design/0022-combat-mmo-v1-roadmap.md) (which superseded this doc's sequencing) and the ADR 0025–0038 wave, and the bot is at **WFV 24** and deployed to MMO. **Current status lives in the per-ADR ledgers ([`../design/`](../design/) `00xx` docs) + [`../design/README.md`](../design/README.md); the open-work backlog lives in [`../reviews/reconciliation-2026-07-01.md`](../reviews/reconciliation-2026-07-01.md) §6.** Landed-task detail (commit SHAs, per-task validation cells) remains in [`../execution/phase-2.md`](../execution/phase-2.md); design rationale in ADR [0008](../design/0008-combat-and-squad-architecture.md) (+ tactics annex [0008a](../design/0008a-combat-tactics.md)). The body below is preserved as history: the obviously-overtaken sections carry `[OVERTAKEN — …]` annotations; the verified-still-true residue is §0a.
+
+## 0a. Still-open items carried forward (verified against code 2026-07-01)
+
+The residue of this plan that is still true at HEAD — everything else below is historical:
+
+- `sourcekeeper.rs:345` — `military_free: true` still hardcoded (`TODO(K2c-2/W)`: yield to active defense / declared war).
+- `ObjectiveKind::Escort` — still defined + handled by the manager with **no producer** (inert; was W3).
+- `MAX_CONCURRENT_SQUADS` — still a static `4` (`squad_manager.rs:167`); a governor-dynamic cap remains future work (ADR 0020 §11 S5-CAP).
+- `decide_towers` / U-TOWER — genuinely unbuilt (no such symbol in `screeps-combat-decision`); tower↔creep fire cohesion remains open.
+
+These are tracked in the standing backlog: [`../reviews/reconciliation-2026-07-01.md`](../reviews/reconciliation-2026-07-01.md) §6 (the "plan §5" rows).
 
 ## 0. How to use this doc
 
 | Doc | Role |
 |---|---|
-| **THIS doc** | Current status by workstream + the single ordered remaining-work plan + gates. Supersedes the phase-2.md Status columns. |
+| **THIS doc** | (HISTORICAL as of 2026-07-01 — see the header note) Current status by workstream + the single ordered remaining-work plan + gates. Supersedes the phase-2.md Status columns. |
 | ADR [0008](../design/0008-combat-and-squad-architecture.md) (+ [0008a](../design/0008a-combat-tactics.md) annex) | Design end-state / why. 0008a = the ~55-tactic catalog + ~70-knob param table + EXP-* register. |
 | [`phase-2.md`](../execution/phase-2.md) | Cold-resume per-task historical log: §2.0 newest-first status log w/ commit SHAs, §2.2–2.7a per-task validation cells, §2.8 sequencing graph, §2.9 checkpoints, §2.1 operator-settled constraints. |
 | ~~g4-offense-plan.md / g3-tail-plan.md~~ (DELETED) | Old sub-plans, removed 2026-06-18 — their remaining work folded into §5–6 here, landed history into [`phase-2.md`](../execution/phase-2.md) §2.0. Full text in git history if ever needed. |
@@ -47,20 +58,24 @@ This table **supersedes** the phase-2.md Status columns (including the stale §2
 | WS | Rollup | Detail |
 |---|---|---|
 | **H** harness/engine | **PARTIAL** | H1/H2/H3 + **H4 DONE** (`screeps-combat-agent`, 28 tests: rush/kite/turtle/drain roster, `run_engagement` + tower controller + `CombatRecording` capture, `world_from_units`, `replay::to_svg`). **H5 IN PROGRESS** — `screeps-combat-eval` crate landed: the **EXP-* register as a metric-producing suite** (`register`/`report`; 5 experiments FOUND/KITE/FOCUS/TOWER/COMP passing = the tactics-tuning loop). Remaining H5 = sim-vs-server **parity oracle** + byte-exact golden vectors + nightly seeded gate (need Docker-capture integration). **U-series harness expansion FOUNDATION DONE (U1–U7)** — `ScenarioBuilder` (walls/ramparts/towers/chokes), recording fidelity, structure-targeted apply layer, tower id-keying, the `metrics` module (5 families, tower-attribution + shared-cohesion must-fixes), symmetric outcome + self-play/stalemate scoring (residual HP-slope), and the room-variety register (7 EXP, incl. BREACH + tower NEST). **Next: behavior fixes U8 (single-creep) / U9 (squad) — touch high-conflict shared decision files, sequencing pending operator.** Plus U-TOWER (now unblocked by U5/U6). See §5(b) U-roadmap. |
-| **I** identity | **UNSTARTED** | Manager interim-keys squads by `SquadContext` Entity. I1 SquadStore/SquadId + I2 re-key both UNSTARTED. |
+| **I** identity | ~~UNSTARTED~~ **[OVERTAKEN — 2026-07-01]** | **[OVERTAKEN — `SquadRef { index, generation }` landed at WFV 17 (ADR 0022 P-ID, blocker #2): `squad_entity` is generation-safe validate-on-access, no longer a bare `u32`.** A minted reload-stable `SquadId` (the original I1/I2 shape) is still open — tracked as REC-009 in [`../reviews/reconciliation-2026-07-01.md`](../reviews/reconciliation-2026-07-01.md).] *(Original text: Manager interim-keys squads by `SquadContext` Entity. I1 SquadStore/SquadId + I2 re-key both UNSTARTED.)* |
 | **M** movement | **PARTIAL** | M1 DONE (footprint primitive). M2 code-done + sim-validated + live-swapped (WFV 7→8); orientation gap closed via G4-O2; **behavioral live-combat validation pending (M2-LIVE)**. M3 DONE (sim). M4 conditional. |
 | **G** goals/squads | **DONE** | G1/G2/G3/G3-tail + G4 (defense-half + offense O1/O2/O3/O4/O6 + SK-DEADCODE + **O7 legacy deletion**) all landed. O5 dropped, G4-HEAVY deferred (§5(g)). **All combat is now objective-driven via the SquadManager — no legacy AttackMission/AttackOperation code remains.** |
 | **W** war supervisor | **PARTIAL** | W1 DONE (defense → Defend, default ON). **W2/W3/W4 UNSTARTED** (supervisor trim/economy-abort; Escort producer; WarDecl posture). |
-| **S** spawning | **UNSTARTED** | S1 sole-demand-producer (GroupId=SquadId) + S2 boost handoff (gated ADR 0010). |
+| **S** spawning | ~~UNSTARTED~~ **[OVERTAKEN — 2026-07-01]** | **[OVERTAKEN — combat spawn demand is now fielded by the `SquadManager` (Phase B slot spawning `queue_slot_spawn` + forming pacing + renew; the ADR 0028/0029/0031 wave), so "S1 UNSTARTED" no longer describes the code; the original GroupId=SquadId design was not built as specified.** S2 boost handoff remains future (ADR 0010-gated).] *(Original text: S1 sole-demand-producer (GroupId=SquadId) + S2 boost handoff (gated ADR 0010).)* |
 | **K** source-keeper | **PARTIAL** | K0/K1/K2/K3/K5 DONE. K2c-2 (military_free gate + farm retirement) + K-RECONCILE UNSTARTED; **K4 mineral DEFERRED/BLOCKED** (needs remote extractor/container + market-glut predicate). |
 
 ## 4. Resume point + do-next ordering
+
+> **[OVERTAKEN — 2026-07-01]** This resume point is the 2026-06-19 state. The path it describes was superseded by ADR [0022](../design/0022-combat-mmo-v1-roadmap.md) and executed through the ADR 0025–0038 wave; the bot has since deployed to MMO. Kept as history.
 
 **RESUME POINT (2026-06-19):** after **P2.G4-O7** (offense legacy deleted; G workstream complete) + the **H4 first increment** (scripted opponents + adversarial harness). Combat slice on master at Docker **WFV 13**; host green (bot 157, rover 27, decision 41, agent 25), wasm + clippy clean. **LIVE COMBAT PATH VALIDATED on Docker (2026-06-19):** with natural invader cores + remote invaders present (and an injected W7N5 stronghold), the bot produces `Dismantle` objectives (O6.1: W5N7, W7N3 cores) + `Defend` objectives (W1: remote invaders in W8N4), and the `SquadManager` fields combat squads (census: 8 combat creeps across W8N4/SK rooms). So the objective→manager→squad pipeline fires end-to-end. **Remaining validation gaps:** (a) the W7N5 stronghold isn't scouted yet (non-reserved → opportunistic visibility is slow), so the O3 *breach* + tower fight specifically aren't exercised; (b) confirm a Dismantle siege-quad actually clears a core (offense MEDIUM competes with defense/SK under `MAX_CONCURRENT_SQUADS`).
 
 **Do-next ordering:** **The entire G workstream (incl. G4 offense migration) is DONE** — O7 deleted the legacy (WFV 12→13, deployed); all combat is objective-driven via the `SquadManager`. O5 (power-banks) + G4-HEAVY (heavy assault) are deferred future capabilities (§5(g)). **Remaining are the independent tracks: H4/H5 (harness), I1/I2 (SquadStore/SquadId), W2–W4 (war supervisor/escort/posture), S1/S2 (synchronized spawn), K2c-2/K-RECONCILE/K4 (SK), plus the validation/future items in §5(g).** Recommended next: validate the objective/manager combat path on the Docker soak (offense ON), then pick up **I1** (foundational — unblocks S1 + a future G4-HEAVY) or **H4** (unblocks the EXP-* tuning loop). Full dependency-ordered queue in §5.
 
 ## 4D. Path to MMO deployment — whole-bot, offense-ready (2026-06-19)
+
+> **[OVERTAKEN — 2026-07-01]** This pre-deploy framing predates the MMO deploy, which has since happened (the ADR 0027/0031/0032/0034–0037 wave is live on MMO). Sequencing authority moved to ADR [0022](../design/0022-combat-mmo-v1-roadmap.md); the WFV numbers cited below (13/14/15) are historical — current `WORLD_FORMAT_VERSION` = 24 (`game_loop.rs`). Kept as history.
 
 **Scope: the WHOLE master delta since the last MMO deploy — not any single ADR.** The delta is large: the entire Phase-2 combat overhaul (objective queue + `SquadManager` + EV tactics + unified positioning + Lanchester gate + self-play tournament; ADR 0008/0019/0020), derelict-rooms M1–M12 (salvage/raid/dismantle/declaim), market always-active seg-58, the `tower_dps` Some(0.0) + defend-gate fixes, statics→`Resource` M0–M6, and several WFV bumps (MMO is presumably <13). Treat as a major behavioral change → staged deploy + telemetry watch.
 
@@ -171,6 +186,8 @@ The ultracode design pass (wf_c4ad0572, 11 agents, ground-truthed the engine/har
 
 ## 7. WORLD_FORMAT_VERSION ledger
 
+> **[Ledger frozen — 2026-07-01]** This table ends at the 2026-06-19 era and is kept as history. **Current `WORLD_FORMAT_VERSION` = 24**; the authoritative bump history (v2→v24, one entry per bump) lives in `screeps-ibex/src/game_loop.rs` directly above the constant. (For the record: the "pending" rows below did land — the force-sizing solver bumped 14→15, and v17 was the `SquadRef` identity change.)
+
 | Change | WFV |
 |---|---|
 | M2 anchor mover | 7→8 |
@@ -179,7 +196,7 @@ The ultracode design pass (wf_c4ad0572, 11 agents, ground-truthed the engine/har
 | K3 per-source mining | 10→11 |
 | G4 defense-half | 11→12 |
 | G4-O7 offense legacy removal | 12→13 |
-| ADR 0009c road-connectivity planner (`b29224f`, non-combat) | 13→14 (**current**) |
+| ADR 0009c road-connectivity planner (`b29224f`, non-combat) | 13→14 (**current as of 2026-06-19**; 24 at HEAD — see `game_loop.rs`) |
 | P2 EV force-sizing solver (RoomThreatData rampart-hits/tower-energy enrichment) | 14→15 (pending — folds into the MMO deploy reset) |
 | I2 (SquadId field) | pending |
 
@@ -219,4 +236,4 @@ Unblock map: CP-H/CP-M ← live soak + H4; CP-I ← I1/I2; CP-G ← O7; CP-W ←
 - **Design end-state:** ADR [0008](../design/0008-combat-and-squad-architecture.md) (+ [0008a](../design/0008a-combat-tactics.md) tactics annex + EXP register).
 - **Landed-task history with SHAs:** [`phase-2.md`](../execution/phase-2.md) §2.0 (newest-first); §2.9 checkpoints.
 - **Old sub-plans (DELETED 2026-06-18):** `g3-tail-plan.md` (8-step kite) and `g4-offense-plan.md` (O-series) were removed once complete — their remaining items live in §5, the legacy delete-tracking in §6, and the `AttackReason→ObjectiveKind` mapping in ADR 0008 §2. Landed history with SHAs: [`phase-2.md`](../execution/phase-2.md) §2.0. Full original text recoverable from git history.
-- **This doc is the source of truth for status and supersedes the phase-2.md Status columns.**
+- ~~This doc is the source of truth for status and supersedes the phase-2.md Status columns.~~ **[OVERTAKEN — 2026-07-01: this doc is HISTORICAL. Current status = the per-ADR ledgers + `docs/design/README.md`; open-work backlog = `docs/reviews/reconciliation-2026-07-01.md` §6. See the header note.]**

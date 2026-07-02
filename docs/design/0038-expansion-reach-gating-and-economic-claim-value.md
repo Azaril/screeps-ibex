@@ -1,12 +1,15 @@
 # ADR 0038 — Expansion reach-gating + economic (net-ROI) claim value
 
-- **Status:** **Implemented on the working tree (2026-07-01), pending operator review + commit + deploy.**
+- **Status:** **Implemented + COMMITTED (master `cf5e8be`, 2026-07-01); MMO deploy pending operator go-ahead.**
   Operator-directed redesign of claim/expansion selection, decided this session: **combined one-pass** change
   (unblock + value-unify together), **ADR-first**, WFV 22→23 reset approved. Landed: the pure
   `claim_economics.rs` kernel (13 tests) + `RoomEconomyFacts::owned_colony`; `claim.rs` reach-gating + cadence +
   kernel scorer + deterministic tie-break; `ClaimFeatures` config migration; `gather.rs` `frontier_truncated`
-  removal; `game_loop.rs` WFV 22→23. **Host: 233/233 green; wasm clippy: clean, zero warnings.** Not yet
-  committed or deployed (MMO deploy is one loud reset).
+  removal; `game_loop.rs` WFV 22→23. **Host: 233/233 green; wasm clippy: clean, zero warnings.** Committed at
+  `cf5e8be`; the pending loud reset is now **WFV 22→24** (v24 folds in REC-001 — two post-`cf5e8be` rover
+  `StuckState` shape changes; see the `game_loop.rs` history +
+  [`../reviews/reconciliation-2026-07-01.md`](../reviews/reconciliation-2026-07-01.md)). The MMO deploy itself
+  still awaits explicit operator go-ahead (one loud reset).
 - **One line:** The empire stops expanding because claim selection **hard-rejects every candidate below a
   distance-4 floor** and the last-resort escape hatch is gated on a search-radius ratchet that widens one hop
   per ~500-tick discover cycle (or never, when boxed in). Fix: gate claims **only on claimer reach**
@@ -204,6 +207,34 @@ claim_value(R, d) = intrinsic_roi(R) · unlock_fraction(d) · support_decay(d) �
 | 2-source @ d=4 (ring) | ~21167 | dominates the adjacent room ~17× — cannibalization discount is decisive |
 | 1-source @ d=8 | ~8571 | **beats** the near cannibalizing 2-source @ d=2 (~8467) — sprawl intent, by ~1% (⇒ D8 tie-break is load-bearing) |
 | 0-source / no-controller | 0 | excluded by the **viable gate** (`claim.rs:147`) primarily; score-0 is defense-in-depth |
+
+### Part C — rapid-spread posture + cannibalization patience (D9, post-deploy 2026-07-01)
+
+Live shardX feedback after the first deploy: the empire "still cannibalizes and does not sprawl enough — the
+ability to rapidly spread is a survival trait." Diagnosis: the scoring already prefers far rooms and
+`max_score_delta` already blocks a much-worse close room *when a far one is scored* — so the residual
+cannibalization is the bot **spending a claim slot on an adjacent room while the farther rooms that would win
+are merely still being scouted** (they are not in the scored set at decision time), compounded by cautious
+throttles. Two fixes, both **config/logic only — no serialized change, no reset**:
+
+- **D9a — Cannibalization patience (the anti-cannibalization guarantee).** A candidate at
+  `distance < ring_separation_hops` (one that overlaps an existing colony's radius-1 remote ring) is committed
+  **only once scouting coverage is complete** — i.e. the reachable far frontier is fully scouted or given up, so
+  nothing farther is coming. Far (`>= ring`) candidates are never gated and claim as soon as scored. Extracted
+  as the pure `claim_economics::may_claim_below_ring(distance, ring_sep, scouting_covered)` (unit-tested). This
+  is **NOT** the deleted hard floor: it is gated on `scouting_coverage_complete` (which *converges* as far
+  unknowns gain visibility or are marked unreachable — `claim.rs`), never on the radius ratchet, so a genuinely
+  boxed-in empire still claims its closest option once the frontier is exhausted (no stall). Net effect: close
+  rooms become a true last resort; slots go to farther rooms whenever any are reachable.
+- **D9b — Rapid-spread posture (config).** `max_concurrent_missions 2→4` and `max_score_delta 0.15→0.35` so the
+  empire grabs several comparable far rooms per cycle (bounded by the GCL/CPU room cap), and the cadence cap is
+  tightened (`max_discover_interval 5000→1500`, `rediscover_ticks_per_room 10→4`) so expansion keeps evaluating
+  new claims frequently on slow-tick MMO rather than idling for hours. All `#[serde(default)]` — tunable live
+  via `Memory._features.claim` without a redeploy.
+
+> Note: the kit's `console`/`exec` require username auth and cannot reach the MMO **token** entry, so this
+> round was reasoned from the pipeline rather than a live shardX probe; the values above are a starting posture
+> and are expected to be tuned from live observation.
 
 ---
 

@@ -97,7 +97,19 @@ Thread `tempo` into the oracle's two entry points:
 
 ## 6. The winnability-validated deploy gate (fixes BOTH the FIX-A over-correction AND the quorum's Lanchester gap)
 
-The most important deliverable, and it took two iterations. The first (a fixed-ratio quorum) was WRONG — the operator caught it: *"Does the quorum still validate Lanchester probability of winning? How do we know quorum is sufficient to be useful?"* It does not.
+> **⚠ NOT YET IMPLEMENTED (verified against code 2026-07-01, reconciliation review).** Nothing in this
+> section exists in code: `present_force_is_winnable`, `EngagementTempo`,
+> `WAVE_DPS_MARGIN`/`WAVE_MIN_WIN_PROB`, and the §6.5 `squad_ready_to_engage(...)` gate function are
+> design-only — no such symbols anywhere in the workspace (the `squad_ready_to_engage` *field* on
+> `squad_fsm::SquadFsmSnapshot` is an unrelated boolean input). What exists instead:
+> (a) the **interim full-roster revert** of §6.5 — the unsound 0.75-count quorum was reverted in
+> `9705b6a`, so defense gates on `squad_ready_to_depart` (full roster) like offense; the quorum kernel
+> `squad_ready_to_depart_at_quorum` remains in `rally.rs` awaiting this gate; and
+> (b) the separate ADR 0028 `present_force_wins_or_stalls` proceed-gate (`lib.rs`), OR'd into the
+> rally/gather gates — a Lanchester win-or-stall check on the PRESENT force that is related in spirit but
+> is NOT this section's tempo-thresholded `present_force_is_winnable` (no tempo thresholds, no
+> `MIN_VIABLE_GROUP` pre-filter, no kill-in-time term at the gate). This section remains the design for
+> the principled subset-deploy restore. The first (a fixed-ratio quorum) was WRONG — the operator caught it: *"Does the quorum still validate Lanchester probability of winning? How do we know quorum is sufficient to be useful?"* It does not.
 
 ### 6.1 Why the fixed-ratio quorum failed (the operator is mathematically exact)
 

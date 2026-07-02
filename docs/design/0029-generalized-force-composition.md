@@ -1,6 +1,6 @@
 # ADR 0029 — Generalized force composition (one oracle, custom only where it pays)
 
-- **Status:** Accepted (core landed) — player-room raid generalization is a flagged follow-up (§7)
+- **Status:** Accepted (core landed) — the §7/D7 player-room raid follow-up **LANDED 2026-06-27** as the NEW `GatedPlayerRaid` doctrine (decision `8ce4643` / super `efa3336`), deployed. NB: it landed as a **separate doctrine** (`GatedPlayerRaid`/`RaidCreeps` — sized + gated, honors `None` → defer); the original `PlayerRaid`/`ClearCreeps` remains **always-field** (operator-intended split — see the doctrine.rs module doc)
 - **Date:** 2026-06-27
 - **Extends:** [0026 §9](0026-*.md) (the doctrine registry), [0020 §12](0020-ev-adaptive-blob-combat.md) (the force-sizing oracle), [0028](0028-lifecycle-harness.md) (the lifecycle harness that proves it)
 - **Supersedes:** the `GarrisonDefense` solo/duo/quad bucket selection (the former `DefenseEscalation::from_threat`)
@@ -43,9 +43,11 @@ offense. After this:
 | `GarrisonDefense` | ClearCreeps | **defense** | **oracle** (`clear_force`) ⟵ *was buckets* | size ranged+heal to out-power+out-heal the attacker |
 | `SkSuppression` | Suppress | sk | **custom kiting duo** | a *behavioral* mix (kite + out-heal one keeper); not a blob |
 | `HarassRemote` | Harass | offense | **fixed solo** | deny an *undefended* remote; one cheap creep, no fight to size |
+| `GatedPlayerRaid` *(added 2026-06-27, §7/D7 follow-up — `efa3336`)* | RaidCreeps | offense | **oracle** (`clear_force`), **gated** — honors `None` → DEFER | the sized+gated resource-denial raid; unlike `PlayerRaid` above (which is ALWAYS-FIELD, never defers), this one defers via the war.rs sizing gate |
 
 Three of six now size through the same `clear_force` path; two more through `assess`. Only **two** are
-non-oracle, and both for a defensible reason (§5).
+non-oracle, and both for a defensible reason (§5). *(Counts describe the original six rows; the
+`GatedPlayerRaid` row landed later — do not conflate it with `PlayerRaid`, which stays always-field.)*
 
 ## 4. The W9N8 root cause this fixes (the live bug)
 
@@ -114,11 +116,12 @@ move of sizing into the strategy layer.
 - **Player-room under-sizing (offense calibration, latent — not a reported live symptom).** `ResourceDenial`
   mapped to `Harass` → `HarassRemote` (fixed solo, no gate), so a defended hostile *player* room was fed a doomed
   lone harasser. **Landed (safe half):** only harass towerless rooms — a solo can deny an undefended remote but is
-  just fed to a tower. **Follow-up (held for review):** route `ResourceDenial` through the sized+gated `PlayerRaid`
-  (DoctrineObjective `ClearCreeps`), populating `candidate.defense` (towers ranged to a chosen assault tile) so the
-  winnability + ROI gate sizes a real raid or defers — the same path AttackFlag already uses (`war.rs:659-672`).
-  This is a *notable offense-behavior change* (player rooms get sized raids or get deferred), so it ships behind
-  operator review rather than in this batch.
+  just fed to a tower. **Follow-up — LANDED + DEPLOYED (2026-06-27, decision `8ce4643` / super `efa3336`):**
+  `ResourceDenial` is routed through a NEW sized+gated doctrine, **`GatedPlayerRaid`** (DoctrineObjective
+  **`RaidCreeps`** — not `ClearCreeps`), populating `candidate.defense` so the winnability + ROI gate sizes a real
+  raid or DEFERS (the doctrine honors `None`); the towerless-solo band-aid was removed. *(As-built correction to
+  the text above: the original `PlayerRaid`/`ClearCreeps` was NOT made gated — it remains ALWAYS-FIELD by operator
+  intent; the gated behavior lives in the separate `GatedPlayerRaid`/`RaidCreeps` path.)*
 
 ## 8. The part-auction's place (task #28, future)
 
@@ -140,8 +143,9 @@ revisit the auction when a concrete objective demonstrably loses value to blob-o
   HarassRemote qualify, nothing else does today. *(decision)*
 - **D6.** SK objective → `OBJECTIVE_PRIORITY_MEDIUM` so it forms (SPAWN_HIGH) without starving CRITICAL economy.
   *(landed)*
-- **D7.** ResourceDenial: only solo-harass towerless rooms now; route defended rooms through sized+gated
-  `PlayerRaid` as a reviewed follow-up. *(half landed, half held)*
+- **D7.** ResourceDenial: only solo-harass towerless rooms now; route defended rooms through a sized+gated
+  raid as a reviewed follow-up. *(BOTH halves landed — the follow-up shipped 2026-06-27 as the new
+  `GatedPlayerRaid`/`RaidCreeps` doctrine, decision `8ce4643` / super `efa3336`, deployed; see §7.)*
 - **D8.** Defer the part-auction until a measured objective needs a non-blob mix. *(decision)*
 - **D9.** The rally-until-full gate is OFFENSE-only: defenders (`ObjectiveKind::Defend`) deploy immediately with
   whatever has spawned (§11 FIX A). *(landed)*
@@ -155,7 +159,9 @@ revisit the auction when a concrete objective demonstrably loses value to blob-o
    vs a *defended* core — to close the seam between `SizingWins` (oracle-sized, pre-placed, ~99%) and
    `run_lifecycle` (formed, undefended). Discriminates "form/travel degrades a sized force" from "the live
    under-sizing was the whole story".
-2. **D7 follow-up:** the sized+gated `PlayerRaid` routing for `ResourceDenial` (operator review — offense behavior).
+2. ~~**D7 follow-up:** the sized+gated raid routing for `ResourceDenial` (operator review — offense behavior).~~
+   **DONE — landed + deployed 2026-06-27** as the new `GatedPlayerRaid`/`RaidCreeps` doctrine (decision
+   `8ce4643` / super `efa3336`); `PlayerRaid` itself stays always-field (see §7).
 3. **Live re-soak (private server):** ✅ W9N8 oscillation fixed (stable 4-slot request) + renew fires — but the
    re-soak EXPOSED the forming-completion wall (§11); FIX A/B/C landed + re-deployed, re-verifying.
 
