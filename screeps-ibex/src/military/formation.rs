@@ -463,24 +463,57 @@ mod tests {
         assert!(corridor_layout_transition(Some(FormationShape::None), 1, true).is_none());
     }
 
-    /// ADR 0031 D14: the live footprint the anchor routes as is DERIVED from the member count, and matches
-    /// the decision-crate `box_footprint(N)` single source of truth. For N=1..=8: member offsets are
-    /// distinct + in-bounds + non-negative (anchor top-left), and the bounding box of `box_formation(N)`
-    /// equals `box_footprint(N)` — so the rover overlay reserves exactly the footprint tiles for N members.
+    /// ADR 0031 D14 / ADR 0031 §5 (formation-enum footprint cleanup): the live footprint the anchor routes
+    /// as is DERIVED from the member count and matches the decision-crate `box_footprint(N)` single source of
+    /// truth. The old hardcoded 2×2 overlay was silently wrong for N=5..8 (members 5+ fell to the `(0,0)`
+    /// fallback and STACKED on the anchor); `box_formation` now row-major-fills the ⌈√N⌉×⌈N/⌈√N⌉⌉ compact box.
+    ///
+    /// This is the minimal-compact-box PROOF for N=1..=8. For every N: exactly N offsets, slot 0 is the anchor
+    /// `(0,0)`, all offsets are DISTINCT (no two members share a tile — the overlap the 2×2 overlay produced),
+    /// non-negative (anchor top-left), and every offset lies WITHIN the compact box `box_footprint(N)`
+    /// (`0 ≤ x < w`, `0 ≤ y < h`) whose bounding box is EXACTLY `box_footprint(N)` — so the box is minimal
+    /// (no wasted row/column) and the rover overlay reserves exactly the footprint tiles for N members.
     #[test]
     fn box_footprint_matches_box_formation_bounding_box_for_1_to_8() {
         for n in 1..=8usize {
             let layout = FormationLayout::box_formation(n);
+            let (w, h) = box_footprint(n);
             assert_eq!(layout.offsets.len(), n, "one offset per member (n={n})");
-            // Distinct + non-negative (anchor at top-left, fills right then down).
+            assert_eq!(layout.offsets[0], (0, 0), "slot 0 stays at the anchor (n={n})");
+            // Distinct — no two members share an offset (the overlap the 5..8 2×2 overlay produced).
             let set: std::collections::HashSet<_> = layout.offsets.iter().collect();
             assert_eq!(set.len(), n, "distinct tiles (n={n})");
-            assert!(layout.offsets.iter().all(|&(x, y)| x >= 0 && y >= 0), "non-negative offsets (n={n})");
-            // Bounding box (since min is 0,0) = (max_x+1, max_y+1) must equal box_footprint(n).
-            let w = layout.offsets.iter().map(|&(x, _)| x).max().unwrap() + 1;
-            let h = layout.offsets.iter().map(|&(_, y)| y).max().unwrap() + 1;
-            assert_eq!((w as u8, h as u8), box_footprint(n), "bounding box == box_footprint (n={n})");
+            // Every offset is WITHIN the compact box: non-negative (anchor top-left) AND under (w, h).
+            assert!(
+                layout.offsets.iter().all(|&(x, y)| x >= 0 && y >= 0 && x < w as i32 && y < h as i32),
+                "all offsets within the compact box {w}x{h} (n={n}): {:?}",
+                layout.offsets
+            );
+            // The box is MINIMAL: its bounding box (min is 0,0 ⇒ max_x+1, max_y+1) equals box_footprint(n)
+            // exactly — no wasted trailing row/column (the N=5,6 → 3×2 case the ⌈√N⌉² square would over-size).
+            let bbox_w = layout.offsets.iter().map(|&(x, _)| x).max().unwrap() + 1;
+            let bbox_h = layout.offsets.iter().map(|&(_, y)| y).max().unwrap() + 1;
+            assert_eq!((bbox_w as u8, bbox_h as u8), (w, h), "bounding box == box_footprint (n={n})");
         }
+    }
+
+    /// ADR 0031 §5: the EXACT row-major offsets for N=5..8 — the rows the hardcoded 2×2 overlay silently got
+    /// wrong (members 5+ stacked on the anchor). Pinned literally so a regression fails with the offending
+    /// row, not just an aggregate invariant. N=5,6 fill a 3×2 box; N=7,8 open the third row of a 3×3.
+    #[test]
+    fn box_formation_offsets_are_correct_for_5_to_8() {
+        assert_eq!(FormationLayout::box_formation(5).offsets, vec![(0, 0), (1, 0), (2, 0), (0, 1), (1, 1)], "n=5 → 3×2 (5 of 6)");
+        assert_eq!(FormationLayout::box_formation(6).offsets, vec![(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1)], "n=6 → full 3×2");
+        assert_eq!(
+            FormationLayout::box_formation(7).offsets,
+            vec![(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1), (0, 2)],
+            "n=7 → 3×3 (7 of 9)"
+        );
+        assert_eq!(
+            FormationLayout::box_formation(8).offsets,
+            vec![(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1), (0, 2), (1, 2)],
+            "n=8 → 3×3 (8 of 9)"
+        );
     }
 
     /// A structure focus must stand the anchor OFF the structure's own (impassable) tile — pathing onto it

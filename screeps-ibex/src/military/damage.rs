@@ -3,10 +3,11 @@ use screeps::*;
 // the decision crate (single source — no duplicated f32 copy). The engine returns u32; cast at use.
 use screeps_combat_decision::damage::tower_attack_damage_at_range;
 
-// The threat-picture → part-count helpers (`drain_heal_parts_for_dps`, `attack_parts_to_kill`,
-// `KILL_WINDOW_TICKS`, `MAX_OFFENSE_PARTS`, the sized template bodies) moved to
-// `screeps_combat_decision::bodies` (the shared force-sizing body layer). This module keeps the
-// game-coupled tower-over-`Position` damage math + the defender spawn-readiness decision.
+// Force sizing (threat-picture → parts/bodies) lives in the decision crate: the doctrine +
+// `composition` sizing path, with `screeps_combat_decision::bodies` providing the surviving
+// heal-sizing helper (`defender_heal_parts_for_dps`). The old parallel template body-sizing helpers
+// were dead and were deleted (ADR 0030 §10 D16). This module keeps the game-coupled
+// tower-over-`Position` damage math + the defender spawn-readiness decision.
 
 /// Tower DPS at a typical drain position (room edge, north side).
 /// Drains sit at the edge to maximize range from towers; this approximates that.
@@ -80,8 +81,8 @@ pub fn range_between(a: Position, b: Position) -> u32 {
 // ── Defender spawn-readiness model ───────────────────────────────────────────
 //
 // The spawn-now-vs-wait decision for an emergency defender, given the room's
-// energy state. The part-sizing it pairs with (`attack_parts_to_kill` /
-// `sized_defender_body`) lives in `screeps_combat_decision::bodies`.
+// energy state. The part-sizing it pairs with lives in the decision crate's
+// doctrine + `composition` sizing path.
 
 /// Fraction of a room's MAX spawn energy that must currently be AVAILABLE before
 /// we size a defender to full capacity (rather than holding for refill). Keeps a
@@ -129,8 +130,8 @@ pub fn defender_spawn_readiness(
 mod readiness_tests {
     use super::*;
 
-    // (The part-sizing tests — `attack_parts_to_kill`, `defender_heal_parts_for_dps` — moved with the
-    // code to `screeps_combat_decision::bodies`.)
+    // (Part-sizing tests live with the code in the decision crate: `defender_heal_parts_for_dps` in
+    // `screeps_combat_decision::bodies`, and the doctrine + `composition` sizing tests.)
 
     #[test]
     fn readiness_urgent_uses_available() {

@@ -131,6 +131,13 @@ pub struct SquadFormingProgress {
     /// frozen while nobody is there — an en-route squad must not accrue a vacuous stall from a constant
     /// snapshot). Ephemeral (NOT serialized — no WFV bump). Cleared on retire/reassign + on room exit.
     enemy_stall: std::collections::BTreeMap<ObjectiveId, (u32, u32)>,
+    /// REC-062 (the `structure_stalled` input — the STRUCTURE twin of `enemy_stall`): objective id →
+    /// (last-observed total hits of the TARGET hostile structures, consecutive in-room ticks that sum did
+    /// NOT decrease). Same cadence/reset/room-gating as `enemy_stall` (and the sim driver's
+    /// `prev_structure_hits`), so the harmless-turtle disengage distinguishes a genuinely-unrazable turtle
+    /// (structure hits flat) from a slow structure-raze (hits DROPPING ⇒ NOT stalled ⇒ keep grinding).
+    /// Ephemeral (NOT serialized — no WFV bump). Cleared on retire/reassign + on room exit.
+    structure_stall: std::collections::BTreeMap<ObjectiveId, (u32, u32)>,
     /// REC-015b (EP-3.5 warn-once latch): (objective, slot_index) pairs whose `build_body → None`
     /// roster-stall has ALREADY been warned this fielded generation, so the unconditional warning fires
     /// once per stalled slot instead of every tick. Cleared on retire/reassign (a re-field re-warns).
@@ -1165,6 +1172,7 @@ fn apply_merges(data: &mut SquadManagerSystemData, merges: &[MergeDecision], _no
             data.forming_progress.last_target_dist.remove(&donor_obj);
             data.forming_progress.retreating_since.remove(&donor_obj);
             data.forming_progress.enemy_stall.remove(&donor_obj);
+            data.forming_progress.structure_stall.remove(&donor_obj);
             data.forming_progress.build_body_warned.retain(|&(oid, _)| oid != donor_obj);
             clear_member_trackers(&mut data.forming_progress, donor_obj);
             data.objective_queue.release_entity(donor);
@@ -1768,10 +1776,12 @@ impl<'a> System<'a> for SquadManagerSystem {
                 // ADR 0035 D4: clear the lost-in-room verdict carrier so a RE-FIELD re-derives it from the
                 // live in-room assessment (no stale lose verdict bleeding into a fresh generation).
                 data.forming_progress.lost_in_room.remove(&obj_id);
-                // REC-003/REC-036/REC-015b: the retreat clock, enemy-stall streak, and build-body warn
-                // latch are per-generation too — a re-field restarts them (and re-warns a stalled slot).
+                // REC-003/REC-036/REC-062/REC-015b: the retreat clock, enemy-stall + structure-stall
+                // streaks, and build-body warn latch are per-generation too — a re-field restarts them
+                // (and re-warns a stalled slot).
                 data.forming_progress.retreating_since.remove(&obj_id);
                 data.forming_progress.enemy_stall.remove(&obj_id);
+                data.forming_progress.structure_stall.remove(&obj_id);
                 data.forming_progress.build_body_warned.retain(|&(oid, _)| oid != obj_id);
                 // ADR 0034 D4/D5/D8: clear the per-member rally/target distance + solo-stall trackers so a
                 // RE-FIELD re-derives them (a new generation's members must not inherit a stale block streak).
@@ -1846,10 +1856,11 @@ impl<'a> System<'a> for SquadManagerSystem {
                 // ADR 0035 D4: clear the lost-in-room verdict carrier under the OLD id (reassign is a NON-LOSS
                 // terminal so it is false here, but re-key hygiene matches the other per-objective trackers).
                 data.forming_progress.lost_in_room.remove(&obj_id);
-                // REC-003/REC-036/REC-015b re-key hygiene: fresh retreat clock / stall streak / warn latch
-                // at the new target.
+                // REC-003/REC-036/REC-062/REC-015b re-key hygiene: fresh retreat clock / enemy- + structure-
+                // stall streaks / warn latch at the new target.
                 data.forming_progress.retreating_since.remove(&obj_id);
                 data.forming_progress.enemy_stall.remove(&obj_id);
+                data.forming_progress.structure_stall.remove(&obj_id);
                 data.forming_progress.build_body_warned.retain(|&(oid, _)| oid != obj_id);
                 // ADR 0034 D4/D5/D8: a reassigned squad gets fresh per-member rally/target/stall trackers at
                 // the new target (the old block streak is meaningless against the new rally corridor).
@@ -2610,6 +2621,27 @@ fn compute_squad_orders(
         false
     };
 
+    // ── REC-062 — the STRUCTURE twin: wire `structure_stalled` from the summed hits of the TARGET
+    // hostile structures, using the SAME per-objective tracker/cadence/room-gating as `enemy_stalled`
+    // above (and the sim driver's `prev_structure_hits`) — `advance_enemy_stall` is the shared pure step
+    // (it tracks a summed-hits streak; structures reuse it verbatim). The harmless-turtle disengage
+    // (decide_squad) requires BOTH signals, so a slow raze (dropping structure hits ⇒ the streak resets ⇒
+    // NOT stalled) keeps grinding while a genuinely-unrazable turtle (flat hits) disengages. Ephemeral —
+    // no serialized state, no WFV bump.
+    let structure_stalled = if in_room_any {
+        let structure_hits_now: u32 = structures
+            .iter()
+            .filter(|s| s.ownership == screeps_combat_decision::Ownership::Hostile && s.hits > 0)
+            .map(|s| s.hits)
+            .sum();
+        let advanced = advance_enemy_stall(forming_progress.structure_stall.get(&obj_id).copied(), structure_hits_now);
+        forming_progress.structure_stall.insert(obj_id, advanced);
+        advanced.1 >= screeps_combat_decision::ENEMY_STALL_TICKS
+    } else {
+        forming_progress.structure_stall.remove(&obj_id);
+        false
+    };
+
     let view = SquadView {
         members: &member_views,
         hostiles: &hostiles,
@@ -2622,6 +2654,9 @@ fn compute_squad_orders(
         // streak computed above (the sim-parity signal the stalemate disengage reads).
         engage_objective: screeps_combat_decision::EngageObjective::Destroy,
         enemy_stalled,
+        // REC-062: the per-objective no-STRUCTURE-raze-headway streak computed above (the STRUCTURE twin
+        // of `enemy_stalled`; the harmless-turtle disengage reads both).
+        structure_stalled,
         // ADR 0031 #39 P3: the drain stance is now THREADED from the oracle. `Some(Drain)` (the war producer
         // ran `plan_engagement` and picked the tower-drain for this objective) → `drain_stance = true`, so the
         // winnability path treats the FINITE towers as drainable (not a permanent unwinnable blocker) WHILE the
