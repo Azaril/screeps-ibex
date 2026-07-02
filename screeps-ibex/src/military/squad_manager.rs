@@ -3385,6 +3385,10 @@ fn apply_squad_decision(
         ctx.engaged_once = true; // P-OBJ #23: latch reaching combat (drives resolve vs give-up in Phase A)
     }
     ctx.focus_target = decision.focus.map(|f| f.pos);
+    // U-TOWER: carry the STABLE focus-creep id alongside the position so the defending room's
+    // `TowerMission` matches the squad's focus by id across the 1-tick tick-order lag (`decide_towers`).
+    // A structure focus (`f.id` None) leaves this None → the tower falls back to its own target pick.
+    ctx.focus_target_id = decision.focus.and_then(|f| f.id).map(|raw| raw.into());
     // A member's in-room test for the per-member order gating below. A member with NO position (still
     // spawning — no body in the world) is treated as in-room: its orders are inert until it has a body,
     // and it has no travel order worth preserving.

@@ -720,7 +720,14 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// encoding change), so a v24 payload can't decode → one loud reset (folds into the pending MMO deploy
 /// reset). The specs `ConvertSaveload for Entity` dangling-serialize panic is guarded by scrubbing a
 /// dead/unmarked squad ref to `None` in `repair_entity_integrity` before serialize.
-const WORLD_FORMAT_VERSION: u32 = 25;
+/// 26 = U-TOWER (tower↔squad fire cohesion, combat-overhaul-plan.md §5): `SquadContext` gains a serialized
+/// `focus_target_id: Option<ObjectId<Creep>>` (the id-half of the existing `focus_target` position) so the
+/// defending room's `TowerMission` combines its fire with the squad's by matching the focus by STABLE id
+/// across the 1-tick tick-order lag (`screeps_combat_decision::tower_fire::decide_towers`). `ObjectId` is a
+/// plain-serde value (not an Entity), so the `SquadContext` `ConvertSaveload` derive round-trips it as data;
+/// but adding an interior field to the positional bincode `SquadContext` shape shifts every later field, so
+/// a v25 payload can't decode → one loud reset (folds into the pending MMO deploy reset).
+const WORLD_FORMAT_VERSION: u32 = 26;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode

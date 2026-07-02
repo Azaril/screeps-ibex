@@ -1,6 +1,8 @@
 use super::data::*;
 use super::missionsystem::*;
+use crate::creep::CreepOwner;
 use crate::jobs::utility::repair::*;
+use crate::military::squad::{SquadContext, SquadTarget};
 use crate::remoteobjectid::*;
 use crate::serialize::*;
 use crate::transfer::transfersystem::*;
@@ -318,6 +320,57 @@ impl Mission for TowerMission {
         let confirmed_drainers = self.get_confirmed_drainers();
 
         if !hostile_creeps.is_empty() {
+            // ─── U-TOWER: combined squad+tower fire when a squad is defending this room ───
+            // Look up the defending squad's shared focus (id + the DPS the squad lands on it). When one
+            // exists, the pure `decide_towers` kernel sizes the tower commit to close the REMAINING heal
+            // gap after the squad's own fire (combined fire beats either alone), redirecting the freed
+            // towers to the next-highest threat and holding rather than over-killing. With NO defending
+            // squad the tower keeps its existing drain-sawtooth / bounded-probe / chip-fire path below
+            // (the passive-base defensive path, unchanged).
+            let squad_focus = find_squad_focus_for_room(system_data.squad_contexts, system_data.creep_owner, system_data.entities, room_name);
+
+            if let Some(sf) = squad_focus {
+                // Conserve against confirmed drainers EXCEPT ones under an active bounded probe (those we
+                // deliberately test-fire this tick). Same semantics as the no-squad path's probe budget.
+                let conserve: std::collections::HashSet<RawObjectId> = confirmed_drainers
+                    .iter()
+                    .filter(|id| !engaged_ids.contains(id))
+                    .map(|id| RawObjectId::from(*id))
+                    .collect();
+
+                let tower_dtos: Vec<crate::combat::tower_fire::TowerDto> = my_towers
+                    .iter()
+                    .map(|t| crate::combat::tower_fire::TowerDto {
+                        pos: t.pos(),
+                        energy: t.store().get_used_capacity(Some(ResourceType::Energy)),
+                    })
+                    .collect();
+                let hostile_dtos: Vec<_> = hostile_creeps.iter().map(crate::jobs::squad_combat::creep_to_dto).collect();
+                let structure_dtos: Vec<_> = structures.all().iter().map(crate::jobs::squad_combat::structure_to_dto).collect();
+
+                let decision = crate::combat::tower_fire::decide_towers(&tower_dtos, &hostile_dtos, &structure_dtos, Some(sf), &conserve);
+
+                for order in &decision.orders {
+                    let Some(tower) = my_towers.get(order.tower_idx) else { continue };
+                    let Some(target) = order.target else { continue };
+                    // Re-resolve the target creep by its STABLE id (never the priced position, which can be
+                    // stale by a tick — the tower reads LAST tick's focus, see the tick-order note above).
+                    let target_id: ObjectId<Creep> = target.id.into();
+                    if let Some(creep) = target_id.resolve() {
+                        let _ = tower.attack(&creep);
+                        // Record a probe volley against a drainer under test so next tick judges the result.
+                        if engaged_ids.contains(&target_id) {
+                            if let Some(tracker) = self.drain_trackers.get_mut(&target_id) {
+                                tracker.probe_fired = true;
+                            }
+                        }
+                    }
+                }
+
+                return Ok(MissionResult::Running);
+            }
+
+            // ─── No defending squad: the passive-base defensive path (drain-sawtooth / probe / chip) ───
             // Calculate per-hostile heal rate for net damage assessment.
             let hostile_infos: Vec<_> = hostile_creeps
                 .iter()
@@ -455,4 +508,79 @@ impl Mission for TowerMission {
 
         Ok(MissionResult::Running)
     }
+}
+
+/// U-TOWER — the game→DTO seam that finds an in-room squad's shared focus for `room` (id + the DPS the
+/// squad lands on it), for [`decide_towers`](crate::combat::tower_fire::decide_towers). Matches ANY
+/// managed squad whose objective targets this room — offensive objectives (`AttackRoom`, `HarassRoom`,
+/// `AttackController`, …) included, not just `DefendRoom` — because combined tower+squad fire helps an
+/// offensive squad fighting IN our room just as much as a defensive one (the towers finish what the
+/// squad's fire can't overcome). Returns `None` when no such squad has a live creep focus standing in
+/// this room (→ the tower keeps its own passive-base target selection).
+///
+/// TICK-ORDER LAG (documented, harmless by id-match): `TowerMission` runs in `RunMissionSystem`
+/// (`game_loop.rs`) BEFORE `SquadManagerSystem` writes THIS tick's focus, so the `focus_target_id` read
+/// here is LAST tick's. That is why the tower matches by STABLE creep id (not the `focus_target`
+/// position): a focus creep persists across ticks, so re-resolving its id yields its CURRENT tile, while
+/// last tick's position would point at empty ground once the creep stepped. The squad's DPS is likewise
+/// computed from the members' CURRENT positions/bodies, so the combined-fire sizing uses this tick's
+/// reality even though the *choice of focus* is one tick old — which is correct: the focus is stable
+/// across ticks in a sustained engagement, and a one-tick-stale focus on the first engagement tick
+/// simply defers combined fire by one tick (the tower's own path fires meanwhile).
+fn find_squad_focus_for_room(
+    squad_contexts: &WriteStorage<SquadContext>,
+    creep_owner: &ReadStorage<CreepOwner>,
+    entities: &Entities,
+    room: RoomName,
+) -> Option<crate::combat::tower_fire::SquadFocus> {
+    // The room a squad's objective targets (room-scoped targets → that room; position-scoped → the
+    // position's room). Any objective type counts — combined fire helps offense in our room too.
+    let target_room = |t: &SquadTarget| -> Option<RoomName> {
+        match t {
+            SquadTarget::DefendRoom { room }
+            | SquadTarget::AttackRoom { room }
+            | SquadTarget::HarassRoom { room }
+            | SquadTarget::CollectResources { room } => Some(*room),
+            SquadTarget::MoveToPosition { position }
+            | SquadTarget::AttackStructure { position }
+            | SquadTarget::EscortPosition { position }
+            | SquadTarget::AttackController { position } => Some(position.room_name()),
+        }
+    };
+
+    // Find a squad whose objective is this room and that has a live creep focus. Iterate the storage
+    // join (deterministic specs storage order); pick the FIRST match — in practice one managed squad
+    // fights in a room at a time (`MAX_CONCURRENT_SQUADS` gates the fielding).
+    for (_, ctx) in (entities, squad_contexts).join() {
+        let Some(target) = ctx.target.as_ref() else { continue };
+        if target_room(target) != Some(room) {
+            continue;
+        }
+        let Some(focus_id) = ctx.focus_target_id else { continue };
+        // Re-resolve the focus creep by its stable id (never the stale `focus_target` position). A focus
+        // creep that has died / left view yields no combined fire this tick.
+        let Some(focus_creep): Option<Creep> = focus_id.resolve() else { continue };
+        // Only combine on a focus that is actually IN this room (a stale cross-room focus doesn't apply
+        // to this room's towers).
+        if focus_creep.pos().room_name() != room {
+            continue;
+        }
+        let focus_pos = focus_creep.pos();
+
+        // The DPS the squad ITSELF lands on the focus THIS tick: over living member creeps, ranged
+        // output when within range 3, melee output when adjacent (what actually hits the focus). The
+        // tower commit closes the gap AFTER this (`decide_towers`).
+        let squad_dps: u32 = ctx
+            .members
+            .iter()
+            .filter_map(|m| creep_owner.get(m.entity).and_then(|co| co.owner.resolve()))
+            .map(|creep| crate::combat::tower_fire::creep_dps_on_focus(&crate::jobs::squad_combat::creep_to_dto(&creep), focus_pos))
+            .sum();
+
+        return Some(crate::combat::tower_fire::SquadFocus {
+            id: focus_creep.try_raw_id(),
+            squad_dps,
+        });
+    }
+    None
 }

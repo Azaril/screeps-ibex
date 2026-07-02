@@ -366,6 +366,15 @@ pub struct SquadContext {
     pub members: EntityVec<SquadMember>,
     /// Shared attack focus position (all members target this).
     pub focus_target: Option<Position>,
+    /// U-TOWER — the STABLE object id of the shared focus creep this tick (`decision.focus.and_then(|f|
+    /// f.id)`), the id-half of `focus_target`. The defending room's `TowerMission` reads this to combine
+    /// its fire with the squad's (`screeps_combat_decision::tower_fire::decide_towers`): the tower matches
+    /// the focus by STABLE id, not the stale `focus_target` position. Id-matching is what makes the
+    /// 1-tick tick-order lag harmless (`TowerMission` runs before the `SquadManager` writes this tick's
+    /// focus, so it reads LAST tick's — but the focus creep persists across ticks, so its live tile is
+    /// re-resolved from the id, whereas the position would point at empty ground once the creep stepped).
+    /// `None` for a structure focus (no creep id) / no focus. Serialized (WFV 25→26).
+    pub focus_target_id: Option<ObjectId<Creep>>,
     /// HP fraction below which the squad should retreat (0.0 - 1.0).
     pub retreat_threshold: f32,
     /// Entity of the member that most needs healing this tick.
@@ -408,6 +417,7 @@ impl SquadContext {
             state: SquadState::Forming,
             members: EntityVec::new(),
             focus_target: None,
+            focus_target_id: None,
             retreat_threshold: composition.retreat_threshold,
             heal_priority: None.into(),
             total_members_added: 0,
