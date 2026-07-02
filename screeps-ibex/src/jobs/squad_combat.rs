@@ -244,6 +244,14 @@ impl MoveToRoom {
                 TickMovement::Hold => {
                     return None;
                 }
+                // ADR 0034 D4-F1: the D6a lifetime gate returned `Recycle` — even a full renew can't cover
+                // the journey + fight from this member's TTL (a hopelessly-far home). Recall to the nearest
+                // spawn + recycle (bank the body energy, free the slot) instead of holding + renewing forever
+                // until MAX_TRAVEL_BUDGET tears the squad down. Reuses the orphan recall-to-recycle path.
+                TickMovement::Recycle => {
+                    Engaged::recall_to_recycle(creep, creep_pos, creep_entity, tick_context);
+                    return None;
+                }
                 _ => {}
             }
         }
@@ -443,6 +451,12 @@ impl CombatResponse {
                         .range(1)
                         .priority(MovementPriority::High);
                 }
+                // ADR 0034 D4-F1: an undeployable member flagged Recycle — recall + recycle even here
+                // (it can never usefully deploy). Only reached if the lifetime gate flags a member already
+                // in the combat-response state; the rally-travel path is the common emitter.
+                TickMovement::Recycle => {
+                    Engaged::recall_to_recycle(creep, creep_pos, creep_entity, tick_context);
+                }
             }
         } else {
             Self::kite_toward_objective(tick_context, state_context);
@@ -546,6 +560,10 @@ impl Engaged {
                     flee_from_hostiles(tick_context);
                 }
                 TickMovement::Hold => {}
+                // ADR 0034 D4-F1: an Engaged member is committed to the fight, not undeployable — a Recycle
+                // order is not expected here. Ignore it (do not abandon a fighting member mid-combat); the
+                // lifetime gate only flags a member during rally-travel, where MoveToRoom recycles it.
+                TickMovement::Recycle => {}
             }
         } else {
             Self::fallback_movement(creep, creep_pos, creep_entity, tick_context, state_context);
@@ -565,6 +583,19 @@ impl Engaged {
         use crate::combat::{decide_combat, CombatView, CreepOrders, FocusTarget, SquadMovement, SquadStateDto};
 
         let room = creep_pos.room_name();
+        // ADR 0025 §11 #12 — the EV kernel already chose this member's ACTION jointly with its position
+        // (the manager stamped `member_intents` on the tick orders for an engaged, non-kiting squad). Emit
+        // them DIRECTLY through the guarded sink — no per-creep `decide_combat` pass — exactly as the sim's
+        // `ManagedSimSquad::step` does, so live and sim can't diverge. The structures list is still needed to
+        // resolve a structure focus by position. Falls through to the solo path below when empty (the kernel
+        // did not run for this member: kiting/retreating/out-of-room).
+        if let Some(intents) = tick_orders.map(|o| &o.member_intents).filter(|k| !k.is_empty()) {
+            let structures_raw = get_hostile_structures(room, tick_context);
+            let intents = intents.clone();
+            Self::translate_intents(creep, &intents, &structures_raw, tick_context);
+            return;
+        }
+
         let hostiles_raw = get_hostile_creeps(room, tick_context);
         let friends_raw = get_friendly_creeps(room, tick_context);
         let structures_raw = get_hostile_structures(room, tick_context);
@@ -651,6 +682,11 @@ impl Engaged {
                         }
                     }
                 }
+                // Dismantle is deliberately NOT issued from this action sink: a structure siege drives
+                // dismantle through the siege/declaim path (drive_declaim + the dismantle job), not the
+                // engaged member-intent actions — routing it here too would double-issue against the
+                // action_flags guard order-dependently. MoveTo/Flee are movement (owned by decide_movement,
+                // not this action sink); Idle is a no-op. A documented seam, not a silent drop.
                 CombatIntent::Dismantle { .. } | CombatIntent::MoveTo { .. } | CombatIntent::Flee { .. } | CombatIntent::Idle => {}
             }
         }

@@ -202,6 +202,13 @@ pub enum TickMovement {
     Flee,
     /// Stay put.
     Hold,
+    /// ADR 0034 D4-F1 — recall to the nearest home spawn and RECYCLE (reclaim part of the body energy).
+    /// Emitted for a member the D6a lifetime gate returned [`CommitDecision::Recycle`] for: even a full
+    /// renew to `RENEW_TARGET_TTL` cannot cover the journey + fight from its current TTL (a hopelessly-far
+    /// home). Pre-F1 such a member `Hold`ed at home renewing pointlessly until `MAX_TRAVEL_BUDGET` tore the
+    /// whole squad down as a give-up; now it is recycled explicitly (freeing the slot + banking the energy),
+    /// so a genuinely-undeployable member is a clean terminal, not a 1000-tick zombie.
+    Recycle,
 }
 
 /// What the squad should focus fire on.
@@ -277,6 +284,19 @@ pub struct TickOrders {
     /// Loose-centroid cohesion radius K (0 ⇒ no squad goal → the per-creep fallback). Ephemeral.
     #[serde(skip)]
     pub squad_cohesion_radius: u32,
+    /// ADR 0025 §11 #12 — the EV kernel's per-creep ACTION plan for this member THIS tick. When the
+    /// engaged, non-kiting kernel ran (`decide_squad_with_pathing`), it chose each member's action jointly
+    /// with its position (focus-fire spill, over-heal avoidance, structure pricing — the SAME currency the
+    /// sim's `ManagedSimSquad::step` consumes). The manager stamps `decision.member_intents[i]` here and the
+    /// job emits them directly through the guarded sink — closing the sim-vs-bot action divergence. Empty ⇒
+    /// the kernel did not run for this member (kite/retreat/solo/out-of-room), so the job falls back to the
+    /// per-creep `decide_combat`. Ephemeral (`TickOrders` is always `None` at serialize time — cleared each
+    /// tick by `PreRunSquadUpdateSystem`). The robust serialization invariant: `#[serde(skip)]` makes this
+    /// field byte-neutral to the serialized `SquadMember` shape (defaulted on load) so it needs no WFV bump,
+    /// and the sibling `TickMovement::Recycle` variant was appended LAST so bincode's index-based variant
+    /// encoding keeps every existing serialized value decodable.
+    #[serde(skip)]
+    pub member_intents: Vec<crate::combat::CombatIntent>,
 }
 
 impl Default for TickOrders {
@@ -288,6 +308,7 @@ impl Default for TickOrders {
             squad_movement: crate::combat::SquadMovement::Hold,
             squad_center: None,
             squad_cohesion_radius: 0,
+            member_intents: Vec::new(),
         }
     }
 }

@@ -410,14 +410,52 @@ fn renew_required_ttl(dist_to_target: u32) -> u32 {
         .clamp(RENEW_WHILE_FORMING_TTL, RENEW_TARGET_TTL)
 }
 
-/// REC-017 — whether a too-short-TTL member HOLDS (for the Phase-B renew) instead of committing to the
-/// rally crawl. Holding is only meaningful AT A HOME ROOM — that is where a spawn exists for the renew
-/// pass to top it up at. A short member caught MID-FIELD has no renew source: holding it freezes it at
-/// its current tile until old age (the D6a zombie), so it COMMITS instead — already en route, it
-/// contributes what life it has and never pins the quorum on a member that can never renew. A member
-/// already at the rally never holds (holding would un-gather the bloc). Pure.
+/// The travel disposition of one member under the D6a pre-departure lifetime gate — what the manager
+/// stamps as this member's `tick_orders.movement` before the rally crawl.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MemberTravelAction {
+    /// Release the member to solo-travel to the shared rally (`MoveTo(rally)`).
+    Travel,
+    /// HOLD at the home spawn so the Phase-B renew tops the TTL up to sufficiency, then commit.
+    HoldForRenew,
+    /// ADR 0034 D4-F1: recall + RECYCLE — even a full renew can't cover the journey (a hopelessly-far
+    /// home), so free the slot + bank the energy rather than hold + renew forever until MAX_TRAVEL_BUDGET.
+    Recycle,
+}
+
+/// REC-017 / D4-F1 — the too-short-TTL member's travel disposition under the D6a lifetime gate. Pure.
+///
+/// - `Commit` verdict, or NOT at a home room, or already at the rally ⇒ [`MemberTravelAction::Travel`]
+///   (release it): a member caught MID-FIELD has no renew source, so holding it freezes it at its tile
+///   until old age (the D6a zombie) — it commits and contributes what life it has; a member already at
+///   the rally never holds (holding would un-gather the bloc).
+/// - `RenewThenCommit` verdict AT a home room ⇒ [`MemberTravelAction::HoldForRenew`]: a renew to
+///   `RENEW_TARGET_TTL` reaches sufficiency, so hold + top up before the crawl.
+/// - `Recycle` verdict AT a home room ⇒ [`MemberTravelAction::Recycle`] (D4-F1): even a full renew is
+///   short — recycling frees the slot instead of holding + renewing forever until the travel budget tears
+///   the squad down. (Mid-field `Recycle` still Travels per the first rule — no home spawn to recycle at
+///   is the same reason it can't renew; committing is the least-bad option en route.)
+fn member_travel_action(
+    decision: screeps_combat_decision::rally::CommitDecision,
+    at_home_room: bool,
+    at_rally: bool,
+) -> MemberTravelAction {
+    use screeps_combat_decision::rally::CommitDecision;
+    if !at_home_room || at_rally || matches!(decision, CommitDecision::Commit) {
+        return MemberTravelAction::Travel;
+    }
+    match decision {
+        CommitDecision::Recycle => MemberTravelAction::Recycle,
+        // RenewThenCommit (Commit handled above).
+        _ => MemberTravelAction::HoldForRenew,
+    }
+}
+
+/// REC-017 — whether a too-short-TTL member HOLDS for the Phase-B renew (kept as the boolean the existing
+/// pin tests assert; delegates to [`member_travel_action`]). `Recycle` also holds *nothing* — it is a
+/// distinct terminal — so this is `== HoldForRenew`, NOT "not Travel".
 fn should_hold_for_renew(decision: screeps_combat_decision::rally::CommitDecision, at_home_room: bool, at_rally: bool) -> bool {
-    at_home_room && !at_rally && !matches!(decision, screeps_combat_decision::rally::CommitDecision::Commit)
+    matches!(member_travel_action(decision, at_home_room, at_rally), MemberTravelAction::HoldForRenew)
 }
 
 /// FIGHTER-FIRST spawn ordering (deep-reach fix — Break #1): the slot indices of `slots` reordered so the
@@ -737,7 +775,13 @@ fn project_defense(threat: Option<&crate::military::threatmap::RoomThreatData>) 
         // `pairing_ev`/`pairing_p_win` read via the separate `enemy` argument (built by `project_enemy` from
         // the same threat intel). `DefenseProfile` is STRUCTURE-only now (no `enemy_dps` field), so there is no
         // dead channel here to keep at 0 — the footgun is gone.
-        repair_per_tick: 0.0,
+        //
+        // ADR 0008a T0.2 — carry the SCOUTED breach repair/tick (defenders repairing the rampart ring extend
+        // the breach window). war.rs's launch oracle already sizes against `threat_data.repair_per_tick`
+        // (war.rs ~1322/1442); the manager's RUNTIME P(win) reassessment hardcoded 0.0 here, so a reassign
+        // auction under-sized vs the launch gate (a repaired breach reads as free to crack). Read the same
+        // field the oracle does — parity restored. `as f32` matches war.rs; 0 for level-0 cores (no repair).
+        repair_per_tick: td.repair_per_tick as f32,
         safe_mode: td.safe_mode_active,
         // ADR 0035 D1: derive the tri-state tower intel from the existing threat fields (threat data present
         // here ⇒ empty list is ScoutedEmpty, non-empty is Seen). Keeps the manager's runtime profile
@@ -3030,7 +3074,7 @@ fn compute_squad_orders(
                 let rally_to_target = room_distance(rally.room_name(), target_room);
                 ctx.squad_path = None;
                 for member in ctx.members.iter_mut() {
-                    let mut hold_for_renew = false;
+                    let mut action = MemberTravelAction::Travel;
                     if let Some(pos) = member.position {
                         let ttl = creep_owner
                             .get(member.entity)
@@ -3045,31 +3089,39 @@ fn compute_squad_orders(
                                 screeps_combat_decision::rally::FIGHT_BUFFER,
                                 screeps_combat_decision::rally::RENEW_TARGET_TTL,
                             );
-                            // Hold a member that is short of sufficiency (renewable: top it up at home;
-                            // hopeless-but-at-home: still hold — unreachable only beyond in-range
-                            // geometry, see renew_required_ttl). A member already AT the rally (range <=
-                            // gather radius) never holds — it has arrived; holding it would un-gather the
-                            // bloc. REC-017: hold ONLY at a HOME ROOM — that is where a spawn exists for
-                            // the Phase-B renew (now distance-aware, renew_required_ttl) to top it up at.
-                            // A short member caught MID-FIELD has no renew source: holding it froze it at
-                            // its current tile until old-age death (the D6a zombie) — it now COMMITS
-                            // instead (already en route, it contributes what life it has and never pins
-                            // the quorum on a member that can never renew).
+                            // Hold a member that is short of sufficiency (renewable: top it up at home). A
+                            // member already AT the rally (range <= gather radius) never holds — it has
+                            // arrived; holding it would un-gather the bloc. REC-017: hold ONLY at a HOME ROOM
+                            // — that is where a spawn exists for the Phase-B renew (distance-aware,
+                            // renew_required_ttl) to top it up at. A short member caught MID-FIELD has no
+                            // renew source: holding it froze it at its tile until old-age death (the D6a
+                            // zombie) — it COMMITS instead (already en route, it contributes what life it
+                            // has and never pins the quorum on a member that can never renew).
+                            //
+                            // ADR 0034 D4-F1: a `Recycle` verdict AT a home room (even a full renew can't
+                            // cover the journey — a hopelessly-far home) now RECYCLES instead of holding +
+                            // renewing forever until MAX_TRAVEL_BUDGET tears the squad down: it frees the
+                            // slot + banks the body energy. (Mid-field `Recycle` still Travels — no home
+                            // spawn to recycle at, same reason it can't renew.)
                             let at_home_room = homes.iter().any(|h| h.name == pos.room_name());
                             let at_rally = pos.get_range_to(rally) <= screeps_combat_decision::rally::RALLY_GATHER_RADIUS;
-                            hold_for_renew = should_hold_for_renew(decision, at_home_room, at_rally);
-                            if hold_for_renew && debug {
+                            action = member_travel_action(decision, at_home_room, at_rally);
+                            if action != MemberTravelAction::Travel && debug {
                                 log::info!(
-                                    "[Lifecycle] LIFETIME-HOLD squad={:?} obj={:?} member={:?} ttl={} dist_to_rally={} rally_to_target={} decision={:?} at_home={} (hold+renew-to-sufficiency before the crawl, RC-7/REC-017)",
-                                    squad_entity, obj_id, member.entity, ttl, dist_to_rally, rally_to_target, decision, at_home_room
+                                    "[Lifecycle] LIFETIME-{:?} squad={:?} obj={:?} member={:?} ttl={} dist_to_rally={} rally_to_target={} decision={:?} at_home={} (RC-7/REC-017/D4-F1)",
+                                    action, squad_entity, obj_id, member.entity, ttl, dist_to_rally, rally_to_target, decision, at_home_room
                                 );
                             }
                         }
                     }
                     member.tick_orders = Some(TickOrders {
-                        // Insufficient TTL → HOLD (next to the home spawn the renew pass tops it up at);
-                        // otherwise solo-travel to the shared rally.
-                        movement: if hold_for_renew { TickMovement::Hold } else { TickMovement::MoveTo(rally) },
+                        // Insufficient TTL → HOLD at the home spawn (the renew pass tops it up); undeployable
+                        // (Recycle) → recall + recycle (D4-F1); otherwise solo-travel to the shared rally.
+                        movement: match action {
+                            MemberTravelAction::HoldForRenew => TickMovement::Hold,
+                            MemberTravelAction::Recycle => TickMovement::Recycle,
+                            MemberTravelAction::Travel => TickMovement::MoveTo(rally),
+                        },
                         ..Default::default()
                     });
                 }
@@ -3461,12 +3513,20 @@ fn apply_squad_decision(
                     .flatten()
                     .map(|goal| SquadMovement::Advance { goal, range: 0 })
                     .unwrap_or(decision.movement);
+                // ADR 0025 §11 #12 — carry the EV kernel's per-creep ACTION plan to the job. When the
+                // engaged, non-kiting kernel ran, `decision.member_intents[i]` is this member's jointly-
+                // chosen action set (focus-fire spill + over-heal avoidance + structure pricing); the job
+                // emits it directly instead of re-deriving via the solo `decide_combat` (the sim's
+                // `ManagedSimSquad::step` consumes the same field, so live + sim no longer diverge). Empty
+                // for a member the kernel skipped (kiting/retreating/out-of-room) → the job falls back.
+                let member_intents = decision.member_intents.get(i).cloned().unwrap_or_default();
                 member.tick_orders = Some(TickOrders {
                     attack_target,
                     movement: TickMovement::Formation,
                     squad_movement,
                     squad_center: decision.center,
                     squad_cohesion_radius: decision.cohesion_radius,
+                    member_intents,
                     ..Default::default()
                 });
             }
@@ -4446,9 +4506,34 @@ mod tests {
         );
         assert!(!should_hold_for_renew(CommitDecision::Commit, true, false), "sufficient TTL never holds");
         assert!(!should_hold_for_renew(CommitDecision::RenewThenCommit, true, true), "already at the rally never holds");
-        // Hopeless-at-home still holds: unreachable within MAX_SPAWN_DISTANCE geometry (renew_required_ttl
-        // ceilings below the gate only beyond in-range distances) — pinned so a change here is deliberate.
-        assert!(should_hold_for_renew(CommitDecision::Recycle, true, false));
+        // ADR 0034 D4-F1: a `Recycle` verdict at home no longer HOLDS (the old behavior renewed forever
+        // until MAX_TRAVEL_BUDGET) — it RECYCLES. `should_hold_for_renew` is now HoldForRenew-only.
+        assert!(!should_hold_for_renew(CommitDecision::Recycle, true, false), "D4-F1: Recycle no longer holds");
+    }
+
+    /// ADR 0034 D4-F1 — the member travel disposition under the D6a lifetime gate. `Recycle` AT a home
+    /// room recalls + recycles (frees the slot instead of holding + renewing forever); `Recycle` MID-FIELD
+    /// still travels (no home spawn to recycle at); `RenewThenCommit` holds; `Commit` / at-rally travel.
+    #[test]
+    fn member_travel_action_recycles_a_hopeless_member_only_at_home() {
+        use screeps_combat_decision::rally::CommitDecision;
+        assert_eq!(
+            member_travel_action(CommitDecision::Recycle, true, false),
+            MemberTravelAction::Recycle,
+            "hopeless TTL at home → recycle (D4-F1), not hold-renew-forever"
+        );
+        assert_eq!(
+            member_travel_action(CommitDecision::Recycle, false, false),
+            MemberTravelAction::Travel,
+            "hopeless TTL MID-FIELD → travel (no home spawn to recycle at, same reason it can't renew)"
+        );
+        assert_eq!(
+            member_travel_action(CommitDecision::Recycle, true, true),
+            MemberTravelAction::Travel,
+            "already at the rally → travel (never un-gather the bloc), even for a Recycle verdict"
+        );
+        assert_eq!(member_travel_action(CommitDecision::RenewThenCommit, true, false), MemberTravelAction::HoldForRenew);
+        assert_eq!(member_travel_action(CommitDecision::Commit, true, false), MemberTravelAction::Travel);
     }
 
     /// REC-002 — the Engaged-arm order overwrite is GATED on per-member in-room presence. `decide_squad`

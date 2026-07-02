@@ -57,7 +57,11 @@ pub struct SkRoiInputs {
     pub contested: bool,
     /// CPU tier is not critical (ADR 0004).
     pub cpu_ok: bool,
-    /// Military capacity is not wanted for active defense / declared war (ADR 0014).
+    /// Military capacity is free — no home room servicing this candidate is under active defense (K2c-2).
+    /// The suppression duo shares spawn lanes with a base's defenders, so an active base defense yields the
+    /// capacity: `false` hard-vetoes a NEW farm here (transient pressure PAUSES an existing one via spawn
+    /// priority, never cancels it — the SK mission only self-cancels on PERMANENT non-viability). Populated
+    /// from `RoomData::militarily_active()` over the candidate's home rooms (ADR 0014).
     pub military_free: bool,
     /// Below `max_concurrent_sk_farms` (only gates *new* commitments).
     pub under_farm_cap: bool,
@@ -330,9 +334,35 @@ impl Operation for SourceKeeperOperation {
                     .max()
                     .unwrap_or(0);
 
-                Some((room_data.name, live_sources, contested, stronghold, home_capacity, already_committed))
+                // K2c-2 — the real yield-to-defense predicate (replaces the hardcoded `military_free: true`).
+                // The suppression duo competes for the SAME spawn lanes as a base's defenders, and SK
+                // suppression is a discretionary economy expansion — so when a HOME room servicing this
+                // candidate is under active attack, the military capacity is NOT free for an SK farm. Yield:
+                // veto a NEW farm while any servicing home has hostiles present — `militarily_active` on its
+                // dynamic visibility (hostile creeps / spawns / towers sighted in it). Intel refreshes each
+                // visible tick; a home not currently visible falls back to its last snapshot (a hostile
+                // sighting persists → conservative yield), and an unscouted home (no dynamic data) reads
+                // not-active (no evidence of attack → do not spuriously starve a farm). When the threat
+                // clears, the home reads inactive → `military_free` flips true → the farm resumes next scan.
+                let military_free = !candidate
+                    .home_room_data_entities()
+                    .iter()
+                    .filter_map(|e| system_data.room_data.get(*e))
+                    .filter_map(|home| home.get_dynamic_visibility_data())
+                    .any(|dv| dv.militarily_active());
+
+                Some((
+                    room_data.name,
+                    live_sources,
+                    contested,
+                    stronghold,
+                    home_capacity,
+                    already_committed,
+                    military_free,
+                ))
             })();
-            let Some((room_name, live_sources, contested, stronghold, home_capacity, already_committed)) = intel else {
+            let Some((room_name, live_sources, contested, stronghold, home_capacity, already_committed, military_free)) = intel
+            else {
                 continue;
             };
 
@@ -347,7 +377,8 @@ impl Operation for SourceKeeperOperation {
                 affordable: suppression_comp.is_some(),
                 contested,
                 cpu_ok,
-                military_free: true, // TODO(K2c-2/W): yield to active defense / declared war
+                // K2c-2 — yield the military capacity to an active base defense (see the predicate above).
+                military_free,
                 under_farm_cap: active_farm_count < sk_features.max_concurrent_farms,
                 already_committed,
                 stronghold_present: stronghold,
