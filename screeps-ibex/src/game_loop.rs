@@ -676,7 +676,15 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// payloads can't decode → one loud reset (folds into the MMO deploy reset). (The v6 note above added those
 /// two fields; v23 removes them. Claim scoring now uses the pure `room_net_roi`/`claim_economics` kernels —
 /// per-tick transient, not serialized. `ClaimFeatures` field add/removes are `#[serde(default)]`, no bump.)
-const WORLD_FORMAT_VERSION: u32 = 23;
+/// 24 = ADR 0033 M5 rover follow-ups landed AFTER the v23 bump: rover `StuckState` gains
+/// `ticks_since_repath: u16` (rover 5a9fe9e / super 553a618) and `denied_by_idle: bool`
+/// (rover 0535352 / super 5ef27bc). `StuckState` rides inside `CreepPathData` →
+/// `CreepRoverData` in the bincode world-save tuple; bincode is positional (see the note
+/// above — trailing `#[serde(default)]` does NOT make old payloads decode safely), so a
+/// v23 payload saved before those fields would misalign silently at the tip. One loud
+/// reset instead (folds into the pending MMO deploy reset). Found by the 2026-07-01
+/// reconciliation review (REC-001, docs/reviews/reconciliation-2026-07-01.md).
+const WORLD_FORMAT_VERSION: u32 = 24;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode
