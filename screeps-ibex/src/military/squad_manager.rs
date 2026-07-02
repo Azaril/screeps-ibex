@@ -27,10 +27,10 @@
 //! `SquadCombatJob` fallback (no dangling `SquadContext` — no leak) until the general
 //! `Recall` terminal state (P2.M0) lands.
 
-use super::objective_queue::{CombatObjectiveQueue, EconomicIntel, ObjectiveId, ObjectiveKind, OBJECTIVE_PRIORITY_MEDIUM};
+use super::objective_queue::{CombatObjectiveQueue, EconomicIntel, ObjectiveId, ObjectiveKind, ObjectiveOwner, OBJECTIVE_PRIORITY_MEDIUM};
 use screeps_combat_decision::composition::{SquadComposition, SquadSlot};
 use screeps_combat_decision::lifecycle; // P-OBJ #23 / ADR 0027 — the pure reconcile kernel (shared, tested offline)
-use super::squad::{AttackTarget, SquadContext, SquadState, SquadTarget, TickMovement, TickOrders};
+use super::squad::{AttackTarget, SquadContext, SquadMember, SquadState, SquadTarget, TickMovement, TickOrders};
 use crate::combat::kite::{PositionLayers, ThreatField, MAX_KITE_OPS};
 use crate::combat::{
     build_room_layers, build_room_threat_field, decide_squad_with_pathing, CombatCreepDto, CombatStructureDto,
@@ -205,7 +205,10 @@ const RENEW_WHILE_FORMING_TTL: u32 = 300;
 /// be a spawn source (keeps a squad from being spawned across the map). Matches
 /// the legacy `MAX_DEFENSE_SOURCE_DISTANCE` (10) so the defense migration does not
 /// narrow the set of rooms a defender can be sourced from.
-const MAX_SPAWN_DISTANCE: u32 = 10;
+///
+/// REC-065: `pub(crate)` so `war.rs`'s sizing-side range filter references THIS const instead of a mirrored
+/// literal (the two must stay in lock-step — a squad sized at a home out of spawn range is unbuildable).
+pub(crate) const MAX_SPAWN_DISTANCE: u32 = 10;
 
 /// P-OBJ #23 commitment lease (ticks). When the manager fields a squad it stamps the objective's
 /// `deadline = now + COMMITMENT_BUDGET` and refreshes it every tick the squad still has a focus (is
@@ -295,13 +298,30 @@ fn squad_is_gathered(present_wins_or_stalls: bool, have_target_intel: bool, gath
 /// `economy::can_afford_military` already declined unaffordable squads, so it cannot crater the economy.
 /// (Defense objectives upsert at `OBJECTIVE_PRIORITY_HIGH`; invader-core offense at `..._MEDIUM`; farms at
 /// `..._LOW`.)
-fn spawn_priority_for(objective_priority: f32) -> f32 {
+///
+/// REC-052(c): a CRITICAL base-under-attack DEFENSE objective gets a tiny intra-band EDGE
+/// (`+ DEFENSE_SPAWN_EDGE`) over the shared 85 band, so the spawn queue's existing DESCENDING sort orders our
+/// own base's defenders AHEAD of MEDIUM offense sharing the same band — with ZERO spawnsystem change and no
+/// hysteresis (a pure priority nudge). Bounded strictly below CRITICAL miners (100), so energy income is
+/// never preempted. Only CRITICAL defense (an owned room under direct attack) gets the edge — a leashed /
+/// neighbour defender (HIGH/MEDIUM) does not out-prioritise offense here.
+fn spawn_priority_for(objective_priority: f32, is_defense: bool) -> f32 {
+    use super::objective_queue::OBJECTIVE_PRIORITY_CRITICAL;
     if objective_priority >= OBJECTIVE_PRIORITY_MEDIUM {
-        SPAWN_PRIORITY_COMBAT_FORMING
+        if is_defense && objective_priority >= OBJECTIVE_PRIORITY_CRITICAL {
+            SPAWN_PRIORITY_COMBAT_FORMING + DEFENSE_SPAWN_EDGE
+        } else {
+            SPAWN_PRIORITY_COMBAT_FORMING
+        }
     } else {
         SPAWN_PRIORITY_MEDIUM
     }
 }
+
+/// REC-052(c): the intra-band spawn edge a CRITICAL base-under-attack defender gets over MEDIUM offense
+/// sharing the 85 `SPAWN_PRIORITY_COMBAT_FORMING` band. Small (0.5) — just enough for the descending sort to
+/// order defenders first — and strictly below the gap to CRITICAL miners (100), so income is never preempted.
+const DEFENSE_SPAWN_EDGE: f32 = 0.5;
 
 /// A squad is *wiped* (overwhelmed — all members lost) when it had spawned members but none remain
 /// alive. Gradual losses are refilled by the unfilled-slot spawns (Phase B) and never reach
@@ -443,16 +463,167 @@ enum CapabilityClass {
     Declaim,
 }
 
-fn capability_class(kind: &ObjectiveKind) -> CapabilityClass {
+/// REC-006/007 — the capability class is OWNER-aware. `Secure` is emitted for BOTH offense (an operator
+/// `AttackFlag` → clear a hostile room, `owner=Attack`) and threat-centric defense (an owned-room / neighbour
+/// intercept, `owner=Defense`). Classing ALL `Secure` as Defense (the pre-fix) let a freed defender reassign
+/// onto an offense `Secure` (an uncrackable room it was never sized for) AND made an offense `Secure` bypass
+/// the offense forming cap. The `owner` is the authoritative discriminator (a serialized field already on the
+/// objective — no WFV bump): an offense-owned objective is Offense regardless of kind; a defense-owned one is
+/// Defense. `Declaim`/`Defend`/`Farm`/etc. carry an unambiguous class from the kind (the owner only
+/// disambiguates `Secure`).
+fn capability_class(kind: &ObjectiveKind, owner: ObjectiveOwner) -> CapabilityClass {
     match kind {
-        // The threat-centric defense arm (ADR 0027 Option B): `Secure` is how defense is now emitted (at the
-        // threat's room), alongside the optional preemptive `Defend` hold.
-        ObjectiveKind::Defend { .. } | ObjectiveKind::Secure { .. } => CapabilityClass::Defense,
+        // The threat-centric defense arm (ADR 0027 Option B): a DEFENSE-owned `Secure` is an intercept at the
+        // threat's room; an ATTACK-owned `Secure` is an offense room-clear (operator flag) — Offense.
+        ObjectiveKind::Secure { .. } => {
+            if matches!(owner, ObjectiveOwner::Defense) {
+                CapabilityClass::Defense
+            } else {
+                CapabilityClass::Offense
+            }
+        }
+        ObjectiveKind::Defend { .. } => CapabilityClass::Defense,
         ObjectiveKind::Harass { .. } | ObjectiveKind::Dismantle { .. } | ObjectiveKind::Farm { .. } | ObjectiveKind::Escort { .. } => {
             CapabilityClass::Offense
         }
         ObjectiveKind::Declaim { .. } => CapabilityClass::Declaim,
     }
+}
+
+/// REC-007 — THE ownership-derived defense predicate, used by `is_defend`, the forming-cap exemption, and
+/// (via the snapshot) `holding_station`. Owned-room / neighbour defense is now emitted as `Secure{owned}`
+/// (`owner=Defense`) NOT `Defend{..}`, so the old `matches!(kind, Defend{..})` test marked a losing OWN-room
+/// defense unwinnable (2000–20000t backoff during which Phase C + reassign skip every objective in our base —
+/// the inverse of "never abandon an owned room"). Deriving defense-ness from the class (owner-aware) fixes it
+/// in one place every consumer shares.
+fn is_defense_objective(kind: &ObjectiveKind, owner: ObjectiveOwner) -> bool {
+    matches!(capability_class(kind, owner), CapabilityClass::Defense)
+}
+
+/// REC-010 — the capability class derived from the SQUAD's PERSISTED [`SquadTarget`], for the reassign matrix
+/// when the objective is GONE (exactly when `Reassign` fires — so the objective's own class/owner can't be
+/// read). A freed declaimer (`AttackController` → Declaim) must never rebind onto an offense objective (a
+/// CLAIM body can't crack a core); a freed owned-room defender (`DefendRoom` → Defense) stays defense. The
+/// AMBIGUOUS `AttackRoom` (both an offense `Secure`/`Harass`/`Farm` and a defense-`Secure` reduce to it in
+/// `objective_target`) defaults to Offense — the common case, and a defense-Secure squad reassigning onto
+/// another room-clear is compatible work. `None` ⇒ no persisted target ⇒ the caller treats the row as
+/// reassign-INFEASIBLE (never a wrong-class rebind). Deterministic (a `match`).
+fn class_from_squad_target(target: &SquadTarget) -> CapabilityClass {
+    match target {
+        SquadTarget::DefendRoom { .. } => CapabilityClass::Defense,
+        SquadTarget::AttackController { .. } => CapabilityClass::Declaim,
+        SquadTarget::AttackRoom { .. }
+        | SquadTarget::HarassRoom { .. }
+        | SquadTarget::AttackStructure { .. }
+        | SquadTarget::CollectResources { .. }
+        | SquadTarget::MoveToPosition { .. }
+        | SquadTarget::EscortPosition { .. } => CapabilityClass::Offense,
+    }
+}
+
+/// REC-010/020 — the SQUAD's SURVIVING capabilities read from its LIVE member creep bodies (the reassign
+/// matrix must price P(win) on what the squad ACTUALLY still fields, not the objective's full REQUESTED
+/// roster). Mirrors [`SquadComposition::capabilities`]'s part math over the real bodies:
+/// HEAL×`HEAL_POWER`, and structure/creep DPS = WORK×`DISMANTLE_POWER` + ATTACK×`ATTACK_POWER` +
+/// RANGED×`RANGED_ATTACK_POWER`; the tank EHP is the toughest single member (Σ parts × 100, unboosted). A
+/// member whose creep can't resolve (dead/spawning) contributes nothing (survivors only). Works whether or
+/// not the objective still exists (it reads bodies, not the composition) — so it prices a gone-objective row.
+fn caps_from_members(members: &[SquadMember], creep_owner: &ReadStorage<CreepOwner>) -> SquadCapabilities {
+    use screeps::constants::{ATTACK_POWER, DISMANTLE_POWER, HEAL_POWER, RANGED_ATTACK_POWER};
+    let mut heal_per_tick = 0u32;
+    let mut structure_dps = 0u32;
+    let mut tank_effective_hp = 0u32;
+    for m in members {
+        let Some(creep) = creep_owner.get(m.entity).and_then(|co| co.owner.resolve()) else {
+            continue; // dead / not-yet-spawned member — not a survivor
+        };
+        let (mut heal, mut atk, mut rng, mut work, mut parts) = (0u32, 0u32, 0u32, 0u32, 0u32);
+        for p in creep.body().iter().filter(|p| p.hits() > 0) {
+            parts += 1;
+            match p.part() {
+                Part::Heal => heal += 1,
+                Part::Attack => atk += 1,
+                Part::RangedAttack => rng += 1,
+                Part::Work => work += 1,
+                _ => {}
+            }
+        }
+        heal_per_tick += heal * HEAL_POWER;
+        structure_dps += work * DISMANTLE_POWER + atk * ATTACK_POWER + rng * RANGED_ATTACK_POWER;
+        tank_effective_hp = tank_effective_hp.max(parts * 100);
+    }
+    SquadCapabilities { heal_per_tick, structure_dps, tank_effective_hp }
+}
+
+/// A floor for a defense objective's protected-asset value (energy-equivalent) so `value_e(Defend)` never
+/// starves a fielded defense out of the EV gate when the precise asset can't be read (a never-visible remote,
+/// no adjacent owned room found). Small but > the EV-positive commit floor once scaled by a real threat's
+/// `defense_risk`. Mirrors the intent of `priority_implied_danger` on the value axis.
+const DEFENSE_ASSET_FLOOR: f32 = 1000.0;
+
+/// REC-006 — value a DEFENSE objective by the PROTECTED ASSET, not the threat room's live
+/// `energy_capacity_available`. The pre-fix `asset_of` returned ~0 for a non-owned room (a never-visible
+/// remote → 1.0; a visible non-owned room → 0), so EVERY `Defend{remote}` / `Secure{neighbour}` / defend-flag
+/// objective read `value_e ≤ 0.91 < 1.0` and was filtered out of Phase C AND lost to Recycle@0 in the
+/// reassign matrix — no defender was ever fielded for a remote/neighbour threat. Now:
+///   * OFFENSE objective → the room's own energy-capacity (unchanged — offense value comes from the room).
+///   * DEFENSE + OWNED room → the owned room's energy-capacity (has a spawn — the real asset).
+///   * DEFENSE + RESERVED remote → the outpost income the room yields over the downtime horizon
+///     (`room_net_roi` reused — the economy the invaders are denying us).
+///   * DEFENSE + non-owned NEIGHBOUR → the strongest ADJACENT owned home's energy-capacity (the base the
+///     intercept protects — the `emit_defense` asset-boost intent, priced on the value axis here).
+///   * otherwise (a never-visible defense room) → `DEFENSE_ASSET_FLOOR` so a warranted defense still fields.
+///
+/// Deterministic (Vec order; no result-affecting HashMap iteration; `game::rooms()` is a keyed lookup).
+fn defense_asset_value(
+    data: &SquadManagerSystemData,
+    obj: &super::objective_queue::CombatObjective,
+    homes: &[HomeRoom],
+    economic: Option<EconomicIntel>,
+) -> f32 {
+    let room = obj.kind.room();
+    // The room's own live energy-capacity (the historical proxy — correct for OWNED rooms + all offense).
+    let own_energy = |r: RoomName| -> Option<f32> { game::rooms().get(r).map(|g| g.energy_capacity_available() as f32) };
+    if !is_defense_objective(&obj.kind, obj.owner) {
+        // Offense: value comes from the room itself (parity with the pre-fix `asset_of`).
+        return own_energy(room).unwrap_or(1.0);
+    }
+    // An economic-intel-carrying defense objective is priced by the economy arm downstream (project_intel
+    // returns FarmCore for it) — the asset here is unused, so any positive floor is fine.
+    if economic.is_some() {
+        return DEFENSE_ASSET_FLOOR;
+    }
+    let rd = data.mapping.get_room(&room).and_then(|e| data.room_data.get(e));
+    let dvd = rd.and_then(|rd| rd.get_dynamic_visibility_data());
+    // OWNED room → its own energy-capacity (real spawn, real asset).
+    if dvd.map(|d| d.owner().mine()).unwrap_or(false) {
+        return own_energy(room).filter(|&e| e > 0.0).unwrap_or(DEFENSE_ASSET_FLOOR);
+    }
+    // RESERVED remote → the outpost income denied over the downtime horizon (`room_net_roi` reused).
+    if dvd.map(|d| d.reservation().mine()).unwrap_or(false) {
+        let source_count = rd
+            .and_then(|rd| rd.get_static_visibility_data())
+            .map(|svd| svd.sources().len() as u32)
+            .unwrap_or(1)
+            .max(1);
+        let haul_tiles = homes.iter().map(|h| room_distance(h.name, room)).min().unwrap_or(1).saturating_mul(50);
+        let value = crate::room_economics::room_net_roi(&crate::room_economics::RoomEconomyFacts::reservable_remote(
+            source_count,
+            haul_tiles,
+        ))
+        .net_roi as f32;
+        return value.max(DEFENSE_ASSET_FLOOR);
+    }
+    // Non-owned NEIGHBOUR intercept → the strongest ADJACENT owned home (the base it protects).
+    let adjacent = homes
+        .iter()
+        .filter(|h| room_distance(h.name, room) <= 1)
+        .filter_map(|h| own_energy(h.name))
+        .fold(0.0_f32, f32::max);
+    if adjacent > 0.0 {
+        return adjacent;
+    }
+    DEFENSE_ASSET_FLOOR
 }
 
 // ═══ ADR 0032 v1.1 — EV-of-pairing projection (bot intel → the pure `objective_value`/`pairing_ev` kernels) ══
@@ -534,11 +705,22 @@ fn project_defense(threat: Option<&crate::military::threatmap::RoomThreatData>) 
     let Some(td) = threat else {
         return DefenseProfile::default();
     };
+    // REC-018: compute the REAL per-tower range to the assault tile (the room center) from the SCOUTED
+    // `hostile_tower_positions`, exactly as war.rs's oracle paths do (`tpos.get_range_to(assault)`). The
+    // hardcoded `range_to_assault: 25` (max falloff) under-estimated tower damage up to 4× — the auction
+    // could reassign a squad onto a room the launch oracle would have deferred. Unknown per-tower energy ⇒
+    // assume firing (1000). A tower with no derivable room-center falls back to 25 (the prior behaviour).
     let towers: Vec<TowerThreat> = td
         .hostile_tower_positions
         .iter()
         .enumerate()
-        .map(|(i, _)| TowerThreat { range_to_assault: 25, energy: td.tower_energy.get(i).copied().unwrap_or(1000) })
+        .map(|(i, tpos)| {
+            let center = RoomCoordinate::new(25)
+                .ok()
+                .map(|c| Position::new(c, c, tpos.room_name()));
+            let range_to_assault = center.map(|c| tpos.get_range_to(c)).unwrap_or(25);
+            TowerThreat { range_to_assault, energy: td.tower_energy.get(i).copied().unwrap_or(1000) }
+        })
         .collect();
     DefenseProfile {
         towers,
@@ -722,44 +904,58 @@ fn solve_global_reassignment(
     let threat_for = |room: RoomName| -> Option<&crate::military::threatmap::RoomThreatData> {
         data.mapping.get_room(&room).and_then(|e| data.threat_data.get(e))
     };
-    let asset_of = |room: RoomName| -> f32 {
-        data.mapping
-            .get_room(&room)
-            .and_then(|e| data.room_data.get(e))
-            .and_then(|rd| game::rooms().get(rd.name))
-            .map(|r| r.energy_capacity_available() as f32)
-            .unwrap_or(1.0)
-    };
 
-    // ── ROWS: the managed squads, in the caller's stable order. Each row carries its surviving caps (off the
-    //    claimed objective's composition at the anchor energy — what we fielded), its class, and its current
-    //    objective id (so the StayPut column re-scores the right fight). recycle_ev = 0 (the reassign path
-    //    reuses bodies; recycling here is the net-negative floor, not a refund model — v1.1 parity). ──
+    // ── ROWS: the managed squads, in the caller's stable order. Each row carries its surviving caps (read
+    //    off the LIVE member creep bodies — REC-020), its class, and its current objective id (so the StayPut
+    //    column re-scores the right fight). recycle_ev = 0 (the reassign path reuses bodies; recycling here is
+    //    the net-negative floor, not a refund model — v1.1 parity). REC-010: for a GONE objective (exactly
+    //    when a Reassign fires) the class/caps can't come off the objective — derive class from the SQUAD's
+    //    persisted target and caps from live bodies; a squad with no derivable class is reassign-INFEASIBLE
+    //    (`row_reassignable[r] == false` AND every cell's per-row feasibility below). ──
     let mut rows: Vec<SquadRow> = Vec::with_capacity(managed.len());
+    let mut row_reassignable: Vec<bool> = Vec::with_capacity(managed.len());
     for (entity, obj_id) in managed {
         let obj = data.objective_queue.get(*obj_id);
-        let class = obj.map(|o| cap_class(capability_class(&o.kind))).unwrap_or(CapClass::Offense);
+        let ctx = data.squad_contexts.get(*entity);
+        let objective_gone = obj.is_none();
+        // REC-010: CLASS from the objective (owner-aware) while it lives; from the squad's persisted target
+        // when it is gone; INFEASIBLE (row_reassignable=false) when neither is known (no wrong-class rebind).
+        let (class, reassignable) = match obj {
+            Some(o) => (cap_class(capability_class(&o.kind, o.owner)), true),
+            None => match ctx.and_then(|c| c.target.as_ref()) {
+                Some(t) => (cap_class(class_from_squad_target(t)), true),
+                None => (CapClass::Offense, false), // unknown class ⇒ never reassign this row
+            },
+        };
+        row_reassignable.push(reassignable);
         let comp = obj.and_then(|o| o.force.squads.first());
-        let caps: SquadCapabilities = comp.map(|c| c.capabilities(squad_energy)).unwrap_or_default();
+        // REC-010/020: SURVIVING caps from live member bodies (what the squad actually still fields), NOT the
+        // objective's full requested roster. A 1-of-4-survivors squad is priced at 1/4 strength, not full.
+        let caps: SquadCapabilities = ctx.map(|c| caps_from_members(&c.members, &data.creep_owner)).unwrap_or_default();
 
         // ── ADR 0032 v2 / ADR 0027 MERGE fields. Read this squad's live members → filled slot indices +
         //    present count + whether it has committed to a fight (`engaged_once`). The donor SHEDS its filled
         //    slots; the receiver OFFERS its unfilled (open pending) slots. ──
-        let ctx = data.squad_contexts.get(*entity);
         let filled: Vec<usize> = ctx.map(|c| c.members.iter().map(|m| m.slot_index).collect()).unwrap_or_default();
-        let present = ctx.map(|c| c.members.iter().filter(|m| m.position.is_some()).count()).unwrap_or(0);
+        // REC-020: the slots held by PRESENT (spawned, positioned) members only — what a merge can ACTUALLY
+        // shed (`apply_merges` transfers present members). Costing the sheddable lift over ALL `filled` slots
+        // (including still-spawning ones) over-priced the merge (a slot with no body can't transfer).
+        let present_filled: Vec<usize> = ctx
+            .map(|c| c.members.iter().filter(|m| m.position.is_some()).map(|m| m.slot_index).collect())
+            .unwrap_or_default();
+        let present = present_filled.len();
         let engaged_once = ctx.map(|c| c.engaged_once).unwrap_or(false);
         let has_members = !filled.is_empty();
         let requested = comp.map(|c| c.slots.len()).unwrap_or(0);
-        let objective_gone = obj.is_none();
 
         // DONOR: merge-eligible iff terminal-with-survivors (objective gone, members alive) OR a FORMING
         // squad consolidating (has members, not yet committed to a fight). A mid-fight (engaged) squad is
         // NEVER eligible — it sheds, never weakens mid-fight (ADR 0027 line 273).
         let forming_consolidate = has_members && !engaged_once && requested > 0 && filled.len() < requested;
         let merge_eligible = (objective_gone && has_members) || forming_consolidate;
+        // REC-020: shed only the PRESENT members' slots (what `apply_merges` will actually transfer).
         let (sheddable, sheddable_roles) = match comp {
-            Some(c) if merge_eligible => sheddable_of(c, &filled, squad_energy),
+            Some(c) if merge_eligible => sheddable_of(c, &present_filled, squad_energy),
             _ => (SquadCapabilities::default(), 0),
         };
         // RECEIVER: a FORMING squad (has at least one present member, not full) offers its OPEN pending slots.
@@ -783,34 +979,62 @@ fn solve_global_reassignment(
         });
     }
 
-    // ── COLUMNS: all live objectives, in the queue's stable Vec order. Per-row feasibility = NOT claimed by
-    //    ANOTHER squad, NOT in give-up backoff, AND NOT the row's OWN current objective (no-ping-pong — the
-    //    current fight is reachable only via StayPut). The capability-class match is the kernel's own pre-
-    //    filter (`SquadRow.class` vs `ObjectiveCell.class`). ──
+    // ── REC-020: the per-ROW travel origin — each squad's CURRENT room (its closest-to-home member's room,
+    //    or its objective room while forming, falling back to the anchor). The degenerate v1.2 matrix used a
+    //    CONSTANT anchor→objective distance for EVERY row (the squad position never entered), so the Hungarian
+    //    could not prefer the ADJACENT squad. Deterministic (Vec order; no HashMap). ──
+    let squad_room_of: Vec<RoomName> = managed
+        .iter()
+        .map(|(entity, obj_id)| {
+            data.squad_contexts
+                .get(*entity)
+                .and_then(|c| {
+                    // The member closest to home is the squad's effective reassign origin (a rallying/forming
+                    // squad sits near home; a deployed one is out — either way its closest member's room).
+                    c.members
+                        .iter()
+                        .filter_map(|m| m.position.map(|p| p.room_name()))
+                        .min_by_key(|r| anchor.map(|a| room_distance(a, *r)).unwrap_or(0))
+                })
+                .or_else(|| data.objective_queue.get(*obj_id).map(|o| o.kind.room()))
+                .or(anchor)
+                .unwrap_or(anchor.unwrap_or(homes[0].name))
+        })
+        .collect();
+
+    // ── COLUMNS: all live objectives, in the queue's stable Vec order. Per-row feasibility = the ROW is
+    //    REASSIGNABLE (REC-010), NOT claimed by ANOTHER squad, NOT in give-up backoff, AND NOT the row's OWN
+    //    current objective (no-ping-pong — the current fight is reachable only via StayPut). The capability-
+    //    class match is the kernel's own pre-filter (`SquadRow.class` vs `ObjectiveCell.class`). ──
     let objectives: Vec<&super::objective_queue::CombatObjective> = data.objective_queue.iter_objectives().collect();
     let mut cells: Vec<ObjectiveCell> = Vec::with_capacity(objectives.len());
     for o in &objectives {
         let room = o.kind.room();
         let unwinnable = data.objective_queue.is_unwinnable_now(room, now);
         let claimed_by = data.objective_queue.claimed_by(o.id);
-        let travel = anchor.map(|h| room_distance(h, room)).unwrap_or(0);
+        // REC-037: the reassign target must have an in-range spawn home (mirror Phase C's claim gate) — a
+        // squad reassigned onto a room no home can spawn/renew for death-spirals N−1, N−2… silently.
+        let home_in_range = homes.iter().any(|h| room_distance(h.name, room) <= MAX_SPAWN_DISTANCE);
         // Per-row travel + feasibility (parallel to `rows`).
         let mut travel_rooms_per_row = Vec::with_capacity(rows.len());
         let mut feasible_per_row = Vec::with_capacity(rows.len());
-        for (entity, cur_id) in managed {
-            travel_rooms_per_row.push(travel);
-            // Feasible to REASSIGN onto iff: not the row's current objective (StayPut owns that), the room is
-            // winnable, and (it is unclaimed OR claimed by THIS very squad — its own claim never blocks it).
+        for (r, (entity, cur_id)) in managed.iter().enumerate() {
+            // REC-020: travel from THIS squad's room (not a constant anchor→room), so proximity ranks moves.
+            travel_rooms_per_row.push(room_distance(squad_room_of[r], room));
+            // Feasible to REASSIGN onto iff: the row is reassignable (REC-010), an in-range home exists
+            // (REC-037), not the row's current objective (StayPut owns that), the room is winnable, and
+            // (unclaimed OR claimed by THIS squad).
             let is_own_current = *cur_id == o.id;
             let claimed_by_other = matches!(claimed_by, Some(c) if c != *entity);
-            feasible_per_row.push(!is_own_current && !unwinnable && !claimed_by_other);
+            feasible_per_row.push(row_reassignable[r] && home_in_range && !is_own_current && !unwinnable && !claimed_by_other);
         }
         let econ = data.objective_queue.economic_intel(o.id);
         cells.push(ObjectiveCell {
             id: o.id.0,
-            class: cap_class(capability_class(&o.kind)),
+            class: cap_class(capability_class(&o.kind, o.owner)),
             value_kind: project_value_kind(&o.kind, econ),
-            intel: project_intel(&o.kind, o.priority, asset_of(room), threat_for(room), econ),
+            // REC-006: value a DEFENSE objective by the PROTECTED asset, not the threat room's live energy.
+            intel: project_intel(&o.kind, o.priority, defense_asset_value(data, o, homes, econ), threat_for(room), econ),
             defense: project_defense(threat_for(room)),
             enemy: project_enemy(threat_for(room)),
             travel_rooms_per_row,
@@ -901,7 +1125,10 @@ fn solve_global_reassignment(
 /// Only the now-EMPTY donor squad ENTITY is deleted (directly — see above), never a creep.
 /// All membership + job rebinds happen inside ONE `exec_mut` per decision (full world access), reading the
 /// LIVE post-spawn world; the receiver composition's slot→role map is captured BEFORE the closure.
-fn apply_merges(data: &mut SquadManagerSystemData, merges: &[MergeDecision], _now: u32, debug: bool) {
+/// REC-021: returns the set of DONOR squad entities so Phase B skips queuing their slots THIS tick (the donor
+/// is being consolidated away — its unfilled slots must not spawn a surplus creep the same tick it merges).
+fn apply_merges(data: &mut SquadManagerSystemData, merges: &[MergeDecision], _now: u32, debug: bool) -> std::collections::HashSet<Entity> {
+    let mut donors: std::collections::HashSet<Entity> = std::collections::HashSet::new();
     for m in merges {
         // Capture the receiver's objective composition (slot→role) + target room BEFORE the closure (the
         // queue is not available inside exec_mut). Skip a decision whose receiver objective vanished.
@@ -921,6 +1148,26 @@ fn apply_merges(data: &mut SquadManagerSystemData, merges: &[MergeDecision], _no
         let donor = m.donor;
         let receiver = m.receiver;
         let shed_roles = m.roles;
+        donors.insert(donor);
+
+        // REC-021: clear the DONOR's per-objective lifecycle trackers + release its ephemeral claim NOW (a
+        // merge is a FORCE consolidation — the donor either fully sheds + is deleted, or keeps fighting having
+        // lost members; both want a FRESH forming/travel budget, not the donor's aged clock). Pre-fix, the
+        // donor was deleted without this cleanup, so the NEXT squad fielded on the donor's objective inherited
+        // the aged forming clock via `.entry().or_insert(now)` and was budget-exhausted at birth. Releasing
+        // the claim frees the objective for the (fresh) re-field; the per-squad reconcile re-claims a PARTIAL
+        // donor that survives next tick.
+        if let Some(donor_obj) = data.squad_contexts.get(donor).and_then(|c| c.objective_id) {
+            data.forming_progress.forming_started_at.remove(&donor_obj);
+            data.forming_progress.departed_at.remove(&donor_obj);
+            data.forming_progress.last_present.remove(&donor_obj);
+            data.forming_progress.last_target_dist.remove(&donor_obj);
+            data.forming_progress.retreating_since.remove(&donor_obj);
+            data.forming_progress.enemy_stall.remove(&donor_obj);
+            data.forming_progress.build_body_warned.retain(|&(oid, _)| oid != donor_obj);
+            clear_member_trackers(&mut data.forming_progress, donor_obj);
+            data.objective_queue.release_entity(donor);
+        }
 
         data.updater.exec_mut(move |world| {
             // Both squads must still be alive (a concurrent retire could have removed one).
@@ -997,10 +1244,11 @@ fn apply_merges(data: &mut SquadManagerSystemData, merges: &[MergeDecision], _no
                 let _ = world.delete_entity(donor);
             }
         });
-        // NOTE: the donor's ephemeral objective claim is left to the per-squad reconcile (it re-claims live
-        // squads each tick) / `release_entity` on the deferred delete — a merge is a FORCE move, not an
-        // objective resolution, and a PARTIAL donor keeps its claim, so we must NOT release here.
+        // REC-021: the donor's ephemeral claim + per-objective trackers were released ABOVE (synchronously,
+        // before the deferred delete). A PARTIAL donor that survives is re-claimed by the per-squad reconcile
+        // next tick with a fresh forming budget; a fully-shed donor is deleted here.
     }
+    donors
 }
 
 /// Map an objective to the squad's target + the room its members travel to.
@@ -1181,6 +1429,17 @@ impl<'a> System<'a> for SquadManagerSystem {
             .collect();
         managed.sort_by_key(|(e, _)| e.id());
 
+        // ── REC-023: SEED the ephemeral `claimed_by` map from every managed squad's SERIALIZED `objective_id`
+        //    BEFORE the global solve. The claim map is never serialized (it self-heals) — but on the FIRST
+        //    post-reload tick it starts EMPTY, so the solve/feasibility read saw a live fighting squad B's
+        //    objective as UNCLAIMED, let terminal squad A rebind + cover it, and B then retired `Duplicate`
+        //    mid-fight (its members recalled). Re-establishing each squad's own claim here makes the solve see
+        //    the true ownership on the reload tick. Idempotent (a steady-state re-claim is a no-op); the per-
+        //    squad reconcile below still re-claims/refreshes as usual. ──
+        for (squad_entity, obj_id) in &managed {
+            data.objective_queue.claim(*obj_id, *squad_entity);
+        }
+
         // ── ADR 0032 v1.2: the GLOBAL EV-maximizing matching (Hungarian) over ALL managed squads × ALL
         //    claimable objectives — computed ONCE here, between Phase-A classify (the per-squad reconcile
         //    below) and apply. This REPLACES the v1.1 per-squad greedy `best_by_ev` reassign SELECTION: the
@@ -1205,7 +1464,9 @@ impl<'a> System<'a> for SquadManagerSystem {
         //    NO CREEP through `entities.delete` (see the ECS dangling-ref panic history), and keeps every
         //    squad's `get_creeps()`/members correct so serialize + repair_entity_integrity do not hit a
         //    dangling Entity ref (the direct donor-entity delete is safe because the donor is empty). ──
-        apply_merges(&mut data, &global_merges, now, debug);
+        // REC-021: the donor set — Phase B must NOT queue spawns for a donor's slots this tick (it is being
+        // consolidated away; a spawn now is a same-tick surplus creep that immediately recalls).
+        let merge_donors = apply_merges(&mut data, &global_merges, now, debug);
 
         let mut live_managed: Vec<(Entity, ObjectiveId)> = Vec::new();
         let mut covered: std::collections::HashSet<ObjectiveId> = std::collections::HashSet::new();
@@ -1215,7 +1476,12 @@ impl<'a> System<'a> for SquadManagerSystem {
             let obj_info = data
                 .objective_queue
                 .get(obj_id)
-                .map(|o| (o.kind.room(), matches!(o.kind, ObjectiveKind::Defend { .. }), o.deadline, capability_class(&o.kind)));
+                // REC-007: `is_defend` is the OWNERSHIP-derived defense predicate, NOT `matches!(Defend{..})`.
+                // Owned-room defense is emitted as `Secure{owned}` (`owner=Defense`), so the old kind-only
+                // test marked a losing OWN-room defense unwinnable (2000–20000t backoff that skipped every
+                // objective in our own base). One predicate feeds `is_defend`, the forming-cap exemption, and
+                // (via the snapshot) `holding_station` (through the kernel's `is_defend` field).
+                .map(|o| (o.kind.room(), is_defense_objective(&o.kind, o.owner), o.deadline, capability_class(&o.kind, o.owner)));
             let objective_gone = obj_info.is_none();
             let squad_room = obj_info.map(|(r, _, _, _)| r);
             let is_defend = obj_info.map(|(_, d, _, _)| d).unwrap_or(false);
@@ -1366,6 +1632,19 @@ impl<'a> System<'a> for SquadManagerSystem {
             if let Some(d) = target_dist {
                 data.forming_progress.last_target_dist.insert(obj_id, d);
             }
+            // ── REC-035: PRUNE the per-member trackers against the LIVE roster each tick. They are keyed by
+            //    `Entity::id()` (the specs INDEX, NOT generation), so a recycled index would inherit a dead
+            //    predecessor's stall/closing streak. Retaining only entries whose id is a current member of
+            //    THIS objective drops the stale entry before a recycled index can alias it (the IBEX-002b
+            //    class). Bounded (roster-sized set); deterministic (membership, no result-affecting iteration). ──
+            let live_member_ids: std::collections::HashSet<u32> = data
+                .squad_contexts
+                .get(squad_entity)
+                .map(|c| c.members.iter().map(|m| m.entity.id()).collect())
+                .unwrap_or_default();
+            data.forming_progress.member_target_dist.retain(|&(oid, id), _| oid != obj_id || live_member_ids.contains(&id));
+            data.forming_progress.member_rally_dist.retain(|&(oid, id), _| oid != obj_id || live_member_ids.contains(&id));
+            data.forming_progress.member_solo_stall.retain(|&(oid, id), _| oid != obj_id || live_member_ids.contains(&id));
 
             // ── ADR 0032 v1.2 (whole-squad REASSIGN, GLOBAL Hungarian): the squad's reassign target is the
             //    column the GLOBAL solve assigned this squad's row (`solve_global_reassignment` above), NOT a
@@ -1524,9 +1803,10 @@ impl<'a> System<'a> for SquadManagerSystem {
                 covered.insert(new_id);
                 data.objective_queue.set_deadline(new_id, Some(now + COMMITMENT_BUDGET));
                 let new_target = data.objective_queue.get(new_id).map(|o| objective_target(&o.kind));
+                let new_room = new_target.as_ref().map(|(_, room)| *room);
                 // Rewrite the SquadContext IN PLACE: re-point it at the new objective + reset the per-squad
                 // engage/travel/path state so it re-gathers + re-approaches the new rally cleanly.
-                if let Some(ctx) = data.squad_contexts.get_mut(squad_entity) {
+                let member_entities: Vec<Entity> = if let Some(ctx) = data.squad_contexts.get_mut(squad_entity) {
                     ctx.objective_id = Some(new_id);
                     if let Some((target, _room)) = new_target {
                         ctx.target = Some(target);
@@ -1536,6 +1816,21 @@ impl<'a> System<'a> for SquadManagerSystem {
                     ctx.state = SquadState::Forming;
                     ctx.squad_path = None;
                     ctx.rally_point = None;
+                    ctx.members.iter().map(|m| m.entity).collect()
+                } else {
+                    Vec::new()
+                };
+                // REC-040: rebind every rostered member's `SquadCombatJob` to the NEW target room + squad
+                // (mirroring `apply_merges`). The reconcile only rewrote the `SquadContext`; the member jobs
+                // still carried the OLD `target_room`/FSM, so an orders-missing fallback tick walked them
+                // toward the old room after a reassign. `rebind_to_squad` (defined in squad_combat.rs) resets
+                // the job's target_room + FSM so the member re-approaches the new rally.
+                if let Some(room) = new_room {
+                    for member in member_entities {
+                        if let Some(crate::jobs::data::JobData::SquadCombat(job)) = data.jobs.get_mut(member) {
+                            job.rebind_to_squad(room, squad_entity);
+                        }
+                    }
                 }
                 // Re-key the per-objective lifecycle trackers under the NEW id (reuse the re-field cleanup,
                 // then stamp fresh clocks) — the deep-reach forming/travel budgets are per-objective, so the
@@ -1615,10 +1910,22 @@ impl<'a> System<'a> for SquadManagerSystem {
 
         // ── Phase B: field rosters (spawn unfilled slots) for live squads. ──
         for (squad_entity, obj_id) in &live_managed {
+            // REC-021: skip a MERGE DONOR's slots this tick — it is being consolidated away (its members shed
+            // into a receiver via the deferred transfer). Queuing its unfilled slots now would spawn a surplus
+            // creep the same tick the donor merges + is deleted (wasted energy + spawn occupancy).
+            if merge_donors.contains(squad_entity) {
+                continue;
+            }
             // Read the composition off the objective each tick (the producer owns it).
             let (slots, target_room, spawn_priority) = match data.objective_queue.get(*obj_id) {
                 Some(obj) => match obj.force.squads.first() {
-                    Some(comp) => (comp.slots.clone(), objective_target(&obj.kind).1, spawn_priority_for(obj.priority)),
+                    // REC-052(c): a CRITICAL base-under-attack DEFENSE roster gets a tiny spawn-priority edge
+                    // over MEDIUM offense sharing the 85 band (the descending sort then orders defenders first).
+                    Some(comp) => (
+                        comp.slots.clone(),
+                        objective_target(&obj.kind).1,
+                        spawn_priority_for(obj.priority, is_defense_objective(&obj.kind, obj.owner)),
+                    ),
                     None => continue,
                 },
                 None => continue,
@@ -1776,10 +2083,11 @@ impl<'a> System<'a> for SquadManagerSystem {
                 let Some(o) = data.objective_queue.get(*oid) else {
                     return false;
                 };
-                // FIX C (ADR 0029): defense is EXEMPT from the forming pace — defenders deploy immediately
-                // (FIX A) and must never queue behind offense. Counting only OFFENSE forming makes the cap
-                // serialize offense rosters at <= MAX_FORMING_SQUADS without ever starving owned-room defense.
-                if matches!(o.kind, ObjectiveKind::Defend { .. }) {
+                // FIX C (ADR 0029) + REC-008: DEFENSE (owner-aware — a `Secure{owned}`/`Secure{neighbour}`
+                // intercept, not just `Defend{..}`) is EXEMPT from the forming pace — defenders deploy
+                // immediately (FIX A) and must never queue behind offense. Counting only OFFENSE forming makes
+                // the cap serialize offense rosters at <= MAX_FORMING_SQUADS without ever starving base defense.
+                if is_defense_objective(&o.kind, o.owner) {
                     return false;
                 }
                 let requested = o.force.squads.first().map(|c| c.slots.len()).unwrap_or(0);
@@ -1807,15 +2115,11 @@ impl<'a> System<'a> for SquadManagerSystem {
         let ev_of_claim = |o: &super::objective_queue::CombatObjective| -> i64 {
             let room = o.kind.room();
             let caps = o.force.squads.first().map(|c| c.capabilities(claim_energy)).unwrap_or_default();
-            let asset = data
-                .mapping
-                .get_room(&room)
-                .and_then(|e| data.room_data.get(e))
-                .and_then(|rd| game::rooms().get(rd.name))
-                .map(|r| r.energy_capacity_available() as f32)
-                .unwrap_or(1.0);
-            let travel = claim_anchor.map(|h| room_distance(h, room)).unwrap_or(0);
+            // REC-006: value a DEFENSE objective by the PROTECTED asset (remote income / adjacent owned-room
+            // value), not the threat room's live energy-capacity (~0 for a non-owned room — the starve bug).
             let econ = data.objective_queue.economic_intel(o.id);
+            let asset = defense_asset_value(&data, o, &homes, econ);
+            let travel = claim_anchor.map(|h| room_distance(h, room)).unwrap_or(0);
             objective_ev_q(caps, &o.kind, o.priority, asset, claim_threat_for(room), econ, MAX_TRAVEL_BUDGET, travel)
         };
         let commit_threshold_q = quantize_ev(COMMIT_EV_THRESHOLD);
@@ -1831,15 +2135,25 @@ impl<'a> System<'a> for SquadManagerSystem {
             .collect();
         ranked_claims.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0 .0.cmp(&b.0 .0)));
 
+        // REC-008: DEFENSE claims must NOT queue behind the OFFENSE forming cap (and must not increment it).
+        // A base under direct attack while two offense rosters form was blocked from claiming its CRITICAL
+        // defender until an offense roster completed. Now only `active < MAX_CONCURRENT_SQUADS` gates a
+        // defense claim; `forming < MAX_FORMING_SQUADS` gates OFFENSE claims only, and `forming` increments
+        // only for offense. (The active cap still backstops total concurrency — defense preemption ABOVE it is
+        // a separate open decision, REC-023 note.)
         let mut claim_iter = ranked_claims.into_iter();
-        while active < MAX_CONCURRENT_SQUADS && forming < MAX_FORMING_SQUADS {
+        while active < MAX_CONCURRENT_SQUADS {
             let Some((obj_id, _ev_q)) = claim_iter.next() else {
                 break; // ran out of EV-positive claimable objectives
             };
 
-            let (composition, target) = match data.objective_queue.get(obj_id) {
+            let (composition, target, is_defense) = match data.objective_queue.get(obj_id) {
                 Some(obj) => match obj.force.squads.first() {
-                    Some(comp) => (comp.clone(), objective_target(&obj.kind)),
+                    Some(comp) => (
+                        comp.clone(),
+                        objective_target(&obj.kind),
+                        is_defense_objective(&obj.kind, obj.owner),
+                    ),
                     None => {
                         // Malformed objective (no force requested) — can't field it; skip to the next claim.
                         continue;
@@ -1847,6 +2161,12 @@ impl<'a> System<'a> for SquadManagerSystem {
                 },
                 None => break,
             };
+
+            // OFFENSE respects the forming pace; DEFENSE bypasses it (deploy immediately). A blocked OFFENSE
+            // claim is passed over — the loop keeps scanning for a defense claim (which may still fit).
+            if !is_defense && forming >= MAX_FORMING_SQUADS {
+                continue;
+            }
 
             // No in-range home can spawn this squad → don't claim it (a claimed-but-
             // never-spawned `SquadContext` would linger forever holding a cap slot).
@@ -1859,11 +2179,14 @@ impl<'a> System<'a> for SquadManagerSystem {
             }
 
             if debug {
-                log::info!("[Lifecycle] FIELD obj={:?} room={} members={}", obj_id, target.1, composition.member_count());
+                log::info!("[Lifecycle] FIELD obj={:?} room={} members={} defense={}", obj_id, target.1, composition.member_count(), is_defense);
             }
             field_new_squad(&data.updater, &data.entities, &mut data.objective_queue, obj_id, &composition, target, now);
             active += 1;
-            forming += 1; // the newly-claimed squad starts forming (slot 0 spawns next tick)
+            // REC-008: only an OFFENSE roster counts toward the forming pace.
+            if !is_defense {
+                forming += 1;
+            }
         }
     }
 }
@@ -1918,6 +2241,18 @@ fn queue_slot_spawn(
         .map(|h| h.energy_capacity)
         .max();
     let Some(best_capacity) = best_capacity else {
+        // REC-037: NO in-range home can spawn this slot — a SILENT no-op pre-fix (the slot never queued, so
+        // the squad rallies forever at present<full and churns form/give-up cycles with zero telemetry). LOUD
+        // + latched once per (objective, slot) per fielded generation (the latch clears on retire/reassign, so
+        // a re-field re-warns). Phase C's claim gate already excludes a no-home-in-range NEW claim; this
+        // covers a squad that OUTLIVES its last in-range home (a home lost/downgraded after fielding). A
+        // seg-57 counter is the follow-up (the metrics block is outside this file's ownership).
+        if build_body_warned.insert((obj_id, slot_index)) {
+            log::warn!(
+                "[SpawnQueue] obj={:?} slot={} role={:?} target={} NO HOME IN SPAWN RANGE (<= {} rooms) — slot never queued, roster stalls here (warn-once per generation)",
+                obj_id, slot_index, slot.role, target_room, MAX_SPAWN_DISTANCE
+            );
+        }
         return;
     };
     // Build via `build_body` so a force-SIZED slot (BodyType::Sized, R3) goes through the dynamic builder
@@ -2729,25 +3064,33 @@ fn compute_squad_orders(
                 );
             }
         } else if formation {
-            // Arrived + FORMATION (siege, O2): keep the anchor and advance it toward the focus
-            // (close to dismantle/weapon range) while ORIENTING the block toward the threat —
-            // `reassign_slots` puts tanks/high-HP in the threat-facing slots, healers at the back
-            // (`decide_squad.orientation` → `threat_direction`). The job's `squad_has_anchor`
-            // branch then formation-follows. (Pure decision in the crate; manager applies; job moves.)
-            if let Some(focus) = decision.focus {
-                // A STRUCTURE focus (`focus.id` is None) sits on an IMPASSABLE tile: advancing the anchor
-                // onto it pathfinds to range 0, finds no path, and reports `Blocked`, so the squad parks
-                // SHORT of weapon range and never fires (the invader-core "enters but does nothing" bug,
-                // ADR 0026 §9). Stand off one tile toward the squad so the formation holds in weapon range;
-                // a creep focus keeps targeting the creep's tile (where the kite logic wants the anchor).
-                let dest = match (focus.id, decision.center) {
-                    (None, Some(center)) => crate::military::formation::standoff_one_tile(focus.pos, center),
-                    _ => focus.pos,
-                };
-                crate::military::formation::advance_squad_virtual_position(ctx, dest);
+            // REC-038: check the anchor-DROP predicates BEFORE the advance. A drain / structure-siege
+            // decision drops the anchor unconditionally below (`should_drop_anchor_for_*`), so advancing it
+            // here first (`advance_squad_virtual_position` = a per-tick PathFinder call + `reassign_slots`)
+            // was pure churn — computed, then thrown away, every tick. Skip the advance when the anchor will
+            // be dropped this tick.
+            let will_drop_anchor = should_drop_anchor_for_drain(&decision) || should_drop_anchor_for_structure_siege(&decision);
+            if !will_drop_anchor {
+                // Arrived + FORMATION (siege, O2): keep the anchor and advance it toward the focus
+                // (close to dismantle/weapon range) while ORIENTING the block toward the threat —
+                // `reassign_slots` puts tanks/high-HP in the threat-facing slots, healers at the back
+                // (`decide_squad.orientation` → `threat_direction`). The job's `squad_has_anchor`
+                // branch then formation-follows. (Pure decision in the crate; manager applies; job moves.)
+                if let Some(focus) = decision.focus {
+                    // A STRUCTURE focus (`focus.id` is None) sits on an IMPASSABLE tile: advancing the anchor
+                    // onto it pathfinds to range 0, finds no path, and reports `Blocked`, so the squad parks
+                    // SHORT of weapon range and never fires (the invader-core "enters but does nothing" bug,
+                    // ADR 0026 §9). Stand off one tile toward the squad so the formation holds in weapon range;
+                    // a creep focus keeps targeting the creep's tile (where the kite logic wants the anchor).
+                    let dest = match (focus.id, decision.center) {
+                        (None, Some(center)) => crate::military::formation::standoff_one_tile(focus.pos, center),
+                        _ => focus.pos,
+                    };
+                    crate::military::formation::advance_squad_virtual_position(ctx, dest);
+                }
+                ctx.threat_direction = decision.orientation;
+                ctx.reassign_slots();
             }
-            ctx.threat_direction = decision.orientation;
-            ctx.reassign_slots();
         } else {
             // Arrived + SKIRMISH: drop the anchor so `Engaged` kites via `decide_movement` (O1).
             ctx.squad_path = None;
@@ -3199,9 +3542,40 @@ mod tests {
     fn declaim_is_a_dedicated_capability_class() {
         let r = room("W5N5");
         let ctrl = Position::new(RoomCoordinate::new(20).unwrap(), RoomCoordinate::new(20).unwrap(), r);
-        assert_eq!(capability_class(&ObjectiveKind::Declaim { room: r, controller: ctrl }), CapabilityClass::Declaim);
-        assert_ne!(capability_class(&ObjectiveKind::Declaim { room: r, controller: ctrl }), CapabilityClass::Offense);
-        assert_ne!(capability_class(&ObjectiveKind::Declaim { room: r, controller: ctrl }), CapabilityClass::Defense);
+        let kind = ObjectiveKind::Declaim { room: r, controller: ctrl };
+        assert_eq!(capability_class(&kind, ObjectiveOwner::SourceKeeper), CapabilityClass::Declaim);
+        assert_ne!(capability_class(&kind, ObjectiveOwner::Attack), CapabilityClass::Offense);
+        assert_ne!(capability_class(&kind, ObjectiveOwner::Defense), CapabilityClass::Defense);
+    }
+
+    /// REC-006/007: `Secure` is OWNER-aware — a `Secure` owned by DEFENSE is a defense intercept; owned by
+    /// ATTACK (an operator attack flag / offense room-clear) it is Offense. The pre-fix classed ALL `Secure`
+    /// as Defense, so a freed defender rebound onto an offense `Secure` AND an offense `Secure` bypassed the
+    /// offense forming cap.
+    #[test]
+    fn secure_class_is_owner_aware() {
+        let kind = ObjectiveKind::Secure { room: room("W5N5") };
+        assert_eq!(capability_class(&kind, ObjectiveOwner::Defense), CapabilityClass::Defense);
+        assert_eq!(capability_class(&kind, ObjectiveOwner::Attack), CapabilityClass::Offense);
+        // The defense predicate follows the class: a DEFENSE-owned Secure is defense, an ATTACK-owned isn't.
+        assert!(is_defense_objective(&kind, ObjectiveOwner::Defense));
+        assert!(!is_defense_objective(&kind, ObjectiveOwner::Attack));
+        // A `Defend{..}` is always defense regardless of owner; an offense kind never is.
+        assert!(is_defense_objective(&ObjectiveKind::Defend { room: room("W5N5") }, ObjectiveOwner::Unknown));
+        assert!(!is_defense_objective(&ObjectiveKind::Harass { room: room("W5N5") }, ObjectiveOwner::Defense));
+    }
+
+    /// REC-010: the reassign-row class derived from the SQUAD's persisted target when the objective is gone —
+    /// a freed declaimer (`AttackController`) stays Declaim, a freed defender (`DefendRoom`) stays Defense; an
+    /// offense target is Offense. This is what stops a wrong-class rebind when the objective vanished.
+    #[test]
+    fn class_from_persisted_target_gates_reassign() {
+        let r = room("W5N5");
+        let pos = Position::new(RoomCoordinate::new(20).unwrap(), RoomCoordinate::new(20).unwrap(), r);
+        assert_eq!(class_from_squad_target(&SquadTarget::DefendRoom { room: r }), CapabilityClass::Defense);
+        assert_eq!(class_from_squad_target(&SquadTarget::AttackController { position: pos }), CapabilityClass::Declaim);
+        assert_eq!(class_from_squad_target(&SquadTarget::AttackRoom { room: r }), CapabilityClass::Offense);
+        assert_eq!(class_from_squad_target(&SquadTarget::HarassRoom { room: r }), CapabilityClass::Offense);
     }
 
     #[test]
@@ -3297,15 +3671,16 @@ mod tests {
         // COMBAT_FORMING band — STRICTLY between the HIGH economy bulk and the CRITICAL miners — or the
         // spawnsystem head-of-line break strands its forming slots last-in-tier behind the economy bulk and
         // the roster never completes (the dead-stall root). Defense (HIGH) and any CRITICAL map there too.
-        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_CRITICAL), SPAWN_PRIORITY_COMBAT_FORMING);
-        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_HIGH), SPAWN_PRIORITY_COMBAT_FORMING);
+        // Offense (not defense) at each band. CRITICAL/HIGH/MEDIUM offense all form in the shared band.
+        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_CRITICAL, false), SPAWN_PRIORITY_COMBAT_FORMING);
+        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_HIGH, false), SPAWN_PRIORITY_COMBAT_FORMING);
         assert_eq!(
-            spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM),
+            spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false),
             SPAWN_PRIORITY_COMBAT_FORMING,
             "MEDIUM offense must form in the COMBAT_FORMING band, not be tied with / starved below the economy bulk"
         );
         // Low-priority farms stay below combat so they never preempt economy.
-        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_LOW), SPAWN_PRIORITY_MEDIUM);
+        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_LOW, false), SPAWN_PRIORITY_MEDIUM);
 
         // The band is STRICTLY between the HIGH economy bulk and the CRITICAL miners: forming squad slots
         // win the within-tier race against economy WITHOUT preempting energy income (miners stay first).
@@ -3317,6 +3692,17 @@ mod tests {
             SPAWN_PRIORITY_COMBAT_FORMING < SPAWN_PRIORITY_CRITICAL,
             "forming squad slots must NOT preempt CRITICAL miners (income protected)"
         );
+
+        // REC-052(c): a CRITICAL base-under-attack DEFENSE roster gets a tiny intra-band EDGE over MEDIUM
+        // offense sharing the 85 band — so the queue's descending sort orders our own base's defenders FIRST.
+        let crit_defense = spawn_priority_for(OBJECTIVE_PRIORITY_CRITICAL, true);
+        let medium_offense = spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false);
+        assert!(crit_defense > medium_offense, "CRITICAL defense out-orders MEDIUM offense in the band ({crit_defense} > {medium_offense})");
+        assert!(crit_defense > SPAWN_PRIORITY_COMBAT_FORMING, "the edge lifts CRITICAL defense above the shared band");
+        assert!(crit_defense < SPAWN_PRIORITY_CRITICAL, "the edge stays STRICTLY below CRITICAL miners (income never preempted)");
+        // A leashed/neighbour defender (HIGH/MEDIUM) does NOT get the edge — only an owned room under DIRECT
+        // (CRITICAL) attack out-prioritises offense here.
+        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_HIGH, true), SPAWN_PRIORITY_COMBAT_FORMING, "HIGH defense shares the band with offense");
     }
 
     #[test]

@@ -84,16 +84,13 @@ pub fn is_build_feasible(pathfinder: &mut PathfinderService, home: RoomName, tar
         .unwrap_or(false)
 }
 
-/// Whether a CLAIM creep from `home` can reach `target` while still alive to
-/// claim it. Claim feasibility implies build feasibility (claimers are
-/// shorter-lived than builders), so it is the binding gate on which rooms we
-/// are willing to claim and establish.
-pub fn is_claim_feasible(pathfinder: &mut PathfinderService, home: RoomName, target: RoomName) -> bool {
-    pathfinder
-        .travel_ticks(home, target, game::time())
-        .map(|travel| travel.saturating_add(CLAIM_ARRIVAL_MARGIN) <= CREEP_CLAIM_LIFE_TIME)
-        .unwrap_or(false)
-}
+// REC-071: `is_claim_feasible` was DELETED here. ADR 0038 moved the live reach gate to
+// `operations::claim`'s `claim_route_feasible` (travel + the 50-tick arrival margin over
+// the ClaimCorridor route pricing, which denies hostile corridors), leaving this helper
+// with zero functional callers. It was not marked KEEP and editing it would silently fork
+// the reach policy from the live one — so it is removed (EP-2.6 one-implementation,
+// EP-10.5 no dead code). `CREEP_CLAIM_LIFE_TIME`/`CLAIM_ARRIVAL_MARGIN` stay: they still
+// bound `max_claim_radius_hops` below.
 
 /// Widest claim search radius (room-hops) worth exploring: beyond it a claimer
 /// cannot reach the target alive. Derived from game constants, not config — it

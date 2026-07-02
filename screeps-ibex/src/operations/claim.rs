@@ -234,9 +234,10 @@ impl ClaimOperation {
         }
 
         // Search the full claimer-viable range every cycle — the only real limit on what we may claim is
-        // claimer reach (`is_claim_feasible` at commit), so the BFS explores exactly that far. No adaptive
-        // ratchet: a far viable room is found on the first discover, not after N widening cycles (ADR 0038
-        // D1/D2). Each new colony re-seeds the BFS, so the frontier crawls outward toward the world edge.
+        // claimer reach (the `claim_route_feasible` gate + ClaimCorridor route pricing at commit, below), so
+        // the BFS explores exactly that far. No adaptive ratchet: a far viable room is found on the first
+        // discover, not after N widening cycles (ADR 0038 D1/D2). Each new colony re-seeds the BFS, so the
+        // frontier crawls outward toward the world edge.
         let radius = crate::missions::utility::max_claim_radius_hops().max(1);
 
         let gather_system_data = GatherSystemData {
@@ -853,30 +854,55 @@ impl ClaimOperation {
                         crate::pathing::routepricing::economy_route_cost(intel, derelict_pathing_on)
                     };
 
-                    let mut home_room_entities: Vec<Entity> = Vec::new();
-                    for (entity, home_room_name, _max_level) in home_room_data.iter() {
-                        if used_home_rooms.contains(entity) {
-                            continue;
+                    // A home is eligible if it is uncommitted, can afford a claimer, and is
+                    // CLAIM-reachable through hostile-free corridors (`claim_route_feasible`
+                    // over the ClaimCorridor route pricing). `restrict_to_bfs_homes` scopes
+                    // the pass to `candidate.home_rooms` (the BFS's minimal-distance homes).
+                    let mut collect_eligible_homes = |restrict_to_bfs_homes: bool| -> Vec<Entity> {
+                        let mut out: Vec<Entity> = Vec::new();
+                        for (entity, home_room_name, _max_level) in home_room_data.iter() {
+                            if used_home_rooms.contains(entity) {
+                                continue;
+                            }
+                            if restrict_to_bfs_homes && !candidate.home_rooms.contains(home_room_name) {
+                                continue;
+                            }
+                            let energy_capacity = game::rooms()
+                                .get(*home_room_name)
+                                .map(|r| r.energy_capacity_available())
+                                .unwrap_or(0);
+                            if energy_capacity < claimer_cost {
+                                continue;
+                            }
+                            let route = system_data.pathfinder.route_distance_via(
+                                *home_room_name,
+                                candidate_name,
+                                game::time(),
+                                crate::pathing::pathfinderservice::RoutePolicy::ClaimCorridor,
+                                &route_cost,
+                            );
+                            if claim_route_feasible(route) {
+                                out.push(*entity);
+                            }
                         }
-                        if !candidate.home_rooms.contains(home_room_name) {
-                            continue;
-                        }
-                        let energy_capacity = game::rooms()
-                            .get(*home_room_name)
-                            .map(|r| r.energy_capacity_available())
-                            .unwrap_or(0);
-                        if energy_capacity < claimer_cost {
-                            continue;
-                        }
-                        let route = system_data.pathfinder.route_distance_via(
-                            *home_room_name,
-                            candidate_name,
-                            game::time(),
-                            crate::pathing::pathfinderservice::RoutePolicy::ClaimCorridor,
-                            &route_cost,
-                        );
-                        if claim_route_feasible(route) {
-                            home_room_entities.push(*entity);
+                        out
+                    };
+
+                    // Prefer the BFS's minimal-distance homes. REC-069: those are recorded
+                    // only at first-visit distance, so a farther-but-eligible home is
+                    // silently excluded (sticky when a corridor near the nearest home stays
+                    // hostile-reserved). If the restricted set empties, fall back to the FULL
+                    // owned-home set — the `claim_route_feasible` + ClaimCorridor route check
+                    // re-derives the hostile-free reachability guarantee the BFS provided, so
+                    // the fallback never sends a claimer through a hostile corridor.
+                    let mut home_room_entities = collect_eligible_homes(true);
+                    if home_room_entities.is_empty() {
+                        home_room_entities = collect_eligible_homes(false);
+                        if !home_room_entities.is_empty() {
+                            info!(
+                                "ClaimOp [Select]: candidate {} had no BFS-recorded eligible home; a farther owned home is claim-reachable — using it (REC-069)",
+                                candidate.room_name
+                            );
                         }
                     }
 
@@ -1273,16 +1299,16 @@ fn plan_commit_gate(plan_valid: Option<bool>) -> PlanCommitGate {
     }
 }
 
-/// Claim-corridor reach (REC-024): the same lifetime arithmetic as
-/// `missions::utility::is_claim_feasible` — travel plus the 50-tick arrival
-/// margin must fit the 600-tick CLAIM lifetime — expressed over the route
-/// directly. With `travel_ticks = hops × 50` the bound is exactly
-/// `hops ≤ max_claim_radius_hops()` (= 11, pinned in `missions::utility`),
-/// which avoids duplicating the private lifetime constants. The margin is
-/// thin against the hop model's terrain blindness (a `[CLAIM, MOVE]` claimer
-/// pays ~5 ticks per swamp tile); the compensating conservatism is in the
-/// route PRICING (unscouted rooms dispreferred — see
-/// `routepricing::UNSCOUTED_ROUTE_COST`), not here.
+/// Claim-corridor reach (REC-024) — the SOLE live claim reach gate (ADR 0038;
+/// the vestigial `missions::utility::is_claim_feasible` was deleted per REC-071).
+/// The CLAIM lifetime arithmetic — travel plus the 50-tick arrival margin must
+/// fit the 600-tick CLAIM lifetime — is expressed over the route directly. With
+/// `travel_ticks = hops × 50` the bound is exactly
+/// `hops ≤ max_claim_radius_hops()` (= 11, pinned in `missions::utility`), which
+/// avoids duplicating the private lifetime constants. The margin is thin against
+/// the hop model's terrain blindness (a `[CLAIM, MOVE]` claimer pays ~5 ticks per
+/// swamp tile); the compensating conservatism is in the route PRICING (unscouted
+/// rooms dispreferred — see `routepricing::UNSCOUTED_ROUTE_COST`), not here.
 fn claim_route_feasible(route: crate::pathing::pathfinderservice::CachedRoute) -> bool {
     route.reachable && route.hops <= crate::missions::utility::max_claim_radius_hops()
 }
@@ -1401,14 +1427,14 @@ mod tests {
 
     // ── Claim-corridor reach (REC-024) ──────────────────────────────────────
 
-    /// Pin (REC-024): the commit-time reach check over a priced route must be
-    /// EXACTLY `missions::utility::is_claim_feasible`'s lifetime arithmetic —
-    /// travel (hops × 50) + 50-tick arrival margin within the 600-tick CLAIM
-    /// lifetime ⇔ hops ≤ max_claim_radius_hops() = 11 — and an unreachable
-    /// route (every corridor denied by the mover-aligned pricing) must be
-    /// infeasible, never defaulted.
+    /// Pin (REC-024): the commit-time reach check over a priced route is the SOLE
+    /// claim reach gate (REC-071 deleted the vestigial `is_claim_feasible`). Its
+    /// lifetime arithmetic — travel (hops × 50) + 50-tick arrival margin within the
+    /// 600-tick CLAIM lifetime ⇔ hops ≤ max_claim_radius_hops() = 11 — must hold, and
+    /// an unreachable route (every corridor denied by the mover-aligned pricing) must
+    /// be infeasible, never defaulted.
     #[test]
-    fn claim_route_feasibility_matches_the_utility_reach_gate() {
+    fn claim_route_feasibility_matches_the_claim_lifetime_bound() {
         let route = |hops: u32, reachable: bool| crate::pathing::pathfinderservice::CachedRoute {
             hops,
             travel_ticks: hops.saturating_mul(50),

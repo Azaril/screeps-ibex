@@ -91,11 +91,26 @@ where
 
 /// Any dismantle target READY to work on right now: in scope (not a road,
 /// not mining infrastructure, engine-dismantlable, within the hit-pool
-/// horizon, not under a hostile rampart) AND with an empty store (loot before
-/// wreck). `max_structure_hits` must match what the dismantler jobs were
-/// spawned with — work detection and job target selection share these
-/// filters or the work never ends.
-pub fn requires_dismantling(structures: &[StructureObject], sources: &[RemoteObjectId<Source>], max_structure_hits: u32) -> bool {
+/// horizon, not under a hostile rampart), REACHABLE now (REC-058), AND with an
+/// empty store (loot before wreck). `max_structure_hits` must match what the
+/// dismantler jobs were spawned with — work detection and job target selection
+/// share these filters or the work never ends.
+///
+/// `reachable` mirrors the selection-side reachability gate in
+/// [`get_new_dismantle_state`](super::dismantlebehavior::get_new_dismantle_state):
+/// pass `Some(set)` of the reachable-now tile coordinates so a structure sealed
+/// behind over-horizon walls does NOT count as ready work — otherwise the
+/// mission's completion check disagrees with target selection (selection skips
+/// the sealed target; completion still sees it) and the mission respawns a
+/// wedging dismantler every generation. `None` leaves the check unfiltered (the
+/// room is not visible, so reachability is unknown — matches selection's
+/// don't-gate-without-visibility behaviour).
+pub fn requires_dismantling(
+    structures: &[StructureObject],
+    sources: &[RemoteObjectId<Source>],
+    max_structure_hits: u32,
+    reachable: Option<&HashSet<(u8, u8)>>,
+) -> bool {
     let hostile_ramparts = hostile_rampart_positions(structures);
 
     structures
@@ -105,7 +120,22 @@ pub fn requires_dismantling(structures: &[StructureObject], sources: &[RemoteObj
         .filter(|s| can_dismantle(*s))
         .filter(|s| within_dismantle_hits_horizon(*s, max_structure_hits))
         .filter(|s| !blocked_by_hostile_rampart(*s, &hostile_ramparts))
+        .filter(|s| tile_dismantle_reachable(reachable, (s.pos().x().u8(), s.pos().y().u8())))
         .any(has_empty_storage)
+}
+
+/// REC-058 reachability gate (pure): does `tile` count as a workable dismantle
+/// target under the reachable-now set? `Some(set)` gates on membership (a tile
+/// sealed behind over-horizon walls is not in `set` → not workable); `None`
+/// (room not visible → reachability unknown) leaves it unfiltered so we neither
+/// fabricate a reachable verdict nor block work blindly. The completion check
+/// (`requires_dismantling`) and the job's target selection MUST use the same
+/// gate or the mission respawns a wedging dismantler forever.
+pub fn tile_dismantle_reachable(reachable: Option<&HashSet<(u8, u8)>>, tile: (u8, u8)) -> bool {
+    match reachable {
+        Some(set) => set.contains(&tile),
+        None => true,
+    }
 }
 
 /// Structures whose stores may be looted by salvage/raid work: structures
@@ -286,6 +316,35 @@ mod tests {
     use std::collections::HashMap;
 
     const NO_WALLS: fn(u8, u8) -> bool = |_, _| false;
+
+    // ── REC-058: dismantle reachability gate ────────────────────────────────
+
+    /// A visible room's reachable set gates by membership: a sealed-off tile
+    /// (not in the set) is not workable; a reachable tile is.
+    #[test]
+    fn reachability_set_gates_by_membership() {
+        let reachable: HashSet<(u8, u8)> = [(10, 10), (11, 11)].into_iter().collect();
+        assert!(tile_dismantle_reachable(Some(&reachable), (10, 10)));
+        assert!(!tile_dismantle_reachable(Some(&reachable), (25, 25)), "sealed-off tile is not workable");
+    }
+
+    /// An empty reachable set (visible room, nothing reachable — fully sealed)
+    /// gates EVERYTHING off: this is exactly the wedge end-state the fix must
+    /// stop treating as ready work.
+    #[test]
+    fn empty_reachable_set_gates_everything_off() {
+        let empty: HashSet<(u8, u8)> = HashSet::new();
+        assert!(!tile_dismantle_reachable(Some(&empty), (10, 10)));
+    }
+
+    /// `None` (room not visible → reachability unknown) leaves the tile
+    /// unfiltered — we neither fabricate a reachable verdict nor block blindly,
+    /// matching the selection side's don't-gate-without-visibility behaviour.
+    #[test]
+    fn no_visibility_leaves_target_unfiltered() {
+        assert!(tile_dismantle_reachable(None, (10, 10)));
+        assert!(tile_dismantle_reachable(None, (49, 0)));
+    }
 
     fn wall_line_with_gaps(x: u8, gaps: &[(u8, u32)]) -> HashMap<(u8, u8), BreachBlocker> {
         // A constructed-wall line across column `x`; `gaps` are (y, hits)

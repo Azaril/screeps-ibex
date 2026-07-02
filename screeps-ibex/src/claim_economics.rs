@@ -16,7 +16,8 @@
 //!   low-but-claimable — never a hard stall. Replaces the old ad-hoc `distance_score` peak-at-4 curve + the
 //!   `adjacent_claim_penalty`.
 //! - **`support_decay(d)`** — a mild reciprocal far-room establishment/logistics penalty; strictly positive,
-//!   never a gate (the hard reach cutoff is `is_claim_feasible`).
+//!   never a gate (the hard reach cutoff is `operations::claim`'s `claim_route_feasible` gate over the
+//!   ClaimCorridor route pricing — REC-071; the vestigial `is_claim_feasible` was deleted).
 //! - **`plan_quality(R)`** — the SOFT plan-quality multiplier (floored; missing = neutral). The HARD "no valid
 //!   plan ⇒ no claim" gate lives in the pipeline (the viable `can_plan` exclusion, the score-time failed-plan
 //!   reject, and the commit-time plan-VALIDITY gate — REC-025), NOT here.
@@ -82,8 +83,9 @@ pub fn unlock_fraction(distance: u32, ring_separation_hops: u32, unlock_floor: f
 
 /// `support_decay(d) = 1 / (1 + k·d)`: strictly positive and monotone-decreasing for all finite d. A mild tilt
 /// against far rooms (establishment/logistics), **never a gate** (ADR 0038 D6) — the hard reach cutoff is
-/// `missions::utility::is_claim_feasible` (~11 hops) upstream. The reciprocal form is mandatory: a linear
-/// `1 − k·d` would reach 0 within reach and re-introduce a stall.
+/// `operations::claim`'s `claim_route_feasible` (~11 hops, over the ClaimCorridor route pricing) upstream
+/// (REC-071; `is_claim_feasible` deleted). The reciprocal form is mandatory: a linear `1 − k·d` would reach 0
+/// within reach and re-introduce a stall.
 pub fn support_decay(distance: u32, k: f64) -> f64 {
     1.0 / (1.0 + k * distance as f64)
 }

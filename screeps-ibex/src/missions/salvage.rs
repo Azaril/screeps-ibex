@@ -46,6 +46,35 @@ impl SalvageWork {
     }
 }
 
+/// REC-057: the breach-surplus admission gate, extracted pure so its
+/// first-emit-vs-re-assert asymmetry is host-testable. Returns whether the v1
+/// breach `Dismantle` objective should be LIVE (kept/re-asserted) this tick.
+///
+/// - **First emit** (`already_emitting == false`): requires true surplus — spare
+///   stored energy at or above `breach_min_home_energy` AND a currently idle
+///   spawn (`free_spawns > 0`).
+/// - **Re-assert** (`already_emitting == true`, i.e. the room is already tracked
+///   in `SalvageBreachTracker`): a fielded breach squad zeroes `free_spawns`
+///   (its own member is spawning), so re-checking the idle-spawn condition every
+///   tick withdrew the objective that fielded the squad — reconcile retired the
+///   half-formed squad, the spawn freed, and the re-emit minted a NEW ObjectiveId:
+///   a spawn-and-vanish loop that never breached. Once committed, keep asserting
+///   while the home economy has not collapsed below a HARD floor (half the
+///   admission threshold) — transient spawn occupancy no longer tears it down.
+///
+/// `breach_needed` is the outer gate (feature-enabled + a breachable objective
+/// exists); when false the breach is never live regardless of energy.
+fn breach_surplus_live(breach_needed: bool, already_emitting: bool, home_stored_energy: u32, home_free_spawns: u32, breach_min_home_energy: u32) -> bool {
+    if !breach_needed {
+        return false;
+    }
+    if already_emitting {
+        home_stored_energy >= breach_min_home_energy / 2
+    } else {
+        home_stored_energy >= breach_min_home_energy && home_free_spawns > 0
+    }
+}
+
 /// Survey a visible room for salvageable value. `lead_ticks` (travel + spawn
 /// lead) discounts decaying structures — value that will rot away before our
 /// creeps arrive is not value (ramparts bleed 3 hits/tick; containers 10/tick
@@ -375,27 +404,37 @@ impl SalvageMission {
         Ok(())
     }
 
-    /// Withdraw the v1 `Declaim` objective THIS mission emitted (ADR 0027 v1.1 P2). Scoped to
-    /// `Declaim { room == target AND controller == tracked-pos }` — the exact `(room, controller)` we last
-    /// requested (from the ephemeral [`SalvageBreachTracker::last_declaim_pos`], keyed by room) — so it
-    /// removes ONLY our objective. The SIBLING of [`Self::withdraw_breach_objective`]. No-op if we have no
-    /// tracked controller for this room (incl. after a VM reset — the orphaned objective then TTL-expires).
-    /// Clears the tracker entry. Called when the controller goes neutral, the room re-arms / stands down /
-    /// goes stale / aborts, and on completion — every path where the mission stops pursuing the de-claim.
+    /// Withdraw the v1 `Declaim` objective THIS mission emitted (ADR 0027 v1.1 P2). The SIBLING of
+    /// [`Self::withdraw_breach_objective`]. Called when the controller goes neutral, the room re-arms /
+    /// stands down / goes stale / aborts, and on completion — every path where the mission stops pursuing the
+    /// de-claim.
+    ///
+    /// When the ephemeral [`SalvageBreachTracker::last_declaim_pos`] holds this room, the withdraw is scoped
+    /// to `Declaim { room == target AND controller == tracked-pos }` — the exact `(room, controller)` we last
+    /// requested. When it does NOT (REC-043 — the post-VM-reset case: the tracker starts empty, but a
+    /// serialized `Declaim` objective survives the reset because its manager re-stamps the deadline lease), we
+    /// fall back to matching `owner == Attack && Declaim { room == target }` for ANY controller pos.
+    /// Salvage is the SOLE `Declaim` producer (war.rs never emits `Declaim`; grep-verified), and a `Declaim`
+    /// squad is claim-immune — it would otherwise hold a now-neutral controller indefinitely — so room-only
+    /// matching removes exactly our own orphaned objective without any risk of clobbering another producer's.
+    /// Clears the tracker entry.
     fn withdraw_declaim_objective(&self, system_data: &mut MissionExecutionSystemData, room_name: RoomName) {
-        let Some(controller_pos) = system_data.salvage_breach_tracker.last_declaim_pos.remove(&room_name) else {
-            return;
-        };
+        let tracked_pos = system_data.salvage_breach_tracker.last_declaim_pos.remove(&room_name);
         let stale: Vec<_> = system_data
             .combat_objective_queue
             .objectives
             .iter()
             .filter(|o| {
-                o.owner == ObjectiveOwner::Attack
-                    && o.kind == ObjectiveKind::Declaim {
-                        room: room_name,
-                        controller: controller_pos,
-                    }
+                if o.owner != ObjectiveOwner::Attack {
+                    return false;
+                }
+                match (o.kind, tracked_pos) {
+                    // Tracked: scope to the exact controller pos we last requested.
+                    (ObjectiveKind::Declaim { room, controller }, Some(pos)) => room == room_name && controller == pos,
+                    // Untracked (post-reset): room-only fallback — salvage owns every Declaim.
+                    (ObjectiveKind::Declaim { room, .. }, None) => room == room_name,
+                    _ => false,
+                }
             })
             .map(|o| o.id)
             .collect();
@@ -494,6 +533,22 @@ impl SalvageMission {
         for id in stale {
             system_data.combat_objective_queue.withdraw(id);
         }
+    }
+
+    /// Tear down EVERY objective + tracker entry this mission owns for its target room
+    /// (REC-059): the single teardown path called from every non-`Running` exit — the
+    /// `Ok`/`Err` early returns in `pre_run_mission`/`run_mission` as well as the standdown
+    /// and completion paths. Withdraws BOTH the breach `Dismantle` and the `Declaim`
+    /// objectives (each scoped to OUR tracked pos, so war.rs's same-room objectives are
+    /// never clobbered) and clears the [`SalvageBreachTracker`] entries. Without this, an
+    /// error/abort that bypassed the withdraws left a squad-CLAIMED objective alive under
+    /// the manager's deadline lease (the lease re-stamps every tick and outlives the TTL),
+    /// so the squad kept chewing a room no producer vouched for. Idempotent (a withdraw
+    /// with no tracked pos is a no-op), so calling it on a path that already withdrew is
+    /// harmless.
+    fn stand_down(&self, system_data: &mut MissionExecutionSystemData, room_name: RoomName) {
+        self.withdraw_breach_objective(system_data, room_name);
+        self.withdraw_declaim_objective(system_data, room_name);
     }
 
     /// Emit (or refresh) the v1 breach `Dismantle{room, breach-blocker}` objective
@@ -624,6 +679,13 @@ impl Mission for SalvageMission {
             .retain(|entity| system_data.room_data.get(*entity).map(is_valid_home_room).unwrap_or(false));
 
         if self.home_room_datas.is_empty() {
+            // REC-059: this Err aborts the mission via the missionsystem cleanup path,
+            // which does NOT run our objective withdraws. Tear down our breach/declaim
+            // objectives first so a squad-claimed objective cannot survive under the
+            // deadline lease with no mission to complete it.
+            if let Some(name) = system_data.room_data.get(self.room_data).map(|rd| rd.name) {
+                self.stand_down(system_data, name);
+            }
             return Err("No home rooms for salvage mission".to_owned());
         }
 
@@ -650,6 +712,11 @@ impl Mission for SalvageMission {
         let derelict_features = features.derelict;
 
         if !derelict_features.on {
+            // REC-059: tear our objectives down before aborting so a claimed breach/declaim
+            // squad is not left chewing under the deadline lease when the feature is killed.
+            if let Some(name) = system_data.room_data.get(self.room_data).map(|rd| rd.name) {
+                self.stand_down(system_data, name);
+            }
             return Err("Derelict-room handling disabled - aborting salvage".to_string());
         }
 
@@ -663,10 +730,23 @@ impl Mission for SalvageMission {
         // `system_data.room_data`, which conflicts with the `&mut self`/`&mut system_data`
         // the withdraw needs, so the standdown decision is DEFERRED out of the borrow:
         // we capture it as `standdown` and handle withdraw+return after the block closes.
+        // REC-059: the two data-missing early aborts below route through the `standdown`
+        // deferral (which withdraws our breach + declaim objectives after the borrow
+        // drops) rather than a bare `?` that would skip the teardown and strand a
+        // squad-claimed objective under the deadline lease. `room_data` missing (name
+        // unknowable) is the sole path left to TTL-expiry — there is no room key to scope
+        // the withdraw on that tick, and the objective self-heals within its ≤200-tick TTL.
         let mut standdown: Option<Result<MissionResult, String>> = None;
-        let survey_tuple = {
-            let room_data = system_data.room_data.get(self.room_data).ok_or("Expected room data")?;
-            let dynamic_visibility_data = room_data.get_dynamic_visibility_data().ok_or("Expected dynamic visibility data")?;
+        let survey_tuple = 'survey: {
+            let Some(room_data) = system_data.room_data.get(self.room_data) else {
+                // No room data ⇒ no room name ⇒ nothing to scope a withdraw on; let the
+                // objective TTL-expire (the pre-claim self-heal). Abort without a teardown.
+                return Err("Expected room data".to_string());
+            };
+            let Some(dynamic_visibility_data) = room_data.get_dynamic_visibility_data() else {
+                standdown = Some(Err("Expected dynamic visibility data".to_string()));
+                break 'survey None;
+            };
 
             if dynamic_visibility_data.updated_within(1000) {
                 if dynamic_visibility_data.owner().mine() || dynamic_visibility_data.owner().friendly() {
@@ -727,9 +807,28 @@ impl Mission for SalvageMission {
                     dynamic_visibility_data.owner().hostile(),
                 );
 
-                // "Ready" = a target with an empty store exists right now;
-                // store-full structures become ready as raiders drain them.
-                let dismantle_ready = requires_dismantling(structures.all(), sources, derelict_features.max_structure_hits);
+                // "Ready" = a REACHABLE target with an empty store exists right now;
+                // store-full structures become ready as raiders drain them. REC-058: the
+                // reachability set must match the dismantle job's selection gate, or the
+                // completion check disagrees (sees a sealed-off target as ready work) and
+                // the mission respawns a wedging dismantler forever. Compute the reachable
+                // tiles over the same in-scope candidate set the job selects from.
+                let dismantle_candidate_tiles: Vec<(u8, u8)> = structures
+                    .all()
+                    .iter()
+                    .filter(|s| s.structure_type() != StructureType::Road)
+                    .filter(|s| !ignore_for_dismantle(*s, sources))
+                    .filter(|s| can_dismantle(*s))
+                    .filter(|s| within_dismantle_hits_horizon(*s, derelict_features.max_structure_hits))
+                    .map(|s| (s.pos().x().u8(), s.pos().y().u8()))
+                    .collect();
+                let dismantle_reachable = reachable_now_tiles(room_data.name, structures.all(), &dismantle_candidate_tiles);
+                let dismantle_ready = requires_dismantling(
+                    structures.all(),
+                    sources,
+                    derelict_features.max_structure_hits,
+                    dismantle_reachable.as_ref(),
+                );
 
                 // Can a de-claimer actually reach the controller? Gates CLAIM
                 // spawning so we don't burn CLAIM bodies that die against a
@@ -805,15 +904,21 @@ impl Mission for SalvageMission {
         // Mirrors the completion withdraw at the end of the tick. (ADR 0027 v1.1 P1+P2.)
         if let Some(result) = standdown {
             if let Some(name) = system_data.room_data.get(self.room_data).map(|rd| rd.name) {
-                self.withdraw_breach_objective(system_data, name);
-                self.withdraw_declaim_objective(system_data, name);
+                self.stand_down(system_data, name);
             }
             return result;
         }
         // Safe: `None` standdown ⇒ `survey_tuple` is `Some` (the visibility-needed path
-        // returned above).
-        let (room_name, work, dismantle_ready, declaim_target, declaim_access, breach_possible, breach_target) =
-            survey_tuple.expect("survey tuple present when not standing down");
+        // returned above). REC-047: the invariant is real today but the reasoning spans a
+        // large borrow block — a `let-else` that parks the tick (log-and-continue) is the
+        // EP-3.4 shape, never an `expect` in the mission tick path.
+        let Some((room_name, work, dismantle_ready, declaim_target, declaim_access, breach_possible, breach_target)) = survey_tuple else {
+            warn!(
+                "Salvage mission {:?}: survey tuple missing without a standdown decision — parking this tick (unexpected; investigate if repeated)",
+                self.room_data
+            );
+            return Ok(MissionResult::Running);
+        };
 
         // Per-role desired rosters from observed work. Disabled feature flags
         // zero the role; live creeps finish their jobs and expire naturally.
@@ -842,18 +947,44 @@ impl Mission for SalvageMission {
         // the within-horizon TEARDOWN dismantlers below.
         let breach_needed = derelict_features.breach_sealed && features.dismantle && breach_possible;
 
-        let breach_surplus = breach_needed
-            && self
-                .home_room_datas
-                .first()
-                .and_then(|home| system_data.economy.rooms.get(home))
-                .map(|econ| econ.stored_energy >= derelict_features.breach_min_home_energy && econ.free_spawns > 0)
-                .unwrap_or(false);
+        // Home energy this tick (best-effort; `None` ⇒ 0 ⇒ never admits a breach).
+        let home_stored_energy = self
+            .home_room_datas
+            .first()
+            .and_then(|home| system_data.economy.rooms.get(home))
+            .map(|econ| econ.stored_energy)
+            .unwrap_or(0);
+        let home_free_spawns = self
+            .home_room_datas
+            .first()
+            .and_then(|home| system_data.economy.rooms.get(home))
+            .map(|econ| econ.free_spawns)
+            .unwrap_or(0);
+
+        // REC-057: the `free_spawns > 0` surplus condition must gate the FIRST emit ONLY.
+        // A breach squad that begins assembling zeroes `free_spawns` (a member is
+        // spawning) — so re-checking it every tick withdrew the very objective that
+        // fielded the squad, reconcile retired the half-formed squad, the spawn freed, and
+        // the re-emit minted a NEW ObjectiveId: a spawn-and-vanish loop that never breached.
+        // Once we already have a live objective for this room (tracked in
+        // `SalvageBreachTracker`), keep re-asserting it and withdraw only on
+        // corridor-open (`breach_target` None, below), standdown (the early returns above),
+        // or a HARD energy floor (stored below half the admission threshold — a genuine
+        // economic collapse, not the transient "our own spawn is busy" dip).
+        let already_emitting = system_data.salvage_breach_tracker.last_breach_pos.contains_key(&room_name);
+        let breach_surplus = breach_surplus_live(
+            breach_needed,
+            already_emitting,
+            home_stored_energy,
+            home_free_spawns,
+            derelict_features.breach_min_home_energy,
+        );
 
         // The v1 breach objective is LIVE this tick when breach is wanted, on
-        // surplus, and we have a concrete blocker tile to target. (`breach_target`
-        // is `None` once the corridor is open — every objective reaches an edge —
-        // which is exactly when we withdraw the objective below.)
+        // surplus (per the first-emit-vs-re-assert gate above), and we have a concrete
+        // blocker tile to target. (`breach_target` is `None` once the corridor is open —
+        // every objective reaches an edge — which is exactly when we withdraw the
+        // objective below.)
         let breach_objective_live = breach_surplus && breach_target.is_some();
 
         // Dismantler roster: ONLY the within-horizon TEARDOWN (raze-for-salvage)
@@ -950,8 +1081,11 @@ impl Mission for SalvageMission {
                 self.request_breach_objective(system_data, room_name, breach_pos, corridor_hits);
             }
         } else {
-            // Corridor open (or surplus lapsed): drop the breach objective so the
-            // manager retires the dismantler squad this tick.
+            // Corridor open, breach no longer needed, or the home economy fell below the
+            // REC-057 hard floor: drop the breach objective so the manager retires the
+            // dismantler squad this tick. Transient spawn occupancy (our own forming
+            // member) no longer reaches here — the re-assert gate keeps a committed breach
+            // alive while the economy holds.
             self.withdraw_breach_objective(system_data, room_name);
         }
 
@@ -989,8 +1123,7 @@ impl Mission for SalvageMission {
             );
 
             // Defensive: never leave a breach / declaim objective behind on completion.
-            self.withdraw_breach_objective(system_data, room_name);
-            self.withdraw_declaim_objective(system_data, room_name);
+            self.stand_down(system_data, room_name);
             return Ok(MissionResult::Success);
         }
 
@@ -1017,5 +1150,73 @@ impl Mission for SalvageMission {
         // fielded by the `SquadManager`.
 
         Ok(MissionResult::Running)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MIN: u32 = 20_000;
+
+    // ── REC-057: breach-surplus first-emit-vs-re-assert gate ────────────────
+
+    /// The outer gate dominates: with `breach_needed == false` the breach is
+    /// never live, whatever the energy or spawn state.
+    #[test]
+    fn breach_never_live_when_not_needed() {
+        assert!(!breach_surplus_live(false, false, u32::MAX, 5, MIN));
+        assert!(!breach_surplus_live(false, true, u32::MAX, 5, MIN));
+    }
+
+    /// First emit (not yet tracked) requires BOTH spare stored energy at/above
+    /// the admission threshold AND an idle spawn.
+    #[test]
+    fn first_emit_requires_energy_and_idle_spawn() {
+        // Both satisfied → live.
+        assert!(breach_surplus_live(true, false, MIN, 1, MIN));
+        // No idle spawn → not admitted (nothing to field the squad).
+        assert!(!breach_surplus_live(true, false, MIN, 0, MIN));
+        // Below the admission threshold → not admitted.
+        assert!(!breach_surplus_live(true, false, MIN - 1, 1, MIN));
+    }
+
+    /// REC-057 headline: once the breach is committed (already tracked), a busy
+    /// spawn (`free_spawns == 0` — the squad's own member assembling) must NOT
+    /// tear the objective down. This is the exact spawn-and-vanish loop the fix
+    /// closes: the pre-fix gate re-checked `free_spawns > 0` every tick and
+    /// withdrew the objective that fielded the squad.
+    #[test]
+    fn committed_breach_survives_busy_spawn() {
+        // Re-assert with zero free spawns but healthy stored energy → stays live.
+        assert!(breach_surplus_live(true, true, MIN, 0, MIN));
+        // Even with stored energy that dipped below the FIRST-emit threshold but
+        // still above the hard floor, a committed breach holds.
+        assert!(breach_surplus_live(true, true, MIN / 2, 0, MIN));
+    }
+
+    /// A committed breach is withdrawn only on a genuine economic collapse:
+    /// stored energy below the hard floor (half the admission threshold).
+    #[test]
+    fn committed_breach_withdrawn_on_hard_floor() {
+        // Just below the hard floor → withdraw (gate returns false).
+        assert!(!breach_surplus_live(true, true, MIN / 2 - 1, 5, MIN));
+        // Exactly at the hard floor → still live.
+        assert!(breach_surplus_live(true, true, MIN / 2, 0, MIN));
+    }
+
+    /// Relation pin: the re-assert gate is strictly more permissive than the
+    /// first-emit gate at every energy level (it drops the idle-spawn condition
+    /// and halves the energy bar), so a committed breach is never withdrawn on a
+    /// tick where a fresh one would have been admitted.
+    #[test]
+    fn reassert_is_more_permissive_than_first_emit() {
+        for energy in [0u32, MIN / 2, MIN - 1, MIN, MIN * 2] {
+            for spawns in [0u32, 1] {
+                let first = breach_surplus_live(true, false, energy, spawns, MIN);
+                let reassert = breach_surplus_live(true, true, energy, spawns, MIN);
+                assert!(!first || reassert, "energy={energy} spawns={spawns}: re-assert must admit whatever first-emit admits");
+            }
+        }
     }
 }

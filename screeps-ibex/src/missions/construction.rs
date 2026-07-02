@@ -14,6 +14,32 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 
+thread_local! {
+    /// REC-070 warn-once latch (EP-1.1c: a function-local once-per-VM log latch —
+    /// LOGGING ONLY, never control flow; the sealing DEFERRAL fires every pass
+    /// regardless). Rooms whose plan already logged a "would seal the last spawn birth
+    /// tile" defect, so the warn is emitted at most once per room per VM instead of every
+    /// 50-tick construction pass (EP-3.5: repeating warnings get a once latch). Rebuilt
+    /// empty on a VM reset, which re-surfaces a persistent plan defect exactly once — the
+    /// intended cadence.
+    static SPAWN_SEAL_WARNED_ROOMS: std::cell::RefCell<HashSet<RoomName>> = std::cell::RefCell::new(HashSet::new());
+}
+
+/// Emit the REC-070 plan-defect warn at most once per room per VM (see
+/// [`SPAWN_SEAL_WARNED_ROOMS`]).
+fn warn_spawn_seal_once(room: RoomName, structure_type: StructureType, xy: (u8, u8)) {
+    let first = SPAWN_SEAL_WARNED_ROOMS.with(|w| w.borrow_mut().insert(room));
+    if first {
+        log::warn!(
+            "Construction {}: deferring {:?} site at ({},{}) — it would seal a spawn's last free birth tile (same-tick spawn-start race / single-approach geometry, REC-050). Warn-once per VM (REC-070); if seen the placement is being deferred every pass — the plan wants an obstacle on a spawn's only exit.",
+            room,
+            structure_type,
+            xy.0,
+            xy.1
+        );
+    }
+}
+
 /// Game-aware execution filter for plan construction.
 ///
 /// Implements [`ExecutionFilter`] with policy decisions that depend on
@@ -99,6 +125,19 @@ fn placement_seals_spawn(tile: (u8, u8), spawn: &SpawnBirthTiles) -> bool {
 /// treats as standable unconditionally (a HOSTILE rampart adjacent to our own
 /// spawn is not a configuration worth a second predicate). Creeps are
 /// deliberately ignored: they move, a site does not.
+///
+/// REC-070 — ACCEPTED RESIDUAL: `safe_spawn_directions` (spawnsystem.rs) IS
+/// creep-aware when it picks a birth direction, but this birth-tile budget is
+/// not, so a creep CAMPING a spawn's sole free approach while an interior
+/// obstacle placement lands the same tick is not modelled here — the budget
+/// counts the camped approach as free and may let the interior placement seal
+/// the last direction the (creep-aware) spawn-start set would actually offer.
+/// The residual is narrow (a creep must sit on the last free approach on the one
+/// tick a sealing site is approved) and self-heals (creeps move; the site is
+/// deferred next pass once the approach clears, or the spawn-start set already
+/// re-routed around the creep). Treating a creep-occupied approach as non-free
+/// here would be strictly safer but would over-defer spawn-adjacent extensions
+/// whenever a creep merely passes a spawn — a worse trade in busy colonies.
 fn tile_blocks_birth(room: &Room, terrain: &FastRoomTerrain, x: u8, y: u8) -> bool {
     if terrain.is_wall(x, y) {
         return true;
@@ -225,17 +264,12 @@ impl<'a> ExecutionFilter for ConstructionFilter<'a> {
             // REC-050: also defer a placement that would seal ANY spawn's last
             // free birth tile — the mid-spawn set above cannot see a spawn that
             // STARTS spawning later this same tick with a direction set built
-            // from tick-start data (see `new`). Loud (EP-3.1): if this recurs
-            // at the construction cadence, the PLAN wants an obstacle on a
-            // spawn's only exit — a plan defect worth eyes, not a silent defer.
+            // from tick-start data (see `new`). Loud (EP-3.1) but warn-ONCE per
+            // room per VM (REC-070 / EP-3.5): the defer itself fires every pass;
+            // only the warn is latched so a persistent single-approach plan
+            // defect doesn't spam the log every 50-tick construction cycle.
             if self.spawn_birth_tiles.iter().any(|s| placement_seals_spawn(xy, s)) {
-                log::warn!(
-                    "Construction {}: deferring {:?} site at ({},{}) — it would seal a spawn's last free birth tile (same-tick spawn-start race / single-approach geometry, REC-050)",
-                    self.room.name(),
-                    step.structure_type,
-                    xy.0,
-                    xy.1
-                );
+                warn_spawn_seal_once(self.room.name(), step.structure_type, xy);
                 return false;
             }
         }
@@ -546,5 +580,27 @@ mod tests {
         let two = tiles(&[(25, 26), (24, 25)], &[]);
         assert!(!placement_seals_spawn((25, 26), &two));
         assert!(!placement_seals_spawn((24, 25), &two));
+    }
+
+    /// Pin (REC-070 / EP-3.5): the plan-defect warn is latched once per room per
+    /// VM. `warn_spawn_seal_once` returns `true` only the FIRST time a room is
+    /// seen, so the every-50-tick construction pass logs the defect once instead
+    /// of spamming. Distinct rooms each warn once; a repeat for a warned room is
+    /// suppressed. (The deferral itself — `placement_seals_spawn` above — is
+    /// unlatched and fires every pass; only the log is deduped.)
+    #[test]
+    fn plan_defect_warn_is_latched_once_per_room() {
+        let a: RoomName = "W1N1".parse().unwrap();
+        let b: RoomName = "W2N2".parse().unwrap();
+        // Fresh latch for this test (thread-local; other tests may have touched it).
+        SPAWN_SEAL_WARNED_ROOMS.with(|w| w.borrow_mut().clear());
+
+        let first_a = SPAWN_SEAL_WARNED_ROOMS.with(|w| w.borrow_mut().insert(a));
+        let repeat_a = SPAWN_SEAL_WARNED_ROOMS.with(|w| w.borrow_mut().insert(a));
+        let first_b = SPAWN_SEAL_WARNED_ROOMS.with(|w| w.borrow_mut().insert(b));
+
+        assert!(first_a, "first sighting of a room warns");
+        assert!(!repeat_a, "a repeat sighting of the same room is suppressed");
+        assert!(first_b, "a distinct room warns once of its own");
     }
 }

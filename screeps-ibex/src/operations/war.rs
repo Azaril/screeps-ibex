@@ -199,7 +199,14 @@ fn defense_threat_from(infos: &[HostileCreepInfo], has_targetable_structures: bo
     } else {
         0.0
     };
-    let ranking_danger = dps + screeps_combat_decision::war_decision::dismantle_danger(work_parts, has_targetable_structures);
+    // REC-066: boost-aware dismantle-danger proxy. `dps` (melee+ranged) is ALREADY boost-scaled by
+    // `analyze_hostile_creep` (×4 for boosted parts, the threatmap model), but the WORK-based dismantle
+    // proxy is not — so thread the SAME ×4 when a WORK-carrying hostile is boosted (a boosted dismantler
+    // tears structures ~4× faster). Coarse (per-creep `boosted` flag; no per-part granularity), matching
+    // the threatmap's conservative T3 assumption. Ranking/priority only — the proxy never sizes.
+    let dismantle_boost = if infos.iter().any(|i| i.boosted && i.work_parts > 0) { 4.0 } else { 1.0 };
+    let ranking_danger =
+        dps + screeps_combat_decision::war_decision::dismantle_danger(work_parts, has_targetable_structures, dismantle_boost);
     DefenseThreat { enemy, dismantle_dps, ranking_danger }
 }
 
@@ -550,7 +557,10 @@ impl WarOperation {
         // (room, visible, is_owned, nearest-owned-dist, hostile bodies as live parts, tower_danger, tower_count)
         // — the RAW read. ADR 0037 T1 adds the hostile-TOWER signal (energized-tower Σ DPS + energized count),
         // read from the SCOUTED `RoomThreatData` (the same signal offense uses), DISTINCT from the creep bodies.
-        type RawNeighbourRead = (RoomName, bool, bool, Option<u32>, Vec<Vec<Part>>, f32, u32);
+        // REC-067: each read carries a per-body BOOST MULTIPLIER slice (parallel to the bodies) so the pure
+        // `estimate_danger` sizes a boosted neighbour raider correctly (×4 for a T3-boosted creep — the same
+        // model the threatmap uses; unboosted ⇒ 1.0).
+        type RawNeighbourRead = (RoomName, bool, bool, Option<u32>, Vec<Vec<Part>>, Vec<f32>, f32, u32);
         let raw_bodies: Vec<RawNeighbourRead> = (system_data.entities, &*system_data.room_data)
             .join()
             .filter_map(|(entity, room_data)| {
@@ -560,15 +570,23 @@ impl WarOperation {
                 let nearest = owned_room_names.iter().map(|&o| cheby(o, room_data.name)).min();
                 // Source Keepers excluded (permanent lair residents, not a colony threat). Each remaining
                 // hostile's LIVE parts → one body entry; the pure kernel folds armed + danger over them.
-                let bodies: Vec<Vec<Part>> = room_data
+                // REC-067: a parallel per-creep boost multiplier (4.0 if ANY live part is boosted — the
+                // threatmap's conservative T3 ×4 model — else 1.0), so the danger fold is boost-aware.
+                let (bodies, boosts): (Vec<Vec<Part>>, Vec<f32>) = room_data
                     .get_creeps()
                     .map(|creeps| {
                         creeps
                             .hostile()
                             .iter()
                             .filter(|c| !crate::military::is_source_keeper_owner(&c.owner().username()))
-                            .map(|c| c.body().iter().filter(|p| p.hits() > 0).map(|p| p.part()).collect::<Vec<Part>>())
-                            .collect()
+                            .map(|c| {
+                                let body = c.body();
+                                let live: Vec<_> = body.iter().filter(|p| p.hits() > 0).collect();
+                                let boosted = live.iter().any(|p| p.boost().is_some());
+                                let parts: Vec<Part> = live.iter().map(|p| p.part()).collect();
+                                (parts, if boosted { 4.0_f32 } else { 1.0_f32 })
+                            })
+                            .unzip()
                     })
                     .unwrap_or_default();
                 // ADR 0037 T1: the SCOUTED hostile-tower threat (energized-tower Σ DPS + count), DISTINCT from
@@ -588,18 +606,19 @@ impl WarOperation {
                         (neighbour_tower_dps(td), count)
                     })
                     .unwrap_or((0.0, 0));
-                Some((room_data.name, visible, is_owned, nearest, bodies, tower_danger, tower_count))
+                Some((room_data.name, visible, is_owned, nearest, bodies, boosts, tower_danger, tower_count))
             })
             .collect();
         // Per-room (tower_dps, tower_count) so the neighbour Secure log below can EXPLAIN a `dps=0` room (a
         // Work/Claim/Heal creep under towers) with the tower threat — ADR 0037 T1 (surfaces the live observation).
         let neighbour_tower_intel: std::collections::HashMap<RoomName, (f32, u32)> =
-            raw_bodies.iter().map(|(room, _, _, _, _, td, tc)| (*room, (*td, *tc))).collect();
+            raw_bodies.iter().map(|(room, _, _, _, _, _, td, tc)| (*room, (*td, *tc))).collect();
         let observations: Vec<screeps_combat_decision::war_decision::RawObservation<RoomName>> = raw_bodies
             .iter()
-            .map(|(room, visible, is_owned, nearest, bodies, tower_danger, _tower_count)| screeps_combat_decision::war_decision::RawObservation {
+            .map(|(room, visible, is_owned, nearest, bodies, boosts, tower_danger, _tower_count)| screeps_combat_decision::war_decision::RawObservation {
                 room: *room,
                 hostile_bodies: bodies,
+                boost_multipliers: boosts, // REC-067
                 visible: *visible,
                 is_owned: *is_owned,
                 nearest_owned_dist: *nearest,
@@ -691,6 +710,9 @@ impl WarOperation {
                     ForceRequirement::single(composition),
                 )
                 .owner(ObjectiveOwner::Defense)
+                // REC-041: the defense scan recomputes the threat priority each pass — authoritative, so a
+                // de-escalated threat's priority decays instead of latching its historical max.
+                .authoritative()
                 .ttl(DEFEND_OBJECTIVE_TTL),
                 game::time(),
             );
@@ -752,6 +774,7 @@ impl WarOperation {
                     ForceRequirement::single(composition),
                 )
                 .owner(ObjectiveOwner::Defense)
+                .authoritative() // REC-041: recomputed each scan — a de-escalated neighbour threat decays
                 .ttl(DEFEND_OBJECTIVE_TTL),
                 game::time(),
             );
@@ -1785,6 +1808,8 @@ impl WarOperation {
             let obj_id = system_data.combat_objective_queue.request(
                 ObjectiveRequest::new(kind, priority, ForceRequirement::single(composition))
                     .owner(ObjectiveOwner::Attack)
+                    // REC-041: offense recomputes the candidate priority each scan — authoritative.
+                    .authoritative()
                     .ttl(OFFENSE_OBJECTIVE_TTL),
                 game::time(),
             );
@@ -2107,11 +2132,11 @@ fn classify_coordination(candidate: &AttackCandidate) -> EnemyCoordination {
 
 /// REC-015 — the sizing-home set must MATCH the spawning-home set: `best_force_budget` sizes the comp at
 /// a chosen home's capacity, but the SquadManager's Phase-B spawn loop only queues at homes within
-/// Chebyshev ≤ this of the target (`squad_manager::MAX_SPAWN_DISTANCE` — private there, mirrored here
-/// with this cross-reference; keep the two in sync). Pre-fix the sizing picked ANY reachable home, so a
-/// comp sized at a strong 11-room home could be unbuildable at every in-range home — the roster then
-/// churned silent 3000-tick form/give-up cycles.
-const MAX_SPAWN_DISTANCE: u32 = 10;
+/// Chebyshev ≤ this of the target. REC-065: this is now the SINGLE source — `squad_manager::MAX_SPAWN_DISTANCE`
+/// (made `pub(crate)`) — not a mirrored literal, so the sizing filter and the spawn filter cannot drift.
+/// Pre-fix the sizing picked ANY reachable home, so a comp sized at a strong 11-room home could be
+/// unbuildable at every in-range home — the roster then churned silent 3000-tick form/give-up cycles.
+use crate::military::squad_manager::MAX_SPAWN_DISTANCE;
 
 /// Is `home` within the SquadManager's spawn range of `target` (Chebyshev room distance — the same
 /// metric `squad_manager::room_distance` uses)? The REC-015 sizing-side filter.
@@ -2396,7 +2421,9 @@ mod tests {
         assert!(home_in_spawn_range("W0N10".parse().unwrap(), target), "exactly MAX_SPAWN_DISTANCE (10) is in range");
         assert!(home_in_spawn_range("W20N20".parse().unwrap(), target), "Chebyshev: (10,10) → 10, still in range");
         assert!(!home_in_spawn_range("W21N10".parse().unwrap(), target), "11 rooms out is beyond the spawn filter");
-        assert_eq!(MAX_SPAWN_DISTANCE, 10, "keep in sync with squad_manager::MAX_SPAWN_DISTANCE (private there)");
+        // REC-065: `home_in_spawn_range` now uses the SHARED `squad_manager::MAX_SPAWN_DISTANCE` directly
+        // (no mirrored literal) — the value is 10 and the two filters can no longer drift.
+        assert_eq!(MAX_SPAWN_DISTANCE, 10, "the single shared spawn-range const");
     }
 
     // Pin (IBEX-044): cadence checks must not underflow when the persisted

@@ -1,7 +1,7 @@
 use super::dismantle::*;
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
-use crate::jobs::utility::movebehavior::mark_working;
+use crate::jobs::utility::movebehavior::{check_movement_failure, mark_working};
 use crate::pathing::pathfinderservice::PathfinderService;
 use crate::room::data::*;
 use crate::structureidentifier::*;
@@ -258,6 +258,33 @@ pub fn position_reachable_now(room: RoomName, structures: &[StructureObject], po
     reaches_room_edge(&passable, start)
 }
 
+/// Which of `targets` a creep can walk from a room edge to within range 1 of
+/// RIGHT NOW (no dismantling), given current structures (REC-058). Builds the
+/// terrain + blocked-tile set ONCE and reuses it across every target (each
+/// target still runs one bounded [`reaches_room_edge`] flood — the pathfinding
+/// primitive), so batch reachability gating is one terrain fetch instead of one
+/// per candidate. Returns the reachable tile coordinates; `None` when the room
+/// is not visible (the caller must decide whether an unknown room's targets are
+/// selectable — for dismantle selection we DON'T gate without visibility, so no
+/// reachable-now target is fabricated behind an impassable seal).
+pub fn reachable_now_tiles(room: RoomName, structures: &[StructureObject], targets: &[(u8, u8)]) -> Option<HashSet<(u8, u8)>> {
+    let room_obj = game::rooms().get(room)?;
+    let terrain = FastRoomTerrain::new(room_obj.get_terrain().get_raw_buffer().to_vec());
+
+    let blocked: HashSet<(u8, u8)> = structures
+        .iter()
+        .filter(|s| !structure_is_walkable(s))
+        .map(|s| {
+            let p = s.pos();
+            (p.x().u8(), p.y().u8())
+        })
+        .collect();
+
+    let passable = |x: u8, y: u8| !terrain.is_wall(x, y) && !blocked.contains(&(x, y));
+
+    Some(targets.iter().copied().filter(|&start| reaches_room_edge(&passable, start)).collect())
+}
+
 /// Rooms the breach-plan cache retains; least-recently-used entries are
 /// evicted beyond this. Generously above `salvage_max_missions` (default 1) —
 /// entries are a handful of tiles each.
@@ -414,7 +441,7 @@ where
         let hostile_ramparts = hostile_rampart_positions(structures.all());
 
         //TODO: Don't collect here when range check is fixed.
-        let dismantle_structures = structures
+        let mut dismantle_structures = structures
             .all()
             .iter()
             .filter(|s| !ignore_for_dismantle(*s, sources))
@@ -424,6 +451,22 @@ where
             .filter(|s| ignore_storage || has_empty_storage(*s))
             .collect::<Vec<_>>();
 
+        // REC-058: drop candidates a creep cannot physically reach RIGHT NOW (sealed
+        // behind over-horizon walls / undismantlable structures). `pick_dismantle_target`'s
+        // `nearest_by_path` fallback searches with structures IGNORED, so without this it
+        // selects a sealed-off target, the rover then finds no path, and the job wedges
+        // (`tick_dismantle` returns None forever). Reachability here is PRICING POLICY over
+        // the pathfinding system's flood primitive (`reaches_room_edge`) — not a new
+        // search algorithm. When the room is not visible we cannot compute reachability, so
+        // we leave the pool unfiltered rather than fabricate a reachable-now verdict.
+        // Sequencing note: a breach corridor's inner seals are unreachable until the outer
+        // seal falls, so this naturally targets the outermost-reachable blocker first and
+        // re-selects inward as the corridor opens.
+        let candidate_tiles: Vec<(u8, u8)> = dismantle_structures.iter().map(|s| (s.pos().x().u8(), s.pos().y().u8())).collect();
+        if let Some(reachable) = reachable_now_tiles(dismantle_room.name, structures.all(), &candidate_tiles) {
+            dismantle_structures.retain(|s| reachable.contains(&(s.pos().x().u8(), s.pos().y().u8())));
+        }
+
         let creep_pos = creep.pos();
 
         // Objective-access priority: structures on the cheapest corridors to
@@ -432,6 +475,9 @@ where
         // waiting for the whole room to be flattened in nearest-first order.
         // Falls back to nearest-target when the corridors are open, unknown, or
         // their structures are not yet workable (e.g. store not emptied).
+        // `dismantle_structures` is already reachability-filtered above, so
+        // `breach_structures` (its subset on the corridor) inherits the same guard —
+        // only the outermost-reachable seal is ever a live target.
         let breach_structures = match objective_breach_tiles(breach_cache, creep_pos, dismantle_room, structures.all(), max_structure_hits)
         {
             Some(breach_tiles) if !breach_tiles.is_empty() => dismantle_structures
@@ -493,6 +539,16 @@ where
     }
 
     if !creep_pos.in_range_to(target_position, 1) {
+        // REC-058: if the rover reported the move as failed last tick (no path found, or
+        // stuck past the threshold), this target is unreachable from here — bail to the
+        // caller's re-select state instead of re-issuing the same doomed move forever.
+        // The rover already tracks the stuck/no-path condition, so this reuses its
+        // feedback rather than tracking per-creep range progress by hand (`next_state` is
+        // `Idle`, which re-runs the reachability-filtered `get_new_dismantle_state`).
+        if check_movement_failure(tick_context).is_some() {
+            return Some(next_state());
+        }
+
         if tick_context.action_flags.consume(SimultaneousActionFlags::MOVE) {
             tick_context
                 .runtime_data

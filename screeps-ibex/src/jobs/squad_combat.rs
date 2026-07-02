@@ -67,6 +67,41 @@ fn has_active_part(creep: &Creep, part: Part) -> bool {
     creep.body().iter().any(|p| p.part() == part && p.hits() > 0)
 }
 
+/// A creep's current HP fraction in `[0.0, 1.0]` (0 when it has no max, defensive only). REC-039: the
+/// per-member HP retreat/re-engage bands compare this against the single-sourced decision-crate
+/// fractions (`JOB_*_HP_FRACTION`) so the job and squad HP bands stay coherent + relation-pinned.
+fn hp_fraction(creep: &Creep) -> f32 {
+    let max = creep.hits_max();
+    if max == 0 {
+        return 0.0;
+    }
+    creep.hits() as f32 / max as f32
+}
+
+/// REC-049 (EP-3.5) — surface a rally-unreachable MOVE-BLOCKED once per VM instead of spamming
+/// `log::info!` per blocked member per tick. The signal is diagnostic only (the SquadManager reads the
+/// same position-stagnation and owns the escalation), so a once-per-VM latch (EP-1.1c logging-only,
+/// never control flow) is the right degradation. The `features.military.debug_log` gate the rest of the
+/// SquadTrace family uses is not reachable from the jobs SystemData here.
+fn warn_move_blocked_once(
+    creep_entity: Entity,
+    room: RoomName,
+    rally: Position,
+    failure: &MovementFailure,
+) {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    log::warn!(
+        "[SquadTrace] MOVE-BLOCKED creep={:?} room={} rally={:?} failure={:?} (rally unreachable — surfaced for manager escalation; once-per-VM latch, further occurrences suppressed)",
+        creep_entity,
+        room,
+        (rally.room_name(), rally.x().u8(), rally.y().u8()),
+        failure
+    );
+}
+
 // ─── Tactical-seam adapters (game::* → JS-free DTOs) ─────────────────────────
 //
 // The single place the live combat path reads a `Creep` / `StructureObject` into the seam DTOs
@@ -178,10 +213,14 @@ impl MoveToRoom {
                     // tick and, past its bounded stall window, RE-ASSESSES this member out of the gather quorum
                     // so the reachable subset proceeds (the escalation lives in the manager — single owner).
                     if let Some(failure) = check_movement_failure(tick_context) {
-                        log::info!(
-                            "[SquadTrace] MOVE-BLOCKED creep={:?} room={} rally={:?} failure={:?} (rally unreachable — surfaced for manager escalation)",
-                            creep_entity, creep_pos.room_name(), (rally.room_name(), rally.x().u8(), rally.y().u8()), failure
-                        );
+                        // REC-049 (EP-3.5): this diagnostic was an UNGATED `log::info!` that repeated per
+                        // blocked member per tick — log spam, and the rest of the SquadTrace family is
+                        // gated on `features.military.debug_log`, which is not reachable from the jobs
+                        // SystemData here. The signal is purely diagnostic (the manager reads the same
+                        // position-stagnation independently and owns the escalation), so a once-per-VM
+                        // warn latch (EP-1.1c logging-only) surfaces that the condition occurred without
+                        // the per-tick flood.
+                        warn_move_blocked_once(creep_entity, creep_pos.room_name(), rally, &failure);
                     }
                     tick_context
                         .runtime_data
@@ -254,8 +293,9 @@ impl CombatResponse {
             }
         }
 
-        // Retreat if HP drops below 40%.
-        if creep.hits() < creep.hits_max() * 2 / 5 {
+        // Retreat if HP drops below the CombatResponse band (REC-039: single-sourced in the decision
+        // crate + relation-pinned against the squad critical band, so the job/squad HP bands stay coherent).
+        if hp_fraction(creep) < crate::combat::JOB_COMBAT_RESPONSE_RETREAT_HP_FRACTION {
             return Some(SquadCombatState::retreating());
         }
 
@@ -436,8 +476,10 @@ impl Engaged {
             }
         }
 
-        // Retreat if HP drops below 50%.
-        if creep.hits() < creep.hits_max() / 2 {
+        // Retreat if HP drops below the Engaged band (REC-039: single-sourced + relation-pinned so the
+        // job's Engaged retreat band CONTAINS the squad's critical band — a squad-critical member is
+        // already job-retreating, never the inverse surprise).
+        if hp_fraction(creep) < crate::combat::JOB_ENGAGED_RETREAT_HP_FRACTION {
             return Some(SquadCombatState::retreating());
         }
 
@@ -479,7 +521,8 @@ impl Engaged {
                     if squad_has_anchor(state_context.squad_entity, tick_context) {
                         execute_formation_movement(state_context, creep_entity, orders, tick_context);
                     } else {
-                        Self::execute_decide_movement(creep, creep_pos, orders, tick_context);
+                        // Engaged → apply the REC-056 anti-scatter anchor (the sim anchors Engaged members).
+                        Self::execute_decide_movement(creep, creep_pos, orders, true, tick_context);
                     }
                 }
                 TickMovement::MoveTo(pos) => {
@@ -612,7 +655,13 @@ impl Engaged {
     // cohesive kiting/advance with the critical-HP + melee-evade + rejoin precedence), and translate
     // its single movement goal into a rover request. Used for anchorless manager squads (the SK duo,
     // defense); squads with a cached anchor path (siege/Formation) keep the anchor mover.
-    fn execute_decide_movement(creep: &Creep, creep_pos: Position, orders: &TickOrders, tick_context: &mut JobTickContext) {
+    /// `engaged` — REC-056: apply the anti-scatter [`AnchorConstraint`] to each member's MoveTo (confine
+    /// the resolver's shoves/swaps to within the cohesion radius of the squad centroid) ONLY when the
+    /// squad is Engaged. The sim's `ManagedSimSquad::step` anchors every Engaged member's request the same
+    /// way; without it live blocks could be shoved off their scored tiles in ways the sim forbids, so sim
+    /// cohesion would overstate live. Passed `false` from the Retreating arm (a withdrawing block should
+    /// not be pinned to its own centroid).
+    fn execute_decide_movement(creep: &Creep, creep_pos: Position, orders: &TickOrders, engaged: bool, tick_context: &mut JobTickContext) {
         use crate::combat::{decide_movement, CombatIntent, CombatView, CreepOrders, FocusTarget, SquadStateDto};
 
         let room = creep_pos.room_name();
@@ -651,19 +700,42 @@ impl Engaged {
         };
 
         let creep_entity = tick_context.runtime_data.creep_entity;
+        // REC-055 — combat-High / support-Normal MoveTo priority split (ported from the sim, which
+        // MEASURED the pathology). A COMBAT-bodied member (attack/ranged parts) takes HIGH so it wins the
+        // contested forward (shooting) tile over a support creep; a pure-support member (healer) stays
+        // NORMAL. Issuing EVERY member's MoveTo at High (the prior live behavior) let the resolver's
+        // neutral tie-break park the shooter one tile out of range — a squadmate at equal priority could
+        // hold the kill tile. The sim's `ManagedSimSquad::step` applies the identical split, so the two
+        // sides now produce the same shooter-wins-forward-tile semantics.
+        let is_combat = has_active_part(creep, Part::Attack) || has_active_part(creep, Part::RangedAttack);
+        let move_priority = if is_combat { MovementPriority::High } else { MovementPriority::Normal };
+        // REC-056: the anti-scatter anchor for an Engaged squad — the resolver may only shove/swap this
+        // member within `cohesion_radius` of the squad centroid, so the block can't be pushed off its
+        // scored tiles (mirrors the sim's Engaged `with_anchor`). Only when Engaged AND the orders carry a
+        // real centroid + a positive radius.
+        let anchor = if engaged && orders.squad_cohesion_radius > 0 {
+            orders.squad_center.map(|center| AnchorConstraint { position: center, range: orders.squad_cohesion_radius })
+        } else {
+            None
+        };
         for intent in intents {
             match intent {
                 CombatIntent::MoveTo { target, range } => {
-                    tick_context
+                    let mut mr = tick_context
                         .runtime_data
                         .movement
-                        .move_to(creep_entity, target)
-                        .range(range as u32)
-                        .priority(MovementPriority::High);
+                        .move_to(creep_entity, target);
+                    mr.range(range as u32).priority(move_priority);
+                    if let Some(anchor) = anchor {
+                        mr.anchor(anchor);
+                    }
                 }
                 CombatIntent::Flee { from, range } => {
                     let targets: Vec<FleeTarget> = from.iter().map(|p| FleeTarget { pos: *p, range: range as u32 }).collect();
                     if !targets.is_empty() {
+                        // `movement.flee` defaults to `allow_shove=false` (a fleeing creep withdraws, it
+                        // does not shove teammates) at HIGH priority — the sim's flee is aligned to this
+                        // (shove off) in `ManagedSimSquad::step` so the two flee semantics match (REC-055).
                         tick_context.runtime_data.movement.flee(creep_entity, targets).range(range as u32);
                     }
                 }
@@ -818,8 +890,12 @@ impl Retreating {
         // retreating. Stay retreating until the squad clears the signal (e.g.
         // the Lanchester re-engage band against an unwinnable target).
         let squad_retreating = squad_state.map(|s| s == SquadState::Retreating).unwrap_or(false);
+        // REC-039: the re-engage bands are single-sourced in the decision crate (unconditional >80%, or
+        // >60% when the squad is pressing) — well separated from the retreat bands so no per-member yo-yo.
+        let hp = hp_fraction(creep);
         if !squad_retreating
-            && (creep.hits() > creep.hits_max() * 4 / 5 || (squad_wants_engage && creep.hits() > creep.hits_max() * 3 / 5))
+            && (hp > crate::combat::JOB_REENGAGE_HP_FRACTION
+                || (squad_wants_engage && hp > crate::combat::JOB_REENGAGE_WITH_SQUAD_HP_FRACTION))
         {
             return Some(SquadCombatState::engaged());
         }
@@ -895,7 +971,10 @@ impl Retreating {
                 // undirected per-creep flee. This is the sim-parity half: the sim honors the Retreating
                 // kite goal; live used to discard it (squads "retreated" in place inside tower range).
                 TickMovement::Formation => {
-                    Engaged::execute_decide_movement(creep, creep_pos, orders, tick_context);
+                    // Retreating → NO anti-scatter anchor (REC-056): a withdrawing block must not be
+                    // pinned to its own centroid inside threat range. The sim's Retreating members carry
+                    // no anchor either (the sim only anchors Engaged).
+                    Engaged::execute_decide_movement(creep, creep_pos, orders, false, tick_context);
                 }
                 _ => {
                     flee_from_hostiles(tick_context);

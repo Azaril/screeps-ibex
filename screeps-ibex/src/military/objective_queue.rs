@@ -281,7 +281,15 @@ impl CombatObjectiveQueue {
         let expires_at = now.saturating_add(request.ttl);
 
         if let Some(existing) = self.objectives.iter_mut().find(|o| o.kind == request.kind) {
-            existing.priority = existing.priority.max(request.priority);
+            // REC-041: an AUTHORITATIVE producer SETS the priority (a de-escalated threat's priority decays);
+            // a non-authoritative one only RAISES it (the historical max-merge — a lower request never lowers
+            // a real threat's band). This lets a shrinking threat stop carrying its historical CRITICAL while
+            // still preventing a stray low request from de-escalating a genuinely dangerous objective.
+            existing.priority = if request.authoritative {
+                request.priority
+            } else {
+                existing.priority.max(request.priority)
+            };
             existing.expires_at = existing.expires_at.max(expires_at);
             existing.force = request.force;
             // REC-005: a producer re-assert must NEVER lower or clear the commitment-lease deadline. All
@@ -533,6 +541,12 @@ pub struct ObjectiveRequest {
     pub owner: ObjectiveOwner,
     /// TTL override (defaults to [`DEFAULT_OBJECTIVE_TTL`]).
     pub ttl: u32,
+    /// REC-041 — the AUTHORITATIVE producer OWNS this objective's priority: a re-assert SETS it (so a
+    /// de-escalated threat's priority DROPS), instead of only ever raising it (`max`-merge). Default `false`
+    /// keeps the historical max-merge for callers that don't own the priority band. The war/defense/offense
+    /// scans set it: they recompute the current threat priority every scan and re-assert idempotently, so a
+    /// threat that shrank (fewer/weaker hostiles) should no longer carry its historical CRITICAL.
+    pub authoritative: bool,
 }
 
 impl ObjectiveRequest {
@@ -548,11 +562,19 @@ impl ObjectiveRequest {
             deadline: None,
             owner: ObjectiveOwner::Unknown,
             ttl: DEFAULT_OBJECTIVE_TTL,
+            authoritative: false,
         }
     }
 
     pub fn owner(mut self, owner: ObjectiveOwner) -> Self {
         self.owner = owner;
+        self
+    }
+
+    /// REC-041 — mark this producer as the authoritative priority owner (a re-assert SETS the priority,
+    /// letting a de-escalated threat's priority decay instead of latching its historical max).
+    pub fn authoritative(mut self) -> Self {
+        self.authoritative = true;
         self
     }
 
@@ -590,18 +612,22 @@ impl<'a> System<'a> for CombatObjectiveCleanupSystem {
     fn run(&mut self, mut data: Self::SystemData) {
         // Find or create the singleton CombatObjectiveData entity.
         let singleton = (&data.entities, &mut data.combat_objective_data).join().next().map(|(e, _)| e);
-        if singleton.is_none() {
+        // REC-044: `let-else` instead of `.unwrap()` (EP-3.4 — no tick-path panic). The None arm creates the
+        // singleton on first run; the resource starts empty this tick.
+        let Some(singleton_entity) = singleton else {
             data.updater
                 .create_entity(&data.entities)
                 .marked::<SerializeMarker>()
                 .with(CombatObjectiveData::default())
                 .build();
-            // No data to load yet; the resource starts empty.
             return;
-        }
-
-        let singleton_entity = singleton.unwrap();
-        let data_component = data.combat_objective_data.get(singleton_entity).unwrap();
+        };
+        // The component is provably present (`singleton_entity` came from the same join), but drop the
+        // `.unwrap()` for a loud log-and-skip if a future refactor ever violates that (EP-3.4).
+        let Some(data_component) = data.combat_objective_data.get(singleton_entity) else {
+            log::warn!("[CombatObjectiveQueue] singleton entity has no CombatObjectiveData component — skipping load this tick");
+            return;
+        };
 
         // Load persistent data into the resource working copy.
         data.combat_objective_queue.load_from(data_component);
@@ -873,9 +899,10 @@ mod tests {
         assert_eq!(q2.next_id, 1);
     }
 
-    /// ADR 0027 v1: the capability-aware reassignment selector excludes the current id, skips claimed +
-    /// backoff rooms, and applies the capability predicate — so a freed defender reassigns only to a
-    /// COMPATIBLE objective, even when a higher-priority incompatible one exists.
+    /// REC-042: `withdraw` drops BOTH the persistent objective AND its ephemeral runtime entry (the claim /
+    /// economic-intel / assault-mode). (The prior doc here described a v1.2-retired "capability-aware
+    /// reassignment selector" that no longer exists — the reassign selection now lives in the global
+    /// Hungarian in `squad_manager::solve_global_reassignment`, not here.)
     #[test]
     fn withdraw_removes_objective_and_runtime() {
         let mut q = CombatObjectiveQueue::default();
