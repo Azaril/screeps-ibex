@@ -1,6 +1,6 @@
 # ADR 0011 — Spawn Orchestration & Group Spawning
 
-- **Status:** Proposed; RE-SCOPED to the economic half + Step-0 quick-wins (combat-cohesion pieces OBVIATED by the auction lifecycle) — 2026-07-02
+- **Status:** Proposed; RE-SCOPED to the economic half + Step-0 quick-wins (combat-cohesion pieces OBVIATED by the auction lifecycle) — 2026-07-02. **RE-SCOPED AGAIN 2026-07-03 (operator-ratified, ADR 0040 reconciliation R2):** D2 throughput/energy budget + D7 starvation cure are DELIVERED BY ADR 0040 (the e/t market is the budget — bids + opportunity floor; K4 deficit-priced spawn bids are the cure); this ADR keeps D5 cross-room assist + G3 incubation (consuming 0040's e/t currency) + the Step-0 spawn-executor quick-wins (which land with 0040's spawn work to avoid file contention; the descending comparator is verified-correct — adapt to bid keys, never reverse).
 - **Date:** 2026-06-09 · **Cross-linked:** 2026-06-16 (combat overhaul pass)
 - **Deciders:** William Archbell
 
