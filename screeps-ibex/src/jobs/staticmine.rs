@@ -141,7 +141,9 @@ impl MoveToContainer {
 fn try_harvest_mine_target(creep: &Creep, mine_target: &StaticMineTarget, tick_context: &mut JobTickContext) -> Option<StaticMineState> {
     match *mine_target {
         StaticMineTarget::Source(source_id) => {
-            tick_opportunistic_repair(tick_context, Some(RepairPriority::Low));
+            // Posture room = the current (mine) room; static miners have no
+            // separate home concept.
+            tick_opportunistic_repair(tick_context, Some(RepairPriority::Low), None);
 
             if let Some(source) = source_id.resolve() {
                 if source.energy() == 0 {

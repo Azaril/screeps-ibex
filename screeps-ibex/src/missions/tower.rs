@@ -1,6 +1,7 @@
 use super::data::*;
 use super::missionsystem::*;
 use crate::creep::CreepOwner;
+use crate::energy_stress::*;
 use crate::jobs::utility::repair::*;
 use crate::military::squad::{SquadContext, SquadTarget};
 use crate::remoteobjectid::*;
@@ -484,9 +485,13 @@ impl Mission for TowerMission {
             .min_by_key(|creep| creep.hits());
 
         let minimum_repair_priority = if dynamic_visibility_data.hostile_creeps() {
+            // Defense lane -- never gated by the energy-stress allowance.
             Some(RepairPriority::Medium)
         } else {
-            Some(RepairPriority::Low)
+            // S1 repair stress gate (ADR 0040 §D6): peaceful tower repair
+            // yields to the refill chain under energy stress.
+            let allowance = repair_allowance_for(system_data.economy, &system_data.features, Some(self.room_data));
+            effective_min_repair_priority(Some(RepairPriority::Low), allowance)
         };
 
         let repair_structure =
@@ -500,7 +505,17 @@ impl Mission for TowerMission {
 
             if let Some(structure) = repair_structure.as_ref() {
                 if let Some(repairable) = structure.as_repairable() {
-                    let _ = tower.repair(repairable);
+                    if tower.repair(repairable).is_ok() {
+                        // repair_leak_e telemetry (ADR 0040 §D6, always-on).
+                        record_repair_leak(
+                            system_data.energy_leak,
+                            system_data.economy,
+                            self.room_data,
+                            room_data.name,
+                            structure.structure_type(),
+                            TOWER_ENERGY_COST,
+                        );
+                    }
                 }
                 continue;
             }

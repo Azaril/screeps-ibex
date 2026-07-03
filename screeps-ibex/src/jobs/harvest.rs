@@ -9,6 +9,7 @@ use super::utility::movebehavior::*;
 use super::utility::repair::*;
 use super::utility::repairbehavior::*;
 use super::utility::waitbehavior::*;
+use crate::energy_stress::*;
 use crate::remoteobjectid::*;
 use crate::structureidentifier::*;
 use crate::transfer::transfersystem::*;
@@ -175,11 +176,18 @@ impl Idle {
             .or_else(|| get_new_upgrade_state(creep, delivery_room_data, HarvestState::upgrade, Some(2)))
             .or_else(|| get_new_build_state(creep, delivery_room_data, HarvestState::build))
             .or_else(|| {
+                // S1 repair stress gate (ADR 0040 §D6): posture = the home/delivery room.
+                let allowance = repair_allowance_for(
+                    tick_context.system_data.economy,
+                    tick_context.system_data.features,
+                    Some(state_context.delivery_room),
+                );
+
                 get_new_repair_state(
                     creep,
                     delivery_room_data,
                     tick_context.system_data.repair_queue,
-                    Some(RepairPriority::Medium),
+                    effective_min_repair_priority(Some(RepairPriority::Medium), allowance),
                     HarvestState::repair,
                 )
             })
@@ -222,7 +230,7 @@ impl Harvest {
             return Some(HarvestState::flee());
         }
 
-        tick_opportunistic_repair(tick_context, Some(RepairPriority::Medium));
+        tick_opportunistic_repair(tick_context, Some(RepairPriority::Medium), Some(state_context.delivery_room));
 
         tick_harvest(tick_context, state_context.harvest_target, false, true, HarvestState::idle)
     }
@@ -260,8 +268,10 @@ impl Delivery {
         }
     }
 
-    fn tick(&mut self, _state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
-        if let Some(consumed_energy) = tick_opportunistic_repair(tick_context, Some(RepairPriority::Medium)) {
+    fn tick(&mut self, state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
+        if let Some(consumed_energy) =
+            tick_opportunistic_repair(tick_context, Some(RepairPriority::Medium), Some(state_context.delivery_room))
+        {
             consume_resource_from_deposits(&mut self.deposits, ResourceType::Energy, consumed_energy);
         }
 
@@ -317,8 +327,8 @@ impl FinishedBuild {
 }
 
 impl Repair {
-    fn tick(&mut self, _state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
-        tick_repair(tick_context, self.target, HarvestState::finished_repair)
+    fn tick(&mut self, state_context: &mut HarvestJobContext, tick_context: &mut JobTickContext) -> Option<HarvestState> {
+        tick_repair(tick_context, self.target, Some(state_context.delivery_room), HarvestState::finished_repair)
     }
 }
 
@@ -328,11 +338,18 @@ impl FinishedRepair {
 
         let creep = tick_context.runtime_data.owner;
 
+        // S1 repair stress gate (ADR 0040 §D6): posture = the home/delivery room.
+        let allowance = repair_allowance_for(
+            tick_context.system_data.economy,
+            tick_context.system_data.features,
+            Some(state_context.delivery_room),
+        );
+
         get_new_repair_state(
             creep,
             delivery_room_data,
             tick_context.system_data.repair_queue,
-            Some(RepairPriority::Medium),
+            effective_min_repair_priority(Some(RepairPriority::Medium), allowance),
             HarvestState::repair,
         )
         .or(Some(HarvestState::idle()))

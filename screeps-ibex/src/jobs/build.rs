@@ -8,6 +8,7 @@ use super::utility::movebehavior::*;
 use super::utility::repair::*;
 use super::utility::repairbehavior::*;
 use super::utility::waitbehavior::*;
+use crate::energy_stress::*;
 use crate::remoteobjectid::*;
 use crate::structureidentifier::*;
 use crate::transfer::transfersystem::*;
@@ -58,11 +59,18 @@ impl Idle {
         let creep = tick_context.runtime_data.owner;
         let build_room_data = tick_context.system_data.room_data.get(state_context.build_room)?;
 
+        // S1 repair stress gate (ADR 0040 §D6): posture = the build room.
+        let allowance = repair_allowance_for(
+            tick_context.system_data.economy,
+            tick_context.system_data.features,
+            Some(state_context.build_room),
+        );
+
         get_new_repair_state(
             creep,
             build_room_data,
             tick_context.system_data.repair_queue,
-            Some(RepairPriority::High),
+            effective_min_repair_priority(Some(RepairPriority::High), allowance),
             BuildState::repair,
         )
         .or_else(|| get_new_build_state(creep, build_room_data, BuildState::build))
@@ -71,7 +79,7 @@ impl Idle {
                 creep,
                 build_room_data,
                 tick_context.system_data.repair_queue,
-                None,
+                effective_min_repair_priority(None, allowance),
                 BuildState::repair,
             )
         })
@@ -158,8 +166,8 @@ impl Build {
 }
 
 impl Repair {
-    pub fn tick(&mut self, _state_context: &mut BuildJobContext, tick_context: &mut JobTickContext) -> Option<BuildState> {
-        tick_repair(tick_context, self.target, BuildState::idle)
+    pub fn tick(&mut self, state_context: &mut BuildJobContext, tick_context: &mut JobTickContext) -> Option<BuildState> {
+        tick_repair(tick_context, self.target, Some(state_context.build_room), BuildState::idle)
     }
 }
 

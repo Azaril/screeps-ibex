@@ -2,6 +2,7 @@ use super::constants::*;
 use super::data::*;
 use super::missionsystem::*;
 use crate::creep::*;
+use crate::energy_stress::*;
 use crate::jobs::build::*;
 use crate::jobs::data::*;
 use crate::jobs::utility::repair::*;
@@ -109,8 +110,12 @@ impl LocalBuildMission {
         }
     }
 
-    fn get_repairer_priority(&self, room_data: &RoomData, repair_queue: &RepairQueue) -> Option<(u32, f32)> {
-        let (priority, _) = select_repair_structure_and_priority(room_data, repair_queue, None, true)?;
+    fn get_repairer_priority(&self, room_data: &RoomData, repair_queue: &RepairQueue, allowance: RepairAllowance) -> Option<(u32, f32)> {
+        // S1 repair stress gate (ADR 0040 §D6): under CriticalOnly, only a
+        // Critical repair target justifies a repairer spawn.
+        let minimum_priority = effective_min_repair_priority(None, allowance);
+
+        let (priority, _) = select_repair_structure_and_priority(room_data, repair_queue, minimum_priority, true)?;
 
         if priority >= RepairPriority::High {
             Some((1, SPAWN_PRIORITY_HIGH))
@@ -246,7 +251,9 @@ impl Mission for LocalBuildMission {
             spawn_priority = spawn_priority.max(build_priority);
         }
 
-        if let Some((desired_repairers, repair_priority)) = self.get_repairer_priority(room_data, system_data.repair_queue) {
+        let allowance = repair_allowance_for(system_data.economy, &system_data.features, Some(self.room_data));
+
+        if let Some((desired_repairers, repair_priority)) = self.get_repairer_priority(room_data, system_data.repair_queue, allowance) {
             spawn_count = spawn_count.max(desired_repairers);
             spawn_priority = spawn_priority.max(repair_priority);
         }

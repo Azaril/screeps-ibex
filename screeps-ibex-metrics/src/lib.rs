@@ -174,6 +174,18 @@ pub struct RoomMetrics {
     /// Energy in storage-class structures (storage + terminal).
     #[serde(default)]
     pub stored_energy: u32,
+    /// Energy spent this tick repairing roads while the room had a refill
+    /// deficit (ADR 0040 §D6 `repair_leak_e` — the S1 symptom counter,
+    /// anchoring the economy sim's M1 repro gate). 0 for writers predating
+    /// the field.
+    #[serde(default)]
+    pub repair_leak_roads: u32,
+    /// As [`Self::repair_leak_roads`], for containers.
+    #[serde(default)]
+    pub repair_leak_containers: u32,
+    /// As [`Self::repair_leak_roads`], for all other structure classes.
+    #[serde(default)]
+    pub repair_leak_other: u32,
 }
 
 /// Loud-failure counters (rewrite-plan non-negotiable #2): cumulative
@@ -320,6 +332,9 @@ mod tests {
                 energy_available: 800,
                 energy_capacity_available: 1300,
                 stored_energy: 250_000,
+                repair_leak_roads: 12,
+                repair_leak_containers: 4,
+                repair_leak_other: 1,
             }],
             faults: FaultCounters {
                 deser_failures: 0,

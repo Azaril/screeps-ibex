@@ -1,5 +1,6 @@
 use crate::cleanup::*;
 use crate::creep::*;
+use crate::energy_stress::EnergyLeakClearSystem;
 use crate::entitymappingsystem::*;
 use crate::jobs::data::*;
 use crate::jobs::jobsystem::*;
@@ -82,6 +83,7 @@ macro_rules! for_each_system {
         $op!(EconomyAssessmentSystem, "economy_assessment", StageClass::Always);
         // === Main-pass: Cleanup ===
         $op!(RepairQueueClearSystem, "repair_queue_clear", StageClass::Always);
+        $op!(EnergyLeakClearSystem, "energy_leak_clear", StageClass::Always);
         $op!(ClearVisualizationSystem, "clear_visualization", StageClass::Always);
         $op!(VisibilityQueueCleanupSystem, "visibility_cleanup", StageClass::Always);
         $op!(CombatObjectiveCleanupSystem, "combat_objective_cleanup", StageClass::Always);
@@ -953,6 +955,10 @@ fn create_environment() -> GameEnvironment {
 
     // Repair queue (ephemeral -- rebuilt each tick by missions).
     world.insert(crate::repairqueue::RepairQueue::default());
+
+    // Repair-leak telemetry (ADR 0040 §D6 `repair_leak_e` -- ephemeral,
+    // cleared each tick, exported per-room via the metrics block).
+    world.insert(crate::energy_stress::EnergyLeakStats::default());
 
     // Entity cleanup queue (ephemeral -- drained each tick by EntityCleanupSystem).
     world.insert(EntityCleanupQueue::default());

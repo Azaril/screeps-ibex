@@ -1,8 +1,11 @@
 use super::data::JobData;
 use super::utility::dismantlebehavior::BreachPlanCache;
 use crate::creep::CreepOwner;
+use crate::energy_stress::EnergyLeakStats;
 use crate::entitymappingsystem::*;
+use crate::features::Features;
 use crate::intents::IntentRecorder;
+use crate::military::economy::EconomySnapshot;
 use crate::military::squad::SquadContext;
 use crate::pathing::pathfinderservice::PathfinderService;
 use crate::repairqueue::RepairQueue;
@@ -27,6 +30,9 @@ pub struct JobSystemData<'a> {
     mapping: Read<'a, EntityMappingData>,
     squad_contexts: WriteStorage<'a, SquadContext>,
     repair_queue: Read<'a, RepairQueue>,
+    economy: Read<'a, EconomySnapshot>,
+    features: Read<'a, Features>,
+    energy_leak: Write<'a, EnergyLeakStats>,
     visibility_queue: Write<'a, VisibilityQueue>,
     pathfinder: Write<'a, PathfinderService>,
     intent_recorder: Write<'a, IntentRecorder>,
@@ -39,6 +45,8 @@ pub struct JobExecutionSystemData<'a> {
     pub room_data: &'a ReadStorage<'a, RoomData>,
     pub squad_contexts: &'a WriteStorage<'a, SquadContext>,
     pub repair_queue: &'a RepairQueue,
+    pub economy: &'a EconomySnapshot,
+    pub features: &'a Features,
 }
 
 pub struct JobExecutionRuntimeData<'a> {
@@ -52,6 +60,8 @@ pub struct JobExecutionRuntimeData<'a> {
     pub pathfinder: &'a mut PathfinderService,
     pub intent_recorder: &'a mut IntentRecorder,
     pub breach_cache: &'a mut BreachPlanCache,
+    /// Repair-leak telemetry counters (ADR 0040 §D6 `repair_leak_e` — always-on).
+    pub energy_leak: &'a mut EnergyLeakStats,
 }
 
 pub struct JobDescribeData<'a> {
@@ -86,6 +96,8 @@ impl<'a> System<'a> for PreRunJobSystem {
             room_data: &data.room_data,
             squad_contexts: &data.squad_contexts,
             repair_queue: &data.repair_queue,
+            economy: &data.economy,
+            features: &data.features,
         };
 
         for (creep_entity, creep, job_data) in (&data.entities, &data.creep_owners, &mut data.jobs).join() {
@@ -101,6 +113,7 @@ impl<'a> System<'a> for PreRunJobSystem {
                     pathfinder: &mut data.pathfinder,
                     intent_recorder: &mut data.intent_recorder,
                     breach_cache: &mut data.breach_cache,
+                    energy_leak: &mut data.energy_leak,
                 };
 
                 job_data.as_job().pre_run_job(&system_data, &mut runtime_data);
@@ -122,6 +135,8 @@ impl<'a> System<'a> for RunJobSystem {
             room_data: &data.room_data,
             squad_contexts: &data.squad_contexts,
             repair_queue: &data.repair_queue,
+            economy: &data.economy,
+            features: &data.features,
         };
 
         for (creep_entity, creep, job_data) in (&data.entities, &data.creep_owners, &mut data.jobs).join() {
@@ -137,6 +152,7 @@ impl<'a> System<'a> for RunJobSystem {
                     pathfinder: &mut data.pathfinder,
                     intent_recorder: &mut data.intent_recorder,
                     breach_cache: &mut data.breach_cache,
+                    energy_leak: &mut data.energy_leak,
                 };
 
                 job_data.as_job().run_job(&system_data, &mut runtime_data);

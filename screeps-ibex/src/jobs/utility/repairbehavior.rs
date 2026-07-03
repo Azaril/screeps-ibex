@@ -1,4 +1,5 @@
 use super::repair::*;
+use crate::energy_stress::*;
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
 use crate::jobs::utility::movebehavior::mark_working;
@@ -7,6 +8,7 @@ use crate::room::data::*;
 use crate::structureidentifier::*;
 use log::*;
 use screeps::*;
+use specs::prelude::*;
 
 /// Get a repair target for a creep. Checks the repair queue first (for
 /// mission-requested repairs), then falls back to the room-scan approach.
@@ -32,8 +34,55 @@ where
     None
 }
 
+/// Energy a successful repair intent consumes this tick: one energy per WORK
+/// part, clamped by carried energy and by the energy needed to finish the
+/// target (`ceil(missing_hits / REPAIR_POWER)`).
+fn repair_energy_consumed(work_body_parts: u32, available_energy: u32, hits: u32, hits_max: u32) -> u32 {
+    let max_energy_consumed = work_body_parts.min(available_energy);
+    let max_repair_energy = ((hits_max - hits) as f32 / REPAIR_POWER as f32).ceil() as u32;
+
+    max_energy_consumed.min(max_repair_energy)
+}
+
+/// WORK parts still alive this tick — the engine spends repair energy only on
+/// parts with `hits > 0` (processor repair.js repairPower filter), so the
+/// `repair_leak_e` telemetry uses this count. Deposit accounting keeps the
+/// historical total-parts count (S1 flag-off parity; see the call sites).
+fn alive_work_parts(creep: &Creep) -> u32 {
+    creep.body().iter().filter(|p| p.part() == Part::Work && p.hits() > 0).count() as u32
+}
+
+/// Record repair energy into the `repair_leak_e` telemetry (ADR 0040 §D6),
+/// attributed to the creep's posture room (falling back to its current room
+/// when the job has no home/delivery concept). Always-on — not gated by
+/// `features.energy.repair_stress_gate` (telemetry never sheds).
+fn record_creep_repair_leak(tick_context: &mut JobTickContext, posture_room: Option<Entity>, structure_type: StructureType, energy: u32) {
+    let creep_room_name = tick_context.runtime_data.owner.pos().room_name();
+
+    let Some(posture_room) = posture_room.or_else(|| tick_context.runtime_data.mapping.get_room(&creep_room_name)) else {
+        return;
+    };
+    let Some(posture_room_name) = tick_context.system_data.room_data.get(posture_room).map(|r| r.name) else {
+        return;
+    };
+
+    record_repair_leak(
+        tick_context.runtime_data.energy_leak,
+        tick_context.system_data.economy,
+        posture_room,
+        posture_room_name,
+        structure_type,
+        energy,
+    );
+}
+
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn tick_repair<F, R>(tick_context: &mut JobTickContext, repair_structure_id: RemoteStructureIdentifier, next_state: F) -> Option<R>
+pub fn tick_repair<F, R>(
+    tick_context: &mut JobTickContext,
+    repair_structure_id: RemoteStructureIdentifier,
+    posture_room: Option<Entity>,
+    next_state: F,
+) -> Option<R>
 where
     F: Fn() -> R,
 {
@@ -88,7 +137,19 @@ where
         if tick_context.action_flags.consume(SimultaneousActionFlags::REPAIR) {
             if let Some(repairable) = structure.as_repairable() {
                 match creep.repair(repairable) {
-                    Ok(()) => None,
+                    Ok(()) => {
+                        // repair_leak_e telemetry (ADR 0040 §D6) — same
+                        // arithmetic as the opportunistic path, over ALIVE
+                        // WORK parts (destroyed parts spend nothing).
+                        let work_body_parts = alive_work_parts(creep);
+                        let available_energy = creep.store().get(ResourceType::Energy).unwrap_or(0);
+                        let (hits, hits_max) = structure.as_attackable().map(|a| (a.hits(), a.hits_max())).unwrap_or((0, 0));
+                        let energy_consumed = repair_energy_consumed(work_body_parts, available_energy, hits, hits_max);
+
+                        record_creep_repair_leak(tick_context, posture_room, structure.structure_type(), energy_consumed);
+
+                        None
+                    }
                     Err(_) => Some(next_state()),
                 }
             } else {
@@ -108,7 +169,11 @@ where
 ///
 /// Returns the amount of energy consumed if a repair was performed.
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
-pub fn tick_opportunistic_repair(tick_context: &mut JobTickContext, minimum_priority: Option<RepairPriority>) -> Option<u32> {
+pub fn tick_opportunistic_repair(
+    tick_context: &mut JobTickContext,
+    minimum_priority: Option<RepairPriority>,
+    posture_room: Option<Entity>,
+) -> Option<u32> {
     if !tick_context.action_flags.intersects(SimultaneousActionFlags::REPAIR) {
         let creep = tick_context.runtime_data.owner;
 
@@ -122,6 +187,18 @@ pub fn tick_opportunistic_repair(tick_context: &mut JobTickContext, minimum_prio
 
                 let room_entity = tick_context.runtime_data.mapping.get_room(&creep_pos.room_name())?;
                 let room_data = tick_context.system_data.room_data.get(room_entity)?;
+
+                // S1 repair stress gate (ADR 0040 §D6): under refill deficit
+                // with no stored buffer in the posture room (the creep's
+                // home/delivery room, falling back to the current room), only
+                // Critical repair is admitted.
+                let posture_room = posture_room.unwrap_or(room_entity);
+                let allowance = repair_allowance_for(
+                    tick_context.system_data.economy,
+                    tick_context.system_data.features,
+                    Some(posture_room),
+                );
+                let minimum_priority = effective_min_repair_priority(minimum_priority, allowance);
 
                 // Check repair queue for in-range targets first, then fall
                 // back to room scan. Walls are excluded from opportunistic
@@ -141,11 +218,24 @@ pub fn tick_opportunistic_repair(tick_context: &mut JobTickContext, minimum_prio
                             if let Some(repairable) = structure.as_repairable() {
                                 match creep.repair(repairable) {
                                     Ok(()) => {
-                                        let max_energy_consumed = work_body_parts.min(available_energy);
                                         let (hits, hits_max) =
                                             structure.as_attackable().map(|a| (a.hits(), a.hits_max())).unwrap_or((0, 0));
-                                        let max_repair_energy = ((hits_max - hits) as f32 / REPAIR_POWER as f32).ceil() as u32;
-                                        let energy_consumed = max_energy_consumed.min(max_repair_energy);
+                                        let energy_consumed =
+                                            repair_energy_consumed(work_body_parts, available_energy, hits, hits_max);
+                                        // Telemetry counts ALIVE WORK parts (the engine's
+                                        // actual spend); the RETURNED value keeps the
+                                        // historical total-parts arithmetic that deposit
+                                        // accounting has always used (S1 flag-off parity).
+                                        let telemetry_energy =
+                                            repair_energy_consumed(alive_work_parts(creep), available_energy, hits, hits_max);
+
+                                        // repair_leak_e telemetry (ADR 0040 §D6).
+                                        record_creep_repair_leak(
+                                            tick_context,
+                                            Some(posture_room),
+                                            structure.structure_type(),
+                                            telemetry_energy,
+                                        );
 
                                         return Some(energy_consumed);
                                     }
@@ -168,4 +258,36 @@ pub fn tick_opportunistic_repair(tick_context: &mut JobTickContext, minimum_prio
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Pin repair_energy_consumed = min(work_parts, carried, ceil(missing / REPAIR_POWER)) —
+    // the exact-arithmetic contract the repair_leak_e telemetry rides on (ADR 0040 §D6).
+
+    #[test]
+    fn repair_energy_is_work_limited() {
+        assert_eq!(repair_energy_consumed(3, 10, 0, 1000), 3);
+    }
+
+    #[test]
+    fn repair_energy_is_carry_limited() {
+        assert_eq!(repair_energy_consumed(10, 2, 0, 1000), 2);
+    }
+
+    #[test]
+    fn repair_energy_is_missing_hits_limited_with_ceil() {
+        // REPAIR_POWER = 100: 101 missing hits cost 2 energy, 100 cost 1.
+        assert_eq!(repair_energy_consumed(10, 10, 899, 1000), 2);
+        assert_eq!(repair_energy_consumed(10, 10, 900, 1000), 1);
+        assert_eq!(repair_energy_consumed(10, 10, 999, 1000), 1);
+    }
+
+    #[test]
+    fn full_health_target_consumes_nothing() {
+        assert_eq!(repair_energy_consumed(10, 10, 1000, 1000), 0);
+        assert_eq!(repair_energy_consumed(10, 10, 0, 0), 0);
+    }
 }

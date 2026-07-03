@@ -16,6 +16,7 @@ mod claim_economics;
 mod constants;
 mod cpugovernor;
 mod creep;
+mod energy_stress;
 mod entitymappingsystem;
 mod expansion;
 mod features;

@@ -326,6 +326,7 @@ pub struct MetricsSystemData<'a> {
     pathfinder: Read<'a, PathfinderService>,
     intents: Read<'a, crate::intents::IntentRecorder>,
     squad_contexts: ReadStorage<'a, crate::military::squad::SquadContext>,
+    energy_leak: Read<'a, crate::energy_stress::EnergyLeakStats>,
 }
 
 pub struct MetricsSystem;
@@ -359,6 +360,10 @@ impl MetricsSystem {
                                 .sum::<u32>()
                     })
                     .unwrap_or(0);
+                // Repair-leak counters (ADR 0040 §D6 `repair_leak_e`): the
+                // jobs/missions recorded this tick's values before metrics
+                // runs (dispatcher order), keyed by posture-room name.
+                let repair_leak = data.energy_leak.rooms.get(&room_data.name).copied().unwrap_or_default();
                 Some(RoomMetrics {
                     name: room_data.name.to_string(),
                     rcl: controller.level() as u32,
@@ -367,6 +372,9 @@ impl MetricsSystem {
                     energy_available: room.energy_available(),
                     energy_capacity_available: room.energy_capacity_available(),
                     stored_energy,
+                    repair_leak_roads: repair_leak.repair_roads,
+                    repair_leak_containers: repair_leak.repair_containers,
+                    repair_leak_other: repair_leak.repair_other,
                 })
             })
             .collect()

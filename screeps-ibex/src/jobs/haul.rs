@@ -212,6 +212,24 @@ impl Pickup {
     }
 }
 
+/// Posture room for the repair stress gate + `repair_leak_e` telemetry
+/// (ADR 0040 §D6): multi-home haul missions carry several delivery rooms
+/// (HashSet-ordered at mission build), so the home the creep is STANDING IN
+/// wins — a hauler repairing inside a refill-deficient home is exactly the
+/// leak the counter measures — else the first entry as a per-job-stable
+/// approximation.
+fn repair_posture_room(state_context: &HaulJobContext, tick_context: &JobTickContext) -> Option<Entity> {
+    let current = tick_context
+        .runtime_data
+        .mapping
+        .get_room(&tick_context.runtime_data.owner.pos().room_name());
+
+    match current {
+        Some(entity) if state_context.delivery_rooms.iter().any(|r| *r == entity) => Some(entity),
+        _ => state_context.delivery_rooms.first().copied(),
+    }
+}
+
 impl Delivery {
     fn visualize(&self, _system_data: &JobExecutionSystemData, _describe_data: &mut JobDescribeData) {}
 
@@ -227,7 +245,8 @@ impl Delivery {
             return Some(HaulState::flee());
         }
         if state_context.allow_repair {
-            if let Some(consumed_energy) = tick_opportunistic_repair(tick_context, Some(RepairPriority::Low)) {
+            let posture_room = repair_posture_room(state_context, tick_context);
+            if let Some(consumed_energy) = tick_opportunistic_repair(tick_context, Some(RepairPriority::Low), posture_room) {
                 consume_resource_from_deposits(&mut self.deposits, ResourceType::Energy, consumed_energy);
             }
         }
@@ -244,7 +263,8 @@ impl MoveToRoom {
             return Some(HaulState::flee());
         }
         if state_context.allow_repair {
-            tick_opportunistic_repair(tick_context, Some(RepairPriority::Low));
+            let posture_room = repair_posture_room(state_context, tick_context);
+            tick_opportunistic_repair(tick_context, Some(RepairPriority::Low), posture_room);
         }
 
         tick_move_to_room(tick_context, self.room_name, None, HaulState::idle)
