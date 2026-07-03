@@ -33,7 +33,7 @@
 
 use crate::jobs::actions::SimultaneousActionFlags;
 use screeps::prelude::*;
-use screeps::{Attackable, Creep, Healable, Position};
+use screeps::{Attackable, Creep, Dismantleable, Healable, Position};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntentCategory {
@@ -42,9 +42,10 @@ pub enum IntentCategory {
     RangedMassAttack = 2,
     Heal = 3,
     RangedHeal = 4,
+    Dismantle = 5,
 }
 
-const CATEGORY_COUNT: usize = 5;
+const CATEGORY_COUNT: usize = 6;
 
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -121,6 +122,29 @@ where
     }
     recorder.record(IntentCategory::Attack, &creep.name(), Some(target_pos));
     let _ = creep.attack(target);
+    true
+}
+
+/// Pipeline A dismantle (WORK vs structure). Shares the A flag with
+/// `attack`: the engine forbids dismantle + any other A-pipeline
+/// action in one tick, and the first caller wins — which is what
+/// makes routing the kernel's `Dismantle` intents through this sink
+/// safe alongside any other A-pipeline driver.
+pub fn dismantle<T>(
+    creep: &Creep,
+    flags: &mut SimultaneousActionFlags,
+    recorder: &mut IntentRecorder,
+    target: &T,
+    target_pos: Position,
+) -> bool
+where
+    T: ?Sized + Dismantleable,
+{
+    if !flags.consume(SimultaneousActionFlags::DISMANTLE) {
+        return false;
+    }
+    recorder.record(IntentCategory::Dismantle, &creep.name(), Some(target_pos));
+    let _ = creep.dismantle(target);
     true
 }
 
@@ -231,5 +255,36 @@ mod tests {
         assert!(flags.consume(F::ATTACK));
         // …but a second A intent is suppressed.
         assert!(!flags.consume(F::HARVEST));
+    }
+
+    /// Dismantle is a first-class sink category (the kernel's `Act::Dismantle` intents route
+    /// through the live seam — the old silent drop was the sim-vs-bot structure-siege
+    /// divergence). Pins both halves of what makes that routing safe:
+    /// (a) dismantle shares pipeline A with attack — whichever fires first wins, so no
+    ///     double-issue against any other A-pipeline driver;
+    /// (b) the recorder counts it in its own slot, distinct from attack, so the seg-57
+    ///     intent block shows dismantles happening live.
+    #[test]
+    fn dismantle_shares_pipeline_a_and_records_its_own_category() {
+        use crate::jobs::actions::SimultaneousActionFlags as F;
+        // (a) Pipeline A mutual exclusion, both orders.
+        let mut flags = F::UNSET;
+        assert!(flags.consume(F::DISMANTLE), "dismantle fires on a fresh tick");
+        assert!(!flags.consume(F::ATTACK), "attack after dismantle is suppressed (same pipeline)");
+        assert!(flags.consume(F::RANGED_ATTACK), "ranged (pipeline B) still independent");
+        assert!(flags.consume(F::HEAL), "heal (pipeline C) still independent");
+        let mut flags = F::UNSET;
+        assert!(flags.consume(F::ATTACK));
+        assert!(!flags.consume(F::DISMANTLE), "dismantle after attack is suppressed (same pipeline)");
+        // (b) The recorder slot is distinct and the digest reflects the category.
+        let mut recorder = IntentRecorder::default();
+        recorder.record(IntentCategory::Dismantle, "c1", None);
+        let (counts, dismantle_digest) = recorder.snapshot();
+        assert_eq!(counts[IntentCategory::Dismantle as usize], 1);
+        assert_eq!(counts[IntentCategory::Attack as usize], 0);
+        let mut recorder = IntentRecorder::default();
+        recorder.record(IntentCategory::Attack, "c1", None);
+        let (_, attack_digest) = recorder.snapshot();
+        assert_ne!(dismantle_digest, attack_digest, "dismantle and attack hash as different categories");
     }
 }

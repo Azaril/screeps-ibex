@@ -424,6 +424,7 @@ impl MetricsSystem {
                     ranged_mass_attack: counts[2],
                     heal: counts[3],
                     ranged_heal: counts[4],
+                    dismantle: counts[5],
                     digest: format!("{digest:016x}"),
                 }
             }),

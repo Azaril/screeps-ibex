@@ -655,7 +655,8 @@ impl Engaged {
     /// Re-emit the seam's combat intents through the guarded sink, in their emitted (pipeline)
     /// order, so the `IntentRecorder` digest is identical to the prior inline logic. Creep targets
     /// resolve by id (the live `resolve()`); structure targets resolve by position within the
-    /// hostile-structure list. Movement / `Idle` / `Dismantle` intents are no-ops here.
+    /// hostile-structure list. Movement / `Idle` intents are no-ops here (movement is owned by
+    /// `decide_movement`).
     fn translate_intents(
         creep: &Creep,
         intents: &[crate::combat::CombatIntent],
@@ -701,12 +702,25 @@ impl Engaged {
                         }
                     }
                 }
-                // Dismantle is deliberately NOT issued from this action sink: a structure siege drives
-                // dismantle through the siege/declaim path (drive_declaim + the dismantle job), not the
-                // engaged member-intent actions — routing it here too would double-issue against the
-                // action_flags guard order-dependently. MoveTo/Flee are movement (owned by decide_movement,
-                // not this action sink); Idle is a no-op. A documented seam, not a silent drop.
-                CombatIntent::Dismantle { .. } | CombatIntent::MoveTo { .. } | CombatIntent::Flee { .. } | CombatIntent::Idle => {}
+                CombatIntent::Dismantle { target, .. } => {
+                    // Structure-only by construction (the kernel's `Act::Dismantle` enumerates only
+                    // `is_structure` ledger entries, addressed by position) — resolve within the
+                    // hostile-structure list exactly like the Attack/RangedAttack structure arms. The
+                    // sim executes this same intent (`to_engine_action` → `CombatAction::Dismantle`),
+                    // so the old no-op here made self-play overstate the live bot's breach capability
+                    // for any WORK-carrying member: a squad Dismantler stood idle while the sim razed
+                    // the ring. (The old comment's double-issue worry was unfounded: a declaim squad
+                    // returns before this seam runs, the civilian DismantleJob is a different job on a
+                    // different creep, and the pipeline-A flag guards any residual overlap first-caller-
+                    // wins.) `as_dismantleable()` is None for the engine's dismantle-immune kinds
+                    // (InvaderCore/KeeperLair/Portal/Controller) — the engine would reject those too.
+                    if let Some(d) = struct_at(*target).and_then(|s| s.as_dismantleable()) {
+                        crate::intents::dismantle(creep, &mut tick_context.action_flags, tick_context.runtime_data.intent_recorder, d, *target);
+                    }
+                }
+                // MoveTo/Flee are movement (owned by decide_movement, not this action sink); Idle is
+                // a no-op.
+                CombatIntent::MoveTo { .. } | CombatIntent::Flee { .. } | CombatIntent::Idle => {}
             }
         }
     }

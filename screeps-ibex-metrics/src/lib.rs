@@ -108,6 +108,8 @@ pub struct IntentMetrics {
     pub heal: u32,
     #[serde(default)]
     pub ranged_heal: u32,
+    #[serde(default)]
+    pub dismantle: u32,
     /// Chained FNV-1a over the tick's intent tuples, hex-encoded.
     #[serde(default)]
     pub digest: String,
