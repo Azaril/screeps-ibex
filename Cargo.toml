@@ -39,6 +39,11 @@ members = [
     # The rover pathing/movement benchmark (ADR 0033) — host-only measurement layer over the
     # screeps-sim-core kernel; excluded from the wasm aliases.
     "screeps-rover-eval",
+    # The economy simulation overlay on screeps-sim-core (ADR 0040 §D7, M0) — an IN-REPO crate
+    # (the screeps-ibex-eval precedent, NOT a submodule). Host-only as a build TARGET (excluded
+    # from the wasm aliases), but pure value-type logic, so it still compiles for wasm32 as a
+    # transitive dep of screeps-combat-decision (whose fielding kernel emits spawn_queue types).
+    "screeps-econ-engine",
 ]
 # No `exclude`: every crate directory in this repo is now a workspace member.
 
@@ -82,6 +87,12 @@ screeps-combat-decision = { path = "screeps-combat-decision" }
 
 [patch.'https://github.com/Azaril/screeps-combat-agent']
 screeps-combat-agent = { path = "screeps-combat-agent" }
+
+# NOTE on screeps-econ-engine (ADR 0040 M0): an IN-REPO crate with NO standalone git repo yet, so
+# consumers (screeps-combat-decision / screeps-combat-eval) declare it as a PATH dep — a git dep
+# cannot be used because cargo fetches the patched-over git source even when a [patch] covers it
+# (404 on the not-yet-created repo). When the standalone repo is minted, flip the consumers to git
+# deps and add the [patch] entry here, matching the sibling convention.
 
 # screeps-rover-eval reuses combat-eval's real-terrain fixtures + layout-capture pattern for its
 # realistic base-traffic scenarios (ADR 0033 §D2/§D6), so combat-eval is now a git dep of a member.

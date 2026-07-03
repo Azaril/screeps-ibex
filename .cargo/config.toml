@@ -4,14 +4,19 @@
 #
 # Every crate in this repo is a workspace MEMBER (the workspace is the single place
 # to pull/use this code; the root Cargo.toml [patch] table gives clean local
-# patching). The host-side crates — screeps-rest-api / pack / prospector /
-# server-kit / foreman-bench / ibex-eval — CANNOT build for wasm32 (tokio / bollard /
-# reqwest / rayon / image), so the wasm aliases build the whole workspace EXCEPT
-# them. A bare `cargo build` and `cargo test-host` DO build/test them, on host.
+# patching). The wasm aliases build the whole workspace EXCEPT the 8 excluded
+# crates, for two DIFFERENT reasons:
+#   - screeps-rest-api / pack / prospector / server-kit / foreman-bench / ibex-eval /
+#     rover-eval CANNOT build for wasm32 (tokio / bollard / reqwest / rayon / image);
+#   - screeps-econ-engine CAN build for wasm32 (pure value types over sim-core — it is
+#     still compiled transitively via screeps-combat-decision's dep) but is excluded
+#     as a host-only build TARGET (zero live CPU; see the root Cargo.toml member
+#     comment, ADR 0040 M0).
+# A bare `cargo build` and `cargo test-host` DO build/test them all, on host.
 [alias]
-clippy-wasm = ["clippy", "--workspace", "--exclude", "screeps-rest-api", "--exclude", "screeps-pack", "--exclude", "screeps-prospector", "--exclude", "screeps-server-kit", "--exclude", "screeps-foreman-bench", "--exclude", "screeps-ibex-eval", "--exclude", "screeps-rover-eval", "--target", "wasm32-unknown-unknown"]
-check-wasm = ["check", "--workspace", "--exclude", "screeps-rest-api", "--exclude", "screeps-pack", "--exclude", "screeps-prospector", "--exclude", "screeps-server-kit", "--exclude", "screeps-foreman-bench", "--exclude", "screeps-ibex-eval", "--exclude", "screeps-rover-eval", "--target", "wasm32-unknown-unknown"]
-build-wasm = ["build", "--workspace", "--exclude", "screeps-rest-api", "--exclude", "screeps-pack", "--exclude", "screeps-prospector", "--exclude", "screeps-server-kit", "--exclude", "screeps-foreman-bench", "--exclude", "screeps-ibex-eval", "--exclude", "screeps-rover-eval", "--target", "wasm32-unknown-unknown"]
+clippy-wasm = ["clippy", "--workspace", "--exclude", "screeps-rest-api", "--exclude", "screeps-pack", "--exclude", "screeps-prospector", "--exclude", "screeps-server-kit", "--exclude", "screeps-foreman-bench", "--exclude", "screeps-ibex-eval", "--exclude", "screeps-rover-eval", "--exclude", "screeps-econ-engine", "--target", "wasm32-unknown-unknown"]
+check-wasm = ["check", "--workspace", "--exclude", "screeps-rest-api", "--exclude", "screeps-pack", "--exclude", "screeps-prospector", "--exclude", "screeps-server-kit", "--exclude", "screeps-foreman-bench", "--exclude", "screeps-ibex-eval", "--exclude", "screeps-rover-eval", "--exclude", "screeps-econ-engine", "--target", "wasm32-unknown-unknown"]
+build-wasm = ["build", "--workspace", "--exclude", "screeps-rest-api", "--exclude", "screeps-pack", "--exclude", "screeps-prospector", "--exclude", "screeps-server-kit", "--exclude", "screeps-foreman-bench", "--exclude", "screeps-ibex-eval", "--exclude", "screeps-rover-eval", "--exclude", "screeps-econ-engine", "--target", "wasm32-unknown-unknown"]
 test-host = ["test"]
 
 # (An earlier `paths` override here was removed — cargo does not apply `paths`

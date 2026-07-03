@@ -225,7 +225,7 @@ fn repair_posture_room(state_context: &HaulJobContext, tick_context: &JobTickCon
         .get_room(&tick_context.runtime_data.owner.pos().room_name());
 
     match current {
-        Some(entity) if state_context.delivery_rooms.iter().any(|r| *r == entity) => Some(entity),
+        Some(entity) if state_context.delivery_rooms.contains(&entity) => Some(entity),
         _ => state_context.delivery_rooms.first().copied(),
     }
 }

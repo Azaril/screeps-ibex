@@ -1,0 +1,23 @@
+[package]
+name = "screeps-econ-engine"
+version = "0.1.0"
+authors = ["William Archbell <william@archbell.com>"]
+edition = "2021"
+description = "The deterministic economy overlay on screeps-sim-core (ADR 0040 §D7, M0): sources + per-resource stores + transfer/withdraw/pickup + atomic spawnCreep/self-charge + TTL death + dropped decay, with an exact per-tick energy-conservation audit surfaced in the tick report. Also the shared home of the spawn-queue policy kernel (spawn_queue, moved from screeps-combat-decision per §D8 #3). Ground truth is docs/references/engine-mechanics.md; every constant cites it, pinned by a unit test."
+
+# An IN-REPO workspace MEMBER (the screeps-ibex-eval precedent — NOT a submodule). Listed in the
+# wasm aliases' --exclude sets in .cargo/config.toml as a host-only TARGET (zero live CPU; the sim
+# never runs on the bot tick) — but the crate itself is pure value-type logic over screeps-game-api
+# + screeps-sim-core (no host-only deps), so it still compiles for wasm32 as a transitive dependency
+# of screeps-combat-decision (whose `fielding` kernel emits `spawn_queue::QueuedSpawn`).
+
+[dependencies]
+screeps-game-api = "0.23"
+# The shared movement kernel (world + terrain + body + the mover + the `Simulation` layering
+# contract). The economy world embeds `MovementState` and `resolve_econ_tick` calls
+# `resolve_movement` at the movement point of its pipeline, exactly as `screeps-combat-engine`
+# overlays combat (ADR 0033/0040). Git dep so this crate's manifest stays standalone-resolvable,
+# matching the sibling sim crates (screeps-rover-eval); the root Cargo.toml [patch] table redirects
+# it to the local working tree for in-workspace builds. No `rover` feature: the economy tick drives
+# the base kernel only.
+screeps-sim-core = { git = "https://github.com/Azaril/screeps-sim-core" }

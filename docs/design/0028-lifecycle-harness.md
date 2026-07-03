@@ -91,7 +91,7 @@ spawn economy is in `Colony`.
 reconcile      lifecycle::reconcile(snapshot)              // DONE (ADR 0027, shared kernel)
 claim-pacing   claim_pacing::plan_claims(...)              // K4 (MAX_FORMING/CONCURRENT)
 field          fielding::slots_to_spawn(objective, colony) // K3 (wraps sized_for + build_body)
-spawn          spawn_throughput::spawn_step(home, queue)   // K1 DONE — head-of-line break model
+spawn          spawn_queue::spawn_step(home, queue)        // K1 DONE — moved to screeps-econ-engine (ADR 0040 §D8 #3)
   + economy_demand_fn(tick) contends for the same lanes
 rally          rally::squad_ready_to_depart / should_hold_at_boundary  // K0 DONE
 engage         squad.step(world); defender(world); resolve_tick(world) // DONE — eval drives it
@@ -103,7 +103,7 @@ engage         squad.step(world); defender(world); resolve_tick(world) // DONE �
 |---|---|---|
 | Reconcile | `lifecycle::reconcile` (ADR 0027) | snapshot from `objective_queue`/`squad_contexts` |
 | Rally | **`rally::{squad_ready_to_depart, should_hold_at_boundary}` (K0)** | the anchor write |
-| Spawn throughput | **`spawn_throughput::spawn_step` (K1)** | `SpawnQueue`/`spawnsystem` |
+| Spawn throughput | **`screeps_econ_engine::spawn_queue::spawn_step` (K1; moved per ADR 0040 §D8 #3)** | `SpawnQueue`/`spawnsystem` |
 | FSM transitions | **`squad_fsm::next_state` (K2)** | per-tick movement/combat/recall |
 | Fielding | `composition::sized_for`/`build_body` (DONE) wrapped by `fielding::slots_to_spawn` (K3) | `queue_slot_spawn` token broadcast |
 | Claim pacing | `claim_pacing::plan_claims` (K4) | entity mint (`field_new_squad`) |
@@ -121,12 +121,13 @@ spread-0). The only new ordering surface is the spawn queue — modeled as a **d
   `STRICT_QUORUM_RATIO=0.75` const and the private `is_near_room_edge_toward`) moved from the
   bot's `military::formation` into `screeps_combat_decision::rally`; the bot re-exports them
   (`formation.rs`, `squad.rs`) so all call sites are unchanged. 4 tests carried over.
-- **K1 — spawn-throughput (LANDED).** `spawn_throughput::spawn_step` is a deterministic,
+- **K1 — spawn-throughput (LANDED).** `spawn_step` is a deterministic,
   value-type mirror of the live per-room head-of-line spawn loop (descending priority;
   skip-over-capacity; **break-on-unaffordable** = reserve; else spawn+debit). A driver test
   **reproduces the 3/5 stall offline + deterministically**: MEDIUM combat starves below
   economy, above-economy combat completes. This is where the spawn-priority lever is tuned
-  now — instead of guessing live.
+  now — instead of guessing live. Moved to its shared home `screeps_econ_engine::spawn_queue`
+  at ADR 0040 M0 (§D8 #3); `fielding` still emits its `QueuedSpawn` request type.
 - **K2 — FSM next_state (LANDED).** `squad_fsm::next_state` is the pure transition table of
   `jobs/squad_combat.rs` (MoveToRoom/CombatResponse/Engaged/Retreating), in the same priority
   order, over a `SquadFsmSnapshot`. 4 tests cover every transition incl. the anti-ping-pong
