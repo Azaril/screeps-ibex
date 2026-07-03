@@ -387,13 +387,14 @@ pub struct ClaimFeatures {
     /// Enable claim debug visualization (panel + map).
     pub visualize: bool,
     /// Maximum number of concurrent room claim missions. 0 = no limit (capped by
-    /// GCL/CPU). Default: 2 — allows the pipeline to pursue a second-best
-    /// candidate when the top pick is blocked.
+    /// GCL/CPU). Default: 4 — rapid-spread posture (ADR 0038 D9): grab several
+    /// far rooms per cycle when they are available.
     pub max_concurrent_missions: u32,
     /// Maximum score difference (0.0–1.0) between the best candidate and any
     /// additional candidates that may be claimed in the same select cycle.
     /// Prevents picking vastly inferior rooms just to fill the mission cap.
-    /// Default: 0.15.
+    /// Default: 0.35 (rapid-spread posture — claim several comparable far rooms
+    /// at once; still excludes a much-worse cannibalizing room).
     pub max_score_delta: f32,
     /// Ticks between full BFS re-discovery cycles. Room topology is static and
     /// ownership changes slowly, so this can be long. Default: 500.
@@ -451,9 +452,10 @@ pub struct ClaimFeatures {
     pub roi_reference: f32,
     /// Per-tracked-room addend to the re-discovery interval — scales the
     /// re-scout cadence by search-area size so a large frontier is re-scanned
-    /// proportionally less often (ADR 0038 D3). Default: 10.
+    /// proportionally less often (ADR 0038 D3). Default: 4.
     pub rediscover_ticks_per_room: u32,
-    /// Cap on the formulaic re-discovery interval. Default: 5000.
+    /// Cap on the formulaic re-discovery interval. Default: 1500 — bounded so
+    /// expansion keeps evaluating new claims on slow-tick MMO (ADR 0038 D9).
     pub max_discover_interval: u32,
     /// Per-unknown-room addend to the scouting window — lets scouts reach a
     /// larger frontier before Select (ADR 0038 D3). Default: 5.
@@ -488,8 +490,11 @@ impl Default for ClaimFeatures {
         Self {
             on: true,
             visualize: false,
-            max_concurrent_missions: 2,
-            max_score_delta: 0.15,
+            // Rapid-spread posture (ADR 0038 D9): claim several rooms per cycle (concurrency 4, a wider
+            // score-delta) so the empire grabs territory fast when good far rooms are available; the
+            // cannibalization-patience gate keeps it from wasting those slots on adjacent rooms.
+            max_concurrent_missions: 4,
+            max_score_delta: 0.35,
             discover_interval: 500,
             scouting_window: 200,
             remote_build_interval: 50,
@@ -503,8 +508,8 @@ impl Default for ClaimFeatures {
             support_decay_k: 0.05,
             internal_haul_tiles: 25,
             roi_reference: 26_000.0,
-            rediscover_ticks_per_room: 10,
-            max_discover_interval: 5000,
+            rediscover_ticks_per_room: 4,
+            max_discover_interval: 1500,
             scout_ticks_per_room: 5,
             max_scouting_window: 2500,
             safety_gate: true,
