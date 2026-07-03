@@ -1,9 +1,21 @@
 # ADR 0009 — Room Planning & Multi-Room Layout
 
-- **Status:** Proposed
+- **Status:** Partially-implemented; D1/D2 DONE+deployed, D3 UNBUILT, D3.5 DROPPED (owned by ADR 0038) — 2026-07-02
 - **Date:** 2026-06-09
 - **Deciders:** William Archbell
 - **Related:** IBEX-036 (unbudgeted gather BFS + uncached `describe_exits`), IBEX-037 (seg-60 planner restart-thrash on fingerprint mismatch), IBEX-032 (claim/colony/scout gate home rooms by *linear* not route distance); Field Report C (CPU death-spiral — planning is a burst consumer); review report §2-#8 (Room data, visibility & planning — "one of the few real load-shedding mechanisms (room-plan CPU budget)") and §8 Sequencing. Builds on / cross-refs [0004](0004-cpu-governance-and-load-shedding.md) (global `CpuGovernor` + budgeted pathfinding facade; IBEX-036 shed tier), [0006](0006-eval-and-iteration-harness.md) (offline harness + colony-health score + seg-57 metrics), [0002](0002-serialization.md) (seg-60 planner state lives on the same brittle bincode substrate; segment-map discipline), [0005](0005-runtime-and-scheduling-model.md) (tick-level panic containment around the planner system; resumable work is the one place specs already does multi-tick), [0001](0001-entity-model.md) (multi-room graph keyed by stable `RoomName`, never recyclable Entity indices).
+
+## Closeout decision log (2026-07-02)
+
+Source of truth: [adr-closeout-2026-07-02.md](../reviews/adr-closeout-2026-07-02.md) §2 (Q6, Q7) + §4. Operator decision wins over any stale prose; code was verified over the header. Detailed planner-quality follow-ups live in the addenda [0009a](0009a-room-planner-performance.md) / [0009b](0009b-room-planner-scoring-and-evaluation.md).
+
+- **Q6 — ADR 0038 OWNS route-distance (IBEX-032). DROP D3.5; re-scope D3.** The route-distance/reach-gating fix for expansion eligibility shipped in ADR [0038](0038-expansion-reach-gating-and-economic-claim-value.md) (IBEX-032, committed `cf5e8be`), so this ADR's **D3 item 5** ("replaces linear distance at the empire layer") is **superseded — DROP it (call it D3.5)**. D3 is **re-scoped to just the `RoomGraph` topology model + inter-room roads** (items 1–4). **Verified UNBUILT:** `RoomGraph` has zero hits in `screeps-foreman`; segment 61 is only *reserved* for it (`screeps-ibex/src/segments.rs:23,88` — `61 // reserved: RoomGraph + inter-room road sets (ADR 0009)`), and `InterRoomRoadLayer`/`RemoteInfraPlan` do not exist yet.
+- **Q7 — ACCEPT the shipped `Failed`+escalation restart design; add a warn-once + seg-57 counter.** D1's specified "restart-cap-of-3 + Failed-backoff" was **superseded by the as-built escalation design**: `RoomPlannerRunningData` carries a `beam_level` index into `ESCALATION_BEAMS = [16, 64, usize::MAX]` and, on a `Failed` result, restarts at the next (wider) beam — only reporting `Failed` once the unbounded level fails (`screeps-ibex/src/room/roomplansystem.rs:182-263`; last-known-good completed plans persist as `RoomPlanData`). This is a strictly better no-plan-loss story than a hard cap of 3. **Residual (accepted):** the fingerprint-mismatch restart at `roomplansystem.rs:234-238` still logs only `info!` and has no counter, so a permanently-changed layer config silently burns CPU re-planning every tick (completed plans persist → **CPU-waste only, not a correctness bug**). Add a **warn-once + a seg-57 counter** on fingerprint mismatch.
+- **D1/D2 status (verified DONE + deployed).** D1's beam-escalation restart, the anchor memoization, and the budgeted gather path are live. D2's upgrade-area work-slot rewrite (`controller_infra_v2`) landed 2026-06-10 (see the D2 table row). Remaining D2 work is **scoring-weight calibration** — owned by [0009b](0009b-room-planner-scoring-and-evaluation.md).
+
+### Resume-point
+
+D1 residual first (Tier-0, small): add the warn-once + seg-57 fingerprint-mismatch counter at `roomplansystem.rs:234-238` (Q7). Then D3 (Tier-2, XL, D3.5 dropped): build the `RoomName`-keyed `RoomGraph` off the budgeted gather BFS (persist to the reserved seg 61) → per-room exit-affinity `PlannerRoomDataSource` term → `InterRoomRoadLayer`/`RemoteInfraPlan` inter-room roads wired into `miningoutpost`.
 
 ## Context
 

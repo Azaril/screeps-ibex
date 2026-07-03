@@ -6,6 +6,18 @@
 - **Addendum to:** [0009 — Room Planning & Multi-Room Layout](0009-room-planning-and-multiroom-layout.md)
 - **Supersedes (in part):** ADR 0009's "Alternatives Considered" row that *rejected* a planner rewrite on the grounds that *"no evidence the current cost is a problem (it is budgeted)."* Operator field evidence — the planner is "very slow" — plus the measurements below overturn that premise. The cost **is** a problem: not in wall-clock per tick (it is budgeted), but in **convergence latency** — a freshly-claimed open room burns hundreds of tick-budget slices before it has *any* layout to build.
 
+## Closeout decision log (2026-07-02)
+
+Source of truth: [adr-closeout-2026-07-02.md](../reviews/adr-closeout-2026-07-02.md) §2 (Q8) + §4. The `Status` header is accurate (Phase 1 + Phase 2 landed; D1/D5 + placement-driven reachability outstanding); this note records the operator closeout only. Code was verified over prose.
+
+- **Q8 — ADD the adaptive beam-widen/cap-lift provability fallback.** Phase 2's adversarial review (§9a) left the anchor beam (top-16) and the `controller_infra` satisfice/4+3 cap as *empirically* no-plan-loss (0 loss on 40 rooms) but **not provably** so. The fallback is now **live and can be hung on** — the escalation ladder `ESCALATION_BEAMS = [16, 64, usize::MAX]` exists in `screeps-foreman/src/planner.rs:160`, driven by `roomplansystem.rs`'s `beam_level` (`182-263`): a room that finds no plan at beam 16 escalates to 64, then unbounded, before ever reporting `Failed`. **Attach the cap-lift for `controller_infra` (and any other satisficing cap) to the same escalation levels** so the no-plan-loss gate is *provable*, not just measured. (See ADR [0009c](0009c-room-planner-road-connectivity.md) §D2/EP-6.8 for the same escalation-only relaxation contract on road-connectivity.)
+- **§9a doc-hygiene:** the §9a closing line "Uncommitted, pending operator review" is **stale — Phase 2 is on master** (10 files, +417/−188, clippy-clean, 24 tests). Corrected inline below.
+- **Tower-plan supersession:** [0009b](0009b-room-planner-scoring-and-evaluation.md) supersedes 0009a's tower plan (the `TowerReservationLayer` → coverability-weighted min-cut → `TowerPlacementLayer` architecture replaced the reposition-based approach 0009a referenced).
+
+### Resume-point
+
+Wire the cap-lift into the existing `ESCALATION_BEAMS` ladder (make `controller_infra`'s satisfice cap and any beam-bounded heuristic widen per level) to make no-plan-loss provable (Q8), then the §10 outstanding items: placement-driven reachability (`UtilityLayer` Factory/PowerSpawn approach-tile reservation) → D1 bounded/stamped footprint → D5 scorer-quality fixes (the D5 quality work is jointly owned with [0009b](0009b-room-planner-scoring-and-evaluation.md)).
+
 ---
 
 ## 1. Context & the metric that matters
@@ -174,7 +186,7 @@ The `compare` harness runs rooms in parallel (rayon), so its per-room durations 
 | W3S52 (open room) | 37 s / 0.727 | **3.6 s / 0.813** (≈10×, +0.086 score) |
 | Quality vs baseline | — | **30 improved, 1 same, 1 × −0.002** |
 
-10 files changed (+417/−188), **clippy-clean**, 24 tests pass. Uncommitted, pending operator review.
+10 files changed (+417/−188), **clippy-clean**, 24 tests pass. ~~Uncommitted, pending operator review.~~ **[2026-07-02] Committed and on master** — Phase 1 + Phase 2 are both live (the escalation ladder `ESCALATION_BEAMS` in `planner.rs:160` is the shipped realization of the "widen the beam if no plan is found" fallback this section flagged as a should-fix).
 
 **Adversarial correctness review (6-agent workflow):** verdict GO after one must-fix (a clippy `needless_range_loop` in the edge-fix loop — fixed). Core changes verified **sound** — the edge-fix can never make a defendable room undefendable (a finite interior cut always exists; `INF_CAP` never overflows), the admissible prune is a genuine upper bound (all scores ∈[0,1]; `total_score_weight` constant), the road Dijkstra is behaviour-preserving and deterministic, and serde/wasm/fingerprint are neutral. Two **should-fix** heuristic caveats remain (empirically 0 plan-loss on 40 rooms, but not *provably* safe): the anchor beam (top-16) and `controller_infra` satisfice/4+3 cap could drop a pathological room whose only feasible anchor/placement ranks low — an **adaptive "widen the beam / lift the cap if no plan is found" fallback** would make the no-plan-loss gate provable. The reviewer also notes the beam and the defense edge-fix are a **coupled** change set (top-K was unsafe *before* the edge-fix) and must ship together.
 

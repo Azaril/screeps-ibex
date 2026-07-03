@@ -1,9 +1,21 @@
 # ADR 0007 — Hauling & Logistics
 
-- **Status:** Proposed
+- **Status:** Partially-implemented; items 5a/5b DONE, item 4 = ADR-0038's route machinery, items 1–3 = BUILD the `TransferSnapshot` matcher (Q5) — 2026-07-02
 - **Date:** 2026-06-09
 - **Deciders:** Ibex maintainers
 - **Related:** IBEX-030 (transfer matching cost, bounded by small per-hauler scope), IBEX-031 (lazy generators ordering — REFUTED as nondeterministic; reservation-safe), IBEX-011 (partial-haul re-plans via Idle — REFUTED as data loss; commitment churn only), IBEX-050 (`get_used_capacity` double-count workaround duplicated 6+ times), IBEX-010 (Nuker-withdraw `panic!`), IBEX-049 (per-creep path serialized). Field Report C (CPU death-spiral) — hauling is one of the un-gated heavy consumers. `todo.md:11` (hauler parts from path distance), `todo.md:22` (shared predicted storage capacity per tick), `todo.md:3` (partial-haul commitment). Builds on [0004](0004-cpu-governance-and-load-shedding.md) (the governor + pathfinding facade this ADR ties into), [0003](0003-behavior-modeling.md) (HaulJob is the FSM pilot; one guarded intent sink), [0006](0006-eval-and-iteration-harness.md) (the `&dyn TransferRequestSystemData` seam is the testability template; round-trip/replay gates), [0001](0001-entity-model.md) (TransferTarget keys on stable `ObjectId`, not Entity — already correct, do not regress), [0005](0005-runtime-and-scheduling-model.md) (the `panic!`/`Err` boundary on transfer targets). Review report §1 (the four findings above), §8 (CPU + Behavior pillars), §9 (two-phase snapshot recommendation).
+
+## Closeout decision log (2026-07-02)
+
+Source of truth: [adr-closeout-2026-07-02.md](../reviews/adr-closeout-2026-07-02.md) §2 (Q5, Q6) + §4. Operator decision wins over any stale prose in the body below; code was verified over the header.
+
+- **Q5 — BUILD the `TransferSnapshot` two-phase matcher (items 1–3).** Land the pure, replay-diffable matcher: the once-per-tick snapshot (Decision item 1) + the governor-gated re-match cadence (item 2) + the committed-delivery guard / confirm-then-consume (item 3). The `select_pickup_and_delivery(&snapshot, creep)` seam makes the matcher a pure `(snapshot, creep) → tickets` function testable against in-memory fixtures. **Verified UNBUILT:** `TransferSnapshot` has zero hits in `screeps-ibex/src/` (docs/execution notes only) — the matcher still flushes and matches inline per the "current model" section.
+- **Q6 — item 4 route-sizing follows ADR 0038's committed reach machinery (one route-distance policy).** Do NOT introduce a second route-distance path here. The hauler-count-from-route-distance sizing (Decision item 4, `haul.rs:199–201,264–267`) reuses ADR [0038](0038-expansion-reach-gating-and-economic-claim-value.md)'s committed route machinery (IBEX-032, `cf5e8be`) so there is one route-distance policy empire-wide; the shared-predicted-capacity half rides alongside. **Verified UNBUILT** in this file (still Manhattan `room_offset_distance`).
+- **Items 5a/5b already landed (Phase-0).** 5a: the reachable Nuker-withdraw `panic!` is now `Err(ErrorCode::InvalidArgs)` + a one-shot `warn_once_nuker_withdraw()` log (`transfer/transfersystem.rs:177-187,233-240`, verified). 5b: the IBEX-050 duplicated `get_capacity − Σ get_used_capacity(Some(r))` double-count workaround is gone — `jobs/utility/haulbehavior.rs` now calls `get_free_capacity(None)` directly (the upstream API bug was resolved), so the copy-paste hazard is closed. (The residual `panic!` arms at `transfersystem.rs:282-322` are the unreachable link/ruin/tombstone pairings owned by [0005](0005-runtime-and-scheduling-model.md)'s type-split, not the reachable nuker bug this item covered.)
+
+### Resume-point
+
+Build item 1 first: lift generation into one immutable per-tick `TransferSnapshot` and change `select_pickup_and_delivery` to take `&snapshot` (Migration step 2 — host-target test the pure function + replay intent-diff parity). Then item 2 (governor read + re-match cadence, step 3), then item 3 (committed-delivery guard + confirm-then-consume, step 4), then item 4 (route-distance sizing over ADR 0038's machinery + shared predicted capacity, step 5).
 
 ## Context
 

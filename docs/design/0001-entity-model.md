@@ -1,8 +1,20 @@
 # ADR 0001 — Entity Model
 
-- **Status:** Proposed
+- **Status:** **Superseded-in-mechanism (problem CLOSED by REC-009b) — 2026-07-02.** The dangling-ref/aliasing problem this ADR opened is fully closed, but by a *different* mechanism than the one prescribed: the shipped fix is the marker-converted `squad_entity: EntityOption<Entity>` (REC-009b), not the minted-`SquadId`/`SquadStore`. `repair_entity_integrity` was **retained (extended) as the serialize-time backstop**, not deleted. See the closeout decision log below. (Originally: Proposed, 2026-06-09.)
 - **Date:** 2026-06-09
 - **Related:** Field Report E (ECS dangling-ref bug farm); IBEX-002b (raw-u32 squad-link aliasing), IBEX-005 (`repair_entity_integrity` hand-maintained, no-op default), IBEX-012 (REFUTED — `SquadContext.members`/`heal_priority` ARE repaired), IBEX-047 (economy missions rely on reactive `remove_creep`); review §1, §3, §5, §8 (Entity-model pillar); review prompt §6.1, §6.2, §12. Sibling ADRs: 0002 (serialization), 0003 (behavior), 0005 (runtime/scheduling).
+
+## Closeout decision log (2026-07-02)
+
+Operator decision (closeout §2, **Q1**; supersession recorded in closeout §5). **Verify-code-over-docs: the shipped mechanism wins over the prescribed one below.**
+
+- **Ratify the marker fix; supersede this ADR's minted-`SquadId`+`SquadStore` mechanism.** The creep→squad link no longer stores a bare `Entity::id()` u32 (the IBEX-002b aliasing) nor a minted `SquadId`. It is a **marker-converted `EntityOption<Entity>`** — `squad_entity: EntityOption<Entity>` (`jobs/squad_combat.rs:29`), which round-trips natively through the `ConvertSaveload`-derived `JobData` marker remapper (serialize.rs), so it survives a VM reload *as ECS identity* with no minted counter, no per-tick `id → Entity` rebuild, and no store. This is **REC-009b — "the NATIVE reload-stable squad identity"** (`jobs/squad_combat.rs:1518`; `game_loop.rs:713–714` "25 = reload-stable squad identity, native fix (REC-009b)"), landed with a **WFV 24→25** bump. **Why:** it closes the exact same aliasing class the minted `SquadId` targeted, but with strictly less machinery — no new persisted id type, no monotonic-counter lifecycle, no per-tick map rebuild — by reusing the marker machinery specs already provides. The A2 `SquadStore`/`SquadId` (this ADR's §Decision + Incremental Migration A2) is therefore **not built and will not be built**; the residual `SquadStore`/`SquadId` mentions in `military/objective_queue.rs:30` and `military/squad_manager.rs:24` are aspirational comments only — there is no `struct SquadStore`/`SquadId` in the tree.
+- **`repair_entity_integrity` (A3 pass-deletion) is RETIRED — it was extended as the backstop, not deleted.** A3 prescribed deleting the pass once no durable ref is an index. Instead the pass **stays** (`game_loop.rs:228`, run at `game_loop.rs:1188`) and now serves as the serialize-time backstop that scrubs a dead/unmarked squad ref to `None` before serialize (`jobs/squad_combat.rs:26`, `1524`, `1633`; `military/squad_manager.rs:1247`). The marker fix makes a stale ref a handled `None` on the read side; the retained pass guarantees no dangling `Entity` reaches `ConvertSaveload`. The A3 "delete the pass" step is **abandoned**.
+- **ADR 0005's specs-dispatch-replacement dies with this decision.** With identity solved natively on specs (markers), the motivation to move dispatch off specs is gone (closeout §5).
+
+### Resume-point
+
+**Nothing open unless the operator reverses the marker decision.** The problem is closed; the minted-`SquadId`/`SquadStore` mechanism and the A3 pass-deletion are superseded/abandoned, not deferred. Do **not** re-propose `SquadStore`/`SquadId` or `repair_entity_integrity` deletion as open work.
 
 ## Context
 Current: **specs 0.20 ECS** — one `specs::Entity` per room / creep / operation / mission / squad. Cross-references between components hold `Entity` handles that **dangle** when the referent is removed, a recurring bug source. A per-tick **`repair_entity_integrity`** 5-phase scan exists solely to fix dangling refs before serialization (and `ConvertSaveload` can panic without it). ECS does buy serialization support and Rust-lifetime decoupling between systems.

@@ -1,10 +1,23 @@
 # 0009b — Room-Planner Scoring, Evaluation & RCL Assignment Revamp
 
-**Status:** Proposed
+**Status:** Partially-implemented; §4 tower placement DONE (2026-06-14), scoring/RCL/refill/bench half UNBUILT — 2026-07-02
 **Relates to:** [0009](0009-room-planning-and-multiroom-layout.md) (room planning), [0009a](0009a-room-planner-performance.md) (planner performance), [0007](0007-hauling-logistics.md) (hauling)
 **Driver:** Operator — "tower coverage is poor; build extensions nearest the nearest source first; minimize storage→refill hauling; evaluate other bots and revamp scoring/evaluation."
 
 > All file references are `screeps-foreman/src/...` unless noted, verified against source at time of writing.
+
+## Closeout decision log (2026-07-02)
+
+Source of truth: [adr-closeout-2026-07-02.md](../reviews/adr-closeout-2026-07-02.md) §2 (Q8, Q9) + §4. Operator decision wins over any stale prose; code was verified over the header.
+
+- **§4 tower placement DONE (verified).** The `TowerReservationLayer` → coverability-weighted min-cut → `TowerPlacementLayer` architecture is built (`screeps-foreman/src/layers/mod.rs`, `layers/tower.rs`, `layers/tower_placement.rs`; `tower_reposition.rs` deleted). This is §8 step **2b/2c** landed. **UNBUILT:** the §7 ground-truth bench (step 1), the §3 scoring re-weight (step 3), source-aware RCL (§5, step 4), the storage→refill metric (§6, step 5), the WFV bump + claim recalibration (step 6), the calibration sweep (step 7), and the optional §4.4 compactness (2d) / §3.2 Tier-2 aggregator (step 8).
+- **Q8 — ADD the adaptive beam-widen/cap-lift provability fallback.** Same decision as [0009a](0009a-room-planner-performance.md) Q8: hang the cap-lift on the live `ESCALATION_BEAMS = [16, 64, usize::MAX]` ladder (`screeps-foreman/src/planner.rs:160`) so no-plan-loss stays *provable* as these scoring/placement changes shift which layouts win. (0009c §D2/EP-6.8 is the escalation-only relaxation contract.)
+- **Q9 — sequence claim.rs recalibration vs 0038; bump from LIVE WFV 26.** (a) **Verified claim.rs is still the sole *live* consumer of `plan.score.total`:** `screeps-ibex/src/operations/claim.rs:213` (`Some(plan.score.total)`, `plan_score_weight`/`max_score_delta` at `:590,761`); the only other `plan.score.total` reads are host-only tools (`screeps-foreman-bench/src/main.rs:289`, `screeps-prospector/src/score.rs:638`), not the live bot, and ADR 0038's economic claim value did not add a new one. (b) After the §3–§6 re-weight shifts the `.total` scale, **re-tune `plan_score_weight`/`max_score_delta`** (§9/§10.3 — decision (a): re-tune the two constants now; the separate cross-room composite (b) is a clean follow-up). (c) The §8-step-6 / §9 "**WORLD_FORMAT_VERSION 7→8**" figure is **STALE — the live value is 26** (`screeps-ibex/src/game_loop.rs:730`); bump from **26→27**, not 7→8.
+- **The full §8 sequence (8 steps), only step 2b/2c done:** **1** bench ground-truth evaluator + corpus stats + `--baseline` CSV (UNBUILT); **2b/2c** coverability-weighted min-cut + staged soft-min metric + `tower_coverage`→3.0 (**DONE** for placement; the staged soft-min §4.6 metric + the §3 weight are NOT); **2d** *(optional)* footprint compactness (UNBUILT); **3** zero the dead weights (UNBUILT); **4** source-aware phase-gated extension RCL (UNBUILT); **5** `storage` landmark + `RefillScoreLayer` (UNBUILT); **6** the one bump — add `refill_distance`/`early_extension_source` fields, delete `traffic_congestion`, **WFV 26→27**, recalibrate `claim.rs` (UNBUILT); **7** calibration sweep, operator-run (UNBUILT); **8** *(optional, flag-gated)* Tier-2 power-mean aggregator (UNBUILT).
+
+### Resume-point
+
+§7 ground-truth bench first (§8 step 1 — the independent evaluator is the measurement substrate everything else is gated on), then §4.3/§4.6 (finish the coverability-weighted cut terms + the staged soft-min metric) → §3/§5/§6 (scoring re-weight → source-aware RCL → storage→refill metric) → §8-step-6 WFV **26→27** bump + `claim.rs` `plan_score_weight`/`max_score_delta` recalibration (Q9) → §8-step-7 calibration sweep.
 
 ---
 

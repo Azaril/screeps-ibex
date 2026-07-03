@@ -1,8 +1,19 @@
 # ADR 0016 — Visualization & HUD ("Glance HUD")
 
-- **Status:** Proposed
+- **Status:** Proposed; IN SCOPE this pass — BUILD the full Glance HUD redesign + fix the render-corruption bug (Q13); operator hint: corruption appears to be from world/RoomVisual visuals — 2026-07-02
 - **Date:** 2026-06-11
 - **Deciders:** operator (acceptance pending, EP-10.7)
+
+## Closeout decision log (2026-07-02)
+
+**Decision (Q13, source of truth [docs/reviews/adr-closeout-2026-07-02.md](../reviews/adr-closeout-2026-07-02.md) §2).** BUILD the full Glance HUD redesign — no partial. Decompose `visualization.rs`, implement the L1/L2/L3 disclosure levels, and **triage + fix the renderer-corruption bug** (Field Report H, IBEX-024/025).
+
+- **BUILD (the full HUD).** The `src/hud/{mod,model,collect,layout,paint,wire,render,glyphs,cache}.rs` module tree replacing the ~1500-line `visualization.rs` (IBEX-024); the exception-first edge-railed model with L0/L1/L2/L3 disclosure levels; the `WireWriter` + byte-ledger serialize-at-emit path; the typed `hud()` / `hud_global()` producer hooks; the M0→M6 migration end to end (legacy renderer deleted at M6).
+- **FIX the render corruption (Field Report H) — focus on world/RoomVisual visuals per the operator hint.** The operator's hint aligns with the ADR's own **Mode B (read-side line poisoning)** analysis and its "Coverage gap on record": `draw_claim_map_visuals` (a **world/map RoomVisual** path) bypasses the P1.C6 clamp, the byte cap, and the buffered flush, and has never run in a green smoke — the strongest live candidate for "one world primitive breaks all rendering." Triage there first: land the M0 fixes (reorder/route `draw_claim_map_visuals` through the buffered flush; `#[wasm_bindgen(catch)]` on `console::add_visual`; newline-by-construction; total numeric encoding incl. style fields), run the render-acceptance probe on the private server to capture the actual offending payload (none was ever captured — the injector is still unproven), then structurally close it via the WireWriter path (M1).
+- **NO deferral** — the full redesign is in scope this pass (the L3 debug firehose, the plan cache at M5, and all six migration steps), not just the M0 bug fixes.
+
+### Resume-point
+Land the M0 bug-fixes against the *current* renderer first (independent, None-breaking): stop destroying `StatsHistoryData`/`CpuHistory` on toggle-off, delete the per-room global-layer redraw, `#[wasm_bindgen(catch)]` on `console::add_visual`, and reorder/route `draw_claim_map_visuals` through the buffered room-visual flush — then run the render-acceptance probe on the private server to capture Field Report H's payload before building `src/hud/` (M1 skeleton + WireWriter + L1).
 - **Related:** IBEX-008 (visual corruption/limits), IBEX-024 (decompose `visualization.rs`), IBEX-025, Field Report H ("renderer corrupts all rendering"), ADR [0004](0004-cpu-governance-and-load-shedding.md) (visuals shed first), ADR [0005](0005-runtime-and-scheduling-model.md), ADR [0015](0015-testing-and-validation-strategy.md), EP-1.1/1.5, EP-2.4/2.6/2.10, EP-3.2/3.4/3.5, EP-4.1/4.2/4.6, EP-5.4, EP-6.1/6.2/6.13
 - **Mockups:** [L2 room view](assets/0016-hud-l2-room.svg) · [L1 ambient / L3 firehose](assets/0016-hud-levels.svg)
 

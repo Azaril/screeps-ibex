@@ -1,8 +1,20 @@
 # ADR 0002 — Serialization & Persistence
 
-- **Status:** Proposed
+- **Status:** **Accepted-in-substance; Stage-1 SHIPPED, Stage-2 deferred per reset-anytime — 2026-07-02.** Stage 1 (version header + reject-and-reset + segment disjointness) and the urgent seg-55 collision fix are landed and live at WFV 26. Stage 2 (positional-bincode → tagged/schema-evolving format swap) is intentionally *not* built and is left as positional-bincode + WFV-loud-reset. See the closeout decision log below. (Originally: Proposed, 2026-06-09.)
 - **Date:** 2026-06-09
 - **Related:** Field Report D (serialization brittle); IBEX-013, IBEX-014, IBEX-004, IBEX-049; review report §3 (positional/unversioned wire format), §5 (deser-failure & seg-55 risk rows), §8 (Serialization pillar). Depends on [0001](0001-entity-model.md). Cross-refs [0004](0004-cpu-governance-and-load-shedding.md) (seg-55 wipe feeds the post-reset route storm), [0005](0005-runtime-and-scheduling-model.md) (panic-skipped serialize), [0006](0006-eval-and-iteration-harness.md) (round-trip/fuzz/old-snapshot tests run as a pre-deploy gate).
+
+## Closeout decision log (2026-07-02)
+
+Operator decision (closeout §2, **Q2**; supersession recorded in closeout §5). **Verify-code-over-docs.**
+
+- **Stage 1 is SHIPPED.** The version header is written by the encode path — `serialized_data.extend_from_slice(&WORLD_FORMAT_VERSION.to_le_bytes())` (`game_loop.rs:515`) — and the decode path does the fingerprint check + deterministic **reject-and-reset + telemetry**: a payload whose leading 4 bytes ≠ `WORLD_FORMAT_VERSION` is dropped wholesale, `record_deser_failure()` fires, and the world rebuilds from empty (`game_loop.rs:793–803`). `WORLD_FORMAT_VERSION` is now **26** (`game_loop.rs:730`), well past the ADR-era 7→8. The **segment-disjointness** half is landed as the operator-directed executable twin: the `segments` module (`src/segments.rs`) is the single registry, `COMPONENT_SEGMENTS = [50, 51, 52, 53]` is provably disjoint from `COST_MATRIX_SEGMENT = 55`, and a **compile-time `const _` assert** over the whole table (`segments.rs:131–137`) *is* the disjointness regression test — a future colliding edit fails to compile. IBEX-013 (the seg-55 wipe) is closed at the source.
+- **Stage 2 is left as positional bincode + WFV-loud-reset — the intended end-state.** The format body is still positional bincode (`Serializer::new(&mut serialized_data, DefaultOptions::new())`, `game_loop.rs:517`); the tagged/schema-evolving format swap is **not built**. Rationale: **reset-anytime.** A deploy resets serialized state anyway, so a WFV bump + loud reset is the sanctioned migration for any shape change — the no-reset additive evolution Stage 2 buys has no consumer. **Build Stage 2 only if a genuine no-reset migration need ever appears.** Not deferred-with-debt; deliberately obviated (closeout §1 wfv-fine-clean-design-no-debt).
+- **IBEX-049 (`#[serde(skip)]` on the rover path) stays operator-DECLINED — do not re-attempt.** It is recorded declined in memory and here; treat any future proposal to serde-skip the `CreepRoverData.path` as closed.
+
+### Resume-point
+
+**Nothing open until a no-reset migration need appears.** Stage 1 + the seg-55 fix are complete and live; the segment-fullness/watermark and reject-and-reset behavior are in place. Stage 2 and IBEX-049 are closed by decision, not deferred. (Doc-truth verification of the fullness-watermark half, if desired, is a Tier-0 closeout item in closeout §4 — but it does not reopen this ADR's design.)
 
 ## Context
 Current: specs `SerializeComponents` → **bincode → gzip → base64 → 50 KiB RawMemory segment chunks** (segments 50–55; cost matrix on 55; planner on 60). Pain: **repeated breakage** and fragile **entity-ref mapping**; **positional bincode** has no schema evolution and **no version header**; deserialization failure is **unrecoverable** (only a full reset). New fields must carry `#[serde(default)]` by convention only. A segment-55 ECS/cost-matrix collision risk and silent >50 KiB truncation were flagged.

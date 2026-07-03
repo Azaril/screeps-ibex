@@ -1,8 +1,23 @@
 # ADR 0010 — Boost, Lab & Factory Resource Pipeline
 
-- **Status:** Proposed
+- **Status:** Proposed; IN SCOPE this completion pass (Q12 full empire tier); also ADR 0041's boost-SUPPLY producer (L0/L1) — 2026-07-02
 - **Date:** 2026-06-09
 - **Deciders:** William Archbell
+
+## Closeout decision log (2026-07-02)
+
+**Decision (Q12, source of truth [docs/reviews/adr-closeout-2026-07-02.md](../reviews/adr-closeout-2026-07-02.md) §2).** BUILD the boost-lab-factory pipeline as the **first step of the full empire executive layer** — no deferral. This ADR is also the **supply producer that ADR 0041's combat boost layer depends on**.
+
+- **BUILD (the three-layer pipeline).** Empire `ReagentPlanner` (the demand signal replacing the flat 10k-of-everything target) → the rewritten `LabsMission` kernel with the `BoostStation` sub-state → the **wired `BoostQueue`** (producers/fulfillers/consumers per §4) → the small `FactoryMission` (level-0 only). This is the head of the Q12 build order **0010 → 0012 → 0013 → 0014 → 0017 → 0018**.
+- **0041 dependency — L0/L1 is the producer that ADR 0041's consumer needs.** ADR 0041 (combat boost layer, Accepted, dark-first) is the **consumer**; it needs compounds actually stocked to fire when NOT dark. This ADR's **L0** (populate `available_boosts` + `BoostQueue::clear()` + chain-math kernels) and **L1** (the Tier-A defense-compound `ReagentPlanner` v0 that stocks XGHO2/XLHO2/XZHO2/XKHO2 on a combat demand signal) are exactly that producer. Sequence 0010 L0/L1 ahead of / alongside 0041's boost-lifecycle steps.
+- **Verified — current state confirms the ADR's premise.**
+  - **The `BoostQueue` is inert.** Verified: it is inserted as a world resource (`game_loop.rs:943`) and threaded into `MissionExecutionSystemData` (`missions/missionsystem.rs:41`/`:72`), but there is **zero `.request` / `.mark_ready` / `.is_ready` call site on the `BoostQueue`** anywhere in `screeps-ibex/src` (the only `.request(` hits are unrelated queues — spawn_queue, combat_objective_queue, visibility, memory_arbiter, room_plan_queue). IBEX-027 stands open exactly as described.
+  - **Nothing boosts.** Verified: a crate-wide search for `boost_creep` / `boostCreep` in `screeps-ibex/src` finds **no intent call site** — even a populated queue would boost nothing today.
+  - **The labs brew ~10k-of-everything autonomously** with no demand signal — the flat `get_desired_storage_amount` target the `ReagentPlanner` replaces (the "reaction layer with no demand signal, no consumption layer" verdict is current).
+- **NO deferral of the pipeline** (the L5 unboost-recovery step stays evidence-gated as the ADR already scopes it; that is a real conditional, not a Q12 deferral).
+
+### Resume-point
+Start at Migration **L0** (None-breaking): extract the reaction-selection logic (`labs.rs`) and the chain-math/targets functions as pure kernels with unit tests, add the missing per-tick `BoostQueue::clear()`, and populate `available_boosts` in `EconomyAssessmentSystem` from storage/terminal/lab stocks so `has_boost` returns truth on a fixture — all with zero behavior change — then proceed to the L1 Tier-A defense slice.
 - **Related:** **IBEX-027** (BoostQueue inert — the primary finding this ADR resolves), IBEX-018 (market trust — the buy-side guard this pipeline's imports depend on), IBEX-026 (economy-abort needs real spend tracking — boost spend is part of it), IBEX-013/IBEX-004 (persistence discipline for any new serialized state, via [0002](0002-serialization.md)), `todo.md:12` ("Factory usage."), `todo.md:13` ("Boost usage."). Field Reports A/B (indirect: boosted defense/offense is pointless until cohesion/lifecycle land — sequencing below honors that). Builds on: [0004](0004-cpu-governance-and-load-shedding.md) (governor tiers; lab planning is sheddable), [0006](0006-eval-and-iteration-harness.md) (kernel tests + harness gates), [0007](0007-hauling-logistics.md) (all lab/factory I/O as transfer requests), [0008](0008-combat-and-squad-architecture.md) (the Squad Manager is the sole combat boost consumer; its Migration Step 4 *is* this ADR), [0009](0009-room-planning-and-multiroom-layout.md) (the foreman lab stamp supplies the geometry; boost-tile + factory placement are plan metadata), **ADR 0011 — Spawn Orchestration** (boost-adjacent spawn routing; companion ADR in this design pass), **ADR 0012 — Market & Terminal** (import of missing reagents, export of surplus; companion ADR in this design pass). Companion analysis: [`competitive-analysis-overmind.md`](competitive-analysis-overmind.md) gaps **G5** (boost wire-or-delete) and **G6** (demand-driven auto-buy). Review report §1 (IBEX-027 block), §7 register row IBEX-027, §Exec ("no empire-level resource allocation").
 
 ## Context
