@@ -10,12 +10,13 @@
 //!    here. A controller-less world keeps its builder-set capacities (a scenario convenience —
 //!    exact while the level is static, which M0 guarantees; M2's upgrade mechanics ride this same
 //!    step). A level DROP never deletes energy: an over-capacity store just reads `free() == 0`.
-//! 1. **Mask** — one Pipeline-A work intent (Harvest) + one Pipeline-D transfer-class intent
-//!    (Transfer/Withdraw/Pickup) per creep per tick, the bot's own Pipeline A/D model
-//!    (`jobs/actions.rs:27-31`). *Deviation:* the engine resolves per-intent-name with a conflict
-//!    matrix (engine-mechanics.md:59-76, none of these verbs conflict there); the bot never emits
-//!    more than one per pipeline, so the mask models the DECISION layer's contract, not the
-//!    engine's. Masking is deterministic: actions are stable-sorted by creep id; within a creep,
+//! 1. **Mask** — one Pipeline-A work intent (Harvest OR Repair) + one Pipeline-D transfer-class
+//!    intent (Transfer/Withdraw/Pickup) per creep per tick, the bot's own Pipeline A/D model
+//!    (`jobs/actions.rs:27-31`) — a repairing creep therefore SKIPS that tick's harvest, exactly
+//!    the S1 leak mechanic. *Deviation:* the engine resolves per-intent-name with a conflict
+//!    matrix (engine-mechanics.md:59-76; harvest does conflict with repair there); the bot never
+//!    emits more than one per pipeline, so the mask models the DECISION layer's contract.
+//!    Masking is deterministic: actions are stable-sorted by creep id; within a creep,
 //!    first submission wins and duplicates are counted in the report.
 //! 2. **Transfer/Withdraw/Pickup** (creep-id order) — adjacency-1 (Chebyshev), atomic per action;
 //!    runs BEFORE harvest, matching the engine's within-creep intent order (drop/transfer/
@@ -27,11 +28,19 @@
 //!    convenience (revisit at M1 kernel transcription); the engine's cross-creep ordering is JS
 //!    hash order (engine-mechanics.md:33) — explicitly unordered — so creep-id order is the
 //!    deterministic stand-in.
-//! 3. **Harvest** (creep-id order), then **source regen** — gain `min(2×WORK, source.energy)`
-//!    (engine-mechanics.md:457), store overflow drops to the creep's tile; the 300-tick timer
-//!    starts at the first harvest below capacity and the pool refills when
-//!    `tick >= regen_at − 1` (engine-mechanics.md:445-446, :466). Regen runs after harvest, as the
-//!    engine's source tick runs after the intent stage (engine-mechanics.md §1.2).
+//! 3. **Work lane: Harvest + Repair** (creep-id order), then **source regen**. Harvest: gain
+//!    `min(2×WORK, source.energy)` (engine-mechanics.md:457), store overflow drops to the creep's
+//!    tile; the 300-tick timer starts at the first harvest below capacity and the pool refills
+//!    when `tick >= regen_at − 1` (engine-mechanics.md:445-446, :466). Regen runs after harvest,
+//!    as the engine's source tick runs after the intent stage (engine-mechanics.md §1.2).
+//!    Repair (M1; engine `creeps/repair.js`, engine-mechanics.md:118): range ≤ 3 (Chebyshev),
+//!    requires carried energy > 0; `effect = min(WORK × 100, energy × 100, hits_max − hits)`,
+//!    `cost = ceil(effect / 100)` — exact integers, the engine's `REPAIR_POWER`/`REPAIR_COST`
+//!    arithmetic. Targets: roads + containers (the M1 hit-bearing structures; spawns/extensions/
+//!    storage carry no hits model in-sim and are rejected — documented deviation, `repair_other`
+//!    is declared for M2). Repair energy is ledgered by structure class, and booked to the
+//!    report's `repair_leak` when the room had a refill deficit at tick start (the live
+//!    `repair_leak_e` mirror — see [`RepairLeak`]).
 //! 4. **Spawns** — completions first (a spawn finishing at tick T can accept a new request at T),
 //!    then new `SpawnCreep` intents in **(spawn index, submission order)**: same-tick requests to
 //!    DIFFERENT spawns resolve independently of emission order (spawn-index order is the
@@ -60,10 +69,30 @@
 //!    (`CREEP_CORPSE_RATE`, :455) — spawn energy is a pure sink in M0; the engine moves a creep
 //!    before its same-tick age-death (engine-mechanics.md:57) — we die before the movement step,
 //!    so the drop lands one tile earlier.
+//!
+//! 6b. **Structure decay (M1)** — roads then containers, index order. A structure's decay event
+//!    fires when `tick >= next_decay_at − 1` (the engine's `gameTime >= nextDecayTime − 1`,
+//!    `roads/tick.js:10` / `containers/tick.js:10`). Roads lose `100 × terrain ratio` (swamp ×5;
+//!    wall-tunnel ×150 not modeled — no tunnels in scope) per event (engine-mechanics.md:430);
+//!    containers lose 5000 per event, window 500 at RCL ≥ 1 / 100 otherwise
+//!    (engine-mechanics.md:429). At 0 hits the structure is REMOVED: a road's tile reverts to its
+//!    natural terrain (de-registered from the movement terrain), a container's store drops to the
+//!    ground (relocation — the same-tick pile decay in step 7 books any loss). Removal COMPACTS
+//!    the Vec — structure indices are only valid within the tick they were read (intent steps ran
+//!    earlier this tick, so in-tick intents are safe; drivers re-derive indices each tick).
+//!    Hit decay costs no energy and is never ledgered (ledger module docs).
 //! 7. **Dropped decay** — every pile loses `ceil(amount/1000)` (engine-mechanics.md:431),
 //!    including piles created this same tick (deviation: engine object-tick timing makes
 //!    same-tick decay of a fresh drop unobservable; ours is one tick earlier, exactly booked).
 //! 8. **Movement** — `resolve_movement` over the embedded `MovementState` (tick advances here).
+//!    After it, **traffic wear (M1)**: every creep that STEPPED onto a road tile pulls that road's
+//!    `next_decay_at` forward by `ROAD_WEAROUT × body parts` (engine `movement.js:215-219`,
+//!    engine-mechanics.md:430). *Deviations:* the engine wears the road while processing the move
+//!    intent (before the road's same-tick object tick); ours lands after this tick's decay step,
+//!    so a pull that would have fired the decay event this tick fires next tick instead — a
+//!    one-tick skew, exactly booked. Positions changed OUTSIDE `resolve_movement` (the analytic
+//!    movement tier's teleports) are not seen here — that tier books its own wear through
+//!    [`crate::EconWorld::apply_road_wear`], the same public helper this step uses.
 //! 9. **Ledger + conservation audit** — exact per-resource integer balance
 //!    (`prev + minted − burned == now`), `debug_assert!`ed AND surfaced on the report
 //!    ([`EconTickReport::conservation`]) so a harness gates on it rather than learning via a
@@ -75,8 +104,9 @@
 //! sim-core's seeded RNG at intent-GENERATION time instead.
 
 use crate::constants::{
-    body_cost, CREEP_LIFE_TIME, CREEP_SPAWN_TIME, DROPPED_DECAY_DIVISOR, ENERGY_REGEN_TIME,
-    MAX_CREEP_SIZE, SPAWN_ENERGY_CAPACITY,
+    body_cost, CONTAINER_DECAY, CREEP_LIFE_TIME, CREEP_SPAWN_TIME, DROPPED_DECAY_DIVISOR,
+    ENERGY_REGEN_TIME, MAX_CREEP_SIZE, REPAIR_HITS_PER_ENERGY, REPAIR_POWER, REPAIR_RANGE,
+    ROAD_DECAY_AMOUNT, ROAD_DECAY_TIME, ROAD_SWAMP_RATIO, SPAWN_ENERGY_CAPACITY,
 };
 use crate::intents::{EconAction, EconIntents, StructRef};
 use crate::ledger::{audit_conservation, ConservationViolation, TickLedger};
@@ -84,6 +114,26 @@ use crate::state::{creep_store_capacity, EconWorld, PendingCreep, SimResource, S
 use screeps::{Part, Position};
 use screeps_sim_core::{resolve_movement, CreepId, MovementReport, SimBody, SimCreep, Simulation};
 use std::collections::{BTreeMap, BTreeSet};
+
+/// Repair energy spent while the room had a spawn/extension refill deficit, by structure class —
+/// the sim mirror of the live `repair_leak_e` counter (ADR 0040 §D6; `energy_stress.rs`
+/// `record_repair_leak`). The deficit condition is ANY deficit (`spawn+extension energy <
+/// capacity` — energy_stress.rs:134, `spawn_energy < spawn_energy_capacity`), deliberately
+/// DIFFERENT from the S1 gate's 10%/10k condition: the counter measures the symptom wherever it
+/// occurs. Evaluated ONCE at tick start (after the extension re-cap), mirroring the live pre-pass
+/// `EconomySnapshot` the counter reads.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RepairLeak {
+    pub roads: u64,
+    pub containers: u64,
+    pub other: u64,
+}
+
+impl RepairLeak {
+    pub fn total(&self) -> u64 {
+        self.roads + self.containers + self.other
+    }
+}
 
 /// Outcome of one economy tick.
 #[derive(Clone, Debug, Default)]
@@ -104,8 +154,11 @@ pub struct EconTickReport {
     /// Creeps that died of TTL this tick.
     pub deaths: Vec<CreepId>,
     /// Actions dropped by validation (bad index / not adjacent / busy spawn / unaffordable /
-    /// illegal body / unknown creep) or by the Pipeline-A/D mask.
+    /// illegal body / unknown creep / zero-effect repair) or by the Pipeline-A/D mask.
     pub rejected_actions: u32,
+    /// The per-tick `repair_leak_e` mirror ([`RepairLeak`] — repair energy spent under refill
+    /// deficit, by class).
+    pub repair_leak: RepairLeak,
 }
 
 /// The economy layer's `Simulation` binding: drive [`EconWorld`] with [`EconIntents`] through
@@ -137,12 +190,23 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
         }
     }
 
+    // The refill-deficit snapshot for the repair_leak_e mirror: ANY spawn/extension deficit at
+    // tick start, after the re-cap (the live counter reads the pre-pass EconomySnapshot —
+    // energy_stress.rs:132-135; see `RepairLeak`).
+    let refill_deficit = {
+        let capacity = world.spawns.len() as u64 * SPAWN_ENERGY_CAPACITY as u64
+            + world.extensions.iter().map(|e| e.capacity as u64).sum::<u64>();
+        (world.room_spawn_energy() as u64) < capacity
+    };
+
     // ── 1. Mask: stable-sort by creep id; one Pipeline-A + one Pipeline-D action per creep. ────
     let mut order: Vec<usize> = (0..intents.actions.len()).collect();
     order.sort_by_key(|&i| intents.actions[i].0); // stable → (creep id, submission order)
 
     let mut pipeline_used: BTreeMap<CreepId, (bool, bool)> = BTreeMap::new(); // (A, D)
-    let mut harvests: Vec<(CreepId, usize)> = Vec::new();
+    // The Pipeline-A work lane: Harvest OR Repair, one per creep per tick (a repair masks the
+    // harvest — the S1 leak mechanic, `jobs/actions.rs:27-31`).
+    let mut work_actions: Vec<(CreepId, &EconAction)> = Vec::new();
     let mut transfer_class: Vec<(CreepId, &EconAction)> = Vec::new();
     // (spawn_idx, submission index, body): sorted before step 4b so the paired creep id and the
     // cross-spawn emission order are genuinely non-semantic (module docs, step 4).
@@ -156,13 +220,13 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
                 // the submission index — the within-spawn first-wins key.
                 spawn_reqs.push((*spawn_idx, i, body));
             }
-            EconAction::Harvest { source_idx } => {
+            EconAction::Harvest { .. } | EconAction::Repair { .. } => {
                 let used = pipeline_used.entry(*creep_id).or_insert((false, false));
                 if used.0 {
                     report.rejected_actions += 1; // second Pipeline-A action this tick
                 } else {
                     used.0 = true;
-                    harvests.push((*creep_id, *source_idx));
+                    work_actions.push((*creep_id, action));
                 }
             }
             EconAction::Transfer { .. } | EconAction::Withdraw { .. } | EconAction::Pickup { .. } => {
@@ -249,42 +313,112 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
                     world.sync_carry_used(creep_id);
                 }
             }
-            EconAction::Harvest { .. } | EconAction::SpawnCreep { .. } => unreachable!(),
+            EconAction::Harvest { .. } | EconAction::Repair { .. } | EconAction::SpawnCreep { .. } => {
+                unreachable!()
+            }
         }
     }
 
-    // ── 3. Harvest (creep-id order), then source regen. ─────────────────────────────────────────
-    for (creep_id, source_idx) in harvests {
-        let Some((creep_pos, work_power)) = world
-            .creep(creep_id)
-            .filter(|c| c.is_alive())
-            .map(|c| (c.pos, c.body.effective_power(Part::Work, crate::constants::HARVEST_POWER)))
-        else {
-            report.rejected_actions += 1;
-            continue;
-        };
-        let Some(source) = world.sources.get_mut(source_idx) else {
-            report.rejected_actions += 1;
-            continue;
-        };
-        if creep_pos.get_range_to(source.pos) > 1 {
-            report.rejected_actions += 1;
-            continue;
+    // ── 3. Work lane: Harvest + Repair (creep-id order), then source regen. ────────────────────
+    for (creep_id, action) in work_actions {
+        match action {
+            EconAction::Harvest { source_idx } => {
+                let Some((creep_pos, work_power)) = world
+                    .creep(creep_id)
+                    .filter(|c| c.is_alive())
+                    .map(|c| (c.pos, c.body.effective_power(Part::Work, crate::constants::HARVEST_POWER)))
+                else {
+                    report.rejected_actions += 1;
+                    continue;
+                };
+                let Some(source) = world.sources.get_mut(*source_idx) else {
+                    report.rejected_actions += 1;
+                    continue;
+                };
+                if creep_pos.get_range_to(source.pos) > 1 {
+                    report.rejected_actions += 1;
+                    continue;
+                }
+                // gain = min(2 × WORK, source.energy) — HARVEST_POWER, engine-mechanics.md:457.
+                let gain = work_power.min(source.energy);
+                source.energy -= gain;
+                ledger.harvested += gain as u64;
+                let accepted = match world.creep_stores.get_mut(&creep_id) {
+                    Some(store) => store.add(SimResource::Energy, gain),
+                    None => 0,
+                };
+                // Store overflow spills to the creep's tile (the engine's drop-overflow step).
+                let overflow = gain - accepted;
+                if overflow > 0 {
+                    world.drop_resource(creep_pos, SimResource::Energy, overflow);
+                }
+                world.sync_carry_used(creep_id);
+            }
+            EconAction::Repair { target } => {
+                // Engine `creeps/repair.js` (engine-mechanics.md:118): range ≤ 3, energy > 0,
+                // effect = min(WORK × REPAIR_POWER, energy × 100, missing hits), cost =
+                // ceil(effect / 100) — all exact integers (`REPAIR_HITS_PER_ENERGY` docs).
+                // ALIVE-work is moot in-sim: no partial body damage is modeled, every WORK part
+                // is always alive (M1 spec note).
+                let Some((creep_pos, work_power)) = world
+                    .creep(creep_id)
+                    .filter(|c| c.is_alive())
+                    .map(|c| (c.pos, c.body.effective_power(Part::Work, REPAIR_POWER)))
+                else {
+                    report.rejected_actions += 1;
+                    continue;
+                };
+                // The M1 hit-bearing targets: roads + containers. Store-only structures
+                // (spawn/extension/storage) carry no hits model in-sim — rejected (deviation:
+                // the engine would repair them; M2 extends the model, `repair_other` waits).
+                let target_state = match target {
+                    StructRef::Road(i) => world.roads.get(*i).map(|r| (r.pos, r.hits, r.hits_max)),
+                    StructRef::Container(i) => {
+                        world.containers.get(*i).map(|c| (c.pos, c.hits, crate::constants::CONTAINER_HITS))
+                    }
+                    _ => None,
+                };
+                let Some((target_pos, hits, hits_max)) = target_state else {
+                    report.rejected_actions += 1;
+                    continue;
+                };
+                let energy = world.creep_stores.get(&creep_id).map(|s| s.amount(SimResource::Energy)).unwrap_or(0);
+                if creep_pos.get_range_to(target_pos) > REPAIR_RANGE || energy == 0 || hits >= hits_max {
+                    report.rejected_actions += 1; // out of range / no energy / full target
+                    continue;
+                }
+                let effect = work_power
+                    .min(energy.saturating_mul(REPAIR_HITS_PER_ENERGY))
+                    .min(hits_max - hits);
+                if effect == 0 {
+                    report.rejected_actions += 1; // no WORK parts
+                    continue;
+                }
+                let cost = effect.div_ceil(REPAIR_HITS_PER_ENERGY);
+                match target {
+                    StructRef::Road(i) => {
+                        world.roads[*i].hits += effect;
+                        ledger.repair_roads += cost as u64;
+                        if refill_deficit {
+                            report.repair_leak.roads += cost as u64;
+                        }
+                    }
+                    StructRef::Container(i) => {
+                        world.containers[*i].hits += effect;
+                        ledger.repair_containers += cost as u64;
+                        if refill_deficit {
+                            report.repair_leak.containers += cost as u64;
+                        }
+                    }
+                    _ => unreachable!("validated above"),
+                }
+                if let Some(store) = world.creep_stores.get_mut(&creep_id) {
+                    store.remove(SimResource::Energy, cost);
+                }
+                world.sync_carry_used(creep_id);
+            }
+            _ => unreachable!("only Pipeline-A actions reach the work lane"),
         }
-        // gain = min(2 × WORK, source.energy) — HARVEST_POWER, engine-mechanics.md:457.
-        let gain = work_power.min(source.energy);
-        source.energy -= gain;
-        ledger.harvested += gain as u64;
-        let accepted = match world.creep_stores.get_mut(&creep_id) {
-            Some(store) => store.add(SimResource::Energy, gain),
-            None => 0,
-        };
-        // Store overflow spills to the creep's tile (the engine's drop-overflow step).
-        let overflow = gain - accepted;
-        if overflow > 0 {
-            world.drop_resource(creep_pos, SimResource::Energy, overflow);
-        }
-        world.sync_carry_used(creep_id);
     }
     // Source regen (after harvest, as the engine's source tick follows the intent stage):
     // refill when `tick >= regen_at − 1` (engine-mechanics.md:445); THEN start the timer on any
@@ -394,6 +528,60 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
         report.deaths.push(id);
     }
 
+    // ── 6b. Structure decay (M1; module docs): roads then containers, index order; events fire
+    // at tick >= next_decay_at − 1 (`roads/tick.js:10` / `containers/tick.js:10`); dead
+    // structures are removed (compaction — indices were only read pre-compaction this tick). ────
+    let mut dead_roads: Vec<usize> = Vec::new();
+    for i in 0..world.roads.len() {
+        if tick + 1 < world.roads[i].next_decay_at {
+            continue;
+        }
+        let pos = world.roads[i].pos;
+        let key = (pos.x().u8(), pos.y().u8());
+        // Terrain ratio: swamp ×5 (engine-mechanics.md:430; wall-tunnel ×150 not modeled).
+        let swamp = world.movement.terrain_for(pos.room_name()).swamps.contains(&key);
+        let amount = ROAD_DECAY_AMOUNT * if swamp { ROAD_SWAMP_RATIO } else { 1 };
+        let road = &mut world.roads[i];
+        road.hits = road.hits.saturating_sub(amount);
+        if road.hits == 0 {
+            dead_roads.push(i);
+        } else {
+            road.next_decay_at = tick + ROAD_DECAY_TIME;
+        }
+    }
+    for &i in dead_roads.iter().rev() {
+        // A dead road leaves its natural terrain behind: de-register the movement-tile effect
+        // (`roads/tick.js:19-21` removes the object; fatigue reverts to plain/swamp).
+        let pos = world.roads[i].pos;
+        world.deregister_road_tile(pos);
+        world.roads.remove(i);
+    }
+
+    let container_window = world.container_decay_window();
+    let mut dead_containers: Vec<usize> = Vec::new();
+    for i in 0..world.containers.len() {
+        if tick + 1 < world.containers[i].next_decay_at {
+            continue;
+        }
+        let container = &mut world.containers[i];
+        container.hits = container.hits.saturating_sub(CONTAINER_DECAY);
+        if container.hits == 0 {
+            dead_containers.push(i);
+        } else {
+            container.next_decay_at = tick + container_window;
+        }
+    }
+    for &i in dead_containers.iter().rev() {
+        // Death drops the WHOLE store to the ground (`containers/tick.js:13-22` via
+        // _create-energy) — stock relocation, no ledger entry; step 7 books the pile decay.
+        let pos = world.containers[i].pos;
+        let store = std::mem::take(&mut world.containers[i].store);
+        for (r, v) in store.contents {
+            world.drop_resource(pos, r, v);
+        }
+        world.containers.remove(i);
+    }
+
     // ── 7. Dropped decay: ceil(amount/1000) per pile per tick (engine-mechanics.md:431);
     // exhausted piles are compacted away (indices are only ever read pre-compaction). ───────────
     for pile in &mut world.dropped {
@@ -413,7 +601,22 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
     let mut moves = intents.moves.clone();
     moves.moves.retain(|id, _| alive.contains(id));
     moves.pulls.retain(|puller, target| alive.contains(puller) && alive.contains(target));
+    let before_positions: BTreeMap<CreepId, Position> =
+        world.movement.creeps.iter().map(|c| (c.id, c.pos)).collect();
     report.movement = resolve_movement(&mut world.movement, &moves);
+
+    // Traffic wear (M1; module docs step 8): each creep that STEPPED onto a road tile pulls the
+    // road's decay clock forward ROAD_WEAROUT × body parts (engine `movement.js:215-219`).
+    let steps: Vec<(Position, u32)> = world
+        .movement
+        .creeps
+        .iter()
+        .filter(|c| before_positions.get(&c.id).is_some_and(|&old| old != c.pos))
+        .map(|c| (c.pos, c.body.parts.len() as u32))
+        .collect();
+    for (pos, parts) in steps {
+        world.apply_road_wear(pos, parts);
+    }
 
     // ── 9. Conservation audit: exact per-resource integer balance, surfaced (EP-6.12). ─────────
     let now_stocks = world.stocks();
@@ -435,14 +638,17 @@ fn target_pos(world: &EconWorld, target: StructRef) -> Option<Position> {
         StructRef::Extension(i) => world.extensions.get(i).map(|e| e.pos),
         StructRef::Container(i) => world.containers.get(i).map(|c| c.pos),
         StructRef::Storage => world.storage.as_ref().map(|s| s.pos),
+        StructRef::Road(i) => world.roads.get(i).map(|r| r.pos),
     }
 }
 
-/// Whether the target's store can hold `resource` at all (spawns/extensions are energy-only).
+/// Whether the target's store can hold `resource` at all (spawns/extensions are energy-only;
+/// roads have no store — a transfer/withdraw naming one is rejected).
 fn target_takes(target: StructRef, resource: SimResource) -> bool {
     match target {
         StructRef::Spawn(_) | StructRef::Extension(_) => resource == SimResource::Energy,
         StructRef::Container(_) | StructRef::Storage => true,
+        StructRef::Road(_) => false,
     }
 }
 
@@ -455,6 +661,7 @@ fn target_free(world: &EconWorld, target: StructRef) -> u32 {
         }
         StructRef::Container(i) => world.containers[i].store.free(),
         StructRef::Storage => world.storage.as_ref().map(|s| s.store.free()).unwrap_or(0),
+        StructRef::Road(_) => 0, // storeless (gated off by `target_takes` before any use)
     }
 }
 
@@ -464,6 +671,7 @@ fn target_available(world: &EconWorld, target: StructRef, resource: SimResource)
         StructRef::Extension(i) => world.extensions[i].store_energy,
         StructRef::Container(i) => world.containers[i].store.amount(resource),
         StructRef::Storage => world.storage.as_ref().map(|s| s.store.amount(resource)).unwrap_or(0),
+        StructRef::Road(_) => 0, // storeless (gated off by `target_takes` before any use)
     }
 }
 
@@ -479,6 +687,7 @@ fn target_add(world: &mut EconWorld, target: StructRef, resource: SimResource, a
                 s.store.add(resource, amount);
             }
         }
+        StructRef::Road(_) => unreachable!("roads are storeless — target_takes gates them off"),
     }
 }
 
@@ -494,6 +703,7 @@ fn target_remove(world: &mut EconWorld, target: StructRef, resource: SimResource
                 s.store.remove(resource, amount);
             }
         }
+        StructRef::Road(_) => unreachable!("roads are storeless — target_takes gates them off"),
     }
 }
 
@@ -1029,6 +1239,229 @@ mod tests {
         let r = step(&mut w, &EconIntents::new());
         assert_eq!(r.births.len(), 1, "born the first tick a tile is free");
         assert_eq!(w.creep(r.births[0]).unwrap().pos, pos(26, 26));
+    }
+
+    // ── M1: repair + decay + wearout (each test doubles as a conservation test via `step`) ──────
+
+    /// Repair pricing (engine `creeps/repair.js`, engine-mechanics.md:118): 100 hits/WORK/tick,
+    /// cost = ceil(hits/100) energy, clamped by carried energy and missing hits; range ≤ 3;
+    /// zero-energy and full-target repairs are rejected. The ledger books the energy by class and
+    /// the report mirrors it into `repair_leak` iff a refill deficit existed at tick start.
+    #[test]
+    fn repair_power_cost_and_clamps() {
+        let mut w = EconWorld::default();
+        let road = w.add_road(pos(10, 10), 1000, 5000);
+        // 3 WORK + carry, holding 50 energy: power = 300 hits, energy clamp = 5000, missing = 4000.
+        let body = [Part::Work, Part::Work, Part::Work, Part::Carry, Part::Move];
+        let c = w.add_creep(pos(12, 12), &body, 100_000); // range 2 ≤ 3 (never steps — no wear)
+        w.creep_stores.get_mut(&c).unwrap().add(SimResource::Energy, 50);
+        w.sync_carry_used(c);
+        // NO spawns/extensions in this world ⇒ zero refill capacity ⇒ no deficit ⇒ no leak.
+        let mut i = EconIntents::new();
+        i.act(c, EconAction::Repair { target: StructRef::Road(road) });
+        let r = step(&mut w, &i);
+        assert_eq!(w.roads[road].hits, 1300, "300 hits repaired (3 WORK × 100)");
+        assert_eq!(w.creep_stores[&c].amount(SimResource::Energy), 47, "cost = ceil(300/100) = 3");
+        assert_eq!(r.ledger.repair_roads, 3, "ledgered by class");
+        assert_eq!(r.repair_leak.total(), 0, "no spawn/extension capacity ⇒ no deficit ⇒ no leak");
+        assert_eq!(w.creep(c).unwrap().carry_used, 47, "weight invariant through the repair");
+
+        // Energy clamp: 1 energy left repairs at most 100 hits (costing exactly that 1).
+        w.creep_stores.get_mut(&c).unwrap().remove(SimResource::Energy, 46);
+        w.sync_carry_used(c);
+        let mut i = EconIntents::new();
+        i.act(c, EconAction::Repair { target: StructRef::Road(road) });
+        step(&mut w, &i);
+        assert_eq!(w.roads[road].hits, 1400, "clamped to energy × 100 = 100 hits");
+        assert_eq!(w.creep_stores[&c].amount(SimResource::Energy), 0);
+
+        // Zero energy ⇒ rejected (engine repair.js:11 early-returns; the sim counts it).
+        let mut i = EconIntents::new();
+        i.act(c, EconAction::Repair { target: StructRef::Road(road) });
+        let r = step(&mut w, &i);
+        assert_eq!(r.rejected_actions, 1, "no energy aboard");
+        assert_eq!(w.roads[road].hits, 1400);
+
+        // Missing-hits clamp + cost ceil: 50 hits missing cost ceil(50/100) = 1 energy.
+        let near_full = w.add_road(pos(11, 11), 4950, 5000);
+        w.creep_stores.get_mut(&c).unwrap().add(SimResource::Energy, 10);
+        w.sync_carry_used(c);
+        let mut i = EconIntents::new();
+        i.act(c, EconAction::Repair { target: StructRef::Road(near_full) });
+        step(&mut w, &i);
+        assert_eq!(w.roads[near_full].hits, 5000, "clamped to missing hits");
+        assert_eq!(w.creep_stores[&c].amount(SimResource::Energy), 9, "ceil(50/100) = 1 energy");
+
+        // Full target ⇒ rejected; out of range (4 > 3) ⇒ rejected.
+        let far = w.add_road(pos(16, 12), 100, 5000); // range 4 from (12,12)
+        let mut i = EconIntents::new();
+        i.act(c, EconAction::Repair { target: StructRef::Road(near_full) });
+        let r = step(&mut w, &i);
+        assert_eq!(r.rejected_actions, 1, "full target rejected");
+        let mut i = EconIntents::new();
+        i.act(c, EconAction::Repair { target: StructRef::Road(far) });
+        let r = step(&mut w, &i);
+        assert_eq!(r.rejected_actions, 1, "range 4 > REPAIR_RANGE rejected");
+    }
+
+    /// Repair shares Pipeline A with Harvest (`jobs/actions.rs:27-31`): a repairing creep SKIPS
+    /// that tick's harvest — the S1 leak mechanic, pinned at the resolver level.
+    #[test]
+    fn repair_masks_same_tick_harvest() {
+        let mut w = EconWorld::default();
+        let s = w.add_source(pos(10, 10), 3000);
+        let road = w.add_road(pos(11, 11), 1000, 5000);
+        let c = w.add_creep(pos(11, 10), &[Part::Work, Part::Carry, Part::Move], 100_000);
+        w.creep_stores.get_mut(&c).unwrap().add(SimResource::Energy, 20);
+        w.sync_carry_used(c);
+        let mut i = EconIntents::new();
+        i.act(c, EconAction::Repair { target: StructRef::Road(road) }); // first-submitted wins A
+        i.act(c, EconAction::Harvest { source_idx: s }); // masked
+        let r = step(&mut w, &i);
+        assert_eq!(r.rejected_actions, 1, "the harvest was masked by the repair");
+        assert_eq!(w.sources[s].energy, 3000, "no harvest happened — the repair ATE the work tick");
+        assert_eq!(w.roads[road].hits, 1100, "1 WORK × 100 hits repaired");
+        assert_eq!(r.ledger.repair_roads, 1);
+    }
+
+    /// The `repair_leak_e` mirror: identical repairs book into `repair_leak` iff ANY
+    /// spawn/extension deficit existed at tick start (energy_stress.rs:132-135 semantics — ANY
+    /// deficit, deliberately not the S1 gate's 10%/10k condition).
+    #[test]
+    fn repair_leak_requires_refill_deficit() {
+        let run = |spawn_energy: u32| {
+            let mut w = EconWorld::default();
+            let sp = w.add_spawn(pos(20, 20));
+            w.spawns[sp].store_energy = spawn_energy;
+            let road = w.add_road(pos(10, 10), 1000, 5000);
+            let ct = w.add_container(pos(11, 10), 2000, 100_000);
+            let c = w.add_creep(pos(10, 11), &[Part::Work, Part::Carry, Part::Move], 100_000);
+            w.creep_stores.get_mut(&c).unwrap().add(SimResource::Energy, 40);
+            w.sync_carry_used(c);
+            let mut i = EconIntents::new();
+            i.act(c, EconAction::Repair { target: StructRef::Road(road) });
+            let r1 = step(&mut w, &i);
+            let mut i = EconIntents::new();
+            i.act(c, EconAction::Repair { target: StructRef::Container(ct) });
+            let r2 = step(&mut w, &i);
+            (r1.repair_leak, r2.repair_leak, r1.ledger.repair_roads, r2.ledger.repair_containers)
+        };
+        // Full spawn (300/300): repairs happen, ledger books them, leak stays 0.
+        let (leak_road, leak_container, road_e, container_e) = run(300);
+        assert_eq!((road_e, container_e), (1, 1), "repairs run either way");
+        assert_eq!(leak_road.total() + leak_container.total(), 0, "no deficit ⇒ no leak");
+        // Deficient spawn (0/300 — stays deficient across both ticks despite the +1/tick
+        // self-charge): the same repairs are leaks, by class.
+        let (leak_road, leak_container, _, _) = run(0);
+        assert_eq!(leak_road.roads, 1, "road repair energy leaked under deficit");
+        assert_eq!(leak_container.containers, 1, "container repair energy leaked under deficit");
+        assert_eq!(leak_road.containers + leak_container.roads, 0, "classes don't cross");
+    }
+
+    /// Road decay (engine-mechanics.md:430): −100 hits per 1000-tick window on plain (fires at
+    /// `tick >= next_decay_at − 1`), ×5 on swamp; a road at 0 hits is REMOVED and its tile
+    /// reverts to natural terrain (the movement-terrain road entry is de-registered).
+    #[test]
+    fn road_decay_plain_swamp_and_death() {
+        let mut w = EconWorld::default();
+        w.movement.terrain.swamps.insert((30, 30));
+        let plain = w.add_road(pos(10, 10), 5000, 5000);
+        let swamp = w.add_road(pos(30, 30), 25_000, 25_000);
+        let _dying = w.add_road(pos(40, 40), 100, 5000); // exactly one event from death
+        assert_eq!(w.roads[plain].next_decay_at, ROAD_DECAY_TIME, "a full window out at build");
+        // Nothing decays before the boundary tick.
+        steps(&mut w, ROAD_DECAY_TIME - 1); // ticks 0..=998
+        assert_eq!(w.roads[plain].hits, 5000);
+        // The boundary tick (tick 999 = next_decay_at − 1) fires the event.
+        steps(&mut w, 1);
+        assert_eq!(w.roads[plain].hits, 4900, "plain: −100");
+        assert_eq!(w.roads[swamp].hits, 24_500, "swamp: −500 (×5 ratio)");
+        assert_eq!(w.roads[plain].next_decay_at, 999 + ROAD_DECAY_TIME, "window re-arms from the event tick");
+        // The 100-hit road died: removed from the world AND from the movement terrain.
+        assert_eq!(w.roads.len(), 2, "the dead road was compacted away");
+        assert!(!w.movement.terrain.roads.contains(&(40, 40)), "tile reverted to natural terrain");
+        assert!(w.movement.terrain.roads.contains(&(10, 10)), "living roads keep their tiles");
+    }
+
+    /// Container decay (engine-mechanics.md:429): −5000 per 500-tick window at RCL ≥ 1, per
+    /// 100-tick window with no (or level-0) controller; death drops the WHOLE store to ground.
+    #[test]
+    fn container_decay_windows_and_death_drop() {
+        // Unowned world (no controller): the fast 100-tick window.
+        let mut w = EconWorld::default();
+        let ct = w.add_container(pos(10, 10), 2000, 250_000);
+        assert_eq!(w.containers[ct].next_decay_at, 100, "unowned window = 100");
+        steps(&mut w, 100); // the event fires at tick 99 (= next_decay_at − 1)
+        assert_eq!(w.containers[ct].hits, 245_000, "−5000 at the boundary tick");
+        assert_eq!(w.containers[ct].next_decay_at, 99 + 100, "unowned window re-arms at 100");
+
+        // Owned world (controller level ≥ 1): the slow 500-tick window.
+        let mut w = EconWorld::default();
+        w.controller = Some(crate::state::SimController { level: 3, progress: 0, downgrade_ticks: 20_000 });
+        let ct = w.add_container(pos(10, 10), 2000, 250_000);
+        assert_eq!(w.containers[ct].next_decay_at, 500, "owned window = 500");
+        steps(&mut w, 499);
+        assert_eq!(w.containers[ct].hits, 250_000, "no decay before the boundary");
+        steps(&mut w, 1);
+        assert_eq!(w.containers[ct].hits, 245_000);
+
+        // Death: a 5000-hit container with cargo dies at its event and drops the store.
+        let mut w = EconWorld::default();
+        w.controller = Some(crate::state::SimController { level: 3, progress: 0, downgrade_ticks: 20_000 });
+        let ct = w.add_container(pos(15, 15), 2000, CONTAINER_DECAY);
+        w.containers[ct].store.add(SimResource::Energy, 700);
+        w.containers[ct].store.add(SimResource::Oxygen, 30);
+        steps(&mut w, 500);
+        assert!(w.containers.is_empty(), "dead container removed");
+        let energy = w.dropped.iter().find(|p| p.resource == SimResource::Energy).unwrap();
+        let oxygen = w.dropped.iter().find(|p| p.resource == SimResource::Oxygen).unwrap();
+        // Dropped at the container's tile, minus the same-tick pile decay (ceil/1000 each).
+        assert_eq!((energy.pos, energy.amount), (pos(15, 15), 699));
+        assert_eq!((oxygen.pos, oxygen.amount), (pos(15, 15), 29));
+    }
+
+    /// ROAD_WEAROUT traffic wear (engine `movement.js:215-219`, engine-mechanics.md:430): a creep
+    /// STEP onto a road tile pulls the road's `next_decay_at` FORWARD by 1 × body parts — the
+    /// clock accelerates, hits are untouched. Standing still wears nothing.
+    #[test]
+    fn road_wearout_pulls_the_decay_clock() {
+        let mut w = EconWorld::default();
+        let road = w.add_road(pos(11, 10), 5000, 5000);
+        let c = w.add_creep(pos(10, 10), &[Part::Move, Part::Move, Part::Carry], 100_000);
+        let before = w.roads[road].next_decay_at;
+
+        // Step ONTO the road: −3 (body parts).
+        let mut i = EconIntents::new();
+        i.moves.set_move(c, screeps::Direction::Right);
+        step(&mut w, &i);
+        assert_eq!(w.creep(c).unwrap().pos, pos(11, 10), "stepped onto the road");
+        assert_eq!(w.roads[road].next_decay_at, before - 3, "clock pulled 1 × 3 parts");
+        assert_eq!(w.roads[road].hits, 5000, "wear never damages hits directly");
+
+        // Idle ON the road: no wear (wear is per STEP, not per occupancy).
+        step(&mut w, &EconIntents::new());
+        assert_eq!(w.roads[road].next_decay_at, before - 3);
+
+        // Step OFF the road (onto plain): no wear either.
+        let mut i = EconIntents::new();
+        i.moves.set_move(c, screeps::Direction::Right);
+        step(&mut w, &i);
+        assert_eq!(w.roads[road].next_decay_at, before - 3);
+    }
+
+    /// Roads are storeless: a Transfer naming a road is rejected whole (target_takes gates it).
+    #[test]
+    fn transfer_to_road_is_rejected() {
+        let mut w = EconWorld::default();
+        let road = w.add_road(pos(11, 10), 1000, 5000);
+        let c = w.add_creep(pos(10, 10), &[Part::Carry, Part::Move], 100_000);
+        w.creep_stores.get_mut(&c).unwrap().add(SimResource::Energy, 50);
+        w.sync_carry_used(c);
+        let mut i = EconIntents::new();
+        i.act(c, EconAction::Transfer { target: StructRef::Road(road), resource: SimResource::Energy, amount: 10 });
+        let r = step(&mut w, &i);
+        assert_eq!(r.rejected_actions, 1);
+        assert_eq!(w.creep_stores[&c].amount(SimResource::Energy), 50, "nothing moved");
     }
 
     /// Spawned-then-living creeps keep the movement weight invariant: `carry_used` equals the

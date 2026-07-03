@@ -151,13 +151,19 @@ pub struct SimExtension {
     pub capacity: u32,
 }
 
-/// A container: general store. `hits` exists now; decay lands M1 (engine-mechanics.md:429).
+/// A container: general store. Decays [`crate::constants::CONTAINER_DECAY`] hits per window
+/// (engine-mechanics.md:429); at 0 hits it is REMOVED and its store drops to the ground
+/// (`containers/tick.js:13-22`).
 #[derive(Clone, Debug)]
 pub struct SimContainer {
     pub id: StructureId,
     pub pos: Position,
     pub store: SimStore,
     pub hits: u32,
+    /// The engine's `nextDecayTime`: the decay event fires when `tick >= next_decay_at − 1`
+    /// (`containers/tick.js:10`). Initialized to a FULL window at build (deviation, documented at
+    /// [`EconWorld::add_container`]).
+    pub next_decay_at: u32,
 }
 
 /// Room storage: general store.
@@ -176,13 +182,20 @@ pub struct SimController {
     pub downgrade_ticks: u32,
 }
 
-/// A road as a decaying STRUCTURE (hits; decay/wearout land M1). The road's movement effect
-/// (fatigue rate 1) lives in sim-core's `SimTerrain::roads` — builders must keep both in sync.
+/// A road as a decaying STRUCTURE. The road's movement effect (fatigue rate 1) lives in sim-core's
+/// `SimTerrain::roads` — [`EconWorld::add_road`] registers it and road DEATH de-registers it (a
+/// dead road leaves plain/swamp terrain behind). Decay: [`crate::constants::ROAD_DECAY_AMOUNT`] ×
+/// terrain ratio per window (engine-mechanics.md:430); traffic wear pulls `next_decay_at` forward
+/// [`crate::constants::ROAD_WEAROUT`] × body parts per creep step (`movement.js:215-219`).
 #[derive(Clone, Debug)]
 pub struct SimRoad {
     pub pos: Position,
     pub hits: u32,
     pub hits_max: u32,
+    /// The engine's `nextDecayTime`: the decay event fires when `tick >= next_decay_at − 1`
+    /// (`roads/tick.js:10`). Creep steps pull it FORWARD (traffic wear). Initialized to a FULL
+    /// window at build (deviation, documented at [`EconWorld::add_road`]).
+    pub next_decay_at: u32,
 }
 
 /// A dropped-resource pile. Piles are merged per (pos, resource) by the drop helper and decay
@@ -288,10 +301,32 @@ impl EconWorld {
         self.extensions.len() - 1
     }
 
+    /// A container. Its decay clock starts a FULL window out ([`Self::container_decay_window`]).
+    /// *Deviation:* a freshly built engine container has `nextDecayTime` unset, which fires an
+    /// immediate first decay event (`containers/tick.js:10`); scenario-placed structures start
+    /// mid-life instead — the placement means "this structure exists", not "was just built".
     pub fn add_container(&mut self, pos: Position, capacity: u32, hits: u32) -> usize {
         let id = self.mint_structure_id();
-        self.containers.push(SimContainer { id, pos, store: SimStore::with_capacity(capacity), hits });
+        let next_decay_at = self.movement.tick + self.container_decay_window();
+        self.containers.push(SimContainer {
+            id,
+            pos,
+            store: SimStore::with_capacity(capacity),
+            hits,
+            next_decay_at,
+        });
         self.containers.len() - 1
+    }
+
+    /// The container decay window for this world's ownership state: 500 ticks at RCL ≥ 1, 100
+    /// where the controller is level 0 or absent (engine-mechanics.md:429,
+    /// `containers/tick.js:26`).
+    pub fn container_decay_window(&self) -> u32 {
+        if self.controller.as_ref().is_some_and(|c| c.level > 0) {
+            crate::constants::CONTAINER_DECAY_TIME_OWNED
+        } else {
+            crate::constants::CONTAINER_DECAY_TIME
+        }
     }
 
     pub fn set_storage(&mut self, pos: Position, capacity: u32) {
@@ -303,6 +338,9 @@ impl EconWorld {
     /// [`MovementState::terrain_for`] actually reads for this room — an existing room override, or
     /// else the DEFAULT terrain. Never `terrain_mut`: its `or_default()` would mint an EMPTY
     /// override that silently shadows the default terrain's walls/swamps for the whole room.
+    /// The decay clock starts a FULL window out (same placement deviation as
+    /// [`Self::add_container`] — the engine's unset-`nextDecayTime` immediate first decay is a
+    /// just-built artifact scenario placement does not mean).
     pub fn add_road(&mut self, pos: Position, hits: u32, hits_max: u32) -> usize {
         let key = (pos.x().u8(), pos.y().u8());
         match self.movement.rooms.get_mut(&pos.room_name()) {
@@ -313,8 +351,44 @@ impl EconWorld {
                 self.movement.terrain.roads.insert(key);
             }
         }
-        self.roads.push(SimRoad { pos, hits, hits_max });
+        let next_decay_at = self.movement.tick + crate::constants::ROAD_DECAY_TIME;
+        self.roads.push(SimRoad { pos, hits, hits_max, next_decay_at });
         self.roads.len() - 1
+    }
+
+    /// Index of the road at `pos`, if any (roads are unique per tile — the engine keeps one road
+    /// object per tile).
+    pub fn road_at(&self, pos: Position) -> Option<usize> {
+        self.roads.iter().position(|r| r.pos == pos)
+    }
+
+    /// Traffic wear (engine `movement.js:215-219`, engine-mechanics.md:430): a creep step onto a
+    /// road tile pulls the road's `next_decay_at` FORWARD by `ROAD_WEAROUT × body_parts` ticks —
+    /// the decay CLOCK accelerates; hits are never damaged directly. Public so the analytic
+    /// movement tier (which advances positions outside `resolve_movement`) can book the same wear
+    /// per tile entered; the tick pipeline applies it automatically for kernel-moved creeps.
+    pub fn apply_road_wear(&mut self, pos: Position, body_parts: u32) {
+        if let Some(i) = self.road_at(pos) {
+            self.roads[i].next_decay_at = self.roads[i]
+                .next_decay_at
+                .saturating_sub(crate::constants::ROAD_WEAROUT * body_parts);
+        }
+    }
+
+    /// De-register a DEAD road's movement effect: the tile reverts to its natural terrain (the
+    /// engine removes the road object — `roads/tick.js:19-21`; fatigue falls back to plain/swamp).
+    /// Removes from whichever terrain [`Self::add_road`] registered it in (the room override if
+    /// one exists, else the default terrain — `terrain_for` symmetry).
+    pub(crate) fn deregister_road_tile(&mut self, pos: Position) {
+        let key = (pos.x().u8(), pos.y().u8());
+        match self.movement.rooms.get_mut(&pos.room_name()) {
+            Some(t) => {
+                t.roads.remove(&key);
+            }
+            None => {
+                self.movement.terrain.roads.remove(&key);
+            }
+        }
     }
 
     /// Drop `amount` of `r` at `pos`, merging into an existing same-(pos, resource) pile (the
@@ -480,6 +554,7 @@ impl EconWorld {
             d.u32(c.id);
             d.pos(c.pos);
             d.u32(c.hits);
+            d.u32(c.next_decay_at);
             d.store(&c.store);
         }
         match &self.storage {
@@ -503,6 +578,7 @@ impl EconWorld {
             d.pos(r.pos);
             d.u32(r.hits);
             d.u32(r.hits_max);
+            d.u32(r.next_decay_at);
         }
         // Dropped piles: canonicalize by (pos, resource) so pile-creation order (an artifact of
         // processing order for DISTINCT tiles, which reorder must not leak through) never shows.

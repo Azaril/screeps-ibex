@@ -1,21 +1,28 @@
 //! Economy intents — the per-tick action vocabulary of the economy layer. [`EconIntents`] embeds
 //! the kernel's [`MoveIntents`] (the ADR 0033 layering contract: the movement mechanism only ever
-//! sees the movement part) and adds the economy verbs. **M0 vocabulary:** Harvest / Transfer /
-//! Withdraw / Pickup / SpawnCreep. Build/Repair/UpgradeController are deliberately absent until
-//! M1/M2 — a decision routine driving this layer cannot express them at the type level.
+//! sees the movement part) and adds the economy verbs. **M1 vocabulary:** Harvest / Repair /
+//! Transfer / Withdraw / Pickup / SpawnCreep. Build/UpgradeController are deliberately absent
+//! until M2 — a decision routine driving this layer cannot express them at the type level.
 
 use crate::state::SimResource;
 use screeps::Part;
 use screeps_sim_core::{CreepId, MoveIntents};
 
-/// A structure store target for transfer/withdraw, by construction index into the corresponding
-/// [`crate::EconWorld`] Vec (indices are stable — M0 never removes structures).
+/// A structure target, by construction index into the corresponding [`crate::EconWorld`] Vec.
+/// Transfer/withdraw accept the store-bearing variants; [`EconAction::Repair`] accepts the
+/// hit-bearing ones (`Road`/`Container` in M1). **Index stability (M1):** roads and containers are
+/// REMOVED (compacted) at the decay step when they die, so an index is valid only within the tick
+/// whose world state it was read from — drivers re-derive indices from the world every tick (the
+/// dropped-pile contract, generalized).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StructRef {
     Spawn(usize),
     Extension(usize),
     Container(usize),
     Storage,
+    /// A road structure (repair target only — roads have no store; a transfer/withdraw naming one
+    /// is rejected).
+    Road(usize),
 }
 
 /// One economy action. Actions ride in [`EconIntents::actions`] as `(CreepId, EconAction)` pairs;
@@ -26,6 +33,13 @@ pub enum StructRef {
 pub enum EconAction {
     /// Harvest an adjacent source (Pipeline A — the bot's work-intent lane, `jobs/actions.rs`).
     Harvest { source_idx: usize },
+    /// Repair a hit-bearing structure within Chebyshev range 3 (Pipeline A — shares the one work
+    /// intent per creep per tick with Harvest, `jobs/actions.rs:27-31`; this is exactly the S1
+    /// leak mechanic: a repairing harvester SKIPS that tick's harvest). 100 hits/WORK/tick at
+    /// 0.01 energy/hit, clamped by carried energy + missing hits (engine `creeps/repair.js`,
+    /// engine-mechanics.md:118). ALIVE-WORK semantics are moot in-sim — no partial body damage is
+    /// modeled, so every WORK part is always alive (noted per the M1 spec).
+    Repair { target: StructRef },
     /// Move `amount` of `resource` from the creep's store into an adjacent structure (Pipeline D).
     Transfer { target: StructRef, resource: SimResource, amount: u32 },
     /// Move `amount` of `resource` from an adjacent structure into the creep's store (Pipeline D).

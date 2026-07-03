@@ -1,0 +1,32 @@
+[package]
+name = "screeps-econ-eval"
+version = "0.1.0"
+authors = ["William Archbell <william@archbell.com>"]
+edition = "2021"
+description = "The economy eval harness (ADR 0040 §D7, M1): Family-C collapse scenarios realized as-of-RCL from the captured foreman layouts, the citation-transcribed current-bot BASELINE policy (tiers, nearest-wins, ungated repair, capacity bodies — the disease, faithfully), an ANALYTIC fatigue-exact movement tier over rover-eval's oracle machinery, T_recover + the dependency-chain oracle + H via rover-eval's stats, the econ_bench CLI, the determinism fence, and THE REPRO GATE (repair_leak_e > 0 on bait + ΔT_recover CI excluding zero — no cure is scored until the sim shows the disease)."
+
+# An IN-REPO workspace MEMBER with NO standalone repo (the screeps-econ-engine precedent):
+# in-repo consumers and deps use PATH declarations where the target crate has no remote
+# (econ-engine, rover-eval is a submodule with a remote but nothing else deps it — path keeps
+# resolution local and split-free). Host-only: depends on screeps-rover-eval (which cannot build
+# for wasm32), so it sits in the wasm aliases' --exclude lists (.cargo/config.toml).
+
+[dependencies]
+screeps-game-api = "0.23"
+# The economy engine under evaluation (ADR 0040 M0+M1) — path per the root-manifest note.
+screeps-econ-engine = { path = "../screeps-econ-engine" }
+# The shared movement kernel: Position/SimBody/SimTerrain + resolve_movement (the trace walker
+# drives it exactly as rover-eval's traverse does). Git dep redirected by the root [patch].
+screeps-sim-core = { git = "https://github.com/Azaril/screeps-sim-core" }
+# The harness substrate REUSED (M1 spec Part C): captured-layouts loader (base_traffic),
+# the fatigue-field oracle (oracle::optimal_path over rover's room_grid_dijkstra — NO new
+# pathfinding algorithms), and stats.rs (H + seeded bootstrap CI) — verbatim via the lib.
+screeps-rover-eval = { path = "../screeps-rover-eval" }
+# The verified column-major terrain decoder (harness::terrain_import::decode_terrain) — the same
+# §D2 reuse rover-eval leans on. Git dep redirected by the root [patch].
+screeps-combat-eval = { git = "https://github.com/Azaril/screeps-combat-eval" }
+# `spawning::create_body` — the live bot's body-expansion kernel, REUSED (not transcribed) so K4's
+# capacity-sized bodies are bit-identical to the bot's. Git dep redirected by the root [patch].
+screeps-combat-decision = { git = "https://github.com/Azaril/screeps-combat-decision" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

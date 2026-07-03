@@ -44,6 +44,12 @@ members = [
     # from the wasm aliases), but pure value-type logic, so it still compiles for wasm32 as a
     # transitive dep of screeps-combat-decision (whose fielding kernel emits spawn_queue types).
     "screeps-econ-engine",
+    # The economy eval harness (ADR 0040 §D7, M1): Family-C scenarios over the captured foreman
+    # layouts, the transcribed-baseline policy, the analytic movement tier, T_recover metrics +
+    # THE REPRO GATE, and the econ_bench CLI. IN-REPO like econ-engine (path deps, no standalone
+    # repo). Host-only and CANNOT build for wasm32 (depends on screeps-rover-eval) — excluded
+    # from the wasm aliases.
+    "screeps-econ-eval",
 ]
 # No `exclude`: every crate directory in this repo is now a workspace member.
 

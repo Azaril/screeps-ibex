@@ -8,7 +8,11 @@
 //!   binding on many ticks — same-store read/write collisions (the pumper pair), source
 //!   exhaustion under two harvesters, cross-spawn energy contention, and a two-pullers-one-target
 //!   conflict — and the instrumented arm asserts floors on each so the coverage cannot silently
-//!   evaporate if the script's timing drifts.
+//!   evaporate if the script's timing drifts. **M1 coverage:** a road corridor under the hauler's
+//!   outbound legs (ROAD_WEAROUT clock pulls), a decayed road the WORKER drive-by repairs (the
+//!   Pipeline-A harvest-masking repair), a short-fuse plain road (a decay event), a short-fuse
+//!   swamp road that DIES mid-run (road removal + terrain reversion), and a doomed cargo-bearing
+//!   container (container death + store drop) — each with its own anti-vacuity floor.
 //! - `det_reorder`: the same script with every tick's action list permuted (reversed) digests
 //!   identically. Insertion order is non-semantic for creep actions and cross-spawn requests (the
 //!   resolver re-orders by creep id / spawn index); the two documented within-actor
@@ -60,6 +64,12 @@ fn fold_report(mut h: u64, r: &EconTickReport) -> u64 {
     eat(r.ledger.harvested);
     eat(r.ledger.spawn_self_charge);
     eat(r.ledger.spawn_bodies);
+    eat(r.ledger.repair_roads);
+    eat(r.ledger.repair_containers);
+    eat(r.ledger.repair_other);
+    eat(r.repair_leak.roads);
+    eat(r.repair_leak.containers);
+    eat(r.repair_leak.other);
     for (res, v) in &r.ledger.dropped_decay {
         eat(*res as u64);
         eat(*v);
@@ -104,6 +114,15 @@ const PULL_TARGET: CreepId = 13;
 /// Ids at and above this are spawned newborns (dispersing to id-derived posts).
 const FIRST_NEWBORN: CreepId = 14;
 
+/// The WORKER's drive-by repair target: a half-dead road within its repair range 3.
+const REPAIR_ROAD_TILE: (u8, u8) = (12, 22);
+/// A road under HAULER_A's outbound corridor — the wearout floor's probe tile.
+const WEAR_ROAD_TILE: (u8, u8) = (20, 25);
+/// The short-fuse swamp road that must DIE mid-run (decay 500/event on swamp).
+const DOOMED_ROAD_TILE: (u8, u8) = (35, 35);
+/// The doomed cargo container (5000 hits = one decay event; unowned window 100).
+const DOOMED_CONTAINER_TILE: (u8, u8) = (36, 36);
+
 fn fixture() -> EconWorld {
     let mut w = EconWorld::default();
     w.add_source(pos(10, 20), 3000); // idx 0
@@ -118,6 +137,27 @@ fn fixture() -> EconWorld {
     w.containers[c0].store.add(SimResource::Energy, 40);
     let c1 = w.add_container(pos(13, 13), 60, 250_000); // pumper loop container 1
     w.containers[c1].store.add(SimResource::Energy, 20);
+
+    // ── M1 furniture ────────────────────────────────────────────────────────────────────────────
+    // The hauler-A outbound corridor (x 18..=23 on y 25): stepped on every trip → wearout pulls.
+    for x in 18..=23u8 {
+        w.add_road(pos(x, 25), 5000, 5000);
+    }
+    // The WORKER's drive-by repair target: half-dead, range 1 from its post at (11,21).
+    let repair_road = w.add_road(pos(REPAIR_ROAD_TILE.0, REPAIR_ROAD_TILE.1), 500, 5000);
+    debug_assert_eq!(w.roads[repair_road].pos, pos(12, 22));
+    // A short-fuse PLAIN road: one decay event (−100) inside the 600-tick run, no death.
+    let event_road = w.add_road(pos(33, 33), 5000, 5000);
+    w.roads[event_road].next_decay_at = 200;
+    // A short-fuse SWAMP road with 500 hits: its first event (−500, swamp ×5) KILLS it — road
+    // removal + terrain reversion inside the run.
+    w.movement.terrain.swamps.insert(DOOMED_ROAD_TILE);
+    let doomed_road = w.add_road(pos(DOOMED_ROAD_TILE.0, DOOMED_ROAD_TILE.1), 500, 25_000);
+    w.roads[doomed_road].next_decay_at = 150;
+    // A doomed cargo container (5000 hits = exactly one unowned decay event at tick 99): death
+    // drops its 40 energy to ground, which then decays as an ordinary pile.
+    let doomed_container = w.add_container(pos(DOOMED_CONTAINER_TILE.0, DOOMED_CONTAINER_TILE.1), 200, 5_000);
+    w.containers[doomed_container].store.add(SimResource::Energy, 40);
 
     // Ids 1..=13, in this order (the fence pins the whole history, ids included).
     w.add_creep(pos(11, 20), &[Part::Work, Part::Work, Part::Carry, Part::Move], 100_000); // 1
@@ -186,7 +226,22 @@ fn scripted(w: &EconWorld) -> EconIntents {
         intents.act(HARVESTER_B, EconAction::Harvest { source_idx: 1 });
     }
     if w.creep(WORKER).is_some() {
-        intents.act(WORKER, EconAction::Harvest { source_idx: 0 });
+        // M1 drive-by repair (state-derived, insertion-order-free): with ≥ 10 energy aboard and
+        // the half-dead road within range 3 still damaged, the WORKER spends its ONE Pipeline-A
+        // work intent repairing INSTEAD of harvesting (the S1 leak mechanic the resolver models);
+        // otherwise it harvests. Index re-derived from the world each tick (compaction contract).
+        let repair_target = w
+            .road_at(pos(REPAIR_ROAD_TILE.0, REPAIR_ROAD_TILE.1))
+            .filter(|&i| w.roads[i].hits < w.roads[i].hits_max);
+        let worker_energy = w.creep_stores[&WORKER].amount(SimResource::Energy);
+        match repair_target {
+            Some(road_idx) if worker_energy >= 10 => {
+                intents.act(WORKER, EconAction::Repair { target: StructRef::Road(road_idx) });
+            }
+            _ => {
+                intents.act(WORKER, EconAction::Harvest { source_idx: 0 });
+            }
+        }
     }
     // The short-source pair: combined 8 e/t against a 300 pool — recurring exhaustion contention.
     for id in [SHORT_HARV_A, SHORT_HARV_B] {
@@ -315,6 +370,7 @@ fn econ_engine_is_deterministic() {
     let mut pull_conflict_ticks = 0u32; // both pullers validly pulling the one target
     let mut pull_target_moves = 0u32;
     let mut spawn_contention_ticks = 0u32; // two requests, room affords at most one
+    let mut repair_energy = 0u64; // M1: the WORKER's drive-by road repairs actually burn energy
     for _ in 0..600 {
         let even = w.tick().is_multiple_of(2);
         if w.creep(PUMP_X).is_some() && w.creep(PUMP_Y).is_some() {
@@ -348,12 +404,43 @@ fn econ_engine_is_deterministic() {
         let r = resolve_econ_tick(&mut w, &intents);
         births += r.births.len();
         deaths += r.deaths.len();
+        repair_energy += r.ledger.repair_roads;
         if w.creep(PULL_TARGET).map(|c| c.pos) != t_before {
             pull_target_moves += 1;
         }
     }
     assert!(births > 5, "the spawn loop kept producing (got {births})");
     assert!(deaths >= 1, "the shuttler's TTL death fired");
+
+    // ── M1 anti-vacuity floors ──────────────────────────────────────────────────────────────────
+    assert!(repair_energy >= 20, "the WORKER's drive-by repairs must recur (burned {repair_energy}e)");
+    let repair_road = w.road_at(pos(REPAIR_ROAD_TILE.0, REPAIR_ROAD_TILE.1)).expect("repair road alive");
+    assert_eq!(
+        w.roads[repair_road].hits, w.roads[repair_road].hits_max,
+        "the WORKER healed its road to full inside the run"
+    );
+    let wear_road = w.road_at(pos(WEAR_ROAD_TILE.0, WEAR_ROAD_TILE.1)).expect("corridor road alive");
+    assert!(
+        w.roads[wear_road].next_decay_at <= 1000 - 40,
+        "hauler traffic must pull the corridor road's decay clock ≥ 40 ticks (at {})",
+        w.roads[wear_road].next_decay_at
+    );
+    let event_road = w.road_at(pos(33, 33)).expect("short-fuse plain road alive");
+    assert_eq!(w.roads[event_road].hits, 4900, "exactly one −100 decay event fired on the plain road");
+    assert!(w.road_at(pos(DOOMED_ROAD_TILE.0, DOOMED_ROAD_TILE.1)).is_none(), "the swamp road died");
+    assert!(
+        !w.movement.terrain.roads.contains(&DOOMED_ROAD_TILE),
+        "the dead road's tile reverted to natural terrain"
+    );
+    assert!(
+        w.movement.terrain.swamps.contains(&DOOMED_ROAD_TILE),
+        "…which is still the swamp underneath"
+    );
+    assert_eq!(w.containers.len(), 2, "the doomed cargo container died (pumper pair survives)");
+    assert!(
+        !w.containers.iter().any(|c| c.pos == pos(DOOMED_CONTAINER_TILE.0, DOOMED_CONTAINER_TILE.1)),
+        "no container remains on the doomed tile"
+    );
     assert!(store_collision_ticks >= 20, "same-store collisions must recur (got {store_collision_ticks})");
     assert!(short_source_ticks >= 100, "the small source must run below demand (got {short_source_ticks})");
     assert!(source_binding_ticks >= 1, "the last-energy harvest split must bind (got {source_binding_ticks})");
@@ -392,6 +479,13 @@ fn fuzz_world(rng: &mut Rng) -> EconWorld {
     w.storage.as_mut().unwrap().store.add(SimResource::Hydrogen, 400);
     w.drop_resource(pos(12, 10), SimResource::Energy, 1_200);
     w.drop_resource(pos(25, 24), SimResource::Ghodium, 90);
+    // M1: damaged roads scattered through the creep field (random Repair targets + wearout under
+    // the random walks); one on swamp (×5 decay), one short-fuse (decay events mid-fuzz).
+    w.movement.terrain.swamps.insert((20, 20));
+    w.add_road(pos(15, 15), 900, 5000);
+    w.add_road(pos(20, 20), 6_000, 25_000);
+    let short_fuse = w.add_road(pos(25, 25), 2_500, 5000);
+    w.roads[short_fuse].next_decay_at = 60;
 
     let bodies: [&[Part]; 4] = [
         &[Part::Work, Part::Work, Part::Carry, Part::Move],
@@ -416,10 +510,11 @@ fn random_resource(rng: &mut Rng) -> SimResource {
 }
 
 fn random_target(rng: &mut Rng) -> StructRef {
-    match rng.range(0, 4) {
+    match rng.range(0, 5) {
         0 => StructRef::Spawn(rng.range(0, 2) as usize), // idx 2 is out of bounds — rejection path
         1 => StructRef::Extension(rng.range(0, 3) as usize),
         2 => StructRef::Container(rng.range(0, 2) as usize),
+        3 => StructRef::Road(rng.range(0, 4) as usize), // idx 3 is out of bounds — rejection path
         _ => StructRef::Storage,
     }
 }
@@ -456,6 +551,11 @@ fn conservation_fuzz_500_ticks() {
                 }
                 3 => {
                     intents.act(id, EconAction::Pickup { dropped_idx: rng.range(0, 6) as usize });
+                }
+                5 => {
+                    // M1: random repairs — storeless/store-only/OOB targets must reject cleanly,
+                    // valid ones must burn exactly the ledgered energy (the audit is the judge).
+                    intents.act(id, EconAction::Repair { target: random_target(&mut rng) });
                 }
                 4 => {
                     // Duplicate-pipeline spam: both a second A and a second D must mask cleanly.

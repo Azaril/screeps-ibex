@@ -6,12 +6,16 @@
 //! calls `resolve_movement` at the movement point of its pipeline (the `Simulation` layering
 //! contract — "No change to that crate is needed to add a layer").
 //!
-//! **Scope (M0):** source harvest + regen (with the first-harvest-below-cap timer), per-resource
-//! stores, transfer/withdraw/pickup, atomic `spawnCreep` energy debit with the engine's draw
-//! order plus spawn self-charge and extensions-by-RCL, TTL death dropping stores to ground,
-//! dropped-resource decay, and an **exact integer energy-conservation audit every tick**,
+//! **Scope (M0 + M1):** source harvest + regen (with the first-harvest-below-cap timer),
+//! per-resource stores, transfer/withdraw/pickup, atomic `spawnCreep` energy debit with the
+//! engine's draw order plus spawn self-charge and extensions-by-RCL, TTL death dropping stores to
+//! ground, dropped-resource decay, and an **exact integer energy-conservation audit every tick**,
 //! surfaced in the tick report (never panic-only — the eval harness gates on it, EP-6.12).
-//! Build/repair/upgrade land in M1/M2; labs/minerals in M6 ([`state::SimMineral`] is a stub).
+//! **M1 adds:** the Repair work intent (roads/containers, engine `creeps/repair.js` pricing,
+//! ledgered by class + the [`RepairLeak`] `repair_leak_e` report mirror), road decay with
+//! `ROAD_WEAROUT` per-step traffic wear, and container decay (death drops the store) — dead
+//! structures are removed and a dead road's tile reverts to natural terrain.
+//! Build/upgrade land in M2; labs/minerals in M6 ([`state::SimMineral`] is a stub).
 //!
 //! **Ground truth** is `docs/references/engine-mechanics.md` (which pins the cloned engine source);
 //! every constant in [`constants`] cites it and is pinned by a unit test. Deviations from the real
@@ -41,7 +45,7 @@ pub use state::{
     EconWorld, PendingCreep, SimContainer, SimController, SimDropped, SimExtension, SimMineral,
     SimResource, SimRoad, SimSource, SimSpawn, SimStorage, SimStore,
 };
-pub use tick::{resolve_econ_tick, EconSim, EconTickReport};
+pub use tick::{resolve_econ_tick, EconSim, EconTickReport, RepairLeak};
 
 // The movement-layer value types come from the kernel; re-export the ones economy call sites need
 // (the combat-engine convention) so `screeps_econ_engine::CreepId` etc. resolve.

@@ -4,8 +4,16 @@
 //! - **Sources (mint):** `harvested` (energy enters the economy at harvest time — source pools are
 //!   NOT stock) and `spawn_self_charge`.
 //! - **Sinks (burn):** `spawn_bodies` (the atomic debit at spawn-intent time; the body is never
-//!   stock) and `dropped_decay` (per resource).
+//!   stock), the M1 repair sinks by structure class (`repair_roads` / `repair_containers` /
+//!   `repair_other`), and `dropped_decay` (per resource — the ADR §D7 "decay" sink,
+//!   [`TickLedger::decay_lost`]).
 //! - **Stock:** every store + dropped piles ([`crate::EconWorld::stocks`]).
+//!
+//! **What decay does and does not ledger (M1):** road/container HIT decay destroys structure hits,
+//! not energy — hits are never ledgered as energy. A container dying at 0 hits DROPS its store to
+//! the ground (stock relocation, no ledger entry), after which ordinary dropped-pile decay books
+//! it under `dropped_decay` — so the only energy decay ever destroys is dropped-pile energy,
+//! exactly as in M0.
 //!
 //! Invariant, checked EVERY tick: `prev_stocks + minted − burned == new_stocks`, exactly. The check
 //! is a `debug_assert!` AND a released-mode flag on the tick report — the eval harness must SEE an
@@ -24,11 +32,30 @@ pub struct TickLedger {
     pub spawn_self_charge: u64,
     /// Energy burned into spawned bodies this tick (the atomic intent-time debit).
     pub spawn_bodies: u64,
+    /// Energy burned repairing ROADS this tick (M1; engine `creeps/repair.js` pricing).
+    pub repair_roads: u64,
+    /// Energy burned repairing CONTAINERS this tick (M1).
+    pub repair_containers: u64,
+    /// Energy burned repairing any other structure class (declared for the ADR §D7 sink set;
+    /// stays 0 in M1 — roads and containers are the only repairable structures until M2).
+    pub repair_other: u64,
     /// Per-resource decay of dropped piles this tick (engine-mechanics.md:431).
     pub dropped_decay: BTreeMap<SimResource, u64>,
 }
 
 impl TickLedger {
+    /// Total repair energy burned this tick (all classes).
+    pub fn repair_total(&self) -> u64 {
+        self.repair_roads + self.repair_containers + self.repair_other
+    }
+
+    /// The ADR §D7 "decay" sink under its ADR name: energy (or mineral) destroyed by decay this
+    /// tick. In M1 this is exactly dropped-pile decay — structure HIT decay destroys hits, not
+    /// energy (module docs), and container-death store drops are stock relocation.
+    pub fn decay_lost(&self, r: SimResource) -> u64 {
+        self.dropped_decay.get(&r).copied().unwrap_or(0)
+    }
+
     fn minted(&self, r: SimResource) -> u64 {
         match r {
             SimResource::Energy => self.harvested + self.spawn_self_charge,
@@ -39,7 +66,7 @@ impl TickLedger {
     fn burned(&self, r: SimResource) -> u64 {
         let decay = self.dropped_decay.get(&r).copied().unwrap_or(0);
         match r {
-            SimResource::Energy => self.spawn_bodies + decay,
+            SimResource::Energy => self.spawn_bodies + self.repair_total() + decay,
             _ => decay,
         }
     }
@@ -117,6 +144,24 @@ mod tests {
         assert_eq!(v[0].resource, SimResource::Energy);
         assert_eq!(v[0].expected, 100);
         assert_eq!(v[0].now, 99);
+    }
+
+    /// M1: repair energy burns by structure class; `repair_total` covers all three; hit decay is
+    /// never an energy flow (`decay_lost` names only dropped-pile decay).
+    #[test]
+    fn repair_sinks_burn_energy_by_class() {
+        let ledger = TickLedger {
+            harvested: 10,
+            repair_roads: 3,
+            repair_containers: 2,
+            repair_other: 0,
+            ..Default::default()
+        };
+        assert_eq!(ledger.repair_total(), 5);
+        assert!(audit_conservation(&stocks(100), &ledger, &stocks(105)).is_empty());
+        // A repair burn NOT booked would violate: prev 100 + 10 minted − 5 burned != 110.
+        assert_eq!(audit_conservation(&stocks(100), &ledger, &stocks(110)).len(), 1);
+        assert_eq!(ledger.decay_lost(SimResource::Energy), 0, "hit decay is not an energy flow");
     }
 
     #[test]

@@ -43,6 +43,65 @@ pub const CREEP_LIFE_TIME: u32 = 1500;
 /// (engine-mechanics.md:431, `energy/tick.js:12`).
 pub const DROPPED_DECAY_DIVISOR: u32 = 1000;
 
+// ── Repair (M1) ─────────────────────────────────────────────────────────────────────────────────
+
+/// Hits restored per WORK part per repair intent — `REPAIR_POWER` 100 (engine-mechanics.md:118,
+/// `common/constants.js:120`; the engine repair pipeline is `creeps/repair.js:23-27`).
+pub const REPAIR_POWER: u32 = 100;
+
+/// Repair energy pricing, expressed as its integer inverse: `REPAIR_COST` is 0.01 energy/hit
+/// (engine `creeps/repair.js:24,27`), i.e. **100 hits repaired per 1 energy** — kept as
+/// hits-per-energy so all repair arithmetic stays exact-integer (the effect clamp is
+/// `energy × REPAIR_HITS_PER_ENERGY`, the cost is `effect.div_ceil(REPAIR_HITS_PER_ENERGY)`,
+/// mirroring the engine's `Math.ceil(repairEffect * REPAIR_COST)`).
+pub const REPAIR_HITS_PER_ENERGY: u32 = 100;
+
+/// Chebyshev repair range — 3 (engine-mechanics.md:118, `creeps/repair.js:19`).
+pub const REPAIR_RANGE: u32 = 3;
+
+// ── Road decay + traffic wear (M1) ──────────────────────────────────────────────────────────────
+
+/// Hits a road loses per decay event, before the terrain ratio — `ROAD_DECAY_AMOUNT` 100
+/// (engine-mechanics.md:430, `roads/tick.js:11-21`, `constants.js:155-159`).
+pub const ROAD_DECAY_AMOUNT: u32 = 100;
+/// Ticks between road decay events — `ROAD_DECAY_TIME` 1000 (engine-mechanics.md:430).
+pub const ROAD_DECAY_TIME: u32 = 1000;
+/// Road hitsMax on plain terrain — `ROAD_HITS` 5000; swamp roads multiply BOTH hitsMax and the
+/// decay amount by [`ROAD_SWAMP_RATIO`] (engine-mechanics.md:430: "−(100 × terrain ratio) hits per
+/// 1,000 ticks (swamp ×5, tunnel ×150)"; hitsMax `constants.js:192-211`). Wall tunnels (×150) are
+/// deliberately NOT modeled — foreman plans no tunnels (documented M1 scope cut).
+pub const ROAD_HITS: u32 = 5000;
+/// The swamp terrain ratio for road hitsMax + decay — `CONSTRUCTION_COST_ROAD_SWAMP_RATIO` 5
+/// (engine-mechanics.md:430, `constants.js:155-159`).
+pub const ROAD_SWAMP_RATIO: u32 = 5;
+/// Per-creep-step road wear — `ROAD_WEAROUT` 1: each creep STEP onto a road tile pulls the road's
+/// `nextDecayTime` FORWARD by `ROAD_WEAROUT × body.length` ticks (engine-mechanics.md:430,
+/// `movement.js:215-219`) — traffic accelerates the decay CLOCK; it never damages hits directly.
+/// (`ROAD_WEAROUT_POWER_CREEP` 100 is not modeled — no power creeps in the sim.)
+pub const ROAD_WEAROUT: u32 = 1;
+
+/// A road's hitsMax for its terrain (plain 5000 / swamp 25000 — engine-mechanics.md:430).
+pub fn road_hits_max(swamp: bool) -> u32 {
+    if swamp {
+        ROAD_HITS * ROAD_SWAMP_RATIO
+    } else {
+        ROAD_HITS
+    }
+}
+
+// ── Container decay (M1) ────────────────────────────────────────────────────────────────────────
+
+/// Hits a container loses per decay event — `CONTAINER_DECAY` 5000 (engine-mechanics.md:429,
+/// `containers/tick.js:10-31`, `constants.js:339-343`).
+pub const CONTAINER_DECAY: u32 = 5_000;
+/// Decay window where the room controller is level 0 (incl. reserved remotes) —
+/// `CONTAINER_DECAY_TIME` 100 (engine-mechanics.md:429).
+pub const CONTAINER_DECAY_TIME: u32 = 100;
+/// Decay window at RCL ≥ 1 — `CONTAINER_DECAY_TIME_OWNED` 500 (engine-mechanics.md:429).
+pub const CONTAINER_DECAY_TIME_OWNED: u32 = 500;
+/// Container hitsMax — 250K (engine-mechanics.md:429).
+pub const CONTAINER_HITS: u32 = 250_000;
+
 /// Extension energy capacity by controller level: 50 (RCL ≤ 6), 100 (RCL 7), 200 (RCL 8) —
 /// `EXTENSION_ENERGY_CAPACITY` (engine-mechanics.md:456). NOTE: the engine RECOMPUTES this from
 /// the room's **current** controller level every tick (`extensions/tick.js:11`), not once at
@@ -101,6 +160,26 @@ mod tests {
         assert_eq!(CREEP_LIFE_TIME, 1500);
         // engine-mechanics.md:431 — dropped decay ceil(amount/1000)/tick.
         assert_eq!(DROPPED_DECAY_DIVISOR, 1000);
+        // engine-mechanics.md:118 — repair 100 hits/WORK, range ≤ 3; REPAIR_COST 0.01 e/hit
+        // (`creeps/repair.js:24`) inverted to 100 hits/energy for exact-integer arithmetic.
+        assert_eq!(REPAIR_POWER, 100);
+        assert_eq!(REPAIR_HITS_PER_ENERGY, 100);
+        assert_eq!(REPAIR_RANGE, 3);
+        // engine-mechanics.md:430 — road decay 100 hits / 1000 ticks, swamp ×5 (hitsMax 5000
+        // plain / 25000 swamp), per-step wear pulls nextDecayTime by 1 × body.length.
+        assert_eq!(ROAD_DECAY_AMOUNT, 100);
+        assert_eq!(ROAD_DECAY_TIME, 1000);
+        assert_eq!(ROAD_HITS, 5000);
+        assert_eq!(ROAD_SWAMP_RATIO, 5);
+        assert_eq!(ROAD_WEAROUT, 1);
+        assert_eq!(road_hits_max(false), 5000);
+        assert_eq!(road_hits_max(true), 25_000);
+        // engine-mechanics.md:429 — container −5000 hits per 100 ticks (RCL 0) / 500 (RCL ≥ 1),
+        // 250K hitsMax.
+        assert_eq!(CONTAINER_DECAY, 5_000);
+        assert_eq!(CONTAINER_DECAY_TIME, 100);
+        assert_eq!(CONTAINER_DECAY_TIME_OWNED, 500);
+        assert_eq!(CONTAINER_HITS, 250_000);
     }
 
     /// engine-mechanics.md:456 — extension capacity 50 (RCL ≤ 6) / 100 (RCL 7) / 200 (RCL 8).
