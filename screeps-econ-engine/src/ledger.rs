@@ -37,8 +37,16 @@ pub struct TickLedger {
     /// Energy burned repairing CONTAINERS this tick (M1).
     pub repair_containers: u64,
     /// Energy burned repairing any other structure class (declared for the ADR §D7 sink set;
-    /// stays 0 in M1 — roads and containers are the only repairable structures until M2).
+    /// stays 0 in M2 — roads and containers remain the only repairable structures).
     pub repair_other: u64,
+    /// Energy burned into controller progress this tick (M2; 1 e/progress —
+    /// `creeps/upgradeController.js:92`). At RCL 8 the energy is spent with no progress (GCL-only
+    /// live); it still burns here.
+    pub upgrade: u64,
+    /// Energy burned into construction-site progress this tick (M2; 1 e/progress —
+    /// `creeps/build.js:69,83`). Site progress is NOT stock — the energy leaves the economy at
+    /// intent time, exactly like body costs.
+    pub build: u64,
     /// Per-resource decay of dropped piles this tick (engine-mechanics.md:431).
     pub dropped_decay: BTreeMap<SimResource, u64>,
 }
@@ -66,7 +74,7 @@ impl TickLedger {
     fn burned(&self, r: SimResource) -> u64 {
         let decay = self.dropped_decay.get(&r).copied().unwrap_or(0);
         match r {
-            SimResource::Energy => self.spawn_bodies + self.repair_total() + decay,
+            SimResource::Energy => self.spawn_bodies + self.repair_total() + self.upgrade + self.build + decay,
             _ => decay,
         }
     }
@@ -162,6 +170,14 @@ mod tests {
         // A repair burn NOT booked would violate: prev 100 + 10 minted − 5 burned != 110.
         assert_eq!(audit_conservation(&stocks(100), &ledger, &stocks(110)).len(), 1);
         assert_eq!(ledger.decay_lost(SimResource::Energy), 0, "hit decay is not an energy flow");
+    }
+
+    /// M2: upgrade + build energy are burns — an unbooked upgrade/build spend violates the audit.
+    #[test]
+    fn upgrade_and_build_sinks_burn_energy() {
+        let ledger = TickLedger { harvested: 20, upgrade: 7, build: 12, ..Default::default() };
+        assert!(audit_conservation(&stocks(100), &ledger, &stocks(101)).is_empty());
+        assert_eq!(audit_conservation(&stocks(100), &ledger, &stocks(120)).len(), 1, "unbooked burn caught");
     }
 
     #[test]

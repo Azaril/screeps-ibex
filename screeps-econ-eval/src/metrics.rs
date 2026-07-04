@@ -6,17 +6,32 @@ use screeps_econ_engine::{EconTickReport, EconWorld, SimResource};
 use screeps_rover_eval::stats::{bootstrap_weighted_mean_ci, Summary};
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
-// Recovered-state constants (ADR §D7 T_recover; open decision #7 — named + env-overridable so the
-// sweep can probe them; the 0.9 cliff is #7's justify-or-replace subject).
+// Recovered-state constants (ADR §D7 T_recover; open decision #7).
+//
+// **#7 DECIDED AT M2 (evidence-driven; operator veto pending — recorded in ADR 0040 §D8 #7):**
+// the OFFICIAL recovered state is LANE-ONLY — spawn/extension energy == capacity sustained for
+// `full_window` consecutive ticks. The former condition (ii), trailing income ≥ 0.9 × source
+// potential, is DEMOTED to a reported self-sufficiency DIAGNOSTIC (`self_sufficient_at`): kept
+// per-scenario in baselines and printed, never gating, never exiting non-zero. Evidence (M2,
+// SHA 355ad75-dirty): **the 0.9 cliff measures ACTIVITY, not recovery** — the bait arm's
+// disease-triggered repairer-builder is an extra generalist whose busywork satisfies the income
+// condition EARLIER than the control, inverting the paired repro diff at RCL 3
+// (E11N1-rcl3 mean ΔT_recover = −1372; fast-corpus gate FAIL: +338.9, CI95 [−415.2, +1106.6])
+// while the lane-only condition kept every scenario positive (fast PASS +781.2, CI95
+// [+632.3, +939.6]; full corpus +580.2 [+514.8, +645.9]). Family D showed the same shape
+// (D-E11N1-rcl3 ΔT vs C = −11,619: the CRITICAL upkeep upgrader's extra demand pushed the D
+// arm over the income cliff the C arm capped on).
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 
 #[derive(Clone, Copy, Debug)]
 pub struct RecoverConsts {
-    /// (i) spawn/extension energy == capacity for this many CONSECUTIVE ticks — RECOVER_FULL_WINDOW.
+    /// THE recovered state (official, #7 decision above): spawn/extension energy == capacity for
+    /// this many CONSECUTIVE ticks — RECOVER_FULL_WINDOW.
     pub full_window: u32,
-    /// (ii) trailing income ≥ this per-mille of source potential — RECOVER_INCOME_FRAC (900 = 0.9).
+    /// DIAGNOSTIC ONLY (#7 demotion): trailing income ≥ this per-mille of source potential feeds
+    /// [`RecoveryTracker::self_sufficient_at`] — reported, never gating.
     pub income_frac_q: u32,
-    /// The trailing-income window (the ADR's 300t).
+    /// The trailing-income window for the diagnostic (the ADR's 300t).
     pub income_window: u32,
 }
 
@@ -46,9 +61,9 @@ impl RecoverConsts {
     }
 }
 
-/// Streaming T_recover detection: recovered = the first tick where BOTH (i) the spawn lane has
-/// been full for `full_window` consecutive ticks AND (ii) trailing-`income_window` harvested
-/// income meets the threshold.
+/// Streaming T_recover detection. **Official (#7, module docs): recovered = the first tick the
+/// spawn lane has been full for `full_window` consecutive ticks — lane-only.** The trailing
+/// income condition survives as [`Self::self_sufficient_at`], a reported diagnostic.
 pub struct RecoveryTracker {
     consts: RecoverConsts,
     n_sources: u32,
@@ -56,7 +71,11 @@ pub struct RecoveryTracker {
     income_ring: Vec<u64>,
     income_sum: u64,
     tick_count: u32,
+    /// The OFFICIAL T_recover: lane full, sustained (#7).
     pub recovered_at: Option<u32>,
+    /// DIAGNOSTIC: the first tick trailing-`income_window` harvested income met the
+    /// `income_frac_q` threshold (the demoted 0.9 cliff — reported, never gating).
+    pub self_sufficient_at: Option<u32>,
 }
 
 impl RecoveryTracker {
@@ -70,6 +89,7 @@ impl RecoveryTracker {
             income_sum: 0,
             tick_count: 0,
             recovered_at: None,
+            self_sufficient_at: None,
         }
     }
 
@@ -84,12 +104,28 @@ impl RecoveryTracker {
         let full = capacity > 0 && world.room_spawn_energy() >= capacity;
         self.full_streak = if full { self.full_streak + 1 } else { 0 };
 
-        if self.recovered_at.is_none()
-            && self.full_streak >= self.consts.full_window
-            && self.income_sum >= self.consts.income_threshold(self.n_sources)
-        {
+        if self.recovered_at.is_none() && self.full_streak >= self.consts.full_window {
             self.recovered_at = Some(report.tick);
         }
+        if self.self_sufficient_at.is_none()
+            && self.income_sum >= self.consts.income_threshold(self.n_sources)
+        {
+            self.self_sufficient_at = Some(report.tick);
+        }
+    }
+}
+
+/// The clamped/raw η pair (review A1): `eta` = min(T*/T, 1) — the H-semantics value (H is
+/// regression-tracked in (0,1]); `eta_raw` = the UNCLAMPED ratio — the oracle-sanity gate's
+/// instrument (`eta_raw > 1 + ε` ⟺ the "lower bound" exceeded an achieved T: an oracle bug).
+/// Non-finish (None / t == 0) is (0, 0) — saturation, never an oracle violation.
+pub fn etas(t_star: u32, reached: Option<u32>) -> (f64, f64) {
+    match reached {
+        Some(t) if t > 0 => {
+            let raw = t_star as f64 / t as f64;
+            (raw.min(1.0), raw)
+        }
+        _ => (0.0, 0.0),
     }
 }
 
@@ -281,6 +317,18 @@ pub fn energy_stock(world: &EconWorld) -> u64 {
     world.stocks().get(&SimResource::Energy).copied().unwrap_or(0)
 }
 
+/// Nearest-rank percentile over an UNSORTED sample (sorts a copy; p ∈ [0, 1]). 0 on empty —
+/// the Family-S refill-latency distribution helper.
+pub fn percentile_u32(samples: &[u32], p: f64) -> u32 {
+    if samples.is_empty() {
+        return 0;
+    }
+    let mut v = samples.to_vec();
+    v.sort_unstable();
+    let rank = ((p * v.len() as f64).ceil() as usize).clamp(1, v.len());
+    v[rank - 1]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,6 +338,23 @@ mod tests {
         let c = RecoverConsts::default();
         assert_eq!(c.income_threshold(1), 2700, "0.9 × 1 source × 10 e/t × 300t");
         assert_eq!(c.income_threshold(2), 5400);
+    }
+
+    /// Review A1 — the oracle-sanity gate must be LIVE: `eta` clamps (H semantics) but `eta_raw`
+    /// does not, so an oracle exceeding an achieved T (T* > T) trips the bench's
+    /// `eta_raw > 1 + ε` check. This pins the exact gate expression against the clamped trap.
+    #[test]
+    fn eta_raw_is_unclamped_and_fires_the_oracle_gate() {
+        let (eta, raw) = etas(1200, Some(1000)); // T* > T: an oracle violation
+        assert_eq!(eta, 1.0, "clamped for H");
+        assert!((raw - 1.2).abs() < 1e-12, "raw carries the violation");
+        assert!(raw > 1.01, "THE GATE FIRES on the raw value");
+        assert!(eta <= 1.01, "…and would NOT have fired on the clamped value (the A1 defect)");
+
+        let (eta, raw) = etas(500, Some(1000)); // healthy
+        assert!((eta - 0.5).abs() < 1e-12 && (raw - 0.5).abs() < 1e-12);
+        assert_eq!(etas(500, None), (0.0, 0.0), "saturation is never a violation");
+        assert_eq!(etas(500, Some(0)), (0.0, 0.0));
     }
 
     #[test]

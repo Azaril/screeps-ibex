@@ -1,13 +1,27 @@
-//! **Family C — collapse** (ADR 0040 §D7; M1 spec Part C.4): a captured foreman layout realized
-//! as of RCL R, spawns/extensions drained to 0, storage at S0, creeps wiped or a skeleton, roads
-//! pre-decayed (the BAIT axis) — run until recovered or the tick cap. Every bait scenario has an
-//! IDENTICAL no-bait control (roads at 100%, same seed ⇒ same decay phases/skeleton) so the
-//! repro gate's paired diff isolates exactly the repair-bait axis.
+//! The scenario families (ADR 0040 §D7):
 //!
-//! The downgrade clock is scenario STATE only until M2 (set + reported, never ticked — M2 owns
-//! controller mechanics; documented per the spec).
+//! - **Family C — collapse** (M1): a captured foreman layout realized as of RCL R,
+//!   spawns/extensions drained to 0, storage at S0, creeps wiped or a skeleton, roads
+//!   pre-decayed (the BAIT axis) — run until recovered or the tick cap. Every bait scenario has
+//!   an IDENTICAL no-bait control (roads at 100%, same seed ⇒ same decay phases/skeleton) so the
+//!   repro gate's paired diff isolates exactly the repair-bait axis. Since M2 the downgrade
+//!   clock TICKS (it starts full here — no downgrade pressure inside a recovery horizon).
+//! - **Family G — greenfield rush** (M2): virgin room at RCL 1 with the plan's anchor spawn
+//!   only; the construction pass builds the plan per `required_rcl` as the rush levels; scored
+//!   by T_RCL(N) against the conservation-bound T*_RCL(N) oracle. Seeds jitter the
+//!   construction-pass phase (live rooms sit at arbitrary 50-tick phase; greenfield has no other
+//!   natural jitter — documented).
+//! - **Family D — downgrade pressure** (M2): the Family C collapse start with the downgrade
+//!   clock at 10% — the refill-vs-controller-save triage; scored by T_recover AND levels_lost.
+//! - **Family S — steady state, THE GUARD RAIL** (M2): a healthy room (full lane, stocked
+//!   stores, full fleet with seed-jittered TTLs, roads at 100%) run a 10k-tick horizon;
+//!   refill-latency distribution, spawn idle, road-stock trajectory (must not collapse),
+//!   steady-state repair leak, flap rate, and intents/tick are the products. Includes LOW-RCL
+//!   healthy rooms (the S1 constants' breadth — the §D8 #2 evidence channel).
 
-use crate::layout::{controller_downgrade_full, realize, LayoutInfo, RealizeParams};
+use crate::layout::{
+    controller_downgrade_full, realize, realize_greenfield, LayoutInfo, RealizeParams,
+};
 use screeps::{Part, Position};
 use screeps_econ_engine::{EconWorld, SimResource};
 use screeps_rover_eval::base_traffic::{captured_layouts, CapturedLayout};
@@ -189,6 +203,253 @@ pub fn instantiate(sc: &EconScenario) -> (EconWorld, SimTerrain, LayoutInfo) {
     (world, realized.terrain, realized.info)
 }
 
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// Family G — greenfield rush (M2).
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+/// One greenfield rush scenario: layout + target RCL. The SEED jitters the construction-pass
+/// phase only (module docs).
+#[derive(Clone, Debug)]
+pub struct RushScenario {
+    pub name: String,
+    pub layout_room: String,
+    pub target_rcl: u8,
+    pub tick_cap: u32,
+    pub seed: u32,
+}
+
+/// Default Family-G tick cap (N ≤ 4 rushes finish well inside; env `ECON_G_TICK_CAP` overrides
+/// in the bench). RCL 4 needs 180,200 progress ≈ 9k ticks at full 2-source potential — real
+/// baselines run 3-6× the oracle, hence the headroom.
+pub const DEFAULT_G_TICK_CAP: u32 = 60_000;
+
+impl RushScenario {
+    pub fn new(room: &str, target_rcl: u8, seed: u32) -> Self {
+        RushScenario {
+            name: format!("G-{room}-rcl{target_rcl}#s{seed}"),
+            layout_room: room.to_string(),
+            target_rcl,
+            tick_cap: DEFAULT_G_TICK_CAP,
+            seed,
+        }
+    }
+
+    /// Instantiate the greenfield world (+ its Family-C-shaped shell for the runner's
+    /// `EconScenario` fields the outcome line reads).
+    pub fn instantiate(&self) -> (EconWorld, SimTerrain, LayoutInfo) {
+        let layouts = captured_layouts();
+        let layout: &CapturedLayout = layouts
+            .iter()
+            .find(|l| l.room == self.layout_room)
+            .unwrap_or_else(|| panic!("rush layout `{}` not in the captured cache", self.layout_room));
+        let realized = realize_greenfield(layout);
+        (realized.world, realized.terrain, realized.info)
+    }
+
+    /// The runner's scenario shell (name/seed/cap — the RunOutcome header fields).
+    pub fn shell(&self) -> EconScenario {
+        EconScenario {
+            name: self.name.clone(),
+            layout_room: self.layout_room.clone(),
+            rcl: 1,
+            storage_energy: 0,
+            creeps: CreepInit::Wiped,
+            road_health_pct: 100,
+            downgrade_clock_pct: 100,
+            tick_cap: self.tick_cap,
+            seed: self.seed,
+            bait: false,
+        }
+    }
+}
+
+/// The G corpus: every captured layout at `target_rcl` × `seeds` phase-jitter seeds.
+pub fn rush_catalog(target_rcl: u8, seeds: u32) -> Vec<RushScenario> {
+    captured_layouts()
+        .iter()
+        .flat_map(|l| (1..=seeds).map(move |s| RushScenario::new(&l.room, target_rcl, s)))
+        .collect()
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// Family D — downgrade pressure (M2).
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+/// Family D = the Family C catalog with the downgrade clock at 10% (the refill-vs-controller
+/// triage; scored by T_recover AND levels_lost).
+pub fn downgrade_catalog() -> Vec<EconScenario> {
+    catalog()
+        .into_iter()
+        .map(|mut sc| {
+            sc.downgrade_clock_pct = 10;
+            sc.name = format!("D-{}", sc.name);
+            sc
+        })
+        .collect()
+}
+
+/// The fast-mode Family-D subset (mirrors `fast_catalog`'s axes).
+pub fn fast_downgrade_catalog() -> Vec<EconScenario> {
+    fast_catalog()
+        .into_iter()
+        .map(|mut sc| {
+            sc.downgrade_clock_pct = 10;
+            sc.name = format!("D-{}", sc.name);
+            sc
+        })
+        .collect()
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// Family S — steady-state guard rail (M2).
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+/// One steady-state scenario: a HEALTHY room at `rcl` run for a 10k-tick horizon.
+#[derive(Clone, Debug)]
+pub struct SteadyScenario {
+    pub name: String,
+    pub layout_room: String,
+    pub rcl: u8,
+    pub tick_cap: u32,
+    pub seed: u32,
+}
+
+pub const DEFAULT_S_TICK_CAP: u32 = 10_000;
+
+impl SteadyScenario {
+    pub fn new(room: &str, rcl: u8, seed: u32) -> Self {
+        SteadyScenario {
+            name: format!("S-{room}-rcl{rcl}#s{seed}"),
+            layout_room: room.to_string(),
+            rcl,
+            tick_cap: DEFAULT_S_TICK_CAP,
+            seed,
+        }
+    }
+
+    /// Instantiate the healthy world: full realization at `rcl` (roads 100%, decay phases
+    /// seed-jittered), spawn lane FULL, storage stocked to 200k (RCL ≥ 4 — `has_excess`
+    /// exercised) / source+controller containers stocked (RCL < 4), and the steady fleet
+    /// pre-seeded with seed-jittered TTLs so the TTL churn spreads: 2 capacity-sized shuttle
+    /// harvesters per source + 2 haulers (upgraders/builders spawn organically within the first
+    /// K4 passes — their bodies depend on live state the policy itself computes).
+    pub fn instantiate(&self) -> (EconWorld, SimTerrain, LayoutInfo) {
+        let layouts = captured_layouts();
+        let layout: &CapturedLayout = layouts
+            .iter()
+            .find(|l| l.room == self.layout_room)
+            .unwrap_or_else(|| panic!("steady layout `{}` not in the captured cache", self.layout_room));
+        let realized = realize(
+            layout,
+            &RealizeParams { rcl: self.rcl, road_health_pct: 100, seed: self.seed },
+        );
+        let mut world = realized.world;
+        let info = realized.info;
+
+        // Healthy stores: full spawn lane (spawns are born full; extensions topped)…
+        for i in 0..world.extensions.len() {
+            world.extensions[i].store_energy = world.extensions[i].capacity;
+        }
+        // …stocked storage at RCL ≥ 4 (200k = the desired amount; has_excess true) or stocked
+        // containers below (source containers half, the controller container near-full).
+        if let Some(storage) = world.storage.as_mut() {
+            storage.store.add(SimResource::Energy, 200_000);
+        } else {
+            let roles = info.container_roles.clone();
+            for c in world.containers.iter_mut() {
+                let tile = (c.pos.x().u8(), c.pos.y().u8());
+                match roles.get(&tile) {
+                    Some(crate::layout::ContainerRole::Controller) => {
+                        c.store.add(SimResource::Energy, 1_600);
+                    }
+                    _ => {
+                        c.store.add(SimResource::Energy, 1_000);
+                    }
+                }
+            }
+        }
+
+        // The steady fleet with jittered TTLs (uniform 200..1400 — churn spreads immediately).
+        let mut rng = Rng::seeded(self.seed.wrapping_mul(6151).wrapping_add(17));
+        let capacity = crate::baseline::spawn_lane_capacity(&world);
+        let harvester = crate::baseline::harvester_body(capacity).expect("capacity ≥ 300");
+        let hauler = crate::baseline::hauler_body(capacity).expect("capacity ≥ 300");
+        let spawn_pos = world.spawns[0].pos;
+        let n_sources = world.sources.len();
+        let mut placed = 0u8;
+        for _src in 0..n_sources {
+            for _ in 0..2 {
+                let tile = fleet_tile(&world, spawn_pos, placed);
+                placed += 1;
+                let ttl = rng.range(200, 1400);
+                world.add_creep(tile, &harvester, ttl);
+            }
+        }
+        for _ in 0..2 {
+            let tile = fleet_tile(&world, spawn_pos, placed);
+            placed += 1;
+            let ttl = rng.range(200, 1400);
+            world.add_creep(tile, &hauler, ttl);
+        }
+
+        (world, realized.terrain, info)
+    }
+
+    pub fn shell(&self) -> EconScenario {
+        EconScenario {
+            name: self.name.clone(),
+            layout_room: self.layout_room.clone(),
+            rcl: self.rcl,
+            storage_energy: 0,
+            creeps: CreepInit::Wiped,
+            road_health_pct: 100,
+            downgrade_clock_pct: 100,
+            tick_cap: self.tick_cap,
+            seed: self.seed,
+            bait: false,
+        }
+    }
+}
+
+/// The S corpus: RCL {2 (low-RCL healthy — the §D8 #2 evidence channel), 4, 6} over a 4-layout
+/// spread (full mode; `fast` takes the first pair).
+pub fn steady_catalog(seed: u32) -> Vec<SteadyScenario> {
+    let rooms = ["E11N1", "E12S41", "E11N14", "E13S29"];
+    let mut out = Vec::new();
+    for (i, room) in rooms.iter().enumerate() {
+        let rcl = [2u8, 4, 6, 4][i];
+        out.push(SteadyScenario::new(room, rcl, seed));
+    }
+    // The low-RCL breadth arm: a second RCL-2 and an RCL-3 healthy room.
+    out.push(SteadyScenario::new("E11N37", 3, seed));
+    out.push(SteadyScenario::new("E11N23", 2, seed));
+    out
+}
+
+/// A free walkable tile near the spawn for fleet seeding: ring-scan outward from the spawn,
+/// skipping occupied tiles, offset by `n` (deterministic).
+fn fleet_tile(world: &EconWorld, spawn_pos: Position, n: u8) -> Position {
+    let mut count = 0u8;
+    for radius in 1..=4i32 {
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                if dx.abs().max(dy.abs()) != radius {
+                    continue;
+                }
+                if let Ok(p) = spawn_pos.checked_add((dx, dy)) {
+                    if world.is_walkable(p) {
+                        if count == n {
+                            return p;
+                        }
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+    panic!("no free fleet tile within radius 4 of the spawn");
+}
+
 /// The first walkable tile adjacent to the spawn (row-major, the birth-tile order) for the
 /// skeleton survivor.
 fn skeleton_tile(world: &EconWorld, spawn_pos: Position) -> Position {
@@ -253,6 +514,58 @@ mod tests {
                 "control differs from bait ONLY on the health axis"
             );
         }
+    }
+
+    /// Family G well-posedness (M2): greenfield = anchor spawn + controller level 1 (full
+    /// 20k clock) + virgin sources, NOTHING else; the plan schedule is available for the
+    /// construction pass; the D catalog only moves the clock axis; Family S rooms are healthy
+    /// (full lane, stocked stores, seeded fleet with jittered TTLs).
+    #[test]
+    fn m2_families_instantiate_well_posed() {
+        let rush = RushScenario::new("E11N1", 4, 1);
+        let (w, _, info) = rush.instantiate();
+        assert_eq!(w.spawns.len(), 1, "the anchor spawn only");
+        assert_eq!(w.spawns[0].store_energy, 300, "born full (the documented greenfield E0)");
+        assert!(w.extensions.is_empty() && w.roads.is_empty() && w.containers.is_empty());
+        assert!(w.storage.is_none() && w.sites.is_empty() && w.towers.is_empty());
+        let c = w.controller.as_ref().unwrap();
+        assert_eq!((c.level, c.progress, c.downgrade_ticks), (1, 0, 20_000));
+        assert!(w.sources.iter().all(|s| s.energy == 3000), "virgin sources");
+        assert!(!info.plan_structures.is_empty(), "the build schedule rides along");
+        assert!(
+            info.plan_structures.iter().any(|s| s.kind == screeps_econ_engine::StructureKind::Extension && s.required_rcl == 2),
+            "RCL-2 extensions are in the schedule"
+        );
+
+        for (d, c) in downgrade_catalog().iter().zip(catalog().iter()) {
+            assert_eq!(d.downgrade_clock_pct, 10);
+            assert_eq!(d.layout_room, c.layout_room, "D = C with only the clock axis moved");
+            assert_eq!(d.road_health_pct, c.road_health_pct);
+        }
+        let (w, _, _) = instantiate(&downgrade_catalog()[0]);
+        let c = w.controller.as_ref().unwrap();
+        assert_eq!(c.downgrade_ticks, controller_downgrade_full(c.level) / 10, "clock at 10%");
+
+        let steady = SteadyScenario::new("E12S41", 4, 7);
+        let (w, _, _) = steady.instantiate();
+        let capacity = crate::baseline::spawn_lane_capacity(&w);
+        assert_eq!(w.room_spawn_energy(), capacity, "healthy: the spawn lane starts FULL");
+        assert_eq!(
+            w.storage.as_ref().unwrap().store.amount(SimResource::Energy),
+            200_000,
+            "healthy: storage stocked to the desired amount"
+        );
+        assert!(w.movement.creeps.len() >= 4, "the steady fleet is seeded");
+        let ttls: Vec<u32> = w.creep_ttl.values().copied().collect();
+        assert!(
+            ttls.iter().max() > ttls.iter().min(),
+            "TTLs jittered — churn spreads ({ttls:?})"
+        );
+        // A low-RCL healthy room stocks its containers instead.
+        let steady2 = SteadyScenario::new("E11N1", 2, 7);
+        let (w2, _, _) = steady2.instantiate();
+        assert!(w2.storage.is_none());
+        assert!(w2.containers.iter().any(|c| c.store.amount(SimResource::Energy) > 0), "containers stocked");
     }
 
     /// Seeds jitter phases/skeletons but never the axes; generate() stays in the axes' ranges.

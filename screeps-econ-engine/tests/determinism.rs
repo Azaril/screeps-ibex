@@ -27,6 +27,7 @@
 use screeps::{Direction, Part, Position, RoomCoordinate, RoomName};
 use screeps_econ_engine::{
     resolve_econ_tick, EconAction, EconIntents, EconTickReport, EconWorld, SimResource, StructRef,
+    StructureKind,
 };
 use screeps_sim_core::rng::Rng;
 use screeps_sim_core::CreepId;
@@ -86,6 +87,25 @@ fn fold_report(mut h: u64, r: &EconTickReport) -> u64 {
     }
     eat(r.rejected_actions as u64);
     eat(r.conservation.len() as u64);
+    // M2: the controller/build lanes are part of the pinned history.
+    eat(r.ledger.upgrade);
+    eat(r.ledger.build);
+    for l in &r.level_ups {
+        eat(*l as u64);
+    }
+    for l in &r.downgrades {
+        eat(*l as u64);
+    }
+    for (kind, p) in &r.sites_completed {
+        eat(*kind as u64);
+        eat(p.x().u8() as u64);
+        eat(p.y().u8() as u64);
+    }
+    if let Some((level, progress, clock)) = r.controller {
+        eat(level as u64);
+        eat(progress as u64);
+        eat(clock as u64);
+    }
     h
 }
 
@@ -457,6 +477,172 @@ fn det_reorder() {
     assert_eq!(run_fixture(600, false), run_fixture(600, true), "insertion order leaked into the outcome");
 }
 
+// ── The M2 fence: controller + build mechanics entered the state/digest — re-prove spread 0 ─────
+
+const M2_UPGRADER: CreepId = 1;
+const M2_BUILDER: CreepId = 2;
+
+/// The M2 fixture: a level-2 controller with a 40-tick fuse (one DOWNGRADE fires ~t39 while the
+/// upgrader hasn't started), an upgrader that from t60 upgrades every tick with the live
+/// parallel-refill withdraw (Pipeline D + E in one tick), and a builder chewing through an
+/// extension site, a swamp road site, and one placed MID-RUN — level-up, downgrade, site
+/// placement, completion/materialization, and the upgrade/build sinks all inside 600 ticks.
+fn m2_fixture() -> EconWorld {
+    let mut w = EconWorld::default();
+    w.set_controller(pos(30, 30), 2);
+    {
+        let c = w.controller.as_mut().unwrap();
+        c.progress = 100;
+        c.downgrade_ticks = 40; // expires ≈ t39 → level 1, progress += 0.9 × 200
+    }
+    // The upgrader + its feeders (a 2000 container, then storage backup).
+    w.add_creep(pos(32, 30), &[Part::Work, Part::Work, Part::Work, Part::Work, Part::Work, Part::Carry, Part::Carry, Part::Move], 100_000); // 1
+    let cu = w.add_container(pos(33, 30), 2000, 250_000);
+    w.containers[cu].store.add(SimResource::Energy, 2000);
+    w.set_storage(pos(33, 31), 1_000_000);
+    w.storage.as_mut().unwrap().store.add(SimResource::Energy, 10_000);
+
+    // The builder + its feeders + the pre-placed sites.
+    w.add_creep(
+        pos(10, 30),
+        &[Part::Work, Part::Work, Part::Work, Part::Work, Part::Work, Part::Work, Part::Work, Part::Work, Part::Work, Part::Work, Part::Carry, Part::Carry, Part::Carry, Part::Carry, Part::Move],
+        100_000,
+    ); // 2 — 50 progress/t, 200 carry
+    for (i, p) in [pos(9, 30), pos(10, 29), pos(9, 29)].into_iter().enumerate() {
+        let c = w.add_container(p, 2000, 250_000);
+        w.containers[c].store.add(SimResource::Energy, 2000);
+        let _ = i;
+    }
+    w.movement.terrain.swamps.insert((12, 31));
+    w.add_construction_site(pos(11, 30), StructureKind::Extension).expect("extension site places");
+    let road = w.add_construction_site(pos(12, 31), StructureKind::Road).expect("swamp road site places");
+    assert_eq!(w.sites[road].total, 1500, "swamp road cost ×5 at placement");
+    w
+}
+
+/// The scripted per-tick intents for the M2 fixture (purely state-derived).
+fn m2_scripted(w: &EconWorld) -> EconIntents {
+    let mut intents = EconIntents::new();
+    let tick = w.tick();
+
+    // Upgrader: from t60, upgrade every tick; when the store is about to run dry (≤ 5 = one
+    // tick's conversion), ALSO withdraw this tick (the live parallel D+E refill idiom).
+    if w.creep(M2_UPGRADER).is_some() {
+        let energy = w.creep_stores[&M2_UPGRADER].amount(SimResource::Energy);
+        if tick >= 60 {
+            if energy > 0 {
+                intents.act(M2_UPGRADER, EconAction::UpgradeController);
+            }
+            if energy <= 5 {
+                let feeder = w
+                    .containers
+                    .iter()
+                    .position(|c| c.pos == pos(33, 30) && c.store.amount(SimResource::Energy) > 0)
+                    .map(StructRef::Container)
+                    .unwrap_or(StructRef::Storage);
+                intents.act(M2_UPGRADER, EconAction::Withdraw { target: feeder, resource: SimResource::Energy, amount: 100 });
+            }
+        } else if energy < 100 && tick < 3 {
+            intents.act(M2_UPGRADER, EconAction::Withdraw { target: StructRef::Container(0), resource: SimResource::Energy, amount: 100 });
+        }
+    }
+
+    // Builder: build the FIRST live site each tick (index re-derived — the compaction contract);
+    // withdraw from the first non-empty feeder whenever the store dips below one build's worth.
+    if w.creep(M2_BUILDER).is_some() {
+        let energy = w.creep_stores[&M2_BUILDER].amount(SimResource::Energy);
+        if !w.sites.is_empty() && energy > 0 {
+            intents.act(M2_BUILDER, EconAction::Build { site_idx: 0 });
+        }
+        if energy <= 50 {
+            if let Some(feeder) = w
+                .containers
+                .iter()
+                .position(|c| c.pos != pos(33, 30) && c.store.amount(SimResource::Energy) > 0)
+            {
+                intents.act(M2_BUILDER, EconAction::Withdraw { target: StructRef::Container(feeder), resource: SimResource::Energy, amount: 200 });
+            }
+        }
+    }
+    intents
+}
+
+/// Run the M2 fixture (with the tick-300 mid-run site placement), returning the digest pair +
+/// the instrumentation counters.
+#[allow(clippy::type_complexity)]
+fn run_m2_fixture(ticks: u32, permute: bool) -> ((u64, u64), (u32, u32, u32, u64, u64, u32)) {
+    let mut w = m2_fixture();
+    let mut report_digest: u64 = 0xcbf2_9ce4_8422_2325;
+    let (mut level_ups, mut downgrades, mut completed) = (0u32, 0u32, 0u32);
+    let (mut upgrade_e, mut build_e) = (0u64, 0u64);
+    let mut parallel_de_ticks = 0u32;
+    for _ in 0..ticks {
+        if w.tick() == 300 {
+            // Mid-run placement: the plain road the builder finishes last.
+            w.add_construction_site(pos(12, 30), StructureKind::Road).expect("mid-run site places");
+        }
+        let mut intents = m2_scripted(&w);
+        let upgrader_both = intents
+            .actions
+            .iter()
+            .filter(|(id, _)| *id == M2_UPGRADER)
+            .count()
+            == 2;
+        if permute {
+            intents.actions.reverse();
+        }
+        let report = resolve_econ_tick(&mut w, &intents);
+        assert!(report.conservation.is_empty(), "conservation violated at tick {}: {:?}", report.tick, report.conservation);
+        report_digest = fold_report(report_digest, &report);
+        level_ups += report.level_ups.len() as u32;
+        downgrades += report.downgrades.len() as u32;
+        completed += report.sites_completed.len() as u32;
+        upgrade_e += report.ledger.upgrade;
+        build_e += report.ledger.build;
+        if upgrader_both && report.ledger.upgrade > 0 {
+            parallel_de_ticks += 1;
+        }
+    }
+    ((w.state_digest(), report_digest), (level_ups, downgrades, completed, upgrade_e, build_e, parallel_de_ticks))
+}
+
+/// The M2 fence: 5 runs spread 0, the reversed-insertion arm bit-identical, and anti-vacuity
+/// floors proving the run actually EXERCISED a downgrade, a level-up, all three site
+/// completions, both new sinks, and recurring parallel withdraw+upgrade ticks.
+#[test]
+fn econ_engine_m2_controller_build_determinism() {
+    let (baseline, floors) = run_m2_fixture(600, false);
+    for run in 1..5 {
+        assert_eq!(run_m2_fixture(600, false).0, baseline, "run {run} diverged from run 0");
+    }
+    assert_eq!(run_m2_fixture(600, true).0, baseline, "insertion order leaked into the M2 lanes");
+
+    let (level_ups, downgrades, completed, upgrade_e, build_e, parallel_de) = floors;
+    assert!(downgrades >= 1, "the 40-tick fuse must fire a downgrade (got {downgrades})");
+    assert!(level_ups >= 1, "the upgrader must earn a level back (got {level_ups})");
+    assert_eq!(completed, 3, "extension + swamp road + mid-run road all complete");
+    assert!(upgrade_e >= 1000, "the upgrade sink must run hot (got {upgrade_e}e)");
+    assert_eq!(build_e, 3000 + 1500 + 300, "build energy = exactly the three sites' costs");
+    assert!(parallel_de >= 15, "the parallel withdraw+upgrade tick must recur (got {parallel_de})");
+
+    // End-state sanity: the structures materialized where the sites were.
+    let w = {
+        let mut w = m2_fixture();
+        for _ in 0..600 {
+            if w.tick() == 300 {
+                w.add_construction_site(pos(12, 30), StructureKind::Road).unwrap();
+            }
+            let intents = m2_scripted(&w);
+            resolve_econ_tick(&mut w, &intents);
+        }
+        w
+    };
+    assert_eq!(w.extensions.len(), 1, "the extension exists");
+    assert!(w.movement.terrain.roads.contains(&(12, 31)), "the swamp road registered its tile");
+    assert!(w.movement.terrain.roads.contains(&(12, 30)), "the mid-run road registered its tile");
+    assert_eq!(w.controller.as_ref().unwrap().level, 2, "downgraded to 1, upgraded back to 2");
+}
+
 // ── Conservation fuzz ────────────────────────────────────────────────────────────────────────────
 
 fn fuzz_world(rng: &mut Rng) -> EconWorld {
@@ -486,6 +672,14 @@ fn fuzz_world(rng: &mut Rng) -> EconWorld {
     w.add_road(pos(20, 20), 6_000, 25_000);
     let short_fuse = w.add_road(pos(25, 25), 2_500, 5000);
     w.roads[short_fuse].next_decay_at = 60;
+    // M2: a controller with a mid-fuzz-expiring clock (downgrades under fire) + sites for the
+    // random Build arm (one is pre-damaged toward completion so a materialization fires).
+    w.set_controller(pos(18, 18), 2);
+    w.controller.as_mut().unwrap().downgrade_ticks = 250;
+    w.controller.as_mut().unwrap().progress = 150; // near the 45_000... no — near NOTHING; random upgrades may or may not level it
+    w.add_construction_site(pos(17, 17), StructureKind::Road).expect("fuzz road site");
+    let ext_site = w.add_construction_site(pos(16, 16), StructureKind::Extension).expect("fuzz extension site");
+    w.sites[ext_site].progress = 2_900; // 100 from completion — materialization likely mid-fuzz
 
     let bodies: [&[Part]; 4] = [
         &[Part::Work, Part::Work, Part::Carry, Part::Move],
@@ -537,6 +731,14 @@ fn conservation_fuzz_500_ticks() {
         let mut intents = EconIntents::new();
         let ids: Vec<CreepId> = w.movement.creeps.iter().map(|c| c.id).collect();
         for id in ids {
+            // M2 lanes ride ALONGSIDE the Pipeline-A/D roll (upgrade is its own pipeline; a
+            // random build may mask the rolled work action — both must stay conservation-clean).
+            if rng.chance(20) {
+                intents.act(id, EconAction::UpgradeController);
+            }
+            if rng.chance(15) {
+                intents.act(id, EconAction::Build { site_idx: rng.range(0, 3) as usize }); // idx OOB included
+            }
             match rng.range(0, 6) {
                 0 => {
                     intents.act(id, EconAction::Harvest { source_idx: rng.range(0, 2) as usize }); // idx 2 OOB

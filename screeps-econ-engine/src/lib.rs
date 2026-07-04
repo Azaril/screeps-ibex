@@ -15,7 +15,13 @@
 //! ledgered by class + the [`RepairLeak`] `repair_leak_e` report mirror), road decay with
 //! `ROAD_WEAROUT` per-step traffic wear, and container decay (death drops the store) — dead
 //! structures are removed and a dead road's tile reverts to natural terrain.
-//! Build/upgrade land in M2; labs/minerals in M6 ([`state::SimMineral`] is a stub).
+//! **M2 adds:** the controller (UpgradeController on its own Pipeline-E lane, the RCL8 15 e/t
+//! shared cap, level-ups with remainder carry + the near-full-clock gate, the downgrade clock
+//! with its +100/upgrade-tick restore, downgrades refunding 0.9× the new level's cost), Build +
+//! construction sites (5 progress/WORK/t at 1 e/progress, completion materializes
+//! spawn/extension/road/container/storage/tower-stub with engine birth state), and the
+//! RCL-allowance-enforced site placement API ([`EconWorld::add_construction_site`]).
+//! Labs/minerals land M6 ([`state::SimMineral`] is a stub).
 //!
 //! **Ground truth** is `docs/references/engine-mechanics.md` (which pins the cloned engine source);
 //! every constant in [`constants`] cites it and is pinned by a unit test. Deviations from the real
@@ -42,8 +48,9 @@ pub use intents::{EconAction, EconIntents, StructRef};
 pub use ledger::{audit_conservation, ConservationViolation, TickLedger};
 pub use spawn_queue::{spawn_step, HomeLanes, QueuedSpawn, Spawned};
 pub use state::{
-    EconWorld, PendingCreep, SimContainer, SimController, SimDropped, SimExtension, SimMineral,
-    SimResource, SimRoad, SimSource, SimSpawn, SimStorage, SimStore,
+    EconWorld, PendingCreep, SimConstructionSite, SimContainer, SimController, SimDropped,
+    SimExtension, SimMineral, SimResource, SimRoad, SimSource, SimSpawn, SimStorage, SimStore,
+    SimTower, SitePlacementError, StructureKind,
 };
 pub use tick::{resolve_econ_tick, EconSim, EconTickReport, RepairLeak};
 

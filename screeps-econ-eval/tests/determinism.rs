@@ -14,10 +14,12 @@
 
 use screeps_econ_eval::baseline::PolicyConfig;
 use screeps_econ_eval::metrics::RecoverConsts;
-use screeps_econ_eval::runner::{run_scenario, RunOptions};
-use screeps_econ_eval::scenario::fast_catalog;
+use screeps_econ_eval::movement::AnalyticMover;
+use screeps_econ_eval::runner::{run_scenario, run_world, RunGoal, RunOptions};
+use screeps_econ_eval::scenario::{fast_catalog, RushScenario, SteadyScenario};
 
-/// A short cap keeps the fence lanes fast while still covering spawn/harvest/repair/decay flow.
+/// A short cap keeps the fence lanes fast while still covering spawn/harvest/repair/decay flow
+/// (and, since M2, upgrade/build/construction-pass flow).
 const FENCE_TICK_CAP: u32 = 1_500;
 
 fn opts(s1: bool, permute: bool) -> RunOptions {
@@ -30,8 +32,10 @@ fn opts(s1: bool, permute: bool) -> RunOptions {
     o
 }
 
-/// One corpus-slice round: (Σ state digests, Σ report digests) over 2 scenarios × bait/control ×
-/// both policy arms.
+/// One corpus-slice round: (Σ state digests, Σ report digests) over 2 Family-C scenarios ×
+/// bait/control × both policy arms, PLUS (M2 — the new mechanics entered the state/digest) one
+/// Family-G greenfield slice (upgrade + build + the construction pass live within 1500 ticks)
+/// and one Family-S healthy slice (TTL churn + upgraders + road wear under real traffic).
 fn round(permute: bool) -> (u64, u64) {
     let slice: Vec<_> = fast_catalog().into_iter().take(2).collect();
     let (mut sd, mut rd) = (0u64, 0u64);
@@ -45,6 +49,31 @@ fn round(permute: bool) -> (u64, u64) {
                 rd = rd.wrapping_add(out.report_digest);
             }
         }
+    }
+    // The M2 G-slice: RCL-8 target never reached inside the cap — pure determinism coverage of
+    // the greenfield upgrade/build/construction lanes.
+    {
+        let mut rush = RushScenario::new("E11N1", 8, 1);
+        rush.tick_cap = FENCE_TICK_CAP;
+        let (mut world, terrain, info) = rush.instantiate();
+        let mut mover = AnalyticMover::new(&terrain);
+        let mut o = opts(false, permute).with_goal(RunGoal::Rcl { target: 8 });
+        o.construction_phase = rush.seed;
+        let out = run_world(&rush.shell(), &mut world, &mut mover, &info, &o);
+        sd = sd.wrapping_add(out.state_digest);
+        rd = rd.wrapping_add(out.report_digest);
+    }
+    // The M2 S-slice: the healthy fleet + horizon goal.
+    {
+        let mut steady = SteadyScenario::new("E12S41", 4, 1);
+        steady.tick_cap = FENCE_TICK_CAP;
+        let (mut world, terrain, info) = steady.instantiate();
+        let mut mover = AnalyticMover::new(&terrain);
+        let mut o = opts(false, permute).with_goal(RunGoal::Horizon);
+        o.construction_phase = steady.seed;
+        let out = run_world(&steady.shell(), &mut world, &mut mover, &info, &o);
+        sd = sd.wrapping_add(out.state_digest);
+        rd = rd.wrapping_add(out.report_digest);
     }
     (sd, rd)
 }

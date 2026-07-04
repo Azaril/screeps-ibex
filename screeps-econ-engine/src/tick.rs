@@ -10,14 +10,18 @@
 //!    here. A controller-less world keeps its builder-set capacities (a scenario convenience —
 //!    exact while the level is static, which M0 guarantees; M2's upgrade mechanics ride this same
 //!    step). A level DROP never deletes energy: an over-capacity store just reads `free() == 0`.
-//! 1. **Mask** — one Pipeline-A work intent (Harvest OR Repair) + one Pipeline-D transfer-class
-//!    intent (Transfer/Withdraw/Pickup) per creep per tick, the bot's own Pipeline A/D model
-//!    (`jobs/actions.rs:27-31`) — a repairing creep therefore SKIPS that tick's harvest, exactly
-//!    the S1 leak mechanic. *Deviation:* the engine resolves per-intent-name with a conflict
-//!    matrix (engine-mechanics.md:59-76; harvest does conflict with repair there); the bot never
-//!    emits more than one per pipeline, so the mask models the DECISION layer's contract.
-//!    Masking is deterministic: actions are stable-sorted by creep id; within a creep,
-//!    first submission wins and duplicates are counted in the report.
+//! 1. **Mask** — one Pipeline-A work intent (Harvest OR Repair OR Build, M2) + one Pipeline-D
+//!    transfer-class intent (Transfer/Withdraw/Pickup) + one Pipeline-E UpgradeController per
+//!    creep per tick, the bot's own pipeline model (`jobs/actions.rs:27-56`) — a repairing creep
+//!    therefore SKIPS that tick's harvest, exactly the S1 leak mechanic, while an UPGRADE
+//!    coexists with a same-tick withdraw (the live parallel-refill idiom,
+//!    `controllerbehavior.rs:107-124`). *Deviation:* the engine resolves per-intent-name with a
+//!    conflict matrix (engine-mechanics.md:59-76; harvest conflicts with build and repair there,
+//!    build conflicts with repair, and upgradeController conflicts with NOTHING —
+//!    `creeps/intents.js:3-13`); the bot never emits more than one per pipeline, so the mask
+//!    models the DECISION layer's contract. Masking is deterministic: actions are stable-sorted
+//!    by creep id; within a creep, first submission wins and duplicates are counted in the
+//!    report.
 //! 2. **Transfer/Withdraw/Pickup** (creep-id order) — adjacency-1 (Chebyshev), atomic per action;
 //!    runs BEFORE harvest, matching the engine's within-creep intent order (drop/transfer/
 //!    withdraw/pickup precede harvest — `creeps/intents.js:15`). **Transfer** mirrors the engine:
@@ -28,19 +32,59 @@
 //!    convenience (revisit at M1 kernel transcription); the engine's cross-creep ordering is JS
 //!    hash order (engine-mechanics.md:33) — explicitly unordered — so creep-id order is the
 //!    deterministic stand-in.
-//! 3. **Work lane: Harvest + Repair** (creep-id order), then **source regen**. Harvest: gain
-//!    `min(2×WORK, source.energy)` (engine-mechanics.md:457), store overflow drops to the creep's
-//!    tile; the 300-tick timer starts at the first harvest below capacity and the pool refills
-//!    when `tick >= regen_at − 1` (engine-mechanics.md:445-446, :466). Regen runs after harvest,
-//!    as the engine's source tick runs after the intent stage (engine-mechanics.md §1.2).
+//! 3. **Work lane: Harvest + Repair + Build (M2)** (creep-id order), then **site
+//!    materialization**, then **source regen**. Harvest: gain `min(2×WORK, source.energy)`
+//!    (engine-mechanics.md:457), store overflow drops to the creep's tile; the 300-tick timer
+//!    starts at the first harvest below capacity and the pool refills when `tick >= regen_at − 1`
+//!    (engine-mechanics.md:445-446, :466). Regen runs after harvest, as the engine's source tick
+//!    runs after the intent stage (engine-mechanics.md §1.2).
 //!    Repair (M1; engine `creeps/repair.js`, engine-mechanics.md:118): range ≤ 3 (Chebyshev),
 //!    requires carried energy > 0; `effect = min(WORK × 100, energy × 100, hits_max − hits)`,
 //!    `cost = ceil(effect / 100)` — exact integers, the engine's `REPAIR_POWER`/`REPAIR_COST`
 //!    arithmetic. Targets: roads + containers (the M1 hit-bearing structures; spawns/extensions/
 //!    storage carry no hits model in-sim and are rejected — documented deviation, `repair_other`
-//!    is declared for M2). Repair energy is ledgered by structure class, and booked to the
-//!    report's `repair_leak` when the room had a refill deficit at tick start (the live
-//!    `repair_leak_e` mirror — see [`RepairLeak`]).
+//!    stays declared). Repair energy is ledgered by structure class, and booked to the report's
+//!    `repair_leak` when the room had a refill deficit at tick start (the live `repair_leak_e`
+//!    mirror — see [`RepairLeak`]).
+//!    **Build (M2; engine `creeps/build.js`):** range ≤ 3 (`:23`), energy > 0 (`:14`); an
+//!    obstacle-kind site is rejected while an obstacle object or ANY creep stands on its tile
+//!    (`:50-60` — the engine's safe-mode ally carve-out is moot, one owner in-sim);
+//!    `effect = min(5 × WORK, total − progress, energy)` at 1 energy/progress (`:67-69,83`).
+//!    Completed sites (progress ≥ total) MATERIALIZE after the work-lane loop in ascending site
+//!    index (the engine inserts inline; deferring to the loop end keeps mid-loop Vec pushes out
+//!    of the id/index space — same-tick observable state is identical because nothing later in
+//!    the lane reads the new structure), then compact: **a built spawn starts EMPTY**
+//!    (`build.js:123` — deliberately unlike the scenario builder's born-full `add_spawn`),
+//!    extensions cap from the CURRENT controller level (`:130-137` + the per-tick re-cap),
+//!    containers arm a 100-tick first decay window (`:261` — `CONTAINER_DECAY_TIME` flat, the
+//!    ownership-aware window only applies from the first decay event on, `containers/tick.js:26`),
+//!    roads get swamp-scaled hitsMax + a full decay window + the SAFE terrain registration
+//!    (`:171-186`), towers materialize as stubs.
+//!
+//! 3c. **Upgrade lane (M2; Pipeline E, creep-id order; engine `creeps/upgradeController.js`)**:
+//!    requires energy > 0 (`:9`), an owned controller at level ≥ 1 (`:24`), range ≤ 3 (`:21`).
+//!    `effect = min(WORK × 1, energy)` (`:33-34`); at RCL 8 the room-wide 15 e/t cap applies via
+//!    the per-tick accumulator shared across upgraders (`:42-52` — a capped-out intent is a
+//!    no-op counted as rejected). Below 8: progress += effect, and the LEVEL-UP fires only when
+//!    `progress + effect ≥ CONTROLLER_LEVELS[level]` AND the downgrade clock is within
+//!    `CONTROLLER_DOWNGRADE_RESTORE` of full (`:67-68` — the near-full-clock gate; progress
+//!    accumulates PAST the threshold while the clock recovers): progress carries the remainder
+//!    (`:70`), level += 1, the clock resets to HALF the new level's max (`:72`), and a level-8
+//!    arrival zeroes progress (`:74-76`). Energy is debited `effect` (`:92`) and ledgered as
+//!    `upgrade`. (GCL and safeModeAvailable are not modeled — no GCL/safemode in the sim.)
+//!
+//! 3d. **Controller step (M2; engine `controllers/tick.js`, countdown translation pinned in
+//!    [`crate::state::SimController`])**: on a tick with ≥ 1 successful upgrade (the `_upgraded`
+//!    truthy gate, `:38` — note a 0-WORK upgrade contributes 0 and does NOT count), the clock
+//!    restores `min(remaining + 100, FULL[level])` and NO downgrade check runs (`:38-43`).
+//!    Otherwise the clock expires at remaining ≤ 1 (`gameTime >= downgradeTime − 1`, `:49`):
+//!    level −= 1; at level 0 progress zeroes and the room is unowned (`:52-62`); else
+//!    progress += `round(0.9 × CONTROLLER_LEVELS[new])` (`:66` — exact ×9/10 by the pinned
+//!    table) and the clock re-arms at remaining + FULL[new]/2 (`:65`). Ordinary ticks decrement
+//!    by 1. *Deviation:* structure DEACTIVATION above the lowered RCL allowance
+//!    (engine-mechanics.md:231) is not modeled — the per-tick extension re-cap adjusts
+//!    capacities, but no structure turns off (documented; Family D's triage doesn't depend on
+//!    it).
 //! 4. **Spawns** — completions first (a spawn finishing at tick T can accept a new request at T),
 //!    then new `SpawnCreep` intents in **(spawn index, submission order)**: same-tick requests to
 //!    DIFFERENT spawns resolve independently of emission order (spawn-index order is the
@@ -104,13 +148,17 @@
 //! sim-core's seeded RNG at intent-GENERATION time instead.
 
 use crate::constants::{
-    body_cost, CONTAINER_DECAY, CREEP_LIFE_TIME, CREEP_SPAWN_TIME, DROPPED_DECAY_DIVISOR,
-    ENERGY_REGEN_TIME, MAX_CREEP_SIZE, REPAIR_HITS_PER_ENERGY, REPAIR_POWER, REPAIR_RANGE,
-    ROAD_DECAY_AMOUNT, ROAD_DECAY_TIME, ROAD_SWAMP_RATIO, SPAWN_ENERGY_CAPACITY,
+    body_cost, controller_downgrade, controller_levels, BUILD_POWER, BUILD_RANGE, CONTAINER_DECAY,
+    CONTAINER_DECAY_TIME, CONTROLLER_DOWNGRADE_RESTORE, CONTROLLER_MAX_UPGRADE_PER_TICK,
+    CREEP_LIFE_TIME, CREEP_SPAWN_TIME, DROPPED_DECAY_DIVISOR, ENERGY_REGEN_TIME, MAX_CREEP_SIZE,
+    REPAIR_HITS_PER_ENERGY, REPAIR_POWER, REPAIR_RANGE, ROAD_DECAY_AMOUNT, ROAD_DECAY_TIME,
+    ROAD_SWAMP_RATIO, SPAWN_ENERGY_CAPACITY, UPGRADE_CONTROLLER_POWER,
 };
 use crate::intents::{EconAction, EconIntents, StructRef};
 use crate::ledger::{audit_conservation, ConservationViolation, TickLedger};
-use crate::state::{creep_store_capacity, EconWorld, PendingCreep, SimResource, SimStore};
+use crate::state::{
+    creep_store_capacity, EconWorld, PendingCreep, SimResource, SimStore, StructureKind,
+};
 use screeps::{Part, Position};
 use screeps_sim_core::{resolve_movement, CreepId, MovementReport, SimBody, SimCreep, Simulation};
 use std::collections::{BTreeMap, BTreeSet};
@@ -154,11 +202,22 @@ pub struct EconTickReport {
     /// Creeps that died of TTL this tick.
     pub deaths: Vec<CreepId>,
     /// Actions dropped by validation (bad index / not adjacent / busy spawn / unaffordable /
-    /// illegal body / unknown creep / zero-effect repair) or by the Pipeline-A/D mask.
+    /// illegal body / unknown creep / zero-effect repair or build / RCL8 upgrade cap) or by the
+    /// Pipeline-A/D/E mask.
     pub rejected_actions: u32,
     /// The per-tick `repair_leak_e` mirror ([`RepairLeak`] — repair energy spent under refill
     /// deficit, by class).
     pub repair_leak: RepairLeak,
+    /// Construction sites COMPLETED this tick, as `(kind, pos)` (M2).
+    pub sites_completed: Vec<(StructureKind, screeps::Position)>,
+    /// Controller level-ups this tick: the NEW level (M2; multiple upgraders can chain at most
+    /// one level-up per tick in practice — the half-max clock gate blocks immediate repeats).
+    pub level_ups: Vec<u8>,
+    /// Controller downgrade events this tick: the NEW level (M2; 0 = ownership lost).
+    pub downgrades: Vec<u8>,
+    /// The controller's `(level, progress, downgrade_ticks)` AFTER this tick (M2) — the
+    /// level/progress series the eval samples.
+    pub controller: Option<(u8, u32, u32)>,
 }
 
 /// The economy layer's `Simulation` binding: drive [`EconWorld`] with [`EconIntents`] through
@@ -199,15 +258,18 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
         (world.room_spawn_energy() as u64) < capacity
     };
 
-    // ── 1. Mask: stable-sort by creep id; one Pipeline-A + one Pipeline-D action per creep. ────
+    // ── 1. Mask: stable-sort by creep id; one Pipeline-A + one Pipeline-D + one Pipeline-E
+    // action per creep (module docs — Build joins A, UpgradeController is its OWN lane E). ──────
     let mut order: Vec<usize> = (0..intents.actions.len()).collect();
     order.sort_by_key(|&i| intents.actions[i].0); // stable → (creep id, submission order)
 
-    let mut pipeline_used: BTreeMap<CreepId, (bool, bool)> = BTreeMap::new(); // (A, D)
-    // The Pipeline-A work lane: Harvest OR Repair, one per creep per tick (a repair masks the
-    // harvest — the S1 leak mechanic, `jobs/actions.rs:27-31`).
+    let mut pipeline_used: BTreeMap<CreepId, (bool, bool, bool)> = BTreeMap::new(); // (A, D, E)
+    // The Pipeline-A work lane: Harvest OR Repair OR Build, one per creep per tick (a repair
+    // masks the harvest — the S1 leak mechanic, `jobs/actions.rs:27-34`).
     let mut work_actions: Vec<(CreepId, &EconAction)> = Vec::new();
     let mut transfer_class: Vec<(CreepId, &EconAction)> = Vec::new();
+    // The Pipeline-E upgrade lane (`jobs/actions.rs:50-51`; conflict-free in the engine matrix).
+    let mut upgrade_actions: Vec<CreepId> = Vec::new();
     // (spawn_idx, submission index, body): sorted before step 4b so the paired creep id and the
     // cross-spawn emission order are genuinely non-semantic (module docs, step 4).
     let mut spawn_reqs: Vec<(usize, usize, &Vec<Part>)> = Vec::new();
@@ -220,8 +282,8 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
                 // the submission index — the within-spawn first-wins key.
                 spawn_reqs.push((*spawn_idx, i, body));
             }
-            EconAction::Harvest { .. } | EconAction::Repair { .. } => {
-                let used = pipeline_used.entry(*creep_id).or_insert((false, false));
+            EconAction::Harvest { .. } | EconAction::Repair { .. } | EconAction::Build { .. } => {
+                let used = pipeline_used.entry(*creep_id).or_insert((false, false, false));
                 if used.0 {
                     report.rejected_actions += 1; // second Pipeline-A action this tick
                 } else {
@@ -230,12 +292,21 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
                 }
             }
             EconAction::Transfer { .. } | EconAction::Withdraw { .. } | EconAction::Pickup { .. } => {
-                let used = pipeline_used.entry(*creep_id).or_insert((false, false));
+                let used = pipeline_used.entry(*creep_id).or_insert((false, false, false));
                 if used.1 {
                     report.rejected_actions += 1; // second Pipeline-D action this tick
                 } else {
                     used.1 = true;
                     transfer_class.push((*creep_id, action));
+                }
+            }
+            EconAction::UpgradeController => {
+                let used = pipeline_used.entry(*creep_id).or_insert((false, false, false));
+                if used.2 {
+                    report.rejected_actions += 1; // second Pipeline-E action this tick
+                } else {
+                    used.2 = true;
+                    upgrade_actions.push(*creep_id);
                 }
             }
         }
@@ -313,9 +384,7 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
                     world.sync_carry_used(creep_id);
                 }
             }
-            EconAction::Harvest { .. } | EconAction::Repair { .. } | EconAction::SpawnCreep { .. } => {
-                unreachable!()
-            }
+            _ => unreachable!("only Pipeline-D actions reach the transfer lane"),
         }
     }
 
@@ -417,9 +486,128 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
                 }
                 world.sync_carry_used(creep_id);
             }
+            EconAction::Build { site_idx } => {
+                // Engine `creeps/build.js` (M2): range ≤ 3 (:23), energy > 0 (:14); an
+                // obstacle-kind site rejects while an obstacle object or ANY creep occupies the
+                // tile (:50-60); effect = min(5 × WORK, remaining, energy) at 1 energy/progress
+                // (:67-69,83). Completed sites materialize after the loop (module docs step 3).
+                let Some((creep_pos, work_parts)) = world
+                    .creep(creep_id)
+                    .filter(|c| c.is_alive())
+                    .map(|c| (c.pos, c.body.alive_part_count(Part::Work)))
+                else {
+                    report.rejected_actions += 1;
+                    continue;
+                };
+                let Some((site_pos, site_kind, remaining)) =
+                    world.sites.get(*site_idx).map(|s| (s.pos, s.kind, s.total.saturating_sub(s.progress)))
+                else {
+                    report.rejected_actions += 1;
+                    continue;
+                };
+                if creep_pos.get_range_to(site_pos) > BUILD_RANGE {
+                    report.rejected_actions += 1;
+                    continue;
+                }
+                if site_kind.blocks_movement()
+                    && (world.obstacle_object_at(site_pos)
+                        || world.movement.creeps.iter().any(|c| c.is_alive() && c.pos == site_pos))
+                {
+                    // build.js:50-60 — an obstacle-type structure cannot complete under an
+                    // obstacle object or a creep (the builder standing ON its own site blocks it).
+                    report.rejected_actions += 1;
+                    continue;
+                }
+                let energy = world.creep_stores.get(&creep_id).map(|s| s.amount(SimResource::Energy)).unwrap_or(0);
+                // effect = min(5 × WORK, remaining, energy) — BUILD_POWER, 1 energy/progress.
+                let effect = (work_parts * BUILD_POWER).min(remaining).min(energy);
+                if effect == 0 {
+                    // No energy / no WORK / already-complete site: the engine no-ops; counted.
+                    report.rejected_actions += 1;
+                    continue;
+                }
+                world.sites[*site_idx].progress += effect;
+                ledger.build += effect as u64;
+                if let Some(store) = world.creep_stores.get_mut(&creep_id) {
+                    store.remove(SimResource::Energy, effect);
+                }
+                world.sync_carry_used(creep_id);
+            }
             _ => unreachable!("only Pipeline-A actions reach the work lane"),
         }
     }
+
+    // ── 3b. Materialize completed sites (ascending index; engine `build.js:108-293`), then
+    // compact. Structure-specific birth state per the engine's insert blocks (module docs). ─────
+    let completed: Vec<usize> =
+        (0..world.sites.len()).filter(|&i| world.sites[i].progress >= world.sites[i].total).collect();
+    for &i in &completed {
+        let (pos, kind) = (world.sites[i].pos, world.sites[i].kind);
+        match kind {
+            StructureKind::Spawn => {
+                // build.js:119-128: a BUILT spawn starts with store {energy: 0} — deliberately
+                // unlike the scenario builder add_spawn's born-full convention.
+                let id = world.mint_structure_id();
+                world.spawns.push(crate::state::SimSpawn { id, pos, store_energy: 0, spawning: None });
+            }
+            StructureKind::Extension => {
+                // build.js:130-137 inserts capacity 0 and the extension tick recomputes from the
+                // CURRENT controller level (`extensions/tick.js:11`); materializing at the
+                // current level is identical one step earlier (step 0 re-caps every tick).
+                let level = world.controller.as_ref().map(|c| c.level).unwrap_or(0);
+                let id = world.mint_structure_id();
+                world.extensions.push(crate::state::SimExtension {
+                    id,
+                    pos,
+                    store_energy: 0,
+                    capacity: crate::constants::extension_capacity(level),
+                });
+            }
+            StructureKind::Storage => {
+                // build.js:151-158 (placement allowance keeps this to one per room).
+                if world.storage.is_none() {
+                    world.set_storage(pos, crate::constants::STORAGE_CAPACITY);
+                }
+            }
+            StructureKind::Container => {
+                // build.js:255-263: 250K hits, nextDecayTime = gameTime + CONTAINER_DECAY_TIME
+                // (100 FLAT — the ownership-aware 500 window only applies from the first decay
+                // event on, containers/tick.js:26).
+                let id = world.mint_structure_id();
+                world.containers.push(crate::state::SimContainer {
+                    id,
+                    pos,
+                    store: SimStore::with_capacity(crate::constants::CONTAINER_CAPACITY),
+                    hits: crate::constants::CONTAINER_HITS,
+                    next_decay_at: tick + CONTAINER_DECAY_TIME,
+                });
+            }
+            StructureKind::Road => {
+                // build.js:171-186: hits = hitsMax = ROAD_HITS × swamp ratio; nextDecayTime a
+                // full window out; the movement-terrain effect registers via the SAFE path.
+                let swamp = {
+                    let key = (pos.x().u8(), pos.y().u8());
+                    world.movement.terrain_for(pos.room_name()).swamps.contains(&key)
+                };
+                let max = crate::constants::road_hits_max(swamp);
+                world.register_road_tile(pos);
+                world.roads.push(crate::state::SimRoad {
+                    pos,
+                    hits: max,
+                    hits_max: max,
+                    next_decay_at: tick + ROAD_DECAY_TIME,
+                });
+            }
+            StructureKind::Tower => {
+                world.add_tower(pos); // stub furniture (module docs)
+            }
+        }
+        report.sites_completed.push((kind, pos));
+    }
+    for &i in completed.iter().rev() {
+        world.sites.remove(i);
+    }
+
     // Source regen (after harvest, as the engine's source tick follows the intent stage):
     // refill when `tick >= regen_at − 1` (engine-mechanics.md:445); THEN start the timer on any
     // source below capacity with no timer running (the first-harvest-below-cap start, same line).
@@ -434,6 +622,120 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
             source.regen_at = Some(tick + ENERGY_REGEN_TIME);
         }
     }
+
+    // ── 3c. Upgrade lane (Pipeline E, creep-id order; engine `creeps/upgradeController.js` —
+    // module docs). `upgraded_this_tick` is the controller's per-tick `_upgraded` accumulator:
+    // it shares the RCL8 15 e/t cap across upgraders (:42-52) AND gates the clock restore in
+    // step 3d (:38 — truthy means ≥ 1 energy actually converted). ───────────────────────────────
+    let mut upgraded_this_tick: u32 = 0;
+    for creep_id in upgrade_actions {
+        let Some((creep_pos, work_parts)) = world
+            .creep(creep_id)
+            .filter(|c| c.is_alive())
+            .map(|c| (c.pos, c.body.alive_part_count(Part::Work)))
+        else {
+            report.rejected_actions += 1;
+            continue;
+        };
+        // Controller present, owned (level ≥ 1 — a level-0 controller rejects, :24), in range 3
+        // (:21-23 — Chebyshev).
+        let Some((level, cpos)) = world.controller.as_ref().map(|c| (c.level, c.pos)) else {
+            report.rejected_actions += 1;
+            continue;
+        };
+        if level == 0 || creep_pos.get_range_to(cpos) > 3 {
+            report.rejected_actions += 1;
+            continue;
+        }
+        let energy = world.creep_stores.get(&creep_id).map(|s| s.amount(SimResource::Energy)).unwrap_or(0);
+        if energy == 0 {
+            report.rejected_actions += 1; // :9 — store.energy <= 0 rejects
+            continue;
+        }
+        // effect = min(WORK × UPGRADE_CONTROLLER_POWER, energy) (:33-34). Unboosted alive-WORK
+        // count (boost multipliers for upgradeController differ from the combat action table —
+        // an M6 concern; every M2 body is unboosted).
+        let mut effect = (work_parts * UPGRADE_CONTROLLER_POWER).min(energy);
+        if level == 8 {
+            // The room-wide 15 e/t cap, shared via the accumulator (:42-52).
+            if upgraded_this_tick >= CONTROLLER_MAX_UPGRADE_PER_TICK {
+                report.rejected_actions += 1; // capped out: full no-op, no energy spent (:48-50)
+                continue;
+            }
+            effect = effect.min(CONTROLLER_MAX_UPGRADE_PER_TICK - upgraded_this_tick);
+        }
+        // NOTE (review B10): NO zero-effect guard before the level-up check — the engine has
+        // none between the :9 energy gate and the :67 check, so a 0-WORK creep CARRYING energy
+        // can trigger the level-up in the surplus window (progress already past the threshold
+        // while the clock gate was low: `progress + 0 >= next`, :67). Its `_upgraded += 0`
+        // stays FALSY — no clock restore that tick (tick.js:38's truthy gate).
+        let mut leveled = false;
+        if level < 8 {
+            let threshold = controller_levels(level).expect("level 1..=7 has a next-level cost");
+            let full = controller_downgrade(level);
+            let c = world.controller.as_mut().expect("checked above");
+            // The level-up gate (:67-68): progress crosses the threshold AND the clock is within
+            // CONTROLLER_DOWNGRADE_RESTORE of full (countdown translation:
+            // `downgradeTime + 100 >= gameTime + FULL` ⟺ `remaining + 100 >= FULL`).
+            if c.progress + effect >= threshold && c.downgrade_ticks + CONTROLLER_DOWNGRADE_RESTORE >= full {
+                c.progress = c.progress + effect - threshold; // remainder carries (:70)
+                c.level += 1;
+                // Clock resets to HALF the NEW level's max (:72); the same tick's step-3d
+                // restore then adds its +100 (the engine's tick.js:39 runs after the intent) —
+                // unless effect == 0 (falsy accumulator: the new clock DECAYS this tick instead).
+                c.downgrade_ticks = controller_downgrade(c.level) / 2;
+                if c.level == 8 {
+                    c.progress = 0; // :74-76
+                }
+                report.level_ups.push(c.level);
+                leveled = true;
+            } else if effect > 0 {
+                c.progress += effect; // :80 — accumulates PAST the threshold while the clock is low
+            }
+        }
+        if effect == 0 && !leveled {
+            report.rejected_actions += 1; // zero conversion AND no level-up: a counted no-op
+            continue;
+        }
+        // Level 8: no progress change (:59 guards the whole block); energy still spent (:92).
+        upgraded_this_tick += effect;
+        ledger.upgrade += effect as u64;
+        if effect > 0 {
+            if let Some(store) = world.creep_stores.get_mut(&creep_id) {
+                store.remove(SimResource::Energy, effect);
+            }
+            world.sync_carry_used(creep_id);
+        }
+    }
+
+    // ── 3d. Controller step (engine `controllers/tick.js`; countdown translation pinned at
+    // `SimController`). Skipped for unowned/level-0 controllers (:14). ──────────────────────────
+    if let Some(c) = world.controller.as_mut() {
+        if c.level > 0 {
+            if upgraded_this_tick > 0 {
+                // :38-43 — restore ONCE per tick-with-upgrade, capped at the full clock
+                // (`min(D + 101, g + FULL + 1)` at gameTime g ⟹ next-tick remaining
+                // `min(R + 100, FULL)`), and NO downgrade check this tick (:43 returns).
+                c.downgrade_ticks =
+                    (c.downgrade_ticks + CONTROLLER_DOWNGRADE_RESTORE).min(controller_downgrade(c.level));
+            } else if c.downgrade_ticks <= 1 {
+                // :49 — expiry at `gameTime >= downgradeTime − 1` ⟺ remaining ≤ 1.
+                c.level -= 1;
+                if c.level == 0 {
+                    c.progress = 0; // :52-62 — ownership lost, progress zeroed
+                } else {
+                    // :65-66 — clock re-arms at +FULL[new]/2 (net of this tick), progress gains
+                    // round(0.9 × CONTROLLER_LEVELS[new]) — exact ×9/10 by the pinned table.
+                    c.downgrade_ticks += controller_downgrade(c.level) / 2;
+                    c.progress += controller_levels(c.level).expect("level 1..=7") / 10 * 9;
+                }
+                report.downgrades.push(c.level);
+            } else {
+                c.downgrade_ticks -= 1;
+            }
+        }
+    }
+    report.controller = world.controller.as_ref().map(|c| (c.level, c.progress, c.downgrade_ticks));
 
     // ── 4a. Spawn completions (index order) — BEFORE new intents, so a spawn is busy exactly
     // 3×parts ticks and can accept a new request the tick its creep walks out. ─────────────────
@@ -967,7 +1269,7 @@ mod tests {
         // builder's rcl argument stops mattering, and a level change re-caps existing extensions.
         let mut w = EconWorld::default();
         let e = w.add_extension(pos(10, 10), 8); // built "at RCL 8"...
-        w.controller = Some(crate::state::SimController { level: 6, progress: 0, downgrade_ticks: 20_000 });
+        w.controller = Some(crate::state::SimController { pos: pos(40, 40), level: 6, progress: 0, downgrade_ticks: 20_000 });
         step(&mut w, &EconIntents::new());
         assert_eq!(w.extensions[e].capacity, 50, "re-capped from the CURRENT level (6), not the build-time 8");
         w.controller.as_mut().unwrap().level = 7;
@@ -1397,7 +1699,7 @@ mod tests {
 
         // Owned world (controller level ≥ 1): the slow 500-tick window.
         let mut w = EconWorld::default();
-        w.controller = Some(crate::state::SimController { level: 3, progress: 0, downgrade_ticks: 20_000 });
+        w.controller = Some(crate::state::SimController { pos: pos(40, 40), level: 3, progress: 0, downgrade_ticks: 20_000 });
         let ct = w.add_container(pos(10, 10), 2000, 250_000);
         assert_eq!(w.containers[ct].next_decay_at, 500, "owned window = 500");
         steps(&mut w, 499);
@@ -1407,7 +1709,7 @@ mod tests {
 
         // Death: a 5000-hit container with cargo dies at its event and drops the store.
         let mut w = EconWorld::default();
-        w.controller = Some(crate::state::SimController { level: 3, progress: 0, downgrade_ticks: 20_000 });
+        w.controller = Some(crate::state::SimController { pos: pos(40, 40), level: 3, progress: 0, downgrade_ticks: 20_000 });
         let ct = w.add_container(pos(15, 15), 2000, CONTAINER_DECAY);
         w.containers[ct].store.add(SimResource::Energy, 700);
         w.containers[ct].store.add(SimResource::Oxygen, 30);
@@ -1462,6 +1764,590 @@ mod tests {
         let r = step(&mut w, &i);
         assert_eq!(r.rejected_actions, 1);
         assert_eq!(w.creep_stores[&c].amount(SimResource::Energy), 50, "nothing moved");
+    }
+
+    // ── M2: controller + build (each test doubles as a conservation test via `step`) ────────────
+
+    /// A worker world for the upgrade tests: controller at (40,40), a WORK-heavy upgrader in
+    /// range 3 (at (38,40) — range 2) with `energy` aboard.
+    fn upgrade_world(level: u8, progress: u32, clock: u32, work: usize, energy: u32) -> (EconWorld, CreepId) {
+        let mut w = EconWorld::default();
+        w.set_controller(pos(40, 40), level);
+        {
+            let c = w.controller.as_mut().unwrap();
+            c.progress = progress;
+            c.downgrade_ticks = clock;
+        }
+        let mut body = vec![Part::Work; work];
+        body.extend([Part::Carry, Part::Carry, Part::Move]);
+        let id = w.add_creep(pos(38, 40), &body, 100_000);
+        if energy > 0 {
+            w.creep_stores.get_mut(&id).unwrap().add(SimResource::Energy, energy);
+            w.sync_carry_used(id);
+        }
+        (w, id)
+    }
+
+    /// UPGRADE_CONTROLLER_POWER 1 e/WORK/t clamped by carried energy
+    /// (`creeps/upgradeController.js:33-34`), 1 energy per progress (:92), Chebyshev range ≤ 3
+    /// (:21-23), empty store rejected (:9), level-0 controller rejected (:24).
+    #[test]
+    fn upgrade_power_range_and_energy_clamp() {
+        let (mut w, id) = upgrade_world(2, 0, 10_000, 3, 10);
+        let mut i = EconIntents::new();
+        i.act(id, EconAction::UpgradeController);
+        let r = step(&mut w, &i);
+        assert_eq!(w.controller.as_ref().unwrap().progress, 3, "3 WORK × 1 progress");
+        assert_eq!(w.creep_stores[&id].amount(SimResource::Energy), 7, "1 energy per progress");
+        assert_eq!(r.ledger.upgrade, 3, "ledgered as the upgrade sink");
+        assert_eq!(r.controller, Some((2, 3, 10_000)), "clock restored +100 net, capped at FULL(2)");
+
+        // Energy clamp: 2 energy left with 3 WORK converts only 2.
+        w.creep_stores.get_mut(&id).unwrap().remove(SimResource::Energy, 5);
+        w.sync_carry_used(id);
+        let mut i = EconIntents::new();
+        i.act(id, EconAction::UpgradeController);
+        step(&mut w, &i);
+        assert_eq!(w.controller.as_ref().unwrap().progress, 5, "clamped to the 2 energy aboard");
+        assert_eq!(w.creep_stores[&id].amount(SimResource::Energy), 0);
+
+        // Empty store: rejected (:9).
+        let mut i = EconIntents::new();
+        i.act(id, EconAction::UpgradeController);
+        let r = step(&mut w, &i);
+        assert_eq!(r.rejected_actions, 1, "empty upgrader rejected");
+
+        // Range 4 > 3: rejected (:21-23).
+        let (mut w, id) = upgrade_world(2, 0, 10_000, 1, 10);
+        w.creep_mut(id).unwrap().pos = pos(36, 40); // range 4
+        let mut i = EconIntents::new();
+        i.act(id, EconAction::UpgradeController);
+        let r = step(&mut w, &i);
+        assert_eq!(r.rejected_actions, 1, "range 4 rejected");
+        assert_eq!(w.controller.as_ref().unwrap().progress, 0);
+
+        // Level-0 controller: rejected (:24).
+        let (mut w, id) = upgrade_world(0, 0, 0, 1, 10);
+        let mut i = EconIntents::new();
+        i.act(id, EconAction::UpgradeController);
+        let r = step(&mut w, &i);
+        assert_eq!(r.rejected_actions, 1, "level-0 controller rejects upgrades");
+    }
+
+    /// The level-up (`upgradeController.js:67-78`): progress crosses CONTROLLER_LEVELS[level]
+    /// with a NEAR-FULL clock → level += 1 carrying the remainder (:70), clock = half the NEW
+    /// level's max (:72) + the same tick's +100 restore (`controllers/tick.js:39` runs after).
+    #[test]
+    fn level_up_carries_remainder_and_resets_clock_to_half_max() {
+        // Level 1 → 2: threshold 200 (CONTROLLER_LEVELS[1]); progress 195 + 10 effect = 205.
+        let (mut w, id) = upgrade_world(1, 195, 20_000, 10, 50);
+        let mut i = EconIntents::new();
+        i.act(id, EconAction::UpgradeController);
+        let r = step(&mut w, &i);
+        let c = w.controller.as_ref().unwrap();
+        assert_eq!(c.level, 2, "leveled up");
+        assert_eq!(c.progress, 5, "remainder carries over (:70)");
+        assert_eq!(
+            c.downgrade_ticks,
+            10_000 / 2 + 100,
+            "half the NEW level's max (:72) + the same-tick +100 restore (tick.js:39)"
+        );
+        assert_eq!(r.level_ups, vec![2]);
+        assert_eq!(r.ledger.upgrade, 10, "full effect spent");
+    }
+
+    /// The near-full-clock LEVEL-UP GATE (`upgradeController.js:67-68`): with the clock more than
+    /// CONTROLLER_DOWNGRADE_RESTORE below full, progress accumulates PAST the threshold and the
+    /// level-up only fires once upgrade ticks have restored the clock to within 100 of full.
+    #[test]
+    fn level_up_blocked_until_clock_near_full() {
+        // Level 1, clock 19_600 < 20_000 − 100: the gate blocks.
+        let (mut w, id) = upgrade_world(1, 195, 19_600, 10, 500);
+        let mut i = EconIntents::new();
+        i.act(id, EconAction::UpgradeController);
+        let r = step(&mut w, &i);
+        {
+            let c = w.controller.as_ref().unwrap();
+            assert_eq!(c.level, 1, "gate held: clock too low (:67-68)");
+            assert_eq!(c.progress, 205, "progress accumulates PAST the threshold (:80)");
+        }
+        assert!(r.level_ups.is_empty());
+        // Each upgrade tick nets +100 clock; two more blocked ticks bring it to 19_900 =
+        // FULL − 100 — the exact gate boundary (`R + RESTORE >= FULL`) — so the NEXT upgrade
+        // levels up with the whole surplus carrying.
+        for _ in 0..2 {
+            let mut i = EconIntents::new();
+            i.act(id, EconAction::UpgradeController);
+            let r = step(&mut w, &i);
+            assert!(r.level_ups.is_empty(), "still below the gate boundary");
+        }
+        assert_eq!(w.controller.as_ref().unwrap().downgrade_ticks, 19_900);
+        let mut i = EconIntents::new();
+        i.act(id, EconAction::UpgradeController);
+        let r = step(&mut w, &i);
+        let c = w.controller.as_ref().unwrap();
+        assert_eq!(c.level, 2, "gate opens at clock = FULL − 100 exactly (:67-68 ≥)");
+        assert_eq!(c.progress, 205 + 3 * 10 - 200, "the accumulated surplus carries");
+        assert_eq!(r.level_ups, vec![2]);
+    }
+
+    /// The RCL8 cap (`upgradeController.js:42-52`): 15 energy/tick ROOM-WIDE via the per-tick
+    /// accumulator shared across upgraders — the second upgrader converts only the remainder,
+    /// the third is a full no-op (nothing spent); progress never moves at 8 (:59 guards).
+    #[test]
+    fn rcl8_cap_is_shared_across_upgraders() {
+        let (mut w, a) = upgrade_world(8, 0, 200_000, 10, 100);
+        let mut extra = vec![Part::Work; 10];
+        extra.extend([Part::Carry, Part::Carry, Part::Move]);
+        let b = w.add_creep(pos(39, 41), &extra, 100_000);
+        w.creep_stores.get_mut(&b).unwrap().add(SimResource::Energy, 100);
+        w.sync_carry_used(b);
+        let c = w.add_creep(pos(41, 39), &extra, 100_000);
+        w.creep_stores.get_mut(&c).unwrap().add(SimResource::Energy, 100);
+        w.sync_carry_used(c);
+
+        let mut i = EconIntents::new();
+        i.act(a, EconAction::UpgradeController);
+        i.act(b, EconAction::UpgradeController);
+        i.act(c, EconAction::UpgradeController);
+        let r = step(&mut w, &i);
+        assert_eq!(r.ledger.upgrade, 15, "room-wide 15 e/t at RCL 8");
+        assert_eq!(w.creep_stores[&a].amount(SimResource::Energy), 90, "first: full 10");
+        assert_eq!(w.creep_stores[&b].amount(SimResource::Energy), 95, "second: the remaining 5");
+        assert_eq!(w.creep_stores[&c].amount(SimResource::Energy), 100, "third: capped out, no spend (:48-50)");
+        assert_eq!(r.rejected_actions, 1, "the capped-out intent is counted");
+        assert_eq!(w.controller.as_ref().unwrap().progress, 0, "no progress at max level");
+        assert_eq!(
+            w.controller.as_ref().unwrap().downgrade_ticks,
+            200_000,
+            "the restore still applies (capped at FULL(8))"
+        );
+    }
+
+    /// The downgrade clock (`controllers/tick.js`): −1/tick idle (:49 boundary at remaining ≤ 1);
+    /// the expiry drops a level, refunds `round(0.9 × CONTROLLER_LEVELS[new])` progress (:66) and
+    /// re-arms at +FULL[new]/2 (:65); an upgrade tick restores instead and skips the downgrade
+    /// check (:38-43); level 0 zeroes progress and unowns the room (:52-62).
+    #[test]
+    fn downgrade_clock_expiry_and_progress_refund() {
+        // Idle decrement.
+        let (mut w, _id) = upgrade_world(3, 100, 5_000, 1, 0);
+        step(&mut w, &EconIntents::new());
+        assert_eq!(w.controller.as_ref().unwrap().downgrade_ticks, 4_999, "−1/tick idle");
+
+        // Expiry: clock 3 → fires on the third tick (remaining ≤ 1 at the step).
+        let (mut w, _id) = upgrade_world(3, 100, 3, 1, 0);
+        step(&mut w, &EconIntents::new()); // 3 → 2
+        step(&mut w, &EconIntents::new()); // 2 → 1
+        let r = step(&mut w, &EconIntents::new()); // 1 ≤ 1: the downgrade tick
+        {
+            let c = w.controller.as_ref().unwrap();
+            assert_eq!(c.level, 2, "level dropped");
+            assert_eq!(c.progress, 100 + 45_000 / 10 * 9, "kept progress + 0.9 × CONTROLLER_LEVELS[2] (:66)");
+            assert_eq!(c.downgrade_ticks, 1 + 10_000 / 2, "re-armed at remaining + FULL[2]/2 (:65)");
+        }
+        assert_eq!(r.downgrades, vec![2]);
+
+        // An upgrade tick RESTORES instead (and skips the downgrade check entirely, :43).
+        let (mut w, id) = upgrade_world(3, 0, 1, 2, 10);
+        let mut i = EconIntents::new();
+        i.act(id, EconAction::UpgradeController);
+        let r = step(&mut w, &i);
+        assert!(r.downgrades.is_empty(), "no downgrade on a tick with an upgrade (:38-43)");
+        assert_eq!(w.controller.as_ref().unwrap().downgrade_ticks, 101, "restored +100");
+        assert_eq!(w.controller.as_ref().unwrap().level, 3);
+
+        // Level 1 → 0: ownership lost, progress zeroed; further upgrades reject.
+        let (mut w, id) = upgrade_world(1, 150, 1, 1, 10);
+        let r = step(&mut w, &EconIntents::new());
+        {
+            let c = w.controller.as_ref().unwrap();
+            assert_eq!((c.level, c.progress), (0, 0), "level 0 zeroes progress (:52-62)");
+        }
+        assert_eq!(r.downgrades, vec![0]);
+        let mut i = EconIntents::new();
+        i.act(id, EconAction::UpgradeController);
+        let r = step(&mut w, &i);
+        assert_eq!(r.rejected_actions, 1, "a level-0 controller rejects upgrades");
+    }
+
+    /// Review B10 — the engine has NO zero-effect guard before the level-up check
+    /// (`upgradeController.js:9` gates energy only; `:67` compares `progress + 0`): a 0-WORK
+    /// creep CARRYING energy triggers the level-up in the surplus window (progress already past
+    /// the threshold from the blocked-gate accumulation). No energy is spent (:92 −0), and the
+    /// falsy `_upgraded` means NO clock restore — the freshly-halved clock decays that tick.
+    #[test]
+    fn zero_work_upgrade_still_fires_the_surplus_level_up() {
+        // Level 1, progress 250 ≥ 200 (surplus), clock full: a [C,C,M] hauler with 10 energy.
+        let (mut w, id) = upgrade_world(1, 250, 20_000, 0, 10);
+        let mut i = EconIntents::new();
+        i.act(id, EconAction::UpgradeController);
+        let r = step(&mut w, &i);
+        let c = w.controller.as_ref().unwrap();
+        assert_eq!(c.level, 2, "the zero-effect intent fired the surplus level-up (:67)");
+        assert_eq!(c.progress, 50, "remainder carries (250 + 0 − 200)");
+        assert_eq!(r.level_ups, vec![2]);
+        assert_eq!(w.creep_stores[&id].amount(SimResource::Energy), 10, "no energy spent (:92 −0)");
+        assert_eq!(r.ledger.upgrade, 0, "nothing ledgered");
+        assert_eq!(
+            c.downgrade_ticks,
+            10_000 / 2 - 1,
+            "half-max from the level-up (:72) MINUS the tick's decay — the falsy accumulator skips the restore (tick.js:38)"
+        );
+        assert_eq!(r.rejected_actions, 0, "a level-up is not a no-op");
+
+        // Without the surplus, the same zero-effect intent is a counted no-op (unchanged).
+        let (mut w, id) = upgrade_world(1, 100, 20_000, 0, 10);
+        let mut i = EconIntents::new();
+        i.act(id, EconAction::UpgradeController);
+        let r = step(&mut w, &i);
+        assert_eq!(r.rejected_actions, 1);
+        assert_eq!(w.controller.as_ref().unwrap().level, 1);
+    }
+
+    /// The restore caps at the full clock and requires an ACTUAL conversion: a 0-WORK "upgrader"
+    /// converts nothing, so the `_upgraded` accumulator stays falsy and the clock still decays
+    /// (`upgradeController.js:33` power 0 → effect 0; `controllers/tick.js:38` truthy gate).
+    #[test]
+    fn zero_work_upgrade_does_not_restore_the_clock() {
+        let (mut w, id) = upgrade_world(2, 0, 5_000, 0, 10); // no WORK parts
+        let mut i = EconIntents::new();
+        i.act(id, EconAction::UpgradeController);
+        let r = step(&mut w, &i);
+        assert_eq!(r.rejected_actions, 1, "zero-conversion intent counted");
+        assert_eq!(w.controller.as_ref().unwrap().downgrade_ticks, 4_999, "clock still decays");
+
+        // And the +100 restore caps at FULL: clock 19_950 + 100 → 20_000, not 20_050.
+        let (mut w, id) = upgrade_world(1, 0, 19_950, 1, 10);
+        let mut i = EconIntents::new();
+        i.act(id, EconAction::UpgradeController);
+        step(&mut w, &i);
+        assert_eq!(w.controller.as_ref().unwrap().downgrade_ticks, 20_000, "capped at FULL[1] (:39-42)");
+    }
+
+    /// The parallel-refill idiom (Pipeline D + E, one tick): the engine processes withdraw BEFORE
+    /// upgradeController (`creeps/intents.js:15-17` creepActions order), so a draining upgrader's
+    /// same-tick withdraw lands first and the upgrade spends from the topped-up store — the live
+    /// `controllerbehavior.rs:107-124` behavior the upgrader body math depends on.
+    #[test]
+    fn withdraw_and_upgrade_coexist_in_one_tick() {
+        let (mut w, id) = upgrade_world(2, 0, 10_000, 3, 2); // 3 WORK, only 2 energy aboard
+        let ct = w.add_container(pos(38, 41), 2000, 250_000); // adjacent to the creep at (38,40)
+        w.containers[ct].store.add(SimResource::Energy, 500);
+
+        let mut i = EconIntents::new();
+        i.act(id, EconAction::UpgradeController); // Pipeline E
+        i.act(id, EconAction::Withdraw { target: StructRef::Container(ct), resource: SimResource::Energy, amount: 90 }); // Pipeline D
+        let r = step(&mut w, &i);
+        assert_eq!(r.rejected_actions, 0, "D and E coexist — no mask collision");
+        assert_eq!(w.controller.as_ref().unwrap().progress, 3, "upgrade spent the FULL 3 (withdraw landed first)");
+        assert_eq!(w.creep_stores[&id].amount(SimResource::Energy), 2 + 90 - 3);
+        assert_eq!(w.containers[ct].store.amount(SimResource::Energy), 410);
+    }
+
+    /// BUILD_POWER 5 progress/WORK/t at 1 energy/progress clamped by remaining + carried energy
+    /// (`creeps/build.js:67-69,83`); range ≤ 3 (:23); a Build masks the same-tick harvest
+    /// (Pipeline A — `jobs/actions.rs:27-34`, engine conflict `intents.js:10`).
+    #[test]
+    fn build_power_cost_range_and_pipeline() {
+        let mut w = EconWorld::default();
+        w.set_controller(pos(40, 40), 2);
+        let s = w.add_source(pos(9, 10), 3000);
+        let site = w.add_construction_site(pos(12, 10), StructureKind::Road).unwrap();
+        let b = w.add_creep(pos(10, 10), &[Part::Work, Part::Work, Part::Carry, Part::Move], 100_000);
+        w.creep_stores.get_mut(&b).unwrap().add(SimResource::Energy, 13);
+        w.sync_carry_used(b);
+
+        // Build (first-submitted) masks the harvest; effect = min(2×5, 300, 13) = 10.
+        let mut i = EconIntents::new();
+        i.act(b, EconAction::Build { site_idx: site });
+        i.act(b, EconAction::Harvest { source_idx: s });
+        let r = step(&mut w, &i);
+        assert_eq!(r.rejected_actions, 1, "the harvest was masked by the build (Pipeline A)");
+        assert_eq!(w.sites[site].progress, 10, "2 WORK × 5 progress");
+        assert_eq!(w.creep_stores[&b].amount(SimResource::Energy), 3, "1 energy per progress");
+        assert_eq!(r.ledger.build, 10);
+        assert_eq!(w.sources[s].energy, 3000, "no harvest happened");
+
+        // Energy clamp: 3 energy left builds 3 progress.
+        let mut i = EconIntents::new();
+        i.act(b, EconAction::Build { site_idx: site });
+        step(&mut w, &i);
+        assert_eq!(w.sites[site].progress, 13, "clamped to carried energy");
+
+        // Empty: rejected (build.js:14).
+        let mut i = EconIntents::new();
+        i.act(b, EconAction::Build { site_idx: site });
+        let r = step(&mut w, &i);
+        assert_eq!(r.rejected_actions, 1, "no energy aboard");
+
+        // Range 4: rejected (:23).
+        w.creep_stores.get_mut(&b).unwrap().add(SimResource::Energy, 10);
+        w.sync_carry_used(b);
+        w.creep_mut(b).unwrap().pos = pos(16, 10); // range 4 from (12,10)
+        let mut i = EconIntents::new();
+        i.act(b, EconAction::Build { site_idx: site });
+        let r = step(&mut w, &i);
+        assert_eq!(r.rejected_actions, 1, "range 4 > 3 rejected");
+        assert_eq!(w.sites[site].progress, 13);
+    }
+
+    /// Completion materializes the structure with the engine's birth state (`build.js:108-293`):
+    /// a road gets swamp-scaled hitsMax + the SAFE terrain registration; a SPAWN starts EMPTY
+    /// (:123 — unlike the scenario builder's born-full convention); an extension caps from the
+    /// CURRENT controller level; a container arms the FLAT 100-tick first window (:261); a tower
+    /// stub blocks movement. Completed sites compact at the end of the work lane.
+    #[test]
+    fn build_completion_materializes_structures() {
+        let heavy = {
+            let mut b = vec![Part::Work; 10]; // 50 progress/t
+            b.extend([Part::Carry; 10]);
+            b.push(Part::Move);
+            b
+        };
+        let fill = |w: &mut EconWorld, id: CreepId, amount: u32| {
+            w.creep_stores.get_mut(&id).unwrap().add(SimResource::Energy, amount);
+            w.sync_carry_used(id);
+        };
+
+        // Swamp road: placement cost ×5 (1500); completion: hits = hitsMax = 25_000, terrain
+        // registered via the SAFE path, no shadowing room override.
+        let mut w = EconWorld::default();
+        w.set_controller(pos(40, 40), 7);
+        w.movement.terrain.swamps.insert((12, 11));
+        let road_site = w.add_construction_site(pos(12, 11), StructureKind::Road).unwrap();
+        assert_eq!(w.sites[road_site].total, 1500, "swamp road costs 300 × 5 (create-construction-site.js:37-41)");
+        let b = w.add_creep(pos(10, 10), &heavy, 100_000);
+        while !w.sites.is_empty() {
+            if w.creep_stores[&b].amount(SimResource::Energy) == 0 {
+                fill(&mut w, b, 500);
+            }
+            let mut i = EconIntents::new();
+            i.act(b, EconAction::Build { site_idx: 0 });
+            step(&mut w, &i);
+        }
+        assert_eq!(w.roads.len(), 1, "the road materialized");
+        assert_eq!((w.roads[0].hits, w.roads[0].hits_max), (25_000, 25_000), "swamp hitsMax ×5 (build.js:171-186)");
+        assert_eq!(w.roads[0].next_decay_at, (w.tick() - 1) + ROAD_DECAY_TIME, "decay a full window out");
+        assert!(w.movement.terrain.roads.contains(&(12, 11)), "terrain effect registered (SAFE path)");
+        assert!(w.movement.rooms.is_empty(), "no empty room override minted");
+
+        // Spawn / extension / container / tower birth state, one at a time.
+        let mut w = EconWorld::default();
+        w.set_controller(pos(40, 40), 7); // RCL 7: extension capacity 100
+        let b = w.add_creep(pos(10, 10), &heavy, 100_000);
+        for (kind, p) in [
+            (StructureKind::Spawn, pos(11, 10)),
+            (StructureKind::Extension, pos(12, 10)),
+            (StructureKind::Container, pos(10, 11)),
+            (StructureKind::Tower, pos(11, 11)),
+        ] {
+            let idx = w.add_construction_site(p, kind).unwrap();
+            w.sites[idx].progress = w.sites[idx].total - 1; // one build from done
+            fill(&mut w, b, 1);
+            let mut i = EconIntents::new();
+            i.act(b, EconAction::Build { site_idx: 0 });
+            let r = step(&mut w, &i);
+            assert_eq!(r.sites_completed, vec![(kind, p)], "{kind:?} completed");
+            assert!(w.sites.is_empty(), "completed site compacted");
+        }
+        // The spawn was born EMPTY (build.js:123 — no 300 birth grant) and then self-charged
+        // +1/tick for the 4 ticks since (the room is < 300 — engine-mechanics.md:279; the
+        // ledger's conservation audit books each unit).
+        assert_eq!(w.spawns[0].store_energy, 4, "born empty + 4 ticks of self-charge, NOT born-full");
+        assert_eq!(w.extensions[0].capacity, 100, "extension caps from the CURRENT level (RCL 7)");
+        assert_eq!(w.extensions[0].store_energy, 0);
+        assert_eq!(w.containers[0].hits, crate::constants::CONTAINER_HITS);
+        assert_eq!(
+            w.containers[0].next_decay_at,
+            (w.tick() - 2) + CONTAINER_DECAY_TIME,
+            "built container arms the FLAT 100 window (build.js:261), owned room or not"
+        );
+        assert_eq!(w.towers.len(), 1, "tower stub materialized");
+        assert!(!w.is_walkable(pos(11, 11)), "the tower blocks movement");
+    }
+
+    /// An obstacle-kind site cannot complete under a creep or obstacle object (`build.js:50-60`)
+    /// — the build intent is REJECTED whole (no progress, no energy); a walkable-kind site (road)
+    /// builds under a creep fine.
+    #[test]
+    fn obstacle_site_blocked_by_tile_occupant() {
+        let mut w = EconWorld::default();
+        w.set_controller(pos(40, 40), 3);
+        let ext = w.add_construction_site(pos(11, 10), StructureKind::Extension).unwrap();
+        let road = w.add_construction_site(pos(12, 10), StructureKind::Road).unwrap();
+        let b = w.add_creep(pos(10, 10), &[Part::Work, Part::Carry, Part::Move], 100_000);
+        w.creep_stores.get_mut(&b).unwrap().add(SimResource::Energy, 50);
+        w.sync_carry_used(b);
+        let squatter = w.add_creep(pos(11, 10), &[Part::Move], 100_000); // ON the extension site
+
+        let mut i = EconIntents::new();
+        i.act(b, EconAction::Build { site_idx: ext });
+        let r = step(&mut w, &i);
+        assert_eq!(r.rejected_actions, 1, "obstacle site under a creep rejects the build");
+        assert_eq!(w.sites[ext].progress, 0);
+        assert_eq!(w.creep_stores[&b].amount(SimResource::Energy), 50, "nothing spent");
+
+        // The road site under the squatter builds fine (roads are walkable).
+        w.creep_mut(squatter).unwrap().pos = pos(12, 10);
+        let mut i = EconIntents::new();
+        i.act(b, EconAction::Build { site_idx: road });
+        step(&mut w, &i);
+        assert_eq!(w.sites[road].progress, 5, "walkable-kind site builds under a creep");
+
+        // Squatter gone: the extension builds.
+        w.creep_mut(squatter).unwrap().pos = pos(20, 20);
+        let mut i = EconIntents::new();
+        i.act(b, EconAction::Build { site_idx: ext });
+        step(&mut w, &i);
+        assert_eq!(w.sites[ext].progress, 5);
+    }
+
+    /// Site placement (`utils.js:128-190` + `:338-354`): the RCL extension allowance counts
+    /// BUILT + PENDING (5 at RCL 2 — the {2:5, 3:10, …, 8:60} ladder); one site per tile; no
+    /// obstacle-kind on an occupied tile (roads exempt); interior bounds; storage gated to
+    /// RCL ≥ 4; natural walls reject every kind (road tunnels not modeled — documented deviation).
+    #[test]
+    fn site_placement_enforces_engine_rules() {
+        let mut w = EconWorld::default();
+        w.set_controller(pos(40, 40), 2);
+        // 5 extension sites at RCL 2 — the 6th rejects on the allowance.
+        for i in 0..5 {
+            w.add_construction_site(pos(10 + i, 10), StructureKind::Extension).unwrap();
+        }
+        assert_eq!(
+            w.add_construction_site(pos(20, 10), StructureKind::Extension),
+            Err(crate::state::SitePlacementError::RclAllowance),
+            "extension allowance at RCL 2 is 5 (constants.js:216)"
+        );
+        // A BUILT extension counts too: at RCL 3 (allowance 10), 5 sites + 5 built = full.
+        w.controller.as_mut().unwrap().level = 3;
+        for i in 0..5 {
+            w.add_extension(pos(10 + i, 12), 3);
+        }
+        assert_eq!(
+            w.add_construction_site(pos(20, 10), StructureKind::Extension),
+            Err(crate::state::SitePlacementError::RclAllowance),
+            "built + pending both count (checkControllerAvailability, utils.js:350)"
+        );
+
+        // One site per tile; obstacle collision; the road exemption.
+        assert_eq!(
+            w.add_construction_site(pos(10, 10), StructureKind::Road),
+            Err(crate::state::SitePlacementError::SiteOccupied),
+            "one site per tile (utils.js:174-176)"
+        );
+        assert_eq!(
+            w.add_construction_site(pos(10, 12), StructureKind::Container),
+            Err(crate::state::SitePlacementError::StructureCollision),
+            "a non-road kind cannot share an extension's tile (utils.js:181-185)"
+        );
+        assert!(
+            w.add_construction_site(pos(10, 12), StructureKind::Road).is_ok(),
+            "a ROAD may share an obstacle structure's tile (utils.js:181 exempts roads)"
+        );
+        assert_eq!(
+            w.add_construction_site(pos(11, 12), StructureKind::Extension),
+            Err(crate::state::SitePlacementError::SameKindStructure),
+            "a same-kind structure blocks placement (utils.js:171-173)"
+        );
+
+        // Review B1 — a CONTAINER blocks non-road placement (utils.js:181-185: containers have a
+        // CONSTRUCTION_COST; walkability is irrelevant to the placement collision set).
+        w.add_container(pos(15, 15), 2000, 250_000);
+        assert_eq!(
+            w.add_construction_site(pos(15, 15), StructureKind::Extension),
+            Err(crate::state::SitePlacementError::StructureCollision),
+            "a container tile rejects a non-road site (B1)"
+        );
+        assert!(
+            w.add_construction_site(pos(15, 15), StructureKind::Road).is_ok(),
+            "…while a road still shares the container's tile"
+        );
+
+        // Bounds + walls + storage RCL gate.
+        assert_eq!(
+            w.add_construction_site(pos(0, 10), StructureKind::Road),
+            Err(crate::state::SitePlacementError::OutOfBounds),
+            "x 0 < 1 (create-construction-site.js:11)"
+        );
+        w.movement.terrain.walls.insert((30, 30));
+        assert_eq!(
+            w.add_construction_site(pos(30, 30), StructureKind::Extension),
+            Err(crate::state::SitePlacementError::TerrainWall)
+        );
+        assert_eq!(
+            w.add_construction_site(pos(30, 30), StructureKind::Road),
+            Err(crate::state::SitePlacementError::TerrainWall),
+            "road-on-wall = tunnel, deliberately unmodeled (deviation)"
+        );
+        assert_eq!(
+            w.add_construction_site(pos(31, 30), StructureKind::Storage),
+            Err(crate::state::SitePlacementError::RclAllowance),
+            "storage needs RCL 4 (CONTROLLER_STRUCTURES.storage)"
+        );
+        w.controller.as_mut().unwrap().level = 4;
+        assert!(w.add_construction_site(pos(31, 30), StructureKind::Storage).is_ok());
+    }
+
+    /// Review A2 — the exit-adjacency border rule (`utils.js:130-145`): a non-road/non-container
+    /// kind at x/y ∈ {1, 48} places only if ALL THREE adjacent border tiles are natural walls;
+    /// roads and containers are exempt.
+    #[test]
+    fn site_placement_exit_adjacency_border_rule() {
+        // Open exits (default terrain: no walls): the near-edge extension is rejected.
+        let mut w = EconWorld::default();
+        w.set_controller(pos(40, 40), 3);
+        assert_eq!(
+            w.add_construction_site(pos(1, 25), StructureKind::Extension),
+            Err(crate::state::SitePlacementError::ExitAdjacent),
+            "x = 1 with an open exit column rejects (utils.js:130-145)"
+        );
+        assert_eq!(
+            w.add_construction_site(pos(25, 48), StructureKind::Tower),
+            Err(crate::state::SitePlacementError::ExitAdjacent),
+            "y = 48 with an open exit row rejects"
+        );
+        // Roads and containers are exempt (the :131 kind filter).
+        assert!(w.add_construction_site(pos(1, 25), StructureKind::Road).is_ok(), "road exempt");
+        assert!(w.add_construction_site(pos(1, 26), StructureKind::Container).is_ok(), "container exempt");
+
+        // All three adjacent border tiles walled: the extension places.
+        let mut w = EconWorld::default();
+        w.set_controller(pos(40, 40), 3);
+        for by in 24..=26u8 {
+            w.movement.terrain.walls.insert((0, by));
+        }
+        assert!(
+            w.add_construction_site(pos(1, 25), StructureKind::Extension).is_ok(),
+            "walled border column admits the near-edge extension"
+        );
+        // …but a single open border tile among the three still rejects.
+        let mut w = EconWorld::default();
+        w.set_controller(pos(40, 40), 3);
+        w.movement.terrain.walls.insert((0, 24));
+        w.movement.terrain.walls.insert((0, 26)); // (0,25) stays open
+        assert_eq!(
+            w.add_construction_site(pos(1, 25), StructureKind::Extension),
+            Err(crate::state::SitePlacementError::ExitAdjacent),
+            "one open border tile of the three rejects"
+        );
+    }
+
+    /// Review B2 — the controller is an OBSTACLE OBJECT (`common/constants.js:85`): its tile
+    /// blocks creep birth (is_walkable) and blocks an obstacle-kind site from COMPLETING
+    /// (`build.js:50-60`), but does NOT block site placement (no CONSTRUCTION_COST —
+    /// `utils.js:181-185`).
+    #[test]
+    fn controller_tile_is_an_obstacle_object() {
+        let mut w = EconWorld::default();
+        w.set_controller(pos(26, 25), 3);
+        assert!(!w.is_walkable(pos(26, 25)), "controller tile blocks birth/standing");
+        assert!(w.obstacle_object_at(pos(26, 25)));
+        assert!(
+            !w.construction_blocking_structure_at(pos(26, 25)),
+            "…but it is NOT in the placement collision set (no CONSTRUCTION_COST)"
+        );
     }
 
     /// Spawned-then-living creeps keep the movement weight invariant: `carry_used` equals the

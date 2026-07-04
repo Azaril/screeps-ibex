@@ -1,8 +1,16 @@
 //! Economy intents — the per-tick action vocabulary of the economy layer. [`EconIntents`] embeds
 //! the kernel's [`MoveIntents`] (the ADR 0033 layering contract: the movement mechanism only ever
-//! sees the movement part) and adds the economy verbs. **M1 vocabulary:** Harvest / Repair /
-//! Transfer / Withdraw / Pickup / SpawnCreep. Build/UpgradeController are deliberately absent
-//! until M2 — a decision routine driving this layer cannot express them at the type level.
+//! sees the movement part) and adds the economy verbs. **M2 vocabulary:** Harvest / Repair /
+//! Build / UpgradeController / Transfer / Withdraw / Pickup / SpawnCreep.
+//!
+//! **Pipelines** (the bot's `jobs/actions.rs:27-56` model, matching the engine's conflict matrix
+//! `creeps/intents.js:3-13`): Harvest/Repair/**Build** share Pipeline A (mutually exclusive —
+//! harvest conflicts with build and repair, build conflicts with repair; engine-mechanics.md:70-72);
+//! Transfer/Withdraw/Pickup share Pipeline D; **UpgradeController is Pipeline E, its OWN lane**
+//! (`actions.rs:50-51`; absent from the engine conflict matrix — it coexists with everything).
+//! *The M2 spec sketch said upgrade "shares Pipeline A with Harvest/Repair" — that is a spec
+//! error against both the engine matrix and the bot's own flags; the E-lane is implemented and
+//! the deviation-from-spec is documented here.*
 
 use crate::state::SimResource;
 use screeps::Part;
@@ -48,6 +56,19 @@ pub enum EconAction {
     /// [`crate::EconWorld::dropped`] as of the tick's START (piles are only compacted at the
     /// decay step, after all pickups).
     Pickup { dropped_idx: usize },
+    /// Build a construction site within Chebyshev range 3 (Pipeline A — shares the work lane with
+    /// Harvest/Repair, `jobs/actions.rs:27-34` / engine conflicts `creeps/intents.js:8,10`).
+    /// 5 progress/WORK/tick at 1 energy per progress (`creeps/build.js:67-69,83`); completion
+    /// materializes the structure (`build.js:108-293`). `site_idx` indexes
+    /// [`crate::EconWorld::sites`] as of the tick's START (completed sites compact at the end of
+    /// the work lane).
+    Build { site_idx: usize },
+    /// Upgrade THE room controller from within Chebyshev range 3 (Pipeline E — its own lane,
+    /// `jobs/actions.rs:50-51`; coexists with a same-tick Pipeline-D withdraw, the live
+    /// upgrader's parallel-refill idiom `controllerbehavior.rs:107-124`). 1 progress/WORK/tick at
+    /// 1 energy per progress (`creeps/upgradeController.js:33-34,92`); RCL8 caps the room at
+    /// 15 e/t shared across upgraders (`:42-52`).
+    UpgradeController,
     /// Start spawning `body` at spawn `spawn_idx` (the spawn MECHANISM half; bid/priority ordering
     /// is the QUEUE layer's job — [`crate::spawn_queue`] — which decides what to request; this
     /// resolver only executes the request).

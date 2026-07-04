@@ -173,13 +173,100 @@ pub struct SimStorage {
     pub store: SimStore,
 }
 
-/// The room controller — struct only in M0 (upgrade mechanics land M2; `UpgradeController` is
-/// deliberately NOT in the M0 intent vocabulary).
+/// The room controller (mechanics since M2 — the resolver's upgrade lane + controller step own
+/// every mutation).
+///
+/// `downgrade_ticks` is the engine's `downgradeTime` expressed as a COUNTDOWN (remaining ticks =
+/// `downgradeTime − gameTime`, sampled at the start of each tick). The translation from the
+/// engine's absolute-timestamp arithmetic is exact (worked out per branch at the resolver's
+/// step 3d): −1 per ordinary tick, +[`crate::constants::CONTROLLER_DOWNGRADE_RESTORE`] net per
+/// tick-with-upgrade capped at the full clock, expiry at `remaining ≤ 1` (the engine's
+/// `gameTime >= downgradeTime − 1`, `controllers/tick.js:49`).
 #[derive(Clone, Debug)]
 pub struct SimController {
+    /// The controller's tile (upgrade range ≤ 3 measures to it — `creeps/upgradeController.js:21`).
+    pub pos: Position,
     pub level: u8,
     pub progress: u32,
     pub downgrade_ticks: u32,
+}
+
+/// The buildable-structure vocabulary (ADR 0040 M2: extension/container/road/storage/spawn/tower;
+/// towers are movement-blocking STUBS — no tower mechanics until their own milestone).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StructureKind {
+    Spawn,
+    Extension,
+    Road,
+    Container,
+    Storage,
+    Tower,
+}
+
+impl StructureKind {
+    /// Whether a BUILT structure of this kind is a movement obstacle (`OBSTACLE_OBJECT_TYPES`:
+    /// spawns/extensions/storage/towers block; roads/containers are walkable).
+    pub fn blocks_movement(self) -> bool {
+        !matches!(self, StructureKind::Road | StructureKind::Container)
+    }
+
+    fn tag(self) -> u8 {
+        match self {
+            StructureKind::Spawn => 0,
+            StructureKind::Extension => 1,
+            StructureKind::Road => 2,
+            StructureKind::Container => 3,
+            StructureKind::Storage => 4,
+            StructureKind::Tower => 5,
+        }
+    }
+}
+
+/// A construction site (engine `constructionSite` room object): builds accumulate `progress`
+/// toward `total`; the resolver materializes the structure at `progress >= total`
+/// (`creeps/build.js:90-293`). One site per tile (`utils.js:174-176`).
+#[derive(Clone, Debug)]
+pub struct SimConstructionSite {
+    pub pos: Position,
+    pub kind: StructureKind,
+    pub progress: u32,
+    /// `progressTotal` = [`crate::constants::construction_cost`] × the swamp ratio for roads
+    /// (`room/create-construction-site.js:35-45`).
+    pub total: u32,
+}
+
+/// A tower STUB (M2): exists, blocks movement, holds nothing, shoots nothing — plans include
+/// towers and the greenfield rush must pay their (large) build cost, so they materialize as
+/// furniture; mechanics land with the tower milestone.
+#[derive(Clone, Debug)]
+pub struct SimTower {
+    pub id: StructureId,
+    pub pos: Position,
+}
+
+/// Why a construction-site placement was rejected (the engine silently no-ops these —
+/// `room/create-construction-site.js` / `utils.js:128-190`; the sim rejects LOUDLY so a scenario
+/// or policy bug cannot silently place nothing).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SitePlacementError {
+    /// x/y outside 1..=48 (`create-construction-site.js:11`).
+    OutOfBounds,
+    /// Natural wall and the kind is not a road (`utils.js:149-151`; road-on-wall = tunnel,
+    /// deliberately NOT modeled — documented deviation, no tunnels in scope).
+    TerrainWall,
+    /// A site already exists on the tile (`utils.js:174-176` — one site per tile).
+    SiteOccupied,
+    /// A same-kind structure already stands there (`utils.js:171-173`).
+    SameKindStructure,
+    /// A non-road/rampart kind on a tile holding an obstacle-cost structure (`utils.js:181-185`).
+    StructureCollision,
+    /// Built + pending count has reached `CONTROLLER_STRUCTURES[kind][rcl]`
+    /// (`utils.js:338-354` `checkControllerAvailability`).
+    RclAllowance,
+    /// A non-road/non-container kind at x/y ∈ {1, 48} with an OPEN adjacent exit tile — the
+    /// engine requires all three neighboring border tiles to be natural walls
+    /// (`utils.js:130-145`; review A2).
+    ExitAdjacent,
 }
 
 /// A road as a decaying STRUCTURE. The road's movement effect (fatigue rate 1) lives in sim-core's
@@ -222,6 +309,12 @@ pub struct EconWorld {
     pub storage: Option<SimStorage>,
     pub controller: Option<SimController>,
     pub roads: Vec<SimRoad>,
+    /// Tower stubs (M2): furniture + movement obstacles only.
+    pub towers: Vec<SimTower>,
+    /// Construction sites (M2). Sites COMPLETED by builds are compacted at the end of the work
+    /// lane — indices are valid only within the tick they were read (the roads/containers
+    /// contract, extended).
+    pub sites: Vec<SimConstructionSite>,
     pub dropped: Vec<SimDropped>,
     /// Per-creep resource stores (creep positions/bodies live in `movement.creeps`).
     pub creep_stores: BTreeMap<CreepId, SimStore>,
@@ -245,6 +338,8 @@ impl Default for EconWorld {
             storage: None,
             controller: None,
             roads: Vec::new(),
+            towers: Vec::new(),
+            sites: Vec::new(),
             dropped: Vec::new(),
             creep_stores: BTreeMap::new(),
             creep_ttl: BTreeMap::new(),
@@ -260,7 +355,7 @@ impl EconWorld {
         self.movement.tick
     }
 
-    fn mint_structure_id(&mut self) -> StructureId {
+    pub(crate) fn mint_structure_id(&mut self) -> StructureId {
         let id = self.next_structure_id;
         self.next_structure_id += 1;
         id
@@ -333,6 +428,17 @@ impl EconWorld {
         self.storage = Some(SimStorage { pos, store: SimStore::with_capacity(capacity) });
     }
 
+    /// The room controller at `level` with zero progress and a FULL downgrade clock
+    /// (`CONTROLLER_DOWNGRADE[level]` — engine-mechanics.md:228; scenarios rescale the clock).
+    pub fn set_controller(&mut self, pos: Position, level: u8) {
+        self.controller = Some(SimController {
+            pos,
+            level,
+            progress: 0,
+            downgrade_ticks: crate::constants::controller_downgrade(level),
+        });
+    }
+
     /// A road structure; also registers the tile in the movement terrain (fatigue rate 1) so the
     /// structure and its movement effect cannot drift apart. The tile goes into whatever terrain
     /// [`MovementState::terrain_for`] actually reads for this room — an existing room override, or
@@ -342,6 +448,17 @@ impl EconWorld {
     /// [`Self::add_container`] — the engine's unset-`nextDecayTime` immediate first decay is a
     /// just-built artifact scenario placement does not mean).
     pub fn add_road(&mut self, pos: Position, hits: u32, hits_max: u32) -> usize {
+        self.register_road_tile(pos);
+        let next_decay_at = self.movement.tick + crate::constants::ROAD_DECAY_TIME;
+        self.roads.push(SimRoad { pos, hits, hits_max, next_decay_at });
+        self.roads.len() - 1
+    }
+
+    /// Register a road's movement-terrain effect via the SAFE path (never `terrain_mut` — its
+    /// `or_default()` would mint an EMPTY per-room override shadowing the default terrain's
+    /// walls/swamps). Shared by [`Self::add_road`] and the M2 build-completion materializer, so a
+    /// road built mid-run gets the identical registration a scenario-placed road gets.
+    pub(crate) fn register_road_tile(&mut self, pos: Position) {
         let key = (pos.x().u8(), pos.y().u8());
         match self.movement.rooms.get_mut(&pos.room_name()) {
             Some(t) => {
@@ -351,9 +468,133 @@ impl EconWorld {
                 self.movement.terrain.roads.insert(key);
             }
         }
-        let next_decay_at = self.movement.tick + crate::constants::ROAD_DECAY_TIME;
-        self.roads.push(SimRoad { pos, hits, hits_max, next_decay_at });
-        self.roads.len() - 1
+    }
+
+    /// A tower STUB (M2 scenario/build furniture): blocks movement, no mechanics.
+    pub fn add_tower(&mut self, pos: Position) -> usize {
+        let id = self.mint_structure_id();
+        self.towers.push(SimTower { id, pos });
+        self.towers.len() - 1
+    }
+
+    /// Whether any BUILT structure of `kind` stands at `pos` (the same-type check of
+    /// `utils.js:171-173` + the build no-op of `creeps/build.js:46-48`).
+    pub fn structure_of_kind_at(&self, pos: Position, kind: StructureKind) -> bool {
+        match kind {
+            StructureKind::Spawn => self.spawns.iter().any(|s| s.pos == pos),
+            StructureKind::Extension => self.extensions.iter().any(|e| e.pos == pos),
+            StructureKind::Road => self.roads.iter().any(|r| r.pos == pos),
+            StructureKind::Container => self.containers.iter().any(|c| c.pos == pos),
+            StructureKind::Storage => self.storage.as_ref().is_some_and(|s| s.pos == pos),
+            StructureKind::Tower => self.towers.iter().any(|t| t.pos == pos),
+        }
+    }
+
+    /// Whether an OBSTACLE OBJECT occupies `pos` — the engine's `OBSTACLE_OBJECT_TYPES`
+    /// (`common/constants.js:85`) room objects the sim models: spawns, extensions, storage,
+    /// towers, sources, minerals, and **the controller** (review B2 — the controller is in the
+    /// engine list; roads, containers, sites, and piles are walkable). Creeps are checked
+    /// separately where the engine checks them (`is_walkable`; the build-completion gate).
+    pub fn obstacle_object_at(&self, pos: Position) -> bool {
+        self.spawns.iter().any(|s| s.pos == pos)
+            || self.extensions.iter().any(|e| e.pos == pos)
+            || self.storage.as_ref().is_some_and(|s| s.pos == pos)
+            || self.towers.iter().any(|t| t.pos == pos)
+            || self.sources.iter().any(|s| s.pos == pos)
+            || self.minerals.iter().any(|m| m.pos == pos)
+            || self.controller.as_ref().is_some_and(|c| c.pos == pos)
+    }
+
+    /// Whether a structure with a `CONSTRUCTION_COST` entry (roads excluded) occupies `pos` —
+    /// the engine's site PLACEMENT collision set (`utils.js:181-185`: any object whose type has
+    /// a CONSTRUCTION_COST, `type != 'rampart' && != 'road'`, blocks a non-rampart/non-road
+    /// site). In the sim's vocabulary: spawn/extension/storage/tower/**container** (review B1 —
+    /// containers block placement despite being walkable). Sources/minerals/controllers carry no
+    /// CONSTRUCTION_COST and do NOT block via this rule — their tiles are natural walls on real
+    /// maps, so the terrain check rejects there.
+    pub fn construction_blocking_structure_at(&self, pos: Position) -> bool {
+        self.spawns.iter().any(|s| s.pos == pos)
+            || self.extensions.iter().any(|e| e.pos == pos)
+            || self.storage.as_ref().is_some_and(|s| s.pos == pos)
+            || self.towers.iter().any(|t| t.pos == pos)
+            || self.containers.iter().any(|c| c.pos == pos)
+    }
+
+    /// Place a construction site — the engine placement pipeline transcribed
+    /// (`game/rooms.js:1028-1074` → `room/create-construction-site.js`, checks in
+    /// `utils.js:128-190` `checkConstructionSite` + `:338-354` `checkControllerAvailability`),
+    /// enforced LOUDLY (the engine silently no-ops; a sim caller must see why):
+    /// - interior coordinates 1..=48 (`create-construction-site.js:11`);
+    /// - **exit-adjacency (review A2, `utils.js:130-145`):** a non-road/non-container kind at
+    ///   x/y ∈ {1, 48} places only if ALL THREE adjacent edge tiles (the room border row/column
+    ///   next to it) are natural walls — an open exit tile beside the site rejects it;
+    /// - natural wall rejects every kind but road; **deviation:** road-on-wall (tunnel, cost
+    ///   ×150) is NOT modeled — rejected too (no tunnels in scope, M1 cut carried over);
+    /// - one site per tile (`utils.js:174-176`); no same-kind structure (`:171-173`); a
+    ///   non-road kind cannot share a tile with a CONSTRUCTION_COST structure
+    ///   ([`Self::construction_blocking_structure_at`], `:181-185` — containers included,
+    ///   review B1; rampart sharing is out of vocabulary);
+    /// - built + pending count < `CONTROLLER_STRUCTURES[kind][rcl]` (`utils.js:338-354` — the
+    ///   extension {2:5, 3:10, …, 8:60} ladder the M2 spec pins), `rcl` read from the world's
+    ///   controller (0 when absent, as `checkControllerAvailability` does for unowned rooms).
+    ///
+    /// `progressTotal` = cost × swamp ratio for roads (`create-construction-site.js:35-45`).
+    pub fn add_construction_site(&mut self, pos: Position, kind: StructureKind) -> Result<usize, SitePlacementError> {
+        let (x, y) = (pos.x().u8(), pos.y().u8());
+        if !(1..=48).contains(&x) || !(1..=48).contains(&y) {
+            return Err(SitePlacementError::OutOfBounds);
+        }
+        // The exit-adjacency border rule (utils.js:130-145; doc above). Road/container exempt.
+        if !matches!(kind, StructureKind::Road | StructureKind::Container)
+            && (x == 1 || x == 48 || y == 1 || y == 48)
+        {
+            let border: [(u8, u8); 3] = if x == 1 {
+                [(0, y - 1), (0, y), (0, y + 1)]
+            } else if x == 48 {
+                [(49, y - 1), (49, y), (49, y + 1)]
+            } else if y == 1 {
+                [(x - 1, 0), (x, 0), (x + 1, 0)]
+            } else {
+                [(x - 1, 49), (x, 49), (x + 1, 49)]
+            };
+            let terrain = self.movement.terrain_for(pos.room_name());
+            if border.iter().any(|&(bx, by)| !terrain.is_wall(bx, by)) {
+                return Err(SitePlacementError::ExitAdjacent);
+            }
+        }
+        if self.movement.terrain_for(pos.room_name()).is_wall(x, y) {
+            return Err(SitePlacementError::TerrainWall);
+        }
+        if self.sites.iter().any(|s| s.pos == pos) {
+            return Err(SitePlacementError::SiteOccupied);
+        }
+        if self.structure_of_kind_at(pos, kind) {
+            return Err(SitePlacementError::SameKindStructure);
+        }
+        if kind != StructureKind::Road && self.construction_blocking_structure_at(pos) {
+            return Err(SitePlacementError::StructureCollision);
+        }
+        let rcl = self.controller.as_ref().map(|c| c.level).unwrap_or(0);
+        let built = match kind {
+            StructureKind::Spawn => self.spawns.len(),
+            StructureKind::Extension => self.extensions.len(),
+            StructureKind::Road => self.roads.len(),
+            StructureKind::Container => self.containers.len(),
+            StructureKind::Storage => usize::from(self.storage.is_some()),
+            StructureKind::Tower => self.towers.len(),
+        };
+        let pending = self.sites.iter().filter(|s| s.kind == kind).count();
+        if (built + pending) as u32 >= crate::constants::controller_structures(kind, rcl) {
+            return Err(SitePlacementError::RclAllowance);
+        }
+        let mut total = crate::constants::construction_cost(kind);
+        if kind == StructureKind::Road
+            && self.movement.terrain_for(pos.room_name()).swamps.contains(&(x, y))
+        {
+            total *= crate::constants::CONSTRUCTION_COST_ROAD_SWAMP_RATIO;
+        }
+        self.sites.push(SimConstructionSite { pos, kind, progress: 0, total });
+        Ok(self.sites.len() - 1)
     }
 
     /// Index of the road at `pos`, if any (roads are unique per tile — the engine keeps one road
@@ -445,8 +686,9 @@ impl EconWorld {
     }
 
     /// Whether `pos` can host a newborn creep: in-terrain walkable (not a natural wall), no living
-    /// creep, and no obstacle object (spawn/extension/storage/source/mineral — roads and containers
-    /// are walkable, matching the engine's `OBSTACLE_OBJECT_TYPES`).
+    /// creep, and no obstacle object (spawn/extension/storage/tower/source/mineral — roads,
+    /// containers, and construction SITES are walkable, matching the engine's
+    /// `OBSTACLE_OBJECT_TYPES`; own sites never block movement).
     pub fn is_walkable(&self, pos: Position) -> bool {
         let (x, y) = (pos.x().u8(), pos.y().u8());
         if self.movement.terrain_for(pos.room_name()).is_wall(x, y) {
@@ -455,11 +697,7 @@ impl EconWorld {
         if self.movement.creeps.iter().any(|c| c.is_alive() && c.pos == pos) {
             return false;
         }
-        !(self.spawns.iter().any(|s| s.pos == pos)
-            || self.extensions.iter().any(|e| e.pos == pos)
-            || self.storage.as_ref().is_some_and(|s| s.pos == pos)
-            || self.sources.iter().any(|s| s.pos == pos)
-            || self.minerals.iter().any(|m| m.pos == pos))
+        !self.obstacle_object_at(pos)
     }
 
     /// Total economy stock per resource: every store (creeps, spawns, extensions, containers,
@@ -569,6 +807,7 @@ impl EconWorld {
             None => d.u8(0),
             Some(c) => {
                 d.u8(1);
+                d.pos(c.pos);
                 d.u8(c.level);
                 d.u32(c.progress);
                 d.u32(c.downgrade_ticks);
@@ -579,6 +818,16 @@ impl EconWorld {
             d.u32(r.hits);
             d.u32(r.hits_max);
             d.u32(r.next_decay_at);
+        }
+        for t in &self.towers {
+            d.u32(t.id);
+            d.pos(t.pos);
+        }
+        for s in &self.sites {
+            d.pos(s.pos);
+            d.u8(s.kind.tag());
+            d.u32(s.progress);
+            d.u32(s.total);
         }
         // Dropped piles: canonicalize by (pos, resource) so pile-creation order (an artifact of
         // processing order for DISTINCT tiles, which reorder must not leak through) never shows.

@@ -615,6 +615,301 @@ pub fn repair_energy_consumed(work_parts: u32, carried: u32, hits: u32, hits_max
 }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
+// M2 — the upgrader kernels (transcribed from jobs/upgrade.rs + jobs/utility/controllerbehavior.rs
+// + missions/upgrade.rs, each line cited).
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+/// jobs/upgrade.rs:30-35 verbatim: a creep is SLOW with > 4 parts and MOVE × 4 < total parts
+/// (the RCL > 3 upgrader body `[W,C,M,M] + N×[W]` trips this at 5+ parts).
+pub fn is_slow_creep(body: &screeps_sim_core::SimBody) -> bool {
+    let total = body.parts.len();
+    let moves = body.parts.iter().filter(|p| p.part == screeps::Part::Move).count();
+    total > 4 && moves * 4 < total
+}
+
+/// jobs/upgrade.rs:41 — how far from the CONTROLLER a slow upgrader will fetch energy.
+pub const SLOW_UPGRADER_PICKUP_RANGE: u32 = 5;
+
+/// jobs/upgrade.rs:49-57: the slow upgrader's pickup anchor is the CONTROLLER (never the creep —
+/// the creep-anchored radius deadlock observed live).
+pub fn upgrader_pickup_anchor(body: &screeps_sim_core::SimBody, controller_pos: Position) -> Option<(Position, u32)> {
+    is_slow_creep(body).then_some((controller_pos, SLOW_UPGRADER_PICKUP_RANGE))
+}
+
+/// jobs/upgrade.rs:64-73: fast creeps always harvest; slow creeps only when the room has NO
+/// storage and NO containers (downgrade emergencies / recovery).
+pub fn upgrader_should_allow_harvest(body: &screeps_sim_core::SimBody, world: &EconWorld) -> bool {
+    if !is_slow_creep(body) {
+        return true;
+    }
+    world.storage.is_none() && world.containers.is_empty()
+}
+
+/// controllerbehavior.rs:52-66 verbatim: this tick's upgrade will exhaust the creep — issue the
+/// refill withdraw THIS tick (pipeline D + E in parallel). Energy/free are start-of-tick.
+pub fn upgrade_about_to_run_dry(work_parts: u32, energy: u32, free: u32) -> bool {
+    if energy == 0 || free == 0 {
+        return false;
+    }
+    let per_tick = work_parts.max(1); // × UPGRADE_CONTROLLER_POWER (1), floored ≥ 1 (:63)
+    energy <= per_tick
+}
+
+/// The upgrader/builder FILL pickup (jobs/upgrade.rs:112-122 / jobs/build.rs:92-101):
+/// `select_pickups` over ALL priorities and BOTH lanes (`TransferTypeFlags::HAUL | USE` —
+/// upgrade.rs:117 / build.rs:97; the Use-lane controller container IS visible here, unlike every
+/// haul selection), optionally anchor-filtered (haulbehavior.rs:105-112), then NEAREST by linear
+/// range (haulbehavior.rs:114-117 `find_nearest_linear_by`). Amount = min(free, available) —
+/// ties break to the deterministic candidate order (module docs).
+pub fn select_fill_pickup(
+    pos: Position,
+    free: u32,
+    pickups: &[Pickup],
+    anchor: Option<(Position, u32)>,
+) -> Option<(SrcKey, Position, u32)> {
+    if free == 0 {
+        return None;
+    }
+    pickups
+        .iter()
+        .filter(|p| match anchor {
+            Some((a, r)) => a.get_range_to(p.pos) <= r, // within_anchor_range (:64-66)
+            None => true,
+        })
+        .min_by_key(|p| range(pos, p.pos))
+        .map(|p| (p.src, p.pos, free.min(p.available)))
+}
+
+/// missions/upgrade.rs:183-200 verbatim — `has_excess_energy`: storage present → Σ storage
+/// energy ≥ `get_desired_storage_amount(Energy)` / 2 (200_000 / 2, missions/constants.rs:3-8);
+/// else containers present → ANY container > 75% full; else TRUE (a bare room is "excess").
+pub fn has_excess_energy(world: &EconWorld) -> bool {
+    if world.storage.is_some() {
+        let energy = world.storage.as_ref().map(|s| s.store.amount(SimResource::Energy)).unwrap_or(0);
+        energy >= 200_000 / 2
+    } else if !world.containers.is_empty() {
+        world
+            .containers
+            .iter()
+            .any(|c| c.store.amount(SimResource::Energy) as u64 * 100 > CONTAINER_CAPACITY_U64 * 75)
+    } else {
+        true
+    }
+}
+
+const CONTAINER_CAPACITY_U64: u64 = screeps_econ_engine::constants::CONTAINER_CAPACITY as u64;
+
+/// missions/upgrade.rs:93-130 TRANSCRIBED — the downgrade-upkeep body sizing: the minimum WORK
+/// parts restoring the clock from `current_ttd` to `max_ticks / 2` within one lifetime (f64
+/// arithmetic on integer inputs, exact in these ranges; the live function's floats kept — the
+/// result is a body SIZE, never a per-tick branch).
+pub fn work_parts_for_upkeep(current_ttd: u32, max_ticks: u32) -> usize {
+    let safe_threshold = max_ticks / 2;
+    if current_ttd >= safe_threshold {
+        return 1;
+    }
+    let deficit = (safe_threshold - current_ttd) as f64;
+    let net_restore = 100.0 - 1.0; // CONTROLLER_DOWNGRADE_RESTORE − the 1/tick decay (:99)
+    for w in 1..=15u32 {
+        // CONTROLLER_MAX_UPGRADE_PER_TICK (:104)
+        let body_parts = w + 3; // [W,C,M,M] + (w−1)×[W] (:102-105)
+        let spawn_ticks = body_parts * 3; // CREEP_SPAWN_TIME (:106)
+        let lifetime = 1500u32.saturating_sub(spawn_ticks) as f64; // CREEP_LIFE_TIME (:107)
+        let upgrade_ticks_per_cycle = (50.0 / w as f64).floor(); // CARRY_CAPACITY / W (:109-110)
+        if upgrade_ticks_per_cycle < 1.0 {
+            continue;
+        }
+        let cycle_ticks = upgrade_ticks_per_cycle; // refill rides along (parallel D+E, :114)
+        let net_per_cycle = upgrade_ticks_per_cycle * net_restore;
+        let cycles = (lifetime / cycle_ticks).floor();
+        if cycles * net_per_cycle >= deficit {
+            return w as usize;
+        }
+    }
+    15 // the fallback cap (:129)
+}
+
+/// The upgrade body (missions/upgrade.rs:298-316): RCL ≤ 3 → pre `[W,C,M,M]`, repeat `[W,M]` ×
+/// 0..=work_parts; RCL > 3 → pre `[W,C,M,M]`, repeat `[W]` × 1..=(work_parts − 1).
+pub fn upgrader_body(rcl: u8, maximum_energy: u32, work_parts: Option<usize>) -> Option<Vec<screeps::Part>> {
+    use screeps::Part::*;
+    let def = if rcl <= 3 {
+        screeps_combat_decision::spawning::SpawnBodyDefinition {
+            maximum_energy,
+            minimum_repeat: Some(0),
+            maximum_repeat: work_parts,
+            pre_body: &[Work, Carry, Move, Move],
+            repeat_body: &[Work, Move],
+            post_body: &[],
+        }
+    } else {
+        screeps_combat_decision::spawning::SpawnBodyDefinition {
+            maximum_energy,
+            minimum_repeat: Some(1),
+            maximum_repeat: work_parts.map(|p| p.saturating_sub(1)),
+            pre_body: &[Work, Carry, Move, Move],
+            repeat_body: &[Work],
+            post_body: &[],
+        }
+    };
+    screeps_combat_decision::spawning::create_body(&def).ok()
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// M2 — the builder kernels (transcribed from missions/localbuild.rs + jobs/build.rs +
+// jobs/utility/build.rs + foreman's get_build_priority).
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+/// missions/localbuild.rs:232-244 verbatim — `has_sufficient_energy`: storage present → ANY
+/// storage ≥ `get_desired_storage_amount(Energy)` / 4 (50_000); else ANY container > 50% full
+/// (an empty candidate set is false — the greenfield RCL-1 room reads insufficient).
+pub fn has_sufficient_energy(world: &EconWorld) -> bool {
+    if world.storage.is_some() {
+        world
+            .storage
+            .as_ref()
+            .map(|s| s.store.amount(SimResource::Energy) >= 200_000 / 4)
+            .unwrap_or(false)
+    } else {
+        world
+            .containers
+            .iter()
+            .any(|c| c.store.amount(SimResource::Energy) as u64 * 100 > CONTAINER_CAPACITY_U64 * 50)
+    }
+}
+
+/// foreman `get_build_priority` (screeps-foreman/src/planner.rs:202-228), the in-vocabulary rows:
+/// spawn/storage/tower Critical, extension Critical at RCL ≤ 2 else High, container High,
+/// road VeryLow. (Ord: higher = build first.)
+pub fn build_priority(kind: screeps_econ_engine::StructureKind, rcl: u8) -> u8 {
+    use screeps_econ_engine::StructureKind::*;
+    match kind {
+        Spawn | Storage | Tower => 4,          // Critical
+        Extension => {
+            if rcl <= 2 {
+                4 // Critical (planner.rs:205-211)
+            } else {
+                3 // High
+            }
+        }
+        Container => 3,                        // High
+        Road => 0,                             // VeryLow (planner.rs:225)
+    }
+}
+
+/// jobs/utility/build.rs:5-19 — the builder's site selection: max by (foreman build priority,
+/// then HIGHEST progress, then NEAREST — the reversed range compare inside max_by). Returns the
+/// site's tile (sites compact; tile is the stable identity).
+pub fn select_construction_site(pos: Position, world: &EconWorld, rcl: u8) -> Option<(u8, u8)> {
+    world
+        .sites
+        .iter()
+        .max_by(|a, b| {
+            build_priority(a.kind, rcl)
+                .cmp(&build_priority(b.kind, rcl))
+                .then_with(|| a.progress.cmp(&b.progress))
+                .then_with(|| range(pos, a.pos).cmp(&range(pos, b.pos)).reverse())
+        })
+        .map(|s| (s.pos.x().u8(), s.pos.y().u8()))
+}
+
+/// missions/localbuild.rs:49-111 — `get_builder_priority`: with sites pending, the desired
+/// builder count from the required-progress table (by RCL band), collapsed to 1 without
+/// sufficient energy; priority = (HIGH+MEDIUM)/2 when NO builders exist, else the max over site
+/// kinds (spawn/storage → HIGH, else MEDIUM).
+pub fn builder_priority(world: &EconWorld, rcl: u8, sufficient: bool, builders: usize) -> Option<(u32, f32)> {
+    if world.sites.is_empty() {
+        return None;
+    }
+    let required_progress: u32 = world.sites.iter().map(|s| s.total - s.progress).sum();
+    let desired_for_progress: u32 = if rcl <= 3 {
+        match required_progress {
+            0 => 0,
+            1..=1000 => 1,
+            1001..=2000 => 2,
+            2001..=3000 => 3,
+            3001..=4000 => 4,
+            _ => 5,
+        }
+    } else if rcl <= 6 {
+        match required_progress {
+            0 => 0,
+            1..=2000 => 1,
+            2001..=4000 => 2,
+            4001..=6000 => 3,
+            _ => 4,
+        }
+    } else {
+        match required_progress {
+            0 => 0,
+            1..=3000 => 1,
+            3001..=6000 => 2,
+            6001..=9000 => 3,
+            _ => 4,
+        }
+    };
+    let desired = if sufficient { desired_for_progress } else { 1 }; // :87
+    if desired == 0 {
+        return None;
+    }
+    let priority = if builders == 0 {
+        (SPAWN_PRIORITY_HIGH + SPAWN_PRIORITY_MEDIUM) / 2.0 // :90-91 = 62.5
+    } else {
+        // :93-101 — max over site kinds: Spawn/Storage → HIGH, everything else MEDIUM.
+        let any_critical_kind = world.sites.iter().any(|s| {
+            matches!(
+                s.kind,
+                screeps_econ_engine::StructureKind::Spawn | screeps_econ_engine::StructureKind::Storage
+            )
+        });
+        if any_critical_kind {
+            SPAWN_PRIORITY_HIGH
+        } else {
+            SPAWN_PRIORITY_MEDIUM
+        }
+    };
+    Some((desired, priority))
+}
+
+/// missions/localbuild.rs:113-127 — `get_repairer_priority`: the queue's best candidate at the
+/// allowance-raised minimum decides — ≥ High → (1, HIGH); ≥ Medium → (1, MEDIUM); else none.
+/// Under `CriticalOnly` the minimum is Critical (`effective_min_repair_priority(None, allowance)`,
+/// the Option-min live form: Unrestricted → no floor at all).
+pub fn repairer_priority(world: &EconWorld, allowance: RepairAllowance) -> Option<(u32, f32)> {
+    let min = match allowance {
+        RepairAllowance::Unrestricted => RepairPriority::VeryLow, // None floor: every candidate
+        RepairAllowance::CriticalOnly => RepairPriority::Critical,
+    };
+    let best = repair_candidates(world)
+        .into_iter()
+        .filter(|(_, _, _, _, pr)| *pr >= min)
+        .max_by(repair_queue_order)
+        .map(|(_, _, _, _, pr)| pr)?;
+    if best >= RepairPriority::High {
+        Some((1, SPAWN_PRIORITY_HIGH))
+    } else if best >= RepairPriority::Medium {
+        Some((1, SPAWN_PRIORITY_MEDIUM))
+    } else {
+        None
+    }
+}
+
+/// The builder body (missions/localbuild.rs:262-277): repeat `[C,W,M,M]` × 1.., capped at 5
+/// repeats below HIGH priority, uncapped at ≥ HIGH.
+pub fn builder_body(maximum_energy: u32, priority: f32) -> Option<Vec<screeps::Part>> {
+    use screeps::Part::*;
+    screeps_combat_decision::spawning::create_body(&screeps_combat_decision::spawning::SpawnBodyDefinition {
+        maximum_energy,
+        minimum_repeat: Some(1),
+        maximum_repeat: if priority >= SPAWN_PRIORITY_HIGH { None } else { Some(5) }, // :268
+        pre_body: &[],
+        repeat_body: &[Carry, Work, Move, Move],
+        post_body: &[],
+    })
+    .ok()
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
 // K4 — spawn requests (rebuilt per tick, spawnsystem re-enqueue semantics).
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 
@@ -622,12 +917,18 @@ pub fn repair_energy_consumed(work_parts: u32, carried: u32, hits: u32, hits_max
 pub const SPAWN_PRIORITY_CRITICAL: f32 = 100.0;
 pub const SPAWN_PRIORITY_HIGH: f32 = 75.0;
 pub const SPAWN_PRIORITY_MEDIUM: f32 = 50.0;
+pub const SPAWN_PRIORITY_LOW: f32 = 25.0;
 
 /// What a queued body is for — carried alongside the request so births map to roles.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RoleSpec {
     Harvester { source_idx: usize },
     Hauler,
+    /// M2 — jobs/upgrade.rs.
+    Upgrader,
+    /// M2 — jobs/build.rs; `allow_harvest` is FROZEN at spawn-request time
+    /// (localbuild.rs:280 `room.storage().is_none()` captured into the job).
+    Builder { allow_harvest: bool },
 }
 
 /// One K4 spawn request: the body + priority + role.
@@ -689,10 +990,26 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 ///   priority HIGH below 75% of desired, else MEDIUM (:279-291 local arms).
 ///   *M1 reduction:* `unfulfilled_hauling` (a 20-tick-cached transfer-queue statistic live) is
 ///   the CURRENT unbooked ACTIVE deposit demand — same quantity, uncached (documented).
+/// - **Upgraders (M2; missions/upgrade.rs:165-347):** roster tracked incl. spawning; ALIVE =
+///   over 100 TTL or still spawning (:243-256); `max_upgraders` from hostiles/max-level/
+///   has_excess (:227-241 — the CPU governor is assumed willing, documented sim reduction; no
+///   hostiles in-sim); WORK sizing from the downgrade-upkeep kernel / the RCL8 cap split / 20
+///   with excess / the source-potential half-share (:259-290); body from
+///   `energy_available().max(300)` only for the FIRST upgrader under downgrade risk, else
+///   CAPACITY (:292-296); priority CRITICAL/HIGH/lerp bands (:319-335).
+/// - **Builders (M2; missions/localbuild.rs:224-292):** desired = max(builder table from pending
+///   site progress ×has_sufficient gating, repairer arm from the queue's best candidate);
+///   priority the max of the two arms; body `[C,W,M,M]` × 1.. capped at 5 repeats below HIGH
+///   (:262-277); `allow_harvest = storage.is_none()` FROZEN into the role (:280).
+///
+/// Emission order (harvesters, haulers, upgraders, builders) is the deterministic tie-break for
+/// equal-priority requests through the queue kernel's stable sort — the live tie order is
+/// mission-iteration-dependent (documented determinism stand-in).
 pub fn spawn_requests(
     world: &EconWorld,
     roles: &BTreeMap<u32, RoleSpec>,
     unfulfilled_hauling: u32,
+    allowance: RepairAllowance,
 ) -> Vec<SpawnPlan> {
     let mut out = Vec::new();
     let total_harvesting = roles.values().filter(|r| matches!(r, RoleSpec::Harvester { .. })).count();
@@ -734,6 +1051,108 @@ pub fn spawn_requests(
                 SPAWN_PRIORITY_MEDIUM
             };
             out.push(SpawnPlan { body, priority, role: RoleSpec::Hauler });
+        }
+    }
+
+    // ── Upgraders (missions/upgrade.rs:165-347; doc above) ──────────────────────────────────────
+    let controller = world.controller.as_ref().filter(|c| c.level > 0);
+    if let Some(c) = controller {
+        let rcl = c.level;
+        let excess = has_excess_energy(world);
+        let at_max_level = screeps_econ_engine::constants::controller_levels(rcl).is_none(); // :224
+        // Downgrade risk: clock below half of max (:209-220).
+        let max_ticks = screeps_econ_engine::constants::controller_downgrade(rcl);
+        let downgrade_upkeep_parts: Option<usize> = (c.downgrade_ticks < max_ticks / 2)
+            .then(|| work_parts_for_upkeep(c.downgrade_ticks, max_ticks));
+        let downgrade_risk = downgrade_upkeep_parts.is_some();
+        // :227-241 (governor willing, no hostiles — sim reductions).
+        let max_upgraders: usize = if at_max_level {
+            1
+        } else if excess {
+            if rcl <= 3 {
+                5
+            } else {
+                3
+            }
+        } else {
+            1
+        };
+        let roster: Vec<u32> = roles
+            .iter()
+            .filter(|(_, r)| matches!(r, RoleSpec::Upgrader))
+            .map(|(&id, _)| id)
+            .collect();
+        // ALIVE = still spawning (no TTL entry yet) or > 100 ticks to live (:243-256).
+        let tick = world.tick();
+        let alive = roster
+            .iter()
+            .filter(|id| world.creep_ttl.get(id).map(|&age| age.saturating_sub(tick) > 100).unwrap_or(true))
+            .count();
+        if alive < max_upgraders {
+            let work_parts: Option<usize> = if let Some(upkeep) = downgrade_upkeep_parts {
+                if roster.is_empty() {
+                    Some(upkeep) // :259-263 — sized to save the clock in one lifetime
+                } else {
+                    Some(((15.0f32 / max_upgraders as f32).ceil()) as usize) // :264-269
+                }
+            } else if at_max_level {
+                Some(((15.0f32 / max_upgraders as f32).ceil()) as usize) // :271-278
+            } else if excess {
+                Some(20) // :279-280
+            } else {
+                // :281-289 — half the room's source potential, split across upgraders.
+                let energy_per_second = (3000.0f32 * world.sources.len() as f32) / 300.0;
+                Some((((energy_per_second / 2.0) / max_upgraders as f32).floor().max(1.0)) as usize)
+            };
+            let maximum_energy = if roster.is_empty() && downgrade_risk {
+                available.max(SPAWN_ENERGY_CAPACITY) // :292-294
+            } else {
+                capacity // :295
+            };
+            if let Some(body) = upgrader_body(rcl, maximum_energy, work_parts) {
+                let priority = if downgrade_risk && roster.is_empty() {
+                    SPAWN_PRIORITY_CRITICAL // :319-322
+                } else if roster.is_empty() {
+                    SPAWN_PRIORITY_HIGH // :323-324
+                } else if excess && world.storage.is_some() && max_upgraders > 1 {
+                    let interp = alive as f32 / (max_upgraders - 1) as f32; // :325-328
+                    lerp(SPAWN_PRIORITY_HIGH, SPAWN_PRIORITY_MEDIUM, interp)
+                } else if max_upgraders > 1 {
+                    let interp = alive as f32 / (max_upgraders - 1) as f32; // :329-332
+                    lerp(SPAWN_PRIORITY_MEDIUM, SPAWN_PRIORITY_LOW, interp)
+                } else {
+                    SPAWN_PRIORITY_MEDIUM // :333-334
+                };
+                out.push(SpawnPlan { body, priority, role: RoleSpec::Upgrader });
+            }
+        }
+    }
+
+    // ── Builders (missions/localbuild.rs:224-292; doc above) ────────────────────────────────────
+    if let Some(c) = controller {
+        let rcl = c.level;
+        let sufficient = has_sufficient_energy(world);
+        let builders = roles.values().filter(|r| matches!(r, RoleSpec::Builder { .. })).count();
+        let mut spawn_count = 0u32;
+        let mut spawn_priority = 0.0f32; // SPAWN_PRIORITY_NONE (:247)
+        if let Some((desired, priority)) = builder_priority(world, rcl, sufficient, builders) {
+            spawn_count = spawn_count.max(desired);
+            spawn_priority = spawn_priority.max(priority);
+        }
+        if let Some((desired, priority)) = repairer_priority(world, allowance) {
+            spawn_count = spawn_count.max(desired);
+            spawn_priority = spawn_priority.max(priority);
+        }
+        if (builders as u32) < spawn_count {
+            let use_energy_max = if builders == 0 && spawn_priority >= SPAWN_PRIORITY_HIGH {
+                available.max(SPAWN_ENERGY_CAPACITY) // :262-264
+            } else {
+                capacity // :265
+            };
+            if let Some(body) = builder_body(use_energy_max, spawn_priority) {
+                let allow_harvest = world.storage.is_none(); // :280
+                out.push(SpawnPlan { body, priority: spawn_priority, role: RoleSpec::Builder { allow_harvest } });
+            }
         }
     }
     out
@@ -960,7 +1379,7 @@ mod tests {
         w.spawns[0].store_energy = 300;
         // capacity = 300 + 10×50 = 800; available = 300.
         let roles: BTreeMap<u32, RoleSpec> = BTreeMap::new();
-        let reqs = spawn_requests(&w, &roles, 800);
+        let reqs = spawn_requests(&w, &roles, 800, RepairAllowance::Unrestricted);
         let harv = reqs.iter().find(|r| matches!(r.role, RoleSpec::Harvester { .. })).unwrap();
         assert_eq!(harv.body.len(), 4, "bootstrap harvester: 1 repeat of [M,M,C,W] at 300 budget");
         assert_eq!(harv.priority, SPAWN_PRIORITY_CRITICAL, "first harvester is CRITICAL");
@@ -968,7 +1387,7 @@ mod tests {
         // With one harvester alive, the replacement sizes from CAPACITY (800 → 3 repeats = 750).
         let mut roles = BTreeMap::new();
         roles.insert(1u32, RoleSpec::Harvester { source_idx: 0 });
-        let reqs = spawn_requests(&w, &roles, 800);
+        let reqs = spawn_requests(&w, &roles, 800, RepairAllowance::Unrestricted);
         let harv = reqs.iter().find(|r| matches!(r.role, RoleSpec::Harvester { .. })).unwrap();
         assert_eq!(harv.body.len(), 12, "replacement: 3 repeats — the S6 capacity body");
         assert!((harv.priority - 93.75).abs() < 1e-6, "1/4 lerp toward HIGH");
@@ -988,5 +1407,231 @@ mod tests {
         assert_eq!(repair_energy_consumed(10, 10, 899, 1000), 2, "ceil(101/100)");
         assert_eq!(repair_energy_consumed(10, 10, 900, 1000), 1);
         assert_eq!(repair_energy_consumed(10, 10, 1000, 1000), 0, "full target");
+    }
+
+    // ── M2 kernels (transcription pins) ─────────────────────────────────────────────────────────
+
+    /// jobs/upgrade.rs:30-35 — the slow-creep threshold per the live CODE
+    /// (`total > 4 && moves × 4 < total`): a 2-MOVE `[W,C,M,M] + N×[W]` body turns slow at 9+
+    /// parts (N ≥ 5). *The live doc comment claims "5+ parts" — it contradicts its own
+    /// arithmetic; the transcription follows the code (the ground-truth convention).* The
+    /// RCL ≤ 3 `[W,C,M,M] + N×[W,M]` shape is NEVER slow (moves scale with parts).
+    #[test]
+    fn slow_creep_matches_live_threshold() {
+        use screeps::Part::*;
+        use screeps_sim_core::SimBody;
+        let rcl4_body = |extra_work: usize| {
+            let mut b = vec![Work, Carry, Move, Move];
+            b.extend(std::iter::repeat_n(Work, extra_work));
+            SimBody::unboosted(&b)
+        };
+        assert!(!is_slow_creep(&rcl4_body(0)), "4 parts: never slow (> 4 required)");
+        assert!(!is_slow_creep(&rcl4_body(4)), "8 parts, 2 MOVE: 8 < 8 false → still fast");
+        assert!(is_slow_creep(&rcl4_body(5)), "9 parts, 2 MOVE: 8 < 9 → slow");
+        let rcl3_body = SimBody::unboosted(&[Work, Carry, Move, Move, Work, Move, Work, Move]);
+        assert!(!is_slow_creep(&rcl3_body), "the [W,M]-repeat body keeps MOVE×4 ≥ total");
+    }
+
+    /// missions/upgrade.rs:183-200 / localbuild.rs:232-244 — the excess/sufficient thresholds,
+    /// including the bare-room split: NO storage and NO containers ⇒ has_excess TRUE (upgrade.rs
+    /// falls through to `true`) but has_sufficient FALSE (localbuild's `any()` over nothing).
+    #[test]
+    fn excess_and_sufficient_energy_thresholds() {
+        let w = EconWorld::default();
+        assert!(has_excess_energy(&w), "bare room: excess TRUE (upgrade.rs:197-199)");
+        assert!(!has_sufficient_energy(&w), "bare room: sufficient FALSE (any() over empty)");
+        // Storage thresholds: 100k excess / 50k sufficient.
+        let mut w = EconWorld::default();
+        w.set_storage(pos(10, 10), 1_000_000);
+        w.storage.as_mut().unwrap().store.add(SimResource::Energy, 99_999);
+        assert!(!has_excess_energy(&w));
+        assert!(has_sufficient_energy(&w), "≥ 50k is sufficient");
+        w.storage.as_mut().unwrap().store.add(SimResource::Energy, 1);
+        assert!(has_excess_energy(&w), "≥ 100k is excess");
+        let mut w = EconWorld::default();
+        w.set_storage(pos(10, 10), 1_000_000);
+        w.storage.as_mut().unwrap().store.add(SimResource::Energy, 49_999);
+        assert!(!has_sufficient_energy(&w));
+        // Container thresholds: > 75% excess / > 50% sufficient (capacity 2000).
+        let mut w = EconWorld::default();
+        let c = w.add_container(pos(10, 10), 2000, 250_000);
+        w.containers[c].store.add(SimResource::Energy, 1500);
+        assert!(!has_excess_energy(&w), "exactly 75% is NOT > 75%");
+        assert!(has_sufficient_energy(&w), "1500 > 50%");
+        w.containers[c].store.add(SimResource::Energy, 1);
+        assert!(has_excess_energy(&w));
+    }
+
+    /// missions/upgrade.rs:93-130 — the upkeep sizing: at/above half-max → 1 WORK; deep deficits
+    /// stay 1 WORK (a single WORK restores ~29 cycles × 4950 = ~143k per lifetime — every
+    /// realizable deficit fits; the live loop exists for the parameter shape, not the outcome).
+    #[test]
+    fn work_parts_for_upkeep_matches_live_math() {
+        assert_eq!(work_parts_for_upkeep(10_000, 20_000), 1, "at the safe threshold: 1");
+        assert_eq!(work_parts_for_upkeep(2_000, 20_000), 1, "RCL-3 at 10%");
+        assert_eq!(work_parts_for_upkeep(0, 200_000), 1, "even the RCL-8 full deficit (100k ≤ 143k)");
+    }
+
+    /// controllerbehavior.rs:52-66 — the draining trigger: energy ≤ WORK × 1 with free space.
+    #[test]
+    fn upgrade_about_to_run_dry_boundaries() {
+        assert!(!upgrade_about_to_run_dry(3, 0, 10), "empty takes the Err path instead");
+        assert!(!upgrade_about_to_run_dry(3, 4, 0), "full creep has nothing to refill into");
+        assert!(upgrade_about_to_run_dry(3, 3, 10), "energy == per-tick spend → refill now");
+        assert!(!upgrade_about_to_run_dry(3, 4, 10), "one tick of slack left");
+        assert!(upgrade_about_to_run_dry(0, 1, 10), "0 WORK floors per_tick at 1 (:63)");
+    }
+
+    /// The upgrader bodies (missions/upgrade.rs:298-316): RCL ≤ 3 at the 300 floor = the bare
+    /// pre [W,C,M,M]; RCL 3 at capacity 800 with the 10-W target = 3 [W,M] repeats (4 W total);
+    /// RCL 4+ at 800 = [W,C,M,M] + 5×[W] energy-capped; RCL > 3 can't build below 350.
+    #[test]
+    fn upgrader_bodies_match_live_definitions() {
+        use screeps::Part::*;
+        assert_eq!(upgrader_body(3, 300, Some(10)).unwrap(), vec![Work, Carry, Move, Move], "min repeat 0 at the floor");
+        let b = upgrader_body(3, 800, Some(10)).unwrap();
+        assert_eq!(b.iter().filter(|p| **p == Work).count(), 4, "3 repeats of [W,M] within 800");
+        let b = upgrader_body(4, 800, Some(20)).unwrap();
+        assert_eq!(b.iter().filter(|p| **p == Work).count(), 6, "pre W + 5 repeat W within 800");
+        assert!(upgrader_body(4, 300, Some(20)).is_none(), "RCL>3 needs ≥ 350 (min repeat 1)");
+    }
+
+    /// The builder priority tables (missions/localbuild.rs:49-111) + the repairer arm (:113-127)
+    /// + the builder body cap (:268).
+    #[test]
+    fn builder_priority_and_body_match_live() {
+        let mut w = EconWorld::default();
+        assert!(builder_priority(&w, 3, true, 0).is_none(), "no sites → no builder demand");
+        w.set_controller(pos(40, 40), 3);
+        let s = w.add_construction_site(pos(10, 10), screeps_econ_engine::StructureKind::Extension).unwrap();
+        // 3000 remaining at RCL ≤ 3 → 3 desired with sufficient energy, 1 without.
+        assert_eq!(builder_priority(&w, 3, true, 0), Some((3, 62.5)), "(HIGH+MEDIUM)/2 with no builders");
+        assert_eq!(builder_priority(&w, 3, false, 0).unwrap().0, 1, "insufficient energy → 1");
+        assert_eq!(builder_priority(&w, 3, true, 1).unwrap().1, SPAWN_PRIORITY_MEDIUM, "extension sites → MEDIUM with a builder");
+        w.sites[s].progress = 2_500; // 500 remaining → 1 desired
+        assert_eq!(builder_priority(&w, 3, true, 0).unwrap().0, 1);
+        // A spawn site raises the with-builders priority to HIGH (:96-97).
+        w.add_construction_site(pos(11, 10), screeps_econ_engine::StructureKind::Spawn).unwrap();
+        assert_eq!(builder_priority(&w, 3, true, 1).unwrap().1, SPAWN_PRIORITY_HIGH);
+
+        // The repairer arm: a <25% road (High band) → (1, HIGH); allowance CriticalOnly hides it.
+        let mut w = EconWorld::default();
+        w.add_road(pos(10, 10), 1000, 5000);
+        assert_eq!(repairer_priority(&w, RepairAllowance::Unrestricted), Some((1, SPAWN_PRIORITY_HIGH)));
+        assert_eq!(repairer_priority(&w, RepairAllowance::CriticalOnly), None, "S1 gate: no repairer spawn");
+        // A 40% road (Medium) → (1, MEDIUM); an 80% road (VeryLow) → none (< Medium).
+        let mut w = EconWorld::default();
+        w.add_road(pos(10, 10), 2000, 5000);
+        assert_eq!(repairer_priority(&w, RepairAllowance::Unrestricted), Some((1, SPAWN_PRIORITY_MEDIUM)));
+        let mut w = EconWorld::default();
+        w.add_road(pos(10, 10), 4000, 5000);
+        assert_eq!(repairer_priority(&w, RepairAllowance::Unrestricted), None, "VeryLow best never spawns");
+
+        // The body cap: 5 [C,W,M,M] repeats below HIGH even with huge energy; uncapped at HIGH.
+        let b = builder_body(10_000, SPAWN_PRIORITY_MEDIUM).unwrap();
+        assert_eq!(b.len(), 20, "5 repeats × 4 parts (localbuild.rs:268 Some(5))");
+        let b = builder_body(10_000, SPAWN_PRIORITY_HIGH).unwrap();
+        assert!(b.len() > 20, "≥ HIGH: uncapped repeats");
+    }
+
+    /// jobs/utility/build.rs:5-19 — site selection: foreman priority first (spawn beats road),
+    /// then higher PROGRESS, then nearest.
+    #[test]
+    fn site_selection_matches_live_ordering() {
+        let mut w = EconWorld::default();
+        w.set_controller(pos(40, 40), 3);
+        let road = w.add_construction_site(pos(11, 10), screeps_econ_engine::StructureKind::Road).unwrap();
+        w.sites[road].progress = 299; // nearly done, but VeryLow priority
+        w.add_construction_site(pos(30, 30), screeps_econ_engine::StructureKind::Spawn).unwrap();
+        assert_eq!(
+            select_construction_site(pos(10, 10), &w, 3),
+            Some((30, 30)),
+            "the far Critical spawn beats the nearly-done adjacent road"
+        );
+        // Equal kind: higher progress wins over distance…
+        let mut w = EconWorld::default();
+        w.set_controller(pos(40, 40), 3);
+        w.add_construction_site(pos(11, 10), screeps_econ_engine::StructureKind::Extension).unwrap();
+        let far = w.add_construction_site(pos(30, 30), screeps_econ_engine::StructureKind::Extension).unwrap();
+        w.sites[far].progress = 100;
+        assert_eq!(select_construction_site(pos(10, 10), &w, 3), Some((30, 30)), "progress beats range");
+        // …and at equal progress the NEAREST wins.
+        w.sites[far].progress = 0;
+        assert_eq!(select_construction_site(pos(10, 10), &w, 3), Some((11, 10)));
+    }
+
+    /// The fill pickup (upgrade.rs:112-122 / haulbehavior.rs:70-125): nearest across ALL tiers
+    /// AND both lanes (the Use-lane controller container IS visible — unlike haul selections);
+    /// the slow-creep anchor filters to CONTROLLER range 5.
+    #[test]
+    fn fill_pickup_sees_use_lane_and_honors_anchor() {
+        let use_pickup = Pickup {
+            src: SrcKey::Container(20, 25),
+            pos: pos(20, 25),
+            tier: Tier::NonePri,
+            available: 500,
+            lane: Lane::Use,
+        };
+        let haul_pickup = pick(SrcKey::Storage, pos(35, 25), Tier::NonePri, 5_000);
+        let set = vec![use_pickup, haul_pickup];
+        let (src, _, take) = select_fill_pickup(pos(22, 25), 100, &set, None).unwrap();
+        assert_eq!(src, SrcKey::Container(20, 25), "the NEAR Use-lane container wins for a filler");
+        assert_eq!(take, 100, "min(free, available)");
+        // The controller anchor (range 5 of (20,25)) excludes the distant storage entirely.
+        let anchored = select_fill_pickup(pos(34, 25), 100, &set, Some((pos(20, 25), 5)));
+        assert_eq!(anchored.unwrap().0, SrcKey::Container(20, 25), "anchor keeps the controller-side source");
+        // Full creep: no pickup.
+        assert!(select_fill_pickup(pos(22, 25), 0, &set, None).is_none());
+    }
+
+    /// The upgrader K4 arm end-to-end shapes: a downgrade-risk room with no upgraders emits a
+    /// CRITICAL upkeep-sized request from AVAILABLE energy; a healthy bare room emits HIGH.
+    #[test]
+    fn upgrader_spawn_arm_downgrade_and_first_priorities() {
+        let mut w = EconWorld::default();
+        w.add_source(pos(10, 10), 3000);
+        w.add_spawn(pos(25, 25));
+        w.set_controller(pos(40, 40), 3);
+        w.controller.as_mut().unwrap().downgrade_ticks = 2_000; // 10% of 20k → risk
+        w.spawns[0].store_energy = 0; // drained: available = 0 → the 300 floor
+        let reqs = spawn_requests(&w, &BTreeMap::new(), 0, RepairAllowance::Unrestricted);
+        let up = reqs.iter().find(|r| matches!(r.role, RoleSpec::Upgrader)).expect("upgrader requested");
+        assert_eq!(up.priority, SPAWN_PRIORITY_CRITICAL, "downgrade risk + no upgraders → CRITICAL");
+        assert_eq!(
+            up.body,
+            vec![screeps::Part::Work, screeps::Part::Carry, screeps::Part::Move, screeps::Part::Move],
+            "upkeep w=1 at the 300 floor: the bare pre-body"
+        );
+
+        w.controller.as_mut().unwrap().downgrade_ticks = 20_000; // healthy clock
+        let reqs = spawn_requests(&w, &BTreeMap::new(), 0, RepairAllowance::Unrestricted);
+        let up = reqs.iter().find(|r| matches!(r.role, RoleSpec::Upgrader)).expect("upgrader requested");
+        assert_eq!(up.priority, SPAWN_PRIORITY_HIGH, "no upgraders yet → HIGH (:323-324)");
+    }
+
+    /// The builder K4 arm: sites → a builder request at 62.5 (no builders), allow_harvest frozen
+    /// TRUE without storage; a repair-only room under the S1 arm spawns NO repairer.
+    #[test]
+    fn builder_spawn_arm_and_s1_gating() {
+        let mut w = EconWorld::default();
+        w.add_source(pos(10, 10), 3000);
+        w.add_spawn(pos(25, 25));
+        w.set_controller(pos(40, 40), 2);
+        w.add_construction_site(pos(24, 24), screeps_econ_engine::StructureKind::Extension).unwrap();
+        let reqs = spawn_requests(&w, &BTreeMap::new(), 0, RepairAllowance::Unrestricted);
+        let b = reqs.iter().find(|r| matches!(r.role, RoleSpec::Builder { .. })).expect("builder requested");
+        assert_eq!(b.priority, 62.5);
+        assert!(matches!(b.role, RoleSpec::Builder { allow_harvest: true }), "no storage → harvest frozen ON");
+
+        // Repair-bait-only room: baseline arm spawns the repairer-builder; the S1 arm does not.
+        let mut w = EconWorld::default();
+        w.add_source(pos(10, 10), 3000);
+        w.add_spawn(pos(25, 25));
+        w.set_controller(pos(40, 40), 2);
+        w.add_road(pos(20, 20), 1000, 5000); // High band
+        let reqs = spawn_requests(&w, &BTreeMap::new(), 0, RepairAllowance::Unrestricted);
+        assert!(reqs.iter().any(|r| matches!(r.role, RoleSpec::Builder { .. })), "repairer arm fires");
+        let reqs = spawn_requests(&w, &BTreeMap::new(), 0, RepairAllowance::CriticalOnly);
+        assert!(!reqs.iter().any(|r| matches!(r.role, RoleSpec::Builder { .. })), "S1 gate blocks the repairer spawn");
     }
 }

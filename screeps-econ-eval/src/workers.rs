@@ -19,6 +19,11 @@ use std::rc::Rc;
 pub enum Role {
     Harvester { source_idx: usize },
     Hauler,
+    /// M2 — the transcribed UpgradeJob FSM (jobs/upgrade.rs).
+    Upgrader,
+    /// M2 — the transcribed BuildJob FSM (jobs/build.rs); `allow_harvest` frozen at
+    /// spawn-request time (localbuild.rs:280).
+    Builder { allow_harvest: bool },
 }
 
 /// One worker's current activity. Targets are held by STABLE identity (SinkKey/SrcKey/RepairRef
@@ -46,10 +51,29 @@ pub enum Activity {
     /// Stationed adjacent to `src`: withdraw/pickup `take`, then travel to the paired delivery.
     PickupFor { src: SrcKey, take: u32, sink: SinkKey, sink_pos: Position, give: u32 },
     /// The harvester idle full-repair (harvest.rs:177-193): stationed within range 3 of the
-    /// target, repair every tick until it is full or the cargo runs out.
+    /// target, repair every tick until it is full or the cargo runs out. Builders reuse it for
+    /// their Repair state (jobs/build.rs:168-172) — the runner branches on role at completion
+    /// (harvesters CHAIN to the next target, builders fall to Idle).
     FullRepair { target: RepairRef },
     /// The harvest.rs:219 `wait(5)` idle backoff.
     Wait { until: u32 },
+    /// M2 — the upgrader stationed within range 3 of the controller (controllerbehavior.rs
+    /// `tick_upgrade` with `refill_when_draining = true`): emit UpgradeController every tick;
+    /// on the draining tick run the pickup selection NOW — an adjacent source withdraws in
+    /// PARALLEL (Pipeline D + E, same tick), a distant one starts the trip.
+    Upgrade,
+    /// M2 — the builder stationed within range 3 of the site at `tile` (buildbehavior.rs
+    /// `tick_build`): emit Build every tick until the site completes/dies or cargo runs out.
+    /// Sites are identified by TILE (one site per tile; indices compact per tick).
+    Build { tile: (u8, u8) },
+    /// M2 — the upgrader/builder refill trip (jobs/upgrade.rs Pickup / jobs/build.rs Pickup →
+    /// tick_pickup): travel to range 1 of `src`, withdraw/pick up `take` into SELF, then Idle
+    /// (the live FinishedPickup re-try collapses into the next Idle pass — 1-tick-lag
+    /// convention, uniform with M1's PostDelivery).
+    FillFrom { src: SrcKey, take: u32 },
+    /// M2 — the upgrader/builder harvest arm (jobs/upgrade.rs:123-129 / jobs/build.rs:103-109 →
+    /// tick_harvest): NEAREST source, chosen at Idle time; harvest until full or drained.
+    HarvestSrc { source_idx: usize },
 }
 
 /// One worker: role + FSM state.
