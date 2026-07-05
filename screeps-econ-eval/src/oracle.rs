@@ -128,7 +128,7 @@ fn t_star_with_fleet(
                 available_energy: bank.min(u32::MAX as u64) as u32,
                 energy_capacity: capacity.max(cost),
             };
-            let queue = [QueuedSpawn { priority: 100.0, body_cost: cost, part_count: parts, id: 1 }];
+            let queue = [QueuedSpawn { priority: 100_000, body_cost: cost, part_count: parts, id: 1 }];
             for s in spawn_step(&mut lanes, &queue) {
                 bank -= cost as u64;
                 // Assign to the least-saturated source.
@@ -265,7 +265,7 @@ pub fn t_star_rcl(world0: &EconWorld, mover: &mut dyn Mover, info: &LayoutInfo, 
                 available_energy: bank.min(u32::MAX as u64) as u32,
                 energy_capacity: (cost as u32).max(SPAWN_ENERGY_CAPACITY),
             };
-            let queue = [QueuedSpawn { priority: 100.0, body_cost: cost as u32, part_count: parts, id: 1 }];
+            let queue = [QueuedSpawn { priority: 100_000, body_cost: cost as u32, part_count: parts, id: 1 }];
             for s in spawn_step(&mut lanes, &queue) {
                 bank -= cost;
                 if need_harvester {

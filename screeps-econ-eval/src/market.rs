@@ -253,18 +253,18 @@ impl MarketRuntime {
 
     /// The S4 arm, market form: a repairer-builder is requested only for an ADMITTED candidate,
     /// banded by the bid's tier projection (survival override ⇒ HIGH).
-    pub fn repairer_priority(&self, world: &EconWorld) -> Option<(u32, f32)> {
+    pub fn repairer_priority(&self, world: &EconWorld) -> Option<(u32, u32)> {
         let (_, _, bid, survival) = self
             .repair_bids(world)
             .into_iter()
             .filter(|&(_, _, bid, survival)| survival || econ::admit_repair(bid, self.floor))
             .max_by_key(|&(_, _, bid, survival)| (survival, bid))?;
         if survival {
-            return Some((1, spawn_policy::SPAWN_PRIORITY_HIGH));
+            return Some((1, spawn_policy::SPAWN_BID_HIGH));
         }
         match econ::bid_to_tier(bid) {
-            screeps_econ_decision::priority::TransferPriority::High => Some((1, spawn_policy::SPAWN_PRIORITY_HIGH)),
-            screeps_econ_decision::priority::TransferPriority::Medium => Some((1, spawn_policy::SPAWN_PRIORITY_MEDIUM)),
+            screeps_econ_decision::priority::TransferPriority::High => Some((1, spawn_policy::SPAWN_BID_HIGH)),
+            screeps_econ_decision::priority::TransferPriority::Medium => Some((1, spawn_policy::SPAWN_BID_MEDIUM)),
             _ => None,
         }
     }
@@ -488,10 +488,9 @@ fn refill_bid_from_plans(consts: &MarketConsts, world: &EconWorld, plans: &[(Spa
     let capacity = baseline::spawn_lane_capacity(world);
     let lane_deficit = capacity.saturating_sub(available);
     let mut order: Vec<usize> = (0..plans.len()).collect();
-    // Descending priority, stable on emission order (the spawn queue's own sort).
-    order.sort_by(|&a, &b| {
-        plans[b].0.priority.partial_cmp(&plans[a].0.priority).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(&b))
-    });
+    // Descending bid, stable on emission order (the spawn queue's own sort). `u32` bids (M5b) —
+    // `cmp` is total, the old `partial_cmp`/NaN coalescing is gone.
+    order.sort_by(|&a, &b| plans[b].0.priority.cmp(&plans[a].0.priority).then(a.cmp(&b)));
     // The next-body cost for the derived floor: the cheapest planned body within the ceiling
     // (the one the lane could bank toward next); fall back to a bare spawn body (300) so a
     // deficit never divides by zero.
@@ -739,7 +738,7 @@ pub fn spawn_requests_market(
         let sufficient = baseline::has_sufficient_energy(world);
         let builders = roles.values().filter(|r| matches!(r, RoleSpec::Builder { .. })).count();
         let mut spawn_count = 0u32;
-        let mut spawn_priority = 0.0f32;
+        let mut spawn_priority = 0u32; // SPAWN_BID_NONE (milli-e/t)
         if let Some((desired, priority)) = baseline::builder_priority(world, rcl, sufficient, builders) {
             spawn_count = spawn_count.max(desired);
             spawn_priority = spawn_priority.max(priority);
@@ -751,7 +750,7 @@ pub fn spawn_requests_market(
         if (builders as u32) < spawn_count {
             let role = RoleSpec::Builder { allow_harvest: world.storage.is_none() };
             let chosen = if k4 {
-                let max_repeats = if spawn_priority >= spawn_policy::SPAWN_PRIORITY_HIGH { 12 } else { 5 };
+                let max_repeats = if spawn_priority >= spawn_policy::SPAWN_BID_HIGH { 12 } else { 5 };
                 let ladder: Vec<(Vec<screeps::Part>, u32)> = (1..=max_repeats)
                     .filter_map(|r| baseline::builder_body(300 * r, spawn_priority))
                     .filter(|b| body_cost(b) <= budget)
@@ -762,7 +761,7 @@ pub fn spawn_requests_market(
                     .collect();
                 pick_body(consts, ladder, available, income)
             } else {
-                let use_energy_max = if builders == 0 && spawn_priority >= spawn_policy::SPAWN_PRIORITY_HIGH {
+                let use_energy_max = if builders == 0 && spawn_priority >= spawn_policy::SPAWN_BID_HIGH {
                     available.max(SPAWN_ENERGY_CAPACITY)
                 } else {
                     capacity

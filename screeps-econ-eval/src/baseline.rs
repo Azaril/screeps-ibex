@@ -715,7 +715,7 @@ pub fn select_construction_site(pos: Position, world: &EconWorld, rcl: u8) -> Op
 
 /// missions/localbuild.rs `get_builder_priority` via the K4 kernel tables (this adapter keeps
 /// the sim's site enumeration).
-pub fn builder_priority(world: &EconWorld, rcl: u8, sufficient: bool, builders: usize) -> Option<(u32, f32)> {
+pub fn builder_priority(world: &EconWorld, rcl: u8, sufficient: bool, builders: usize) -> Option<(u32, u32)> {
     if world.sites.is_empty() {
         return None;
     }
@@ -742,7 +742,7 @@ pub fn builder_priority(world: &EconWorld, rcl: u8, sufficient: bool, builders: 
 /// missions/localbuild.rs `get_repairer_priority` via the K4 kernel: the queue's best candidate
 /// at the allowance-raised minimum decides (`effective_min_repair_priority(None, allowance)` —
 /// Unrestricted → no floor at all).
-pub fn repairer_priority(world: &EconWorld, allowance: RepairAllowance) -> Option<(u32, f32)> {
+pub fn repairer_priority(world: &EconWorld, allowance: RepairAllowance) -> Option<(u32, u32)> {
     let min = effective_min_repair_priority(None, allowance);
     let best = repair_candidates(world)
         .into_iter()
@@ -758,9 +758,7 @@ pub fn repairer_priority(world: &EconWorld, allowance: RepairAllowance) -> Optio
 // priority bands are the shared `spawn_policy` kernels.
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 
-pub use screeps_econ_decision::spawn_policy::{
-    SPAWN_PRIORITY_CRITICAL, SPAWN_PRIORITY_HIGH, SPAWN_PRIORITY_LOW, SPAWN_PRIORITY_MEDIUM,
-};
+pub use screeps_econ_decision::spawn_policy::{SPAWN_BID_CRITICAL, SPAWN_BID_HIGH, SPAWN_BID_LOW, SPAWN_BID_MEDIUM};
 
 /// What a queued body is for — carried alongside the request so births map to roles.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -773,11 +771,11 @@ pub enum RoleSpec {
     Builder { allow_harvest: bool },
 }
 
-/// One K4 spawn request: the body + priority + role.
+/// One K4 spawn request: the body + bid + role. The bid is MILLI-e/t (ADR 0040 §D2, M5b).
 #[derive(Clone, Debug)]
 pub struct SpawnPlan {
     pub body: Vec<screeps::Part>,
-    pub priority: f32,
+    pub priority: u32,
     pub role: RoleSpec,
 }
 
@@ -797,7 +795,7 @@ pub fn upgrader_body(rcl: u8, maximum_energy: u32, work_parts: Option<usize>) ->
 }
 
 /// The builder body via the K4 kernel definition.
-pub fn builder_body(maximum_energy: u32, priority: f32) -> Option<Vec<screeps::Part>> {
+pub fn builder_body(maximum_energy: u32, priority: u32) -> Option<Vec<screeps::Part>> {
     screeps_combat_decision::spawning::create_body(&spawn_policy::builder_body(maximum_energy, priority)).ok()
 }
 
@@ -932,7 +930,7 @@ pub fn spawn_requests(
         let sufficient = has_sufficient_energy(world);
         let builders = roles.values().filter(|r| matches!(r, RoleSpec::Builder { .. })).count();
         let mut spawn_count = 0u32;
-        let mut spawn_priority = 0.0f32; // SPAWN_PRIORITY_NONE
+        let mut spawn_priority = 0u32; // SPAWN_BID_NONE (milli-e/t)
         if let Some((desired, priority)) = builder_priority(world, rcl, sufficient, builders) {
             spawn_count = spawn_count.max(desired);
             spawn_priority = spawn_priority.max(priority);
@@ -942,7 +940,7 @@ pub fn spawn_requests(
             spawn_priority = spawn_priority.max(priority);
         }
         if (builders as u32) < spawn_count {
-            let use_energy_max = if builders == 0 && spawn_priority >= SPAWN_PRIORITY_HIGH {
+            let use_energy_max = if builders == 0 && spawn_priority >= SPAWN_BID_HIGH {
                 available.max(SPAWN_ENERGY_CAPACITY)
             } else {
                 capacity
@@ -1125,7 +1123,7 @@ mod tests {
         let reqs = spawn_requests(&w, &roles, 800, RepairAllowance::Unrestricted);
         let harv = reqs.iter().find(|r| matches!(r.role, RoleSpec::Harvester { .. })).unwrap();
         assert_eq!(harv.body.len(), 4, "bootstrap harvester: 1 repeat of [M,M,C,W] at 300 budget");
-        assert_eq!(harv.priority, SPAWN_PRIORITY_CRITICAL, "first harvester is CRITICAL");
+        assert_eq!(harv.priority, SPAWN_BID_CRITICAL, "first harvester is CRITICAL");
 
         // With one harvester alive, the replacement sizes from CAPACITY (800 → 3 repeats = 750).
         let mut roles = BTreeMap::new();
@@ -1133,13 +1131,13 @@ mod tests {
         let reqs = spawn_requests(&w, &roles, 800, RepairAllowance::Unrestricted);
         let harv = reqs.iter().find(|r| matches!(r.role, RoleSpec::Harvester { .. })).unwrap();
         assert_eq!(harv.body.len(), 12, "replacement: 3 repeats — the S6 capacity body");
-        assert!((harv.priority - 93.75).abs() < 1e-6, "1/4 lerp toward HIGH");
+        assert_eq!(harv.priority, 93_750, "1/4 lerp toward HIGH (milli)");
 
         // Hauler demand: none alive, 800 unfulfilled → body from available (300 → 3×[C,M],
         // base 150) → desired = min(800/150, 3) = 3 > 0 at HIGH.
         let haul = reqs.iter().find(|r| matches!(r.role, RoleSpec::Hauler)).unwrap();
         assert_eq!(haul.body.len(), 6, "bootstrap hauler: 3 repeats of [C,M] at 300");
-        assert_eq!(haul.priority, SPAWN_PRIORITY_HIGH);
+        assert_eq!(haul.priority, SPAWN_BID_HIGH);
     }
 
     // ── The uncovered transcriptions (pins stay sim-side) ──────────────────────────────────────
@@ -1210,35 +1208,35 @@ mod tests {
         w.set_controller(pos(40, 40), 3);
         let s = w.add_construction_site(pos(10, 10), screeps_econ_engine::StructureKind::Extension).unwrap();
         // 3000 remaining at RCL ≤ 3 → 3 desired with sufficient energy, 1 without.
-        assert_eq!(builder_priority(&w, 3, true, 0), Some((3, 62.5)), "(HIGH+MEDIUM)/2 with no builders");
+        assert_eq!(builder_priority(&w, 3, true, 0), Some((3, 62_500)), "(HIGH+MEDIUM)/2 with no builders");
         assert_eq!(builder_priority(&w, 3, false, 0).unwrap().0, 1, "insufficient energy → 1");
         assert_eq!(
             builder_priority(&w, 3, true, 1).unwrap().1,
-            SPAWN_PRIORITY_MEDIUM,
+            SPAWN_BID_MEDIUM,
             "extension sites → MEDIUM with a builder"
         );
         w.sites[s].progress = 2_500; // 500 remaining → 1 desired
         assert_eq!(builder_priority(&w, 3, true, 0).unwrap().0, 1);
         // A spawn site raises the with-builders priority to HIGH.
         w.add_construction_site(pos(11, 10), screeps_econ_engine::StructureKind::Spawn).unwrap();
-        assert_eq!(builder_priority(&w, 3, true, 1).unwrap().1, SPAWN_PRIORITY_HIGH);
+        assert_eq!(builder_priority(&w, 3, true, 1).unwrap().1, SPAWN_BID_HIGH);
 
         // The repairer arm: a <25% road (High band) → (1, HIGH); allowance CriticalOnly hides it.
         let mut w = EconWorld::default();
         w.add_road(pos(10, 10), 1000, 5000);
-        assert_eq!(repairer_priority(&w, RepairAllowance::Unrestricted), Some((1, SPAWN_PRIORITY_HIGH)));
+        assert_eq!(repairer_priority(&w, RepairAllowance::Unrestricted), Some((1, SPAWN_BID_HIGH)));
         assert_eq!(repairer_priority(&w, RepairAllowance::CriticalOnly), None, "S1 gate: no repairer spawn");
         let mut w = EconWorld::default();
         w.add_road(pos(10, 10), 2000, 5000);
-        assert_eq!(repairer_priority(&w, RepairAllowance::Unrestricted), Some((1, SPAWN_PRIORITY_MEDIUM)));
+        assert_eq!(repairer_priority(&w, RepairAllowance::Unrestricted), Some((1, SPAWN_BID_MEDIUM)));
         let mut w = EconWorld::default();
         w.add_road(pos(10, 10), 4000, 5000);
         assert_eq!(repairer_priority(&w, RepairAllowance::Unrestricted), None, "VeryLow best never spawns");
 
         // The body cap: 5 [C,W,M,M] repeats below HIGH even with huge energy; uncapped at HIGH.
-        let b = builder_body(10_000, SPAWN_PRIORITY_MEDIUM).unwrap();
+        let b = builder_body(10_000, SPAWN_BID_MEDIUM).unwrap();
         assert_eq!(b.len(), 20, "5 repeats × 4 parts (localbuild.rs Some(5))");
-        let b = builder_body(10_000, SPAWN_PRIORITY_HIGH).unwrap();
+        let b = builder_body(10_000, SPAWN_BID_HIGH).unwrap();
         assert!(b.len() > 20, "≥ HIGH: uncapped repeats");
     }
 
@@ -1298,7 +1296,7 @@ mod tests {
         w.spawns[0].store_energy = 0; // drained: available = 0 → the 300 floor
         let reqs = spawn_requests(&w, &BTreeMap::new(), 0, RepairAllowance::Unrestricted);
         let up = reqs.iter().find(|r| matches!(r.role, RoleSpec::Upgrader)).expect("upgrader requested");
-        assert_eq!(up.priority, SPAWN_PRIORITY_CRITICAL, "downgrade risk + no upgraders → CRITICAL");
+        assert_eq!(up.priority, SPAWN_BID_CRITICAL, "downgrade risk + no upgraders → CRITICAL");
         assert_eq!(
             up.body,
             vec![screeps::Part::Work, screeps::Part::Carry, screeps::Part::Move, screeps::Part::Move],
@@ -1308,10 +1306,10 @@ mod tests {
         w.controller.as_mut().unwrap().downgrade_ticks = 20_000; // healthy clock
         let reqs = spawn_requests(&w, &BTreeMap::new(), 0, RepairAllowance::Unrestricted);
         let up = reqs.iter().find(|r| matches!(r.role, RoleSpec::Upgrader)).expect("upgrader requested");
-        assert_eq!(up.priority, SPAWN_PRIORITY_HIGH, "no upgraders yet → HIGH");
+        assert_eq!(up.priority, SPAWN_BID_HIGH, "no upgraders yet → HIGH");
     }
 
-    /// The builder K4 arm: sites → a builder request at 62.5 (no builders), allow_harvest
+    /// The builder K4 arm: sites → a builder request at 62_500 milli (no builders), allow_harvest
     /// frozen TRUE without storage; a repair-only room under the S1 arm spawns NO repairer.
     #[test]
     fn builder_spawn_arm_and_s1_gating() {
@@ -1322,7 +1320,7 @@ mod tests {
         w.add_construction_site(pos(24, 24), screeps_econ_engine::StructureKind::Extension).unwrap();
         let reqs = spawn_requests(&w, &BTreeMap::new(), 0, RepairAllowance::Unrestricted);
         let b = reqs.iter().find(|r| matches!(r.role, RoleSpec::Builder { .. })).expect("builder requested");
-        assert_eq!(b.priority, 62.5);
+        assert_eq!(b.priority, 62_500);
         assert!(matches!(b.role, RoleSpec::Builder { allow_harvest: true }), "no storage → harvest frozen ON");
 
         // Repair-bait-only room: baseline arm spawns the repairer-builder; the S1 arm does not.

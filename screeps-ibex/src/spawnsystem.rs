@@ -19,15 +19,16 @@ const CREEP_SPAWN_TIME: u32 = 3;
 /// Minimum stored energy (per room) to allow renewal.
 const RENEW_MIN_ROOM_ENERGY: u32 = 10_000;
 
-// The spawn priority bands live in `screeps_econ_decision::spawn_policy` since ADR 0040 M3
-// (K4) — one implementation, consumed by the missions AND the economy sim. Re-exported here so
-// every bot call site keeps its `spawnsystem::SPAWN_PRIORITY_*` path. (COMBAT_FORMING's
-// rally-stall rationale — the band strictly above the HIGH economy bulk, strictly below the
+// The spawn BIDS live in `screeps_econ_decision::spawn_policy` since ADR 0040 M3 (K4) — one
+// implementation, consumed by the missions AND the economy sim. At M5b (ADR 0040 §D2) the f32
+// `SPAWN_PRIORITY_*` bands are DELETED: the spawn queue joins the e/t currency, so these are now
+// `u32` MILLI-e/t bids (the M5a transfer market's [`BID_SCALE`] = 1000 = par lane). Re-exported
+// here so every bot call site keeps its `spawnsystem::SPAWN_BID_*` path. (COMBAT_FORMING's
+// rally-stall rationale — the bid strictly above the HIGH economy bulk, strictly below the
 // CRITICAL miners, bounded to forming-squad slots — moved with the constants.)
-#[allow(unused_imports)] // all six bands are re-exported API
+#[allow(unused_imports)] // all six bids are re-exported API
 pub use screeps_econ_decision::spawn_policy::{
-    SPAWN_PRIORITY_COMBAT_FORMING, SPAWN_PRIORITY_CRITICAL, SPAWN_PRIORITY_HIGH, SPAWN_PRIORITY_LOW, SPAWN_PRIORITY_MEDIUM,
-    SPAWN_PRIORITY_NONE,
+    SPAWN_BID_COMBAT_FORMING, SPAWN_BID_CRITICAL, SPAWN_BID_HIGH, SPAWN_BID_LOW, SPAWN_BID_MEDIUM, SPAWN_BID_NONE,
 };
 
 /// Exclusive upper bound on a room tile coordinate (rooms are 50x50, 0..=49).
@@ -143,17 +144,18 @@ pub struct SpawnToken(u32);
 pub struct SpawnRequest {
     description: String,
     body: Vec<Part>,
-    priority: f32,
+    /// The spawn queue bid — MILLI-e/t (ADR 0040 §D2, M5b): the same [`BID_SCALE`] currency the
+    /// M5a transfer market runs on. Higher wins; the descending head-of-line-banking comparator
+    /// orders by it. `u32` (not `f32`) makes the whole NaN-coalescing class (IBEX-046) unrepresentable.
+    priority: u32,
     token: Option<SpawnToken>,
     callback: SpawnQueueCallback,
 }
 
 impl SpawnRequest {
-    pub fn new(description: String, body: &[Part], priority: f32, token: Option<SpawnToken>, callback: SpawnQueueCallback) -> SpawnRequest {
-        // Tripwire (IBEX-046): the queue comparator coalesces NaN to Equal;
-        // assert finiteness where the priority is produced instead.
-        debug_assert!(priority.is_finite(), "spawn request priority not finite: {priority}");
-
+    pub fn new(description: String, body: &[Part], priority: u32, token: Option<SpawnToken>, callback: SpawnQueueCallback) -> SpawnRequest {
+        // The bid is a `u32` milli-e/t value (M5b) — no NaN, so the old finiteness tripwire
+        // (IBEX-046, when priority was `f32`) is designed out by the type.
         SpawnRequest {
             description,
             body: body.to_vec(),
@@ -167,7 +169,7 @@ impl SpawnRequest {
         self.body.iter().map(|p| p.cost()).sum()
     }
 
-    pub fn priority(&self) -> f32 {
+    pub fn priority(&self) -> u32 {
         self.priority
     }
 
@@ -204,13 +206,14 @@ impl SpawnQueue {
     pub fn request(&mut self, room: Entity, spawn_request: SpawnRequest) {
         let requests = self.requests.entry(room).or_default();
 
+        // DESCENDING head-of-line-banking order (VERIFIED-CORRECT, reconciliation R2 — NEVER
+        // reverse): the comparator intentionally puts the NEW request's bid on the LEFT of `cmp`
+        // (the reverse of a conventional ascending probe comparison), which yields a descending
+        // insertion so the front of the vec is the highest bid `process_room_spawns` consumes
+        // first. With `u32` bids (M5b) `cmp` is total — the old `partial_cmp`/NaN coalescing is
+        // gone (the finiteness tripwire it needed with `f32` is designed out by the type).
         let pos = requests
-            .binary_search_by(|probe| {
-                spawn_request
-                    .priority
-                    .partial_cmp(&probe.priority)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .binary_search_by(|probe| spawn_request.priority.cmp(&probe.priority))
             .unwrap_or_else(|e| e);
 
         requests.insert(pos, spawn_request);
@@ -565,49 +568,64 @@ impl<'a> System<'a> for SpawnQueueSystem {
 mod tests {
     use super::*;
 
-    fn test_request(priority: f32) -> SpawnRequest {
+    fn test_request(priority: u32) -> SpawnRequest {
         SpawnRequest::new(format!("test-{}", priority), &[Part::Move], priority, None, Box::new(|_, _| {}))
     }
 
-    /// Pin: the spawn queue orders requests DESCENDING by priority (highest
+    /// Pin: the spawn queue orders requests DESCENDING by bid (highest
     /// first). `process_room_spawns` consumes requests front-to-back, so the
     /// front of the vec must be the most important creep.
     ///
     /// WHY the comparator in `SpawnQueue::request` must not be "fixed": it
-    /// intentionally passes the *new* request's priority as the left-hand
-    /// side of `partial_cmp` (the reverse of a conventional ascending
+    /// intentionally passes the *new* request's bid as the left-hand
+    /// side of `cmp` (the reverse of a conventional ascending
     /// `binary_search_by` probe comparison), which yields a descending
     /// insertion order. The original review flagged this as an inverted
     /// comparator; that finding was REFUTED (see
     /// docs/reviews/ibex-review-report.md, spawn-ordering seed). Rewriting it
-    /// as a "natural" ascending comparison would invert spawn priorities so
-    /// the least important creep spawns first.
+    /// as a "natural" ascending comparison would invert spawn bids so
+    /// the least important creep spawns first. (M5b: bids are `u32` milli-e/t;
+    /// the `f32`-era `partial_cmp`/NaN coalescing is gone.)
     #[test]
     fn spawn_queue_orders_requests_descending_by_priority() {
         let mut world = specs::World::new();
         let room = world.create_entity().build();
 
         let mut queue = SpawnQueue::default();
-        queue.request(room, test_request(0.0));
-        queue.request(room, test_request(100.0));
-        queue.request(room, test_request(50.0));
+        queue.request(room, test_request(0));
+        queue.request(room, test_request(100_000));
+        queue.request(room, test_request(50_000));
 
-        let priorities: Vec<f32> = queue
+        let priorities: Vec<u32> = queue
             .iter_requests()
             .find(|(entity, _)| **entity == room)
             .map(|(_, requests)| requests.iter().map(|r| r.priority()).collect())
             .expect("expected requests for room");
 
-        assert_eq!(priorities, vec![100.0, 50.0, 0.0]);
+        assert_eq!(priorities, vec![100_000, 50_000, 0]);
     }
 
-    /// Pin (IBEX-046): non-finite priorities trip the debug assert at the
-    /// request source in debug builds (tests/sim).
-    #[cfg(debug_assertions)]
+    /// Pin (IBEX-046, M5b): the bid is a `u32` milli-e/t value, so the whole
+    /// non-finite-priority class the `f32`-era finiteness tripwire guarded is
+    /// UNREPRESENTABLE by construction — `u32::MAX` is a perfectly ordered bid,
+    /// never coalesced to Equal. (The comparator can no longer see a NaN.)
     #[test]
-    #[should_panic(expected = "priority not finite")]
-    fn spawn_request_rejects_non_finite_priority_in_debug() {
-        let _ = test_request(f32::NAN);
+    fn spawn_request_bid_is_a_total_order_u32() {
+        let mut world = specs::World::new();
+        let room = world.create_entity().build();
+
+        let mut queue = SpawnQueue::default();
+        queue.request(room, test_request(u32::MAX));
+        queue.request(room, test_request(0));
+        queue.request(room, test_request(1));
+
+        let priorities: Vec<u32> = queue
+            .iter_requests()
+            .find(|(entity, _)| **entity == room)
+            .map(|(_, requests)| requests.iter().map(|r| r.priority()).collect())
+            .expect("expected requests for room");
+
+        assert_eq!(priorities, vec![u32::MAX, 1, 0], "u32 bids sort as a total order, front = highest");
     }
 
     /// Engine-true renew cost: ceil(1.2·cost/3/len) — pinned against
@@ -625,26 +643,26 @@ mod tests {
         assert_eq!(renew_energy_cost(0, 0), 0);
     }
 
-    /// Pin: equal-priority requests stay adjacent and do not disturb the
-    /// descending order around them.
+    /// Pin: equal-bid requests stay adjacent and do not disturb the
+    /// descending order around them (stable tie-break — determinism).
     #[test]
     fn spawn_queue_keeps_descending_order_with_equal_priorities() {
         let mut world = specs::World::new();
         let room = world.create_entity().build();
 
         let mut queue = SpawnQueue::default();
-        queue.request(room, test_request(25.0));
-        queue.request(room, test_request(75.0));
-        queue.request(room, test_request(25.0));
-        queue.request(room, test_request(100.0));
+        queue.request(room, test_request(25_000));
+        queue.request(room, test_request(75_000));
+        queue.request(room, test_request(25_000));
+        queue.request(room, test_request(100_000));
 
-        let priorities: Vec<f32> = queue
+        let priorities: Vec<u32> = queue
             .iter_requests()
             .find(|(entity, _)| **entity == room)
             .map(|(_, requests)| requests.iter().map(|r| r.priority()).collect())
             .expect("expected requests for room");
 
-        assert_eq!(priorities, vec![100.0, 75.0, 25.0, 25.0]);
+        assert_eq!(priorities, vec![100_000, 75_000, 25_000, 25_000]);
     }
 
     /// Pin: the construction-site obstacle predicate matches the engine's

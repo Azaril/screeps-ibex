@@ -232,11 +232,11 @@ impl Mission for ScoutMission {
                     // steady-state economy spawning — the visibility entry
                     // that wanted it expires unserviced. The salvage
                     // confirmation pipeline stalled exactly this way
-                    // (LOW-priority requests mapped to SPAWN_PRIORITY_NONE).
+                    // (LOW-priority requests mapped to SPAWN_BID_NONE).
                     let priority = if self.priority >= VISIBILITY_PRIORITY_CRITICAL {
-                        SPAWN_PRIORITY_HIGH
+                        SPAWN_BID_HIGH
                     } else {
-                        SPAWN_PRIORITY_MEDIUM
+                        SPAWN_BID_MEDIUM
                     };
 
                     let spawn_request = SpawnRequest::new(

@@ -46,7 +46,7 @@ impl LocalBuildMission {
     // K4 policy (ADR 0040 M3): the builder count table, priority bands, repairer arm and body
     // cap live in `screeps_econ_decision::spawn_policy` (consumed here and by the economy
     // sim); this mission keeps the ECS/roster bookkeeping and the room reads.
-    fn get_builder_priority(&self, room_data: &RoomData, has_sufficient_energy: bool) -> Option<(u32, f32)> {
+    fn get_builder_priority(&self, room_data: &RoomData, has_sufficient_energy: bool) -> Option<(u32, u32)> {
         let structures = room_data.get_structures()?;
         let controller_level = structures.controllers().iter().map(|c| c.level()).max().unwrap_or(0);
         let construction_sites = room_data.get_construction_sites()?;
@@ -81,7 +81,7 @@ impl LocalBuildMission {
         }
     }
 
-    fn get_repairer_priority(&self, room_data: &RoomData, repair_queue: &RepairQueue) -> Option<(u32, f32)> {
+    fn get_repairer_priority(&self, room_data: &RoomData, repair_queue: &RepairQueue) -> Option<(u32, u32)> {
         // The S1 repair stress gate was deleted at ADR 0040 M5a — the market
         // prices repair natively; the repairer arm considers every repair target.
         let (priority, _) = select_repair_structure_and_priority(room_data, repair_queue, None, true)?;
@@ -211,7 +211,7 @@ impl Mission for LocalBuildMission {
         };
 
         let mut spawn_count = 0;
-        let mut spawn_priority = SPAWN_PRIORITY_NONE;
+        let mut spawn_priority = SPAWN_BID_NONE;
 
         if let Some((desired_builders, build_priority)) = self.get_builder_priority(room_data, has_sufficient_energy) {
             spawn_count = spawn_count.max(desired_builders);
@@ -224,7 +224,7 @@ impl Mission for LocalBuildMission {
         }
 
         if self.builders.len() < spawn_count as usize {
-            let use_energy_max = if self.builders.is_empty() && spawn_priority >= SPAWN_PRIORITY_HIGH {
+            let use_energy_max = if self.builders.is_empty() && spawn_priority >= SPAWN_BID_HIGH {
                 room.energy_available().max(SPAWN_ENERGY_CAPACITY)
             } else {
                 room.energy_capacity_available()

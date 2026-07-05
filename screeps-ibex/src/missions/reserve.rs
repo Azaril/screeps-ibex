@@ -204,9 +204,9 @@ impl Mission for ReserveMission {
 
                 if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                     let priority = if alive_reservers.is_empty() {
-                        SPAWN_PRIORITY_MEDIUM
+                        SPAWN_BID_MEDIUM
                     } else {
-                        SPAWN_PRIORITY_LOW
+                        SPAWN_BID_LOW
                     };
 
                     let spawn_request = SpawnRequest::new(

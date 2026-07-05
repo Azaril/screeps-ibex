@@ -255,10 +255,20 @@ impl Mission for HaulMission {
             let should_spawn = self.haulers.len() < desired_haulers && self.allow_spawning;
 
             if should_spawn {
-                let priority = screeps_econ_decision::spawn_policy::hauler_priority(
+                // Civilian ROI bid (ADR 0040 §D2, M5b — `body_roi_milli`): the hauler's §D5.4 `w`
+                // is its logistics rate = throughput unblocked (cargo per round-trip amortized over
+                // the round-trip time). `range_multiplier = 1/((max_distance·2)+1)` is exactly the
+                // demand-sizing round-trip factor (spawn_policy::hauler_desired), so
+                // `carry × CARRY_CAPACITY × multiplier` is the per-tick throughput this body serves.
+                let body_cost: u32 = body.iter().map(|p| p.cost()).sum();
+                let range_multiplier_milli = (screeps_econ_decision::sink_economics::BID_SCALE) / ((max_distance * 2) + 1);
+                let logistics_rate_milli = (carry_parts as u32) * 50 * range_multiplier_milli;
+                let priority = screeps_econ_decision::spawn_policy::hauler_bid(
                     self.haulers.len(),
                     desired_haulers_for_unfufilled,
                     max_distance,
+                    logistics_rate_milli,
+                    body_cost,
                 );
 
                 let pickup_rooms = &[self.room_data];

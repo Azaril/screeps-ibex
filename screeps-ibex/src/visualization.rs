@@ -326,7 +326,8 @@ pub struct RoomVisibilitySummary {
 /// One spawn queue entry for a room.
 #[derive(Debug, Clone)]
 pub struct SpawnQueueEntry {
-    pub priority: f32,
+    /// The spawn bid — milli-e/t (ADR 0040 §D2, M5b).
+    pub priority: u32,
     pub cost: u32,
     pub description: String,
 }
@@ -1340,7 +1341,16 @@ impl<'a> System<'a> for RenderSystem {
                 let lines: Vec<String> = room_viz
                     .spawn_queue
                     .iter()
-                    .map(|s| format!("{:.0} · {} · {}", s.priority, s.cost, s.description))
+                    // M5b: the bid is milli-e/t — show its coarse band label + the raw bid.
+                    .map(|s| {
+                        format!(
+                            "{} {} · {} · {}",
+                            screeps_econ_decision::spawn_policy::spawn_bid_label(s.priority),
+                            s.priority,
+                            s.cost,
+                            s.description
+                        )
+                    })
                     .collect();
                 format!("Spawn\n{}", lines.join("\n"))
             };

@@ -8,7 +8,6 @@ use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use itertools::*;
-use lerp::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 #[allow(deprecated)]
@@ -188,7 +187,7 @@ impl Mission for RemoteBuildMission {
         if self.builders.len() < desired_builders {
             let interp = (self.builders.len() as f32) / (desired_builders as f32);
 
-            let priority = SPAWN_PRIORITY_MEDIUM.lerp_bounded(SPAWN_PRIORITY_LOW, interp);
+            let priority = screeps_econ_decision::spawn_policy::lerp_bid(SPAWN_BID_MEDIUM, SPAWN_BID_LOW, interp);
 
             let token = system_data.spawn_queue.token();
 

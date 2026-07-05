@@ -217,7 +217,7 @@ impl Mission for ClaimMission {
                     let spawn_request = SpawnRequest::new(
                         "Claimer".to_string(),
                         &body,
-                        SPAWN_PRIORITY_HIGH,
+                        SPAWN_BID_HIGH,
                         Some(token),
                         Self::create_handle_claimer_spawn(mission_entity, *controller),
                     );

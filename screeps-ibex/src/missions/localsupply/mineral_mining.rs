@@ -269,7 +269,7 @@ impl MineralMiningMission {
                     let spawn_request = SpawnRequest::new(
                         format!("Container Miner - Extractor: {}", self.extractor.id()),
                         &body,
-                        SPAWN_PRIORITY_LOW,
+                        SPAWN_BID_LOW,
                         Some(token),
                         Self::create_handle_container_miner_spawn(mission_entity, self.mineral, self.extractor, *container),
                     );

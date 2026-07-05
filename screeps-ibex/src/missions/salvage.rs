@@ -330,7 +330,7 @@ impl SalvageMission {
                 let spawn_request = SpawnRequest::new(
                     format!("Raider - Target Room: {}", room_name),
                     &body,
-                    SPAWN_PRIORITY_LOW,
+                    SPAWN_BID_LOW,
                     Some(token),
                     Self::create_handle_raider_spawn(mission_entity, self.room_data, &self.home_room_datas),
                 );
@@ -347,7 +347,7 @@ impl SalvageMission {
         system_data: &mut MissionExecutionSystemData,
         mission_entity: Entity,
         max_structure_hits: u32,
-        priority: f32,
+        priority: u32,
     ) -> Result<(), String> {
         let token = system_data.spawn_queue.token();
 
@@ -1142,7 +1142,7 @@ impl Mission for SalvageMission {
                 system_data,
                 mission_entity,
                 derelict_features.max_structure_hits,
-                SPAWN_PRIORITY_LOW,
+                SPAWN_BID_LOW,
             )?;
         }
 

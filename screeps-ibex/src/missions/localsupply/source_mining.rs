@@ -454,7 +454,7 @@ impl SourceMiningMission {
                         let spawn_request = SpawnRequest::new(
                             format!("Link Miner - Source: {}", source_id.id()),
                             &body,
-                            SPAWN_PRIORITY_HIGH,
+                            SPAWN_BID_HIGH,
                             Some(token),
                             Self::create_handle_link_miner_spawn(mission_entity, *source_id, *link, target_container.cloned()),
                         );
@@ -488,7 +488,7 @@ impl SourceMiningMission {
                         let spawn_request = SpawnRequest::new(
                             format!("Container Miner - Source: {}", source_id.id()),
                             &body,
-                            SPAWN_PRIORITY_HIGH,
+                            SPAWN_BID_HIGH,
                             Some(token),
                             Self::create_handle_container_miner_spawn(mission_entity, *source_id, *container),
                         );

@@ -16,33 +16,79 @@
 //! deliberately preserved — extracted faithfully; M4 owns the fix.
 
 use crate::repair::RepairPriority;
+use crate::sink_economics::{body_roi_milli, BID_SCALE};
 use screeps::Part;
 use screeps_combat_decision::spawning::SpawnBodyDefinition;
 
-// ── The spawn priority bands (spawnsystem.rs — re-exported by the bot) ───────────────────────
+// ── The spawn bids (ADR 0040 §D2, M5b — one currency, milli-e/t) ─────────────────────────────
+//
+// The spawn queue joins the e/t currency at M5b: `SpawnRequest.priority` is now a `u32`
+// MILLI-e/t bid (the same [`BID_SCALE`] = 1000 = par lane the M5a transfer market runs on), so
+// "what energy FLOWS TO" (transfer) and "what energy BECOMES" (spawn) share one priority
+// architecture and the descending head-of-line-banking queue orders both by the same units.
+//
+// The f32 `SPAWN_PRIORITY_*` bands (100/85/75/50/25/0) are DELETED (EP-2.6). They are replaced
+// by these milli bid-equivalents: the OLD band value × [`BID_SCALE`], so every relative ordering
+// the bands encoded is preserved BY CONSTRUCTION (`CRITICAL > COMBAT_FORMING > HIGH > MEDIUM >
+// LOW > NONE` maps to `100_000 > 85_000 > 75_000 > 50_000 > 25_000 > 0`). Civilian roles whose
+// value the ROI kernel can price bid the real ROI ([`body_roi_milli`]) INSIDE their band window
+// (mirroring the M5a transfer lane's tier-window idiom, so the S6 cost-amortization is expressed
+// without inverting the combat-vs-economy gate the lifecycle harness pins). Coarse roles
+// (claim/scout/reserve/salvage) and the body-sizing-coupled builder keep the band-equivalent.
 
-pub const SPAWN_PRIORITY_CRITICAL: f32 = 100.0;
-/// A band STRICTLY above the HIGH economy bulk but STRICTLY below the CRITICAL miners, reserved
-/// for the slots of a FORMING active offense/defense combat squad (the rally-stall fix — see
-/// the spawnsystem head-of-line note).
-pub const SPAWN_PRIORITY_COMBAT_FORMING: f32 = 85.0;
-pub const SPAWN_PRIORITY_HIGH: f32 = 75.0;
-pub const SPAWN_PRIORITY_MEDIUM: f32 = 50.0;
-pub const SPAWN_PRIORITY_LOW: f32 = 25.0;
-pub const SPAWN_PRIORITY_NONE: f32 = 0.0;
+/// The CRITICAL band-equivalent bid (miners / clock-saving upgraders): the top of the civilian
+/// spawn lane — income is NEVER preempted (ADR §D2). = old `SPAWN_PRIORITY_CRITICAL` (100) × 1000.
+pub const SPAWN_BID_CRITICAL: u32 = 100 * BID_SCALE;
+/// A bid STRICTLY above the HIGH economy bulk but STRICTLY below the CRITICAL miners, reserved for
+/// the slots of a FORMING active offense/defense combat squad (the rally-stall fix — see the
+/// spawnsystem head-of-line note; a forming squad's `w` is high by construction while the window
+/// is open). = old `SPAWN_PRIORITY_COMBAT_FORMING` (85) × 1000.
+pub const SPAWN_BID_COMBAT_FORMING: u32 = 85 * BID_SCALE;
+/// The HIGH economy-bulk band-equivalent bid. = old `SPAWN_PRIORITY_HIGH` (75) × 1000.
+pub const SPAWN_BID_HIGH: u32 = 75 * BID_SCALE;
+/// The MEDIUM band-equivalent bid. = old `SPAWN_PRIORITY_MEDIUM` (50) × 1000.
+pub const SPAWN_BID_MEDIUM: u32 = 50 * BID_SCALE;
+/// The LOW band-equivalent bid. = old `SPAWN_PRIORITY_LOW` (25) × 1000.
+pub const SPAWN_BID_LOW: u32 = 25 * BID_SCALE;
+/// The NONE band-equivalent bid (no demand). = old `SPAWN_PRIORITY_NONE` (0).
+pub const SPAWN_BID_NONE: u32 = 0;
 
-/// Bounded lerp between two bands (the live `lerp::Lerp::lerp_bounded` on f32).
-pub fn lerp_bounded(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t.clamp(0.0, 1.0)
+/// Bounded lerp between two u32 bids (integer, saturating — the milli lane never overflows within
+/// the band range). Replaces the old f32 `lerp::Lerp::lerp_bounded` on the deleted bands; `t` is
+/// clamped to `[0, 1]`. Deterministic integer math (no float reaches an ordering).
+pub fn lerp_bid(a: u32, b: u32, t: f32) -> u32 {
+    let t = t.clamp(0.0, 1.0);
+    // Interpolate in i64 so a > b (descending lerp) is exact; result is back in the band range.
+    let a = a as i64;
+    let b = b as i64;
+    (a + ((b - a) as f64 * t as f64).round() as i64).max(0) as u32
 }
 
-/// A role tag + body + priority — one K4 spawn request (the `RequestSpawn` intent payload).
-/// The `body` is fully expanded (via the shared `create_body`); adapters attach their own
-/// callbacks/tokens.
+/// A coarse label for a spawn bid (logs/HUD) — the surviving role of the deleted band vocabulary.
+/// Maps a milli bid to the nearest band-equivalent name.
+pub fn spawn_bid_label(bid_milli: u32) -> &'static str {
+    if bid_milli >= SPAWN_BID_CRITICAL {
+        "Critical"
+    } else if bid_milli >= SPAWN_BID_COMBAT_FORMING {
+        "CombatForming"
+    } else if bid_milli >= SPAWN_BID_HIGH {
+        "High"
+    } else if bid_milli >= SPAWN_BID_MEDIUM {
+        "Medium"
+    } else if bid_milli >= SPAWN_BID_LOW {
+        "Low"
+    } else {
+        "None"
+    }
+}
+
+/// A role tag + body + bid — one K4 spawn request (the `RequestSpawn` intent payload). The `body`
+/// is fully expanded (via the shared `create_body`); adapters attach their own callbacks/tokens.
+/// `priority` is the MILLI-e/t spawn bid (ADR 0040 §D2, M5b — the unified currency).
 #[derive(Clone, Debug)]
 pub struct SpawnPlan {
     pub body: Vec<Part>,
-    pub priority: f32,
+    pub priority: u32,
 }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
@@ -75,19 +121,21 @@ pub fn harvester_body_energy(total_harvesting_creeps: usize, energy_available: u
 /// The per-source desired harvester count (source_mining.rs `desired_harvesters`).
 pub const DESIRED_HARVESTERS_PER_SOURCE: usize = 4;
 
-/// The harvester priority: lerped across the (range-start, range-end) band for the home's
-/// Manhattan room distance — local (CRITICAL→HIGH), adjacent (MEDIUM→NONE), far (LOW→NONE)
-/// (source_mining.rs).
-pub fn harvester_priority(current: usize, desired: usize, room_manhattan_distance: u32) -> f32 {
+/// The harvester spawn bid (milli-e/t): lerped across the (range-start, range-end) band-equivalent
+/// for the home's Manhattan room distance — local (CRITICAL→HIGH), adjacent (MEDIUM→NONE), far
+/// (LOW→NONE) (source_mining.rs). Income is the top of the civilian lane (CRITICAL) so it is never
+/// preempted (ADR §D2); the lerp fades the bid as the source's roster fills. On the unified
+/// milli-e/t currency the ordering the f32 band encoded is preserved by construction (×1000).
+pub fn harvester_priority(current: usize, desired: usize, room_manhattan_distance: u32) -> u32 {
     let priority_range = if room_manhattan_distance == 0 {
-        (SPAWN_PRIORITY_CRITICAL, SPAWN_PRIORITY_HIGH)
+        (SPAWN_BID_CRITICAL, SPAWN_BID_HIGH)
     } else if room_manhattan_distance <= 1 {
-        (SPAWN_PRIORITY_MEDIUM, SPAWN_PRIORITY_NONE)
+        (SPAWN_BID_MEDIUM, SPAWN_BID_NONE)
     } else {
-        (SPAWN_PRIORITY_LOW, SPAWN_PRIORITY_NONE)
+        (SPAWN_BID_LOW, SPAWN_BID_NONE)
     };
     let interp = (current as f32) / (desired as f32);
-    lerp_bounded(priority_range.0, priority_range.1, interp)
+    lerp_bid(priority_range.0, priority_range.1, interp)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
@@ -131,21 +179,36 @@ pub fn hauler_desired(unfulfilled_hauling: u32, carry_parts: u32, max_distance: 
     (desired_for_unfulfilled, desired)
 }
 
-/// The hauler priority bands (missions/haul.rs): below 75% of the unfulfilled-desired count →
-/// the urgent band (HIGH local / MEDIUM remote), else the relaxed band (MEDIUM local / LOW
-/// remote).
-pub fn hauler_priority(current: usize, desired_for_unfulfilled: u32, max_distance: u32) -> f32 {
+/// The hauler spawn bid (milli-e/t, missions/haul.rs): below 75% of the unfulfilled-desired count →
+/// the urgent band-equivalent (HIGH local / MEDIUM remote), else the relaxed band-equivalent
+/// (MEDIUM local / LOW remote). Haulers sit in the economy bulk (below COMBAT_FORMING), where the
+/// ROI refinement ([`hauler_bid`]) is safe (never crosses the combat gate).
+pub fn hauler_priority(current: usize, desired_for_unfulfilled: u32, max_distance: u32) -> u32 {
     if (current as f32) < (desired_for_unfulfilled as f32 * 0.75).ceil() {
         if max_distance == 0 {
-            SPAWN_PRIORITY_HIGH
+            SPAWN_BID_HIGH
         } else {
-            SPAWN_PRIORITY_MEDIUM
+            SPAWN_BID_MEDIUM
         }
     } else if max_distance == 0 {
-        SPAWN_PRIORITY_MEDIUM
+        SPAWN_BID_MEDIUM
     } else {
-        SPAWN_PRIORITY_LOW
+        SPAWN_BID_LOW
     }
+}
+
+/// The hauler spawn ROI bid (ADR §D2, M5b — civilian `body_roi_milli`): the hauler's §D5.4 `w` is
+/// its logistics rate (throughput unblocked); amortized over the body cost and clamped so it stays
+/// INSIDE the economy bulk (`[SPAWN_BID_LOW, SPAWN_BID_COMBAT_FORMING - 1]`) — the ROI expresses
+/// the S6 cost-amortization within the hauler's class, never crossing the combat-forming gate the
+/// lifecycle harness pins. `logistics_rate_milli` is the caller's throughput estimate (milli-e/t).
+pub fn hauler_bid(current: usize, desired_for_unfulfilled: u32, max_distance: u32, logistics_rate_milli: u32, body_cost: u32) -> u32 {
+    let band = hauler_priority(current, desired_for_unfulfilled, max_distance);
+    let roi = body_roi_milli(logistics_rate_milli, body_cost);
+    // Blend: the ROI refines the ordering WITHIN the band's economy-bulk class. Take the larger of
+    // the coarse band and the ROI (a high-throughput cheap hauler bids up), capped strictly below
+    // the combat gate so logistics never preempts a forming squad.
+    band.max(roi).min(SPAWN_BID_COMBAT_FORMING - 1)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
@@ -272,9 +335,10 @@ pub fn upgrader_body(rcl: u8, maximum_energy: u32, work_parts: Option<usize>) ->
     }
 }
 
-/// The upgrader priority bands (missions/upgrade.rs): downgrade-risk-with-empty-roster
-/// CRITICAL; empty roster HIGH; excess+storage lerp HIGH→MEDIUM; multi lerp MEDIUM→LOW; else
-/// MEDIUM.
+/// The upgrader spawn bid (milli-e/t, missions/upgrade.rs): downgrade-risk-with-empty-roster
+/// CRITICAL (a survival-class clock save — never preempted); empty roster HIGH; excess+storage
+/// lerp HIGH→MEDIUM; multi lerp MEDIUM→LOW; else MEDIUM. Band-equivalents on the unified currency
+/// (×1000), so the ordering the f32 bands encoded is preserved.
 pub fn upgrader_priority(
     downgrade_risk: bool,
     roster_empty: bool,
@@ -282,19 +346,19 @@ pub fn upgrader_priority(
     has_storage: bool,
     max_upgraders: usize,
     alive_upgraders: usize,
-) -> f32 {
+) -> u32 {
     if downgrade_risk && roster_empty {
-        SPAWN_PRIORITY_CRITICAL
+        SPAWN_BID_CRITICAL
     } else if roster_empty {
-        SPAWN_PRIORITY_HIGH
+        SPAWN_BID_HIGH
     } else if has_excess_energy && has_storage && max_upgraders > 1 {
         let interp = (alive_upgraders as f32) / ((max_upgraders - 1) as f32);
-        lerp_bounded(SPAWN_PRIORITY_HIGH, SPAWN_PRIORITY_MEDIUM, interp)
+        lerp_bid(SPAWN_BID_HIGH, SPAWN_BID_MEDIUM, interp)
     } else if max_upgraders > 1 {
         let interp = (alive_upgraders as f32) / ((max_upgraders - 1) as f32);
-        lerp_bounded(SPAWN_PRIORITY_MEDIUM, SPAWN_PRIORITY_LOW, interp)
+        lerp_bid(SPAWN_BID_MEDIUM, SPAWN_BID_LOW, interp)
     } else {
-        SPAWN_PRIORITY_MEDIUM
+        SPAWN_BID_MEDIUM
     }
 }
 
@@ -333,27 +397,27 @@ pub fn builder_desired_for_progress(rcl: u8, required_progress: u32) -> u32 {
     }
 }
 
-/// The first-builder priority: (HIGH + MEDIUM) / 2 (missions/localbuild.rs).
-pub const FIRST_BUILDER_PRIORITY: f32 = (SPAWN_PRIORITY_HIGH + SPAWN_PRIORITY_MEDIUM) / 2.0;
+/// The first-builder spawn bid: (HIGH + MEDIUM) / 2 = 62_500 milli (missions/localbuild.rs).
+pub const FIRST_BUILDER_PRIORITY: u32 = (SPAWN_BID_HIGH + SPAWN_BID_MEDIUM) / 2;
 
 /// The with-builders priority: HIGH iff any spawn/storage site is pending, else MEDIUM
 /// (missions/localbuild.rs — the per-site max collapses to this).
-pub fn builder_priority_with_builders(any_spawn_or_storage_site: bool) -> f32 {
+pub fn builder_priority_with_builders(any_spawn_or_storage_site: bool) -> u32 {
     if any_spawn_or_storage_site {
-        SPAWN_PRIORITY_HIGH
+        SPAWN_BID_HIGH
     } else {
-        SPAWN_PRIORITY_MEDIUM
+        SPAWN_BID_MEDIUM
     }
 }
 
 /// The repairer-builder arm (missions/localbuild.rs `get_repairer_priority` tail): the queue's
 /// best candidate at the allowance-raised minimum decides — ≥ High → (1, HIGH); ≥ Medium →
 /// (1, MEDIUM); else none.
-pub fn repairer_spawn_priority(best_candidate: RepairPriority) -> Option<(u32, f32)> {
+pub fn repairer_spawn_priority(best_candidate: RepairPriority) -> Option<(u32, u32)> {
     if best_candidate >= RepairPriority::High {
-        Some((1, SPAWN_PRIORITY_HIGH))
+        Some((1, SPAWN_BID_HIGH))
     } else if best_candidate >= RepairPriority::Medium {
-        Some((1, SPAWN_PRIORITY_MEDIUM))
+        Some((1, SPAWN_BID_MEDIUM))
     } else {
         None
     }
@@ -361,11 +425,11 @@ pub fn repairer_spawn_priority(best_candidate: RepairPriority) -> Option<(u32, f
 
 /// The builder body definition (missions/localbuild.rs): repeat `[C,W,M,M]` × 1.., capped at 5
 /// repeats below HIGH priority, uncapped at ≥ HIGH.
-pub fn builder_body(maximum_energy: u32, priority: f32) -> SpawnBodyDefinition<'static> {
+pub fn builder_body(maximum_energy: u32, spawn_bid: u32) -> SpawnBodyDefinition<'static> {
     SpawnBodyDefinition {
         maximum_energy,
         minimum_repeat: Some(1),
-        maximum_repeat: if priority >= SPAWN_PRIORITY_HIGH { None } else { Some(5) },
+        maximum_repeat: if spawn_bid >= SPAWN_BID_HIGH { None } else { Some(5) },
         pre_body: &[],
         repeat_body: &[Part::Carry, Part::Work, Part::Move, Part::Move],
         post_body: &[],
@@ -424,10 +488,10 @@ mod tests {
         assert_eq!(body.len(), 4, "1 repeat of [M,M,C,W] at 300");
         let body = create_body(&harvester_body(800)).unwrap();
         assert_eq!(body.len(), 12, "3 repeats at 800");
-        assert_eq!(harvester_priority(0, 4, 0), SPAWN_PRIORITY_CRITICAL);
-        assert!((harvester_priority(1, 4, 0) - 93.75).abs() < 1e-6, "1/4 lerp toward HIGH");
-        assert_eq!(harvester_priority(0, 4, 1), SPAWN_PRIORITY_MEDIUM, "adjacent-room band");
-        assert_eq!(harvester_priority(0, 4, 2), SPAWN_PRIORITY_LOW, "far band");
+        assert_eq!(harvester_priority(0, 4, 0), SPAWN_BID_CRITICAL);
+        assert_eq!(harvester_priority(1, 4, 0), 93_750, "1/4 lerp toward HIGH (milli)");
+        assert_eq!(harvester_priority(0, 4, 1), SPAWN_BID_MEDIUM, "adjacent-room band");
+        assert_eq!(harvester_priority(0, 4, 2), SPAWN_BID_LOW, "far band");
     }
 
     /// The hauler arm (pre-move fixtures, missions/haul.rs): local body, desired sizing,
@@ -442,10 +506,14 @@ mod tests {
         assert_eq!(hauler_desired(800, 3, 0), (5, 3));
         // Remote distance 1: multiplier 1/3 → base 50, 800/50 = 16, cap 6.
         assert_eq!(hauler_desired(800, 3, 1), (16, 6));
-        assert_eq!(hauler_priority(0, 5, 0), SPAWN_PRIORITY_HIGH);
-        assert_eq!(hauler_priority(4, 5, 0), SPAWN_PRIORITY_MEDIUM, "≥ ceil(75%) of desired");
-        assert_eq!(hauler_priority(0, 5, 1), SPAWN_PRIORITY_MEDIUM, "remote urgent band");
-        assert_eq!(hauler_priority(4, 5, 1), SPAWN_PRIORITY_LOW, "remote relaxed band");
+        assert_eq!(hauler_priority(0, 5, 0), SPAWN_BID_HIGH);
+        assert_eq!(hauler_priority(4, 5, 0), SPAWN_BID_MEDIUM, "≥ ceil(75%) of desired");
+        assert_eq!(hauler_priority(0, 5, 1), SPAWN_BID_MEDIUM, "remote urgent band");
+        assert_eq!(hauler_priority(4, 5, 1), SPAWN_BID_LOW, "remote relaxed band");
+        // ROI refinement (M5b): a cheap high-throughput hauler bids up WITHIN the economy bulk but
+        // never crosses the combat-forming gate.
+        assert!(hauler_bid(0, 5, 0, 8_000, 300) < SPAWN_BID_COMBAT_FORMING, "hauler ROI stays below combat");
+        assert!(hauler_bid(0, 5, 0, 8_000, 300) >= SPAWN_BID_HIGH, "a strong-ROI hauler bids at least its band");
     }
 
     /// The upkeep sizing (pre-move fixture, missions/upgrade.rs): at/above half-max → 1 WORK;
@@ -486,10 +554,10 @@ mod tests {
         // 2 sources: 20 e/t, half = 10, / 1 upgrader = 10.
         assert_eq!(upgrader_work_parts(None, true, false, false, 2, 1), Some(10));
 
-        assert_eq!(upgrader_priority(true, true, false, false, 1, 0), SPAWN_PRIORITY_CRITICAL);
-        assert_eq!(upgrader_priority(false, true, true, true, 3, 0), SPAWN_PRIORITY_HIGH, "empty roster");
-        assert_eq!(upgrader_priority(false, false, true, true, 3, 2), SPAWN_PRIORITY_MEDIUM, "full lerp");
-        assert_eq!(upgrader_priority(false, false, false, false, 1, 1), SPAWN_PRIORITY_MEDIUM);
+        assert_eq!(upgrader_priority(true, true, false, false, 1, 0), SPAWN_BID_CRITICAL);
+        assert_eq!(upgrader_priority(false, true, true, true, 3, 0), SPAWN_BID_HIGH, "empty roster");
+        assert_eq!(upgrader_priority(false, false, true, true, 3, 2), SPAWN_BID_MEDIUM, "full lerp");
+        assert_eq!(upgrader_priority(false, false, false, false, 1, 1), SPAWN_BID_MEDIUM);
     }
 
     /// The builder tables + the repairer arm + the body cap (pre-move fixtures,
@@ -501,18 +569,18 @@ mod tests {
         assert_eq!(builder_desired_for_progress(3, 4001), 5);
         assert_eq!(builder_desired_for_progress(5, 3000), 2);
         assert_eq!(builder_desired_for_progress(8, 3000), 1);
-        assert_eq!(FIRST_BUILDER_PRIORITY, 62.5);
-        assert_eq!(builder_priority_with_builders(true), SPAWN_PRIORITY_HIGH);
-        assert_eq!(builder_priority_with_builders(false), SPAWN_PRIORITY_MEDIUM);
+        assert_eq!(FIRST_BUILDER_PRIORITY, 62_500);
+        assert_eq!(builder_priority_with_builders(true), SPAWN_BID_HIGH);
+        assert_eq!(builder_priority_with_builders(false), SPAWN_BID_MEDIUM);
 
-        assert_eq!(repairer_spawn_priority(RepairPriority::Critical), Some((1, SPAWN_PRIORITY_HIGH)));
-        assert_eq!(repairer_spawn_priority(RepairPriority::High), Some((1, SPAWN_PRIORITY_HIGH)));
-        assert_eq!(repairer_spawn_priority(RepairPriority::Medium), Some((1, SPAWN_PRIORITY_MEDIUM)));
+        assert_eq!(repairer_spawn_priority(RepairPriority::Critical), Some((1, SPAWN_BID_HIGH)));
+        assert_eq!(repairer_spawn_priority(RepairPriority::High), Some((1, SPAWN_BID_HIGH)));
+        assert_eq!(repairer_spawn_priority(RepairPriority::Medium), Some((1, SPAWN_BID_MEDIUM)));
         assert_eq!(repairer_spawn_priority(RepairPriority::Low), None);
 
-        let b = create_body(&builder_body(10_000, SPAWN_PRIORITY_MEDIUM)).unwrap();
+        let b = create_body(&builder_body(10_000, SPAWN_BID_MEDIUM)).unwrap();
         assert_eq!(b.len(), 20, "5 repeats × 4 parts below HIGH");
-        let b = create_body(&builder_body(10_000, SPAWN_PRIORITY_HIGH)).unwrap();
+        let b = create_body(&builder_body(10_000, SPAWN_BID_HIGH)).unwrap();
         assert!(b.len() > 20, "≥ HIGH: uncapped repeats");
     }
 
@@ -529,5 +597,41 @@ mod tests {
         assert!(has_excess_energy(false, 0, &[1501]));
         assert!(has_sufficient_energy(false, &[], &[1001]));
         assert!(!has_sufficient_energy(false, &[], &[1000]), "exactly 50% is NOT > 50%");
+    }
+
+    /// M5b spawn-currency: the band-equivalents preserve the exact ordering the deleted f32 bands
+    /// encoded (CRITICAL > COMBAT_FORMING > HIGH > MEDIUM > LOW > NONE), on the milli-e/t lane
+    /// (× BID_SCALE), so the descending head-of-line-banking queue orders spawns by the same units
+    /// the M5a transfer market runs on — one currency. THIS ordering is the invariant the combat
+    /// lifecycle harness pins.
+    #[test]
+    fn spawn_bid_band_equivalents_preserve_the_ordering() {
+        assert_eq!(SPAWN_BID_CRITICAL, 100_000);
+        assert_eq!(SPAWN_BID_COMBAT_FORMING, 85_000);
+        assert_eq!(SPAWN_BID_HIGH, 75_000);
+        assert_eq!(SPAWN_BID_MEDIUM, 50_000);
+        assert_eq!(SPAWN_BID_LOW, 25_000);
+        assert_eq!(SPAWN_BID_NONE, 0);
+        assert!(SPAWN_BID_CRITICAL > SPAWN_BID_COMBAT_FORMING, "income is never preempted");
+        assert!(SPAWN_BID_COMBAT_FORMING > SPAWN_BID_HIGH, "a forming squad outbids the economy bulk");
+        assert!(SPAWN_BID_HIGH > SPAWN_BID_MEDIUM);
+        assert!(SPAWN_BID_MEDIUM > SPAWN_BID_LOW);
+        assert!(SPAWN_BID_LOW > SPAWN_BID_NONE);
+    }
+
+    /// `lerp_bid` is a deterministic integer lerp (descending band lerps are exact) and the label
+    /// helper maps a bid back to its coarse band name (the deleted enum's surviving role).
+    #[test]
+    fn lerp_bid_and_label() {
+        assert_eq!(lerp_bid(SPAWN_BID_CRITICAL, SPAWN_BID_HIGH, 0.0), SPAWN_BID_CRITICAL);
+        assert_eq!(lerp_bid(SPAWN_BID_CRITICAL, SPAWN_BID_HIGH, 1.0), SPAWN_BID_HIGH);
+        assert_eq!(lerp_bid(SPAWN_BID_CRITICAL, SPAWN_BID_HIGH, 0.25), 93_750, "1/4 toward HIGH");
+        assert_eq!(lerp_bid(SPAWN_BID_MEDIUM, SPAWN_BID_LOW, 2.0), SPAWN_BID_LOW, "t clamps to 1");
+        assert_eq!(spawn_bid_label(SPAWN_BID_CRITICAL), "Critical");
+        assert_eq!(spawn_bid_label(SPAWN_BID_COMBAT_FORMING), "CombatForming");
+        assert_eq!(spawn_bid_label(SPAWN_BID_HIGH), "High");
+        assert_eq!(spawn_bid_label(SPAWN_BID_MEDIUM), "Medium");
+        assert_eq!(spawn_bid_label(SPAWN_BID_LOW), "Low");
+        assert_eq!(spawn_bid_label(SPAWN_BID_NONE), "None");
     }
 }
