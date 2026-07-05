@@ -17,19 +17,40 @@ use screeps::{Part, Position};
 use screeps_sim_core::{BoostTier, CreepId, MovementState, SimBody, SimCreep, StructureId};
 use std::collections::BTreeMap;
 
-/// Resource kinds the economy sim tracks. M0 flows only `Energy`; a few base minerals exist for
-/// M6-readiness (stores/transfers already handle them; extractor/lab mechanics land M6).
+/// Resource kinds the economy sim tracks. `Energy` is the M0 flow; the base minerals + catalyst
+/// (`X`) and the compound chain to the upgrade boost `XGH2O` are the M6 mineral economy. Each is
+/// its OWN conservation lane (the ledger is already per-resource). The engine keys resources by
+/// their game symbol string; the sim keys by this enum, and the mineral-tick / lab arithmetic maps
+/// between them via [`SimResource::mineral_symbol`] / the reaction recipe table.
+///
+/// **Base mineral G vs compound G:** the engine gives the base mineral "G" (Ghodium ore, mined
+/// from an ULTRA-analog deposit) and the reaction product G (ZK+UL→G) the SAME symbol "G" — one
+/// resource id. This enum follows the engine: [`SimResource::Ghodium`] is that shared id (whether
+/// mined or brewed). The upgrade boost chain consumes it identically.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SimResource {
     Energy,
-    Hydrogen,
-    Oxygen,
-    Utrium,
-    Ghodium,
+    // Base minerals (the seven deposit types — `common/constants.js:299-306`).
+    Hydrogen,   // H
+    Oxygen,     // O
+    Utrium,     // U
+    Lemergium,  // L
+    Keanium,    // K
+    Zynthium,   // Z
+    Ghodium,    // G (base ore AND the ZK+UL compound — one id, engine semantics)
+    Catalyst,   // X
+    // Compounds on the upgrade-boost chain (G → GH → GH2O → XGH2O) + the shared OH/ZK/UL pairs.
+    Hydroxide,        // OH
+    ZynthiumKeanite,  // ZK
+    UtriumLemergite,  // UL
+    GH,
+    GH2O,
+    XGH2O,
 }
 
 impl SimResource {
-    /// Stable digest tag (NOT the game's resource id — a sim-local canonical byte).
+    /// Stable digest tag (NOT the game's resource id — a sim-local canonical byte). Existing tags
+    /// 0..=4 are FROZEN (a scenario baseline digest depends on them); new resources append.
     fn tag(self) -> u8 {
         match self {
             SimResource::Energy => 0,
@@ -37,8 +58,67 @@ impl SimResource {
             SimResource::Oxygen => 2,
             SimResource::Utrium => 3,
             SimResource::Ghodium => 4,
+            SimResource::Lemergium => 5,
+            SimResource::Keanium => 6,
+            SimResource::Zynthium => 7,
+            SimResource::Catalyst => 8,
+            SimResource::Hydroxide => 9,
+            SimResource::ZynthiumKeanite => 10,
+            SimResource::UtriumLemergite => 11,
+            SimResource::GH => 12,
+            SimResource::GH2O => 13,
+            SimResource::XGH2O => 14,
         }
     }
+
+    /// Whether this resource is a MINERAL (anything but energy) — the store/ledger lanes that are
+    /// not the numeraire.
+    pub fn is_mineral(self) -> bool {
+        self != SimResource::Energy
+    }
+
+    /// The engine game symbol for a base mineral density type (`minerals/tick.js` operates on the
+    /// deposit's `mineralType`). Only the seven base ores + catalyst return a symbol; compounds
+    /// are lab products, never mined, so they return `None`.
+    pub fn mineral_symbol(self) -> Option<&'static str> {
+        Some(match self {
+            SimResource::Hydrogen => "H",
+            SimResource::Oxygen => "O",
+            SimResource::Utrium => "U",
+            SimResource::Lemergium => "L",
+            SimResource::Keanium => "K",
+            SimResource::Zynthium => "Z",
+            SimResource::Ghodium => "G",
+            SimResource::Catalyst => "X",
+            _ => return None,
+        })
+    }
+}
+
+/// The reaction product of two input minerals, if any — the engine `REACTIONS[a][b]` table
+/// (`common/constants.js:484-615`), symmetric (`REACTIONS[a][b] == REACTIONS[b][a]`). Only the
+/// recipes the M6 boost economy needs are tabled (the base pairs + the G→XGH2O upgrade chain);
+/// an untabled pair returns `None` (the reaction is a no-op — matching the engine's "no product"
+/// early-out, `run-reaction.js:49`). Order-independent by construction (both orders matched).
+pub fn reaction_product(a: SimResource, b: SimResource) -> Option<SimResource> {
+    use SimResource::*;
+    // Canonicalize to an unordered pair so the table lists each recipe once.
+    let (lo, hi) = if a.tag() <= b.tag() { (a, b) } else { (b, a) };
+    Some(match (lo, hi) {
+        // Base pairs (constants.js:484-524): H+O→OH, Z+K→ZK, U+L→UL, ZK+UL→G.
+        (Hydrogen, Oxygen) => Hydroxide,
+        (Utrium, Lemergium) => UtriumLemergite,
+        (Keanium, Zynthium) => ZynthiumKeanite,
+        (ZynthiumKeanite, UtriumLemergite) => Ghodium,
+        // Upgrade boost chain (constants.js:516-548): G+H→GH, GH+OH→GH2O, GH2O+X→XGH2O.
+        // Listed in tag-ascending (lo, hi) order — the canonicalization above sorts by tag, so the
+        // pair must be written with the lower-tag resource first (Hydrogen<Ghodium; Hydroxide<GH;
+        // Catalyst<GH2O — see `SimResource::tag`).
+        (Hydrogen, Ghodium) => GH,
+        (Hydroxide, GH) => GH2O,
+        (Catalyst, GH2O) => XGH2O,
+        _ => return None,
+    })
 }
 
 /// A per-resource store with one shared capacity (engine general-store semantics: creeps,
@@ -107,13 +187,70 @@ pub struct SimSource {
     pub regen_at: Option<u32>,
 }
 
-/// M6 stub: a mineral deposit exists as world furniture only — NO extractor/harvest mechanics in
-/// M0 (`mineral_type` stays an opaque u8 until M6 types the mineral economy).
+/// A mineral deposit (M6): a typed pool that regenerates on a 50k-tick timer after exhaustion,
+/// re-rolling its density on regen (engine `minerals/tick.js`). Harvest requires an extractor on
+/// the tile ([`SimExtractor`]) whose 5-tick cooldown paces extraction; a WORK creep adjacent
+/// mines `HARVEST_MINERAL_POWER × WORK` (boosted by the WORK-harvest ladder ×3/5/7).
 #[derive(Clone, Debug)]
 pub struct SimMineral {
     pub pos: Position,
-    pub mineral_type: u8,
+    /// The deposit's mineral type — one of the seven base ores (never a compound; see
+    /// [`SimResource::mineral_symbol`]).
+    pub resource: SimResource,
+    /// The current density tier 1..=4 (`DENSITY_LOW..DENSITY_ULTRA`) — re-rolled on regen.
+    pub density: u8,
     pub amount: u32,
+    /// The engine's `nextRegenerationTime`: `None` while the pool holds mineral; set to
+    /// `tick + MINERAL_REGEN_TIME` the tick the pool hits 0; the pool refills (to the — possibly
+    /// re-rolled — density amount) when `tick >= regen_at − 1` (`minerals/tick.js:14`).
+    pub regen_at: Option<u32>,
+    /// A per-mineral deterministic re-roll counter: the density re-roll draws from
+    /// `Rng::seeded(reroll_seed)` and increments the counter, so the stochastic mechanic is
+    /// SEEDED and reproducible with NO ambient entropy (the ADR 0040 §D7 determinism rule — the
+    /// resolver signature stays `(world, intents)`, no threaded RNG). Scenario setup seeds it.
+    pub reroll_seed: u32,
+}
+
+/// An extractor structure sitting ON a mineral deposit — required to harvest it (engine
+/// `creeps/harvest.js:81`). Its `cooldown` counts down each tick ([`SimExtractor`] tick) and is
+/// set to `EXTRACTOR_COOLDOWN` after each successful harvest (`creeps/harvest.js:108`); a harvest
+/// on a cooling extractor is rejected (`:84`).
+#[derive(Clone, Debug)]
+pub struct SimExtractor {
+    pub id: StructureId,
+    pub pos: Position,
+    pub cooldown: u32,
+}
+
+/// A lab (M6): a two-store structure — up to [`crate::constants::LAB_MINERAL_CAPACITY`] of ONE
+/// mineral/compound + up to [`crate::constants::LAB_ENERGY_CAPACITY`] energy — that runs reactions
+/// (`runReaction`, consuming 5 from two input labs → 5 of the product) and boosts creeps
+/// (`boostCreep`, 30 mineral + 20 energy per part). `cooldown_at` is the engine's `cooldownTime`:
+/// the lab cannot react while `tick < cooldown_at` (`labs/run-reaction.js:8`).
+#[derive(Clone, Debug)]
+pub struct SimLab {
+    pub id: StructureId,
+    pub pos: Position,
+    /// The single mineral/compound the lab holds, and how much (0..=3000). `None` = empty of
+    /// mineral (an output lab may then take any product; an input lab supplies nothing).
+    pub mineral: Option<(SimResource, u32)>,
+    /// Energy held (0..=2000) — consumed by `boostCreep` (20/part) and by `runReaction` (none:
+    /// reactions consume mineral only; energy is the boost fuel).
+    pub energy: u32,
+    /// The engine's `cooldownTime` as an ABSOLUTE tick: no reaction may run while `tick <
+    /// cooldown_at` (`labs/run-reaction.js:8`; set to `tick + REACTION_TIME[product]` after a
+    /// reaction, `:56`). 0 = never reacted / off cooldown.
+    pub cooldown_at: u32,
+}
+
+impl SimLab {
+    /// Mineral amount of `r` held (0 if the lab holds a different mineral or none).
+    pub fn mineral_amount(&self, r: SimResource) -> u32 {
+        match self.mineral {
+            Some((m, n)) if m == r => n,
+            _ => 0,
+        }
+    }
 }
 
 /// A creep mid-spawn: materializes when `tick >= done_at` (the busy-until source of truth; the
@@ -303,6 +440,10 @@ pub struct EconWorld {
     pub movement: MovementState,
     pub sources: Vec<SimSource>,
     pub minerals: Vec<SimMineral>,
+    /// Extractors (M6): sit on minerals, gate + pace harvest via a 5-tick cooldown.
+    pub extractors: Vec<SimExtractor>,
+    /// Labs (M6): reaction + boost structures.
+    pub labs: Vec<SimLab>,
     pub spawns: Vec<SimSpawn>,
     pub extensions: Vec<SimExtension>,
     pub containers: Vec<SimContainer>,
@@ -332,6 +473,8 @@ impl Default for EconWorld {
             movement: MovementState::default(),
             sources: Vec::new(),
             minerals: Vec::new(),
+            extractors: Vec::new(),
+            labs: Vec::new(),
             spawns: Vec::new(),
             extensions: Vec::new(),
             containers: Vec::new(),
@@ -374,9 +517,35 @@ impl EconWorld {
         self.sources.len() - 1
     }
 
-    pub fn add_mineral(&mut self, pos: Position, mineral_type: u8, amount: u32) -> usize {
-        self.minerals.push(SimMineral { pos, mineral_type, amount });
+    /// A mineral deposit (M6): a typed pool at density tier `density` (1..=4), born full at that
+    /// tier's amount, with a re-roll seed for the regen density draw. `resource` must be a base
+    /// ore ([`SimResource::mineral_symbol`] `Some`) — asserted.
+    pub fn add_mineral(&mut self, pos: Position, resource: SimResource, density: u8, reroll_seed: u32) -> usize {
+        debug_assert!(resource.mineral_symbol().is_some(), "a deposit holds a base ore, not {resource:?}");
+        let amount = crate::constants::mineral_density_amount(density);
+        self.minerals.push(SimMineral { pos, resource, density, amount, regen_at: None, reroll_seed });
         self.minerals.len() - 1
+    }
+
+    /// An extractor on a mineral tile (M6), off cooldown (ready to harvest). Sits ON the mineral,
+    /// so it does NOT add a movement obstacle beyond the mineral's own (extractors are walkable
+    /// per the `base_traffic` rule — the mineral tile is a natural wall on real maps anyway).
+    pub fn add_extractor(&mut self, pos: Position) -> usize {
+        let id = self.mint_structure_id();
+        self.extractors.push(SimExtractor { id, pos, cooldown: 0 });
+        self.extractors.len() - 1
+    }
+
+    /// A lab (M6), empty of mineral, holding `energy`, off cooldown.
+    pub fn add_lab(&mut self, pos: Position, energy: u32) -> usize {
+        let id = self.mint_structure_id();
+        self.labs.push(SimLab { id, pos, mineral: None, energy: energy.min(crate::constants::LAB_ENERGY_CAPACITY), cooldown_at: 0 });
+        self.labs.len() - 1
+    }
+
+    /// The extractor index on a given mineral tile, if any.
+    pub fn extractor_at(&self, pos: Position) -> Option<usize> {
+        self.extractors.iter().position(|e| e.pos == pos)
     }
 
     /// A spawn, born FULL (a freshly placed spawn holds its 300) — drain it in-scenario if needed.
@@ -500,9 +669,12 @@ impl EconWorld {
             || self.extensions.iter().any(|e| e.pos == pos)
             || self.storage.as_ref().is_some_and(|s| s.pos == pos)
             || self.towers.iter().any(|t| t.pos == pos)
+            || self.labs.iter().any(|l| l.pos == pos)
             || self.sources.iter().any(|s| s.pos == pos)
             || self.minerals.iter().any(|m| m.pos == pos)
             || self.controller.as_ref().is_some_and(|c| c.pos == pos)
+        // NOTE: extractors are NOT obstacles (`OBSTACLE_OBJECT_TYPES` excludes them, like roads);
+        // they sit on the mineral (itself an obstacle), so the tile is blocked regardless.
     }
 
     /// Whether a structure with a `CONSTRUCTION_COST` entry (roads excluded) occupies `pos` —
@@ -731,6 +903,13 @@ impl EconWorld {
                 bump(r, v as u64);
             }
         }
+        // Labs hold mineral + energy stock (M6).
+        for l in &self.labs {
+            if let Some((r, n)) = l.mineral {
+                bump(r, n as u64);
+            }
+            bump(SimResource::Energy, l.energy as u64);
+        }
         for d in &self.dropped {
             bump(d.resource, d.amount as u64);
         }
@@ -763,8 +942,30 @@ impl EconWorld {
         }
         for m in &self.minerals {
             d.pos(m.pos);
-            d.u8(m.mineral_type);
+            d.u8(m.resource.tag());
+            d.u8(m.density);
             d.u32(m.amount);
+            d.opt_u32(m.regen_at);
+            d.u32(m.reroll_seed);
+        }
+        for e in &self.extractors {
+            d.u32(e.id);
+            d.pos(e.pos);
+            d.u32(e.cooldown);
+        }
+        for l in &self.labs {
+            d.u32(l.id);
+            d.pos(l.pos);
+            match l.mineral {
+                None => d.u8(0),
+                Some((r, n)) => {
+                    d.u8(1);
+                    d.u8(r.tag());
+                    d.u32(n);
+                }
+            }
+            d.u32(l.energy);
+            d.u32(l.cooldown_at);
         }
         for s in &self.spawns {
             d.u32(s.id);

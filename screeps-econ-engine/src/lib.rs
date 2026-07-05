@@ -48,9 +48,9 @@ pub use intents::{EconAction, EconIntents, StructRef};
 pub use ledger::{audit_conservation, ConservationViolation, TickLedger};
 pub use spawn_queue::{spawn_step, HomeLanes, QueuedSpawn, Spawned};
 pub use state::{
-    EconWorld, PendingCreep, SimConstructionSite, SimContainer, SimController, SimDropped,
-    SimExtension, SimMineral, SimResource, SimRoad, SimSource, SimSpawn, SimStorage, SimStore,
-    SimTower, SitePlacementError, StructureKind,
+    reaction_product, EconWorld, PendingCreep, SimConstructionSite, SimContainer, SimController,
+    SimDropped, SimExtension, SimExtractor, SimLab, SimMineral, SimResource, SimRoad, SimSource,
+    SimSpawn, SimStorage, SimStore, SimTower, SitePlacementError, StructureKind,
 };
 pub use tick::{resolve_econ_tick, EconSim, EconTickReport, RepairLeak};
 

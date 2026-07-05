@@ -73,6 +73,30 @@ pub enum EconAction {
     /// is the QUEUE layer's job — [`crate::spawn_queue`] — which decides what to request; this
     /// resolver only executes the request).
     SpawnCreep { spawn_idx: usize, body: Vec<Part> },
+    /// Harvest an adjacent mineral deposit (M6; Pipeline A — the ONE work intent per creep,
+    /// shares the lane with Harvest/Repair/Build). Requires an extractor OFF cooldown on the
+    /// deposit tile; gain = `HARVEST_MINERAL_POWER × WORK` (boosted ×3/5/7 by the WORK-harvest
+    /// ladder), clamped to the pool; the extractor arms its 5-tick cooldown
+    /// (engine `creeps/harvest.js:80-111`).
+    HarvestMineral { mineral_idx: usize },
+    /// Run a reaction on lab `out_idx` consuming 5 from `in1_idx` + 5 from `in2_idx`
+    /// (M6; a LAB structure intent, keyed by the output lab index — NOT creep-pipeline-masked,
+    /// like [`SpawnCreep`](EconAction::SpawnCreep); the paired creep id is ignored). The product is
+    /// the recipe of the two inputs' minerals; the output lab must be range-2 of both inputs, off
+    /// cooldown, holding only the product (engine `labs/run-reaction.js`).
+    RunReaction { out_idx: usize, in1_idx: usize, in2_idx: usize },
+    /// Boost the parts of `creep` (the paired creep id) from lab `lab_idx` (M6; a LAB structure
+    /// intent). Boosts every unboosted part the lab's mineral can boost, 30 mineral + 20 energy
+    /// each, until the lab runs dry (engine `labs/boost-creep.js`). Range ≤ 1; creep not spawning.
+    BoostCreep { lab_idx: usize },
+    /// **The terminal recovery lever** (M6; a STRUCTURE intent — ignored creep id). Sell `amount`
+    /// of `resource` (a mineral) from STORAGE at the fixed exchange rate
+    /// ([`crate::constants::TERMINAL_SELL_ENERGY_PER_MINERAL`] × num/den): the mineral leaves the
+    /// economy and the energy proceeds are credited back into storage. This is the
+    /// recovery-lever ABSTRACTION only (ADR 0040 §D7 / §D4) — the real terminal/market-credit
+    /// mechanics (fees, credits, order books) are ADR 0012's. Fails whole if storage lacks the
+    /// mineral or is full of the energy proceeds; clamped to what fits/holds.
+    SellMineral { resource: SimResource, amount: u32 },
 }
 
 /// All actors' economy intents for one tick.
@@ -102,6 +126,24 @@ impl EconIntents {
     /// Queue a spawn request (the ignored creep-id convention, spelled once).
     pub fn spawn(&mut self, spawn_idx: usize, body: Vec<Part>) -> &mut Self {
         self.actions.push((0, EconAction::SpawnCreep { spawn_idx, body }));
+        self
+    }
+
+    /// Queue a lab reaction (a structure intent — ignored creep-id convention, like [`Self::spawn`]).
+    pub fn react(&mut self, out_idx: usize, in1_idx: usize, in2_idx: usize) -> &mut Self {
+        self.actions.push((0, EconAction::RunReaction { out_idx, in1_idx, in2_idx }));
+        self
+    }
+
+    /// Queue a boost: lab `lab_idx` boosts creep `creep` (M6).
+    pub fn boost(&mut self, creep: CreepId, lab_idx: usize) -> &mut Self {
+        self.actions.push((creep, EconAction::BoostCreep { lab_idx }));
+        self
+    }
+
+    /// Queue a terminal mineral sale (the recovery lever — ignored creep-id convention, M6).
+    pub fn sell(&mut self, resource: SimResource, amount: u32) -> &mut Self {
+        self.actions.push((0, EconAction::SellMineral { resource, amount }));
         self
     }
 }

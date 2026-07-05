@@ -158,3 +158,53 @@ fn econ_is_deterministic_over_rounds() {
 fn det_reorder() {
     assert_eq!(round(false), round(true), "intent insertion order leaked into the outcome");
 }
+
+// ── The M6 mineral-family fence (labs + minerals): the mineral-economy metrics are reproducible ──
+
+/// A fold of every M6 metric over the mineral corpus into one digest — the fence's instrument.
+/// Covers the seeded mineral re-roll (via the world's density path), the reaction pipeline
+/// (compound time-to-X), the boost e/t diagnostic, the recovery-lever delta, and the boosted
+/// T_RCL probe. Two folds must be bit-identical (spread 0).
+fn m6_fold(seed: u32) -> u64 {
+    use screeps_econ_eval::mineral::{
+        boost_e_t_equivalent, boosted_upgrader_probe, compound_time_to, mineral_catalog,
+        recovery_lever_delta, recovery_lever_world,
+    };
+    use screeps_econ_engine::SimResource;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |v: u64| {
+        for b in v.to_le_bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01B3);
+        }
+    };
+    for w in [5u32, 10, 20] {
+        eat(boost_e_t_equivalent(w) as u64);
+    }
+    for sc in mineral_catalog(seed, false) {
+        let (mut world, _, _, cluster) = sc.instantiate();
+        // The instantiated world's state digest folds the seeded mineral density + reroll seed.
+        eat(world.state_digest());
+        eat(compound_time_to(&mut world, &cluster, 100, 20_000).unwrap_or(u32::MAX) as u64);
+        let (world2, _, _, cluster2) = sc.instantiate();
+        let p = boosted_upgrader_probe(&world2, &cluster2, 40_000, 20_000);
+        eat(p.unboosted_ticks.unwrap_or(u32::MAX) as u64);
+        eat(p.boosted_ticks.unwrap_or(u32::MAX) as u64);
+        let rw = recovery_lever_world(&sc.layout_room, SimResource::Ghodium, 50_000, seed);
+        let r = recovery_lever_delta(&rw, SimResource::Ghodium, 100, 20_000);
+        eat(r.with_lever.unwrap_or(u32::MAX) as u64);
+        eat(r.without_lever.unwrap_or(u32::MAX) as u64);
+    }
+    h
+}
+
+/// The always-on M6 fence: two folds of the mineral family, bit-identical (the seeded re-roll +
+/// the reaction/boost/recovery drivers are all reproducible — no ambient entropy).
+#[test]
+fn econ_m6_mineral_family_fence() {
+    let a = m6_fold(1);
+    let b = m6_fold(1);
+    assert_eq!(a, b, "M6 mineral-family metrics diverged across runs (spread != 0)");
+    // A different seed genuinely varies the world (the mineral re-roll seed + probe seeding).
+    assert_ne!(m6_fold(1), m6_fold(2), "the seed must vary the M6 corpus");
+}

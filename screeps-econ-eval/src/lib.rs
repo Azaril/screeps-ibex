@@ -29,6 +29,7 @@ pub mod baseline;
 pub mod layout;
 pub mod market;
 pub mod metrics;
+pub mod mineral;
 pub mod movement;
 pub mod oracle;
 pub mod runner;

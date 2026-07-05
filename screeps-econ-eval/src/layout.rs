@@ -23,7 +23,7 @@
 use screeps::{Position, RoomCoordinate, RoomName};
 use screeps_combat_eval::harness::terrain_import::decode_terrain;
 use screeps_econ_engine::constants::{road_hits_max, CONTAINER_HITS, ROAD_DECAY_TIME};
-use screeps_econ_engine::EconWorld;
+use screeps_econ_engine::{EconWorld, SimResource};
 use screeps_rover_eval::base_traffic::{CapturedLayout, PlannedStructure};
 use screeps_sim_core::rng::Rng;
 use screeps_sim_core::SimTerrain;
@@ -41,6 +41,33 @@ pub const SOURCE_CAPACITY: u32 = screeps_econ_engine::constants::SOURCE_CAPACITY
 /// crate's citation-pinned table since M2 (the clock now TICKS; scenarios rescale it).
 pub fn controller_downgrade_full(rcl: u8) -> u32 {
     screeps_econ_engine::constants::controller_downgrade(rcl)
+}
+
+/// A deterministic base-mineral type + starting density for a room (M6): the captured layouts
+/// record the mineral TILE but not its type/density, so derive both from the room name — stable
+/// per room, no ambient entropy. The type cycles the seven base ores; the density starts MODERATE
+/// (tier 2) so the pool is neither trivially small nor maximal. The mineral-economy family cares
+/// only that it is a well-typed pool an extractor can mine.
+pub fn mineral_type_and_density(room: &str) -> (SimResource, u8) {
+    let ores = [
+        SimResource::Hydrogen,
+        SimResource::Oxygen,
+        SimResource::Utrium,
+        SimResource::Lemergium,
+        SimResource::Keanium,
+        SimResource::Zynthium,
+        SimResource::Ghodium,
+    ];
+    let h = room.bytes().fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
+    (ores[(h as usize) % ores.len()], screeps_econ_engine::constants::DENSITY_MODERATE)
+}
+
+/// A deterministic per-mineral re-roll seed from the room + scenario seed (M6): the density
+/// re-roll draws `Rng::seeded(reroll_seed)`, so this must be reproducible (no ambient entropy) but
+/// vary per (room, seed) so N-seed runs differ.
+pub fn mineral_reroll_seed(room: &str, seed: u32) -> u32 {
+    let h = room.bytes().fold(0u32, |a, b| a.wrapping_mul(2166136261).wrapping_add(b as u32));
+    h.wrapping_mul(16777619).wrapping_add(seed.wrapping_mul(2654435761))
 }
 
 /// Does a planned structure of `kind` block movement? The [`screeps_rover_eval::base_traffic`]
@@ -159,7 +186,13 @@ pub fn realize(layout: &CapturedLayout, params: &RealizeParams) -> Realized {
         world.add_source(pos_in(room, x, y), SOURCE_CAPACITY);
     }
     if let Some((x, y)) = layout.mineral {
-        world.add_mineral(pos_in(room, x, y), 0, 0); // furniture until M6
+        // The captured layout carries no mineral TYPE/density (only the tile), so assign a
+        // deterministic type + starting density from the room name (stable per room, no ambient
+        // entropy). Families C/G/S/D realize the mineral as FURNITURE (no extractor/labs) — the
+        // density is inert there; the M6 mineral-economy family adds the extractor + labs
+        // ([`realize_mineral_economy`]).
+        let (res, density) = mineral_type_and_density(&layout.room);
+        world.add_mineral(pos_in(room, x, y), res, density, mineral_reroll_seed(&layout.room, params.seed));
     }
 
     let mut rng = Rng::seeded(params.seed);
@@ -310,7 +343,8 @@ pub fn realize_greenfield(layout: &CapturedLayout) -> Realized {
         world.add_source(pos_in(room, x, y), SOURCE_CAPACITY);
     }
     if let Some((x, y)) = layout.mineral {
-        world.add_mineral(pos_in(room, x, y), 0, 0);
+        let (res, density) = mineral_type_and_density(&layout.room);
+        world.add_mineral(pos_in(room, x, y), res, density, mineral_reroll_seed(&layout.room, 0));
     }
 
     let anchor = layout

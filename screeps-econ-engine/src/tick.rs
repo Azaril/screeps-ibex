@@ -142,10 +142,34 @@
 //!    ([`EconTickReport::conservation`]) so a harness gates on it rather than learning via a
 //!    panic (EP-6.12).
 //!
-//! *Signature deviation from the M0 spec sketch:* no `rng` parameter — M0 resolution is fully
-//! deterministic (no stochastic mechanic exists until M6's mineral density re-roll), and the
-//! `Simulation` trait's `step(world, intents)` cannot thread one. The conservation fuzz uses
-//! sim-core's seeded RNG at intent-GENERATION time instead.
+//! *Signature deviation from the M0 spec sketch:* no `rng` parameter — the `Simulation` trait's
+//! `step(world, intents)` cannot thread one. **M6's ONE stochastic mechanic — the mineral density
+//! re-roll on regen — is made deterministic WITHOUT a threaded RNG by carrying a per-mineral
+//! `reroll_seed` counter on `SimMineral` and drawing from `Rng::seeded(reroll_seed)` (advanced each
+//! regen).** No ambient entropy, byte-reproducible, the fence stays spread-0 (the ADR 0040 §D7
+//! determinism rule). The conservation fuzz still uses sim-core's seeded RNG at intent-GENERATION
+//! time.
+//!
+//! ## M6 additions (labs + minerals, FULL scope)
+//!
+//! - **HarvestMineral** joins the Pipeline-A work lane: an extractor OFF cooldown on the deposit +
+//!   range 1 → gain `HARVEST_MINERAL_POWER × WORK` (boosted ×3/5/7 by the WORK-harvest ladder),
+//!   clamped to the pool; the extractor arms `EXTRACTOR_COOLDOWN` 5, decremented per tick
+//!   (`extractors/tick.js`). Mineral minted per-resource (`harvested_mineral`).
+//! - **Mineral regen** (after source regen): an exhausted pool arms a `MINERAL_REGEN_TIME` 50k
+//!   timer; on expiry it re-rolls density (seeded, `minerals/tick.js:19-33`) and refills.
+//! - **Lab lane** (after regen, before the upgrade lane): **RunReaction** (5-in-from-each / 5-out,
+//!   `REACTION_TIME[product]` cooldown) then **BoostCreep** (30 mineral + 20 energy/part → the
+//!   part's boost tier) — both LAB structure intents keyed by lab index (like SpawnCreep), not
+//!   creep-pipeline-masked. Reactions transmute per-resource (`reaction_consumed`/`_produced`);
+//!   boosts BURN mineral + energy (`boost_mineral`/`boost_energy` — no corpse refund modeled).
+//! - **Boost EFFECTS** thread into the work arms: a boosted WORK part multiplies harvest (×3/5/7),
+//!   build (×1.5/1.8/2.0), and upgradeController (×1.5/1.8/2.0) via the per-effect `BOOSTS[WORK]`
+//!   table (NOT the ×1/2/3/4 action ladder) — the boosted upgrader converts up to 2× energy→
+//!   progress per tick, the mechanic that shortens T_RCL(6+).
+//! - **Terminal recovery lever** (`SellMineral`, after the lab lane): sells a stocked mineral from
+//!   storage for energy at a fixed exchange rate (`sold_mineral` burn / `sold_energy_credit` mint)
+//!   — the §D4 recovery-lever abstraction only; the market-credit realism is ADR 0012's.
 
 use crate::constants::{
     body_cost, controller_downgrade, controller_levels, BUILD_POWER, BUILD_RANGE, CONTAINER_DECAY,
@@ -160,8 +184,65 @@ use crate::state::{
     creep_store_capacity, EconWorld, PendingCreep, SimResource, SimStore, StructureKind,
 };
 use screeps::{Part, Position};
+use screeps_sim_core::rng::Rng;
 use screeps_sim_core::{resolve_movement, CreepId, MovementReport, SimBody, SimCreep, Simulation};
 use std::collections::{BTreeMap, BTreeSet};
+
+// ── WORK-effect boost helpers (M6): the engine prices boosted WORK actions in a specific two-step
+// way (upgradeController.js:33-57 / build.js:67-83), NOT the ×1/2/3/4 action ladder:
+//   1. `buildEffect` = min(WORK_count × base, [remaining,] energy)  — the UNBOOSTED, energy-capped
+//      effect. This is what the creep is CHARGED (energy -= buildEffect) and the RCL8 cap accrues.
+//   2. `boostedEffect` = buildEffect + Σ (top `buildEffect` per-part boost BONUSES), where a
+//      boosted WORK part's bonus = (mult − 1) × base. This is what PROGRESS gains.
+// So a boost buys more PROGRESS per unit ENERGY (the energy cost stays unboosted). Bodies are
+// uniform-tier in the sim, so every boosted WORK part shares one bonus. These helpers compute the
+// two quantities faithfully; harvest is simpler (no energy split — the whole boosted amount mines).
+
+/// Alive WORK parts as their boost tiers (front-to-back degradation respected via `part_hits`).
+fn alive_work_boosts(body: &SimBody) -> Vec<screeps_sim_core::BoostTier> {
+    body.parts
+        .iter()
+        .enumerate()
+        .filter(|(i, p)| p.part == Part::Work && body.part_hits(*i) > 0)
+        .map(|(_, p)| p.boost)
+        .collect()
+}
+
+/// Harvest power (source or mineral) with the WORK-harvest boost ladder ×3/5/7: `Σ base × mult`
+/// over alive WORK parts. Harvest has NO energy split (the whole boosted amount is mined), so this
+/// is the full boosted effect — the mined mineral/energy = this, clamped to the pool.
+fn work_harvest_power(body: &SimBody, base: u32) -> u32 {
+    alive_work_boosts(body).into_iter().map(|b| base * crate::constants::work_harvest_mult(b)).sum()
+}
+
+/// The engine's two-step boosted WORK effect for build/upgrade (module note): returns
+/// `(unboosted_effect, boosted_effect)` for a work lane priced `base` per part, given the already-
+/// computed `unboosted_effect` = min(WORK_count × base, caps...). The boosted effect adds the sum
+/// of the top-`unboosted_effect` per-part bonuses (each `(mult−1) × base` — a `(num,den)` rational,
+/// exact for the table values). For build, the caller further clamps `boosted` to `remaining`.
+fn boosted_work_bonus(body: &SimBody, base: u32, unboosted_effect: u32, mult_fn: fn(screeps_sim_core::BoostTier) -> (u32, u32)) -> u32 {
+    // Per-part bonus = (mult − 1) × base = (num − den) × base / den (exact for the table rows).
+    let mut bonuses: Vec<u32> = alive_work_boosts(body)
+        .into_iter()
+        .map(|b| {
+            let (num, den) = mult_fn(b);
+            // (num/den − 1) × base = base·(num − den)/den. Table rows keep this whole:
+            // build/upgrade base 5/1 × {(3−2)/2, (9−5)/5, (2−1)/1} → 5·1/2=2 (⌊⌋), … engine floors
+            // the FINAL sum, so keep per-part as the exact integer bonus the engine's _.sum uses.
+            base.saturating_mul(num.saturating_sub(den)) / den
+        })
+        .collect();
+    // The engine sorts bonuses DESC and slices to `buildEffect` (upgradeController.js:54-55 /
+    // build.js:77-78) — only as many boosted parts as the unboosted effect "pays for".
+    bonuses.sort_unstable_by(|a, b| b.cmp(a));
+    bonuses.truncate(unboosted_effect as usize);
+    unboosted_effect + bonuses.into_iter().sum::<u32>()
+}
+
+/// Alive WORK part count (the unboosted `buildPower` numerator).
+fn alive_work_count(body: &SimBody) -> u32 {
+    alive_work_boosts(body).len() as u32
+}
 
 /// Repair energy spent while the room had a spawn/extension refill deficit, by structure class —
 /// the sim mirror of the live `repair_leak_e` counter (ADR 0040 §D6; `energy_stress.rs`
@@ -273,6 +354,13 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
     // (spawn_idx, submission index, body): sorted before step 4b so the paired creep id and the
     // cross-spawn emission order are genuinely non-semantic (module docs, step 4).
     let mut spawn_reqs: Vec<(usize, usize, &Vec<Part>)> = Vec::new();
+    // M6 lab STRUCTURE intents (keyed by lab index + submission order, like spawn requests — NOT
+    // creep-pipeline-masked): reactions (out_idx, submission, in1, in2) and boosts
+    // (lab_idx, submission, target_creep).
+    let mut reaction_reqs: Vec<(usize, usize, usize, usize)> = Vec::new();
+    let mut boost_reqs: Vec<(usize, usize, CreepId)> = Vec::new();
+    // M6 terminal recovery-lever sales (structure intent, submission-ordered): (submission, res, amount).
+    let mut sell_reqs: Vec<(usize, SimResource, u32)> = Vec::new();
 
     for &i in &order {
         let (creep_id, action) = &intents.actions[i];
@@ -282,7 +370,23 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
                 // the submission index — the within-spawn first-wins key.
                 spawn_reqs.push((*spawn_idx, i, body));
             }
-            EconAction::Harvest { .. } | EconAction::Repair { .. } | EconAction::Build { .. } => {
+            EconAction::RunReaction { out_idx, in1_idx, in2_idx } => {
+                // A LAB structure intent (M6) — keyed by (out lab, submission), paired id ignored.
+                reaction_reqs.push((*out_idx, i, *in1_idx, *in2_idx));
+            }
+            EconAction::BoostCreep { lab_idx } => {
+                // A LAB structure intent (M6) — the paired creep id is the BOOST TARGET; keyed by
+                // (lab, submission) so a lab's within-tick first request wins.
+                boost_reqs.push((*lab_idx, i, *creep_id));
+            }
+            EconAction::SellMineral { resource, amount } => {
+                // A STRUCTURE (terminal) intent (M6) — ignored creep id, submission-ordered.
+                sell_reqs.push((i, *resource, *amount));
+            }
+            EconAction::Harvest { .. }
+            | EconAction::HarvestMineral { .. }
+            | EconAction::Repair { .. }
+            | EconAction::Build { .. } => {
                 let used = pipeline_used.entry(*creep_id).or_insert((false, false, false));
                 if used.0 {
                     report.rejected_actions += 1; // second Pipeline-A action this tick
@@ -392,10 +496,13 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
     for (creep_id, action) in work_actions {
         match action {
             EconAction::Harvest { source_idx } => {
+                // Source harvest: HARVEST_POWER 2/WORK, boosted by the WORK-harvest ladder ×3/5/7
+                // (`BOOSTS[WORK].harvest` — NOT the action ladder; every M0-M5 body is unboosted so
+                // this is inert until an M6 boosted harvester, at which point it prices correctly).
                 let Some((creep_pos, work_power)) = world
                     .creep(creep_id)
                     .filter(|c| c.is_alive())
-                    .map(|c| (c.pos, c.body.effective_power(Part::Work, crate::constants::HARVEST_POWER)))
+                    .map(|c| (c.pos, work_harvest_power(&c.body, crate::constants::HARVEST_POWER)))
                 else {
                     report.rejected_actions += 1;
                     continue;
@@ -420,6 +527,47 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
                 let overflow = gain - accepted;
                 if overflow > 0 {
                     world.drop_resource(creep_pos, SimResource::Energy, overflow);
+                }
+                world.sync_carry_used(creep_id);
+            }
+            EconAction::HarvestMineral { mineral_idx } => {
+                // Mineral harvest (M6; engine `creeps/harvest.js:80-111`): requires an extractor
+                // OFF cooldown on the deposit tile, range ≤ 1; gain = HARVEST_MINERAL_POWER × WORK
+                // (boosted ×3/5/7), clamped to the pool; the extractor arms a 5-tick cooldown.
+                let Some((creep_pos, work_power)) = world
+                    .creep(creep_id)
+                    .filter(|c| c.is_alive())
+                    .map(|c| (c.pos, work_harvest_power(&c.body, crate::constants::HARVEST_MINERAL_POWER)))
+                else {
+                    report.rejected_actions += 1;
+                    continue;
+                };
+                let Some((mineral_pos, mineral_res, mineral_amount)) =
+                    world.minerals.get(*mineral_idx).map(|m| (m.pos, m.resource, m.amount))
+                else {
+                    report.rejected_actions += 1;
+                    continue;
+                };
+                if creep_pos.get_range_to(mineral_pos) > 1 || work_power == 0 || mineral_amount == 0 {
+                    report.rejected_actions += 1; // out of range / no WORK / exhausted pool
+                    continue;
+                }
+                // The extractor gate: present on the mineral tile AND off cooldown (`:84`).
+                let Some(ext_idx) = world.extractor_at(mineral_pos).filter(|&i| world.extractors[i].cooldown == 0) else {
+                    report.rejected_actions += 1; // no extractor / cooling
+                    continue;
+                };
+                let gain = work_power.min(mineral_amount);
+                world.minerals[*mineral_idx].amount -= gain;
+                *ledger.harvested_mineral.entry(mineral_res).or_insert(0) += gain as u64;
+                world.extractors[ext_idx].cooldown = crate::constants::EXTRACTOR_COOLDOWN;
+                let accepted = match world.creep_stores.get_mut(&creep_id) {
+                    Some(store) => store.add(mineral_res, gain),
+                    None => 0,
+                };
+                let overflow = gain - accepted;
+                if overflow > 0 {
+                    world.drop_resource(creep_pos, mineral_res, overflow);
                 }
                 world.sync_carry_used(creep_id);
             }
@@ -491,11 +639,10 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
                 // obstacle-kind site rejects while an obstacle object or ANY creep occupies the
                 // tile (:50-60); effect = min(5 × WORK, remaining, energy) at 1 energy/progress
                 // (:67-69,83). Completed sites materialize after the loop (module docs step 3).
-                let Some((creep_pos, work_parts)) = world
-                    .creep(creep_id)
-                    .filter(|c| c.is_alive())
-                    .map(|c| (c.pos, c.body.alive_part_count(Part::Work)))
-                else {
+                // Build (engine `build.js:67-83`): the UNBOOSTED, energy-capped effect is charged;
+                // the boosted effect (adding the WORK-build boost bonus) is what PROGRESS gains.
+                let creep_body = world.creep(creep_id).filter(|c| c.is_alive()).map(|c| (c.pos, c.body.clone()));
+                let Some((creep_pos, body)) = creep_body else {
                     report.rejected_actions += 1;
                     continue;
                 };
@@ -519,17 +666,20 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
                     continue;
                 }
                 let energy = world.creep_stores.get(&creep_id).map(|s| s.amount(SimResource::Energy)).unwrap_or(0);
-                // effect = min(5 × WORK, remaining, energy) — BUILD_POWER, 1 energy/progress.
-                let effect = (work_parts * BUILD_POWER).min(remaining).min(energy);
-                if effect == 0 {
+                // buildEffect = min(WORK × BUILD_POWER, remaining, energy) — the UNBOOSTED,
+                // energy-capped effect (build.js:69). Energy is charged this; progress gains the
+                // boosted effect (build.js:80-83).
+                let build_effect = (alive_work_count(&body) * BUILD_POWER).min(remaining).min(energy);
+                if build_effect == 0 {
                     // No energy / no WORK / already-complete site: the engine no-ops; counted.
                     report.rejected_actions += 1;
                     continue;
                 }
-                world.sites[*site_idx].progress += effect;
-                ledger.build += effect as u64;
+                let boosted = boosted_work_bonus(&body, BUILD_POWER, build_effect, crate::constants::work_build_mult).min(remaining);
+                world.sites[*site_idx].progress += boosted;
+                ledger.build += build_effect as u64; // energy charged = the UNBOOSTED effect
                 if let Some(store) = world.creep_stores.get_mut(&creep_id) {
-                    store.remove(SimResource::Energy, effect);
+                    store.remove(SimResource::Energy, build_effect);
                 }
                 world.sync_carry_used(creep_id);
             }
@@ -623,17 +773,97 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
         }
     }
 
+    // ── 3a-min. Mineral regen with the SEEDED density re-roll (M6; engine `minerals/tick.js`).
+    // An exhausted pool (amount == 0) with no timer starts one at `tick + MINERAL_REGEN_TIME`; a
+    // pool whose timer expires (`tick >= regen_at − 1`) refills to its density amount, re-rolling
+    // the density FIRST — always for LOW/ULTRA, else with MINERAL_DENSITY_CHANGE probability. The
+    // draw is the per-mineral SEEDED `Rng::seeded(reroll_seed)` (the counter advances each regen),
+    // so the stochastic mechanic is deterministic with NO ambient entropy (the ADR 0040 §D7 rule,
+    // keeping the resolver signature RNG-free). ────────────────────────────────────────────────
+    for mineral in &mut world.minerals {
+        if mineral.amount == 0 && mineral.regen_at.is_none() {
+            mineral.regen_at = Some(tick + crate::constants::MINERAL_REGEN_TIME);
+        }
+        if let Some(regen_at) = mineral.regen_at {
+            if tick + 1 >= regen_at {
+                reroll_density(mineral);
+                mineral.amount = crate::constants::mineral_density_amount(mineral.density);
+                mineral.regen_at = None;
+            }
+        }
+    }
+
+    // ── 3a-ext. Extractor cooldown decrement (M6; engine `extractors/tick.js:9-19`): each cooling
+    // extractor ticks down toward 0 (a harvest re-armed it to EXTRACTOR_COOLDOWN this same tick,
+    // in the work lane — so a fresh harvest's 5 becomes 4 here, ready again in 5 ticks total). ──
+    for extractor in &mut world.extractors {
+        if extractor.cooldown > 0 {
+            extractor.cooldown -= 1;
+        }
+    }
+
+    // ── 3b-lab. Lab lane (M6; LAB structure intents, keyed by lab index, submission-ordered —
+    // like spawns, NOT creep-pipeline-masked). Reactions first (per `run-reaction.js`), then
+    // boosts (`boost-creep.js`) — the engine runs both in the labs' object-tick; the sim orders
+    // reactions before boosts deterministically (a lab that both reacts and boosts a tick is not
+    // an emitted case). All accounting is per-resource so conservation stays exact. ─────────────
+    resolve_lab_reactions(world, &mut reaction_reqs, &mut ledger, &mut report);
+    resolve_boosts(world, &mut boost_reqs, &mut ledger, &mut report);
+
+    // ── 3d-sell. Terminal recovery lever (M6; the sell-mineral-for-energy abstraction, §D4):
+    // sells from STORAGE at the fixed exchange rate, submission-ordered (sequential against the
+    // mutated storage store). Mineral leaves the economy; the energy proceeds are credited into
+    // storage (a mint), both per-resource ledgered so conservation stays exact. ─────────────────
+    sell_reqs.sort_by_key(|&(submission, _, _)| submission);
+    for (_, resource, amount) in sell_reqs {
+        if resource == SimResource::Energy {
+            report.rejected_actions += 1; // the lever sells MINERALS for energy, not energy
+            continue;
+        }
+        let Some(storage) = world.storage.as_mut() else {
+            report.rejected_actions += 1;
+            continue;
+        };
+        let sellable = amount.min(storage.store.amount(resource));
+        let proceeds = crate::constants::terminal_sale_energy(sellable);
+        // Clamp to what the energy proceeds can fit AFTER the mineral leaves (frees capacity).
+        if sellable == 0 {
+            report.rejected_actions += 1;
+            continue;
+        }
+        storage.store.remove(resource, sellable);
+        let credited = storage.store.add(SimResource::Energy, proceeds);
+        *ledger.sold_mineral.entry(resource).or_insert(0) += sellable as u64;
+        ledger.sold_energy_credit += credited as u64;
+        // Any energy that didn't fit is NOT minted (the sale of that fraction is simply void) —
+        // conservation stays exact because only `credited` is booked as the mint.
+        if credited < proceeds {
+            // Refund the unsellable fraction's mineral so no mineral vanishes without proceeds:
+            // re-derive the mineral that maps to the credited energy at the exchange rate.
+            let credited_mineral =
+                credited as u64 * crate::constants::TERMINAL_SELL_ENERGY_DEN as u64 / crate::constants::TERMINAL_SELL_ENERGY_NUM as u64;
+            let refund = sellable.saturating_sub(credited_mineral as u32);
+            if refund > 0 {
+                if let Some(storage) = world.storage.as_mut() {
+                    storage.store.add(resource, refund);
+                }
+                ledger.sold_mineral.entry(resource).and_modify(|v| *v -= refund as u64).or_insert(0);
+            }
+        }
+    }
+
     // ── 3c. Upgrade lane (Pipeline E, creep-id order; engine `creeps/upgradeController.js` —
     // module docs). `upgraded_this_tick` is the controller's per-tick `_upgraded` accumulator:
     // it shares the RCL8 15 e/t cap across upgraders (:42-52) AND gates the clock restore in
     // step 3d (:38 — truthy means ≥ 1 energy actually converted). ───────────────────────────────
     let mut upgraded_this_tick: u32 = 0;
     for creep_id in upgrade_actions {
-        let Some((creep_pos, work_parts)) = world
-            .creep(creep_id)
-            .filter(|c| c.is_alive())
-            .map(|c| (c.pos, c.body.alive_part_count(Part::Work)))
-        else {
+        // The engine's two-step boosted upgrade (`upgradeController.js:33-57`): `build_effect` =
+        // min(WORK_count × 1, energy) is the UNBOOSTED, energy-capped amount that is CHARGED (energy
+        // -= build_effect, :92) and drives the RCL8 accumulator (:88); `boosted_effect` adds the
+        // WORK-upgrade boost bonus (×1.5/1.8/2.0) and is what PROGRESS gains (:57,70,80). So a boost
+        // buys more progress per unit ENERGY — the M6 effect that shortens T_RCL(6+).
+        let Some((creep_pos, body)) = world.creep(creep_id).filter(|c| c.is_alive()).map(|c| (c.pos, c.body.clone())) else {
             report.rejected_actions += 1;
             continue;
         };
@@ -652,57 +882,53 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
             report.rejected_actions += 1; // :9 — store.energy <= 0 rejects
             continue;
         }
-        // effect = min(WORK × UPGRADE_CONTROLLER_POWER, energy) (:33-34). Unboosted alive-WORK
-        // count (boost multipliers for upgradeController differ from the combat action table —
-        // an M6 concern; every M2 body is unboosted).
-        let mut effect = (work_parts * UPGRADE_CONTROLLER_POWER).min(energy);
+        // build_effect = min(WORK × UPGRADE_CONTROLLER_POWER, energy) — the UNBOOSTED effect (:33).
+        let mut build_effect = (alive_work_count(&body) * UPGRADE_CONTROLLER_POWER).min(energy);
         if level == 8 {
-            // The room-wide 15 e/t cap, shared via the accumulator (:42-52).
+            // The room-wide 15 e/t cap, shared via the accumulator (:42-52). The accumulator holds
+            // the UNBOOSTED energy (:88), so the cap binds build_effect.
             if upgraded_this_tick >= CONTROLLER_MAX_UPGRADE_PER_TICK {
                 report.rejected_actions += 1; // capped out: full no-op, no energy spent (:48-50)
                 continue;
             }
-            effect = effect.min(CONTROLLER_MAX_UPGRADE_PER_TICK - upgraded_this_tick);
+            build_effect = build_effect.min(CONTROLLER_MAX_UPGRADE_PER_TICK - upgraded_this_tick);
         }
-        // NOTE (review B10): NO zero-effect guard before the level-up check — the engine has
-        // none between the :9 energy gate and the :67 check, so a 0-WORK creep CARRYING energy
-        // can trigger the level-up in the surplus window (progress already past the threshold
-        // while the clock gate was low: `progress + 0 >= next`, :67). Its `_upgraded += 0`
-        // stays FALSY — no clock restore that tick (tick.js:38's truthy gate).
+        // boosted_effect adds the top-`build_effect` WORK-upgrade boost bonuses (:54-57).
+        let boosted_effect = boosted_work_bonus(&body, UPGRADE_CONTROLLER_POWER, build_effect, crate::constants::work_upgrade_mult);
+        // NOTE (review B10): NO zero-effect guard before the level-up check — the engine has none
+        // between the :9 energy gate and the :67 check, so a 0-WORK creep CARRYING energy can
+        // trigger the level-up in the surplus window. Its `_upgraded += 0` stays FALSY (:88).
         let mut leveled = false;
         if level < 8 {
             let threshold = controller_levels(level).expect("level 1..=7 has a next-level cost");
             let full = controller_downgrade(level);
             let c = world.controller.as_mut().expect("checked above");
-            // The level-up gate (:67-68): progress crosses the threshold AND the clock is within
-            // CONTROLLER_DOWNGRADE_RESTORE of full (countdown translation:
-            // `downgradeTime + 100 >= gameTime + FULL` ⟺ `remaining + 100 >= FULL`).
-            if c.progress + effect >= threshold && c.downgrade_ticks + CONTROLLER_DOWNGRADE_RESTORE >= full {
-                c.progress = c.progress + effect - threshold; // remainder carries (:70)
+            // The level-up gate (:67-68): PROGRESS (boosted) crosses the threshold AND the clock is
+            // within CONTROLLER_DOWNGRADE_RESTORE of full.
+            if c.progress + boosted_effect >= threshold && c.downgrade_ticks + CONTROLLER_DOWNGRADE_RESTORE >= full {
+                c.progress = c.progress + boosted_effect - threshold; // remainder carries (:70)
                 c.level += 1;
-                // Clock resets to HALF the NEW level's max (:72); the same tick's step-3d
-                // restore then adds its +100 (the engine's tick.js:39 runs after the intent) —
-                // unless effect == 0 (falsy accumulator: the new clock DECAYS this tick instead).
-                c.downgrade_ticks = controller_downgrade(c.level) / 2;
+                c.downgrade_ticks = controller_downgrade(c.level) / 2; // half the NEW level's max (:72)
                 if c.level == 8 {
                     c.progress = 0; // :74-76
                 }
                 report.level_ups.push(c.level);
                 leveled = true;
-            } else if effect > 0 {
-                c.progress += effect; // :80 — accumulates PAST the threshold while the clock is low
+            } else if boosted_effect > 0 {
+                c.progress += boosted_effect; // :80 — accumulates PAST the threshold while clock low
             }
         }
-        if effect == 0 && !leveled {
+        if build_effect == 0 && !leveled {
             report.rejected_actions += 1; // zero conversion AND no level-up: a counted no-op
             continue;
         }
         // Level 8: no progress change (:59 guards the whole block); energy still spent (:92).
-        upgraded_this_tick += effect;
-        ledger.upgrade += effect as u64;
-        if effect > 0 {
+        // Energy CHARGED = build_effect (the unboosted amount, :92); the accumulator too (:88).
+        upgraded_this_tick += build_effect;
+        ledger.upgrade += build_effect as u64;
+        if build_effect > 0 {
             if let Some(store) = world.creep_stores.get_mut(&creep_id) {
-                store.remove(SimResource::Energy, effect);
+                store.remove(SimResource::Energy, build_effect);
             }
             world.sync_carry_used(creep_id);
         }
@@ -933,6 +1159,199 @@ pub fn resolve_econ_tick(world: &mut EconWorld, intents: &EconIntents) -> EconTi
 }
 
 // ── Structure-store plumbing (spawns/extensions are energy-only; containers/storage general) ────
+
+// ── M6 mineral/lab helpers ──────────────────────────────────────────────────────────────────────
+
+/// Re-roll a mineral's density on regen (engine `minerals/tick.js:19-33`) using the per-mineral
+/// SEEDED stream (no ambient entropy). LOW/ULTRA ALWAYS re-roll; MODERATE/HIGH re-roll with
+/// `MINERAL_DENSITY_CHANGE` probability. The new density is drawn from the cumulative
+/// `MINERAL_DENSITY_PROBABILITY` table and is guaranteed DIFFERENT from the old (the engine's
+/// `do…while(new == old)` loop). The `reroll_seed` counter advances each regen so successive
+/// re-rolls of one mineral are independent + reproducible.
+fn reroll_density(mineral: &mut crate::state::SimMineral) {
+    use crate::constants::{
+        DENSITY_LOW, DENSITY_ULTRA, MINERAL_DENSITY_CHANGE_Q, MINERAL_DENSITY_PROBABILITY_Q,
+    };
+    // The per-regen seed: base seed XOR the advancing counter — a distinct SplitMix64 stream per
+    // regen event, fully determined by scenario setup (no Date/rand). Advance FIRST so the same
+    // event never re-draws the same stream if replayed.
+    mineral.reroll_seed = mineral.reroll_seed.wrapping_add(1);
+    let mut rng = Rng::seeded(mineral.reroll_seed);
+
+    let always = mineral.density == DENSITY_LOW || mineral.density == DENSITY_ULTRA;
+    if !always && rng.range(0, 999) >= MINERAL_DENSITY_CHANGE_Q {
+        return; // MODERATE/HIGH: no change this regen (probability 1 − 0.05)
+    }
+    // Draw a new density (≠ old) from the cumulative per-mille table (engine's do…while).
+    let old = mineral.density;
+    loop {
+        let r = rng.range(0, 999); // uniform 0..=999 (the engine's Math.random × 1000 analog)
+        let mut chosen = DENSITY_ULTRA;
+        for &(d, cum) in &MINERAL_DENSITY_PROBABILITY_Q {
+            if r < cum {
+                chosen = d;
+                break;
+            }
+        }
+        if chosen != old {
+            mineral.density = chosen;
+            return;
+        }
+    }
+}
+
+/// Resolve lab reactions (M6; engine `labs/run-reaction.js`). Each `(out, submission, in1, in2)`,
+/// in (out lab index, submission) order: the output lab off cooldown, range-2 of both inputs,
+/// each input holding ≥ 5 of a mineral whose pair has a recipe, and the output holding only the
+/// product (or empty) with room for 5 more. On success: 5 leaves each input, 5 of the product
+/// enters the output, the output arms `tick + REACTION_TIME[product]`. Per-resource ledgered.
+fn resolve_lab_reactions(
+    world: &mut EconWorld,
+    reqs: &mut [(usize, usize, usize, usize)],
+    ledger: &mut TickLedger,
+    report: &mut EconTickReport,
+) {
+    let tick = world.movement.tick;
+    let amount = crate::constants::LAB_REACTION_AMOUNT;
+    reqs.sort_by_key(|&(out, submission, _, _)| (out, submission));
+    for &(out, _, in1, in2) in reqs.iter() {
+        // All three labs must exist and be distinct.
+        if in1 == in2 || out == in1 || out == in2 || out.max(in1).max(in2) >= world.labs.len() {
+            report.rejected_actions += 1;
+            continue;
+        }
+        // Output lab: off cooldown (`:8`).
+        if tick < world.labs[out].cooldown_at {
+            report.rejected_actions += 1;
+            continue;
+        }
+        let (out_pos, in1_pos, in2_pos) = (world.labs[out].pos, world.labs[in1].pos, world.labs[in2].pos);
+        // Range 2 (Chebyshev) of BOTH inputs (`:26,38`).
+        if out_pos.get_range_to(in1_pos) > 2 || out_pos.get_range_to(in2_pos) > 2 {
+            report.rejected_actions += 1;
+            continue;
+        }
+        // Each input holds ≥ 5 of some mineral (`:22-25,34-37`).
+        let (Some((m1, n1)), Some((m2, n2))) = (world.labs[in1].mineral, world.labs[in2].mineral) else {
+            report.rejected_actions += 1;
+            continue;
+        };
+        if n1 < amount || n2 < amount {
+            report.rejected_actions += 1;
+            continue;
+        }
+        // The recipe (`:47`); the output must be empty or already hold the product, with room (`:42-45`).
+        let Some(product) = crate::state::reaction_product(m1, m2) else {
+            report.rejected_actions += 1;
+            continue;
+        };
+        let out_have = world.labs[out].mineral;
+        let out_ok = match out_have {
+            None => true,
+            Some((m, n)) => m == product && n + amount <= crate::constants::LAB_MINERAL_CAPACITY,
+        };
+        if !out_ok {
+            report.rejected_actions += 1;
+            continue;
+        }
+        // Commit: consume 5 from each input, produce 5 in the output, arm the cooldown.
+        world.labs[in1].mineral = if n1 == amount { None } else { Some((m1, n1 - amount)) };
+        world.labs[in2].mineral = if n2 == amount { None } else { Some((m2, n2 - amount)) };
+        let new_out = out_have.map(|(_, n)| n).unwrap_or(0) + amount;
+        world.labs[out].mineral = Some((product, new_out));
+        world.labs[out].cooldown_at = tick + crate::constants::reaction_time(product);
+        *ledger.reaction_consumed.entry(m1).or_insert(0) += amount as u64;
+        *ledger.reaction_consumed.entry(m2).or_insert(0) += amount as u64;
+        *ledger.reaction_produced.entry(product).or_insert(0) += amount as u64;
+    }
+}
+
+/// Resolve boosts (M6; engine `labs/boost-creep.js`). Each `(lab, submission, creep)`, in
+/// (lab, submission) order: the lab holds a boostable mineral, the target creep exists + is not
+/// spawning + is range ≤ 1, and has ≥ 1 unboosted part the mineral boosts. Boosts as many
+/// matching unboosted parts as the lab can fund (30 mineral + 20 energy each) until it runs dry.
+/// The parts gain the boost tier; the mineral + energy are BURNED (no corpse refund modeled).
+fn resolve_boosts(
+    world: &mut EconWorld,
+    reqs: &mut [(usize, usize, CreepId)],
+    ledger: &mut TickLedger,
+    report: &mut EconTickReport,
+) {
+    let boost_mineral = crate::constants::LAB_BOOST_MINERAL;
+    let boost_energy = crate::constants::LAB_BOOST_ENERGY;
+    reqs.sort_by_key(|&(lab, submission, _)| (lab, submission));
+    for &(lab_idx, _, creep_id) in reqs.iter() {
+        let Some(lab) = world.labs.get(lab_idx) else {
+            report.rejected_actions += 1;
+            continue;
+        };
+        let (Some((mineral, _)), lab_pos) = (lab.mineral, lab.pos) else {
+            report.rejected_actions += 1;
+            continue;
+        };
+        let Some((part, tier)) = crate::constants::boost_effect(mineral) else {
+            report.rejected_actions += 1; // mineral is not a boost the sim models
+            continue;
+        };
+        // Target creep: alive, not spawning (all live creeps are past spawn in-sim), range ≤ 1.
+        let Some(creep_pos) = world.creep(creep_id).filter(|c| c.is_alive()).map(|c| c.pos) else {
+            report.rejected_actions += 1;
+            continue;
+        };
+        if creep_pos.get_range_to(lab_pos) > 1 {
+            report.rejected_actions += 1;
+            continue;
+        }
+        // How many matching UNBOOSTED parts does the creep have?
+        let unboosted = world
+            .creep(creep_id)
+            .map(|c| {
+                c.body
+                    .parts
+                    .iter()
+                    .filter(|p| p.part == part && p.boost == screeps_sim_core::BoostTier::None)
+                    .count() as u32
+            })
+            .unwrap_or(0);
+        if unboosted == 0 {
+            report.rejected_actions += 1; // nothing to boost (`:29-31`)
+            continue;
+        }
+        // Fund as many as the lab can (mineral 30 + energy 20 each), capped by unboosted count.
+        let lab_now = &world.labs[lab_idx];
+        let mineral_have = lab_now.mineral.map(|(_, n)| n).unwrap_or(0);
+        let fundable = (mineral_have / boost_mineral).min(lab_now.energy / boost_energy).min(unboosted);
+        if fundable == 0 {
+            report.rejected_actions += 1; // lab too dry to boost even one part (`:15-17`)
+            continue;
+        }
+        // Apply the boost to `fundable` matching parts (uniform tier — order is immaterial).
+        if let Some(creep) = world.creep_mut(creep_id) {
+            let mut applied = 0;
+            for p in creep.body.parts.iter_mut() {
+                if applied == fundable {
+                    break;
+                }
+                if p.part == part && p.boost == screeps_sim_core::BoostTier::None {
+                    p.boost = tier;
+                    applied += 1;
+                }
+            }
+        }
+        // Burn the mineral + energy from the lab.
+        let mineral_cost = fundable * boost_mineral;
+        let energy_cost = fundable * boost_energy;
+        world.labs[lab_idx].mineral = match world.labs[lab_idx].mineral {
+            Some((m, n)) if n > mineral_cost => Some((m, n - mineral_cost)),
+            _ => None,
+        };
+        world.labs[lab_idx].energy -= energy_cost;
+        *ledger.boost_mineral.entry(mineral).or_insert(0) += mineral_cost as u64;
+        ledger.boost_energy += energy_cost as u64;
+        // A boosted CARRY would change store capacity; WORK boosts don't, so no capacity re-sync
+        // is needed for the M6 WORK-boost economy (the one boostable part here). Documented.
+    }
+}
 
 fn target_pos(world: &EconWorld, target: StructRef) -> Option<Position> {
     match target {
@@ -2375,5 +2794,204 @@ mod tests {
                 creep.id
             );
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════════════════
+    // M6 — labs + minerals mechanics tests.
+    // ═══════════════════════════════════════════════════════════════════════════════════════════
+
+    /// Mineral harvest (M6): HARVEST_MINERAL_POWER 1/WORK/intent, gated by the extractor's 5-tick
+    /// cooldown (a harvest arms 5, the extractor tick decrements to 4 the same tick, and a re-harvest
+    /// before it hits 0 is rejected — so exactly one harvest per 5 ticks). Mineral minted per-resource.
+    #[test]
+    fn mineral_harvest_and_extractor_cooldown() {
+        let mut w = EconWorld::default();
+        let m = w.add_mineral(pos(20, 20), SimResource::Hydrogen, crate::constants::DENSITY_HIGH, 40);
+        w.add_extractor(pos(20, 20));
+        assert_eq!(w.minerals[m].amount, 70_000, "HIGH density = 70K");
+        // A 3-WORK, big-carry miner adjacent.
+        let mut body = vec![Part::Work; 3];
+        body.extend([Part::Carry, Part::Carry, Part::Carry, Part::Carry, Part::Move]);
+        let c = w.add_creep(pos(21, 20), &body, 100_000);
+
+        let mut i = EconIntents::new();
+        i.act(c, EconAction::HarvestMineral { mineral_idx: m });
+        let r = step(&mut w, &i);
+        assert_eq!(r.ledger.harvested_mineral[&SimResource::Hydrogen], 3, "3 WORK × HARVEST_MINERAL_POWER 1");
+        assert_eq!(w.minerals[m].amount, 70_000 - 3);
+        assert_eq!(w.creep_stores[&c].amount(SimResource::Hydrogen), 3);
+        // The extractor armed 5 and ticked down to 4 the same tick.
+        assert_eq!(w.extractors[0].cooldown, 4, "cooldown 5 armed, decremented to 4 same tick");
+
+        // The next 4 harvest attempts are rejected (cooling); the 5th succeeds.
+        for expect_reject in [true, true, true, true, false] {
+            let mut i = EconIntents::new();
+            i.act(c, EconAction::HarvestMineral { mineral_idx: m });
+            let r = step(&mut w, &i);
+            if expect_reject {
+                assert_eq!(r.rejected_actions, 1, "harvest on a cooling extractor rejects");
+            } else {
+                assert_eq!(r.ledger.harvested_mineral.get(&SimResource::Hydrogen).copied(), Some(3), "off cooldown: harvests again");
+            }
+        }
+        assert_eq!(w.creep_stores[&c].amount(SimResource::Hydrogen), 6, "two harvests, 5 ticks apart");
+    }
+
+    /// Mineral regen with the SEEDED density re-roll (M6): a drained pool arms a 50k timer and
+    /// refills to a (possibly re-rolled) density at `regen_at − 1`. The re-roll is deterministic
+    /// (per-mineral seed) — two identical worlds regen to the SAME density; a ULTRA pool ALWAYS
+    /// re-rolls to a DIFFERENT tier.
+    #[test]
+    fn mineral_regen_reroll_is_seeded_and_deterministic() {
+        let build = || {
+            let mut w = EconWorld::default();
+            // ULTRA (always re-rolls) with just 1 unit so it drains in one harvest.
+            let m = w.add_mineral(pos(20, 20), SimResource::Utrium, crate::constants::DENSITY_ULTRA, 999);
+            w.minerals[m].amount = 1;
+            w.add_extractor(pos(20, 20));
+            w.add_creep(pos(21, 20), &[Part::Work, Part::Carry, Part::Move], 100_000);
+            (w, m)
+        };
+        let regen_density = || {
+            let (mut w, m) = build();
+            // Drain the pool.
+            let mut i = EconIntents::new();
+            i.act(1, EconAction::HarvestMineral { mineral_idx: m });
+            step(&mut w, &i);
+            assert_eq!(w.minerals[m].amount, 0, "pool drained");
+            assert!(w.minerals[m].regen_at.is_some(), "regen timer armed");
+            // The timer arms at the RESOLVING tick (0) + MINERAL_REGEN_TIME (regen runs inside the
+            // tick, before the tick counter advances).
+            assert_eq!(w.minerals[m].regen_at, Some(crate::constants::MINERAL_REGEN_TIME));
+            // Fast-forward the mineral to just before regen (avoid a 50k-tick loop): set the timer
+            // to fire next tick and advance one tick.
+            w.minerals[m].regen_at = Some(w.tick() + 1);
+            step(&mut w, &EconIntents::new());
+            assert!(w.minerals[m].amount > 0, "refilled");
+            assert!(w.minerals[m].regen_at.is_none(), "timer cleared");
+            assert_ne!(w.minerals[m].density, crate::constants::DENSITY_ULTRA, "ULTRA re-rolls to a DIFFERENT tier");
+            w.minerals[m].density
+        };
+        assert_eq!(regen_density(), regen_density(), "the re-roll is SEEDED — deterministic across runs");
+    }
+
+    /// A lab reaction (M6): two input labs each holding ≥5 of a recipe pair, an output lab in
+    /// range 2 → 5 consumed from each, 5 of the product produced, the output arms
+    /// `REACTION_TIME[product]`. Conservation holds (5 + 5 in, 5 out — 5 net mineral destroyed).
+    #[test]
+    fn lab_run_reaction() {
+        let mut w = EconWorld::default();
+        // G + H → GH (REACTION_TIME 10).
+        let in_g = w.add_lab(pos(20, 20), 0);
+        w.labs[in_g].mineral = Some((SimResource::Ghodium, 100));
+        let in_h = w.add_lab(pos(21, 20), 0);
+        w.labs[in_h].mineral = Some((SimResource::Hydrogen, 100));
+        let out = w.add_lab(pos(20, 21), 0); // range 1 of both
+
+        let mut i = EconIntents::new();
+        i.react(out, in_g, in_h);
+        let r = step(&mut w, &i);
+        assert_eq!(r.ledger.reaction_consumed[&SimResource::Ghodium], 5);
+        assert_eq!(r.ledger.reaction_consumed[&SimResource::Hydrogen], 5);
+        assert_eq!(r.ledger.reaction_produced[&SimResource::GH], 5);
+        assert_eq!(w.labs[in_g].mineral, Some((SimResource::Ghodium, 95)));
+        assert_eq!(w.labs[in_h].mineral, Some((SimResource::Hydrogen, 95)));
+        assert_eq!(w.labs[out].mineral, Some((SimResource::GH, 5)));
+        // The reaction resolved at tick 0, arming cooldown_at = 0 + REACTION_TIME[GH] 10.
+        assert_eq!(w.labs[out].cooldown_at, 10, "cooldown_at = resolving tick 0 + REACTION_TIME[GH] 10");
+        // The output lab is on cooldown: a second reaction the next few ticks rejects.
+        let mut i = EconIntents::new();
+        i.react(out, in_g, in_h);
+        let r = step(&mut w, &i);
+        assert_eq!(r.rejected_actions, 1, "output lab still cooling (REACTION_TIME[GH] = 10)");
+    }
+
+    /// boostCreep (M6): a lab holding XGH2O boosts a creep's WORK parts to T3, consuming 30
+    /// mineral + 20 energy per part (until the lab runs dry), and the boost then MULTIPLIES the
+    /// upgrade/build/harvest WORK effect. Conservation books the mineral + energy burn.
+    #[test]
+    fn boost_creep_applies_and_multiplies_work_effect() {
+        let mut w = EconWorld::default();
+        let lab = w.add_lab(pos(20, 20), 2000);
+        // Enough XGH2O to boost 3 WORK parts (3 × 30 = 90 mineral; energy 3 × 20 = 60).
+        w.labs[lab].mineral = Some((SimResource::XGH2O, 90));
+        let c = w.add_creep(pos(21, 20), &[Part::Work, Part::Work, Part::Work, Part::Carry, Part::Move], 100_000);
+
+        let mut i = EconIntents::new();
+        i.boost(c, lab);
+        let r = step(&mut w, &i);
+        assert_eq!(r.ledger.boost_mineral[&SimResource::XGH2O], 90, "3 parts × 30 mineral");
+        assert_eq!(r.ledger.boost_energy, 60, "3 parts × 20 energy");
+        assert_eq!(w.labs[lab].mineral, None, "mineral spent to zero");
+        assert_eq!(w.labs[lab].energy, 2000 - 60);
+        // All 3 WORK parts are now T3.
+        let boosted = w.creep(c).unwrap().body.parts.iter().filter(|p| p.part == Part::Work && p.boost == screeps_sim_core::BoostTier::T3).count();
+        assert_eq!(boosted, 3, "3 WORK parts boosted to T3");
+        // The boosted effect helpers: harvest ×7 (full boosted); build/upgrade are the engine's
+        // two-step form — for k = work_count = 3, boosted = 3 + top-3 bonuses.
+        assert_eq!(work_harvest_power(&w.creep(c).unwrap().body, 1), 3 * 7, "3 WORK × ×7 harvest boost");
+        // Upgrade: build_effect (unboosted) = 3; boosted = 3 + 3×(2−1)×1 = 6.
+        assert_eq!(boosted_work_bonus(&w.creep(c).unwrap().body, crate::constants::UPGRADE_CONTROLLER_POWER, 3, crate::constants::work_upgrade_mult), 6, "3 WORK T3 upgrade: 3 + 3 bonus = 6 progress");
+        // Build: build_effect (unboosted) = 3×5 = 15; boosted = 15 + top-15 bonuses (only 3 parts,
+        // each (2−1)×5 = 5) = 15 + 15 = 30.
+        assert_eq!(boosted_work_bonus(&w.creep(c).unwrap().body, crate::constants::BUILD_POWER, 15, crate::constants::work_build_mult), 30, "3 WORK T3 build: 15 + 15 bonus = 30 progress");
+    }
+
+    /// The boosted UPGRADER shortens controller progress-per-tick (the M6 headline boost effect,
+    /// engine-faithful): a T3 upgrader gains PROGRESS at ×2 the unboosted rate, while ENERGY
+    /// charged stays the UNBOOSTED amount (the engine `upgradeController.js:70,88,92` split — a
+    /// boost buys more progress per unit energy, not more energy burned).
+    #[test]
+    fn boosted_upgrader_doubles_progress_per_tick() {
+        let run = |boost: bool| -> (u32, u32) {
+            let mut w = EconWorld::default();
+            w.set_controller(pos(30, 30), 5); // RCL 5: below the RCL8 cap, progress accumulates
+            let before = w.controller.as_ref().unwrap().progress;
+            let c = w.add_creep(pos(31, 30), &[Part::Work, Part::Work, Part::Work, Part::Work, Part::Carry, Part::Move], 100_000);
+            w.creep_stores.get_mut(&c).unwrap().add(SimResource::Energy, 1000);
+            w.sync_carry_used(c);
+            if boost {
+                for p in w.creep_mut(c).unwrap().body.parts.iter_mut() {
+                    if p.part == Part::Work {
+                        p.boost = screeps_sim_core::BoostTier::T3;
+                    }
+                }
+            }
+            let mut i = EconIntents::new();
+            i.act(c, EconAction::UpgradeController);
+            let r = step(&mut w, &i);
+            let progress_gained = w.controller.as_ref().unwrap().progress - before;
+            (r.ledger.upgrade as u32, progress_gained)
+        };
+        let (plain_energy, plain_prog) = run(false);
+        let (boosted_energy, boosted_prog) = run(true);
+        assert_eq!((plain_energy, plain_prog), (4, 4), "4 WORK unboosted: 4 energy → 4 progress");
+        assert_eq!(boosted_energy, 4, "boosted: SAME 4 energy charged (engine :92 — unboosted amount)");
+        assert_eq!(boosted_prog, 8, "boosted: ×2 PROGRESS (4 + 4 bonus = 8) for the same energy");
+    }
+
+    /// The terminal recovery lever (M6): selling a stocked mineral from storage credits energy at
+    /// the fixed 1:1 rate; the mineral leaves the economy, the energy is minted, conservation exact.
+    #[test]
+    fn terminal_sell_mineral_recovery_lever() {
+        let mut w = EconWorld::default();
+        w.set_storage(pos(25, 25), 1_000_000);
+        w.storage.as_mut().unwrap().store.add(SimResource::Ghodium, 5000);
+        w.storage.as_mut().unwrap().store.add(SimResource::Energy, 100);
+
+        let mut i = EconIntents::new();
+        i.sell(SimResource::Ghodium, 3000);
+        let r = step(&mut w, &i);
+        assert_eq!(r.ledger.sold_mineral[&SimResource::Ghodium], 3000);
+        assert_eq!(r.ledger.sold_energy_credit, 3000, "1:1 exchange");
+        assert_eq!(w.storage.as_ref().unwrap().store.amount(SimResource::Ghodium), 2000);
+        assert_eq!(w.storage.as_ref().unwrap().store.amount(SimResource::Energy), 3100);
+        // Selling more than held clamps; selling energy itself is rejected.
+        let mut i = EconIntents::new();
+        i.sell(SimResource::Ghodium, 99_999);
+        i.sell(SimResource::Energy, 10);
+        let r = step(&mut w, &i);
+        assert_eq!(r.ledger.sold_mineral[&SimResource::Ghodium], 2000, "clamped to what's held");
+        assert!(r.rejected_actions >= 1, "selling energy is rejected");
     }
 }

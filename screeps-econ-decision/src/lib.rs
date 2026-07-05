@@ -50,6 +50,7 @@ pub mod cadence;
 pub mod demand;
 pub mod market;
 pub mod matching;
+pub mod mineral_value;
 pub mod priority;
 pub mod repair;
 pub mod sink_economics;

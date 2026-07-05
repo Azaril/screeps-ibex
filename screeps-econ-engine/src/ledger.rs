@@ -49,6 +49,28 @@ pub struct TickLedger {
     pub build: u64,
     /// Per-resource decay of dropped piles this tick (engine-mechanics.md:431).
     pub dropped_decay: BTreeMap<SimResource, u64>,
+    /// Mineral MINTED by extractor harvest this tick, per resource (M6; minerals enter the
+    /// economy at harvest exactly as energy does — the source pool is NOT stock,
+    /// engine-mechanics.md:446).
+    pub harvested_mineral: BTreeMap<SimResource, u64>,
+    /// Per-resource lab reaction transmutation this tick (M6): the two inputs each LOSE
+    /// `LAB_REACTION_AMOUNT`, the product GAINS it. Booked as per-resource mint (`+product`) and
+    /// burn (`−input`) so the conservation audit sees each resource lane balance exactly (total
+    /// stock is preserved: 5 + 5 in, 5 out — a net 5 destroyed across the base minerals, exactly
+    /// the engine's mass loss).
+    pub reaction_produced: BTreeMap<SimResource, u64>,
+    pub reaction_consumed: BTreeMap<SimResource, u64>,
+    /// Mineral + energy BURNED by `boostCreep` this tick (M6; 30 mineral + 20 energy per part,
+    /// engine `labs/boost-creep.js` — consumed into the part's boost attribute, no corpse refund
+    /// modeled, so a genuine sink, per resource for the mineral lane + energy).
+    pub boost_mineral: BTreeMap<SimResource, u64>,
+    pub boost_energy: u64,
+    /// Mineral + energy sold via the terminal recovery lever this tick (M6): the mineral leaves
+    /// the economy (`sold_mineral`, per resource) and energy is CREDITED (`sold_energy_credit` —
+    /// a MINT, the fixed-exchange energy the sale yields). Documented recovery-lever abstraction
+    /// (ADR 0040 §D7 / D4; the market-credit realism is ADR 0012's).
+    pub sold_mineral: BTreeMap<SimResource, u64>,
+    pub sold_energy_credit: u64,
 }
 
 impl TickLedger {
@@ -65,17 +87,29 @@ impl TickLedger {
     }
 
     fn minted(&self, r: SimResource) -> u64 {
+        let mineral_harvest = self.harvested_mineral.get(&r).copied().unwrap_or(0);
+        let reaction = self.reaction_produced.get(&r).copied().unwrap_or(0);
         match r {
-            SimResource::Energy => self.harvested + self.spawn_self_charge,
-            _ => 0,
+            // Energy: harvest + self-charge + the terminal recovery-lever credit (M6).
+            SimResource::Energy => self.harvested + self.spawn_self_charge + self.sold_energy_credit,
+            // Minerals: extractor harvest + reaction product (M6).
+            _ => mineral_harvest + reaction,
         }
     }
 
     fn burned(&self, r: SimResource) -> u64 {
         let decay = self.dropped_decay.get(&r).copied().unwrap_or(0);
+        let reaction = self.reaction_consumed.get(&r).copied().unwrap_or(0);
+        let boost_min = self.boost_mineral.get(&r).copied().unwrap_or(0);
+        let sold = self.sold_mineral.get(&r).copied().unwrap_or(0);
         match r {
-            SimResource::Energy => self.spawn_bodies + self.repair_total() + self.upgrade + self.build + decay,
-            _ => decay,
+            // Energy: bodies + repair + upgrade + build + decay + boost energy (M6). The recovery
+            // lever's mineral is sold FOR energy — the energy is a mint (above), never a burn.
+            SimResource::Energy => {
+                self.spawn_bodies + self.repair_total() + self.upgrade + self.build + decay + self.boost_energy
+            }
+            // Minerals: dropped decay + reaction input consumed + boost mineral + terminal sale (M6).
+            _ => decay + reaction + boost_min + sold,
         }
     }
 }
@@ -103,6 +137,12 @@ pub fn audit_conservation(
     resources.extend(prev.keys().copied());
     resources.extend(now.keys().copied());
     resources.extend(ledger.dropped_decay.keys().copied());
+    // M6 mineral lanes: a resource appearing only in a mint/burn lane must still be audited.
+    resources.extend(ledger.harvested_mineral.keys().copied());
+    resources.extend(ledger.reaction_produced.keys().copied());
+    resources.extend(ledger.reaction_consumed.keys().copied());
+    resources.extend(ledger.boost_mineral.keys().copied());
+    resources.extend(ledger.sold_mineral.keys().copied());
     resources.insert(SimResource::Energy);
 
     let mut violations = Vec::new();

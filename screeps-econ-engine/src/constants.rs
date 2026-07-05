@@ -263,6 +263,175 @@ pub fn body_cost(body: &[Part]) -> u32 {
     body.iter().map(|&p| part_cost(p)).sum()
 }
 
+// ── Minerals + extractor (M6) ─────────────────────────────────────────────────────────────────────
+
+/// Energy-analog harvest for minerals: `HARVEST_MINERAL_POWER` 1 mineral per WORK per intent
+/// (engine-mechanics.md:446,457, `common/constants.js:118`; the engine pipeline is
+/// `creeps/harvest.js:88`, `calcBodyEffectiveness(body, WORK, 'harvest', HARVEST_MINERAL_POWER)`).
+/// UNLIKE the source's `HARVEST_POWER` 2, and boosted by the WORK **harvest** ladder ×3/5/7
+/// ([`work_harvest_mult`]) — NOT the ×1/2/3/4 action ladder.
+pub const HARVEST_MINERAL_POWER: u32 = 1;
+
+/// Mineral regen delay after exhaustion — `MINERAL_REGEN_TIME` 50000 (engine-mechanics.md:446,
+/// `common/constants.js:298`, `minerals/tick.js:11`). The timer starts when the pool hits 0 and
+/// the pool refills (density-amount) when `gameTime >= nextRegenerationTime − 1`
+/// (`minerals/tick.js:14`).
+pub const MINERAL_REGEN_TIME: u32 = 50_000;
+
+/// The four mineral density tiers — `MINERAL_DENSITY` {1:15K, 2:35K, 3:70K, 4:100K}
+/// (engine-mechanics.md:446, `common/constants.js:310`). `density` is 1..=4 (LOW/MODERATE/HIGH/
+/// ULTRA — `constants.js:324-327`); any other value is out of the engine's vocabulary.
+pub fn mineral_density_amount(density: u8) -> u32 {
+    match density {
+        1 => 15_000,
+        2 => 35_000,
+        3 => 70_000,
+        4 => 100_000,
+        _ => 0,
+    }
+}
+
+/// The cumulative density-selection probability table — `MINERAL_DENSITY_PROBABILITY`
+/// {1:0.1, 2:0.5, 3:0.9, 4:1.0} (`common/constants.js:316`), expressed per-mille for exact
+/// integer selection (`minerals/tick.js:22-30`: a uniform draw picks the first density whose
+/// cumulative probability is ≥ the draw). Quantized to per-mille — the exact table values are
+/// all whole per-mille, so no rounding.
+pub const MINERAL_DENSITY_PROBABILITY_Q: [(u8, u32); 4] = [(1, 100), (2, 500), (3, 900), (4, 1000)];
+
+/// Re-roll probability for MODERATE/HIGH densities — `MINERAL_DENSITY_CHANGE` 0.05
+/// (engine-mechanics.md:446, `common/constants.js:322`, `minerals/tick.js:20`), per-mille for the
+/// seeded integer draw. LOW (1) and ULTRA (4) ALWAYS re-roll on regen (`minerals/tick.js:19`).
+pub const MINERAL_DENSITY_CHANGE_Q: u32 = 50;
+
+/// Density enum values (`common/constants.js:324-327`).
+pub const DENSITY_LOW: u8 = 1;
+pub const DENSITY_MODERATE: u8 = 2;
+pub const DENSITY_HIGH: u8 = 3;
+pub const DENSITY_ULTRA: u8 = 4;
+
+/// Extractor cooldown ticks after a successful mineral harvest — `EXTRACTOR_COOLDOWN` 5
+/// (engine-mechanics.md:446, `common/constants.js:272`; the harvest sets `extractor._cooldown`,
+/// `creeps/harvest.js:108`, and the extractor tick decrements it, `extractors/tick.js:9-19`).
+pub const EXTRACTOR_COOLDOWN: u32 = 5;
+
+// ── Terminal recovery lever (M6) ────────────────────────────────────────────────────────────────
+//
+// The ABSTRACTION only (ADR 0040 §D4/§D7): a fixed mineral→energy exchange rate for the
+// sell-mineral-for-energy recovery lever. This is NOT the engine's market — the real credit /
+// order-book / MARKET_FEE 0.05 mechanics belong to ADR 0012 (`fairvalue.rs`, untouched). The sim
+// prices one unit of a base mineral at a conservative fixed energy-equivalent so the recovery
+// scenario can ask "does dumping a stocked mineral stash for energy speed T_recover?" without
+// coupling to a market model. Chosen at 1 mineral = 1 energy (par) as the deliberately-neutral
+// floor: the lever adds LIQUIDITY (a stuck stash becomes spendable energy), not free value — so a
+// measured T_recover improvement is attributable to the liquidity, not an assumed exchange premium.
+
+/// Energy credited per unit mineral sold via the terminal recovery lever — a fixed
+/// num/den exchange rate (par: 1:1). Deliberately conservative (ADR 0040 §D4 documents the
+/// abstraction; the market-priced version is ADR 0012's `mineral_value_e` follow-up).
+pub const TERMINAL_SELL_ENERGY_NUM: u32 = 1;
+pub const TERMINAL_SELL_ENERGY_DEN: u32 = 1;
+
+/// Energy proceeds of selling `mineral_amount` units (exact integer, floored).
+pub fn terminal_sale_energy(mineral_amount: u32) -> u32 {
+    ((mineral_amount as u64 * TERMINAL_SELL_ENERGY_NUM as u64) / TERMINAL_SELL_ENERGY_DEN as u64) as u32
+}
+
+// ── Labs (M6) ─────────────────────────────────────────────────────────────────────────────────────
+
+/// Lab mineral-store capacity — `LAB_MINERAL_CAPACITY` 3000 (engine-mechanics.md:303,460,
+/// `common/constants.js:275`).
+pub const LAB_MINERAL_CAPACITY: u32 = 3_000;
+/// Lab energy-store capacity — `LAB_ENERGY_CAPACITY` 2000 (engine-mechanics.md:303,460,
+/// `common/constants.js:276`).
+pub const LAB_ENERGY_CAPACITY: u32 = 2_000;
+/// Reaction/consumption amount per `runReaction`: `LAB_REACTION_AMOUNT` 5 — 5 in from EACH input
+/// lab, 5 out to the output lab (engine-mechanics.md:301,460, `common/constants.js:280`;
+/// `labs/run-reaction.js:12,55,67,77`). (`PWR_OPERATE_LAB` boosts this — power creeps NOT modeled.)
+pub const LAB_REACTION_AMOUNT: u32 = 5;
+/// Mineral consumed per body part boosted — `LAB_BOOST_MINERAL` 30 (engine-mechanics.md:317,460,
+/// `common/constants.js:278`; `labs/boost-creep.js:15,43`).
+pub const LAB_BOOST_MINERAL: u32 = 30;
+/// Energy consumed per body part boosted — `LAB_BOOST_ENERGY` 20 (engine-mechanics.md:317,460,
+/// `common/constants.js:277`; `labs/boost-creep.js:15,44`).
+pub const LAB_BOOST_ENERGY: u32 = 20;
+
+/// Per-compound reaction cooldown — `REACTION_TIME[product]` (engine-mechanics.md:302,311,468,
+/// `common/constants.js:733-768`; `labs/run-reaction.js:56`). The annotated-unused `LAB_COOLDOWN`
+/// 10 is deliberately NOT used (engine-mechanics.md:303,513). Only the compounds the boost
+/// economy needs are tabled here (the base pairs + the boost chains); an unlisted product panics
+/// loudly at the [`compound_tag`] boundary rather than silently guessing a cooldown.
+pub fn reaction_time(compound: crate::state::SimResource) -> u32 {
+    use crate::state::SimResource::*;
+    match compound {
+        // Base pairs (engine-mechanics.md:307, constants.js:734-737).
+        Hydroxide => 20, // OH
+        ZynthiumKeanite => 5,
+        UtriumLemergite => 5,
+        Ghodium => 5, // G (the compound; the base mineral G shares the tag — see state docs)
+        // Upgrade chain GH/GH2O/XGH2O (constants.js:762-764): 10 / 15 / 80.
+        GH => 10,
+        GH2O => 15,
+        XGH2O => 80,
+        // Everything below is not produced in the M6 boost economy (only the upgrade chain is
+        // brewed on-sim); tabled for completeness of the reaction the fence exercises.
+        _ => panic!("REACTION_TIME not tabled for {compound:?} — add its constants.js:733-768 row"),
+    }
+}
+
+// ── Boost effect multipliers on WORK actions (M6; `BOOSTS[WORK]`, constants.js:618-657) ─────────────
+//
+// The WORK boosts do NOT follow the ×1/2/3/4 action ladder (`BoostTier::action_mult`, which is
+// correct for attack/heal/dismantle/move/carry). They are per-effect tables (engine-mechanics.md:
+// 136 references the `BOOSTS` table at :617-731). Returned as (numerator, denominator) exact
+// rationals so the resolver's `power × num / den` stays integer.
+
+/// WORK **upgradeController** boost multiplier as an exact rational (`BOOSTS[WORK][GH|GH2O|XGH2O]
+/// .upgradeController` = 1.5 / 1.8 / 2.0; constants.js:650-656). T0 = ×1.
+pub fn work_upgrade_mult(tier: screeps_sim_core::BoostTier) -> (u32, u32) {
+    use screeps_sim_core::BoostTier::*;
+    match tier {
+        None => (1, 1),
+        T1 => (3, 2),  // GH2O... GH is the T1 upgrade boost → 1.5
+        T2 => (9, 5),  // GH2O → 1.8
+        T3 => (2, 1),  // XGH2O → 2.0
+    }
+}
+
+/// WORK **build**/**repair** boost multiplier (`BOOSTS[WORK][LH|LH2O|XLH2O].build/.repair` =
+/// 1.5 / 1.8 / 2.0; constants.js:628-639). Same ladder as upgrade by coincidence of the table.
+pub fn work_build_mult(tier: screeps_sim_core::BoostTier) -> (u32, u32) {
+    work_upgrade_mult(tier)
+}
+
+/// WORK **harvest** boost multiplier (`BOOSTS[WORK][UO|UHO2|XUHO2].harvest` = 3 / 5 / 7;
+/// constants.js:618-627). Integer multipliers; T0 = ×1.
+pub fn work_harvest_mult(tier: screeps_sim_core::BoostTier) -> u32 {
+    use screeps_sim_core::BoostTier::*;
+    match tier {
+        None => 1,
+        T1 => 3,
+        T2 => 5,
+        T3 => 7,
+    }
+}
+
+/// Which `(body part, boost tier)` a mineral/compound applies as a boost — the `BOOSTS` table
+/// keyed by mineral (`common/constants.js:617-731`), inverted to the sim's `(Part, BoostTier)`.
+/// Only the compounds the M6 economy handles are mapped (the WORK-upgrade chain GH/GH2O/XGH2O);
+/// an unmapped mineral is not a boost (`None` — `boostCreep` finds no boostable part and no-ops).
+/// The tier is which rung of the ×1/2/3-tier chain the compound sits on.
+pub fn boost_effect(compound: crate::state::SimResource) -> Option<(Part, screeps_sim_core::BoostTier)> {
+    use crate::state::SimResource::*;
+    use screeps_sim_core::BoostTier;
+    Some(match compound {
+        // WORK upgradeController chain (`BOOSTS[WORK]`, constants.js:649-656): GH=T1, GH2O=T2, XGH2O=T3.
+        GH => (Part::Work, BoostTier::T1),
+        GH2O => (Part::Work, BoostTier::T2),
+        XGH2O => (Part::Work, BoostTier::T3),
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,6 +545,95 @@ mod tests {
         }
         assert_eq!(extension_capacity(7), 100);
         assert_eq!(extension_capacity(8), 200);
+    }
+
+    /// M6 mineral + extractor citation pins (engine-mechanics.md:446,457,466;
+    /// `common/constants.js:298-327,271-272`): HARVEST_MINERAL_POWER 1, MINERAL_REGEN_TIME 50k,
+    /// the density tiers {1:15K,2:35K,3:70K,4:100K}, the cumulative selection table
+    /// {1:0.1,2:0.5,3:0.9,4:1.0}, MINERAL_DENSITY_CHANGE 0.05, EXTRACTOR_COOLDOWN 5.
+    #[test]
+    fn m6_mineral_citation_pins() {
+        assert_eq!(HARVEST_MINERAL_POWER, 1, "engine-mechanics.md:446,457 (≠ source HARVEST_POWER 2)");
+        assert_eq!(MINERAL_REGEN_TIME, 50_000, "engine-mechanics.md:446");
+        assert_eq!(
+            [mineral_density_amount(1), mineral_density_amount(2), mineral_density_amount(3), mineral_density_amount(4)],
+            [15_000, 35_000, 70_000, 100_000],
+            "MINERAL_DENSITY tiers (constants.js:310)"
+        );
+        assert_eq!(mineral_density_amount(0), 0, "out-of-vocabulary density is 0");
+        assert_eq!(
+            MINERAL_DENSITY_PROBABILITY_Q,
+            [(1, 100), (2, 500), (3, 900), (4, 1000)],
+            "cumulative selection per-mille (constants.js:316)"
+        );
+        assert_eq!(MINERAL_DENSITY_CHANGE_Q, 50, "0.05 as per-mille (constants.js:322)");
+        assert_eq!((DENSITY_LOW, DENSITY_MODERATE, DENSITY_HIGH, DENSITY_ULTRA), (1, 2, 3, 4));
+        assert_eq!(EXTRACTOR_COOLDOWN, 5, "constants.js:272");
+    }
+
+    /// M6 lab citation pins (engine-mechanics.md:301-303,317,460,468;
+    /// `common/constants.js:275-280,733-768,617-731`): store caps 3000/2000, LAB_REACTION_AMOUNT 5,
+    /// boost 30 mineral + 20 energy, the REACTION_TIME rows for the brewed chain, and the
+    /// WORK-boost effect multipliers (harvest 3/5/7, build & upgrade 1.5/1.8/2.0 — NOT the action
+    /// ladder).
+    #[test]
+    fn m6_lab_citation_pins() {
+        use crate::state::SimResource::*;
+        assert_eq!((LAB_MINERAL_CAPACITY, LAB_ENERGY_CAPACITY), (3_000, 2_000), "constants.js:275-276");
+        assert_eq!(LAB_REACTION_AMOUNT, 5, "constants.js:280");
+        assert_eq!((LAB_BOOST_MINERAL, LAB_BOOST_ENERGY), (30, 20), "constants.js:277-278");
+        // REACTION_TIME for the brewed upgrade chain + the shared pairs (constants.js:733-768).
+        assert_eq!(reaction_time(Hydroxide), 20, "OH 20t");
+        assert_eq!(reaction_time(ZynthiumKeanite), 5, "ZK 5t");
+        assert_eq!(reaction_time(UtriumLemergite), 5, "UL 5t");
+        assert_eq!(reaction_time(Ghodium), 5, "G 5t (the compound)");
+        assert_eq!((reaction_time(GH), reaction_time(GH2O), reaction_time(XGH2O)), (10, 15, 80), "GH/GH2O/XGH2O");
+
+        // WORK-effect boost multipliers (BOOSTS[WORK], constants.js:618-657) — the exact table.
+        use screeps_sim_core::BoostTier::*;
+        assert_eq!(
+            [work_harvest_mult(None), work_harvest_mult(T1), work_harvest_mult(T2), work_harvest_mult(T3)],
+            [1, 3, 5, 7],
+            "harvest UO/UHO2/XUHO2 = 3/5/7"
+        );
+        assert_eq!(work_upgrade_mult(None), (1, 1));
+        assert_eq!(work_upgrade_mult(T1), (3, 2), "GH → 1.5");
+        assert_eq!(work_upgrade_mult(T2), (9, 5), "GH2O → 1.8");
+        assert_eq!(work_upgrade_mult(T3), (2, 1), "XGH2O → 2.0");
+        assert_eq!(work_build_mult(T3), (2, 1), "XLH2O → 2.0 (same table as upgrade)");
+
+        // The boost-effect inverse: the upgrade chain compounds → (WORK, tier).
+        assert_eq!(boost_effect(GH), Some((Part::Work, T1)));
+        assert_eq!(boost_effect(GH2O), Some((Part::Work, T2)));
+        assert_eq!(boost_effect(XGH2O), Some((Part::Work, T3)));
+        assert_eq!(boost_effect(Energy), Option::None, "energy is not a boost");
+    }
+
+    /// The reaction recipe table is symmetric and covers the brewed chain (engine
+    /// `REACTIONS[a][b]`, constants.js:484-615).
+    #[test]
+    fn m6_reaction_recipe_table() {
+        use crate::state::{reaction_product, SimResource::*};
+        // Order-independence: REACTIONS[a][b] == REACTIONS[b][a].
+        assert_eq!(reaction_product(Hydrogen, Oxygen), Some(Hydroxide));
+        assert_eq!(reaction_product(Oxygen, Hydrogen), Some(Hydroxide));
+        assert_eq!(reaction_product(Keanium, Zynthium), Some(ZynthiumKeanite));
+        assert_eq!(reaction_product(Utrium, Lemergium), Some(UtriumLemergite));
+        assert_eq!(reaction_product(ZynthiumKeanite, UtriumLemergite), Some(Ghodium));
+        // The upgrade boost chain: G+H→GH, GH+OH→GH2O, GH2O+X→XGH2O.
+        assert_eq!(reaction_product(Ghodium, Hydrogen), Some(GH));
+        assert_eq!(reaction_product(GH, Hydroxide), Some(GH2O));
+        assert_eq!(reaction_product(GH2O, Catalyst), Some(XGH2O));
+        // An untabled pair has no product (a no-op).
+        assert_eq!(reaction_product(Hydrogen, Hydrogen), None);
+    }
+
+    /// The terminal recovery lever's fixed exchange rate (ADR 0040 §D4 abstraction): 1:1 par.
+    #[test]
+    fn m6_terminal_recovery_lever_pin() {
+        assert_eq!((TERMINAL_SELL_ENERGY_NUM, TERMINAL_SELL_ENERGY_DEN), (1, 1), "par: 1 mineral = 1 energy");
+        assert_eq!(terminal_sale_energy(500), 500);
+        assert_eq!(terminal_sale_energy(0), 0);
     }
 
     /// engine-mechanics.md:452 — the BODYPART_COST table, cross-checked against screeps-game-api's

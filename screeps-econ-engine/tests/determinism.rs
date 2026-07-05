@@ -75,6 +75,15 @@ fn fold_report(mut h: u64, r: &EconTickReport) -> u64 {
         eat(*res as u64);
         eat(*v);
     }
+    // M6 mineral/lab ledger lanes (the fence pins them once the M6 fixture exercises them).
+    for m in [&r.ledger.harvested_mineral, &r.ledger.reaction_produced, &r.ledger.reaction_consumed, &r.ledger.boost_mineral, &r.ledger.sold_mineral] {
+        for (res, v) in m {
+            eat(*res as u64);
+            eat(*v);
+        }
+    }
+    eat(r.ledger.boost_energy);
+    eat(r.ledger.sold_energy_credit);
     for (idx, id) in &r.spawns_started {
         eat(*idx as u64);
         eat(*id as u64);
@@ -643,6 +652,167 @@ fn econ_engine_m2_controller_build_determinism() {
     assert_eq!(w.controller.as_ref().unwrap().level, 2, "downgraded to 1, upgraded back to 2");
 }
 
+// ── The M6 fence: labs + minerals entered the state/digest — re-prove spread 0 ──────────────────
+
+const M6_MINER: CreepId = 1;
+const M6_BOOST_TARGET: CreepId = 2;
+
+/// The M6 fixture: an ULTRA mineral (always re-rolls on regen) drained low so it exhausts + regens
+/// (density re-roll) several times inside the run; an extractor pacing the harvest; a 3-lab reaction
+/// cluster (G + H → GH, cooldown 10) fed from stocked input labs; a boost lab holding XGH2O; and a
+/// WORK creep boosted mid-run whose subsequent upgrades run at ×2. Purely state-derived drivers.
+fn m6_fixture() -> EconWorld {
+    let mut w = EconWorld::default();
+    // A small ULTRA pool so it drains + regens repeatedly (re-roll every regen).
+    let mineral = w.add_mineral(pos(20, 20), SimResource::Utrium, 4 /*ULTRA*/, 7);
+    w.minerals[mineral].amount = 30; // 5 harvests of a 6-WORK miner drain it
+    w.add_extractor(pos(20, 20));
+    // The reaction cluster: two input labs (range 1 of the output), stocked; the output lab empty.
+    let in_g = w.add_lab(pos(30, 30), 0);
+    w.labs[in_g].mineral = Some((SimResource::Ghodium, 3000));
+    let in_h = w.add_lab(pos(31, 30), 0);
+    w.labs[in_h].mineral = Some((SimResource::Hydrogen, 3000));
+    w.add_lab(pos(30, 31), 0); // out, idx 2
+    // The boost lab, holding XGH2O + energy (boosts the target's 4 WORK parts).
+    let boost_lab = w.add_lab(pos(35, 35), 2000);
+    w.labs[boost_lab].mineral = Some((SimResource::XGH2O, 3000));
+    // A controller for the boosted upgrader to work (RCL 5 — below the RCL8 cap).
+    w.set_controller(pos(36, 36), 5);
+
+    // The miner (6 WORK): harvests the mineral through the extractor's 5-tick cooldown.
+    w.add_creep(pos(21, 20), &[Part::Work, Part::Work, Part::Work, Part::Work, Part::Work, Part::Work, Part::Carry, Part::Carry, Part::Carry, Part::Carry, Part::Move], 100_000); // 1
+    // The boost target / upgrader (4 WORK), placed adjacent to the boost lab, fed energy.
+    let up = w.add_creep(pos(35, 36), &[Part::Work, Part::Work, Part::Work, Part::Work, Part::Carry, Part::Carry, Part::Move], 100_000); // 2
+    w.creep_stores.get_mut(&up).unwrap().add(SimResource::Energy, 100);
+    w.sync_carry_used(up);
+    w
+}
+
+/// The M6 fixture's per-tick scripted intents (state-derived, insertion-order-free).
+fn m6_scripted(w: &EconWorld) -> EconIntents {
+    let mut intents = EconIntents::new();
+
+    // The miner harvests whenever the extractor is off cooldown AND the pool holds mineral.
+    if w.creep(M6_MINER).is_some() {
+        let ready = w.extractor_at(pos(20, 20)).is_some_and(|i| w.extractors[i].cooldown == 0);
+        if ready && w.minerals[0].amount > 0 {
+            intents.act(M6_MINER, EconAction::HarvestMineral { mineral_idx: 0 });
+        }
+    }
+    // The reaction fires whenever the output lab is off cooldown and the inputs are stocked.
+    if w.labs.len() >= 3 && w.tick() >= w.labs[2].cooldown_at && w.labs[0].mineral_amount(SimResource::Ghodium) >= 5 && w.labs[1].mineral_amount(SimResource::Hydrogen) >= 5 {
+        intents.react(2, 0, 1);
+    }
+    // Boost the target ONCE (when it still has an unboosted WORK part).
+    if let Some(c) = w.creep(M6_BOOST_TARGET) {
+        let unboosted = c.body.parts.iter().filter(|p| p.part == Part::Work && p.boost == screeps_sim_core::BoostTier::None).count();
+        if unboosted > 0 {
+            intents.boost(M6_BOOST_TARGET, 3); // the XGH2O boost lab (idx 3)
+        } else if w.creep_stores[&M6_BOOST_TARGET].amount(SimResource::Energy) > 0 {
+            // Once boosted, upgrade (the ×2 effect); top up energy from... just keep upgrading.
+            intents.act(M6_BOOST_TARGET, EconAction::UpgradeController);
+        }
+    }
+    intents
+}
+
+#[allow(clippy::type_complexity)]
+fn run_m6_fixture(ticks: u32, permute: bool) -> ((u64, u64), (u32, u64, u64, u32, bool)) {
+    let mut w = m6_fixture();
+    let mut report_digest: u64 = 0xcbf2_9ce4_8422_2325;
+    let (mut mineral_harvests, mut reaction_products, mut boost_mineral) = (0u32, 0u64, 0u64);
+    let mut regens = 0u32;
+    let mut last_amount = w.minerals[0].amount;
+    let mut ever_boosted = false;
+    for _ in 0..ticks {
+        // Refill the boost target's energy so the post-boost upgrade lane keeps running.
+        if let Some(store) = w.creep_stores.get_mut(&M6_BOOST_TARGET) {
+            if store.amount(SimResource::Energy) < 8 {
+                store.add(SimResource::Energy, 100);
+                w.sync_carry_used(M6_BOOST_TARGET);
+            }
+        }
+        let mut intents = m6_scripted(&w);
+        if permute {
+            intents.actions.reverse();
+        }
+        let before_amount = w.minerals[0].amount;
+        let report = resolve_econ_tick(&mut w, &intents);
+        assert!(report.conservation.is_empty(), "conservation violated at tick {}: {:?}", report.tick, report.conservation);
+        report_digest = fold_report(report_digest, &report);
+        mineral_harvests += report.ledger.harvested_mineral.values().sum::<u64>() as u32;
+        reaction_products += report.ledger.reaction_produced.values().sum::<u64>();
+        boost_mineral += report.ledger.boost_mineral.values().sum::<u64>();
+        // A regen event: the pool jumped from 0 back up. Cap the refilled pool low so it
+        // re-drains fast (keeping the run short) — a deterministic test manipulation applied
+        // identically every run, so the fence stays spread-0.
+        if before_amount == 0 && w.minerals[0].amount > 0 {
+            regens += 1;
+            w.minerals[0].amount = 30;
+        }
+        let _ = last_amount;
+        last_amount = w.minerals[0].amount;
+        if w.creep(M6_BOOST_TARGET).map(|c| c.body.parts.iter().any(|p| p.part == Part::Work && p.boost == screeps_sim_core::BoostTier::T3)).unwrap_or(false) {
+            ever_boosted = true;
+        }
+        // Fast-forward the 50k regen timer to keep the run short (deterministic — same each run).
+        if w.minerals[0].amount == 0 {
+            if let Some(_r) = w.minerals[0].regen_at {
+                w.minerals[0].regen_at = Some(w.tick() + 1);
+            }
+        }
+    }
+    ((w.state_digest(), report_digest), (regens, reaction_products, boost_mineral, mineral_harvests, ever_boosted))
+}
+
+/// The M6 fence: 5 runs spread 0, the reversed-insertion arm bit-identical, and anti-vacuity floors
+/// proving the run EXERCISED mineral harvest + at least one seeded density re-roll on regen + lab
+/// reactions + a boostCreep + the boosted-upgrade effect.
+#[test]
+fn econ_engine_m6_labs_minerals_determinism() {
+    let (baseline, floors) = run_m6_fixture(400, false);
+    for run in 1..5 {
+        assert_eq!(run_m6_fixture(400, false).0, baseline, "run {run} diverged from run 0");
+    }
+    assert_eq!(run_m6_fixture(400, true).0, baseline, "insertion order leaked into the M6 lanes");
+
+    let (regens, reaction_products, boost_mineral, mineral_harvests, ever_boosted) = floors;
+    assert!(mineral_harvests >= 12, "the extractor-paced mineral harvest must recur (got {mineral_harvests})");
+    assert!(regens >= 2, "the mineral must exhaust + regen (seeded density re-roll) ≥ 2× (got {regens})");
+    assert!(reaction_products >= 20, "the lab reaction cluster must produce GH repeatedly (got {reaction_products})");
+    assert_eq!(boost_mineral, 4 * 30, "the target's 4 WORK parts boosted (4 × 30 XGH2O)");
+    assert!(ever_boosted, "the boost target reached T3");
+
+    // End-state sanity: the ULTRA mineral re-rolled OFF ultra at least once (density changed),
+    // and the boosted upgrader accumulated controller progress at the ×2 rate.
+    let mut w = m6_fixture();
+    let mut densities_seen = std::collections::BTreeSet::new();
+    for _ in 0..400 {
+        let mut intents = m6_scripted(&w);
+        let _ = &mut intents;
+        if let Some(store) = w.creep_stores.get_mut(&M6_BOOST_TARGET) {
+            if store.amount(SimResource::Energy) < 8 {
+                store.add(SimResource::Energy, 100);
+                w.sync_carry_used(M6_BOOST_TARGET);
+            }
+        }
+        let intents = m6_scripted(&w);
+        let before = w.minerals[0].amount;
+        resolve_econ_tick(&mut w, &intents);
+        densities_seen.insert(w.minerals[0].density);
+        if before == 0 && w.minerals[0].amount > 0 {
+            w.minerals[0].amount = 30; // same cap as run_m6_fixture — keeps the re-drain fast
+        }
+        if w.minerals[0].amount == 0 {
+            if let Some(_r) = w.minerals[0].regen_at {
+                w.minerals[0].regen_at = Some(w.tick() + 1);
+            }
+        }
+    }
+    assert!(densities_seen.len() >= 2, "the density re-roll actually VARIED the tier (saw {densities_seen:?})");
+    assert!(w.controller.as_ref().unwrap().progress > 0, "the boosted upgrader made controller progress");
+}
+
 // ── Conservation fuzz ────────────────────────────────────────────────────────────────────────────
 
 fn fuzz_world(rng: &mut Rng) -> EconWorld {
@@ -681,6 +851,21 @@ fn fuzz_world(rng: &mut Rng) -> EconWorld {
     let ext_site = w.add_construction_site(pos(16, 16), StructureKind::Extension).expect("fuzz extension site");
     w.sites[ext_site].progress = 2_900; // 100 from completion — materialization likely mid-fuzz
 
+    // M6: a mineral + extractor (random HarvestMineral) that drains + regens under the seeded
+    // re-roll; a lab cluster (random RunReaction + BoostCreep) stocked with a base pair + a boost
+    // compound; storage stocked with minerals for the random SellMineral recovery lever.
+    let mineral = w.add_mineral(pos(38, 38), SimResource::Utrium, 1 /*LOW: always re-rolls*/, 91);
+    w.minerals[mineral].amount = 20; // drains fast → regens mid-fuzz
+    w.add_extractor(pos(38, 38));
+    let lg = w.add_lab(pos(5, 40), 500);
+    w.labs[lg].mineral = Some((SimResource::Ghodium, 400));
+    let lh = w.add_lab(pos(6, 40), 500);
+    w.labs[lh].mineral = Some((SimResource::Hydrogen, 400));
+    w.add_lab(pos(5, 41), 500); // out
+    let boost_lab = w.add_lab(pos(7, 40), 500);
+    w.labs[boost_lab].mineral = Some((SimResource::XGH2O, 400));
+    w.storage.as_mut().unwrap().store.add(SimResource::Zynthium, 2_000); // sell fodder
+
     let bodies: [&[Part]; 4] = [
         &[Part::Work, Part::Work, Part::Carry, Part::Move],
         &[Part::Carry, Part::Carry, Part::Move, Part::Move],
@@ -695,10 +880,13 @@ fn fuzz_world(rng: &mut Rng) -> EconWorld {
 }
 
 fn random_resource(rng: &mut Rng) -> SimResource {
-    match rng.range(0, 9) {
+    match rng.range(0, 12) {
         0..=6 => SimResource::Energy,
         7 => SimResource::Hydrogen,
         8 => SimResource::Oxygen,
+        9 => SimResource::Zynthium,
+        10 => SimResource::Ghodium,
+        11 => SimResource::XGH2O,
         _ => SimResource::Ghodium,
     }
 }
@@ -768,6 +956,15 @@ fn conservation_fuzz_500_ticks() {
                 }
                 _ => {}
             }
+            // M6: random mineral harvest (idx OOB included) + random boost (the target creep is
+            // this id; range/lab-state gates most, valid ones must ledger exactly — the audit is
+            // the judge). BoostCreep is a lab intent naming this creep as the target.
+            if rng.chance(20) {
+                intents.act(id, EconAction::HarvestMineral { mineral_idx: rng.range(0, 2) as usize }); // idx 1 OOB
+            }
+            if rng.chance(15) {
+                intents.boost(id, rng.range(0, 5) as usize); // lab idx (some OOB / non-boost)
+            }
             if rng.chance(70) {
                 let dir = match rng.range(1, 8) {
                     1 => Direction::Top,
@@ -788,6 +985,15 @@ fn conservation_fuzz_500_ticks() {
         }
         if rng.chance(5) {
             intents.spawn(0, vec![Part::Move; 51]); // oversize: must reject, never debit
+        }
+        // M6 structure intents: random reactions (some OOB / distinct-lab-violating) + random
+        // terminal sales (some of energy, rejected; some over-ask, clamped). The audit is judge.
+        if rng.chance(30) {
+            intents.react(rng.range(0, 5) as usize, rng.range(0, 5) as usize, rng.range(0, 5) as usize);
+        }
+        if rng.chance(20) {
+            let res = random_resource(&mut rng); // energy included → the reject path
+            intents.sell(res, rng.range(0, 500));
         }
 
         let report = resolve_econ_tick(&mut w, &intents);

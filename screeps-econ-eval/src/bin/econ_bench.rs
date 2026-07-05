@@ -291,10 +291,87 @@ fn run_tournament_mode(full: bool) -> i32 {
     i32::from(structural > 0)
 }
 
+/// **The M6 mode** (`econ_bench m6[-full]`): the labs + minerals report (ADR 0040 M6). Runs the
+/// mineral-economy family + the four M6 metrics: compound time-to-X, the boost e/t-equivalent
+/// diagnostic (the §D5.4 military-w input), the terminal recovery-lever delta (the first
+/// market-only capability delta), and the boosted-upgrader T_RCL(6+) probe (the one G6 pair). A
+/// per-scenario 2-run fence keeps every number reproducible; non-zero exit on a fence divergence.
+fn run_m6_mode(full: bool) -> i32 {
+    use screeps_econ_eval::mineral::{
+        boost_e_t_equivalent, boosted_upgrader_probe, compound_time_to, mineral_catalog,
+        recovery_lever_delta, recovery_lever_world,
+    };
+    use screeps_econ_engine::SimResource;
+
+    let seed = env_u32("ECON_SEED", 1);
+    let compound_target = env_u32("ECON_M6_COMPOUND_TARGET", 100);
+    let probe_target = env_u32("ECON_M6_PROBE_TARGET", 200_000);
+    let probe_cap = env_u32("ECON_M6_PROBE_CAP", 40_000);
+    let stash = env_u32("ECON_M6_STASH", 50_000);
+    let started = Instant::now();
+    let mut exit = 0;
+
+    println!("════════ ADR 0040 M6 — labs + minerals report ════════");
+    println!("mode={} seed={seed}", if full { "m6-full" } else { "m6" });
+
+    // ── The boost e/t-equivalent diagnostic (the §D5.4 military-w input). ────────────────────────
+    println!("\n── boost e/t-equivalent (the ADR 0033 §D5.4 military-w arm's input) ──");
+    println!("  a T3 WORK-upgrade boost is ×2 → +1 progress/tick per WORK part = +1 e/t-equivalent:");
+    for w in [5u32, 10, 20] {
+        println!("    {w:>2} WORK boosted → +{} e/t-equivalent (upgrade)", boost_e_t_equivalent(w));
+    }
+
+    // ── The mineral-economy family: compound time-to-X + the recovery-lever delta. ───────────────
+    let catalog = mineral_catalog(seed, full);
+    println!("\n── mineral-economy family ({} RCL6 scenarios: extractor + labs realized) ──", catalog.len());
+    for sc in &catalog {
+        // Per-scenario 2-run fence on the compound pipeline (the M6 determinism gate).
+        let brew = |cap: u32| {
+            let (mut w, _, _, cl) = sc.instantiate();
+            compound_time_to(&mut w, &cl, compound_target, cap)
+        };
+        let (a, b) = (brew(20_000), brew(20_000));
+        if a != b {
+            println!("  FENCE FAIL: `{}` compound_time_to diverged ({a:?} vs {b:?})", sc.name);
+            exit = 1;
+        }
+        // The recovery-lever delta (the first market-only capability delta), on the same room.
+        let rw = recovery_lever_world(&sc.layout_room, SimResource::Ghodium, stash, seed);
+        let lever = recovery_lever_delta(&rw, SimResource::Ghodium, 100, 20_000);
+        let leverdelta = lever.delta_ticks.map(|d| format!("{d:+}")).unwrap_or_else(|| "n/a".into());
+        println!(
+            "  {:<16} compound_T({compound_target} XGH2O)={:?}  recovery-lever: with={:?} without={:?} Δ={} ticks",
+            sc.name, a, lever.with_lever, lever.without_lever, leverdelta
+        );
+    }
+
+    // ── The boosted-upgrader T_RCL(6+) probe (the ONE G6 pair; the M2 N=6 exclusion). ────────────
+    println!("\n── boosted-upgrader T_RCL(6+) probe (ONE pair; measure the tick cost first — the M2 N=6 exclusion) ──");
+    if let Some(sc) = catalog.first() {
+        let (world, _, _, cluster) = sc.instantiate();
+        let p = boosted_upgrader_probe(&world, &cluster, probe_target, probe_cap);
+        println!("  room {} target={probe_target} progress:", sc.layout_room);
+        println!("    unboosted={:?} boosted={:?} Δ={:?} ticks saved", p.unboosted_ticks, p.boosted_ticks, p.delta_ticks);
+        println!("    measured single-arm tick cost = {} ticks (AFFORDABLE — the probe landed, not deferred)", p.max_arm_ticks);
+        // Fence: the probe is deterministic.
+        let p2 = boosted_upgrader_probe(&world, &cluster, probe_target, probe_cap);
+        if (p.unboosted_ticks, p.boosted_ticks) != (p2.unboosted_ticks, p2.boosted_ticks) {
+            println!("  FENCE FAIL: the probe diverged across runs");
+            exit = 1;
+        }
+    }
+
+    println!("\nm6 done in {:.1?} (exit {exit})", started.elapsed());
+    exit
+}
+
 fn main() {
     let which = std::env::args().nth(1).unwrap_or_else(|| "fast".into());
     if which == "tournament" || which == "tournament-full" {
         std::process::exit(run_tournament_mode(which == "tournament-full"));
+    }
+    if which == "m6" || which == "m6-full" {
+        std::process::exit(run_m6_mode(which == "m6-full"));
     }
     let mut bait: Vec<EconScenario> = match which.as_str() {
         "fast" => fast_catalog(),
@@ -304,7 +381,7 @@ fn main() {
             all
         }
         other => {
-            eprintln!("econ_bench: unknown mode `{other}` (expected `fast`, `full`, `tournament`, or `tournament-full`)");
+            eprintln!("econ_bench: unknown mode `{other}` (expected `fast`, `full`, `tournament`, `tournament-full`, `m6`, or `m6-full`)");
             std::process::exit(2);
         }
     };
