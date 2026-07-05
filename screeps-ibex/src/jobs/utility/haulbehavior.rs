@@ -1,4 +1,3 @@
-use crate::findnearest::*;
 use crate::jobs::actions::*;
 use crate::jobs::context::*;
 use crate::jobs::jobsystem::*;
@@ -6,7 +5,13 @@ use crate::room::data::*;
 use crate::transfer::transfersystem::*;
 use itertools::*;
 use screeps::*;
-use std::collections::HashMap;
+
+// The pickup/delivery SELECTION policy (nearest-wins compositions, the tier-interleave
+// pickup+delivery pairing, the per-node ticket construction) lives in
+// `screeps_econ_decision::snapshot` since ADR 0040 M3 (K2 / ADR 0007 item 1) — one
+// implementation, consumed by these adapters (through `TransferQueue`'s per-tick snapshot)
+// AND the economy sim. The helpers below keep the FSM state construction + booking
+// registration; the anchor-range pin tests moved with the kernel.
 
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -23,46 +28,17 @@ pub fn get_new_pickup_state_fill_resource<F, R>(
 where
     F: Fn(TransferWithdrawTicket) -> R,
 {
-    // Safe on general stores (engine-mechanics folklore row 26).
-    let free_capacity = creep.store().get_free_capacity(None).max(0) as u32;
-
-    if free_capacity > 0 {
-        let mut desired_resources = HashMap::new();
-
-        desired_resources.insert(Some(desired_resource), free_capacity);
-
-        let pickup_room_names = pickup_rooms.iter().map(|r| r.name).collect_vec();
-
-        let pickups = transfer_queue.select_pickups(
-            data,
-            &pickup_room_names,
-            allowed_priorities,
-            transfer_types,
-            &desired_resources,
-            TransferCapacity::Infinite,
-        );
-
-        if let Some(pickup) = pickups
-            .into_iter()
-            .find_nearest_linear_by(creep.pos(), |ticket| ticket.target().pos().into())
-        {
-            transfer_queue.register_pickup(&pickup);
-
-            return Some(state_map(pickup));
-        }
-    }
-
-    None
-}
-
-/// Whether a pickup target is within `range` of an anchor position. The
-/// anchor must be the creep's work site (e.g. the controller for slow
-/// upgraders), NOT the creep's current position: anchoring on the creep can
-/// permanently deadlock it -- a slow creep idling just outside the radius of
-/// the only valid pickup can neither pick up (too far) nor work (no energy),
-/// so it never moves again.
-fn within_anchor_range(target_pos: screeps::Position, anchor: screeps::Position, range: u32) -> bool {
-    anchor.get_range_to(target_pos) <= range
+    get_new_nearby_pickup_state_fill_resource(
+        creep,
+        data,
+        pickup_rooms,
+        allowed_priorities,
+        transfer_types,
+        desired_resource,
+        transfer_queue,
+        None,
+        state_map,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -85,36 +61,18 @@ where
     let free_capacity = creep.store().get_free_capacity(None).max(0) as u32;
 
     if free_capacity > 0 {
-        let mut desired_resources = HashMap::new();
-
-        desired_resources.insert(Some(desired_resource), free_capacity);
-
         let pickup_room_names = pickup_rooms.iter().map(|r| r.name).collect_vec();
 
-        let pickups = transfer_queue.select_pickups(
+        if let Some(pickup) = transfer_queue.select_nearest_pickup(
             data,
             &pickup_room_names,
             allowed_priorities,
             transfer_types,
-            &desired_resources,
-            TransferCapacity::Infinite,
-        );
-
-        let creep_pos = creep.pos();
-
-        let filtered: Vec<_> = if let Some((anchor, range)) = range_anchor {
-            pickups
-                .into_iter()
-                .filter(|ticket| within_anchor_range(ticket.target().pos().into(), anchor, range))
-                .collect()
-        } else {
-            pickups
-        };
-
-        if let Some(pickup) = filtered
-            .into_iter()
-            .find_nearest_linear_by(creep_pos, |ticket| ticket.target().pos().into())
-        {
+            desired_resource,
+            free_capacity,
+            creep.pos(),
+            range_anchor,
+        ) {
             transfer_queue.register_pickup(&pickup);
 
             return Some(state_map(pickup));
@@ -140,31 +98,28 @@ where
     TF: Fn(&TransferTarget) -> bool,
     F: Fn(Vec<TransferDepositTicket>) -> R,
 {
-    let available_resources: HashMap<ResourceType, u32> = creep
+    // Carried resources in store_types() order (the adapter-deterministic candidate order).
+    let available_resources: Vec<(ResourceType, u32)> = creep
         .store()
         .store_types()
         .into_iter()
         .map(|r| (r, creep.store().get_used_capacity(Some(r))))
         .collect();
-    let available_capacity = TransferCapacity::Finite(available_resources.values().sum());
+    let available_capacity = TransferCapacity::Finite(available_resources.iter().map(|(_, a)| a).sum());
 
     if !available_capacity.empty() {
         let delivery_room_names = delivery_rooms.iter().map(|r| r.name).collect_vec();
 
-        let deliveries = transfer_queue.select_deliveries(
+        if let Some(delivery) = transfer_queue.select_nearest_delivery(
             data,
             &delivery_room_names,
             allowed_priorities,
             transfer_types,
             &available_resources,
             available_capacity,
+            creep.pos(),
             target_filter,
-        );
-
-        if let Some(delivery) = deliveries
-            .into_iter()
-            .find_nearest_linear_by(creep.pos(), |ticket| ticket.target().pos().into())
-        {
+        ) {
             transfer_queue.register_delivery(&delivery);
 
             let deliveries = vec![delivery];
@@ -208,7 +163,7 @@ where
             &delivery_room_names,
             allowed_priorities,
             transfer_type,
-            creep.pos().into(),
+            creep.pos(),
             available_capacity,
             target_filter,
         ) {
@@ -276,7 +231,7 @@ pub fn get_additional_deliveries<TF>(
                 let Some(last_delivery) = deliveries.last() else {
                     break;
                 };
-                let last_delivery_pos = last_delivery.target().pos();
+                let last_delivery_pos = last_delivery.target().local_pos();
 
                 //
                 // NOTE: Pickup priority is ignored here as it's already known that the delivery priority is allowed. Additionally,
@@ -547,15 +502,23 @@ where
                 return None;
             }
 
-            while let Some((resource, amount)) = ticket.get_next_deposit() {
+            // Confirm-then-consume (ADR 0007 Q5 item 3 via ADR 0040 M3): the ticket entry is
+            // consumed only AFTER the transfer intent is accepted, so a rejected transfer no
+            // longer transiently mis-accounts the ticket. A REJECTED resource consumes only its
+            // own entries (deliberate abandonment, not the mis-account window item 3 closed) and
+            // the loop retries the ticket's remaining resources same-tick — the pre-M3
+            // entry-by-entry drain semantics for the multi-resource case (a whole-ticket drop
+            // stalled a mixed-cargo hauler for the full wait backoff — M3 review finding); the
+            // drained ticket is removed by the get_next_deposit guard above.
+            if let Some((resource, amount)) = ticket.get_next_deposit() {
                 if !tick_context.action_flags.intersects(SimultaneousActionFlags::TRANSFER) {
-                    ticket.consume_deposit(resource, amount);
-
                     if ticket.target().creep_transfer_resource_amount(creep, resource, amount).is_ok() {
+                        ticket.consume_deposit(resource, amount);
                         tick_context.action_flags.insert(SimultaneousActionFlags::TRANSFER);
 
                         transfered = true;
-                        break;
+                    } else {
+                        ticket.consume_deposit(resource, amount);
                     }
                 } else {
                     return None;
@@ -634,38 +597,5 @@ where
     Some(next_state())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use screeps::RoomCoordinate;
-
-    // Pin: the nearby-pickup range filter is anchored on the WORK SITE
-    // passed by the caller, never on the creep. Geometry from the live
-    // deadlock (W7N4): with the controller (39,12) as anchor and range 5,
-    // the upgrade container (36,9) must stay eligible no matter where the
-    // creep idles, while the room's storage (31,32) stays excluded.
-
-    fn pos(x: u8, y: u8) -> screeps::Position {
-        screeps::Position::new(
-            RoomCoordinate::new(x).expect("valid coordinate"),
-            RoomCoordinate::new(y).expect("valid coordinate"),
-            "W7N4".parse().expect("valid room name"),
-        )
-    }
-
-    #[test]
-    fn anchor_range_keeps_upgrade_container_eligible() {
-        assert!(within_anchor_range(pos(36, 9), pos(39, 12), 5));
-    }
-
-    #[test]
-    fn anchor_range_excludes_distant_storage() {
-        assert!(!within_anchor_range(pos(31, 32), pos(39, 12), 5));
-    }
-
-    #[test]
-    fn anchor_range_boundary_is_inclusive() {
-        assert!(within_anchor_range(pos(34, 12), pos(39, 12), 5));
-        assert!(!within_anchor_range(pos(33, 12), pos(39, 12), 5));
-    }
-}
+// The anchor-range pin tests MOVED with the kernel to
+// `screeps_econ_decision::snapshot` (nearest_pickup_honors_anchor — ADR 0040 M3).

@@ -19,24 +19,16 @@ const CREEP_SPAWN_TIME: u32 = 3;
 /// Minimum stored energy (per room) to allow renewal.
 const RENEW_MIN_ROOM_ENERGY: u32 = 10_000;
 
-pub const SPAWN_PRIORITY_CRITICAL: f32 = 100.0;
-/// FIX 2 (rally-stall): a band STRICTLY above the HIGH economy bulk (haulers / upgraders / claim /
-/// secondary-mining all at HIGH = 75) but STRICTLY below the CRITICAL miners (100), reserved for the
-/// slots of a FORMING active offense/defense combat squad. The spawnsystem head-of-line break
-/// (`process_room_spawns`: a request whose `body_cost > available_energy` but `<= energy_capacity`
-/// reserves the room's energy and `break`s the rest of the queue this tick) means a request TIED with
-/// the economy bulk but sorted last in-tier (squad slots, because `RunMissionSystem` enqueues economy
-/// before `SquadManagerSystem` enqueues squads) can never bank energy ahead of the colony's constant
-/// economy demand — rosters dead-stall (observed 3/5, 1/2 for thousands of ticks). Placing forming
-/// squad slots in this band lets them win the within-tier ordering AND the energy-banking race against
-/// economy WITHOUT preempting energy income (miners stay CRITICAL = first). BOUNDED: only the slots of
-/// the at-most-`MAX_FORMING_SQUADS` (=2) forming squads spawn here, and `economy::can_afford_military`
-/// already declined unaffordable squads — so it cannot crater income.
-pub const SPAWN_PRIORITY_COMBAT_FORMING: f32 = 85.0;
-pub const SPAWN_PRIORITY_HIGH: f32 = 75.0;
-pub const SPAWN_PRIORITY_MEDIUM: f32 = 50.0;
-pub const SPAWN_PRIORITY_LOW: f32 = 25.0;
-pub const SPAWN_PRIORITY_NONE: f32 = 0.0;
+// The spawn priority bands live in `screeps_econ_decision::spawn_policy` since ADR 0040 M3
+// (K4) — one implementation, consumed by the missions AND the economy sim. Re-exported here so
+// every bot call site keeps its `spawnsystem::SPAWN_PRIORITY_*` path. (COMBAT_FORMING's
+// rally-stall rationale — the band strictly above the HIGH economy bulk, strictly below the
+// CRITICAL miners, bounded to forming-squad slots — moved with the constants.)
+#[allow(unused_imports)] // all six bands are re-exported API
+pub use screeps_econ_decision::spawn_policy::{
+    SPAWN_PRIORITY_COMBAT_FORMING, SPAWN_PRIORITY_CRITICAL, SPAWN_PRIORITY_HIGH, SPAWN_PRIORITY_LOW, SPAWN_PRIORITY_MEDIUM,
+    SPAWN_PRIORITY_NONE,
+};
 
 /// Exclusive upper bound on a room tile coordinate (rooms are 50x50, 0..=49).
 const ROOM_COORD_MAX: i32 = 50;

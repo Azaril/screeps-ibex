@@ -1,5 +1,6 @@
 use super::data::JobData;
 use super::utility::dismantlebehavior::BreachPlanCache;
+use crate::cpugovernor::GovernorSnapshot;
 use crate::creep::CreepOwner;
 use crate::energy_stress::EnergyLeakStats;
 use crate::entitymappingsystem::*;
@@ -37,6 +38,10 @@ pub struct JobSystemData<'a> {
     pathfinder: Write<'a, PathfinderService>,
     intent_recorder: Write<'a, IntentRecorder>,
     breach_cache: Write<'a, BreachPlanCache>,
+    /// The tick's CPU-pressure view (ADR 0004) — read by the hauler re-match cadence
+    /// (ADR 0007 item 2 via ADR 0040 M3; the cadence POLICY lives in
+    /// `screeps_econ_decision::cadence`, this is the adapter-side governor read).
+    governor: Read<'a, GovernorSnapshot>,
 }
 
 pub struct JobExecutionSystemData<'a> {
@@ -47,6 +52,7 @@ pub struct JobExecutionSystemData<'a> {
     pub repair_queue: &'a RepairQueue,
     pub economy: &'a EconomySnapshot,
     pub features: &'a Features,
+    pub governor: GovernorSnapshot,
 }
 
 pub struct JobExecutionRuntimeData<'a> {
@@ -98,6 +104,7 @@ impl<'a> System<'a> for PreRunJobSystem {
             repair_queue: &data.repair_queue,
             economy: &data.economy,
             features: &data.features,
+            governor: *data.governor,
         };
 
         for (creep_entity, creep, job_data) in (&data.entities, &data.creep_owners, &mut data.jobs).join() {
@@ -129,6 +136,19 @@ impl<'a> System<'a> for RunJobSystem {
     type SystemData = JobSystemData<'a>;
 
     fn run(&mut self, mut data: Self::SystemData) {
+        // The per-tick TransferSnapshot (ADR 0040 M3 / ADR 0007 Q5 item 1): built ONCE at the
+        // top of the hauling pass — every generator flushes here (generation provably paid
+        // once; missions already ran and registered), and every hauler selection below runs
+        // against the frozen view, mutating only the booking layer. Cleared with the queue by
+        // `TransferQueueUpdateSystem`.
+        {
+            let generator_data = TransferQueueGeneratorData {
+                cause: "Econ Snapshot",
+                room_data: &data.room_data,
+            };
+            data.transfer_queue.build_econ_snapshot(&generator_data);
+        }
+
         let system_data = JobExecutionSystemData {
             updater: &data.updater,
             entities: &data.entities,
@@ -137,6 +157,7 @@ impl<'a> System<'a> for RunJobSystem {
             repair_queue: &data.repair_queue,
             economy: &data.economy,
             features: &data.features,
+            governor: *data.governor,
         };
 
         for (creep_entity, creep, job_data) in (&data.entities, &data.creep_owners, &mut data.jobs).join() {

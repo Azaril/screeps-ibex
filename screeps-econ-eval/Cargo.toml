@@ -28,5 +28,9 @@ screeps-combat-eval = { git = "https://github.com/Azaril/screeps-combat-eval" }
 # `spawning::create_body` — the live bot's body-expansion kernel, REUSED (not transcribed) so K4's
 # capacity-sized bodies are bit-identical to the bot's. Git dep redirected by the root [patch].
 screeps-combat-decision = { git = "https://github.com/Azaril/screeps-combat-decision" }
+# The economy decision seam (ADR 0040 §D5, M3): the REAL K1-K4 kernels the live bot ships —
+# the M1 transcription mirrors in baseline.rs were deleted and import these instead (EP-2.6).
+# PATH dep: in-repo crate, no standalone repo yet (the econ-engine precedent).
+screeps-econ-decision = { path = "../screeps-econ-decision" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

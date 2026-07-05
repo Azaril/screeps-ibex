@@ -34,15 +34,9 @@ where
     None
 }
 
-/// Energy a successful repair intent consumes this tick: one energy per WORK
-/// part, clamped by carried energy and by the energy needed to finish the
-/// target (`ceil(missing_hits / REPAIR_POWER)`).
-fn repair_energy_consumed(work_body_parts: u32, available_energy: u32, hits: u32, hits_max: u32) -> u32 {
-    let max_energy_consumed = work_body_parts.min(available_energy);
-    let max_repair_energy = ((hits_max - hits) as f32 / REPAIR_POWER as f32).ceil() as u32;
-
-    max_energy_consumed.min(max_repair_energy)
-}
+// `repair_energy_consumed` lives in `screeps_econ_decision::repair` since ADR 0040 M3 (K3) —
+// one implementation shared with the economy sim; its exact-split pins moved with it.
+use screeps_econ_decision::repair::repair_energy_consumed;
 
 /// WORK parts still alive this tick — the engine spends repair energy only on
 /// parts with `hits > 0` (processor repair.js repairPower filter), so the
@@ -260,34 +254,5 @@ pub fn tick_opportunistic_repair(
     None
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Pin repair_energy_consumed = min(work_parts, carried, ceil(missing / REPAIR_POWER)) —
-    // the exact-arithmetic contract the repair_leak_e telemetry rides on (ADR 0040 §D6).
-
-    #[test]
-    fn repair_energy_is_work_limited() {
-        assert_eq!(repair_energy_consumed(3, 10, 0, 1000), 3);
-    }
-
-    #[test]
-    fn repair_energy_is_carry_limited() {
-        assert_eq!(repair_energy_consumed(10, 2, 0, 1000), 2);
-    }
-
-    #[test]
-    fn repair_energy_is_missing_hits_limited_with_ceil() {
-        // REPAIR_POWER = 100: 101 missing hits cost 2 energy, 100 cost 1.
-        assert_eq!(repair_energy_consumed(10, 10, 899, 1000), 2);
-        assert_eq!(repair_energy_consumed(10, 10, 900, 1000), 1);
-        assert_eq!(repair_energy_consumed(10, 10, 999, 1000), 1);
-    }
-
-    #[test]
-    fn full_health_target_consumes_nothing() {
-        assert_eq!(repair_energy_consumed(10, 10, 1000, 1000), 0);
-        assert_eq!(repair_energy_consumed(10, 10, 0, 0), 0);
-    }
-}
+// The repair_energy_consumed pins MOVED with the kernel to
+// `screeps_econ_decision::repair` (ADR 0040 M3).

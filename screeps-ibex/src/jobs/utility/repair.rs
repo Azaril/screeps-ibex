@@ -3,53 +3,21 @@ use crate::room::data::*;
 use crate::structureidentifier::*;
 use screeps::*;
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Ord, PartialOrd)]
-pub enum RepairPriority {
-    VeryLow,
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-pub static ORDERED_REPAIR_PRIORITIES: &[RepairPriority] = &[
-    RepairPriority::Critical,
-    RepairPriority::High,
-    RepairPriority::Medium,
-    RepairPriority::Low,
-    RepairPriority::VeryLow,
-];
+// `RepairPriority` + the health-fraction priority maps live in
+// `screeps_econ_decision::repair` since ADR 0040 M3 (K3) — one implementation, consumed by
+// this adapter AND the economy sim. Re-exported so every bot call site keeps its
+// `jobs::utility::repair::RepairPriority` path. (The live f32 fraction maps were replaced by
+// the kernel's exact-integer forms — bit-identical on every reachable hits_max; see the
+// kernel's module docs.)
+#[allow(unused_imports)] // ORDERED_REPAIR_PRIORITIES is re-exported API (pre-move pub static)
+pub use screeps_econ_decision::repair::{RepairPriority, ORDERED_REPAIR_PRIORITIES};
 
 fn map_normal_priority(hits: u32, hits_max: u32) -> Option<RepairPriority> {
-    let health_fraction = (hits as f32) / (hits_max as f32);
-
-    let priority = if health_fraction < 0.25 {
-        RepairPriority::High
-    } else if health_fraction < 0.5 {
-        RepairPriority::Medium
-    } else if health_fraction < 0.75 {
-        RepairPriority::Low
-    } else {
-        RepairPriority::VeryLow
-    };
-
-    Some(priority)
+    Some(screeps_econ_decision::repair::map_normal_priority(hits, hits_max))
 }
 
 fn map_high_value_priority(hits: u32, hits_max: u32) -> Option<RepairPriority> {
-    let health_fraction = (hits as f32) / (hits_max as f32);
-
-    let priority = if health_fraction < 0.5 {
-        RepairPriority::Critical
-    } else if health_fraction < 0.75 {
-        RepairPriority::High
-    } else if health_fraction < 0.95 {
-        RepairPriority::Low
-    } else {
-        RepairPriority::VeryLow
-    };
-
-    Some(priority)
+    Some(screeps_econ_decision::repair::map_high_value_priority(hits, hits_max))
 }
 
 fn map_defense_priority(

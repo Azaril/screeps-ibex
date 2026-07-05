@@ -64,6 +64,19 @@ impl Tier {
     }
 }
 
+/// The economy decision seam's posture view of the tier (ADR 0040 M3: the re-match cadence
+/// kernel takes `CpuPosture`; this adapter mapping is 1:1 by name — the governor READ stays
+/// bot-side per ADR 0007 item 2).
+impl From<Tier> for screeps_econ_decision::cadence::CpuPosture {
+    fn from(tier: Tier) -> Self {
+        match tier {
+            Tier::Normal => screeps_econ_decision::cadence::CpuPosture::Normal,
+            Tier::Conserve => screeps_econ_decision::cadence::CpuPosture::Conserve,
+            Tier::Critical => screeps_econ_decision::cadence::CpuPosture::Critical,
+        }
+    }
+}
+
 /// Pure decision kernel: (bucket, trend in bucket-units/tick) → tier.
 pub fn compute_tier(bucket: i32, trend: f64) -> Tier {
     if bucket < CRITICAL_BUCKET || (bucket < CONSERVE_BUCKET && trend < CRITICAL_DRAIN) {

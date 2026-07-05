@@ -82,19 +82,9 @@ pub fn mineral_miner_body(is_local: bool, energy_capacity: u32) -> SpawnBodyDefi
     }
 }
 
-/// Build a `SpawnBodyDefinition` for a harvester.
-///
-/// - `energy`: the energy to use for the body (may be `energy_available` or `energy_capacity_available`)
-pub fn harvester_body(energy: u32) -> SpawnBodyDefinition<'static> {
-    SpawnBodyDefinition {
-        maximum_energy: energy,
-        minimum_repeat: Some(1),
-        maximum_repeat: Some(5),
-        pre_body: &[],
-        repeat_body: &[Part::Move, Part::Move, Part::Carry, Part::Work],
-        post_body: &[],
-    }
-}
+// The harvester body definition lives in `screeps_econ_decision::spawn_policy` since
+// ADR 0040 M3 (K4) — one implementation, consumed here and by the economy sim.
+pub use screeps_econ_decision::spawn_policy::harvester_body;
 
 /// Estimate how many ticks it takes for a creep with the given body to
 /// traverse `distance` tiles, assuming roads are present. Returns the

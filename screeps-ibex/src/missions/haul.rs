@@ -242,53 +242,24 @@ impl Mission for HaulMission {
             .max()
             .unwrap_or(0);
 
-        let body_definition = if is_multi_room {
-            crate::creep::SpawnBodyDefinition {
-                maximum_energy: energy_to_use,
-                minimum_repeat: Some(1),
-                maximum_repeat: Some(20),
-                pre_body: &[Part::Work, Part::Move],
-                repeat_body: &[Part::Carry, Part::Move],
-                post_body: &[],
-            }
-        } else {
-            crate::creep::SpawnBodyDefinition {
-                maximum_energy: energy_to_use,
-                minimum_repeat: Some(1),
-                maximum_repeat: Some(20),
-                pre_body: &[],
-                repeat_body: &[Part::Carry, Part::Move],
-                post_body: &[],
-            }
-        };
+        // K4 policy (ADR 0040 M3): the hauler body shape, demand sizing and priority bands
+        // live in `screeps_econ_decision::spawn_policy` (consumed here and by the economy sim).
+        let body_definition = screeps_econ_decision::spawn_policy::hauler_body(is_multi_room, energy_to_use);
 
         if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
             let carry_parts = body.iter().filter(|p| **p == Part::Carry).count();
 
-            let range_multiplier = 1.0 / ((max_distance as f32 * 2.0) + 1.0);
-            let base_amount = carry_parts as f32 * CARRY_CAPACITY as f32 * range_multiplier;
-
-            let max_haulers = 3 + (max_distance * 3);
-
-            let desired_haulers_for_unfufilled = (stats.unfufilled_hauling as f32 / base_amount) as u32;
-            let desired_haulers = desired_haulers_for_unfufilled.min(max_haulers) as usize;
+            let (desired_haulers_for_unfufilled, desired_haulers) =
+                screeps_econ_decision::spawn_policy::hauler_desired(stats.unfufilled_hauling, carry_parts as u32, max_distance);
 
             let should_spawn = self.haulers.len() < desired_haulers && self.allow_spawning;
 
             if should_spawn {
-                let priority = if (self.haulers.len() as f32) < (desired_haulers_for_unfufilled as f32 * 0.75).ceil() {
-                    if max_distance == 0 {
-                        SPAWN_PRIORITY_HIGH
-                    } else {
-                        SPAWN_PRIORITY_MEDIUM
-                    }
-                } else {
-                    if max_distance == 0 {
-                        SPAWN_PRIORITY_MEDIUM
-                    } else {
-                        SPAWN_PRIORITY_LOW
-                    }
-                };
+                let priority = screeps_econ_decision::spawn_policy::hauler_priority(
+                    self.haulers.len(),
+                    desired_haulers_for_unfufilled,
+                    max_distance,
+                );
 
                 let pickup_rooms = &[self.room_data];
 

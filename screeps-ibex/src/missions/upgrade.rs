@@ -6,7 +6,6 @@ use crate::jobs::upgrade::*;
 use crate::room::data::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
-use lerp::*;
 use screeps::*;
 use serde::{Deserialize, Serialize};
 #[allow(deprecated)]
@@ -69,65 +68,9 @@ impl UpgradeMission {
         })
     }
 
-    /// Compute the minimum number of WORK parts needed for an upgrader to
-    /// restore the controller's downgrade timer from `current_ttd` back to
-    /// the safe threshold (`max_ticks / 2`) within one creep lifetime.
-    ///
-    /// Assumes the creep has a container of energy adjacent to the controller,
-    /// so the refill withdraw rides along with the final upgrade tick as a
-    /// parallel intent (pipeline D + E) and costs no dedicated tick — see
-    /// `tick_upgrade`'s `refill_when_draining` path. The body format at RCL > 3
-    /// is `[WORK, CARRY, MOVE, MOVE] + (W-1)*[WORK]`, giving 1 CARRY (50 cap),
-    /// 2 MOVE, and W total WORK parts.
-    ///
-    /// Model per refill cycle (W work parts, 1 carry = 50 energy):
-    ///   - upgrade_ticks = floor(50 / W)
-    ///   - cycle_ticks   = upgrade_ticks (the refill withdraw is parallel, so it
-    ///     adds no idle tick — the creep upgrades every tick of its life)
-    ///   - Each upgrade tick restores CONTROLLER_DOWNGRADE_RESTORE (100) ticks
-    ///     but the timer also decays by 1, so net = 99 per upgrade tick.
-    ///   - net_per_cycle = upgrade_ticks * 99
-    ///
-    /// Available lifetime ticks = CREEP_LIFE_TIME - spawn_ticks, where
-    /// spawn_ticks = body_part_count * CREEP_SPAWN_TIME.
-    fn work_parts_for_upkeep(current_ttd: u32, max_ticks: u32) -> usize {
-        let safe_threshold = max_ticks / 2;
-        if current_ttd >= safe_threshold {
-            return 1;
-        }
-        let deficit = (safe_threshold - current_ttd) as f64;
-        let net_restore_per_upgrade_tick = (CONTROLLER_DOWNGRADE_RESTORE as f64) - 1.0;
-
-        // Try increasing WORK parts until the creep can cover the deficit.
-        // The body is [WORK, CARRY, MOVE, MOVE] + (w-1)*[WORK], so total
-        // parts = w + 3. Max body size is 50 parts, so w <= 47.
-        for w in 1..=CONTROLLER_MAX_UPGRADE_PER_TICK {
-            let body_parts = w + 3;
-            let spawn_ticks = body_parts * CREEP_SPAWN_TIME;
-            let lifetime = CREEP_LIFE_TIME.saturating_sub(spawn_ticks) as f64;
-
-            let carry_cap = CARRY_CAPACITY as f64; // 50
-            let upgrade_ticks_per_cycle = (carry_cap / w as f64).floor();
-            if upgrade_ticks_per_cycle < 1.0 {
-                continue;
-            }
-            let cycle_ticks = upgrade_ticks_per_cycle; // refill rides along with the final upgrade tick (parallel intent)
-            let net_per_cycle = upgrade_ticks_per_cycle * net_restore_per_upgrade_tick;
-            if net_per_cycle <= 0.0 {
-                continue;
-            }
-
-            let cycles = (lifetime / cycle_ticks).floor();
-            let total_restore = cycles * net_per_cycle;
-
-            if total_restore >= deficit {
-                return w as usize;
-            }
-        }
-
-        // Fallback: cap at the max-level upgrade limit.
-        CONTROLLER_MAX_UPGRADE_PER_TICK as usize
-    }
+    // `work_parts_for_upkeep` (the clock-saving upgrader sizing model) lives in
+    // `screeps_econ_decision::spawn_policy` since ADR 0040 M3 (K4) — one implementation,
+    // consumed here and by the economy sim; its model documentation moved with it.
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -180,23 +123,21 @@ impl Mission for UpgradeMission {
 
         let controller_level = controllers.iter().map(|c| c.level()).max().ok_or("Expected controller level")?;
 
+        // K4 policy (ADR 0040 M3): the excess-energy threshold, roster cap, WORK sizing, body
+        // shape and priority bands live in `screeps_econ_decision::spawn_policy` (consumed
+        // here and by the economy sim); this mission keeps the ECS/roster bookkeeping.
         let has_excess_energy = {
-            if !structures.storages().is_empty() {
-                let energy: u32 = structures
-                    .storages()
-                    .iter()
-                    .map(|storage| storage.store().get(ResourceType::Energy).unwrap_or(0))
-                    .sum();
-
-                energy >= get_desired_storage_amount(ResourceType::Energy) / 2
-            } else if !structures.containers().is_empty() {
-                structures
-                    .containers()
-                    .iter()
-                    .any(|container| container.store().get(ResourceType::Energy).unwrap_or(0) as f32 / CONTAINER_CAPACITY as f32 > 0.75)
-            } else {
-                true
-            }
+            let storage_energy: u32 = structures
+                .storages()
+                .iter()
+                .map(|storage| storage.store().get(ResourceType::Energy).unwrap_or(0))
+                .sum();
+            let container_energies: Vec<u32> = structures
+                .containers()
+                .iter()
+                .map(|container| container.store().get(ResourceType::Energy).unwrap_or(0))
+                .collect();
+            screeps_econ_decision::spawn_policy::has_excess_energy(!structures.storages().is_empty(), storage_energy, &container_energies)
         };
 
         let are_hostile_creeps = !creeps.hostile().is_empty();
@@ -212,7 +153,7 @@ impl Mission for UpgradeMission {
                 let max_ticks = controller_downgrade(controller.level())?;
                 let ttd = controller.ticks_to_downgrade()?;
                 if ttd < max_ticks / 2 {
-                    Some(Self::work_parts_for_upkeep(ttd, max_ticks))
+                    Some(screeps_econ_decision::spawn_policy::work_parts_for_upkeep(ttd, max_ticks))
                 } else {
                     None
                 }
@@ -224,21 +165,13 @@ impl Mission for UpgradeMission {
         let at_max_level = controller_levels(controller_level as u32).is_none();
 
         //TODO: Need better calculation for maximum number of upgraders.
-        let max_upgraders = if system_data.governor.can_execute_cpu(CpuBar::MediumPriority) {
-            if are_hostile_creeps || at_max_level {
-                1
-            } else if has_excess_energy {
-                if controller_level <= 3 {
-                    5
-                } else {
-                    3
-                }
-            } else {
-                1
-            }
-        } else {
-            1
-        };
+        let max_upgraders = screeps_econ_decision::spawn_policy::max_upgraders(
+            system_data.governor.can_execute_cpu(CpuBar::MediumPriority),
+            are_hostile_creeps,
+            at_max_level,
+            has_excess_energy,
+            controller_level,
+        );
 
         let alive_upgraders = self
             .upgraders
@@ -256,38 +189,14 @@ impl Mission for UpgradeMission {
             .count();
 
         if alive_upgraders < max_upgraders {
-            let work_parts_per_upgrader = if let Some(upkeep_parts) = downgrade_upkeep_parts {
-                if self.upgraders.is_empty() {
-                    // Downgrade risk with no upgrader at all: size the body
-                    // to restore the timer in one lifetime.
-                    Some(upkeep_parts)
-                } else {
-                    // Have an upgrader (possibly dying) — use the normal
-                    // max-level cap for the replacement.
-                    let work_parts_per_tick = (CONTROLLER_MAX_UPGRADE_PER_TICK as f32) / (UPGRADE_CONTROLLER_POWER as f32);
-                    let work_parts = (work_parts_per_tick / (max_upgraders as f32)).ceil();
-                    Some(work_parts as usize)
-                }
-            } else if at_max_level {
-                // At max controller level the game caps upgrade throughput to
-                // CONTROLLER_MAX_UPGRADE_PER_TICK energy per tick.
-                let work_parts_per_tick = (CONTROLLER_MAX_UPGRADE_PER_TICK as f32) / (UPGRADE_CONTROLLER_POWER as f32);
-
-                let work_parts = (work_parts_per_tick / (max_upgraders as f32)).ceil();
-
-                Some(work_parts as usize)
-            } else if has_excess_energy {
-                Some(20)
-            } else {
-                let sources = static_visibility_data.sources();
-
-                let energy_per_second = ((SOURCE_ENERGY_CAPACITY * sources.len() as u32) as f32) / (ENERGY_REGEN_TIME as f32);
-                let upgrade_per_second = energy_per_second / (UPGRADE_CONTROLLER_POWER as f32);
-
-                let parts_per_upgrader = ((upgrade_per_second / 2.0) / max_upgraders as f32).floor().max(1.0) as usize;
-
-                Some(parts_per_upgrader)
-            };
+            let work_parts_per_upgrader = screeps_econ_decision::spawn_policy::upgrader_work_parts(
+                downgrade_upkeep_parts,
+                self.upgraders.is_empty(),
+                at_max_level,
+                has_excess_energy,
+                static_visibility_data.sources().len(),
+                max_upgraders,
+            );
 
             let maximum_energy = if self.upgraders.is_empty() && downgrade_risk {
                 room.energy_available().max(SPAWN_ENERGY_CAPACITY)
@@ -295,44 +204,18 @@ impl Mission for UpgradeMission {
                 room.energy_capacity_available()
             };
 
-            let body_definition = if controller_level <= 3 {
-                crate::creep::SpawnBodyDefinition {
-                    maximum_energy,
-                    minimum_repeat: Some(0),
-                    maximum_repeat: work_parts_per_upgrader,
-                    pre_body: &[Part::Work, Part::Carry, Part::Move, Part::Move],
-                    repeat_body: &[Part::Work, Part::Move],
-                    post_body: &[],
-                }
-            } else {
-                crate::creep::SpawnBodyDefinition {
-                    maximum_energy,
-                    minimum_repeat: Some(1),
-                    maximum_repeat: work_parts_per_upgrader.map(|p| p - 1),
-                    pre_body: &[Part::Work, Part::Carry, Part::Move, Part::Move],
-                    repeat_body: &[Part::Work],
-                    post_body: &[],
-                }
-            };
+            let body_definition =
+                screeps_econ_decision::spawn_policy::upgrader_body(controller_level, maximum_energy, work_parts_per_upgrader);
 
             if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                let priority = if downgrade_risk && self.upgraders.is_empty() {
-                    // Downgrade risk with no upgrader at all — override
-                    // everything else and get a creep out immediately.
-                    SPAWN_PRIORITY_CRITICAL
-                } else if self.upgraders.is_empty() {
-                    SPAWN_PRIORITY_HIGH
-                } else if has_excess_energy && !storages.is_empty() && max_upgraders > 1 {
-                    let interp = (alive_upgraders as f32) / ((max_upgraders - 1) as f32);
-
-                    SPAWN_PRIORITY_HIGH.lerp_bounded(SPAWN_PRIORITY_MEDIUM, interp)
-                } else if max_upgraders > 1 {
-                    let interp = (alive_upgraders as f32) / ((max_upgraders - 1) as f32);
-
-                    SPAWN_PRIORITY_MEDIUM.lerp_bounded(SPAWN_PRIORITY_LOW, interp)
-                } else {
-                    SPAWN_PRIORITY_MEDIUM
-                };
+                let priority = screeps_econ_decision::spawn_policy::upgrader_priority(
+                    downgrade_risk,
+                    self.upgraders.is_empty(),
+                    has_excess_energy,
+                    !storages.is_empty(),
+                    max_upgraders,
+                    alive_upgraders,
+                );
 
                 let spawn_request = SpawnRequest::new(
                     "Upgrader".to_string(),

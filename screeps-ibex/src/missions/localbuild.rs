@@ -1,7 +1,5 @@
-use super::constants::*;
 use super::data::*;
 use super::missionsystem::*;
-use crate::creep::*;
 use crate::energy_stress::*;
 use crate::jobs::build::*;
 use crate::jobs::data::*;
@@ -46,6 +44,9 @@ impl LocalBuildMission {
         }
     }
 
+    // K4 policy (ADR 0040 M3): the builder count table, priority bands, repairer arm and body
+    // cap live in `screeps_econ_decision::spawn_policy` (consumed here and by the economy
+    // sim); this mission keeps the ECS/roster bookkeeping and the room reads.
     fn get_builder_priority(&self, room_data: &RoomData, has_sufficient_energy: bool) -> Option<(u32, f32)> {
         let structures = room_data.get_structures()?;
         let controller_level = structures.controllers().iter().map(|c| c.level()).max().unwrap_or(0);
@@ -57,48 +58,19 @@ impl LocalBuildMission {
                 .map(|construction_site| construction_site.progress_total() - construction_site.progress())
                 .sum();
 
-            let desired_builders_for_progress: u32 = if controller_level <= 3 {
-                match required_progress {
-                    0 => 0,
-                    1..=1000 => 1,
-                    1001..=2000 => 2,
-                    2001..=3000 => 3,
-                    3001..=4000 => 4,
-                    _ => 5,
-                }
-            } else if controller_level <= 6 {
-                match required_progress {
-                    0 => 0,
-                    1..=2000 => 1,
-                    2001..=4000 => 2,
-                    4001..=6000 => 3,
-                    _ => 4,
-                }
-            } else {
-                match required_progress {
-                    0 => 0,
-                    1..=3000 => 1,
-                    3001..=6000 => 2,
-                    6001..=9000 => 3,
-                    _ => 4,
-                }
-            };
+            let desired_builders_for_progress: u32 =
+                screeps_econ_decision::spawn_policy::builder_desired_for_progress(controller_level, required_progress);
 
             let desired_builders = if has_sufficient_energy { desired_builders_for_progress } else { 1 };
 
             if desired_builders > 0 {
                 let priority = if self.builders.is_empty() {
-                    (SPAWN_PRIORITY_HIGH + SPAWN_PRIORITY_MEDIUM) / 2.0
+                    screeps_econ_decision::spawn_policy::FIRST_BUILDER_PRIORITY
                 } else {
-                    construction_sites
+                    let any_spawn_or_storage_site = construction_sites
                         .iter()
-                        .map(|construction_site| match construction_site.structure_type() {
-                            StructureType::Spawn => SPAWN_PRIORITY_HIGH,
-                            StructureType::Storage => SPAWN_PRIORITY_HIGH,
-                            _ => SPAWN_PRIORITY_MEDIUM,
-                        })
-                        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                        .unwrap_or(SPAWN_PRIORITY_LOW)
+                        .any(|site| matches!(site.structure_type(), StructureType::Spawn | StructureType::Storage));
+                    screeps_econ_decision::spawn_policy::builder_priority_with_builders(any_spawn_or_storage_site)
                 };
 
                 Some((desired_builders, priority))
@@ -117,13 +89,7 @@ impl LocalBuildMission {
 
         let (priority, _) = select_repair_structure_and_priority(room_data, repair_queue, minimum_priority, true)?;
 
-        if priority >= RepairPriority::High {
-            Some((1, SPAWN_PRIORITY_HIGH))
-        } else if priority >= RepairPriority::Medium {
-            Some((1, SPAWN_PRIORITY_MEDIUM))
-        } else {
-            None
-        }
+        screeps_econ_decision::spawn_policy::repairer_spawn_priority(priority)
     }
 
     fn create_handle_builder_spawn(
@@ -227,20 +193,24 @@ impl Mission for LocalBuildMission {
         let room = game::rooms().get(room_data.name).ok_or("Expected room")?;
         let structure_data = room_data.get_structures().ok_or("Expected structure data")?;
 
-        let desired_storage_energy = get_desired_storage_amount(ResourceType::Energy) / 4;
-
+        // K4 policy (ADR 0040 M3): the sufficient-energy threshold lives in
+        // `screeps_econ_decision::spawn_policy`.
         let has_sufficient_energy = {
-            if !structure_data.storages().is_empty() {
-                structure_data
-                    .storages()
-                    .iter()
-                    .any(|container| container.store().get(ResourceType::Energy).unwrap_or(0) >= desired_storage_energy)
-            } else {
-                structure_data
-                    .containers()
-                    .iter()
-                    .any(|container| container.store().get(ResourceType::Energy).unwrap_or(0) as f32 / CONTAINER_CAPACITY as f32 > 0.50)
-            }
+            let storage_energies: Vec<u32> = structure_data
+                .storages()
+                .iter()
+                .map(|storage| storage.store().get(ResourceType::Energy).unwrap_or(0))
+                .collect();
+            let container_energies: Vec<u32> = structure_data
+                .containers()
+                .iter()
+                .map(|container| container.store().get(ResourceType::Energy).unwrap_or(0))
+                .collect();
+            screeps_econ_decision::spawn_policy::has_sufficient_energy(
+                !structure_data.storages().is_empty(),
+                &storage_energies,
+                &container_energies,
+            )
         };
 
         let mut spawn_count = 0;
@@ -265,16 +235,7 @@ impl Mission for LocalBuildMission {
                 room.energy_capacity_available()
             };
 
-            let max_body = if spawn_priority >= SPAWN_PRIORITY_HIGH { None } else { Some(5) };
-
-            let body_definition = SpawnBodyDefinition {
-                maximum_energy: use_energy_max,
-                minimum_repeat: Some(1),
-                maximum_repeat: max_body,
-                pre_body: &[],
-                repeat_body: &[Part::Carry, Part::Work, Part::Move, Part::Move],
-                post_body: &[],
-            };
+            let body_definition = screeps_econ_decision::spawn_policy::builder_body(use_energy_max, spawn_priority);
 
             if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
                 let allow_harvest = room.storage().is_none();

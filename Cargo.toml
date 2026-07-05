@@ -44,6 +44,11 @@ members = [
     # from the wasm aliases), but pure value-type logic, so it still compiles for wasm32 as a
     # transitive dep of screeps-combat-decision (whose fielding kernel emits spawn_queue types).
     "screeps-econ-engine",
+    # The economy decision seam (ADR 0040 §D5, M3): the pure K1-K4 economy kernels behind
+    # EconomyView/EconomyIntent DTOs, shared by the live bot and the econ sim (the
+    # screeps-combat-decision precedent). IN-REPO (path deps, no standalone repo yet). Ships to
+    # wasm as a bot dependency — NOT excluded from the wasm aliases.
+    "screeps-econ-decision",
     # The economy eval harness (ADR 0040 §D7, M1): Family-C scenarios over the captured foreman
     # layouts, the transcribed-baseline policy, the analytic movement tier, T_recover metrics +
     # THE REPRO GATE, and the econ_bench CLI. IN-REPO like econ-engine (path deps, no standalone

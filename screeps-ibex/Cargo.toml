@@ -34,6 +34,10 @@ shrinkwraprs = "0.3.0"
 lerp = "0.5"
 screeps-game-api = "0.23"
 screeps-combat-decision = { path = "../screeps-combat-decision" }
+# The economy decision seam (ADR 0040 §D5, M3): the pure K1-K4 economy kernels the bot's
+# transfer/haul/mission adapters call on the live tick (wasm-clean; the combat-decision
+# precedent). PATH dep: in-repo crate, no standalone repo yet.
+screeps-econ-decision = { path = "../screeps-econ-decision" }
 screeps-common = { git = "https://github.com/Azaril/screeps-common", features = ["screeps"] }
 screeps-machine = { git = "https://github.com/Azaril/screeps-machine" }
 screeps-cache = { git = "https://github.com/Azaril/screeps-cache" }

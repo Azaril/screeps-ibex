@@ -1,0 +1,30 @@
+[package]
+name = "screeps-econ-decision"
+version = "0.1.0"
+authors = ["William Archbell <william@archbell.com>"]
+edition = "2021"
+description = "The economy decision seam (ADR 0040 §D5, M3): EconomyView/EconomyIntent DTOs + the pure K1-K4 economy kernels (demand registration, TransferSnapshot pickup/delivery selection, repair admission, spawn-request policy) — JS-free logic over screeps-game-api value types, shared by the live bot (screeps-ibex) and the economy sim (screeps-econ-eval) so there is ONE implementation of economy policy, no mirror."
+
+# A workspace MEMBER shipped to wasm (the screeps-combat-decision precedent, ADR 0040 §D5):
+# the live bot's transfer/haul/spawn adapters call these kernels on the live tick, so this
+# crate is in the `build-wasm` set and MUST stay wasm-clean — no host-only deps, no game::*
+# reads (the crate boundary mechanically enforces "no game::* below the seam"). IN-REPO with
+# no standalone repo yet (the screeps-econ-engine precedent): in-repo consumers use PATH deps.
+
+[dependencies]
+screeps-game-api = "0.23"
+# `TransferPriority`/`TransferType` ride inside the bot's SERIALIZED tickets
+# (TransferWithdrawTicket/TransferDepositTicket/HaulState) — the enum definitions moved here
+# (one implementation) but their serde shapes are unchanged (zero serialized-shape change, M3).
+serde = { version = "1.0", features = ["derive"] }
+bitflags = "2"
+# `spawning::SpawnBodyDefinition` — the ONE body-definition type the bot and sim already share
+# (screeps-combat-decision::spawning; re-exported by the bot as crate::creep::SpawnBodyDefinition).
+# K4's body-shape policy returns it directly instead of minting a duplicate. Pure + wasm-clean
+# (combat-decision is itself in the wasm set). Git dep redirected by the root [patch].
+screeps-combat-decision = { git = "https://github.com/Azaril/screeps-combat-decision" }
+
+[dev-dependencies]
+# The serde-shape pins (TransferPriority/TransferType ride in serialized tickets).
+serde_json = "1.0"
+

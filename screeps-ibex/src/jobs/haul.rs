@@ -59,6 +59,18 @@ impl Idle {
         if is_threatened(tick_context) {
             return Some(HaulState::flee());
         }
+
+        // The governor-gated re-match cadence (ADR 0007 Q5 item 2 via ADR 0040 M3): the POLICY
+        // lives in `screeps_econ_decision::cadence`; the governor tier read stays here. At
+        // Normal this is exactly the pre-M3 behavior (attempt every Idle tick, wait(5) on a
+        // failed match); Conserve stretches the failed-match backoff; Critical skips idle
+        // re-selection for the backoff window (committed plans — the Pickup/Delivery states —
+        // never consult this: hauling itself is never shed, only the re-decision).
+        let cadence = screeps_econ_decision::cadence::rematch_policy(tick_context.system_data.governor.tier.into());
+        if !cadence.attempt {
+            return Some(HaulState::wait(cadence.backoff_ticks));
+        }
+
         let creep = tick_context.runtime_data.owner;
         let pickup_rooms = state_context
             .pickup_rooms
@@ -136,7 +148,7 @@ impl Idle {
 
             None
         })
-        .or_else(|| Some(HaulState::wait(5)))
+        .or_else(|| Some(HaulState::wait(cadence.backoff_ticks)))
     }
 }
 

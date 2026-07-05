@@ -14,83 +14,16 @@ use specs::*;
 use std::cell::*;
 use std::rc::*;
 
-/// The controller link's active-priority intake is gated to a horizon of this
-/// many ticks of expected drain. A link refills at most once per cooldown
-/// (= Chebyshev distance to the sending link, ≤ ~25 for a hub↔controller pair),
-/// so 30 ticks of drain comfortably covers a full refill cycle without
-/// starving the upgrader — while keeping the advertised demand small enough
-/// that surplus link energy overflows to the storage link instead of soaking
-/// the 800-capacity controller buffer.
-const CONTROLLER_LINK_BUFFER_TICKS: u32 = 30;
-
-/// At or above this fraction of its (gated) buffer the controller link defers to
-/// storage: it advertises its remaining deficit at `None` priority instead of
-/// `Low`. A `Low` deposit unconditionally out-ranks the storage link's `None`
-/// deposit in the link router, so without this a nearly-full link keeps winning
-/// the small top-offs and pins itself full — and the surplus never reaches
-/// storage. Demoted to `None`, those top-offs lose the router's value ranking to
-/// storage's much larger free capacity, so the link hovers at the threshold and
-/// the surplus flows to storage. Most visible at RCL≤7, where there is no drain
-/// gate and the buffer is the link's full 800 capacity.
-const CONTROLLER_LINK_DEFER_FILL: f32 = 0.75;
-
-/// Pure decision for what (if anything) a controller link should advertise as a
-/// `Link` deposit, given its energy `capacity`/`used`/`free` and the
-/// controller's expected per-tick drain.
-///
-/// `expected_drain_per_tick`:
-///   - `Some(rate)` — controller at max RCL, where the engine caps upgrade at
-///     `CONTROLLER_MAX_UPGRADE_PER_TICK` e/t. Only request enough to keep
-///     `rate × CONTROLLER_LINK_BUFFER_TICKS` buffered so the surplus overflows
-///     to the storage link's `None` deposit instead of being soaked into the
-///     controller buffer (the RCL8 storage-link starvation root cause).
-///   - `None` — below max RCL, where upgrading is the growth bottleneck and the
-///     real drain is bounded by upgrader WORK (not the engine cap); keep the
-///     whole link topped.
-///
-/// Priority escalates as the buffer runs low (so a starving upgrader still wins
-/// energy under contention) and de-escalates to `None` once the buffer is mostly
-/// full (see [`CONTROLLER_LINK_DEFER_FILL`]), so a nearly-topped link no longer
-/// out-prioritizes storage and the surplus flows there. Returns `None` (no
-/// request at all) only once the buffer is at or over target.
-fn controller_link_deposit(
-    capacity: u32,
-    used: u32,
-    free: u32,
-    expected_drain_per_tick: Option<u32>,
-) -> Option<(TransferPriority, u32)> {
-    let target_buffer = match expected_drain_per_tick {
-        Some(drain) => drain.saturating_mul(CONTROLLER_LINK_BUFFER_TICKS).min(capacity),
-        None => capacity,
-    };
-
-    let deficit = target_buffer.saturating_sub(used).min(free);
-
-    if deficit == 0 {
-        return None;
-    }
-
-    let fill_fraction = if target_buffer == 0 {
-        1.0
-    } else {
-        (used as f32) / (target_buffer as f32)
-    };
-
-    let priority = if fill_fraction < 0.25 {
-        TransferPriority::High
-    } else if fill_fraction < 0.5 {
-        TransferPriority::Medium
-    } else if fill_fraction < CONTROLLER_LINK_DEFER_FILL {
-        TransferPriority::Low
-    } else {
-        // Mostly full: defer to storage (still advertise the deficit so the link
-        // can top off if storage can't take the energy, but at `None` so it no
-        // longer out-prioritizes storage).
-        TransferPriority::None
-    };
-
-    Some((priority, deficit))
-}
+// The K1 demand-registration policy (the per-structure tier ladders, `controller_link_deposit`
+// + its buffer/defer constants, and the link withdraw ladders) lives in
+// `screeps_econ_decision::demand` since ADR 0040 M3 — one implementation, consumed by this
+// mission's generator adapters AND the economy sim (`screeps-econ-eval`). The generators below
+// build a [`RoomEconDto`] from live handles and execute the returned [`Demand`]s; their pinned
+// tests moved with the kernel.
+use screeps_econ_decision::demand::{
+    controller_link_deposit, room_haul_demand, ContainerDto, ContainerRole, Demand, DemandSide, DroppedDto, ItemRef, LootDto,
+    RefillStructDto, RoomEconDto, StorageDto, source_link_withdraw_priority, storage_link_withdraw_priority,
+};
 
 pub struct RoomTransferMission {
     owner: EntityOption<Entity>,
@@ -209,7 +142,7 @@ impl RoomTransferMission {
                                     priority.into(),
                                     TransferType::Link,
                                     TransferCapacity::Infinite,
-                                    link_pos.into(),
+                                    link_pos,
                                     target_filters::link,
                                 )
                             })
@@ -251,19 +184,168 @@ impl RoomTransferMission {
                 return Ok(());
             };
 
-            Self::request_transfer_for_spawns(transfer, &structure_data.spawns);
-            Self::request_transfer_for_extension(transfer, &structure_data.extensions);
-            Self::request_transfer_for_storage(transfer, &structure_data.storage);
-            Self::request_transfer_for_containers(transfer, structure_data);
-
-            if let Some(room) = game::rooms().get(room_data.name) {
-                Self::request_transfer_for_ruins(transfer, &room);
-                Self::request_transfer_for_tombstones(transfer, &room);
-                Self::request_transfer_for_dropped_resources(transfer, &room);
-            }
+            // Build the K1 view (RoomEconDto) from live handles, run the kernel, execute the
+            // demands (ADR 0040 M3 — the policy lives in screeps_econ_decision::demand).
+            let (dto, targets) = Self::build_room_econ_dto(structure_data, room_data.name);
+            Self::execute_demands(transfer, &targets, room_haul_demand(&dto));
 
             Ok(())
         })
+    }
+
+    /// Build the K1 [`RoomEconDto`] + the aligned target table from the live structure cache
+    /// (unresolvable ids — stale cache entries — are skipped, exactly like the pre-move
+    /// per-structure `resolve()` guards).
+    fn build_room_econ_dto(structure_data: &StructureData, room_name: RoomName) -> (RoomEconDto, Vec<TransferTarget>) {
+        let mut targets: Vec<TransferTarget> = Vec::new();
+        let mut dto = RoomEconDto::default();
+
+        fn item(targets: &mut Vec<TransferTarget>, target: TransferTarget) -> ItemRef {
+            targets.push(target);
+            ItemRef(targets.len() as u32 - 1)
+        }
+
+        for spawn_id in &structure_data.spawns {
+            if let Some(spawn) = spawn_id.resolve() {
+                dto.spawns.push(RefillStructDto {
+                    item: item(&mut targets, TransferTarget::Spawn(*spawn_id)),
+                    free_energy: spawn.store().get_free_capacity(Some(ResourceType::Energy)).max(0) as u32,
+                });
+            }
+        }
+
+        for extension_id in &structure_data.extensions {
+            if let Some(extension) = extension_id.resolve() {
+                dto.extensions.push(RefillStructDto {
+                    item: item(&mut targets, TransferTarget::Extension(*extension_id)),
+                    free_energy: extension.store().get_free_capacity(Some(ResourceType::Energy)).max(0) as u32,
+                });
+            }
+        }
+
+        // Containers, grouped by role exactly as the pre-move arms classified them: provider
+        // (source + mineral), controller, then everything else.
+        let push_container = |targets: &mut Vec<TransferTarget>,
+                                  dto: &mut RoomEconDto,
+                                  container_id: &RemoteObjectId<StructureContainer>,
+                                  role: ContainerRole| {
+            if let Some(container) = container_id.resolve() {
+                let store = container
+                    .store()
+                    .store_types()
+                    .into_iter()
+                    .map(|r| (r, container.store().get_used_capacity(Some(r))))
+                    .collect();
+                dto.containers.push(ContainerDto {
+                    item: item(targets, TransferTarget::Container(*container_id)),
+                    role,
+                    store,
+                    capacity: container.store().get_capacity(None),
+                });
+            }
+        };
+
+        let provider_containers = structure_data
+            .sources_to_containers
+            .values()
+            .chain(structure_data.mineral_extractors_to_containers.values());
+        for containers in provider_containers {
+            for container_id in containers {
+                push_container(&mut targets, &mut dto, container_id, ContainerRole::Provider);
+            }
+        }
+        for containers in structure_data.controllers_to_containers.values() {
+            for container_id in containers {
+                push_container(&mut targets, &mut dto, container_id, ContainerRole::Controller);
+            }
+        }
+        let storage_containers = structure_data.containers.iter().filter(|container| {
+            !structure_data.sources_to_containers.values().any(|c| c.contains(container))
+                && !structure_data.controllers_to_containers.values().any(|c| c.contains(container))
+                && !structure_data
+                    .mineral_extractors_to_containers
+                    .values()
+                    .any(|c| c.contains(container))
+        });
+        for container_id in storage_containers {
+            push_container(&mut targets, &mut dto, container_id, ContainerRole::Other);
+        }
+
+        for storage_id in &structure_data.storage {
+            if let Some(storage) = storage_id.resolve() {
+                let store = storage
+                    .store()
+                    .store_types()
+                    .into_iter()
+                    .map(|r| (r, storage.store().get_used_capacity(Some(r))))
+                    .collect();
+                dto.storage.push(StorageDto {
+                    item: item(&mut targets, TransferTarget::Storage(*storage_id)),
+                    store,
+                    capacity: storage.store().get_capacity(None),
+                });
+            }
+        }
+
+        if let Some(room) = game::rooms().get(room_name) {
+            for ruin in room.find(find::RUINS, None) {
+                let store = ruin
+                    .store()
+                    .store_types()
+                    .into_iter()
+                    .map(|r| (r, ruin.store().get_used_capacity(Some(r))))
+                    .collect();
+                dto.ruins.push(LootDto {
+                    item: item(&mut targets, TransferTarget::Ruin(ruin.remote_id())),
+                    store,
+                });
+            }
+            for tombstone in room.find(find::TOMBSTONES, None) {
+                let store = tombstone
+                    .store()
+                    .store_types()
+                    .into_iter()
+                    .map(|r| (r, tombstone.store().get_used_capacity(Some(r))))
+                    .collect();
+                dto.tombstones.push(LootDto {
+                    item: item(&mut targets, TransferTarget::Tombstone(tombstone.remote_id())),
+                    store,
+                });
+            }
+            for dropped_resource in room.find(find::DROPPED_RESOURCES, None) {
+                dto.dropped.push(DroppedDto {
+                    item: item(&mut targets, TransferTarget::Resource(dropped_resource.remote_id())),
+                    resource: dropped_resource.resource_type(),
+                    amount: dropped_resource.amount(),
+                });
+            }
+        }
+
+        (dto, targets)
+    }
+
+    /// Execute K1 demands against the transfer queue (the write half of the seam —
+    /// `RegisterWithdraw`/`RegisterDeposit` intents).
+    fn execute_demands(transfer: &mut dyn TransferRequestSystem, targets: &[TransferTarget], demands: Vec<Demand>) {
+        for demand in demands {
+            let target = targets[demand.item.0 as usize];
+            match demand.side {
+                DemandSide::Withdraw => transfer.request_withdraw(TransferWithdrawRequest::new(
+                    target,
+                    demand.resource.expect("withdraw demands always carry a resource"),
+                    demand.priority,
+                    demand.amount,
+                    demand.transfer_type,
+                )),
+                DemandSide::Deposit => transfer.request_deposit(TransferDepositRequest::new(
+                    target,
+                    demand.resource,
+                    demand.priority,
+                    demand.amount,
+                    demand.transfer_type,
+                )),
+            }
+        }
     }
 
     fn transfer_request_link_generator(room_entity: Entity, structure_data: Rc<RefCell<Option<StructureData>>>) -> TransferQueueGenerator {
@@ -300,204 +382,6 @@ impl RoomTransferMission {
         })
     }
 
-    fn request_transfer_for_containers(transfer: &mut dyn TransferRequestSystem, structure_data: &StructureData) {
-        let provider_containers = structure_data
-            .sources_to_containers
-            .values()
-            .chain(structure_data.mineral_extractors_to_containers.values());
-
-        for containers in provider_containers {
-            for container_id in containers {
-                if let Some(container) = container_id.resolve() {
-                    let container_used_capacity = container.store().get_used_capacity(None);
-                    if container_used_capacity > 0 {
-                        let container_store_capacity = container.store().get_capacity(None);
-
-                        let storage_fraction = (container_used_capacity as f32) / (container_store_capacity as f32);
-                        let priority = if storage_fraction > 0.75 {
-                            TransferPriority::Medium
-                        } else if storage_fraction > 0.5 {
-                            TransferPriority::Low
-                        } else {
-                            TransferPriority::None
-                        };
-
-                        for resource in container.store().store_types() {
-                            let resource_amount = container.store().get_used_capacity(Some(resource));
-                            let transfer_request = TransferWithdrawRequest::new(
-                                TransferTarget::Container(*container_id),
-                                resource,
-                                priority,
-                                resource_amount,
-                                TransferType::Haul,
-                            );
-
-                            transfer.request_withdraw(transfer_request);
-                        }
-                    }
-                }
-            }
-        }
-
-        for containers in structure_data.controllers_to_containers.values() {
-            for container_id in containers {
-                if let Some(container) = container_id.resolve() {
-                    let container_used_capacity = container.store().get_used_capacity(Some(ResourceType::Energy));
-                    let container_available_capacity = container.store().get_capacity(Some(ResourceType::Energy));
-                    let container_free_capacity = container_available_capacity - container_used_capacity;
-
-                    let storage_fraction = container_used_capacity as f32 / container_available_capacity as f32;
-
-                    if container_free_capacity > 0 {
-                        let priority = if storage_fraction < 0.75 {
-                            TransferPriority::Low
-                        } else {
-                            TransferPriority::None
-                        };
-
-                        let transfer_request = TransferDepositRequest::new(
-                            TransferTarget::Container(*container_id),
-                            Some(ResourceType::Energy),
-                            priority,
-                            container_free_capacity,
-                            TransferType::Haul,
-                        );
-
-                        transfer.request_deposit(transfer_request);
-                    }
-
-                    let container_used_capacity = container.store().get_used_capacity(Some(ResourceType::Energy));
-                    if container_used_capacity > 0 {
-                        let transfer_request = TransferWithdrawRequest::new(
-                            TransferTarget::Container(*container_id),
-                            ResourceType::Energy,
-                            TransferPriority::None,
-                            container_used_capacity,
-                            TransferType::Use,
-                        );
-
-                        transfer.request_withdraw(transfer_request);
-                    }
-                }
-            }
-        }
-
-        let storage_containers = structure_data.containers.iter().filter(|container| {
-            !structure_data.sources_to_containers.values().any(|c| c.contains(container))
-                && !structure_data.controllers_to_containers.values().any(|c| c.contains(container))
-                && !structure_data
-                    .mineral_extractors_to_containers
-                    .values()
-                    .any(|c| c.contains(container))
-        });
-
-        for container_id in storage_containers {
-            if let Some(container) = container_id.resolve() {
-                // Safe on general stores (engine-mechanics folklore row 26).
-                let container_free_capacity = container.store().get_free_capacity(None).max(0) as u32;
-                if container_free_capacity > 0 {
-                    let transfer_request = TransferDepositRequest::new(
-                        TransferTarget::Container(*container_id),
-                        None,
-                        TransferPriority::None,
-                        container_free_capacity,
-                        TransferType::Haul,
-                    );
-
-                    transfer.request_deposit(transfer_request);
-                }
-
-                for resource in container.store().store_types() {
-                    let resource_amount = container.store().get_used_capacity(Some(resource));
-                    let transfer_request = TransferWithdrawRequest::new(
-                        TransferTarget::Container(*container_id),
-                        resource,
-                        TransferPriority::None,
-                        resource_amount,
-                        TransferType::Haul,
-                    );
-
-                    transfer.request_withdraw(transfer_request);
-                }
-            }
-        }
-    }
-
-    fn request_transfer_for_spawns(transfer: &mut dyn TransferRequestSystem, spawns: &[RemoteObjectId<StructureSpawn>]) {
-        for spawn_id in spawns.iter() {
-            if let Some(spawn) = spawn_id.resolve() {
-                let free_capacity = spawn.store().get_free_capacity(Some(ResourceType::Energy));
-                if free_capacity > 0 {
-                    let transfer_request = TransferDepositRequest::new(
-                        TransferTarget::Spawn(*spawn_id),
-                        Some(ResourceType::Energy),
-                        TransferPriority::High,
-                        free_capacity as u32,
-                        TransferType::Haul,
-                    );
-
-                    transfer.request_deposit(transfer_request);
-                }
-            }
-        }
-    }
-
-    fn request_transfer_for_extension(transfer: &mut dyn TransferRequestSystem, extensions: &[RemoteObjectId<StructureExtension>]) {
-        for extension_id in extensions.iter() {
-            if let Some(extension) = extension_id.resolve() {
-                let free_capacity = extension.store().get_free_capacity(Some(ResourceType::Energy));
-                if free_capacity > 0 {
-                    let transfer_request = TransferDepositRequest::new(
-                        TransferTarget::Extension(*extension_id),
-                        Some(ResourceType::Energy),
-                        TransferPriority::High,
-                        free_capacity as u32,
-                        TransferType::Haul,
-                    );
-
-                    transfer.request_deposit(transfer_request);
-                }
-            }
-        }
-    }
-
-    fn request_transfer_for_storage(transfer: &mut dyn TransferRequestSystem, stores: &[RemoteObjectId<StructureStorage>]) {
-        for storage_id in stores.iter() {
-            if let Some(storage) = storage_id.resolve() {
-                let mut used_capacity = 0;
-
-                for resource in storage.store().store_types() {
-                    let resource_amount = storage.store().get_used_capacity(Some(resource));
-                    let transfer_request = TransferWithdrawRequest::new(
-                        TransferTarget::Storage(*storage_id),
-                        resource,
-                        TransferPriority::None,
-                        resource_amount,
-                        TransferType::Haul,
-                    );
-
-                    transfer.request_withdraw(transfer_request);
-
-                    used_capacity += resource_amount;
-                }
-
-                let free_capacity = storage.store().get_capacity(None) - used_capacity;
-
-                if free_capacity > 0 {
-                    let transfer_request = TransferDepositRequest::new(
-                        TransferTarget::Storage(*storage_id),
-                        None,
-                        TransferPriority::None,
-                        free_capacity,
-                        TransferType::Haul,
-                    );
-
-                    transfer.request_deposit(transfer_request);
-                }
-            }
-        }
-    }
-
     fn request_transfer_for_storage_links(transfer: &mut dyn TransferRequestSystem, structure_data: &StructureData) {
         for link_id in &structure_data.storage_links {
             if let Some(link) = link_id.resolve() {
@@ -519,15 +403,8 @@ impl RoomTransferMission {
 
                 if used_capacity > 0 {
                     let available_capacity = link.store().get_capacity(Some(ResourceType::Energy));
-                    let storage_fraction = (used_capacity as f32) / (available_capacity as f32);
-
-                    let priority = if storage_fraction > 0.5 {
-                        TransferPriority::High
-                    } else if storage_fraction > 0.25 {
-                        TransferPriority::Low
-                    } else {
-                        TransferPriority::None
-                    };
+                    // The fill ladder lives in the K1 kernel (ADR 0040 M3).
+                    let priority = storage_link_withdraw_priority(used_capacity, available_capacity);
 
                     let transfer_request = TransferWithdrawRequest::new(
                         TransferTarget::Link(link.remote_id()),
@@ -550,15 +427,8 @@ impl RoomTransferMission {
 
                 if used_capacity > 0 {
                     let available_capacity = link.store().get_capacity(Some(ResourceType::Energy));
-                    let storage_fraction = (used_capacity as f32) / (available_capacity as f32);
-
-                    let priority = if storage_fraction > 0.5 {
-                        TransferPriority::High
-                    } else if storage_fraction > 0.25 {
-                        TransferPriority::Medium
-                    } else {
-                        TransferPriority::Low
-                    };
+                    // The fill ladder lives in the K1 kernel (ADR 0040 M3).
+                    let priority = source_link_withdraw_priority(used_capacity, available_capacity);
 
                     let transfer_request = TransferWithdrawRequest::new(
                         TransferTarget::Link(link.remote_id()),
@@ -614,78 +484,6 @@ impl RoomTransferMission {
             }
         }
     }
-
-    fn request_transfer_for_ruins(transfer: &mut dyn TransferRequestSystem, room: &Room) {
-        for ruin in room.find(find::RUINS, None) {
-            let ruin_id = ruin.remote_id();
-
-            for resource in ruin.store().store_types() {
-                let resource_amount = ruin.store().get_used_capacity(Some(resource));
-                let transfer_request = TransferWithdrawRequest::new(
-                    TransferTarget::Ruin(ruin_id),
-                    resource,
-                    TransferPriority::Medium,
-                    resource_amount,
-                    TransferType::Haul,
-                );
-
-                transfer.request_withdraw(transfer_request);
-            }
-        }
-    }
-
-    fn request_transfer_for_tombstones(transfer: &mut dyn TransferRequestSystem, room: &Room) {
-        for tombstone in room.find(find::TOMBSTONES, None) {
-            let tombstone_id = tombstone.remote_id();
-
-            for resource in tombstone.store().store_types() {
-                let resource_amount = tombstone.store().get_used_capacity(Some(resource));
-
-                //TODO: Only apply this if no hostiles in the room?
-                let priority = if resource_amount > 200 || resource != ResourceType::Energy {
-                    TransferPriority::High
-                } else {
-                    TransferPriority::Medium
-                };
-
-                let transfer_request = TransferWithdrawRequest::new(
-                    TransferTarget::Tombstone(tombstone_id),
-                    resource,
-                    priority,
-                    resource_amount,
-                    TransferType::Haul,
-                );
-
-                transfer.request_withdraw(transfer_request);
-            }
-        }
-    }
-
-    fn request_transfer_for_dropped_resources(transfer: &mut dyn TransferRequestSystem, room: &Room) {
-        for dropped_resource in room.find(find::DROPPED_RESOURCES, None) {
-            let dropped_resource_id = dropped_resource.remote_id();
-
-            let resource = dropped_resource.resource_type();
-            let resource_amount = dropped_resource.amount();
-
-            //TODO: Only apply this if no hostiles in the room?
-            let priority = if resource_amount > 500 || resource != ResourceType::Energy {
-                TransferPriority::High
-            } else {
-                TransferPriority::Medium
-            };
-
-            let transfer_request = TransferWithdrawRequest::new(
-                TransferTarget::Resource(dropped_resource_id),
-                resource,
-                priority,
-                resource_amount,
-                TransferType::Haul,
-            );
-
-            transfer.request_withdraw(transfer_request);
-        }
-    }
 }
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
@@ -736,72 +534,3 @@ impl Mission for RoomTransferMission {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // At max RCL the controller drains only CONTROLLER_MAX_UPGRADE_PER_TICK (15)
-    // e/t, so the gated buffer is 15 * CONTROLLER_LINK_BUFFER_TICKS (30) = 450,
-    // below the 800 link capacity.
-    const MAX_LEVEL_DRAIN: Option<u32> = Some(CONTROLLER_MAX_UPGRADE_PER_TICK);
-
-    // Pin (RCL8 storage-link starvation fix): once the controller link holds its
-    // gated buffer, it advertises NO active deposit, so source links fall through
-    // to the storage link (None) in link_transfer and the surplus reaches storage.
-    // This is the regression the operator observed: the controller link soaking
-    // all link energy via its old unconditional free-capacity Low deposit.
-    #[test]
-    fn controller_link_full_gated_buffer_requests_nothing() {
-        assert_eq!(controller_link_deposit(800, 450, 350, MAX_LEVEL_DRAIN), None);
-        // Over-buffered (e.g. just before an upgrader drains it) — still nothing.
-        assert_eq!(controller_link_deposit(800, 600, 200, MAX_LEVEL_DRAIN), None);
-    }
-
-    // Pin: below the buffer, the controller link tops up only its (small) gated
-    // deficit — not the full free capacity — so the rest overflows to storage.
-    #[test]
-    fn controller_link_tops_up_only_the_gated_deficit() {
-        // used 300 of a 450 buffer -> deficit 150, fill 0.667 -> Low.
-        assert_eq!(controller_link_deposit(800, 300, 500, MAX_LEVEL_DRAIN), Some((TransferPriority::Low, 150)));
-    }
-
-    // Pin (operator requirement): priority escalates as the buffer runs low so a
-    // starving upgrader still wins energy under contention.
-    #[test]
-    fn controller_link_escalates_priority_when_low() {
-        // < 25% of buffer (used 100/450 = 0.22) -> High.
-        assert_eq!(controller_link_deposit(800, 100, 700, MAX_LEVEL_DRAIN), Some((TransferPriority::High, 350)));
-        // Empty -> High, request the whole buffer.
-        assert_eq!(controller_link_deposit(800, 0, 800, MAX_LEVEL_DRAIN), Some((TransferPriority::High, 450)));
-        // 25%-50% (used 200/450 = 0.44) -> Medium.
-        assert_eq!(controller_link_deposit(800, 200, 600, MAX_LEVEL_DRAIN), Some((TransferPriority::Medium, 250)));
-    }
-
-    // Pin: below max RCL (None) the controller is the growth bottleneck, so
-    // while the link is below the defer threshold it out-prioritizes storage,
-    // escalating as it empties.
-    #[test]
-    fn controller_link_below_max_prioritizes_until_threshold() {
-        // 12.5% full -> High, full deficit.
-        assert_eq!(controller_link_deposit(800, 100, 700, None), Some((TransferPriority::High, 700)));
-        // 37.5% full -> Medium.
-        assert_eq!(controller_link_deposit(800, 300, 500, None), Some((TransferPriority::Medium, 500)));
-        // 62.5% full (below the 0.75 defer threshold) -> Low.
-        assert_eq!(controller_link_deposit(800, 500, 300, None), Some((TransferPriority::Low, 300)));
-    }
-
-    // Pin (operator requirement, RCL≤7): once the link is mostly full it defers
-    // to storage. The remaining (small) deficit is advertised at None, NOT Low,
-    // so source links stop pinning the link full and the surplus reaches storage.
-    #[test]
-    fn controller_link_defers_to_storage_when_nearly_full() {
-        // At the 0.75 defer threshold -> None (not Low).
-        assert_eq!(controller_link_deposit(800, 600, 200, None), Some((TransferPriority::None, 200)));
-        // A small top-off near the brim -> None.
-        assert_eq!(controller_link_deposit(800, 720, 80, None), Some((TransferPriority::None, 80)));
-        // Completely full -> no request at all.
-        assert_eq!(controller_link_deposit(800, 800, 0, None), None);
-        // Same defer behaviour at max RCL: used 400 of the 450 buffer -> None.
-        assert_eq!(controller_link_deposit(800, 400, 400, MAX_LEVEL_DRAIN), Some((TransferPriority::None, 50)));
-    }
-}

@@ -11,7 +11,6 @@ use crate::room::visibilitysystem::*;
 use crate::serialize::*;
 use crate::spawnsystem::*;
 use itertools::*;
-use lerp::*;
 use screeps::*;
 use screeps_cache::*;
 use serde::{Deserialize, Serialize};
@@ -387,27 +386,25 @@ impl SourceMiningMission {
 
                 let current_source_room_harvesters = home_rooms_to_harvesters.iter().filter(|e| source_harvesters.contains(e)).count();
 
+                // K4 policy (ADR 0040 M3): the desired count, body-energy choice (bootstrap
+                // available-sized / replacement capacity-sized — the S6 arm, preserved) and
+                // the priority lerp live in `screeps_econ_decision::spawn_policy`.
                 //TODO: Compute correct number of harvesters to use for source.
-                let desired_harvesters = 4;
+                let desired_harvesters = screeps_econ_decision::spawn_policy::DESIRED_HARVESTERS_PER_SOURCE;
 
                 if current_source_room_harvesters < desired_harvesters {
-                    let body_definition = harvester_body(if total_harvesting_creeps == 0 {
-                        home_room.energy_available().max(SPAWN_ENERGY_CAPACITY)
-                    } else {
-                        home_room.energy_capacity_available()
-                    });
+                    let body_definition = harvester_body(screeps_econ_decision::spawn_policy::harvester_body_energy(
+                        total_harvesting_creeps,
+                        home_room.energy_available(),
+                        home_room.energy_capacity_available(),
+                    ));
 
                     if let Ok(body) = crate::creep::spawning::create_body(&body_definition) {
-                        let priority_range = if room_manhattan_distance == 0 {
-                            (SPAWN_PRIORITY_CRITICAL, SPAWN_PRIORITY_HIGH)
-                        } else if room_manhattan_distance <= 1 {
-                            (SPAWN_PRIORITY_MEDIUM, SPAWN_PRIORITY_NONE)
-                        } else {
-                            (SPAWN_PRIORITY_LOW, SPAWN_PRIORITY_NONE)
-                        };
-
-                        let interp = (current_source_room_harvesters as f32) / (desired_harvesters as f32);
-                        let priority = priority_range.0.lerp_bounded(priority_range.1, interp);
+                        let priority = screeps_econ_decision::spawn_policy::harvester_priority(
+                            current_source_room_harvesters,
+                            desired_harvesters,
+                            room_manhattan_distance as u32,
+                        );
 
                         let spawn_request = SpawnRequest::new(
                             format!("Harvester - Source: {}", source_id.id()),

@@ -58,22 +58,14 @@ impl RepairQueue {
             .requests
             .iter()
             .filter(|r| minimum_priority.map(|min| r.priority >= min).unwrap_or(true))
+            // (priority, then LOWEST hp fraction) — the shared kernel ordering
+            // (screeps_econ_decision::repair::repair_target_order since ADR 0040 M3; the
+            // max_hits == 0 → fraction-1.0 NaN guard preserved there).
             .max_by(|a, b| {
-                // Sort by priority first, then by lowest HP fraction.
-                a.priority.cmp(&b.priority).then_with(|| {
-                    let a_frac = if a.max_hits > 0 {
-                        a.current_hits as f64 / a.max_hits as f64
-                    } else {
-                        1.0
-                    };
-                    let b_frac = if b.max_hits > 0 {
-                        b.current_hits as f64 / b.max_hits as f64
-                    } else {
-                        1.0
-                    };
-                    // Lower fraction = more damaged = higher priority.
-                    b_frac.partial_cmp(&a_frac).unwrap_or(std::cmp::Ordering::Equal)
-                })
+                screeps_econ_decision::repair::repair_target_order(
+                    (a.priority, a.current_hits, a.max_hits),
+                    (b.priority, b.current_hits, b.max_hits),
+                )
             })
     }
 
@@ -93,19 +85,10 @@ impl RepairQueue {
             .filter(|r| minimum_priority.map(|min| r.priority >= min).unwrap_or(true))
             .filter(|r| r.structure_id.pos().in_range_to(pos, range))
             .max_by(|a, b| {
-                a.priority.cmp(&b.priority).then_with(|| {
-                    let a_frac = if a.max_hits > 0 {
-                        a.current_hits as f64 / a.max_hits as f64
-                    } else {
-                        1.0
-                    };
-                    let b_frac = if b.max_hits > 0 {
-                        b.current_hits as f64 / b.max_hits as f64
-                    } else {
-                        1.0
-                    };
-                    b_frac.partial_cmp(&a_frac).unwrap_or(std::cmp::Ordering::Equal)
-                })
+                screeps_econ_decision::repair::repair_target_order(
+                    (a.priority, a.current_hits, a.max_hits),
+                    (b.priority, b.current_hits, b.max_hits),
+                )
             })
     }
 

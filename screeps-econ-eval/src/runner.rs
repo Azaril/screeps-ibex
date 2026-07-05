@@ -707,7 +707,7 @@ fn step_worker(
     // Upgraders/builders run NO opportunistic repair (their repair is an explicit state —
     // jobs/upgrade.rs has no repair arm; jobs/build.rs repairs via the queue-read Idle arms).
     let drive_by_min = if is_harvester {
-        Some(effective_min_repair_priority(RepairPriority::Medium, allowance))
+        Some(effective_min_repair_priority(Some(RepairPriority::Medium), allowance))
     } else {
         None // local hauler / upgrader / builder: no drive-by lane
     };
@@ -768,7 +768,7 @@ fn step_worker(
                             worker.activity = travel_then(world, mover, id, pos, spos, 1, Activity::Deliver { sink, amount }, tick);
                         } else if let Some((target, tpos)) = baseline::full_repair_target(
                             world,
-                            effective_min_repair_priority(RepairPriority::Medium, allowance),
+                            effective_min_repair_priority(Some(RepairPriority::Medium), allowance),
                         ) {
                             // (5) idle full-repair ≥ Medium (harvest.rs:178-193, allowance-gated).
                             worker.activity =
@@ -777,7 +777,7 @@ fn step_worker(
                             pos,
                             &deposit_set,
                             held,
-                            &[Tier::Medium, Tier::Low, Tier::NonePri],
+                            &[Tier::Medium, Tier::Low, Tier::None],
                         ) {
                             // (6) Medium → Low → None deliveries (harvest.rs:194-210).
                             *bookings.deposits.entry(sink).or_insert(0) += amount;
@@ -797,7 +797,7 @@ fn step_worker(
                         // (storage dump) only when no ACTIVE demand exists.
                         if let Some((sink, spos, amount)) =
                             select_delivery_flat_active(pos, &deposit_set, held).or_else(|| {
-                                select_delivery_tiered(pos, &deposit_set, held, &[Tier::NonePri])
+                                select_delivery_tiered(pos, &deposit_set, held, &[Tier::None])
                             })
                         {
                             *bookings.deposits.entry(sink).or_insert(0) += amount;
@@ -868,11 +868,11 @@ fn step_worker(
                 Role::Builder { allow_harvest } => {
                     let free = creep_free(world, id);
                     let rcl = world.controller.as_ref().map(|c| c.level).unwrap_or(0);
-                    let min_high = effective_min_repair_priority(RepairPriority::High, allowance);
-                    let min_any = match allowance {
-                        baseline::RepairAllowance::Unrestricted => RepairPriority::VeryLow, // None floor
-                        baseline::RepairAllowance::CriticalOnly => RepairPriority::Critical,
-                    };
+                    let min_high = effective_min_repair_priority(Some(RepairPriority::High), allowance);
+                    // The live "repair at ANY priority" arm has NO floor at all (the Option-min
+                    // form: None) — the S1 allowance raises it to Critical. (The pre-M3 VeryLow
+                    // stand-in was equivalent: every candidate is ≥ VeryLow.)
+                    let min_any = effective_min_repair_priority(None, allowance);
                     let repair_high =
                         (held > 0).then(|| baseline::full_repair_target(world, min_high)).flatten();
                     let site = (held > 0)
@@ -1049,7 +1049,7 @@ fn step_worker(
                     pos,
                     &deposit_set,
                     held,
-                    &[Tier::High, Tier::Medium, Tier::Low, Tier::NonePri],
+                    &[Tier::High, Tier::Medium, Tier::Low, Tier::None],
                 ) {
                     *bookings.deposits.entry(sink).or_insert(0) += amount;
                     *assignments += 1;
@@ -1138,7 +1138,7 @@ fn step_worker(
                 if harvester_chains && held > 0 {
                     if let Some((next, tpos)) = baseline::full_repair_target(
                         world,
-                        effective_min_repair_priority(RepairPriority::Medium, allowance),
+                        effective_min_repair_priority(Some(RepairPriority::Medium), allowance),
                     ) {
                         *assignments += 1;
                         worker.activity =
