@@ -13,6 +13,10 @@ use std::collections::HashSet;
 // The K2 selection kernels (ADR 0040 M3 / ADR 0007 item 1) — the snapshot module this
 // adapter builds views for.
 use screeps_econ_decision::snapshot as econ;
+// ADR 0040 M5a — the e/t sink market: the numeric-bid vocabulary + bid functions (the live
+// tickets ride `bid: u32`; the live market-selection kernel `market::market_pass` is consumed
+// by the `market_adapter` module).
+use screeps_econ_decision::sink_economics::{bid_to_tier, bid_label, tier_to_bid, MarketConsts};
 
 // The transfer priority/type vocabulary (`TransferPriority`/`TransferType` + flags + the
 // ACTIVE/ALL priority lists) lives in `screeps_econ_decision::priority` since ADR 0040 M3 —
@@ -23,6 +27,56 @@ use screeps_econ_decision::snapshot as econ;
 pub use screeps_econ_decision::priority::{
     TransferPriority, TransferPriorityFlags, TransferType, TransferTypeFlags, ACTIVE_TRANSFER_PRIORITIES, ALL_TRANSFER_PRIORITIES,
 };
+
+/// ADR 0040 M5a market observability (§D8 #5): the per-room bid readout the
+/// live transfer-market pass publishes each tick — the opportunity floor + the
+/// top unmet deposit bids. Ephemeral resource (cleared/rebuilt each tick),
+/// exported per-room by `metrics.rs` into the seg-57 stats block, and echoed to
+/// one grep-able console line per room. "An emergent system without a readout
+/// is an operations regression" (§D4).
+#[derive(Default)]
+pub struct MarketBidSummary {
+    /// Per owned-room-name summary.
+    pub rooms: HashMap<RoomName, RoomBidSummary>,
+}
+
+/// One room's market bid readout for this tick.
+#[derive(Debug, Default, Clone)]
+pub struct RoomBidSummary {
+    /// The opportunity floor (highest materially-unmet deposit bid, milli-e/t).
+    pub opportunity_floor: u32,
+    /// The top unmet deposit bids (milli-e/t), descending, up to three.
+    pub top_unmet_bids: Vec<u32>,
+}
+
+impl MarketBidSummary {
+    /// Clear all counters (called at the start of each tick).
+    pub fn clear(&mut self) {
+        self.rooms.clear();
+    }
+
+    /// Publish (or overwrite) a room's summary and emit the one-line, grep-able
+    /// console readout (`[market] <room> floor=<f> unmet=[..]`).
+    pub fn publish(&mut self, room: RoomName, floor: u32, top_unmet_bids: Vec<u32>) {
+        log::info!(
+            "[market] {room} floor={floor} unmet={:?}",
+            top_unmet_bids
+        );
+        self.rooms.insert(room, RoomBidSummary { opportunity_floor: floor, top_unmet_bids });
+    }
+}
+
+/// System that clears the market bid summary at the start of each tick.
+#[derive(Default)]
+pub struct MarketBidSummaryClearSystem;
+
+impl<'a> System<'a> for MarketBidSummaryClearSystem {
+    type SystemData = Write<'a, MarketBidSummary>;
+
+    fn run(&mut self, mut summary: Self::SystemData) {
+        summary.clear();
+    }
+}
 
 /// Compute a transfer "value" (resources per unit of distance/cost) with a
 /// guarded divisor so a degenerate input (zero length/cost) cannot produce
@@ -403,17 +457,23 @@ impl From<&StructurePowerSpawn> for TransferTarget {
     }
 }
 
+// ADR 0040 M5a — the numeric-bid lane: the live queue keys / requests / ticket entries carry a
+// quantized `bid: u32` (milli-e/t; `sink_economics::BID_SCALE` = 1.000 = par) INSTEAD of the
+// 4-tier `TransferPriority` enum (the rover w-lane precedent). `bid_to_tier` projects a bid back
+// onto the tier bands for the NON-MARKET lanes (links/terminal/labs) that still consume the
+// tier-interleave snapshot kernel (`screeps_econ_decision::snapshot`, kept tier-based for the
+// SIM's tournament arms). The market HAUL lane runs the numeric market pass directly.
 #[derive(Eq, PartialEq, Hash, Clone, Copy)]
 pub struct TransferWithdrawlKey {
     resource: ResourceType,
-    priority: TransferPriority,
+    bid: u32,
     allowed_type: TransferType,
 }
 
 impl TransferWithdrawlKey {
     pub fn matches(&self, resource: ResourceType, allowed_priorities: TransferPriorityFlags, allowed_types: TransferTypeFlags) -> bool {
         self.resource == resource
-            && allowed_priorities.intersects(self.priority.into())
+            && allowed_priorities.intersects(bid_to_tier(self.bid).into())
             && allowed_types.intersects(self.allowed_type.into())
     }
 }
@@ -421,7 +481,7 @@ impl TransferWithdrawlKey {
 #[derive(Eq, PartialEq, Hash, Clone, Copy)]
 pub struct TransferDepositKey {
     resource: Option<ResourceType>,
-    priority: TransferPriority,
+    bid: u32,
     allowed_type: TransferType,
 }
 
@@ -433,7 +493,7 @@ impl TransferDepositKey {
         allowed_types: TransferTypeFlags,
     ) -> bool {
         self.resource == resource
-            && allowed_priorities.intersects(self.priority.into())
+            && allowed_priorities.intersects(bid_to_tier(self.bid).into())
             && allowed_types.intersects(self.allowed_type.into())
     }
 }
@@ -497,7 +557,7 @@ impl TransferNode {
             for resource_entry in resource_entries {
                 let key = TransferWithdrawlKey {
                     resource: *resource,
-                    priority: resource_entry.priority,
+                    bid: resource_entry.bid,
                     allowed_type: resource_entry.transfer_type,
                 };
 
@@ -513,7 +573,7 @@ impl TransferNode {
             for resource_entry in resource_entries {
                 let key = TransferDepositKey {
                     resource: resource_entry.target_resource,
-                    priority: resource_entry.priority,
+                    bid: resource_entry.bid,
                     allowed_type: resource_entry.transfer_type,
                 };
 
@@ -529,22 +589,22 @@ impl TransferNode {
         let withdraw_text = self
             .withdrawls
             .iter()
-            .map(|(key, amount)| format!("{:?} {:?} {:?} {:?}", key.resource, key.priority, key.allowed_type, amount));
+            .map(|(key, amount)| format!("{:?} {} {:?} {:?}", key.resource, bid_label(key.bid), key.allowed_type, amount));
 
         let pending_withdraw_text = self
             .pending_withdrawls
             .iter()
-            .map(|(key, amount)| format!("{:?} {:?} {:?} {:?}", key.resource, key.priority, key.allowed_type, amount));
+            .map(|(key, amount)| format!("{:?} {} {:?} {:?}", key.resource, bid_label(key.bid), key.allowed_type, amount));
 
         let deposit_text = self
             .deposits
             .iter()
-            .map(|(key, amount)| format!("{:?} {:?} {:?} {:?}", key.resource, key.priority, key.allowed_type, amount));
+            .map(|(key, amount)| format!("{:?} {} {:?} {:?}", key.resource, bid_label(key.bid), key.allowed_type, amount));
 
         let pending_deposit_text = self
             .pending_deposits
             .iter()
-            .map(|(key, amount)| format!("{:?} {:?} {:?} {:?}", key.resource, key.priority, key.allowed_type, amount));
+            .map(|(key, amount)| format!("{:?} {} {:?} {:?}", key.resource, bid_label(key.bid), key.allowed_type, amount));
 
         let full_text = withdraw_text
             .chain(pending_withdraw_text)
@@ -560,26 +620,40 @@ impl TransferNode {
 pub struct TransferWithdrawRequest {
     target: TransferTarget,
     resource: ResourceType,
-    priority: TransferPriority,
+    bid: u32,
     amount: u32,
     allowed_type: TransferType,
 }
 
 impl TransferWithdrawRequest {
+    /// Construct a withdraw request from a numeric `bid` (milli-e/t; ADR 0040 M5a). Registration
+    /// sites that still speak tiers convert via [`tier_to_bid`] at the call.
     pub fn new(
         target: TransferTarget,
         resource: ResourceType,
-        priority: TransferPriority,
+        bid: u32,
         amount: u32,
         allowed_type: TransferType,
     ) -> TransferWithdrawRequest {
         TransferWithdrawRequest {
             target,
             resource,
-            priority,
+            bid,
             amount,
             allowed_type,
         }
+    }
+
+    /// Construct from a legacy tier priority (the non-market registration sites keep their tier
+    /// intent readable; the bid rides the numeric lane).
+    pub fn new_tier(
+        target: TransferTarget,
+        resource: ResourceType,
+        priority: TransferPriority,
+        amount: u32,
+        allowed_type: TransferType,
+    ) -> TransferWithdrawRequest {
+        Self::new(target, resource, tier_to_bid(priority), amount, allowed_type)
     }
 }
 
@@ -587,7 +661,9 @@ impl TransferWithdrawRequest {
 pub struct TransferWithdrawlTicketResourceEntry {
     amount: u32,
     transfer_type: TransferType,
-    priority: TransferPriority,
+    /// The quantized e/t bid (milli; ADR 0040 M5a — replaces the `TransferPriority` tier). Rides
+    /// inside the serialized `HaulState` (WFV 26→27).
+    bid: u32,
 }
 
 impl TransferWithdrawlTicketResourceEntry {
@@ -599,8 +675,8 @@ impl TransferWithdrawlTicketResourceEntry {
         self.transfer_type
     }
 
-    pub fn priority(&self) -> TransferPriority {
-        self.priority
+    pub fn bid(&self) -> u32 {
+        self.bid
     }
 }
 
@@ -628,7 +704,7 @@ impl TransferWithdrawTicket {
                     for entry in entries {
                         if let Some(withdrawl_resource_entry) = existing
                             .iter_mut()
-                            .find(|oe| oe.priority == entry.priority && oe.transfer_type == entry.transfer_type)
+                            .find(|oe| oe.bid == entry.bid && oe.transfer_type == entry.transfer_type)
                         {
                             withdrawl_resource_entry.amount += entry.amount;
                         } else {
@@ -675,26 +751,38 @@ impl TransferWithdrawTicket {
 pub struct TransferDepositRequest {
     target: TransferTarget,
     resource: Option<ResourceType>,
-    priority: TransferPriority,
+    bid: u32,
     amount: u32,
     allowed_type: TransferType,
 }
 
 impl TransferDepositRequest {
+    /// Construct a deposit request from a numeric `bid` (milli-e/t; ADR 0040 M5a).
     pub fn new(
         target: TransferTarget,
         resource: Option<ResourceType>,
-        priority: TransferPriority,
+        bid: u32,
         amount: u32,
         allowed_type: TransferType,
     ) -> TransferDepositRequest {
         TransferDepositRequest {
             target,
             resource,
-            priority,
+            bid,
             amount,
             allowed_type,
         }
+    }
+
+    /// Construct from a legacy tier priority (the non-market registration sites).
+    pub fn new_tier(
+        target: TransferTarget,
+        resource: Option<ResourceType>,
+        priority: TransferPriority,
+        amount: u32,
+        allowed_type: TransferType,
+    ) -> TransferDepositRequest {
+        Self::new(target, resource, tier_to_bid(priority), amount, allowed_type)
     }
 }
 
@@ -703,7 +791,8 @@ pub struct TransferDepositTicketResourceEntry {
     target_resource: Option<ResourceType>,
     amount: u32,
     transfer_type: TransferType,
-    priority: TransferPriority,
+    /// The quantized e/t bid (milli; ADR 0040 M5a — replaces the `TransferPriority` tier).
+    bid: u32,
 }
 
 impl TransferDepositTicketResourceEntry {
@@ -719,8 +808,8 @@ impl TransferDepositTicketResourceEntry {
         self.transfer_type
     }
 
-    pub fn priority(&self) -> TransferPriority {
-        self.priority
+    pub fn bid(&self) -> u32 {
+        self.bid
     }
 }
 
@@ -748,7 +837,7 @@ impl TransferDepositTicket {
                     for entry in entries {
                         if let Some(deposit_resource_entry) = existing.iter_mut().find(|oe| {
                             oe.target_resource == entry.target_resource
-                                && oe.priority == entry.priority
+                                && oe.bid == entry.bid
                                 && oe.transfer_type == entry.transfer_type
                         }) {
                             deposit_resource_entry.amount += entry.amount;
@@ -1088,7 +1177,8 @@ impl TransferRequestSystem for LazyTransferQueueRooms {
         let room = self.get_room_no_flush(withdraw_request.target.local_pos().room_name());
         room.stats.total_withdrawl += withdraw_request.amount;
 
-        let priority_flag = withdraw_request.priority.into();
+        // The tier-presence gates read the bid's projected band (ADR 0040 M5a).
+        let priority_flag = bid_to_tier(withdraw_request.bid).into();
         room.stats.withdrawl_priorities |= priority_flag;
 
         if TransferPriorityFlags::ACTIVE.intersects(priority_flag) {
@@ -1097,7 +1187,7 @@ impl TransferRequestSystem for LazyTransferQueueRooms {
 
         let key = TransferWithdrawlKey {
             resource: withdraw_request.resource,
-            priority: withdraw_request.priority,
+            bid: withdraw_request.bid,
             allowed_type: withdraw_request.allowed_type,
         };
 
@@ -1112,7 +1202,7 @@ impl TransferRequestSystem for LazyTransferQueueRooms {
         let room = self.get_room_no_flush(deposit_request.target.local_pos().room_name());
         room.stats.total_deposit += deposit_request.amount;
 
-        let priority_flag = deposit_request.priority.into();
+        let priority_flag = bid_to_tier(deposit_request.bid).into();
         room.stats.deposit_priorities |= priority_flag;
 
         if TransferPriorityFlags::ACTIVE.intersects(priority_flag) {
@@ -1121,7 +1211,7 @@ impl TransferRequestSystem for LazyTransferQueueRooms {
 
         let key = TransferDepositKey {
             resource: deposit_request.resource,
-            priority: deposit_request.priority,
+            bid: deposit_request.bid,
             allowed_type: deposit_request.allowed_type,
         };
 
@@ -1139,7 +1229,7 @@ impl TransferRequestSystem for LazyTransferQueueRooms {
             for entry in entries {
                 let key = TransferWithdrawlKey {
                     resource: *resource,
-                    priority: entry.priority,
+                    bid: entry.bid,
                     allowed_type: entry.transfer_type,
                 };
 
@@ -1159,7 +1249,7 @@ impl TransferRequestSystem for LazyTransferQueueRooms {
             for entry in entries {
                 let key = TransferDepositKey {
                     resource: entry.target_resource,
-                    priority: entry.priority,
+                    bid: entry.bid,
                     allowed_type: entry.transfer_type,
                 };
 
@@ -1184,10 +1274,12 @@ impl TransferRequestSystem for LazyTransferQueueRooms {
 // into the kernel bookings alongside the queue's own `pending_*`/stats writes.
 
 impl TransferWithdrawlKey {
+    // The tier-keyed snapshot kernel (`snapshot.rs`, kept tier-based for the SIM) consumes the
+    // bid's projected band (ADR 0040 M5a). The market HAUL lane uses the numeric bid directly.
     fn to_econ(self) -> econ::WithdrawKey {
         econ::WithdrawKey {
             resource: self.resource,
-            priority: self.priority,
+            priority: bid_to_tier(self.bid),
             allowed_type: self.allowed_type,
         }
     }
@@ -1197,7 +1289,7 @@ impl TransferDepositKey {
     fn to_econ(self) -> econ::DepositKey {
         econ::DepositKey {
             resource: self.resource,
-            priority: self.priority,
+            priority: bid_to_tier(self.bid),
             allowed_type: self.allowed_type,
         }
     }
@@ -1240,6 +1332,37 @@ fn deposit_key_sort(key: &econ::DepositKey) -> (u32, u8, u8) {
     (resource, key.priority as u8, key.allowed_type as u8)
 }
 
+/// Build a single-entry energy withdraw ticket (ADR 0040 M5a market selection): the pickup leg a
+/// market `PickupDeliver` assigns, keyed by the source node's own numeric bid.
+fn build_energy_withdraw_ticket(target: TransferTarget, amount: u32, bid: u32, transfer_type: TransferType) -> TransferWithdrawTicket {
+    let mut resources: HashMap<ResourceType, Vec<TransferWithdrawlTicketResourceEntry>> = HashMap::new();
+    resources.insert(
+        ResourceType::Energy,
+        vec![TransferWithdrawlTicketResourceEntry {
+            amount,
+            transfer_type,
+            bid,
+        }],
+    );
+    TransferWithdrawTicket { target, resources }
+}
+
+/// Build a single-entry energy deposit ticket (ADR 0040 M5a market selection): the delivery leg a
+/// market `Deliver`/`PickupDeliver` assigns, keyed by the sink's own numeric bid.
+fn build_energy_deposit_ticket(target: TransferTarget, amount: u32, bid: u32, transfer_type: TransferType) -> TransferDepositTicket {
+    let mut resources: HashMap<ResourceType, Vec<TransferDepositTicketResourceEntry>> = HashMap::new();
+    resources.insert(
+        ResourceType::Energy,
+        vec![TransferDepositTicketResourceEntry {
+            target_resource: Some(ResourceType::Energy),
+            amount,
+            transfer_type,
+            bid,
+        }],
+    );
+    TransferDepositTicket { target, resources }
+}
+
 /// The live-side K2 view: the kernel snapshot + bookings + the node↔target table.
 #[derive(Default)]
 pub struct EconView {
@@ -1272,7 +1395,9 @@ impl EconView {
                             .map(|e| TransferWithdrawlTicketResourceEntry {
                                 amount: e.amount,
                                 transfer_type: e.transfer_type,
-                                priority: e.priority,
+                                // The tier-keyed snapshot kernel emits a tier; carry it onto the
+                                // numeric ticket lane (ADR 0040 M5a).
+                                bid: tier_to_bid(e.priority),
                             })
                             .collect(),
                     )
@@ -1296,7 +1421,7 @@ impl EconView {
                                 target_resource: e.target_resource,
                                 amount: e.amount,
                                 transfer_type: e.transfer_type,
-                                priority: e.priority,
+                                bid: tier_to_bid(e.priority),
                             })
                             .collect(),
                     )
@@ -1316,7 +1441,7 @@ impl EconView {
                         node,
                         econ::WithdrawKey {
                             resource: *resource,
-                            priority: entry.priority,
+                            priority: bid_to_tier(entry.bid),
                             allowed_type: entry.transfer_type,
                         },
                         entry.amount,
@@ -1335,7 +1460,7 @@ impl EconView {
                         node,
                         econ::DepositKey {
                             resource: entry.target_resource,
-                            priority: entry.priority,
+                            priority: bid_to_tier(entry.bid),
                             allowed_type: entry.transfer_type,
                         },
                         entry.amount,
@@ -1482,6 +1607,47 @@ impl TransferQueue {
     /// (`RunJobSystem`); cleared with the queue each tick.
     pub fn build_econ_snapshot(&mut self, data: &dyn TransferRequestSystemData) {
         self.econ = Some(self.rooms.build_econ_view_all(data));
+    }
+
+    /// ADR 0040 M5a — publish the LIVE market readout (§D8 #5): for every materialized room,
+    /// compute the opportunity floor (the highest materially-unmet DEPOSIT bid, read straight
+    /// off the numeric-bid deposit keys — this IS the market's per-room floor the selection
+    /// admits against) + the top-3 unmet bids, and emit the grep-able `[market]` console line via
+    /// [`MarketBidSummary`]. Called right after [`Self::build_econ_snapshot`] (the demand is
+    /// fully materialized). The floor is the same quantity the sim's `begin_tick` computes; the
+    /// live selection (the numeric-bid tier-interleave over this demand) and the repair/Use-lane
+    /// admission consume it.
+    pub fn publish_market_floor(&self, summary: &mut MarketBidSummary) {
+        let consts = MarketConsts::default();
+        for (room_name, room) in &self.rooms.rooms {
+            // Aggregate unmet deposit demand per numeric bid across the room's nodes
+            // (`requested − pending`, floored at 0 — the live availability).
+            let mut unmet_by_bid: HashMap<u32, u32> = HashMap::new();
+            for node in room.nodes.values() {
+                for key in node.deposits.keys() {
+                    let available = node.get_available_deposit(key);
+                    if available > 0 {
+                        *unmet_by_bid.entry(key.bid).or_insert(0) += available;
+                    }
+                }
+            }
+            if unmet_by_bid.is_empty() {
+                continue;
+            }
+            let floor = screeps_econ_decision::sink_economics::opportunity_floor(
+                &consts,
+                unmet_by_bid.iter().map(|(&b, &a)| (b, a)),
+            );
+            let mut top: Vec<u32> = unmet_by_bid
+                .iter()
+                .filter(|(_, &a)| a >= consts.floor_material_min_e)
+                .map(|(&b, _)| b)
+                .collect();
+            top.sort_unstable_by(|a, b| b.cmp(a));
+            top.dedup();
+            top.truncate(3);
+            summary.publish(*room_name, floor, top);
+        }
     }
 
     /// Run `f` over the per-tick snapshot when it exists (the hauling pass), else over an
@@ -1671,6 +1837,221 @@ impl TransferQueue {
             )
             .map(|(pickup, delivery)| (view.withdraw_ticket(pickup), view.deposit_ticket(delivery)))
         })
+    }
+
+    /// **ADR 0040 M5a — the LIVE bid-native market selection** (the wiring the M5a-core slice
+    /// left undone): run the SHARED market-selection kernel
+    /// ([`screeps_econ_decision::market::market_pass`], the same one the sim's MARKET tournament
+    /// arm delegates to) over this creep, ranking candidate (pickup, delivery) pairs by RAW
+    /// bid-density `v = bid·amount/service` — NOT the tier-interleave `select_pickup_and_delivery`
+    /// which projects bids back to 4 tiers via `bid_to_tier` and then scores nearest-wins,
+    /// throwing away bid resolution before selecting.
+    ///
+    /// The pass is run with a SINGLE carrier (this creep), so it honors the FSM's existing
+    /// per-mission room scoping + `target_filter` for free (the market kernel is single-room /
+    /// single-target-set; a whole-room batch pass cannot honor N heterogeneous per-carrier scopes
+    /// — see the report). Because the bot and the sim build the same DTOs and call the ONE kernel,
+    /// the assignment is byte-identical to the sim's `market_pass` on the equivalent world (the
+    /// live-wiring parity test asserts exactly that).
+    ///
+    /// Returns the FSM's ticket pair: a loaded hauler (carried `held > 0`) gets an empty pickup +
+    /// a `Deliver`; an empty hauler gets a `PickupDeliver`. `None` falls through to the caller's
+    /// existing tier path (which keeps the crate tier-capable for links/terminal/labs). Bookings
+    /// are NOT registered here — the caller registers the returned tickets (the FSM's
+    /// `register_pickup`/`register_delivery` contract, identical to the tier path).
+    #[allow(clippy::too_many_arguments)]
+    pub fn select_market_pickup_and_delivery<TF>(
+        &mut self,
+        data: &dyn TransferRequestSystemData,
+        pickup_rooms: &[RoomName],
+        delivery_rooms: &[RoomName],
+        transfer_type: TransferType,
+        current_position: Position,
+        free_capacity: u32,
+        carried_energy: u32,
+        target_filter: TF,
+    ) -> Option<(TransferWithdrawTicket, TransferDepositTicket)>
+    where
+        TF: Fn(&TransferTarget) -> bool,
+    {
+        use screeps_econ_decision::market::{MarketCarrier, MarketDeposit, MarketPickup, MarketTask};
+
+        // Flush exactly the queried rooms/types (the lazy `with_econ_view` contract) so the raw
+        // nodes carry this tick's full demand before we read the numeric bids off them. At the
+        // hauling-pass batch point every generator is already flushed (the snapshot build);
+        // this keeps the method correct for any caller.
+        {
+            let mut names: Vec<RoomName> = pickup_rooms.iter().chain(delivery_rooms.iter()).cloned().collect();
+            names.sort_unstable();
+            names.dedup();
+            for room in &names {
+                self.rooms.flush_generators(data, *room, transfer_type.into());
+            }
+        }
+
+        let types: TransferTypeFlags = transfer_type.into();
+
+        // ── Build the market DTOs from the RAW queue nodes (numeric bids, net of pending). ──
+        // Deposits: every delivery-room node that can absorb energy on this lane, aggregated into
+        // ONE sink per structure (the kernel's per-structure model) — sum the available energy
+        // across its energy-acceptable deposit keys, take the highest bid as the sink's bid, and
+        // flag the engine-fungible spawn lane (`is_refill`) so it aggregates. Deterministic:
+        // nodes in `target_sort_key` order, indices assigned in that order.
+        let mut deposit_targets: Vec<TransferTarget> = Vec::new();
+        let mut deposits: Vec<MarketDeposit> = Vec::new();
+        for room_name in delivery_rooms {
+            let Some(room) = self.rooms.rooms.get(room_name) else {
+                continue;
+            };
+            let mut nodes: Vec<(&TransferTarget, &TransferNode)> = room.nodes.iter().collect();
+            nodes.sort_by_key(|(target, _)| target_sort_key(target));
+            for (target, node) in nodes {
+                if !target_filter(target) {
+                    continue;
+                }
+                let mut unfulfilled = 0u32;
+                let mut bid = 0u32;
+                let mut keys: Vec<&TransferDepositKey> = node
+                    .deposits
+                    .keys()
+                    .filter(|k| {
+                        (k.resource == Some(ResourceType::Energy) || k.resource.is_none())
+                            && types.intersects(k.allowed_type.into())
+                    })
+                    .collect();
+                keys.sort_by_key(|k| deposit_key_sort(&k.to_econ()));
+                for key in keys {
+                    let available = node.get_available_deposit(key);
+                    if available > 0 {
+                        unfulfilled += available;
+                        bid = bid.max(key.bid);
+                    }
+                }
+                if unfulfilled == 0 {
+                    continue;
+                }
+                let sink = deposit_targets.len() as u32;
+                deposits.push(MarketDeposit {
+                    sink,
+                    pos: target.local_pos(),
+                    bid_milli: bid,
+                    unfulfilled,
+                    is_refill: matches!(target, TransferTarget::Spawn(_) | TransferTarget::Extension(_)),
+                });
+                deposit_targets.push(*target);
+            }
+        }
+        if deposits.is_empty() {
+            return None;
+        }
+
+        // Pickups (empty-carrier only): every pickup-room node that can supply energy on this
+        // lane, one source per structure, summed available energy. Same deterministic order.
+        let mut pickup_targets: Vec<TransferTarget> = Vec::new();
+        let mut pickups: Vec<MarketPickup> = Vec::new();
+        if carried_energy == 0 {
+            for room_name in pickup_rooms {
+                let Some(room) = self.rooms.rooms.get(room_name) else {
+                    continue;
+                };
+                let mut nodes: Vec<(&TransferTarget, &TransferNode)> = room.nodes.iter().collect();
+                nodes.sort_by_key(|(target, _)| target_sort_key(target));
+                for (target, node) in nodes {
+                    let mut available = 0u32;
+                    let mut keys: Vec<&TransferWithdrawlKey> = node
+                        .withdrawls
+                        .keys()
+                        .filter(|k| k.resource == ResourceType::Energy && types.intersects(k.allowed_type.into()))
+                        .collect();
+                    keys.sort_by_key(|k| withdraw_key_sort(&k.to_econ()));
+                    for key in keys {
+                        available += node.get_available_withdrawl(key);
+                    }
+                    if available == 0 {
+                        continue;
+                    }
+                    let src = pickup_targets.len() as u32;
+                    pickups.push(MarketPickup {
+                        src,
+                        pos: target.local_pos(),
+                        available,
+                    });
+                    pickup_targets.push(*target);
+                }
+            }
+        }
+
+        // The single carrier: a loaded hauler (`held > 0`) delivers carried cargo; an empty
+        // hauler picks up + delivers. Haulers have no harvest alternative (`opportunity 0`).
+        let carriers = [MarketCarrier {
+            id: 0,
+            pos: current_position,
+            free: free_capacity,
+            held: carried_energy,
+            opportunity_milli: 0,
+        }];
+
+        let consts = MarketConsts::default();
+        let input = crate::transfer::market_adapter::RoomMarketInput {
+            deposits,
+            pickups,
+            carriers: carriers.to_vec(),
+        };
+        // `same_structure(src_idx, sink_idx)`: never withdraw from the very structure being served
+        // (the kernel's self-withdraw guard) — the bot's `TransferTarget` identity.
+        let result = crate::transfer::market_adapter::run_room_market(&consts, &input, |src_idx, sink_idx| {
+            pickup_targets[src_idx as usize] == deposit_targets[sink_idx as usize]
+        });
+
+        let assignment = result.assignments.into_iter().next()?;
+        // Map the kernel's index-scoped task back to live tickets (energy lane; the delivered bid
+        // carries the SINK's numeric bid so the registered ticket reads identically to the queue).
+        match assignment.task {
+            MarketTask::Deliver { sink, amount, .. } => {
+                let sink_target = deposit_targets[sink as usize];
+                let sink_bid = input.deposits[sink as usize].bid_milli;
+                // A loaded hauler has no pickup leg — an empty withdraw ticket keeps the FSM's
+                // (pickup, delivery) shape; the delivery is what actually moves cargo.
+                let empty_pickup = TransferWithdrawTicket {
+                    target: sink_target,
+                    resources: HashMap::new(),
+                };
+                let delivery = build_energy_deposit_ticket(sink_target, amount, sink_bid, transfer_type);
+                Some((empty_pickup, delivery))
+            }
+            MarketTask::PickupDeliver { src, take, sink, give, .. } => {
+                let src_target = pickup_targets[src as usize];
+                let sink_target = deposit_targets[sink as usize];
+                let sink_bid = input.deposits[sink as usize].bid_milli;
+                // The withdraw ticket carries the SOURCE node's own energy bid (so the pickup
+                // registration reads identically to the queue's withdraw key); the kernel took
+                // `take` from that source.
+                let src_bid = self.node_energy_withdraw_bid(&src_target);
+                let pickup = build_energy_withdraw_ticket(src_target, take, src_bid, transfer_type);
+                let delivery = build_energy_deposit_ticket(sink_target, give, sink_bid, transfer_type);
+                Some((pickup, delivery))
+            }
+        }
+    }
+
+    /// The energy withdraw bid to stamp on a pickup ticket for `target`: the highest-bid energy
+    /// withdraw key with remaining availability (deterministic; falls back to the numeraire when
+    /// the source registered no bid this tick — an in-flight store). Reads the raw node so the
+    /// registered ticket's bid matches the queue's key.
+    fn node_energy_withdraw_bid(&self, target: &TransferTarget) -> u32 {
+        let room_name = target.local_pos().room_name();
+        self.rooms
+            .rooms
+            .get(&room_name)
+            .and_then(|room| room.nodes.get(target))
+            .and_then(|node| {
+                node.withdrawls
+                    .keys()
+                    .filter(|k| k.resource == ResourceType::Energy && node.get_available_withdrawl(k) > 0)
+                    .map(|k| k.bid)
+                    .max()
+            })
+            .unwrap_or(screeps_econ_decision::sink_economics::STORAGE_BID)
     }
 
     /// Terminal routing: pair a terminal's own supply with the best cross-room delivery
@@ -1909,7 +2290,7 @@ impl TransferQueue {
                     if key.allowed_type == transfer_type {
                         let resource_entry = withdrawls.entry(key.resource).or_default();
 
-                        if TransferPriorityFlags::ACTIVE.intersects(key.priority.into()) {
+                        if TransferPriorityFlags::ACTIVE.intersects(bid_to_tier(key.bid).into()) {
                             resource_entry.active += stats.unfufilled_amount().max(0) as u32;
                         } else {
                             resource_entry.inactive += stats.unfufilled_amount().max(0) as u32;
@@ -1925,7 +2306,7 @@ impl TransferQueue {
                     if key.allowed_type == transfer_type {
                         let resource_entry = deposits.entry(key.resource).or_default();
 
-                        if TransferPriorityFlags::ACTIVE.intersects(key.priority.into()) {
+                        if TransferPriorityFlags::ACTIVE.intersects(bid_to_tier(key.bid).into()) {
                             resource_entry.active += stats.unfufilled_amount().max(0) as u32;
                         } else {
                             resource_entry.inactive += stats.unfufilled_amount().max(0) as u32;
@@ -1967,15 +2348,16 @@ impl TransferQueue {
             let mut generic_demand_pending: u32 = 0;
             let mut generic_demand_by_priority = [0u32; 4];
 
-            fn priority_index(p: TransferPriority) -> usize {
-                p as usize
+            // The bid's projected tier band → the [High, Medium, Low, None] display bucket.
+            fn priority_index(bid: u32) -> usize {
+                bid_to_tier(bid) as usize
             }
 
             // Aggregate withdrawals (supply side): always a concrete resource.
             for (key, res_stats) in &stats.withdrawl_resource_stats {
                 let amount = res_stats.amount();
                 let pending = res_stats.pending_amount();
-                let idx = priority_index(key.priority).min(3);
+                let idx = priority_index(key.bid).min(3);
 
                 let entry = resources.entry(key.resource).or_default();
                 entry.supply += amount;
@@ -1987,7 +2369,7 @@ impl TransferQueue {
             for (key, res_stats) in &stats.deposit_resource_stats {
                 let amount = res_stats.amount();
                 let pending = res_stats.pending_amount();
-                let idx = priority_index(key.priority).min(3);
+                let idx = priority_index(key.bid).min(3);
 
                 if let Some(resource) = key.resource {
                     let entry = resources.entry(resource).or_default();
@@ -2077,6 +2459,7 @@ impl<'a> System<'a> for TransferQueueUpdateSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use screeps_econ_decision::sink_economics::STORAGE_BID;
 
     // Pin (IBEX-046): transfer value computations guard their divisors so a
     // zero length/cost cannot produce NaN or infinity for the priority
@@ -2144,21 +2527,21 @@ mod tests {
     fn fill_room(queue: &mut TransferQueue, room: &str, id_base: u128) -> (TransferTarget, TransferTarget) {
         let spawn = spawn_target(room, 25, 25, id_base);
         let storage = storage_target(room, 20, 25, id_base + 1);
-        queue.request_deposit(TransferDepositRequest::new(
+        queue.request_deposit(TransferDepositRequest::new_tier(
             spawn,
             Some(ResourceType::Energy),
             TransferPriority::High,
             300,
             TransferType::Haul,
         ));
-        queue.request_withdraw(TransferWithdrawRequest::new(
+        queue.request_withdraw(TransferWithdrawRequest::new_tier(
             storage,
             ResourceType::Energy,
             TransferPriority::None,
             50_000,
             TransferType::Haul,
         ));
-        queue.request_deposit(TransferDepositRequest::new(
+        queue.request_deposit(TransferDepositRequest::new_tier(
             storage,
             None,
             TransferPriority::None,
@@ -2267,6 +2650,221 @@ mod tests {
         assert_eq!(*ticket.target(), spawn, "the only ACTIVE sink; storage(None) never competes");
     }
 
+    // ═════════════════════════════════════════════════════════════════════════════════════════
+    // ADR 0040 M5a — the LIVE-SELECTION WIRING PROOF (the gate the M5a-core slice lacked).
+    //
+    // The M5a-core parity test (`screeps-econ-eval/tests/market_parity.rs`) proved the SIM MARKET
+    // arm (`MarketRuntime::market_pass`) equals the shared kernel (`market::market_pass`) by
+    // reconstructing kernel DTOs from the world — a kernel-in-isolation proof. What it did NOT
+    // exercise is the LIVE hauler-facing selection (the thing the FSM actually calls). These tests
+    // close that gap: they drive the REAL live method `TransferQueue::select_market_pickup_and_
+    // delivery` on a fixture room, and assert its assignment equals the shared kernel run over the
+    // EQUIVALENT DTOs built the exact way the SIM MARKET arm builds them (`market.rs`'s
+    // `k_carriers`/`k_deposits`/`k_pickups` field mapping, inlined below). Since
+    // market_parity.rs already pins (sim arm == kernel), (live == kernel-with-sim-arm-DTOs) closes
+    // the loop: the live selection == the tournament MARKET arm, by construction.
+    // ═════════════════════════════════════════════════════════════════════════════════════════
+
+    fn container_target(room: &str, x: u8, y: u8, id: u128) -> TransferTarget {
+        TransferTarget::Container(RemoteObjectId::new_from_components(
+            screeps::local::RawObjectId::from_packed(id).into(),
+            test_pos(room, x, y),
+        ))
+    }
+
+    /// Build a market-priced fixture room in the LIVE queue with explicit NUMERIC bids (the same
+    /// facts the kernel DTOs below carry): a spawn refill deficit (high bid, engine-fungible), a
+    /// stressed near container (high bid, per-structure), and a par storage that both supplies
+    /// (big withdraw) and buffers (accepts-any par deposit). Returns the targets.
+    #[allow(clippy::type_complexity)]
+    fn market_fixture(queue: &mut TransferQueue, room: &str, id: u128) -> (TransferTarget, TransferTarget, TransferTarget) {
+        let spawn = spawn_target(room, 25, 25, id);
+        let container = container_target(room, 11, 10, id + 1);
+        let storage = storage_target(room, 30, 25, id + 2);
+        // Spawn refill deposit: bid 6000 (a stressed refill), deficit 250, engine-fungible lane.
+        queue.request_deposit(TransferDepositRequest::new(spawn, Some(ResourceType::Energy), 6000, 250, TransferType::Haul));
+        // Stressed container deposit: bid 5000, unmet 100 (per-structure sink).
+        queue.request_deposit(TransferDepositRequest::new(container, Some(ResourceType::Energy), 5000, 100, TransferType::Haul));
+        // Storage: par deposit (accepts-any) + a big supply to pick up from.
+        queue.request_deposit(TransferDepositRequest::new(storage, None, STORAGE_BID, 500_000, TransferType::Haul));
+        queue.request_withdraw(TransferWithdrawRequest::new(storage, ResourceType::Energy, STORAGE_BID, 50_000, TransferType::Haul));
+        (spawn, container, storage)
+    }
+
+    /// Build the kernel DTOs the way the SIM MARKET arm does (`market.rs` k_deposits/k_pickups/
+    /// k_carriers) from the SAME facts — one deposit per sink (bid + unmet + is_refill), one
+    /// pickup per haul source, one carrier. This IS the sim arm's `market_pass` core.
+    #[allow(clippy::type_complexity)]
+    fn sim_arm_kernel_assignment(
+        carrier: screeps_econ_decision::market::MarketCarrier,
+        deposits: &[(TransferTarget, u32, u32, bool)], // (target, bid, unmet, is_refill)
+        pickups: &[(TransferTarget, u32)],             // (target, available)
+    ) -> Option<screeps_econ_decision::market::MarketAssignment> {
+        use screeps_econ_decision::market::{market_pass, MarketDeposit, MarketPickup};
+        let k_deposits: Vec<MarketDeposit> = deposits
+            .iter()
+            .enumerate()
+            .map(|(i, (t, bid, unmet, is_refill))| MarketDeposit {
+                sink: i as u32,
+                pos: t.local_pos(),
+                bid_milli: *bid,
+                unfulfilled: *unmet,
+                is_refill: *is_refill,
+            })
+            .collect();
+        let k_pickups: Vec<MarketPickup> = pickups
+            .iter()
+            .enumerate()
+            .map(|(i, (t, avail))| MarketPickup {
+                src: i as u32,
+                pos: t.local_pos(),
+                available: *avail,
+            })
+            .collect();
+        let deposit_targets: Vec<TransferTarget> = deposits.iter().map(|(t, ..)| *t).collect();
+        let pickup_targets: Vec<TransferTarget> = pickups.iter().map(|(t, _)| *t).collect();
+        market_pass(&[carrier], &k_deposits, &k_pickups, |src, sink| {
+            pickup_targets[src as usize] == deposit_targets[sink as usize]
+        })
+        .assignments
+        .into_iter()
+        .next()
+    }
+
+    /// LOADED hauler, the BID-RESOLUTION discriminator: two same-band, EQUIDISTANT deposits with
+    /// different RAW bids. The tier path would band both to `High` and break the range tie by node
+    /// order (blind to the bid — "a 15-bid extension and a 6-bid tower both become High and nearest
+    /// wins"); the bid-native live path (and the sim MARKET arm) pick the HIGHER raw bid. The live
+    /// selection's sink + amount equal the sim MARKET arm's `Deliver` task.
+    #[test]
+    fn live_market_selection_loaded_matches_sim_arm() {
+        use screeps_econ_decision::market::{MarketCarrier, MarketTask};
+        let mut queue = TransferQueue::default();
+        // Two equidistant sinks either side of the carrier (both range 1 → identical service):
+        // a lower-bid container and a higher-bid spawn refill. Raw bid is the only differentiator.
+        let carrier_pos = test_pos("W4N4", 25, 25);
+        let low = container_target("W4N4", 24, 25, 0x4001); // bid 4100 (High band)
+        let high = spawn_target("W4N4", 26, 25, 0x4002); // bid 6000 (High band), engine-fungible
+        queue.request_deposit(TransferDepositRequest::new(low, Some(ResourceType::Energy), 4100, 100, TransferType::Haul));
+        queue.request_deposit(TransferDepositRequest::new(high, Some(ResourceType::Energy), 6000, 100, TransferType::Haul));
+        let rooms = ["W4N4".parse().unwrap()];
+        queue.build_econ_snapshot(&NoRoomData);
+
+        // ── Live path: run the REAL hauler-facing selection for a loaded hauler (held 100). ──
+        let (pickup, delivery) = queue
+            .select_market_pickup_and_delivery(
+                &NoRoomData,
+                &rooms,
+                &rooms,
+                TransferType::Haul,
+                carrier_pos,
+                0,   // free
+                100, // carried energy
+                target_filters::all,
+            )
+            .expect("the market assigns the loaded hauler a delivery");
+        assert!(pickup.resources().is_empty(), "a loaded hauler has no pickup leg");
+        let live_sink = *delivery.target();
+        let live_amount: u32 = delivery.resources().values().flat_map(|e| e.iter().map(|x| x.amount())).sum();
+
+        // ── Sim MARKET arm (kernel over the equivalent DTOs, sim-arm field mapping). ──
+        let carrier = MarketCarrier { id: 0, pos: carrier_pos, free: 0, held: 100, opportunity_milli: 0 };
+        let deposits = [(low, 4100u32, 100u32, false), (high, 6000, 100, true)];
+        let sim = sim_arm_kernel_assignment(carrier, &deposits, &[]).expect("sim arm assigns too");
+        match sim.task {
+            MarketTask::Deliver { sink, amount, .. } => {
+                let sim_sink = deposits[sink as usize].0;
+                assert_eq!(live_sink, sim_sink, "live sink target == sim MARKET arm sink");
+                assert_eq!(live_amount, amount, "live delivered amount == sim MARKET arm amount");
+                // Non-vacuous AND discriminating: the HIGHER raw bid wins even though the two sinks
+                // are equidistant and in the same tier band — the exact resolution the tier path
+                // throws away.
+                assert_eq!(sim_sink, high, "the higher raw bid wins among same-band equidistant sinks");
+                assert_eq!(amount, 100, "the whole carried cargo lands");
+            }
+            _ => panic!("the loaded hauler must Deliver"),
+        }
+    }
+
+    /// EMPTY hauler: the live method picks up + delivers; the (src, sink, take, give) equal the sim
+    /// MARKET arm's `PickupDeliver` task on the equivalent world.
+    #[test]
+    fn live_market_selection_empty_matches_sim_arm() {
+        use screeps_econ_decision::market::{MarketCarrier, MarketTask};
+        let mut queue = TransferQueue::default();
+        let (spawn, container, storage) = market_fixture(&mut queue, "W2N2", 0x2000);
+        let rooms = ["W2N2".parse().unwrap()];
+        queue.build_econ_snapshot(&NoRoomData);
+
+        let carrier_pos = test_pos("W2N2", 29, 25); // next to storage — cheapest pickup
+        // ── Live path: an empty hauler (free 100). ──
+        let (pickup, delivery) = queue
+            .select_market_pickup_and_delivery(
+                &NoRoomData,
+                &rooms,
+                &rooms,
+                TransferType::Haul,
+                carrier_pos,
+                100, // free
+                0,   // carried
+                target_filters::all,
+            )
+            .expect("the market assigns the empty hauler a pickup+delivery");
+        let live_src = *pickup.target();
+        let live_sink = *delivery.target();
+        let live_take: u32 = pickup.resources().values().flat_map(|e| e.iter().map(|x| x.amount())).sum();
+        let live_give: u32 = delivery.resources().values().flat_map(|e| e.iter().map(|x| x.amount())).sum();
+
+        // ── Sim MARKET arm (kernel over equivalent DTOs). ──
+        let carrier = MarketCarrier { id: 0, pos: carrier_pos, free: 100, held: 0, opportunity_milli: 0 };
+        let deposits = [
+            (spawn, 6000u32, 250u32, true),
+            (container, 5000, 100, false),
+            (storage, STORAGE_BID, 500_000, false),
+        ];
+        // Only the storage supplies on the haul lane (the sim's `k_pickups`).
+        let pickups = [(storage, 50_000u32)];
+        let sim = sim_arm_kernel_assignment(carrier, &deposits, &pickups).expect("sim arm assigns too");
+        match sim.task {
+            MarketTask::PickupDeliver { src, take, sink, give, .. } => {
+                let sim_src = pickups[src as usize].0;
+                let sim_sink = deposits[sink as usize].0;
+                assert_eq!(live_src, sim_src, "live pickup source == sim MARKET arm src");
+                assert_eq!(live_sink, sim_sink, "live delivery sink == sim MARKET arm sink");
+                assert_eq!(live_take, take, "live take == sim MARKET arm take");
+                assert_eq!(live_give, give, "live give == sim MARKET arm give");
+                // Non-vacuous: storage supplies, the refill lane is the densest admitted sink.
+                assert_eq!(sim_src, storage);
+                assert_eq!(sim_sink, spawn);
+            }
+            _ => panic!("the empty hauler must PickupDeliver"),
+        }
+    }
+
+    /// S1-REPLACEMENT re-confirmation through the bid-native live path: under a deep refill
+    /// deficit the opportunity floor (published off the numeric-bid deposit keys the SAME
+    /// selection admits against) prices OUT a quiet-road repair + a par Use-lane withdraw, and a
+    /// survival bid bypasses. Mirrors `market_adapter::deep_deficit_prices_out_use_and_repair`,
+    /// but reads the floor off the LIVE queue the wiring publishes from.
+    #[test]
+    fn live_floor_prices_out_use_and_repair_under_deep_deficit() {
+        use screeps_econ_decision::sink_economics as econ;
+        let mut queue = TransferQueue::default();
+        let (_spawn, _container, _storage) = market_fixture(&mut queue, "W3N3", 0x3000);
+        queue.build_econ_snapshot(&NoRoomData);
+
+        let mut summary = MarketBidSummary::default();
+        queue.publish_market_floor(&mut summary);
+        let room: RoomName = "W3N3".parse().unwrap();
+        let floor = summary.rooms.get(&room).map(|r| r.opportunity_floor).unwrap_or(0);
+        // The floor is the highest materially-unmet deposit bid — the stressed refill (6000).
+        assert_eq!(floor, 6000, "the deep-deficit floor is the stressed refill bid");
+        // A quiet 40% road (~0.37) + a par Use withdraw are priced OUT; survival bypasses.
+        assert!(!econ::admit_repair(370, floor), "quiet road priced out under deep deficit");
+        assert!(!econ::admit_use_withdraw(econ::STORAGE_BID, floor), "par Use-lane withdraw priced out");
+        assert!(econ::admit_use_withdraw(econ::SURVIVAL_BID, floor), "survival bypasses the floor");
+    }
+
     /// COST SPOT-CHECK (ADR 0007 item 1's "generation provably paid once" + the M3 battery's
     /// per-tick cost check): build the per-tick snapshot over a 10-room colony-scale queue and
     /// run a fleet's worth of selections. Ignored by default — run explicitly with
@@ -2286,7 +2884,7 @@ mod tests {
                     screeps::local::RawObjectId::from_packed(base + 0x100 + e).into(),
                     test_pos(&room_s, 10 + (e as u8), 20),
                 ));
-                queue.request_deposit(TransferDepositRequest::new(
+                queue.request_deposit(TransferDepositRequest::new_tier(
                     ext,
                     Some(ResourceType::Energy),
                     TransferPriority::High,
@@ -2299,7 +2897,7 @@ mod tests {
                     screeps::local::RawObjectId::from_packed(base + 0x200 + d).into(),
                     test_pos(&room_s, 30 + (d as u8), 30),
                 ));
-                queue.request_withdraw(TransferWithdrawRequest::new(
+                queue.request_withdraw(TransferWithdrawRequest::new_tier(
                     pile,
                     ResourceType::Energy,
                     TransferPriority::High,

@@ -50,15 +50,10 @@ pub struct RoomEconomyData {
     pub available_boosts: HashMap<ResourceType, u32>,
 }
 
-impl RoomEconomyData {
-    /// The room's repair allowance from its refill deficit + stored-energy
-    /// buffer (ADR 0040 §D6 — the S1 repair stress gate; interim, superseded
-    /// by the sink market at M5a).
-    pub fn repair_allowance(&self) -> crate::energy_stress::RepairAllowance {
-        let deficit_q = crate::energy_stress::refill_deficit_q(self.spawn_energy, self.spawn_energy_capacity);
-        crate::energy_stress::repair_allowance(deficit_q, self.stored_energy)
-    }
-}
+// `RoomEconomyData::repair_allowance()` (the S1 repair-stress gate accessor)
+// was deleted at ADR 0040 M5a — the sink market prices repair natively. The
+// `spawn_energy`/`spawn_energy_capacity`/`stored_energy` fields it read remain
+// (the `repair_leak_e` telemetry still reads the deficit condition).
 
 // ---------------------------------------------------------------------------
 // EconomySnapshot

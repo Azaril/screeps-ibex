@@ -1,45 +1,25 @@
-//! S1 repair stress gate + `repair_leak_e` telemetry (ADR 0040 §D6).
+//! `repair_leak_e` telemetry (ADR 0040 §D6).
 //!
-//! **INTERIM**: the allowance gate is stopgap scaffolding, superseded by the
-//! unified e/t sink market at M5a (EP-2.10; removal point tied to the market's
-//! default-on, EP-10.5). The [`EnergyLeakStats`] counter is PERMANENT: it
-//! anchors the economy sim's M1 repro gate and the M5 validation.
+//! The S1 repair-stress GATE was DELETED at ADR 0040 M5a (operator decision
+//! 2026-07-05): the unified e/t sink market now prices repair natively (the
+//! market's opportunity-floor admission owns repair admission live), so the
+//! bot-side allowance adapter, the `features.energy.repair_stress_gate`
+//! kill-switch, and the ad-hoc energy thresholds are gone (EP-2.6/2.10). The
+//! S1 allowance KERNEL stays in `screeps_econ_decision::stress` — the economy
+//! sim's S1 tournament arm still consumes it.
 //!
-//! The decision kernel ([`refill_deficit_q`] / [`repair_allowance`] /
-//! [`effective_min_repair_priority`] / [`RepairAllowance`]) lives in
-//! `screeps_econ_decision::stress` since ADR 0040 M3 (K3) — consumed by this
-//! adapter AND by the economy sim (`screeps-econ-eval`), one implementation
-//! (EP-2.6). Re-exported here so every bot call site keeps its
-//! `crate::energy_stress::*` path. The bot-side adapters
-//! ([`repair_allowance_for`], [`record_repair_leak`]) gather plain room facts
-//! from the [`EconomySnapshot`] and stay at the seam.
+//! The [`EnergyLeakStats`] counter is PERMANENT: it anchors the economy sim's
+//! M1 repro gate and the M5 validation. **The counter is EXPECTED to RISE
+//! versus the old S1-gated code** — that is correct re-pricing, not a
+//! regression: the market re-prices repair against the opportunity floor
+//! instead of hard-gating it (ADR 0040 M4 attribution; §D6). The bot-side
+//! adapter ([`record_repair_leak`]) gathers plain room facts from the
+//! [`EconomySnapshot`] and stays at the seam.
 
-use crate::features::Features;
 use crate::military::economy::EconomySnapshot;
 use screeps::*;
 use specs::prelude::*;
 use std::collections::HashMap;
-
-#[allow(unused_imports)] // the constants are re-exported API (tests + future consumers)
-pub use screeps_econ_decision::stress::{
-    effective_min_repair_priority, refill_deficit_q, repair_allowance, RepairAllowance, REPAIR_UNRESTRICTED_MAX_DEFICIT_Q,
-    REPAIR_UNRESTRICTED_STORED_ENERGY,
-};
-
-/// Allowance for a posture room (the creep's HOME/delivery room — ADR 0040
-/// §D8 #3; callers with no home concept fall back to the creep's current
-/// room). Flag off, or room missing from the snapshot (not owned / not
-/// visible) => `Unrestricted` — fail-open to current behavior.
-pub fn repair_allowance_for(economy: &EconomySnapshot, features: &Features, posture_room: Option<Entity>) -> RepairAllowance {
-    if !features.energy.repair_stress_gate {
-        return RepairAllowance::Unrestricted;
-    }
-
-    posture_room
-        .and_then(|room| economy.room(&room))
-        .map(|room| room.repair_allowance())
-        .unwrap_or(RepairAllowance::Unrestricted)
-}
 
 // ---------------------------------------------------------------------------
 // repair_leak_e telemetry (PERMANENT — anchors the economy sim's M1 repro gate)
@@ -114,15 +94,14 @@ impl<'a> System<'a> for EnergyLeakClearSystem {
     }
 }
 
-// The kernel's boundary/monotonicity tests MOVED with it to
-// `screeps_econ_decision::stress` (ADR 0040 M3). The tests below pin the
-// bot-side ADAPTERS only (flag/snapshot behavior + leak telemetry).
+// The S1 allowance KERNEL's boundary/monotonicity tests live in
+// `screeps_econ_decision::stress` (ADR 0040 M3; the sim's S1 arm still
+// consumes it). The bot-side GATE was deleted at M5a; the tests below pin the
+// surviving bot-side ADAPTER only — the `repair_leak_e` leak telemetry.
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::military::economy::RoomEconomyData;
-
-    // ── Adapter: flag / snapshot behavior ───────────────────────────────────
 
     fn snapshot_with_room(world: &mut World, room: RoomEconomyData) -> (EconomySnapshot, Entity) {
         let entity = world.create_entity().build();
@@ -140,45 +119,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn flag_off_is_always_unrestricted() {
-        let mut world = World::new();
-        let (economy, entity) = snapshot_with_room(&mut world, stressed_room());
-
-        let features = Features {
-            energy: crate::features::EnergyFeatures { repair_stress_gate: false },
-            ..Features::default()
-        };
-
-        assert_eq!(
-            repair_allowance_for(&economy, &features, Some(entity)),
-            RepairAllowance::Unrestricted
-        );
-    }
-
-    #[test]
-    fn flag_on_gates_a_stressed_room_and_fails_open_otherwise() {
-        let mut world = World::new();
-        let (economy, entity) = snapshot_with_room(&mut world, stressed_room());
-        let missing = world.create_entity().build();
-
-        let features = Features::default();
-        assert!(features.energy.repair_stress_gate, "gate defaults on");
-
-        assert_eq!(
-            repair_allowance_for(&economy, &features, Some(entity)),
-            RepairAllowance::CriticalOnly
-        );
-        // Not in the snapshot (not owned/visible) => fail-open.
-        assert_eq!(
-            repair_allowance_for(&economy, &features, Some(missing)),
-            RepairAllowance::Unrestricted
-        );
-        // No posture room at all => fail-open.
-        assert_eq!(repair_allowance_for(&economy, &features, None), RepairAllowance::Unrestricted);
-    }
-
-    // ── Leak telemetry ──────────────────────────────────────────────────────
+    // ── Leak telemetry (PERMANENT — the S1 gate that used to sit alongside it
+    //    was deleted at M5a; this counter is EXPECTED to rise) ───────────────
 
     #[test]
     fn leak_records_by_class_only_under_deficit() {
@@ -218,36 +160,37 @@ mod tests {
     }
 
     #[test]
-    fn leak_records_under_any_deficit_independent_of_gate() {
-        // The telemetry condition (ANY refill deficit) is deliberately different
-        // from the gate condition (deficit > 10% AND stored < 10k) — the counter
-        // measures the symptom wherever it occurs; the gate acts only under real
-        // stress. A future "simplification" that reuses the gate's allowance as
-        // the telemetry condition must fail here.
+    fn leak_records_under_any_deficit() {
+        // The telemetry condition is ANY refill deficit (`spawn_energy <
+        // spawn_energy_capacity`) — it measures the symptom wherever it occurs,
+        // independent of any stress posture. Now that the S1 gate is gone (M5a),
+        // this counter is EXPECTED to rise, because the market re-prices repair
+        // against the opportunity floor rather than hard-gating it: a nonzero,
+        // rising value is correct re-pricing, not a regression (§D6).
         let mut world = World::new();
         let room_name: RoomName = "E0N0".parse().expect("valid room name");
 
-        // Tiny deficit (deficit_q = 8 <= 100): gate Unrestricted, telemetry records.
+        // Tiny deficit: telemetry records.
         let tiny_deficit = RoomEconomyData {
             spawn_energy: 1290,
             spawn_energy_capacity: 1300,
             stored_energy: 0,
             ..RoomEconomyData::default()
         };
-        assert_eq!(tiny_deficit.repair_allowance(), RepairAllowance::Unrestricted);
         let (economy, entity) = snapshot_with_room(&mut world, tiny_deficit);
         let mut stats = EnergyLeakStats::default();
         record_repair_leak(&mut stats, &economy, entity, room_name, StructureType::Road, 2);
         assert_eq!(stats.rooms.get(&room_name).map(|l| l.repair_roads), Some(2));
 
-        // Full deficit but a >=10k stored buffer: gate Unrestricted, telemetry records.
+        // Full deficit even with a large stored buffer: telemetry still records
+        // (it never sheds on a stored buffer — that WAS the old gate's condition,
+        // which no longer applies).
         let buffered = RoomEconomyData {
             spawn_energy: 0,
             spawn_energy_capacity: 300,
-            stored_energy: REPAIR_UNRESTRICTED_STORED_ENERGY,
+            stored_energy: 50_000,
             ..RoomEconomyData::default()
         };
-        assert_eq!(buffered.repair_allowance(), RepairAllowance::Unrestricted);
         let (economy, entity) = snapshot_with_room(&mut world, buffered);
         let mut stats = EnergyLeakStats::default();
         record_repair_leak(&mut stats, &economy, entity, room_name, StructureType::Container, 4);

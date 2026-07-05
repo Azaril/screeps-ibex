@@ -655,25 +655,12 @@ impl Default for SourceKeeperFeatures {
     }
 }
 
-/// Energy-stress features (ADR 0040). The repair stress gate is INTERIM
-/// scaffolding (§D6): it is deleted at M5a when the unified sink market
-/// lands and prices repair natively.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(default)]
-pub struct EnergyFeatures {
-    /// Kill-switch for the S1 repair stress gate: while a room is
-    /// refill-deficient (>10% below spawn capacity) with no stored-energy
-    /// buffer (<10k), non-Critical repair is suppressed so the energy feeds
-    /// the refill chain. The `repair_leak_e` telemetry counter is NOT gated
-    /// by this flag (telemetry never sheds). Default: true.
-    pub repair_stress_gate: bool,
-}
-
-impl Default for EnergyFeatures {
-    fn default() -> Self {
-        Self { repair_stress_gate: true }
-    }
-}
+// The `EnergyFeatures` group (the `repair_stress_gate` kill-switch) was DELETED
+// at ADR 0040 M5a: the unified e/t sink market IS the live behavior (no flag —
+// operator decision 2026-07-05), and the market's opportunity floor prices
+// repair natively, so there is nothing left to gate (EP-2.6). Old `_features`
+// memory that still carries an `energy` key is ignored by the `#[serde(default)]`
+// on `Features` (unknown keys are dropped).
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
@@ -727,7 +714,6 @@ pub struct Features {
     pub claim: ClaimFeatures,
     pub derelict: DerelictFeatures,
     pub source_keeper: SourceKeeperFeatures,
-    pub energy: EnergyFeatures,
     pub visibility: VisibilityFeatures,
     /// Allow the dismantler role in salvage missions; semantics as `raid`.
     /// Default: true.
@@ -754,7 +740,6 @@ impl Default for Features {
             claim: ClaimFeatures::default(),
             derelict: DerelictFeatures::default(),
             source_keeper: SourceKeeperFeatures::default(),
-            energy: EnergyFeatures::default(),
             visibility: VisibilityFeatures::default(),
             dismantle: true,
             system_timing: false,

@@ -133,6 +133,65 @@ where
     None
 }
 
+/// ADR 0040 M5a — the LIVE bid-native HAUL-lane selection (the wiring the M5a-core slice left
+/// undone). Runs the SHARED market kernel (`market_pass`, the same one the sim's MARKET tournament
+/// arm delegates to) over this hauler, ranking (pickup, delivery) pairs by RAW bid-density instead
+/// of the tier-interleave. Covers BOTH a loaded hauler (delivers carried cargo — an empty pickup
+/// leg + a `Delivery`-shaped deposit) and an empty hauler (`Pickup` with paired deposits). The
+/// caller registers the returned tickets and transitions into the mapped state. Returns `None`
+/// when the market assigns nothing (drained lane / full creep) so the Idle cascade falls through
+/// to the tier path (which keeps the crate tier-capable for the non-market lanes).
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
+pub fn get_new_market_pickup_and_delivery_state<TF, PF, DF, R>(
+    creep: &Creep,
+    data: &dyn TransferRequestSystemData,
+    pickup_rooms: &[&RoomData],
+    delivery_rooms: &[&RoomData],
+    transfer_queue: &mut TransferQueue,
+    target_filter: TF,
+    pickup_state: PF,
+    delivery_state: DF,
+) -> Option<R>
+where
+    TF: Fn(&TransferTarget) -> bool,
+    PF: Fn(TransferWithdrawTicket, Vec<TransferDepositTicket>) -> R,
+    DF: Fn(Vec<TransferDepositTicket>) -> R,
+{
+    // Safe on general stores (engine-mechanics folklore row 26).
+    let free_capacity = creep.store().get_free_capacity(None).max(0) as u32;
+    let carried_energy = creep.store().get_used_capacity(Some(ResourceType::Energy));
+
+    if free_capacity == 0 && carried_energy == 0 {
+        return None;
+    }
+
+    let pickup_room_names = pickup_rooms.iter().map(|r| r.name).collect_vec();
+    let delivery_room_names = delivery_rooms.iter().map(|r| r.name).collect_vec();
+
+    let (pickup, delivery) = transfer_queue.select_market_pickup_and_delivery(
+        data,
+        &pickup_room_names,
+        &delivery_room_names,
+        TransferType::Haul,
+        creep.pos(),
+        free_capacity,
+        carried_energy,
+        target_filter,
+    )?;
+
+    transfer_queue.register_delivery(&delivery);
+
+    // A loaded hauler's pickup leg is empty (it already carries its cargo) — go straight to the
+    // Delivery state; an empty hauler picks up first.
+    if pickup.resources().is_empty() {
+        Some(delivery_state(vec![delivery]))
+    } else {
+        transfer_queue.register_pickup(&pickup);
+        Some(pickup_state(pickup, vec![delivery]))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 pub fn get_new_pickup_and_delivery_state<TF, F, R>(

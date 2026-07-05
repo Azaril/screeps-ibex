@@ -451,6 +451,52 @@ pub fn bid_to_tier(bid_milli: u32) -> TransferPriority {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
+// M5a bot bid vocabulary: the numeric-bid lane the LIVE tickets/keys/requests ride (spec Part 1).
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+/// Representative bids for the 4 tier bands — the M5a bot registration mapping for the
+/// NON-MARKET lanes that still register through the transfer queue by tier (links / terminal /
+/// labs / powerspawn / salvage / siege-tower): the demand kernels + the ad-hoc mission sites
+/// emit a `TransferPriority`, and [`tier_to_bid`] carries it onto the numeric ticket lane so the
+/// whole queue is keyed by one currency. Each band's bid sits strictly inside its
+/// [`bid_to_tier`] window, so `bid_to_tier(tier_to_bid(t)) == t` round-trips (pinned below) — a
+/// tier request and its numeric bid read identically for the display/HUD label.
+///
+/// These are DELIBERATELY coarse: they are the priorities of sinks the ECONOMIC market does not
+/// price (a lab reaction's intra-room shuffle, a terminal send). The market-priced lanes
+/// (spawn/extension refill, repair, build, upgrade, tower) call the derived bid functions
+/// directly ([`refill_bid`], [`repair_bid`], [`build_bid`], [`upgrade_bid`], [`tower_refill_bid`])
+/// — they never route through this band table.
+pub const BID_TIER_HIGH: u32 = 5_000;
+pub const BID_TIER_MEDIUM: u32 = 2_000;
+pub const BID_TIER_LOW: u32 = 1_250;
+/// The `None` tier is the storage numeraire lane (par) — a request with no urgency over storage.
+pub const BID_TIER_NONE: u32 = STORAGE_BID;
+
+/// Carry a tier onto the numeric bid lane (spec Part 1: the ~15 non-market registration sites).
+/// The inverse-ish of [`bid_to_tier`]: it lands each tier at a representative bid inside that
+/// tier's window (`bid_to_tier(tier_to_bid(t)) == t`).
+pub fn tier_to_bid(priority: TransferPriority) -> u32 {
+    match priority {
+        TransferPriority::High => BID_TIER_HIGH,
+        TransferPriority::Medium => BID_TIER_MEDIUM,
+        TransferPriority::Low => BID_TIER_LOW,
+        TransferPriority::None => BID_TIER_NONE,
+    }
+}
+
+/// A coarse grep-able label for a numeric bid (logs / HUD): the tier band it reads as plus the
+/// milli value. The spec's "display helper maps bid ranges → coarse labels."
+pub fn bid_label(bid_milli: u32) -> &'static str {
+    match bid_to_tier(bid_milli) {
+        TransferPriority::High => "High",
+        TransferPriority::Medium => "Medium",
+        TransferPriority::Low => "Low",
+        TransferPriority::None => "None",
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
 // K4 — deficit-priced bodies (spec Part B; the S6 fix).
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 
@@ -717,6 +763,24 @@ mod tests {
         assert_eq!(bid_to_tier(BID_SCALE + 1), TransferPriority::Low);
         assert_eq!(bid_to_tier(BID_SCALE), TransferPriority::None, "par is the storage tier");
         assert_eq!(bid_to_tier(0), TransferPriority::None);
+    }
+
+    /// M5a bot bid vocabulary: `tier_to_bid` lands each tier inside its own `bid_to_tier`
+    /// window, so a tier request and its numeric bid read as the SAME band (round-trip).
+    #[test]
+    fn tier_to_bid_round_trips() {
+        for t in [
+            TransferPriority::High,
+            TransferPriority::Medium,
+            TransferPriority::Low,
+            TransferPriority::None,
+        ] {
+            assert_eq!(bid_to_tier(tier_to_bid(t)), t, "{t:?} round-trips through the numeric lane");
+        }
+        // The labels agree with the tiers.
+        assert_eq!(bid_label(tier_to_bid(TransferPriority::High)), "High");
+        assert_eq!(bid_label(tier_to_bid(TransferPriority::None)), "None");
+        assert_eq!(bid_label(REFILL_ROI_CAP_MILLI), "High", "a stressed refill reads High");
     }
 
     /// The floor's materiality boundary: unmet exactly AT the minimum moves the floor; one

@@ -43,6 +43,7 @@ use crate::baseline::{
 };
 use crate::layout::{ContainerRole, LayoutInfo};
 use screeps::Position;
+use screeps_econ_decision::market as mk;
 use screeps_econ_decision::matching as m;
 use screeps_econ_decision::sink_economics as econ;
 use screeps_econ_decision::sink_economics::MarketConsts;
@@ -348,179 +349,77 @@ impl MarketRuntime {
         }
         self.match_passes += 1;
 
-        // The refill aggregate (module docs): one demand node per ENGINE-FUNGIBLE POOL. The only
-        // fungible pool is the spawn lane (`SinkKey::is_fungible_pool_member` — review #5); every
-        // non-pool sink (containers, storage) matches per-structure.
-        let is_refill = |d: &Deposit| d.sink.is_fungible_pool_member();
-        let refill_indices: Vec<usize> =
-            (0..deposits.len()).filter(|&i| is_refill(&deposits[i])).collect();
-        let refill_total: u32 = refill_indices.iter().map(|&i| deposits[i].unfulfilled).sum();
-        let refill_bid = refill_indices.first().map(|&i| dep_bids[i]).unwrap_or(0);
-        let refill_node = deposits.len() as u32;
-        // Nearest still-needy lane structure from a position (ties: lowest deposit index).
-        let nearest_refill = |from: Position, local: &BTreeMap<usize, u32>| -> Option<usize> {
-            refill_indices
-                .iter()
-                .copied()
-                .filter(|&i| deposits[i].unfulfilled > local.get(&i).copied().unwrap_or(0))
-                .min_by_key(|&i| (from.get_range_to(deposits[i].pos), i))
-        };
-        let no_local: BTreeMap<usize, u32> = BTreeMap::new();
-
-        // ── Edge generation ─────────────────────────────────────────────────────────────────────
-        let mut edges: Vec<m::AssignEdge> = Vec::new();
-        // (edge index order mirrors push order; deposit ids: 0..len = non-refill nodes,
-        // `refill_node` = the aggregate.)
-        for (ci, c) in carriers.iter().enumerate() {
-            let budget = if c.held > 0 { c.held } else { c.free };
-            if budget == 0 {
-                continue;
-            }
-            // Candidate demand targets: every non-refill deposit + the refill aggregate.
-            let mut targets: Vec<(u32, u32, u32, Position)> = Vec::new(); // (node, unmet, bid, pos)
-            for (di, d) in deposits.iter().enumerate() {
-                if !is_refill(d) && d.unfulfilled > 0 {
-                    targets.push((di as u32, d.unfulfilled, dep_bids[di], d.pos));
-                }
-            }
-            if refill_total > 0 {
-                if let Some(i) = nearest_refill(c.pos, &no_local) {
-                    targets.push((refill_node, refill_total, refill_bid, deposits[i].pos));
-                }
-            }
-            for &(node, unmet, bid, dpos) in &targets {
-                if c.held > 0 {
-                    let amount = c.held.min(unmet);
-                    let service = c.pos.get_range_to(dpos) + 1;
-                    if amount == 0 || !carrier_gate(c, bid, amount, service) {
-                        continue;
-                    }
-                    edges.push(m::AssignEdge {
-                        carrier: ci as u32,
-                        supply: None,
-                        demand: node,
-                        amount,
-                        bid_milli: bid,
-                        service_ticks: service,
-                    });
-                } else {
-                    // The best pickup for this (carrier, target): max flow/service (exact
-                    // rationals), ties to lower service then lower pickup index.
-                    let mut best: Option<(usize, u32, u32)> = None; // (pi, flow, service)
-                    for (pi, p) in pickups.iter().enumerate() {
-                        if p.lane != Lane::Haul || p.available == 0 {
-                            continue;
-                        }
-                        // Never propose withdrawing from a non-refill sink being served.
-                        if node != refill_node && same_structure(p.src, deposits[node as usize].sink) {
-                            continue;
-                        }
-                        let flow = c.free.min(p.available).min(unmet);
-                        if flow == 0 {
-                            continue;
-                        }
-                        let service = c.pos.get_range_to(p.pos) + p.pos.get_range_to(dpos) + 2;
-                        let better = match best {
-                            None => true,
-                            Some((bpi, bflow, bserv)) => {
-                                let lhs = flow as u64 * bserv as u64;
-                                let rhs = bflow as u64 * service as u64;
-                                lhs > rhs || (lhs == rhs && (service, pi) < (bserv, bpi))
-                            }
-                        };
-                        if better {
-                            best = Some((pi, flow, service));
-                        }
-                    }
-                    if let Some((pi, flow, service)) = best {
-                        if !carrier_gate(c, bid, flow, service) {
-                            continue;
-                        }
-                        edges.push(m::AssignEdge {
-                            carrier: ci as u32,
-                            supply: Some(pi as u32),
-                            demand: node,
-                            amount: flow,
-                            bid_milli: bid,
-                            service_ticks: service,
-                        });
-                    }
-                }
-            }
-        }
-        self.match_edges += edges.len() as u64;
-        self.match_max_edges = self.match_max_edges.max(edges.len() as u64);
-        if edges.is_empty() {
-            return;
-        }
-
-        // ── The shipped greedy with booking ─────────────────────────────────────────────────────
-        let mut supply_avail: BTreeMap<u32, u32> =
-            pickups.iter().enumerate().map(|(i, p)| (i as u32, p.available)).collect();
-        let mut demand_unmet: BTreeMap<u32, u32> = deposits
+        // ── Build the shared-kernel DTOs (M5a: the ONE market-select algorithm lives in
+        // `screeps_econ_decision::market`; this arm and the LIVE bot both delegate to it, so the
+        // A/B is by construction — module docs). The kernel is index-scoped: `sink` = deposit
+        // index, `src` = pickup index, so it returns them for us to resolve back to sim keys. ──
+        let k_carriers: Vec<mk::MarketCarrier> = carriers
+            .iter()
+            .map(|c| mk::MarketCarrier {
+                id: c.id,
+                pos: c.pos,
+                free: c.free,
+                held: c.held,
+                opportunity_milli: c.opportunity_milli,
+            })
+            .collect();
+        let k_deposits: Vec<mk::MarketDeposit> = deposits
             .iter()
             .enumerate()
-            .filter(|(_, d)| !is_refill(d))
-            .map(|(i, d)| (i as u32, d.unfulfilled))
+            .map(|(i, d)| mk::MarketDeposit {
+                sink: i as u32,
+                pos: d.pos,
+                bid_milli: dep_bids[i],
+                unfulfilled: d.unfulfilled,
+                is_refill: d.sink.is_fungible_pool_member(),
+            })
             .collect();
-        demand_unmet.insert(refill_node, refill_total);
-        let supply0 = supply_avail.clone();
-        let demand0 = demand_unmet.clone();
-        let (assignments, ops) = m::greedy_assign(&edges, &mut supply_avail, &mut demand_unmet);
-        self.match_ops += ops;
+        // Only the Haul lane is a pickup candidate (a `Use` withdraw is invisible to haulers).
+        let k_pickups: Vec<mk::MarketPickup> = pickups
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.lane == Lane::Haul)
+            .map(|(i, p)| mk::MarketPickup { src: i as u32, pos: p.pos, available: p.available })
+            .collect();
 
-        // Pass-local lane booking: concurrent refill assignments spread across structures.
-        let mut local_lane: BTreeMap<usize, u32> = BTreeMap::new();
-        for a in &assignments {
-            let e = &edges[a.edge];
-            let c = &carriers[e.carrier as usize];
-            // Resolve the CONCRETE sink: the aggregate refill node delivers to the nearest
-            // still-needy lane structure (pass-locally booked); surplus flow stays aboard for
-            // the next pass (module docs).
-            let (sink, sink_pos, give) = if e.demand == refill_node {
-                let anchor = match e.supply {
-                    Some(pi) => pickups[pi as usize].pos,
-                    None => c.pos,
-                };
-                let Some(di) = nearest_refill(anchor, &local_lane) else { continue };
-                let d = &deposits[di];
-                let already = local_lane.get(&di).copied().unwrap_or(0);
-                let give = a.amount.min(d.unfulfilled - already);
-                *local_lane.entry(di).or_insert(0) += give;
-                (d.sink, d.pos, give)
-            } else {
-                let d = &deposits[e.demand as usize];
-                (d.sink, d.pos, a.amount)
-            };
-            if give == 0 {
-                continue;
-            }
-            let task = match e.supply {
-                Some(pi) => {
-                    let p = &pickups[pi as usize];
-                    *bookings.pickups.entry(p.src).or_insert(0) += a.amount;
-                    *bookings.deposits.entry(sink).or_insert(0) += give;
+        let out = mk::market_pass(&k_carriers, &k_deposits, &k_pickups, |src_idx, sink_idx| {
+            same_structure(pickups[src_idx as usize].src, deposits[sink_idx as usize].sink)
+        });
+
+        self.match_edges += out.stats.edges;
+        self.match_max_edges = self.match_max_edges.max(out.stats.edges);
+        self.match_ops += out.stats.ops;
+
+        // Resolve the kernel's index-scoped tasks + bookings back to sim keys.
+        for a in &out.assignments {
+            let task = match a.task {
+                mk::MarketTask::PickupDeliver { src, src_pos, take, sink, sink_pos, give } => {
                     MarketTask::PickupDeliver {
-                        src: p.src,
-                        src_pos: p.pos,
-                        take: a.amount,
-                        sink,
+                        src: pickups[src as usize].src,
+                        src_pos,
+                        take,
+                        sink: deposits[sink as usize].sink,
                         sink_pos,
                         give,
                     }
                 }
-                None => {
-                    *bookings.deposits.entry(sink).or_insert(0) += give;
-                    MarketTask::Deliver { sink, sink_pos, amount: give }
+                mk::MarketTask::Deliver { sink, sink_pos, amount } => {
+                    MarketTask::Deliver { sink: deposits[sink as usize].sink, sink_pos, amount }
                 }
             };
-            self.tasks.insert(c.id, task);
+            self.tasks.insert(a.carrier, task);
+        }
+        for (&src_idx, &amount) in &out.bookings.pickups {
+            *bookings.pickups.entry(pickups[src_idx as usize].src).or_insert(0) += amount;
+        }
+        for (&sink_idx, &amount) in &out.bookings.deposits {
+            *bookings.deposits.entry(deposits[sink_idx as usize].sink).or_insert(0) += amount;
         }
 
-        // ── The sim-only exact oracle (sampled) ─────────────────────────────────────────────────
-        if self.cfg.measure_gap && world.tick().is_multiple_of(self.cfg.oracle_period.max(1)) {
-            let greedy_fp = m::assignments_value_fp(&edges, &assignments);
-            match oracle_best_fp(&edges, &supply0, &demand0) {
+        // ── The sim-only exact oracle (sampled) — over the kernel's exact greedy inputs. ─────────
+        if self.cfg.measure_gap && world.tick().is_multiple_of(self.cfg.oracle_period.max(1)) && !out.edges.is_empty() {
+            let greedy_fp = m::assignments_value_fp(&out.edges, &out.greedy);
+            match oracle_best_fp(&out.edges, &out.supply0, &out.demand0) {
                 Some(oracle_fp) => {
                     let oracle_fp = oracle_fp.max(greedy_fp); // guard: greedy is feasible
                     self.gap.samples += 1;
@@ -562,17 +461,11 @@ fn same_structure(src: SrcKey, sink: SinkKey) -> bool {
     }
 }
 
-/// The harvester opportunity gate (module docs): a carrier with a live harvest alternative
-/// only takes tickets whose SURPLUS value rate — `(bid − par) · amount / service` — strictly
-/// beats its harvest rate. Moving energy to a par sink creates no surplus (the energy was
-/// already worth par where it sat), while harvesting creates new energy at par. Haulers and
-/// harvest-incapable carriers (`opportunity == 0`) take any positive edge.
+/// The harvester opportunity gate — now the shared kernel's ([`mk::carrier_gate`]); this thin
+/// wrapper keeps the `CarrierDto` shape for the sim's parity test (module docs on the gate).
+#[cfg(test)]
 fn carrier_gate(c: &CarrierDto, bid: u32, amount: u32, service: u32) -> bool {
-    if c.opportunity_milli == 0 {
-        return true;
-    }
-    let surplus = bid.saturating_sub(econ::BID_SCALE) as u64 * amount as u64;
-    surplus > c.opportunity_milli as u64 * service as u64
+    mk::carrier_gate(c.opportunity_milli, bid, amount, service)
 }
 
 fn near_level_up(consts: &MarketConsts, world: &EconWorld) -> bool {

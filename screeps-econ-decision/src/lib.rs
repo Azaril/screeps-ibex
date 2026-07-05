@@ -48,6 +48,7 @@
 
 pub mod cadence;
 pub mod demand;
+pub mod market;
 pub mod matching;
 pub mod priority;
 pub mod repair;

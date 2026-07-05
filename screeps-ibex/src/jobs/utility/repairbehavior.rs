@@ -48,8 +48,9 @@ fn alive_work_parts(creep: &Creep) -> u32 {
 
 /// Record repair energy into the `repair_leak_e` telemetry (ADR 0040 §D6),
 /// attributed to the creep's posture room (falling back to its current room
-/// when the job has no home/delivery concept). Always-on — not gated by
-/// `features.energy.repair_stress_gate` (telemetry never sheds).
+/// when the job has no home/delivery concept). Permanent, always-on — this
+/// counter is EXPECTED to rise now the S1 gate is gone (M5a): correct
+/// re-pricing, not a regression.
 fn record_creep_repair_leak(tick_context: &mut JobTickContext, posture_room: Option<Entity>, structure_type: StructureType, energy: u32) {
     let creep_room_name = tick_context.runtime_data.owner.pos().room_name();
 
@@ -182,17 +183,12 @@ pub fn tick_opportunistic_repair(
                 let room_entity = tick_context.runtime_data.mapping.get_room(&creep_pos.room_name())?;
                 let room_data = tick_context.system_data.room_data.get(room_entity)?;
 
-                // S1 repair stress gate (ADR 0040 §D6): under refill deficit
-                // with no stored buffer in the posture room (the creep's
-                // home/delivery room, falling back to the current room), only
-                // Critical repair is admitted.
+                // The S1 repair stress gate was deleted at ADR 0040 M5a — the
+                // sink market now prices opportunistic repair natively. The
+                // caller's `minimum_priority` is used as-is. `posture_room`
+                // survives: it is the attribution key for the `repair_leak_e`
+                // telemetry below.
                 let posture_room = posture_room.unwrap_or(room_entity);
-                let allowance = repair_allowance_for(
-                    tick_context.system_data.economy,
-                    tick_context.system_data.features,
-                    Some(posture_room),
-                );
-                let minimum_priority = effective_min_repair_priority(minimum_priority, allowance);
 
                 // Check repair queue for in-range targets first, then fall
                 // back to room scan. Walls are excluded from opportunistic

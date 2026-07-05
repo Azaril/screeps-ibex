@@ -24,7 +24,12 @@ fn map_defense_priority(
     structure_type: StructureType,
     hits: u32,
     hits_max: u32,
-    available_energy: Option<u32>,
+    // The ad-hoc `available_energy > 10_000` VeryLow wall/rampart gate was
+    // deleted at ADR 0040 M5a (operator decision 2026-07-05: remove the
+    // walls-10k thresholds); the market now prices wall/rampart maintenance
+    // repair natively. The parameter is retained (the queue-populating callers
+    // still thread it) but no longer consulted in the peaceful branch.
+    _available_energy: Option<u32>,
     under_attack: bool,
 ) -> Option<RepairPriority> {
     let health_fraction = (hits as f32) / (hits_max as f32);
@@ -49,8 +54,6 @@ fn map_defense_priority(
         Some(RepairPriority::Medium)
     } else if health_fraction < 0.1 {
         Some(RepairPriority::Low)
-    } else if available_energy.map(|e| e > 10_000).unwrap_or(false) {
-        Some(RepairPriority::VeryLow)
     } else {
         None
     }

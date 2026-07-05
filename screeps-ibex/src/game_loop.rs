@@ -84,6 +84,7 @@ macro_rules! for_each_system {
         // === Main-pass: Cleanup ===
         $op!(RepairQueueClearSystem, "repair_queue_clear", StageClass::Always);
         $op!(EnergyLeakClearSystem, "energy_leak_clear", StageClass::Always);
+        $op!(MarketBidSummaryClearSystem, "market_bid_summary_clear", StageClass::Always);
         $op!(ClearVisualizationSystem, "clear_visualization", StageClass::Always);
         $op!(VisibilityQueueCleanupSystem, "visibility_cleanup", StageClass::Always);
         $op!(CombatObjectiveCleanupSystem, "combat_objective_cleanup", StageClass::Always);
@@ -729,7 +730,17 @@ fn serialize_world(world: &World, segments: &[u32]) {
 /// plain-serde value (not an Entity), so the `SquadContext` `ConvertSaveload` derive round-trips it as data;
 /// but adding an interior field to the positional bincode `SquadContext` shape shifts every later field, so
 /// a v25 payload can't decode → one loud reset (folds into the pending MMO deploy reset).
-const WORLD_FORMAT_VERSION: u32 = 26;
+/// 27 = ADR 0040 M5a (the e/t logistics market goes LIVE): the serialized transfer tickets ride a numeric
+/// `bid: u32` (milli-e/t) instead of the 4-tier `TransferPriority` enum. `TransferWithdrawlTicketResourceEntry`
+/// / `TransferDepositTicketResourceEntry` swap their `priority: TransferPriority` field for `bid: u32`; those
+/// entries ride inside the serialized `HaulState` (Pickup/Delivery states → `TransferWithdrawTicket` /
+/// `TransferDepositTicket` → the resource-entry vecs) → `HaulJob` → `JobData`. `TransferPriority` serialized as
+/// a bincode enum ordinal (1 byte); `u32` serializes as 4 bytes — a positional bincode shape change on the
+/// persisted `HaulState`, so a v26 payload can't decode → one loud reset (folds into the pending MMO deploy
+/// reset). The market's opportunity-floor repair admission replaces the deleted S1 hard gate (this milestone
+/// makes the S1 deletion non-regressive). The tier enum + the tier-interleave path STAY in
+/// `screeps-econ-decision` for the sim's tournament arms; only the live bot's tickets go numeric.
+const WORLD_FORMAT_VERSION: u32 = 27;
 
 /// Loads world state from RawMemory segments. Old/foreign payloads are
 /// rejected by the [`WORLD_FORMAT_VERSION`] fingerprint; a mid-stream decode
@@ -959,6 +970,10 @@ fn create_environment() -> GameEnvironment {
     // Repair-leak telemetry (ADR 0040 §D6 `repair_leak_e` -- ephemeral,
     // cleared each tick, exported per-room via the metrics block).
     world.insert(crate::energy_stress::EnergyLeakStats::default());
+
+    // Market bid readout (ADR 0040 M5a §D8 #5 -- ephemeral, cleared each tick,
+    // exported per-room via the metrics block + one grep-able console line).
+    world.insert(crate::transfer::transfersystem::MarketBidSummary::default());
 
     // Entity cleanup queue (ephemeral -- drained each tick by EntityCleanupSystem).
     world.insert(EntityCleanupQueue::default());

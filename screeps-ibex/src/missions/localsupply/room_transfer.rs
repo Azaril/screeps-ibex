@@ -330,14 +330,14 @@ impl RoomTransferMission {
         for demand in demands {
             let target = targets[demand.item.0 as usize];
             match demand.side {
-                DemandSide::Withdraw => transfer.request_withdraw(TransferWithdrawRequest::new(
+                DemandSide::Withdraw => transfer.request_withdraw(TransferWithdrawRequest::new_tier(
                     target,
                     demand.resource.expect("withdraw demands always carry a resource"),
                     demand.priority,
                     demand.amount,
                     demand.transfer_type,
                 )),
-                DemandSide::Deposit => transfer.request_deposit(TransferDepositRequest::new(
+                DemandSide::Deposit => transfer.request_deposit(TransferDepositRequest::new_tier(
                     target,
                     demand.resource,
                     demand.priority,
@@ -388,7 +388,7 @@ impl RoomTransferMission {
                 let free_capacity = link.store().get_free_capacity(Some(ResourceType::Energy));
 
                 if free_capacity > 1 {
-                    let transfer_request = TransferDepositRequest::new(
+                    let transfer_request = TransferDepositRequest::new_tier(
                         TransferTarget::Link(link.remote_id()),
                         Some(ResourceType::Energy),
                         TransferPriority::None,
@@ -406,7 +406,7 @@ impl RoomTransferMission {
                     // The fill ladder lives in the K1 kernel (ADR 0040 M3).
                     let priority = storage_link_withdraw_priority(used_capacity, available_capacity);
 
-                    let transfer_request = TransferWithdrawRequest::new(
+                    let transfer_request = TransferWithdrawRequest::new_tier(
                         TransferTarget::Link(link.remote_id()),
                         ResourceType::Energy,
                         priority,
@@ -430,7 +430,7 @@ impl RoomTransferMission {
                     // The fill ladder lives in the K1 kernel (ADR 0040 M3).
                     let priority = source_link_withdraw_priority(used_capacity, available_capacity);
 
-                    let transfer_request = TransferWithdrawRequest::new(
+                    let transfer_request = TransferWithdrawRequest::new_tier(
                         TransferTarget::Link(link.remote_id()),
                         ResourceType::Energy,
                         priority,
@@ -461,7 +461,7 @@ impl RoomTransferMission {
                 if let Some((priority, amount)) =
                     controller_link_deposit(capacity, used_capacity, free_capacity, expected_drain_per_tick)
                 {
-                    let transfer_request = TransferDepositRequest::new(
+                    let transfer_request = TransferDepositRequest::new_tier(
                         TransferTarget::Link(link.remote_id()),
                         Some(ResourceType::Energy),
                         priority,
@@ -472,7 +472,7 @@ impl RoomTransferMission {
                     transfer.request_deposit(transfer_request);
                 }
 
-                let transfer_request = TransferWithdrawRequest::new(
+                let transfer_request = TransferWithdrawRequest::new_tier(
                     TransferTarget::Link(link.remote_id()),
                     ResourceType::Energy,
                     TransferPriority::None,

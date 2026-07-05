@@ -83,7 +83,7 @@ fn unload_labs_transfer_generator(room_entity: Entity) -> TransferQueueGenerator
             for unwanted_resource in current_store.iter().filter(|r| **r != ResourceType::Energy) {
                 let amount = lab.store().get(*unwanted_resource).unwrap_or(0);
 
-                let transfer_request = TransferWithdrawRequest::new(
+                let transfer_request = TransferWithdrawRequest::new_tier(
                     TransferTarget::Lab(lab.remote_id()),
                     *unwanted_resource,
                     TransferPriority::Medium,
@@ -411,7 +411,7 @@ impl RunReaction {
                 for unwanted_resource in current_store.iter().filter(|r| **r != ResourceType::Energy && *r != input_resource) {
                     let unwanted_amount = lab.store().get(*unwanted_resource).unwrap_or(0);
 
-                    let transfer_request = TransferWithdrawRequest::new(
+                    let transfer_request = TransferWithdrawRequest::new_tier(
                         TransferTarget::Lab(lab.remote_id()),
                         *unwanted_resource,
                         TransferPriority::Medium,
@@ -428,7 +428,7 @@ impl RunReaction {
                 let deposit_amount = (reaction_amount as i32 - current_resource_amount as i32).min(free_capacity);
 
                 if deposit_amount > 0 {
-                    let transfer_request = TransferDepositRequest::new(
+                    let transfer_request = TransferDepositRequest::new_tier(
                         TransferTarget::Lab(lab.remote_id()),
                         Some(*input_resource),
                         TransferPriority::Medium,
@@ -454,7 +454,7 @@ impl RunReaction {
 
                     //TODO: Add priority calculation.
 
-                    let transfer_request = TransferWithdrawRequest::new(
+                    let transfer_request = TransferWithdrawRequest::new_tier(
                         TransferTarget::Lab(lab.remote_id()),
                         *unwanted_resource,
                         TransferPriority::Medium,
@@ -570,7 +570,7 @@ impl RunReverseReaction {
                 {
                     let unwanted_amount = lab.store().get(*unwanted_resource).unwrap_or(0);
 
-                    let transfer_request = TransferWithdrawRequest::new(
+                    let transfer_request = TransferWithdrawRequest::new_tier(
                         TransferTarget::Lab(lab.remote_id()),
                         *unwanted_resource,
                         TransferPriority::Medium,
@@ -595,7 +595,7 @@ impl RunReverseReaction {
                 let deposit_amount = (lab_input_reaction_amount as i32 - current_resource_amount as i32).min(free_capacity);
 
                 if deposit_amount > 0 {
-                    let transfer_request = TransferDepositRequest::new(
+                    let transfer_request = TransferDepositRequest::new_tier(
                         TransferTarget::Lab(lab.remote_id()),
                         Some(reaction_resource),
                         TransferPriority::Medium,
@@ -621,7 +621,7 @@ impl RunReverseReaction {
 
                     //TODO: Add priority calculation.
 
-                    let transfer_request = TransferWithdrawRequest::new(
+                    let transfer_request = TransferWithdrawRequest::new_tier(
                         TransferTarget::Lab(lab.remote_id()),
                         *unwanted_resource,
                         TransferPriority::Medium,

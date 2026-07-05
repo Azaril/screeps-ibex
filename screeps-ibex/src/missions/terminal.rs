@@ -241,7 +241,7 @@ impl Mission for TerminalMission {
                         }
 
                         if transfer_amount > Self::get_minimum_terminal_transfer_amount(resource_type) {
-                            let deposit_request = TransferDepositRequest::new(
+                            let deposit_request = TransferDepositRequest::new_tier(
                                 TransferTarget::Terminal(terminal.remote_id()),
                                 Some(resource_type),
                                 TransferPriority::Low,
@@ -263,7 +263,7 @@ impl Mission for TerminalMission {
                         );
 
                         if transfer_amount > 0 && transfer_amount >= Self::get_minimum_terminal_transfer_amount(resource_type) {
-                            let withdraw_request = TransferWithdrawRequest::new(
+                            let withdraw_request = TransferWithdrawRequest::new_tier(
                                 TransferTarget::Terminal(terminal.remote_id()),
                                 resource_type,
                                 TransferPriority::None,
@@ -333,7 +333,7 @@ impl Mission for TerminalMission {
                             let transfer_amount =
                                 (*thresholds.terminal_reserve_threshold.end() - current_terminal_amount).min(max_transfer);
 
-                            let transfer_request = TransferDepositRequest::new(
+                            let transfer_request = TransferDepositRequest::new_tier(
                                 TransferTarget::Terminal(terminal_id),
                                 Some(resource_type),
                                 TransferPriority::Medium,
@@ -356,7 +356,7 @@ impl Mission for TerminalMission {
                                 let transfer_amount =
                                     (*thresholds.terminal_transfer_outgoing_threshold.end() - current_terminal_amount).min(max_transfer);
 
-                                let transfer_request = TransferDepositRequest::new(
+                                let transfer_request = TransferDepositRequest::new_tier(
                                     TransferTarget::Terminal(terminal_id),
                                     Some(resource_type),
                                     TransferPriority::Low,
@@ -373,7 +373,7 @@ impl Mission for TerminalMission {
                                 let transfer_amount =
                                     (*thresholds.terminal_passive_threshold.end() - current_terminal_amount).min(max_transfer);
 
-                                let transfer_request = TransferDepositRequest::new(
+                                let transfer_request = TransferDepositRequest::new_tier(
                                     TransferTarget::Terminal(terminal_id),
                                     Some(resource_type),
                                     TransferPriority::Low,
@@ -390,7 +390,7 @@ impl Mission for TerminalMission {
                                 let transfer_amount =
                                     (*thresholds.terminal_active_threshold.end() - current_terminal_amount).min(max_transfer);
 
-                                let transfer_request = TransferDepositRequest::new(
+                                let transfer_request = TransferDepositRequest::new_tier(
                                     TransferTarget::Terminal(terminal_id),
                                     Some(resource_type),
                                     TransferPriority::Low,
@@ -414,7 +414,7 @@ impl Mission for TerminalMission {
                                     (thresholds.desired_storage_amount - current_storage_amount).min(available_terminal_amount);
 
                                 if transfer_amount > 0 {
-                                    let transfer_request = TransferWithdrawRequest::new(
+                                    let transfer_request = TransferWithdrawRequest::new_tier(
                                         TransferTarget::Terminal(terminal_id),
                                         resource_type,
                                         TransferPriority::None,
@@ -443,7 +443,7 @@ impl Mission for TerminalMission {
                             let transfer_amount = (terminal_excess as i32) - (made_available_amount as i32);
 
                             if transfer_amount > 0 {
-                                let transfer_request = TransferWithdrawRequest::new(
+                                let transfer_request = TransferWithdrawRequest::new_tier(
                                     TransferTarget::Terminal(terminal_id),
                                     resource_type,
                                     TransferPriority::Medium,

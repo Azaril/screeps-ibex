@@ -95,16 +95,33 @@ impl Idle {
             target_filters::all
         };
 
-        get_new_delivery_current_resources_state(
+        // ADR 0040 M5a — the LIVE bid-native HAUL selection: rank (pickup, delivery) pairs by RAW
+        // bid-density via the SHARED market kernel (reproducing the sim's MARKET tournament arm),
+        // for BOTH a loaded hauler (delivers carried cargo) and an empty one (pickup+deliver). The
+        // tier-interleave / nearest-wins path below is the fallback the market falls through to
+        // (drained lane / non-market lanes) — it keeps the crate tier-capable for the sim's arms.
+        get_new_market_pickup_and_delivery_state(
             creep,
             &transfer_queue_data,
+            &pickup_rooms,
             &delivery_rooms,
-            TransferPriorityFlags::ACTIVE,
-            TransferTypeFlags::HAUL,
             tick_context.runtime_data.transfer_queue,
             target_filter,
+            HaulState::pickup,
             HaulState::delivery,
         )
+        .or_else(|| {
+            get_new_delivery_current_resources_state(
+                creep,
+                &transfer_queue_data,
+                &delivery_rooms,
+                TransferPriorityFlags::ACTIVE,
+                TransferTypeFlags::HAUL,
+                tick_context.runtime_data.transfer_queue,
+                target_filter,
+                HaulState::delivery,
+            )
+        })
         .or_else(|| {
             get_new_delivery_current_resources_state(
                 creep,

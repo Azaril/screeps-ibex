@@ -287,7 +287,7 @@ impl SalvageMission {
 
                     if resource_amount > 0 {
                         if let Ok(transfer_target) = structure.try_into() {
-                            let transfer_request = TransferWithdrawRequest::new(
+                            let transfer_request = TransferWithdrawRequest::new_tier(
                                 transfer_target,
                                 resource,
                                 TransferPriority::Low,

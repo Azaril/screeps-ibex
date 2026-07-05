@@ -327,6 +327,7 @@ pub struct MetricsSystemData<'a> {
     intents: Read<'a, crate::intents::IntentRecorder>,
     squad_contexts: ReadStorage<'a, crate::military::squad::SquadContext>,
     energy_leak: Read<'a, crate::energy_stress::EnergyLeakStats>,
+    market_bids: Read<'a, crate::transfer::transfersystem::MarketBidSummary>,
 }
 
 pub struct MetricsSystem;
@@ -375,6 +376,23 @@ impl MetricsSystem {
                     repair_leak_roads: repair_leak.repair_roads,
                     repair_leak_containers: repair_leak.repair_containers,
                     repair_leak_other: repair_leak.repair_other,
+                    // ADR 0040 M5a market observability (§D8 #5): the per-room
+                    // opportunity floor + top-3 unmet bids, published by the
+                    // live transfer-market pass into `MarketBidSummary` (keyed by
+                    // owned-room name). Default (0 / empty) until the market pass
+                    // has run for the room this tick.
+                    market_opportunity_floor: data
+                        .market_bids
+                        .rooms
+                        .get(&room_data.name)
+                        .map(|s| s.opportunity_floor)
+                        .unwrap_or(0),
+                    market_top_unmet_bids: data
+                        .market_bids
+                        .rooms
+                        .get(&room_data.name)
+                        .map(|s| s.top_unmet_bids.clone())
+                        .unwrap_or_default(),
                 })
             })
             .collect()

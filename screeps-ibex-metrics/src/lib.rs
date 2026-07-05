@@ -178,6 +178,13 @@ pub struct RoomMetrics {
     /// deficit (ADR 0040 §D6 `repair_leak_e` — the S1 symptom counter,
     /// anchoring the economy sim's M1 repro gate). 0 for writers predating
     /// the field.
+    ///
+    /// **EXPECTED to rise from ADR 0040 M5a onward.** The S1 repair-stress gate
+    /// was deleted at M5a; the unified e/t sink market now re-prices repair
+    /// against the room's opportunity floor rather than hard-gating it. A
+    /// nonzero/rising value is therefore correct re-pricing, not a regression —
+    /// the market's own M4 attribution predicted this ("the market leaks more
+    /// than S1 and keeps roads healthier"; §D6).
     #[serde(default)]
     pub repair_leak_roads: u32,
     /// As [`Self::repair_leak_roads`], for containers.
@@ -186,6 +193,17 @@ pub struct RoomMetrics {
     /// As [`Self::repair_leak_roads`], for all other structure classes.
     #[serde(default)]
     pub repair_leak_other: u32,
+    /// ADR 0040 M5a market observability (§D8 #5): the room's opportunity floor
+    /// this tick (the highest materially-unmet deposit bid, milli-e/t; storage
+    /// numeraire = 1000). 0 when nothing is materially unmet (every withdraw
+    /// admits). 0 for writers predating the field.
+    #[serde(default)]
+    pub market_opportunity_floor: u32,
+    /// ADR 0040 M5a market observability (§D8 #5): the top unmet deposit bids
+    /// this tick (milli-e/t), descending, up to three — the "why did the hauler
+    /// skip the lab" readout. Empty for writers predating the field.
+    #[serde(default)]
+    pub market_top_unmet_bids: Vec<u32>,
 }
 
 /// Loud-failure counters (rewrite-plan non-negotiable #2): cumulative
@@ -335,6 +353,8 @@ mod tests {
                 repair_leak_roads: 12,
                 repair_leak_containers: 4,
                 repair_leak_other: 1,
+                market_opportunity_floor: 3200,
+                market_top_unmet_bids: vec![12_000, 8_000, 2_000],
             }],
             faults: FaultCounters {
                 deser_failures: 0,

@@ -42,6 +42,9 @@ pub struct JobSystemData<'a> {
     /// (ADR 0007 item 2 via ADR 0040 M3; the cadence POLICY lives in
     /// `screeps_econ_decision::cadence`, this is the adapter-side governor read).
     governor: Read<'a, GovernorSnapshot>,
+    /// ADR 0040 M5a — the live e/t market readout (§D8 #5): the opportunity floor + top unmet
+    /// bids the hauling pass publishes each tick, exported to seg-57 by `metrics.rs`.
+    market_bids: Write<'a, crate::transfer::transfersystem::MarketBidSummary>,
 }
 
 pub struct JobExecutionSystemData<'a> {
@@ -147,6 +150,10 @@ impl<'a> System<'a> for RunJobSystem {
                 room_data: &data.room_data,
             };
             data.transfer_queue.build_econ_snapshot(&generator_data);
+            // ADR 0040 M5a: publish the live market floor + top unmet bids (§D8 #5). The demand
+            // is fully materialized by the snapshot build; the floor read off the numeric-bid
+            // deposit keys is the same quantity every hauler selection admits against this tick.
+            data.transfer_queue.publish_market_floor(&mut data.market_bids);
         }
 
         let system_data = JobExecutionSystemData {

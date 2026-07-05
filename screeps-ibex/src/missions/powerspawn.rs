@@ -113,7 +113,7 @@ impl Mission for PowerSpawnMission {
                         let maximum_energy = power_spawn.store().get_capacity(Some(ResourceType::Energy));
                         let energy_fraction = (required_energy as f32) / (maximum_energy as f32);
 
-                        let deposit_request = TransferDepositRequest::new(
+                        let deposit_request = TransferDepositRequest::new_tier(
                             TransferTarget::PowerSpawn(power_spawn.remote_id()),
                             Some(ResourceType::Energy),
                             map_priority(energy_fraction),
@@ -130,7 +130,7 @@ impl Mission for PowerSpawnMission {
                         let maximum_power = power_spawn.store().get_capacity(Some(ResourceType::Power));
                         let power_fraction = (required_power as f32) / (maximum_power as f32);
 
-                        let deposit_request = TransferDepositRequest::new(
+                        let deposit_request = TransferDepositRequest::new_tier(
                             TransferTarget::PowerSpawn(power_spawn.remote_id()),
                             Some(ResourceType::Power),
                             map_priority(power_fraction),

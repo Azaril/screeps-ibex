@@ -129,7 +129,7 @@ impl Mission for WallRepairMission {
                     }
                     let free_cap = tower.store().get_free_capacity(Some(ResourceType::Energy));
                     if free_cap > 0 {
-                        let request = TransferDepositRequest::new(
+                        let request = TransferDepositRequest::new_tier(
                             TransferTarget::Tower(tower.remote_id()),
                             Some(ResourceType::Energy),
                             TransferPriority::High,

@@ -9,7 +9,6 @@ use super::utility::movebehavior::*;
 use super::utility::repair::*;
 use super::utility::repairbehavior::*;
 use super::utility::waitbehavior::*;
-use crate::energy_stress::*;
 use crate::remoteobjectid::*;
 use crate::structureidentifier::*;
 use crate::transfer::transfersystem::*;
@@ -176,18 +175,12 @@ impl Idle {
             .or_else(|| get_new_upgrade_state(creep, delivery_room_data, HarvestState::upgrade, Some(2)))
             .or_else(|| get_new_build_state(creep, delivery_room_data, HarvestState::build))
             .or_else(|| {
-                // S1 repair stress gate (ADR 0040 §D6): posture = the home/delivery room.
-                let allowance = repair_allowance_for(
-                    tick_context.system_data.economy,
-                    tick_context.system_data.features,
-                    Some(state_context.delivery_room),
-                );
-
+                // S1 gate deleted at ADR 0040 M5a — the market prices repair natively.
                 get_new_repair_state(
                     creep,
                     delivery_room_data,
                     tick_context.system_data.repair_queue,
-                    effective_min_repair_priority(Some(RepairPriority::Medium), allowance),
+                    Some(RepairPriority::Medium),
                     HarvestState::repair,
                 )
             })
@@ -338,18 +331,12 @@ impl FinishedRepair {
 
         let creep = tick_context.runtime_data.owner;
 
-        // S1 repair stress gate (ADR 0040 §D6): posture = the home/delivery room.
-        let allowance = repair_allowance_for(
-            tick_context.system_data.economy,
-            tick_context.system_data.features,
-            Some(state_context.delivery_room),
-        );
-
+        // S1 gate deleted at ADR 0040 M5a — the market prices repair natively.
         get_new_repair_state(
             creep,
             delivery_room_data,
             tick_context.system_data.repair_queue,
-            effective_min_repair_priority(Some(RepairPriority::Medium), allowance),
+            Some(RepairPriority::Medium),
             HarvestState::repair,
         )
         .or(Some(HarvestState::idle()))

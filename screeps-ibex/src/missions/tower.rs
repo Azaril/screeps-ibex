@@ -185,7 +185,7 @@ impl Mission for TowerMission {
                 for tower in towers {
                     let tower_free_capacity = tower.store().get_free_capacity(Some(ResourceType::Energy));
                     if tower_free_capacity > 0 {
-                        let transfer_request = TransferDepositRequest::new(
+                        let transfer_request = TransferDepositRequest::new_tier(
                             TransferTarget::Tower(tower.remote_id()),
                             Some(ResourceType::Energy),
                             priority,
@@ -485,13 +485,14 @@ impl Mission for TowerMission {
             .min_by_key(|creep| creep.hits());
 
         let minimum_repair_priority = if dynamic_visibility_data.hostile_creeps() {
-            // Defense lane -- never gated by the energy-stress allowance.
+            // Defense lane.
             Some(RepairPriority::Medium)
         } else {
-            // S1 repair stress gate (ADR 0040 §D6): peaceful tower repair
-            // yields to the refill chain under energy stress.
-            let allowance = repair_allowance_for(system_data.economy, &system_data.features, Some(self.room_data));
-            effective_min_repair_priority(Some(RepairPriority::Low), allowance)
+            // Peaceful tower repair. The S1 repair stress gate was deleted at
+            // ADR 0040 M5a — the sink market re-prices tower maintenance repair
+            // natively (the peaceful tower lane loses to any real demand, §D1),
+            // so the tower keeps its own Low minimum.
+            Some(RepairPriority::Low)
         };
 
         let repair_structure =
