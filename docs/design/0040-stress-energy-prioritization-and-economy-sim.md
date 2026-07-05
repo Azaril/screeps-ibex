@@ -183,6 +183,15 @@ Pricing is cheap (integer bid functions per materialized request, from fields `E
 
 Remaining (tracked, not silent): hostile-pressure collapse family; terminal/credit pricing integration (ADR 0012); bounded-auction matching if #4 triggers.
 
+## End state (as shipped, 2026-07-05)
+
+All milestones S1 + M0–M6 landed on master and validated; the unified e/t energy market is **live on private-server** (M5a WFV 26→27 + M5b, deployed for validation). Status stays **Proposed** pending operator acceptance (EP-10.7) and the **MMO WFV-27 reset awaits explicit operator go-ahead** — nothing on MMO changed.
+
+- **Shipped:** the civilian economy now runs one ratified currency (energy-equivalent per tick) end-to-end — hauler selection prices every sink and assigns by raw bid-density (the market's greedy `market_pass` live, not a tier sieve); repair admission is the opportunity floor (S1's hand-tuned gate retired); spawn requests bid in the same currency (civilian `body_roi`, military `p_win·value_e/est_ticks`), the `SPAWN_PRIORITY_*`/`TransferPriority` enums deleted. The offline `screeps-econ-engine`/`-decision`/`-eval` simulator (sim spawn/economy/source+mineral/controller/**full** lab systems) is the calibration + regression instrument, sharing the exact decision crate the bot runs.
+- **Evidence:** the repro gate proved the collapse disease offline (+453–584 ticks of recovery cost, CI excluding zero); the four-arm tournament (review-hardened, derived refill floor, contended matching family) showed the market beats baseline on all families (C −513, G −1582, D −455) and beats the shipped S1 stopgap decisively on the RCL rush (G −1702). **Honest attribution:** M5a pricing/matching carries the rush win; M5b K4 deficit-priced bodies carry the collapse-recovery win over S1; on the collapse *symptom* the market is parity-with-S1 (it re-prices repair rather than hard-gating — roads stay healthier, `repair_leak_e` rises by design).
+- **§D8 dispositions:** #1 refill floor DERIVED (banking-model instant-spawnability premium, not a swept constant); #2 flat S1 constants stand (S1 digest-identical in healthy RCL≥4 rooms); #3 posture = home/delivery room; #4 greedy matching (18‰ contended gap → don't escalate; threshold ~50‰); #5 observability = console `[market]` line + seg-57 (Glance HUD row when 0016's infra lands); #6 traffic wear = observed timer-pull; #7 recovered-state = lane-only (income-frac demoted to diagnostic — it measured activity, not recovery); #8 WFV = 26→27 solo (0041 P2 unbuilt).
+- **Follow-ups (tracked):** the MMO deploy decision; a forming-squad + collapse Docker soak on private (available on request); `mineral_value_e` consumed by ADR 0041's boost cost; the lab-load bid's full integration into the live market edge-gen; the hostile-pressure collapse family; `can_afford_military`'s reserve retirement; ADR 0016's HUD row.
+
 ## Cross-references
 
 - Leak sites: `jobs/utility/repairbehavior.rs:111-171`; `jobs/harvest.rs:225,264-266`; `jobs/haul.rs:229-248` + `missions/haul.rs:295-299`; `jobs/staticmine.rs:144`; `jobs/build.rs:56-104`; `missions/tower.rs:426-453`; `missions/localbuild.rs:112-122,181-217`
