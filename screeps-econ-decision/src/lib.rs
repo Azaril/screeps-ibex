@@ -34,6 +34,11 @@
 //!   alive-count/ECS bookkeeping; the sim's K4 arm calls the same functions.
 //! - **Re-match cadence** ([`cadence`], ADR 0007 item 2): the governor-tier re-match/backoff
 //!   policy; the governor *read* stays adapter-side.
+//! - **The M4 MARKET CANDIDATE kernels** (ADR 0040 §D1/§D3, behind the same seam — the sim
+//!   tournament consumes them now, the live bot at M5a): [`sink_economics`] (the e/t sink bids,
+//!   the opportunity floor + admission, the survival vetoes, K4 deficit-priced bodies) and
+//!   [`matching`] (the deterministic greedy bid-density assignment, the shipped §D3 v1; the
+//!   exact oracle is sim-only in econ-eval, never a bot dependency).
 //!
 //! **Determinism:** kernels iterate deterministic orders (sorted DTO collections, adapter-
 //! controlled candidate order) and compare exact integer rationals (`a1·d2 ⋛ a2·d1`) instead of
@@ -43,8 +48,10 @@
 
 pub mod cadence;
 pub mod demand;
+pub mod matching;
 pub mod priority;
 pub mod repair;
+pub mod sink_economics;
 pub mod snapshot;
 pub mod spawn_policy;
 pub mod stress;

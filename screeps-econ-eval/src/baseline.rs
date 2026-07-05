@@ -49,12 +49,37 @@ pub const MASK_NONE: TransferPriorityFlags = TransferPriorityFlags::NONE;
 pub const MASK_ACTIVE: TransferPriorityFlags = TransferPriorityFlags::ACTIVE;
 pub const MASK_ALL: TransferPriorityFlags = TransferPriorityFlags::ALL;
 
-/// The policy toggle: `s1_allowance = false` is the BASELINE arm (the live pre-S1 behavior — the
-/// disease); `true` applies the allowance at every repair admission point (the S1 stopgap arm
-/// the bench A/Bs — report-only in M1, the real A/B is M4).
+/// The policy ARM configuration (the M4 tournament vocabulary):
+/// - `Default` = the BASELINE arm (the live pre-S1 behavior — the disease);
+/// - `s1_allowance` = the S1 stopgap arm (the allowance at every repair admission point);
+/// - `tiered_delivery` (+ s1) = the PTRP arm: carried-cargo deliveries honor tiers
+///   High→Medium→Low before the None fallback (the tier-faithful S3 fix — the ADR's
+///   "tiers + gates" alternative, costed for the M4 report);
+/// - `market` = the MARKET arms (ADR §D1/§D3 candidate kernels; `k4_bodies` splits the full
+///   MARKET arm from MARKET-minus-K4 for S6 attribution).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PolicyConfig {
     pub s1_allowance: bool,
+    pub tiered_delivery: bool,
+    pub market: Option<crate::market::MarketArmCfg>,
+}
+
+impl PolicyConfig {
+    pub fn baseline() -> Self {
+        PolicyConfig::default()
+    }
+
+    pub fn s1() -> Self {
+        PolicyConfig { s1_allowance: true, ..Default::default() }
+    }
+
+    pub fn ptrp() -> Self {
+        PolicyConfig { s1_allowance: true, tiered_delivery: true, ..Default::default() }
+    }
+
+    pub fn market(cfg: crate::market::MarketArmCfg) -> Self {
+        PolicyConfig { market: Some(cfg), ..Default::default() }
+    }
 }
 
 /// The room's allowance under this config (Unrestricted when the arm is off — the flag-off
@@ -93,6 +118,25 @@ pub enum SinkKey {
     Extension(usize),
     Container(u8, u8),
     Storage,
+}
+
+impl SinkKey {
+    /// **Engine-fungible-pool membership** (M4 review #5): whether this sink is a member of a
+    /// pool the ENGINE treats as ONE fungible reservoir — energy in any member is drawn from all
+    /// members for the pool's function, so the market prices the ECONOMIC pool, not its plumbing,
+    /// and the matcher aggregates the members into ONE demand node (see `market::market_pass`).
+    ///
+    /// The ONLY fungible pool is the spawn lane: `room.energy_available()` /
+    /// `energy_capacity_available()` is `Σ(spawns + extensions)` and the head-of-line banker draws
+    /// spawns-then-extensions-closest from that single total (engine `spawns/tick.js`,
+    /// `spawnCreep`'s energy draw). Containers and storage are NOT fungible — each is a distinct
+    /// stockpile with its own function (a controller container feeds ONE controller; storage is
+    /// the numeraire depot) — so they are priced and matched per-structure. This method is the
+    /// single predicate; a future fungible pool (e.g. a link network, if ever modeled) adds one
+    /// arm here, and the matcher's aggregation follows automatically.
+    pub fn is_fungible_pool_member(&self) -> bool {
+        matches!(self, SinkKey::Spawn(_) | SinkKey::Extension(_))
+    }
 }
 
 /// A withdraw/pickup source's stable identity.

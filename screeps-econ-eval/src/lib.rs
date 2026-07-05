@@ -27,9 +27,11 @@
 
 pub mod baseline;
 pub mod layout;
+pub mod market;
 pub mod metrics;
 pub mod movement;
 pub mod oracle;
 pub mod runner;
 pub mod scenario;
+pub mod tournament;
 pub mod workers;

@@ -26,9 +26,26 @@ use screeps_sim_core::SimBody;
 /// Source potential: 10 e/t (3000 / 300 regen — engine-mechanics.md:466).
 const SOURCE_RATE_E_T: u32 = 10;
 
-/// T* for a collapse world: the arithmetic chain above. `world0` is the INSTANTIATED (drained)
-/// scenario world.
+/// T* for a collapse world: the arithmetic chain above, MINIMIZED over the fleet-body ladder
+/// (M4 fix: the fixed capacity-sized fleet model was NOT a lower bound for deficit-priced-body
+/// policies — the K4 arm legitimately beat it by fielding cheap saturating shuttles, tripping
+/// the η_raw sanity gate; the min over the [M,M,C,W]×r ladder restores a true bound over every
+/// ladder policy). `world0` is the INSTANTIATED (drained) scenario world.
 pub fn t_star(world0: &EconWorld, mover: &mut dyn Mover, info: &LayoutInfo, consts: &RecoverConsts) -> u32 {
+    (1..=5u32)
+        .map(|r| t_star_with_fleet(world0, mover, info, consts, 250 * r))
+        .min()
+        .unwrap_or(0)
+}
+
+/// The M1 arithmetic chain for ONE fleet-body budget (`t_star` docs).
+fn t_star_with_fleet(
+    world0: &EconWorld,
+    mover: &mut dyn Mover,
+    info: &LayoutInfo,
+    consts: &RecoverConsts,
+    fleet_budget: u32,
+) -> u32 {
     let _ = info;
     let k = world0.spawns.len() as u32;
     if k == 0 || world0.sources.is_empty() {
@@ -69,9 +86,9 @@ pub fn t_star(world0: &EconWorld, mover: &mut dyn Mover, info: &LayoutInfo, cons
     let mut arrivals: Vec<(u32, usize, u32)> = Vec::new(); // (arrive_tick, source, work)
     let mut t: u32 = 0;
     let mut refill_done_at: Option<u32> = None;
-    // The optimal fleet: 5-WORK bodies until each source's Σ(2·WORK) ≥ 10 — one 1250 body per
-    // source at capacity ≥ 1250, else stacked smaller bodies (cheapest saturating fleet).
-    let fleet_body = crate::baseline::harvester_body(capacity).expect("capacity ≥ 300");
+    // The fleet body for THIS ladder rung (the caller minimizes over rungs), clamped to the
+    // room's ceiling.
+    let fleet_body = crate::baseline::harvester_body(fleet_budget.min(capacity).max(300)).expect("capacity ≥ 300");
     let fleet_cost = body_cost(&fleet_body);
     let fleet_parts = fleet_body.len() as u32;
     let fleet_work = fleet_body.iter().filter(|p| **p == screeps::Part::Work).count() as u32;

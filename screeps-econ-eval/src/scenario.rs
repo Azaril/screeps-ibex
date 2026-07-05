@@ -426,11 +426,159 @@ pub fn steady_catalog(seed: u32) -> Vec<SteadyScenario> {
     out
 }
 
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// Family M — CONTENDED matching (M4 review #2). The §D3 matching-frontier / §D8 #4 escalation
+// question and the M5a CPU budget cannot be ratified on home-room floors (~1.1 edges/pass, a
+// FEW carriers): the greedy's myopia only bites when a pass generates MANY candidate edges into
+// MANY non-aggregated sinks. Family M builds exactly that pressure — a high-RCL room (many
+// extensions, containers, storage) with (a) a large IDLE hauler crowd and (b) many concurrently
+// drained NON-aggregated sinks (every container empty, storage below capacity, dropped piles),
+// so each pass's edge set is O(carriers × sinks). Run the market arm with the exact oracle ON;
+// the pooled gap it measures there is the one §D8 #4 is decided on, and its ops/tick is the real
+// M5a budget input (the home-room number is a floor).
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+/// One contended-matching scenario: a high-RCL healthy room stripped to a maximal-edge state
+/// (drained sinks + a big idle hauler fleet) run a short window under the matching pass.
+#[derive(Clone, Debug)]
+pub struct ContendedScenario {
+    pub name: String,
+    pub layout_room: String,
+    pub rcl: u8,
+    /// The idle hauler crowd size (the "6-12+ carriers" the review asks for).
+    pub haulers: u8,
+    pub tick_cap: u32,
+    pub seed: u32,
+}
+
+/// The contended window: short (the matching pass runs every tick; a few hundred ticks samples
+/// the oracle many times without a full recovery arc muddying the edge-count signal).
+pub const DEFAULT_M_TICK_CAP: u32 = 600;
+
+impl ContendedScenario {
+    pub fn new(room: &str, rcl: u8, haulers: u8, seed: u32) -> Self {
+        ContendedScenario {
+            name: format!("M-{room}-rcl{rcl}-h{haulers}#s{seed}"),
+            layout_room: room.to_string(),
+            rcl,
+            haulers,
+            tick_cap: DEFAULT_M_TICK_CAP,
+            seed,
+        }
+    }
+
+    /// Instantiate the maximal-edge world: full realization at `rcl` (so the room has its full
+    /// extension/container/storage count), then DRAIN every sink (extensions to 0, containers to
+    /// 0, storage to a large-but-below-capacity stock so it is both a big withdraw source AND a
+    /// deposit sink), stock the source containers + drop several piles (many withdraw sources),
+    /// and seed a big idle hauler crowd + one loaded shuttle per source (the deposit pressure).
+    pub fn instantiate(&self) -> (EconWorld, SimTerrain, LayoutInfo) {
+        let layouts = captured_layouts();
+        let layout: &CapturedLayout = layouts
+            .iter()
+            .find(|l| l.room == self.layout_room)
+            .unwrap_or_else(|| panic!("contended layout `{}` not in the captured cache", self.layout_room));
+        let realized = realize(
+            layout,
+            &RealizeParams { rcl: self.rcl, road_health_pct: 100, seed: self.seed },
+        );
+        let mut world = realized.world;
+        let info = realized.info;
+
+        // Drain the deposit sinks (many concurrent High/Low deposit nodes).
+        for s in &mut world.spawns {
+            s.store_energy = 0;
+        }
+        for e in &mut world.extensions {
+            e.store_energy = 0;
+        }
+        // Provider/source containers STOCKED (withdraw sources); every other container drained.
+        let roles = info.container_roles.clone();
+        for c in world.containers.iter_mut() {
+            let tile = (c.pos.x().u8(), c.pos.y().u8());
+            // Provider/source containers stocked (withdraw sources); controller + other
+            // containers left empty (deposit demand).
+            if roles.get(&tile) == Some(&crate::layout::ContainerRole::Source) {
+                c.store.add(SimResource::Energy, c.store.capacity);
+            }
+        }
+        // Storage: a big stock, below capacity — a large withdraw source AND a deposit sink.
+        if let Some(storage) = world.storage.as_mut() {
+            storage.store.add(SimResource::Energy, 300_000);
+        }
+        // Dropped piles near the spawn: extra withdraw sources (more edges), deterministic tiles.
+        let spawn_pos = world.spawns[0].pos;
+        let mut rng = Rng::seeded(self.seed.wrapping_mul(7723).wrapping_add(29));
+        let mut placed = 0u8;
+        for _ in 0..4 {
+            let tile = fleet_tile(&world, spawn_pos, placed);
+            placed += 1;
+            world.drop_resource(tile, SimResource::Energy, rng.range(200, 900));
+        }
+        // The idle hauler crowd (the carriers): balanced [C,M] bodies, seed-jittered TTLs.
+        let hauler = crate::baseline::hauler_body(600).expect("600 ≥ 300");
+        for _ in 0..self.haulers {
+            let tile = fleet_tile(&world, spawn_pos, placed);
+            placed += 1;
+            let ttl = rng.range(400, 1400);
+            world.add_creep(tile, &hauler, ttl);
+        }
+        // One LOADED shuttle harvester per source (a full store ⇒ a delivery-edge carrier).
+        let capacity = crate::baseline::spawn_lane_capacity(&world);
+        let harvester = crate::baseline::harvester_body(capacity.min(800)).expect("≥ 300");
+        for _ in 0..world.sources.len() {
+            let tile = fleet_tile(&world, spawn_pos, placed);
+            placed += 1;
+            let id = world.add_creep(tile, &harvester, rng.range(400, 1400));
+            let cap = world.creep_stores.get(&id).map(|s| s.capacity).unwrap_or(0);
+            if let Some(store) = world.creep_stores.get_mut(&id) {
+                store.add(SimResource::Energy, cap);
+            }
+        }
+
+        (world, realized.terrain, info)
+    }
+
+    pub fn shell(&self) -> EconScenario {
+        EconScenario {
+            name: self.name.clone(),
+            layout_room: self.layout_room.clone(),
+            rcl: self.rcl,
+            storage_energy: 0,
+            creeps: CreepInit::Wiped,
+            road_health_pct: 100,
+            downgrade_clock_pct: 100,
+            tick_cap: self.tick_cap,
+            seed: self.seed,
+            bait: false,
+        }
+    }
+}
+
+/// The M corpus: the highest-RCL captured rooms (most extensions/containers = most sinks) with a
+/// large hauler crowd. `full` widens the room/crowd spread; `fast` takes the first pair.
+pub fn contended_catalog(seed: u32, full: bool) -> Vec<ContendedScenario> {
+    // The captured foreman rooms realize to RCL 6 max in the corpus; a crowd of 10-16 haulers
+    // against a fully-drained RCL-6 sink set generates the many-edge passes.
+    let mut out = vec![
+        ContendedScenario::new("E11N14", 6, 12, seed),
+        ContendedScenario::new("E11N23", 6, 16, seed),
+    ];
+    if full {
+        out.push(ContendedScenario::new("E11N13", 5, 10, seed));
+        out.push(ContendedScenario::new("E11N11", 6, 12, seed));
+        out.push(ContendedScenario::new("E11N14", 6, 12, seed.wrapping_add(1)));
+        out.push(ContendedScenario::new("E11N23", 6, 16, seed.wrapping_add(1)));
+    }
+    out
+}
+
 /// A free walkable tile near the spawn for fleet seeding: ring-scan outward from the spawn,
-/// skipping occupied tiles, offset by `n` (deterministic).
+/// skipping occupied tiles, offset by `n` (deterministic). Radius 8 accommodates the Family-M
+/// crowd (16+ haulers); home-room fleets exhaust radius 4 at most.
 fn fleet_tile(world: &EconWorld, spawn_pos: Position, n: u8) -> Position {
     let mut count = 0u8;
-    for radius in 1..=4i32 {
+    for radius in 1..=8i32 {
         for dy in -radius..=radius {
             for dx in -radius..=radius {
                 if dx.abs().max(dy.abs()) != radius {

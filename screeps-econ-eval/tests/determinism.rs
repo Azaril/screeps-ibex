@@ -13,18 +13,31 @@
 //!   proves the driver leans on that, never on emission order).
 
 use screeps_econ_eval::baseline::PolicyConfig;
+use screeps_econ_eval::market::MarketArmCfg;
 use screeps_econ_eval::metrics::RecoverConsts;
 use screeps_econ_eval::movement::AnalyticMover;
 use screeps_econ_eval::runner::{run_scenario, run_world, RunGoal, RunOptions};
 use screeps_econ_eval::scenario::{fast_catalog, RushScenario, SteadyScenario};
 
 /// A short cap keeps the fence lanes fast while still covering spawn/harvest/repair/decay flow
-/// (and, since M2, upgrade/build/construction-pass flow).
+/// (and, since M2, upgrade/build/construction-pass flow; since M4, the market pass + oracle).
 const FENCE_TICK_CAP: u32 = 1_500;
 
 fn opts(s1: bool, permute: bool) -> RunOptions {
     let mut o = RunOptions::new(
-        PolicyConfig { s1_allowance: s1 },
+        PolicyConfig { s1_allowance: s1, ..Default::default() },
+        RecoverConsts::default(),
+        FENCE_TICK_CAP,
+    );
+    o.permute_intents = permute;
+    o
+}
+
+/// The M4 market arm with the gap oracle ON — the fence covers bids, floor, the greedy pass,
+/// AND the sim-only exact oracle (its fixed-point totals fold into the round digest).
+fn market_opts(permute: bool) -> RunOptions {
+    let mut o = RunOptions::new(
+        PolicyConfig::market(MarketArmCfg { measure_gap: true, ..Default::default() }),
         RecoverConsts::default(),
         FENCE_TICK_CAP,
     );
@@ -75,6 +88,23 @@ fn round(permute: bool) -> (u64, u64) {
         sd = sd.wrapping_add(out.state_digest);
         rd = rd.wrapping_add(out.report_digest);
     }
+    // The M4 MARKET slice: bait + control under the full market arm with the exact oracle
+    // sampling — the pass, the bids, the floor, K4 bodies AND the oracle's fixed-point totals
+    // all enter the round digest (a nondeterministic oracle fails the fence, not just a
+    // nondeterministic decision).
+    for arm in {
+        let mut sc = fast_catalog().remove(0);
+        sc.tick_cap = FENCE_TICK_CAP;
+        [sc.clone(), sc.control()]
+    } {
+        let out = run_scenario(&arm, &market_opts(permute));
+        sd = sd.wrapping_add(out.state_digest);
+        rd = rd.wrapping_add(out.report_digest);
+        rd = rd.wrapping_add(out.match_ops).wrapping_add(out.match_edges);
+        if let Some(g) = out.match_gap {
+            rd = rd.wrapping_add(g.greedy_fp).wrapping_add(g.oracle_fp).wrapping_add(g.samples as u64);
+        }
+    }
     (sd, rd)
 }
 
@@ -88,6 +118,26 @@ fn econ_smoke_fence() {
     assert_eq!(a.state_digest, b.state_digest, "state digests diverged");
     assert_eq!(a.report_digest, b.report_digest, "report digests diverged");
     assert_eq!(a.recovered_at, b.recovered_at);
+}
+
+/// The always-on MARKET smoke fence (M4): two identical market-arm runs bit-equal, including
+/// the matching diagnostics and the oracle's fixed-point totals.
+#[test]
+fn econ_market_smoke_fence() {
+    let mut sc = fast_catalog().remove(0);
+    sc.tick_cap = FENCE_TICK_CAP;
+    let a = run_scenario(&sc, &market_opts(false));
+    let b = run_scenario(&sc, &market_opts(false));
+    assert_eq!(a.state_digest, b.state_digest, "market state digests diverged");
+    assert_eq!(a.report_digest, b.report_digest, "market report digests diverged");
+    assert_eq!((a.match_ops, a.match_edges, a.match_passes), (b.match_ops, b.match_edges, b.match_passes));
+    let (ga, gb) = (a.match_gap.unwrap(), b.match_gap.unwrap());
+    assert_eq!(
+        (ga.samples, ga.greedy_fp, ga.oracle_fp, ga.worst_permille, ga.skipped),
+        (gb.samples, gb.greedy_fp, gb.oracle_fp, gb.worst_permille, gb.skipped),
+        "oracle totals diverged"
+    );
+    assert!(a.match_passes > 0, "anti-vacuity: the market pass actually ran");
 }
 
 /// The expensive fence lane: 5 rounds, digest spread 0.

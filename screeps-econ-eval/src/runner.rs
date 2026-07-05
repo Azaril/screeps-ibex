@@ -23,6 +23,7 @@ use crate::baseline::{
     MASK_MEDIUM, MASK_NONE,
 };
 use crate::layout::LayoutInfo;
+use crate::market::{self, CarrierDto, GapStats, MarketRuntime, MarketTask};
 use crate::metrics::{
     DeadlockSentinel, Diagnostics, LeakTotals, RecoverConsts, RecoveryTracker,
 };
@@ -131,6 +132,17 @@ pub struct RunOutcome {
     /// Review A3 — the length of a deficit episode still OPEN at run end (a terminal permanent
     /// deficit must not vanish from the latency statistics by censoring).
     pub deficit_open_at_end: Option<u32>,
+    // ── M4 market diagnostics (zero on non-market arms) ─────────────────────────────────────────
+    /// Σ matching ops (the §D3 CPU-gate proxy: edge intake + sort + scan).
+    pub match_ops: u64,
+    /// Σ edges generated across all passes.
+    pub match_edges: u64,
+    /// Assignment passes run (ticks with ≥ 1 idle carrier and ≥ 1 deposit).
+    pub match_passes: u64,
+    /// The most candidate edges any single pass generated (the contended worst case, review #2).
+    pub match_max_edges: u64,
+    /// The sampled greedy-vs-exact gap (market arms with `measure_gap` only).
+    pub match_gap: Option<GapStats>,
     /// The #7 diagnostic: first tick trailing income met the demoted 0.9 threshold
     /// (`RecoveryTracker::self_sufficient_at` — reported, never gating).
     pub self_sufficient_at: Option<u32>,
@@ -302,6 +314,10 @@ pub fn run_world(
     let mut deficit_started: Option<u32> = None;
     let mut sites_built: BTreeMap<&'static str, u32> = BTreeMap::new();
 
+    // M4: the market arms carry per-run market state (wear observation, pass products, the
+    // matching/gap diagnostics). None on the tier arms — every baseline path is untouched.
+    let mut market_rt: Option<MarketRuntime> = opts.cfg.market.map(|cfg| MarketRuntime::new(cfg, world.tick()));
+
     for _ in 0..opts.tick_cap {
         // ── 0. The construction pass (M2; live ConstructionMission every 50 ticks at the room's
         // phase — construction.rs:452): place plan sites the current RCL allows. ────────────────
@@ -321,6 +337,19 @@ pub fn run_world(
             book_activity(&mut bookings, &w.activity);
         }
 
+        // ── 2.5 The MARKET pass (market arms only — ADR §D1/§D3): plan preview → refill bid →
+        // per-deposit bids + opportunity floor + downgrade veto → the per-room greedy assignment
+        // over this tick's idle carriers (assigned flows booked; tasks consumed by step 3). ──────
+        if let Some(rt) = market_rt.as_mut() {
+            let deposit_set = deposits(world, info, &bookings);
+            let pickup_set = pickups(world, info, &bookings);
+            let unfulfilled = matched_unfulfilled_hauling(&deposit_set, &pickup_set);
+            let plans_preview = market::spawn_requests_market(world, &driver.roles(), unfulfilled, rt);
+            let dep_bids = rt.begin_tick(world, info, &plans_preview, &deposit_set);
+            let carriers = collect_market_carriers(world, &driver);
+            rt.market_pass(world, &deposit_set, &dep_bids, &pickup_set, &carriers, &mut bookings);
+        }
+
         // ── 3. Worker FSM steps (creep-id order). ───────────────────────────────────────────────
         let mut intents = EconIntents::new();
         let mut moved_any = false;
@@ -333,6 +362,8 @@ pub fn run_world(
                 mover,
                 info,
                 allowance,
+                opts.cfg.tiered_delivery,
+                market_rt.as_mut(),
                 &mut bookings,
                 &mut driver,
                 id,
@@ -352,7 +383,17 @@ pub fn run_world(
         let deposit_set = deposits(world, info, &bookings);
         let pickup_set = pickups(world, info, &bookings);
         let unfulfilled_hauling = matched_unfulfilled_hauling(&deposit_set, &pickup_set);
-        let plans = spawn_requests(world, &driver.roles(), unfulfilled_hauling, allowance);
+        let plans = if let Some(rt) = market_rt.as_ref() {
+            // Market arms: the K4 request set (bodies deficit-priced when `k4_bodies`; the
+            // repairer arm bid-admitted). Priorities keep the f32 band interface (M5b owns
+            // bid-ordering of the queue).
+            market::spawn_requests_market(world, &driver.roles(), unfulfilled_hauling, rt)
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect()
+        } else {
+            spawn_requests(world, &driver.roles(), unfulfilled_hauling, allowance)
+        };
         let idle_spawn_indices: Vec<usize> =
             (0..world.spawns.len()).filter(|&i| world.spawns[i].spawning.is_none()).collect();
         let mut pending_by_spawn: BTreeMap<usize, RoleSpec> = BTreeMap::new();
@@ -552,6 +593,10 @@ pub fn run_world(
     // latency statistics.
     let deficit_open_at_end =
         deficit_started.map(|start| ticks_run.saturating_sub(1).saturating_sub(start));
+    let (match_ops, match_edges, match_passes, match_max_edges, match_gap) = match &market_rt {
+        Some(rt) => (rt.match_ops, rt.match_edges, rt.match_passes, rt.match_max_edges, rt.cfg.measure_gap.then_some(rt.gap)),
+        None => (0, 0, 0, 0, None),
+    };
     RunOutcome {
         scenario: sc.name.clone(),
         seed: sc.seed,
@@ -575,6 +620,68 @@ pub fn run_world(
         deficit_open_at_end,
         self_sufficient_at: tracker.self_sufficient_at,
         sites_built,
+        match_ops,
+        match_edges,
+        match_passes,
+        match_max_edges,
+        match_gap,
+    }
+}
+
+/// The market pass's carrier pool: this tick's IDLE haul-capable creeps (haulers always;
+/// harvesters with their §D5.4 opportunity rate — a live assigned source prices
+/// `min(2·WORK, 10) e/t`, a drained/absent source or a full store prices 0). Upgraders and
+/// builders are never carriers (their withdraw side is the Use-lane admission).
+fn collect_market_carriers(world: &EconWorld, driver: &Driver) -> Vec<CarrierDto> {
+    let mut out = Vec::new();
+    for (&id, w) in &driver.workers {
+        if !matches!(w.activity, Activity::Idle) {
+            continue;
+        }
+        let Some(creep) = world.creep(id) else { continue };
+        let (free, held) = (creep_free(world, id), creep_energy(world, id));
+        match w.role {
+            Role::Hauler => out.push(CarrierDto { id, pos: creep.pos, free, held, opportunity_milli: 0 }),
+            Role::Harvester { source_idx } => {
+                let live_source = world.sources.get(source_idx).map(|s| s.energy > 0).unwrap_or(false);
+                let opportunity = if free > 0 && live_source {
+                    let work = creep.body.alive_part_count(Part::Work);
+                    (2_000 * work).min(10_000)
+                } else {
+                    0
+                };
+                out.push(CarrierDto { id, pos: creep.pos, free, held, opportunity_milli: opportunity });
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Convert a consumed market task into the worker's next activity (the same travel-then shapes
+/// the baseline selections use).
+fn market_task_activity(
+    world: &EconWorld,
+    mover: &mut dyn Mover,
+    id: u32,
+    pos: Position,
+    task: &MarketTask,
+    tick: u32,
+) -> Activity {
+    match *task {
+        MarketTask::PickupDeliver { src, src_pos, take, sink, sink_pos, give } => travel_then(
+            world,
+            mover,
+            id,
+            pos,
+            src_pos,
+            1,
+            Activity::PickupFor { src, take, sink, sink_pos, give },
+            tick,
+        ),
+        MarketTask::Deliver { sink, sink_pos, amount } => {
+            travel_then(world, mover, id, pos, sink_pos, 1, Activity::Deliver { sink, amount }, tick)
+        }
     }
 }
 
@@ -686,6 +793,8 @@ fn step_worker(
     mover: &mut dyn Mover,
     info: &LayoutInfo,
     allowance: baseline::RepairAllowance,
+    tiered_delivery: bool,
+    mut market: Option<&mut MarketRuntime>,
     bookings: &mut Bookings,
     driver: &mut Driver,
     id: u32,
@@ -715,6 +824,15 @@ fn step_worker(
     let mut moved = false;
     match std::mem::replace(&mut worker.activity, Activity::Idle) {
         Activity::Idle => {
+            // ── MARKET arms: the bid-driven Idle chain (task from the pass → productive
+            // fallback → admitted repair → wait). The tier chains below never run. ───────────────
+            if let Some(rt) = market.as_deref() {
+                step_idle_market(world, mover, info, rt, bookings, worker, id, pos, tick);
+                if !matches!(worker.activity, Activity::Wait { .. } | Activity::Idle) {
+                    *assignments += 1;
+                }
+                return false; // Idle steps never move
+            }
             let deposit_set = deposits(world, info, bookings);
             let held = creep_energy(world, id);
             match worker.role {
@@ -794,12 +912,16 @@ fn step_worker(
                 Role::Hauler => {
                     if held > 0 {
                         // S3 verbatim: carried cargo → nearest FLAT ACTIVE; the None tier
-                        // (storage dump) only when no ACTIVE demand exists.
-                        if let Some((sink, spos, amount)) =
-                            select_delivery_flat_active(pos, &deposit_set, held).or_else(|| {
-                                select_delivery_tiered(pos, &deposit_set, held, &[Tier::None])
-                            })
-                        {
+                        // (storage dump) only when no ACTIVE demand exists. The PTRP arm
+                        // (`tiered_delivery`) walks the tiers High→Medium→Low instead — the
+                        // tier-faithful S3 fix (M4 optional arm).
+                        let selected = if tiered_delivery {
+                            select_delivery_tiered(pos, &deposit_set, held, &[Tier::High, Tier::Medium, Tier::Low])
+                        } else {
+                            select_delivery_flat_active(pos, &deposit_set, held)
+                        }
+                        .or_else(|| select_delivery_tiered(pos, &deposit_set, held, &[Tier::None]));
+                        if let Some((sink, spos, amount)) = selected {
                             *bookings.deposits.entry(sink).or_insert(0) += amount;
                             worker.activity =
                                 travel_then(world, mover, id, pos, spos, 1, Activity::Deliver { sink, amount }, tick);
@@ -923,13 +1045,20 @@ fn step_worker(
                     c.pos = new_pos;
                 }
                 world.apply_road_wear(new_pos, parts);
+                // M4 market arms: the observed-traffic-wear term of the repair bid (§D1) —
+                // the same timer-pull the engine just booked.
+                if world.road_at(new_pos).is_some() {
+                    if let Some(rt) = market.as_deref_mut() {
+                        rt.observe_wear((new_pos.x().u8(), new_pos.y().u8()), parts);
+                    }
+                }
                 moved = true;
             }
             let mut then = then;
-            if let Some(min) = drive_by_min {
+            if is_harvester {
                 let held = creep_energy(world, id);
                 if held > 0 {
-                    if let Some(target) = opportunistic_repair_target(world, new_pos, min) {
+                    if let Some(target) = drive_by_target(world, new_pos, market.as_deref(), drive_by_min) {
                         if let Some(sref) = resolve_repair_ref(world, target) {
                             let (hits, hits_max) = repair_hits(world, target);
                             let work = world
@@ -971,10 +1100,10 @@ fn step_worker(
                 // K3: the opportunistic repair MASKS the harvest (shared Pipeline A —
                 // jobs/actions.rs:27-31; harvest.rs:225's tick order: repair, then harvest).
                 let mut repaired = false;
-                if let Some(min) = drive_by_min {
+                if is_harvester {
                     let held = creep_energy(world, id);
                     if held > 0 {
-                        if let Some(target) = opportunistic_repair_target(world, pos, min) {
+                        if let Some(target) = drive_by_target(world, pos, market.as_deref(), drive_by_min) {
                             if let Some(sref) = resolve_repair_ref(world, target) {
                                 intents.act(id, EconAction::Repair { target: sref });
                                 repaired = true;
@@ -999,8 +1128,8 @@ fn step_worker(
                     // + Pipeline D transfer the same tick, the repair cost consumed from the
                     // ticket so the Transfer never over-asks (baseline.rs exact-split contract).
                     let mut transfer_amount = amount.min(held);
-                    if let Some(min) = drive_by_min {
-                        if let Some(target) = opportunistic_repair_target(world, pos, min) {
+                    if is_harvester {
+                        if let Some(target) = drive_by_target(world, pos, market.as_deref(), drive_by_min) {
                             if let Some(rref) = resolve_repair_ref(world, target) {
                                 let (hits, hits_max) = repair_hits(world, target);
                                 let work = world
@@ -1042,8 +1171,12 @@ fn step_worker(
             // Live FinishedDelivery (harvest.rs:283-310): with leftover cargo, re-try deliveries
             // across ALL tiers in order (High→Medium→Low→None, nearest within each — the
             // ALL_TRANSFER_PRIORITIES iteration), NO repair arm; else fall to Idle.
+            // MARKET arms: fall to Idle — leftover cargo re-enters the next tick's pass (the
+            // uniform 1-tick-lag convention; documented reduction).
             let held = creep_energy(world, id);
-            if held > 0 {
+            if market.is_some() {
+                worker.activity = Activity::Idle;
+            } else if held > 0 {
                 let deposit_set = deposits(world, info, bookings);
                 if let Some((sink, spos, amount)) = select_delivery_tiered(
                     pos,
@@ -1134,17 +1267,25 @@ fn step_worker(
             // dead) target rolls straight into the NEXT ≥Medium full-repair target while cargo
             // remains (allowance re-applied). BUILDERS: tick_repair → BuildState::idle
             // (jobs/build.rs:168-172) — completion falls to Idle, the next Idle pass re-selects.
-            let chain = |worker: &mut Worker, world: &EconWorld, mover: &mut dyn Mover, assignments: &mut u64| {
-                if harvester_chains && held > 0 {
-                    if let Some((next, tpos)) = baseline::full_repair_target(
+            // The next chained target (market arms: bid-admitted; tier arms: ≥ Medium with the
+            // allowance re-applied). Precomputed — the world does not change before the chain.
+            let next_target: Option<(baseline::RepairRef, Position)> = if harvester_chains && held > 0 {
+                match market.as_deref() {
+                    Some(rt) => rt.full_repair_target(world).map(|(t, p, _)| (t, p)),
+                    None => baseline::full_repair_target(
                         world,
                         effective_min_repair_priority(Some(RepairPriority::Medium), allowance),
-                    ) {
-                        *assignments += 1;
-                        worker.activity =
-                            travel_then(world, mover, id, pos, tpos, 3, Activity::FullRepair { target: next }, tick);
-                        return;
-                    }
+                    ),
+                }
+            } else {
+                None
+            };
+            let chain = |worker: &mut Worker, world: &EconWorld, mover: &mut dyn Mover, assignments: &mut u64| {
+                if let Some((next, tpos)) = next_target {
+                    *assignments += 1;
+                    worker.activity =
+                        travel_then(world, mover, id, pos, tpos, 3, Activity::FullRepair { target: next }, tick);
+                    return;
                 }
                 worker.activity = Activity::Idle;
             };
@@ -1185,7 +1326,14 @@ fn step_worker(
                 let body = world.creep(id).unwrap().body.clone();
                 let work = body.alive_part_count(Part::Work);
                 let free = creep_free(world, id);
-                if upgrade_about_to_run_dry(work, held, free) {
+                // MARKET arms: the Use-lane withdraw admission (§D1) — the upgrade sink must
+                // meet the opportunity floor unless the downgrade veto is live.
+                let refill_admitted = match market.as_deref() {
+                    Some(rt) => rt.veto
+                        || screeps_econ_decision::sink_economics::admit_use_withdraw(rt.upgrade_sink_bid(world), rt.floor),
+                    None => true,
+                };
+                if refill_admitted && upgrade_about_to_run_dry(work, held, free) {
                     // controllerbehavior.rs:107-124: the state cascade runs the pickup NOW —
                     // an ADJACENT source withdraws in parallel (Pipeline D + E, same tick);
                     // a distant one starts the refill trip one tick early.
@@ -1266,6 +1414,165 @@ fn step_worker(
         }
     }
     moved
+}
+
+/// The drive-by (opportunistic) repair target: market arms use the bid-admitted K3-market
+/// selection ([`MarketRuntime::opportunistic_target`]); tier arms the priority-map queue read
+/// with the caller's allowance-raised minimum.
+fn drive_by_target(
+    world: &EconWorld,
+    pos: Position,
+    market: Option<&MarketRuntime>,
+    baseline_min: Option<Option<RepairPriority>>,
+) -> Option<baseline::RepairRef> {
+    match market {
+        Some(rt) => rt.opportunistic_target(world, pos),
+        None => baseline_min.and_then(|min| opportunistic_repair_target(world, pos, min)),
+    }
+}
+
+/// The MARKET-arm Idle chain (ADR §D1/§D3, one per role):
+/// - **Harvester**: pass task (the opportunity-gated haul edges) → harvest-first → admitted
+///   full-repair with cargo → wait(5).
+/// - **Hauler**: pass task → wait(5) (everything it can usefully do IS a market ticket).
+/// - **Upgrader**: fill-pickup ADMITTED by the Use-lane rule (upgrade bid ≥ floor, or the
+///   downgrade veto) → harvest (the live slow/fast rule) → upgrade → wait(5).
+/// - **Builder**: with cargo, the higher-BID action of {admitted repair, best site's build} —
+///   ties build; empty, fill-pickup admitted iff the intended sink's bid meets the floor →
+///   harvest (if frozen-allowed) → wait(5).
+#[allow(clippy::too_many_arguments)]
+fn step_idle_market(
+    world: &EconWorld,
+    mover: &mut dyn Mover,
+    info: &LayoutInfo,
+    rt: &MarketRuntime,
+    bookings: &mut Bookings,
+    worker: &mut Worker,
+    id: u32,
+    pos: Position,
+    tick: u32,
+) {
+    use screeps_econ_decision::sink_economics as se;
+    let held = creep_energy(world, id);
+    let free = creep_free(world, id);
+    match worker.role {
+        Role::Harvester { source_idx } => {
+            let source_has_energy = world.sources.get(source_idx).map(|s| s.energy > 0).unwrap_or(false);
+            if let Some(task) = rt.tasks.get(&id) {
+                worker.activity = market_task_activity(world, mover, id, pos, task, tick);
+            } else if free > 0 && source_has_energy {
+                let src_pos = world.sources[source_idx].pos;
+                worker.activity = travel_then(world, mover, id, pos, src_pos, 1, Activity::Harvest, tick);
+            } else if held > 0 {
+                if let Some((target, tpos, _bid)) = rt.full_repair_target(world) {
+                    worker.activity = travel_then(world, mover, id, pos, tpos, 3, Activity::FullRepair { target }, tick);
+                } else {
+                    worker.activity = Activity::Wait { until: tick + 5 };
+                }
+            } else {
+                worker.activity = Activity::Wait { until: tick + 5 };
+            }
+        }
+        Role::Hauler => {
+            if let Some(task) = rt.tasks.get(&id) {
+                worker.activity = market_task_activity(world, mover, id, pos, task, tick);
+            } else {
+                worker.activity = Activity::Wait { until: tick + 5 };
+            }
+        }
+        Role::Upgrader => {
+            let body = world.creep(id).unwrap().body.clone();
+            let admitted = rt.veto || se::admit_use_withdraw(rt.upgrade_sink_bid(world), rt.floor);
+            let fill = if admitted && free > 0 {
+                let pickup_set = pickups(world, info, bookings);
+                let anchor = upgrader_pickup_anchor(&body, info.controller_pos);
+                select_fill_pickup(pos, free, &pickup_set, anchor)
+            } else {
+                None
+            };
+            if let Some((src, spos, take)) = fill {
+                *bookings.pickups.entry(src).or_insert(0) += take;
+                worker.activity = travel_then(world, mover, id, pos, spos, 1, Activity::FillFrom { src, take }, tick);
+            } else if free > 0 && upgrader_should_allow_harvest(&body, world) && !world.sources.is_empty() {
+                let si = nearest_source(world, pos);
+                worker.activity = travel_then(
+                    world, mover, id, pos, world.sources[si].pos, 1,
+                    Activity::HarvestSrc { source_idx: si }, tick,
+                );
+            } else if held > 0 && world.controller.as_ref().is_some_and(|c| c.level > 0) {
+                worker.activity = travel_then(world, mover, id, pos, info.controller_pos, 3, Activity::Upgrade, tick);
+            } else {
+                worker.activity = Activity::Wait { until: tick + 5 };
+            }
+        }
+        Role::Builder { allow_harvest } => {
+            let rcl = world.controller.as_ref().map(|c| c.level).unwrap_or(0);
+            // The candidate sinks (computed regardless of cargo — the EMPTY builder's pickup
+            // admission prices what it WOULD do with energy).
+            let best_repair = rt.full_repair_target(world); // admission (or survival) included
+            let best_site = baseline::select_construction_site(pos, world, rcl).and_then(|tile| {
+                world
+                    .sites
+                    .iter()
+                    .find(|s| (s.pos.x().u8(), s.pos.y().u8()) == tile)
+                    .map(|s| (tile, rt.site_build_bid(s.kind)))
+            });
+            if held > 0 {
+                match (best_repair, best_site) {
+                    (Some((target, tpos, rbid)), Some((tile, bbid))) => {
+                        // The per-tick optimum between the two sinks; exact ties BUILD (progress
+                        // compounds; deterministic).
+                        if rbid > bbid {
+                            worker.activity =
+                                travel_then(world, mover, id, pos, tpos, 3, Activity::FullRepair { target }, tick);
+                        } else {
+                            let spos = site_pos(info.room, tile);
+                            worker.activity = travel_then(world, mover, id, pos, spos, 3, Activity::Build { tile }, tick);
+                        }
+                    }
+                    (Some((target, tpos, _)), None) => {
+                        worker.activity =
+                            travel_then(world, mover, id, pos, tpos, 3, Activity::FullRepair { target }, tick);
+                    }
+                    (None, Some((tile, _))) => {
+                        let spos = site_pos(info.room, tile);
+                        worker.activity = travel_then(world, mover, id, pos, spos, 3, Activity::Build { tile }, tick);
+                    }
+                    (None, None) => {
+                        worker.activity = Activity::Wait { until: tick + 5 };
+                    }
+                }
+            } else {
+                // Empty: acquire energy only when the intended sink clears the floor (§D1
+                // withdraw admission; a survival-override repair target always admits).
+                let sink_bid = best_repair
+                    .as_ref()
+                    .map(|&(_, _, b)| b.max(rt.floor)) // an admitted repair target clears the floor by construction
+                    .into_iter()
+                    .chain(best_site.map(|(_, b)| b))
+                    .max()
+                    .unwrap_or(0);
+                let fill = if se::admit_use_withdraw(sink_bid, rt.floor) && free > 0 {
+                    let pickup_set = pickups(world, info, bookings);
+                    select_fill_pickup(pos, free, &pickup_set, None)
+                } else {
+                    None
+                };
+                if let Some((src, spos, take)) = fill {
+                    *bookings.pickups.entry(src).or_insert(0) += take;
+                    worker.activity = travel_then(world, mover, id, pos, spos, 1, Activity::FillFrom { src, take }, tick);
+                } else if allow_harvest && free > 0 && !world.sources.is_empty() {
+                    let si = nearest_source(world, pos);
+                    worker.activity = travel_then(
+                        world, mover, id, pos, world.sources[si].pos, 1,
+                        Activity::HarvestSrc { source_idx: si }, tick,
+                    );
+                } else {
+                    worker.activity = Activity::Wait { until: tick + 5 };
+                }
+            }
+        }
+    }
 }
 
 /// Nearest source by linear range (get_new_harvest_state, harvestbehavior.rs:16-23 — no energy
