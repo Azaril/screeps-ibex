@@ -1,6 +1,6 @@
 # ADR 0040 — The Unified Energy Market (e/t), the Economy Decision Seam, and the Offline Economy Simulator
 
-- **Status:** Proposed (revised to the end-state design 2026-07-01 after operator interview; operator review pending)
+- **Status:** Accepted (operator-approved 2026-07-06, EP-10.7; end-state design revised 2026-07-01 after operator interview — the shipped end state below reflects what landed on master and validated on private-server)
 - **Date:** 2026-07-01
 - **Deciders:** operator
 - **Related:** ADR 0033 (sim-core substrate + §D5.4 e/t objective + the numeric w-bid movement lane this mirrors), ADR 0038 (`room_net_roi` e/t accounting), ADR 0032 (`value_e` currency + P-AUCTION assignment precedent), ADR 0006 (server-backed eval harness / colony-health — the live complement), ADR 0007 (hauling pillar), ADR 0011 (spawn orchestration pillar), ADR 0016 (HUD — bid observability), ADR 0015 (gate policy); `todo.md:18`; `missions/haul.rs:299` ("TODO: Make sure there is handling for starvation/bootstrap mode."); REC-001 (pending WFV 23→24 bump this ADR folds into)
@@ -185,7 +185,7 @@ Remaining (tracked, not silent): hostile-pressure collapse family; terminal/cred
 
 ## End state (as shipped, 2026-07-05)
 
-All milestones S1 + M0–M6 landed on master and validated; the unified e/t energy market is **live on private-server** (M5a WFV 26→27 + M5b, deployed for validation). Status stays **Proposed** pending operator acceptance (EP-10.7) and the **MMO WFV-27 reset awaits explicit operator go-ahead** — nothing on MMO changed.
+All milestones S1 + M0–M6 landed on master and validated; the unified e/t energy market is **live on private-server** (M5a WFV 26→27 + M5b, deployed for validation). **Accepted by the operator 2026-07-06 (EP-10.7); the WFV-27 MMO reset was authorized on the same date** — the MMO deploy is executed as part of this acceptance workstream.
 
 - **Shipped:** the civilian economy now runs one ratified currency (energy-equivalent per tick) end-to-end — hauler selection prices every sink and assigns by raw bid-density (the market's greedy `market_pass` live, not a tier sieve); repair admission is the opportunity floor (S1's hand-tuned gate retired); spawn requests bid in the same currency (civilian `body_roi`, military `p_win·value_e/est_ticks`), the `SPAWN_PRIORITY_*`/`TransferPriority` enums deleted. The offline `screeps-econ-engine`/`-decision`/`-eval` simulator (sim spawn/economy/source+mineral/controller/**full** lab systems) is the calibration + regression instrument, sharing the exact decision crate the bot runs.
 - **Evidence:** the repro gate proved the collapse disease offline (+453–584 ticks of recovery cost, CI excluding zero); the four-arm tournament (review-hardened, derived refill floor, contended matching family) showed the market beats baseline on all families (C −513, G −1582, D −455) and beats the shipped S1 stopgap decisively on the RCL rush (G −1702). **Honest attribution:** M5a pricing/matching carries the rush win; M5b K4 deficit-priced bodies carry the collapse-recovery win over S1; on the collapse *symptom* the market is parity-with-S1 (it re-prices repair rather than hard-gating — roads stay healthier, `repair_leak_e` rises by design).
