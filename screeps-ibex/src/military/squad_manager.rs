@@ -297,11 +297,14 @@ fn squad_is_gathered(present_wins_or_stalls: bool, have_target_intel: bool, gath
 /// claim / secondary-mining all 75) and sorted LAST in-tier (`RunMissionSystem` enqueues economy before
 /// `SquadManagerSystem` enqueues squads), so they still sat permanently last behind the colony's constant
 /// economy demand and rosters never completed (observed dead-stuck at 3/5, 1/2 for thousands of ticks
-/// despite idle in-range spawns). FIX 2: MEDIUM+ objectives (active offense/defense) now map to the
-/// dedicated `SPAWN_BID_COMBAT_FORMING` band (85) — STRICTLY above the HIGH economy bulk so forming
-/// slots win the within-tier ordering AND the energy-banking race, but STRICTLY below the CRITICAL miners
-/// (100) so energy INCOME is never preempted. Only LOW farms stay at MEDIUM. BOUNDED: the
-/// `MAX_FORMING_SQUADS` (=2) cap limits how many squads' slots sit in this band at once, and
+/// despite idle in-range spawns). FIX 2: MEDIUM+ objectives (active offense/defense) map to
+/// `SPAWN_BID_COMBAT_FORMING`, which SHARES the HIGH economy band (= `SPAWN_BID_HIGH`) — forming
+/// competes WITH the economy bulk on the tie-break, is out-ranked by CRITICAL miners (100) so income is
+/// never preempted, AND yields to a stressed logistics lane (whose ROI can exceed the band). This
+/// reverts the M5b "dedicated band STRICTLY above economy" (85): combat must not starve the economy,
+/// and promoting forming's priority does NOT fix the forming-completion lifecycle bug — stuck squads
+/// pile up on their home spawns regardless (see the RALLY/Hold path). Only LOW farms stay at MEDIUM.
+/// BOUNDED: the `MAX_FORMING_SQUADS` (=2) cap limits how many squads' slots sit in this band at once, and
 /// `economy::can_afford_military` already declined unaffordable squads, so it cannot crater the economy.
 /// (Defense objectives upsert at `OBJECTIVE_PRIORITY_HIGH`; invader-core offense at `..._MEDIUM`; farms at
 /// `..._LOW`.)
@@ -326,10 +329,10 @@ fn spawn_priority_for(objective_priority: f32, is_defense: bool) -> u32 {
 }
 
 /// REC-052(c): the intra-band spawn edge a CRITICAL base-under-attack defender gets over MEDIUM offense
-/// sharing the `SPAWN_BID_COMBAT_FORMING` bid (85_000 milli). Small (500 milli — the old 0.5 f32 edge ×
-/// BID_SCALE) — just enough for the descending sort to order defenders first — and strictly below the gap
-/// to CRITICAL miners (100_000), so income is never preempted. (ADR 0040 §D2 M5b: the spawn lane is now
-/// milli-e/t; a forming combat squad's high `w` — its objective rate — sits in the COMBAT_FORMING gap.)
+/// sharing the `SPAWN_BID_COMBAT_FORMING` bid (= `SPAWN_BID_HIGH`, 75_000 milli). Small (500 milli — the
+/// old 0.5 f32 edge × BID_SCALE) — just enough for the descending sort to order defenders first — and
+/// strictly below the gap to CRITICAL miners (100_000), so income is never preempted. (ADR 0040 §D2 M5b:
+/// the spawn lane is milli-e/t; a forming combat squad shares the HIGH economy band.)
 const DEFENSE_SPAWN_EDGE: u32 = 500;
 
 /// A squad is *wiped* (overwhelmed — all members lost) when it had spawned members but none remain
@@ -3922,28 +3925,26 @@ mod tests {
     }
 
     #[test]
-    fn forming_combat_squads_spawn_above_economy_bulk() {
+    fn forming_combat_squads_share_the_high_band() {
         use crate::military::objective_queue::{OBJECTIVE_PRIORITY_CRITICAL, OBJECTIVE_PRIORITY_HIGH, OBJECTIVE_PRIORITY_LOW};
-        // FIX 2: active offense (a MEDIUM objective, e.g. an invader core) MUST map to the dedicated
-        // COMBAT_FORMING band — STRICTLY between the HIGH economy bulk and the CRITICAL miners — or the
-        // spawnsystem head-of-line break strands its forming slots last-in-tier behind the economy bulk and
-        // the roster never completes (the dead-stall root). Defense (HIGH) and any CRITICAL map there too.
-        // Offense (not defense) at each band. CRITICAL/HIGH/MEDIUM offense all form in the shared band.
+        // Active offense (a MEDIUM objective, e.g. an invader core) maps to COMBAT_FORMING, which SHARES the
+        // HIGH economy band — it competes WITH the economy bulk on the tie-break rather than preempting it.
+        // Defense (HIGH) and any CRITICAL map there too. CRITICAL/HIGH/MEDIUM offense all form in the band.
         assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_CRITICAL, false), SPAWN_BID_COMBAT_FORMING);
         assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_HIGH, false), SPAWN_BID_COMBAT_FORMING);
         assert_eq!(
             spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false),
             SPAWN_BID_COMBAT_FORMING,
-            "MEDIUM offense must form in the COMBAT_FORMING band, not be tied with / starved below the economy bulk"
+            "MEDIUM offense forms in the shared HIGH band"
         );
         // Low-priority farms stay below combat so they never preempt economy.
         assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_LOW, false), SPAWN_BID_MEDIUM);
 
-        // The band is STRICTLY between the HIGH economy bulk and the CRITICAL miners: forming squad slots
-        // win the within-tier race against economy WITHOUT preempting energy income (miners stay first).
-        assert!(
-            SPAWN_BID_COMBAT_FORMING > SPAWN_BID_HIGH,
-            "forming squad slots must outrank the HIGH economy bulk (haulers/upgraders/claim/mining)"
+        // Forming SHARES the HIGH economy band (does not preempt it) and stays below the CRITICAL miners:
+        // combat must not starve the economy, and income is always protected.
+        assert_eq!(
+            SPAWN_BID_COMBAT_FORMING, SPAWN_BID_HIGH,
+            "forming squad slots SHARE the HIGH economy band — combat must not starve the economy"
         );
         assert!(
             SPAWN_BID_COMBAT_FORMING < SPAWN_BID_CRITICAL,
@@ -3951,7 +3952,7 @@ mod tests {
         );
 
         // REC-052(c): a CRITICAL base-under-attack DEFENSE roster gets a tiny intra-band EDGE over MEDIUM
-        // offense sharing the 85 band — so the queue's descending sort orders our own base's defenders FIRST.
+        // offense sharing the band — so the queue's descending sort orders our own base's defenders FIRST.
         let crit_defense = spawn_priority_for(OBJECTIVE_PRIORITY_CRITICAL, true);
         let medium_offense = spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false);
         assert!(crit_defense > medium_offense, "CRITICAL defense out-orders MEDIUM offense in the band ({crit_defense} > {medium_offense})");

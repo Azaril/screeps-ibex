@@ -39,11 +39,14 @@ use screeps_combat_decision::spawning::SpawnBodyDefinition;
 /// The CRITICAL band-equivalent bid (miners / clock-saving upgraders): the top of the civilian
 /// spawn lane — income is NEVER preempted (ADR §D2). = old `SPAWN_PRIORITY_CRITICAL` (100) × 1000.
 pub const SPAWN_BID_CRITICAL: u32 = 100 * BID_SCALE;
-/// A bid STRICTLY above the HIGH economy bulk but STRICTLY below the CRITICAL miners, reserved for
-/// the slots of a FORMING active offense/defense combat squad (the rally-stall fix — see the
-/// spawnsystem head-of-line note; a forming squad's `w` is high by construction while the window
-/// is open). = old `SPAWN_PRIORITY_COMBAT_FORMING` (85) × 1000.
-pub const SPAWN_BID_COMBAT_FORMING: u32 = 85 * BID_SCALE;
+/// The bid for the slots of a FORMING active offense/defense combat squad. It SHARES the HIGH
+/// economy band (does NOT preempt it): a forming squad competes with the HIGH economy bulk on the
+/// tie-break and is out-bid by CRITICAL miners AND by a genuinely stressed logistics lane (whose
+/// ROI can exceed the band — see [`hauler_bid`]). This deliberately reverts the M5b "dedicated
+/// band STRICTLY above economy" (85) — combat must not starve the economy, and promoting forming's
+/// priority does not fix the forming-completion lifecycle bug (stuck squads pile up regardless), it
+/// only pulls spawn/energy off the economy. Equal to [`SPAWN_BID_HIGH`] by construction.
+pub const SPAWN_BID_COMBAT_FORMING: u32 = SPAWN_BID_HIGH;
 /// The HIGH economy-bulk band-equivalent bid. = old `SPAWN_PRIORITY_HIGH` (75) × 1000.
 pub const SPAWN_BID_HIGH: u32 = 75 * BID_SCALE;
 /// The MEDIUM band-equivalent bid. = old `SPAWN_PRIORITY_MEDIUM` (50) × 1000.
@@ -69,9 +72,9 @@ pub fn lerp_bid(a: u32, b: u32, t: f32) -> u32 {
 pub fn spawn_bid_label(bid_milli: u32) -> &'static str {
     if bid_milli >= SPAWN_BID_CRITICAL {
         "Critical"
-    } else if bid_milli >= SPAWN_BID_COMBAT_FORMING {
-        "CombatForming"
     } else if bid_milli >= SPAWN_BID_HIGH {
+        // A forming combat squad's slots also land here — `SPAWN_BID_COMBAT_FORMING` shares the
+        // HIGH band. Combat spawns are still identifiable by role in the `[SpawnQueue]` log.
         "High"
     } else if bid_milli >= SPAWN_BID_MEDIUM {
         "Medium"
@@ -198,17 +201,18 @@ pub fn hauler_priority(current: usize, desired_for_unfulfilled: u32, max_distanc
 }
 
 /// The hauler spawn ROI bid (ADR §D2, M5b — civilian `body_roi_milli`): the hauler's §D5.4 `w` is
-/// its logistics rate (throughput unblocked); amortized over the body cost and clamped so it stays
-/// INSIDE the economy bulk (`[SPAWN_BID_LOW, SPAWN_BID_COMBAT_FORMING - 1]`) — the ROI expresses
-/// the S6 cost-amortization within the hauler's class, never crossing the combat-forming gate the
-/// lifecycle harness pins. `logistics_rate_milli` is the caller's throughput estimate (milli-e/t).
+/// its logistics rate (throughput unblocked); amortized over the body cost and clamped only below
+/// the CRITICAL miner band (`[SPAWN_BID_LOW, SPAWN_BID_CRITICAL - 1]`). A genuinely stressed
+/// logistics lane (high throughput-per-cost) can therefore bid ABOVE the shared HIGH/combat-forming
+/// band — logistics is never starved by speculative combat forming, only ever out-ranked by income
+/// (miners). `logistics_rate_milli` is the caller's throughput estimate (milli-e/t).
 pub fn hauler_bid(current: usize, desired_for_unfulfilled: u32, max_distance: u32, logistics_rate_milli: u32, body_cost: u32) -> u32 {
     let band = hauler_priority(current, desired_for_unfulfilled, max_distance);
     let roi = body_roi_milli(logistics_rate_milli, body_cost);
-    // Blend: the ROI refines the ordering WITHIN the band's economy-bulk class. Take the larger of
-    // the coarse band and the ROI (a high-throughput cheap hauler bids up), capped strictly below
-    // the combat gate so logistics never preempts a forming squad.
-    band.max(roi).min(SPAWN_BID_COMBAT_FORMING - 1)
+    // Blend: the ROI refines the ordering WITHIN the economy class. Take the larger of the coarse
+    // band and the ROI (a high-throughput cheap hauler bids up), capped only strictly below the
+    // CRITICAL miner band so logistics never preempts income but CAN out-rank a forming squad.
+    band.max(roi).min(SPAWN_BID_CRITICAL - 1)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
@@ -510,10 +514,15 @@ mod tests {
         assert_eq!(hauler_priority(4, 5, 0), SPAWN_BID_MEDIUM, "≥ ceil(75%) of desired");
         assert_eq!(hauler_priority(0, 5, 1), SPAWN_BID_MEDIUM, "remote urgent band");
         assert_eq!(hauler_priority(4, 5, 1), SPAWN_BID_LOW, "remote relaxed band");
-        // ROI refinement (M5b): a cheap high-throughput hauler bids up WITHIN the economy bulk but
-        // never crosses the combat-forming gate.
-        assert!(hauler_bid(0, 5, 0, 8_000, 300) < SPAWN_BID_COMBAT_FORMING, "hauler ROI stays below combat");
+        // ROI refinement (M5b): a cheap high-throughput hauler bids up. It is capped only below the
+        // CRITICAL miner band, so a genuinely stressed logistics lane can out-rank a forming combat
+        // squad (combat must not starve the economy) while income (miners) is still never preempted.
         assert!(hauler_bid(0, 5, 0, 8_000, 300) >= SPAWN_BID_HIGH, "a strong-ROI hauler bids at least its band");
+        assert!(
+            hauler_bid(0, 5, 0, 60_000, 1_000) > SPAWN_BID_COMBAT_FORMING,
+            "a genuinely high-throughput hauler can now out-bid speculative combat forming"
+        );
+        assert!(hauler_bid(0, 5, 0, 60_000, 1_000) < SPAWN_BID_CRITICAL, "but logistics never preempts income (miners)");
     }
 
     /// The upkeep sizing (pre-move fixture, missions/upgrade.rs): at/above half-max → 1 WORK;
@@ -599,21 +608,20 @@ mod tests {
         assert!(!has_sufficient_energy(false, &[], &[1000]), "exactly 50% is NOT > 50%");
     }
 
-    /// M5b spawn-currency: the band-equivalents preserve the exact ordering the deleted f32 bands
-    /// encoded (CRITICAL > COMBAT_FORMING > HIGH > MEDIUM > LOW > NONE), on the milli-e/t lane
+    /// M5b spawn-currency: the band-equivalents preserve the economy ordering the deleted f32 bands
+    /// encoded (CRITICAL > HIGH = COMBAT_FORMING > MEDIUM > LOW > NONE), on the milli-e/t lane
     /// (× BID_SCALE), so the descending head-of-line-banking queue orders spawns by the same units
-    /// the M5a transfer market runs on — one currency. THIS ordering is the invariant the combat
-    /// lifecycle harness pins.
+    /// the M5a transfer market runs on — one currency. Combat forming SHARES the HIGH band (it must
+    /// not starve the economy); only CRITICAL income and a stressed logistics ROI out-rank it.
     #[test]
     fn spawn_bid_band_equivalents_preserve_the_ordering() {
         assert_eq!(SPAWN_BID_CRITICAL, 100_000);
-        assert_eq!(SPAWN_BID_COMBAT_FORMING, 85_000);
         assert_eq!(SPAWN_BID_HIGH, 75_000);
         assert_eq!(SPAWN_BID_MEDIUM, 50_000);
         assert_eq!(SPAWN_BID_LOW, 25_000);
         assert_eq!(SPAWN_BID_NONE, 0);
         assert!(SPAWN_BID_CRITICAL > SPAWN_BID_COMBAT_FORMING, "income is never preempted");
-        assert!(SPAWN_BID_COMBAT_FORMING > SPAWN_BID_HIGH, "a forming squad outbids the economy bulk");
+        assert_eq!(SPAWN_BID_COMBAT_FORMING, SPAWN_BID_HIGH, "a forming squad SHARES the HIGH band — it must not starve the economy");
         assert!(SPAWN_BID_HIGH > SPAWN_BID_MEDIUM);
         assert!(SPAWN_BID_MEDIUM > SPAWN_BID_LOW);
         assert!(SPAWN_BID_LOW > SPAWN_BID_NONE);
@@ -628,7 +636,7 @@ mod tests {
         assert_eq!(lerp_bid(SPAWN_BID_CRITICAL, SPAWN_BID_HIGH, 0.25), 93_750, "1/4 toward HIGH");
         assert_eq!(lerp_bid(SPAWN_BID_MEDIUM, SPAWN_BID_LOW, 2.0), SPAWN_BID_LOW, "t clamps to 1");
         assert_eq!(spawn_bid_label(SPAWN_BID_CRITICAL), "Critical");
-        assert_eq!(spawn_bid_label(SPAWN_BID_COMBAT_FORMING), "CombatForming");
+        assert_eq!(spawn_bid_label(SPAWN_BID_COMBAT_FORMING), "High", "forming shares the HIGH band");
         assert_eq!(spawn_bid_label(SPAWN_BID_HIGH), "High");
         assert_eq!(spawn_bid_label(SPAWN_BID_MEDIUM), "Medium");
         assert_eq!(spawn_bid_label(SPAWN_BID_LOW), "Low");
