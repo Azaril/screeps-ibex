@@ -206,7 +206,7 @@ const MAX_FORMING_SQUADS: usize = 2;
 /// never starves spawning or a poor colony. REC-017: this is now the FLOOR of the distance-aware
 /// [`renew_required_ttl`] — the renew threshold scales up to the D6a deployment requirement for far
 /// targets (the flat 300 saturated held members BELOW the gate's `dist·50+100` and zombied them).
-const RENEW_WHILE_FORMING_TTL: u32 = 300;
+pub const RENEW_WHILE_FORMING_TTL: u32 = 300;
 
 /// Max room distance from a candidate home to the objective room for that home to
 /// be a spawn source (keeps a squad from being spawned across the map). Matches

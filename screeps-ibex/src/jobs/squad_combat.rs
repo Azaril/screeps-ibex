@@ -15,6 +15,12 @@ use specs::error::NoError;
 use specs::saveload::*;
 use specs::*;
 
+/// Issue #2 (rally loiter leash): the max range a LOOSE forming member (not currently renewing) may be
+/// shoved/drift from its nearest home spawn while it waits for the rally gate. Small so the member stays
+/// "at home" (ready to depart or to close for a renew) but clear of the spawn's range-1 exit tiles, which
+/// the `flee(range 2)` keeps open for new spawns. The window `[2, RALLY_LEASH_RANGE]` is the loiter annulus.
+const RALLY_LEASH_RANGE: u32 = 5;
+
 #[derive(Clone, ConvertSaveload)]
 pub struct SquadCombatJobContext {
     target_room: RoomName,
@@ -267,9 +273,43 @@ impl MoveToRoom {
                     apply_squad_move_priority(&mut mr, MovementPriority::High, bid);
                     return None;
                 }
-                // HOLD (rally/forming phase): the rally gate has not released — hold at home next to the
-                // spawn (renewable) instead of marching solo to the target room. No movement this tick.
+                // HOLD (rally/forming phase): the rally gate has not released. A plain immovable hold made
+                // forming members CAMP their home spawn — physically blocking new spawns (all spawn-exit
+                // tiles occupied) and starving the economy, because a creep that issues NO movement request
+                // is an idle occupant the traffic resolver cannot shove. Instead run a LOOSE/TIGHT LEASH
+                // keyed on renew-need (issue #2):
+                //   • LOOSE (ttl healthy): FLEE every home spawn to range 2 so ALL spawn-adjacent tiles stay
+                //     open for a new spawn, at LOW priority + allow_shove so economy traffic and (critically)
+                //     a spawning creep always win the tile, anchored within RALLY_LEASH_RANGE of the nearest
+                //     spawn so a shove can't drift the member away from home. Renew always yields to spawning.
+                //   • TIGHT (ttl below the forming-renew floor): sit adjacent (range 1) to the nearest spawn
+                //     so the manager's renew request can be serviced — still allow_shove so a spawn that needs
+                //     to SPAWN can bump it off an exit tile. Renew is opportunistic, never a spawn block.
                 TickMovement::Hold => {
+                    let spawn_positions: Vec<Position> = game::rooms()
+                        .get(creep_pos.room_name())
+                        .map(|room| room.find(find::MY_SPAWNS, None).iter().map(|s| s.pos()).collect())
+                        .unwrap_or_default();
+                    if let Some(nearest) =
+                        spawn_positions.iter().min_by_key(|p| creep_pos.get_range_to(**p)).copied()
+                    {
+                        let ttl = creep.ticks_to_live().unwrap_or(CREEP_LIFE_TIME);
+                        if ttl < crate::military::squad_manager::RENEW_WHILE_FORMING_TTL {
+                            // TIGHT: get renewable (range 1), but stay shoveable so spawning wins the tile.
+                            let mut mr = tick_context.runtime_data.movement.move_to(creep_entity, nearest);
+                            mr.range(1);
+                            mr.allow_shove(true);
+                            mr.priority(MovementPriority::Normal);
+                        } else {
+                            // LOOSE: clear of every spawn's range-1, reined near home, shoved by anyone.
+                            let targets: Vec<FleeTarget> =
+                                spawn_positions.iter().map(|p| FleeTarget { pos: *p, range: 2 }).collect();
+                            let mut mr = tick_context.runtime_data.movement.flee(creep_entity, targets);
+                            mr.allow_shove(true);
+                            mr.priority(MovementPriority::Low);
+                            mr.anchor(AnchorConstraint { position: nearest, range: RALLY_LEASH_RANGE });
+                        }
+                    }
                     return None;
                 }
                 // ADR 0034 D4-F1: the D6a lifetime gate returned `Recycle` — even a full renew can't cover
