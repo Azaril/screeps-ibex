@@ -315,13 +315,19 @@ fn squad_is_gathered(present_wins_or_stalls: bool, have_target_intel: bool, gath
 /// hysteresis (a pure priority nudge). Bounded strictly below CRITICAL miners (100), so energy income is
 /// never preempted. Only CRITICAL defense (an owned room under direct attack) gets the edge — a leashed /
 /// neighbour defender (HIGH/MEDIUM) does not out-prioritise offense here.
-fn spawn_priority_for(objective_priority: f32, is_defense: bool) -> u32 {
+fn spawn_priority_for(objective_priority: f32, is_defense: bool, present_count: usize, ticks_forming: u32) -> u32 {
     use super::objective_queue::OBJECTIVE_PRIORITY_CRITICAL;
     if objective_priority >= OBJECTIVE_PRIORITY_MEDIUM {
+        // The forming bid is PRICED on the lifetime being wasted while the roster is incomplete
+        // (`forming_completion_bid`): a fresh squad starts at HIGH (competes fairly with economy) and
+        // ESCALATES toward CRITICAL as `present_count × ticks_forming` accrues, so a roster tied with
+        // economy still COMPLETES rather than stalling forever. Bounded strictly below CRITICAL miners.
+        let base = screeps_econ_decision::spawn_policy::forming_completion_bid(present_count as u32, ticks_forming);
         if is_defense && objective_priority >= OBJECTIVE_PRIORITY_CRITICAL {
-            SPAWN_BID_COMBAT_FORMING + DEFENSE_SPAWN_EDGE
+            // REC-052(c): a tiny edge orders a base-under-attack defender ahead of offense sharing the band.
+            (base + DEFENSE_SPAWN_EDGE).min(SPAWN_BID_CRITICAL - 1)
         } else {
-            SPAWN_BID_COMBAT_FORMING
+            base
         }
     } else {
         SPAWN_BID_MEDIUM
@@ -2038,15 +2044,29 @@ impl<'a> System<'a> for SquadManagerSystem {
             if merge_donors.contains(squad_entity) {
                 continue;
             }
+            // The forming-completion bid is priced on this squad's wasted lifetime: how many members are
+            // already present (their sunk lifetime bleeding) × how long this generation has been forming.
+            let present_count = data.forming_progress.last_present.get(obj_id).copied().unwrap_or(0);
+            let ticks_forming = data
+                .forming_progress
+                .forming_started_at
+                .get(obj_id)
+                .map(|&started| now.saturating_sub(started))
+                .unwrap_or(0);
             // Read the composition off the objective each tick (the producer owns it).
             let (slots, target_room, spawn_priority) = match data.objective_queue.get(*obj_id) {
                 Some(obj) => match obj.force.squads.first() {
                     // REC-052(c): a CRITICAL base-under-attack DEFENSE roster gets a tiny spawn-priority edge
-                    // over MEDIUM offense sharing the 85 band (the descending sort then orders defenders first).
+                    // over MEDIUM offense sharing the band (the descending sort then orders defenders first).
                     Some(comp) => (
                         comp.slots.clone(),
                         objective_target(&obj.kind).1,
-                        spawn_priority_for(obj.priority, is_defense_objective(&obj.kind, obj.owner)),
+                        spawn_priority_for(
+                            obj.priority,
+                            is_defense_objective(&obj.kind, obj.owner),
+                            present_count,
+                            ticks_forming,
+                        ),
                     ),
                     None => continue,
                 },
@@ -3933,42 +3953,44 @@ mod tests {
     }
 
     #[test]
-    fn forming_combat_squads_share_the_high_band() {
+    fn forming_bid_starts_at_high_and_escalates_with_wasted_lifetime() {
         use crate::military::objective_queue::{OBJECTIVE_PRIORITY_CRITICAL, OBJECTIVE_PRIORITY_HIGH, OBJECTIVE_PRIORITY_LOW};
-        // Active offense (a MEDIUM objective, e.g. an invader core) maps to COMBAT_FORMING, which SHARES the
-        // HIGH economy band — it competes WITH the economy bulk on the tie-break rather than preempting it.
-        // Defense (HIGH) and any CRITICAL map there too. CRITICAL/HIGH/MEDIUM offense all form in the band.
-        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_CRITICAL, false), SPAWN_BID_COMBAT_FORMING);
-        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_HIGH, false), SPAWN_BID_COMBAT_FORMING);
+        // A FRESH active-offense squad (0 present, 0 ticks forming) STARTS at the HIGH band — it competes
+        // fairly with the economy bulk rather than preempting income to spawn a first speculative member.
+        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_CRITICAL, false, 0, 0), SPAWN_BID_COMBAT_FORMING);
+        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_HIGH, false, 0, 0), SPAWN_BID_COMBAT_FORMING);
         assert_eq!(
-            spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false),
+            spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false, 0, 0),
             SPAWN_BID_COMBAT_FORMING,
-            "MEDIUM offense forms in the shared HIGH band"
+            "a fresh MEDIUM offense squad starts in the HIGH band"
         );
         // Low-priority farms stay below combat so they never preempt economy.
-        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_LOW, false), SPAWN_BID_MEDIUM);
+        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_LOW, false, 0, 0), SPAWN_BID_MEDIUM);
 
-        // Forming SHARES the HIGH economy band (does not preempt it) and stays below the CRITICAL miners:
-        // combat must not starve the economy, and income is always protected.
-        assert_eq!(
-            SPAWN_BID_COMBAT_FORMING, SPAWN_BID_HIGH,
-            "forming squad slots SHARE the HIGH economy band — combat must not starve the economy"
-        );
+        // As the roster WASTES lifetime forming (members present × ticks elapsed), the bid ESCALATES above
+        // the economy bulk so it COMPLETES instead of stalling tied-with-economy — but never preempts income.
+        let stalling = spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false, 2, 200);
+        assert!(stalling > SPAWN_BID_HIGH, "a stalling roster escalates above economy to finish ({stalling})");
+        assert!(stalling < SPAWN_BID_CRITICAL, "escalation never preempts CRITICAL miners (income protected)");
         assert!(
-            SPAWN_BID_COMBAT_FORMING < SPAWN_BID_CRITICAL,
-            "forming squad slots must NOT preempt CRITICAL miners (income protected)"
+            spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false, 2, 400)
+                > spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false, 2, 200),
+            "more wasted forming time ⇒ a higher completion bid"
         );
 
-        // REC-052(c): a CRITICAL base-under-attack DEFENSE roster gets a tiny intra-band EDGE over MEDIUM
-        // offense sharing the band — so the queue's descending sort orders our own base's defenders FIRST.
-        let crit_defense = spawn_priority_for(OBJECTIVE_PRIORITY_CRITICAL, true);
-        let medium_offense = spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false);
-        assert!(crit_defense > medium_offense, "CRITICAL defense out-orders MEDIUM offense in the band ({crit_defense} > {medium_offense})");
-        assert!(crit_defense > SPAWN_BID_COMBAT_FORMING, "the edge lifts CRITICAL defense above the shared band");
+        // REC-052(c): a CRITICAL base-under-attack DEFENSE roster gets a tiny EDGE over MEDIUM offense at the
+        // same forming state — so the queue's descending sort orders our own base's defenders FIRST.
+        let crit_defense = spawn_priority_for(OBJECTIVE_PRIORITY_CRITICAL, true, 0, 0);
+        let medium_offense = spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false, 0, 0);
+        assert!(crit_defense > medium_offense, "CRITICAL defense out-orders MEDIUM offense ({crit_defense} > {medium_offense})");
         assert!(crit_defense < SPAWN_BID_CRITICAL, "the edge stays STRICTLY below CRITICAL miners (income never preempted)");
         // A leashed/neighbour defender (HIGH/MEDIUM) does NOT get the edge — only an owned room under DIRECT
         // (CRITICAL) attack out-prioritises offense here.
-        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_HIGH, true), SPAWN_BID_COMBAT_FORMING, "HIGH defense shares the band with offense");
+        assert_eq!(
+            spawn_priority_for(OBJECTIVE_PRIORITY_HIGH, true, 0, 0),
+            SPAWN_BID_COMBAT_FORMING,
+            "HIGH defense shares the band with offense"
+        );
     }
 
     #[test]

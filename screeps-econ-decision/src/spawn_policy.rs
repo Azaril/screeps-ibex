@@ -39,13 +39,14 @@ use screeps_combat_decision::spawning::SpawnBodyDefinition;
 /// The CRITICAL band-equivalent bid (miners / clock-saving upgraders): the top of the civilian
 /// spawn lane — income is NEVER preempted (ADR §D2). = old `SPAWN_PRIORITY_CRITICAL` (100) × 1000.
 pub const SPAWN_BID_CRITICAL: u32 = 100 * BID_SCALE;
-/// The bid for the slots of a FORMING active offense/defense combat squad. It SHARES the HIGH
-/// economy band (does NOT preempt it): a forming squad competes with the HIGH economy bulk on the
-/// tie-break and is out-bid by CRITICAL miners AND by a genuinely stressed logistics lane (whose
-/// ROI can exceed the band — see [`hauler_bid`]). This deliberately reverts the M5b "dedicated
-/// band STRICTLY above economy" (85) — combat must not starve the economy, and promoting forming's
-/// priority does not fix the forming-completion lifecycle bug (stuck squads pile up regardless), it
-/// only pulls spawn/energy off the economy. Equal to [`SPAWN_BID_HIGH`] by construction.
+/// The STARTING bid for a FORMING combat squad's slots — the floor of [`forming_completion_bid`].
+/// A squad with no members yet bids here (== [`SPAWN_BID_HIGH`]): it competes FAIRLY with the HIGH
+/// economy bulk to START, so speculative squads do not preempt the economy just to spawn a first
+/// member. Once the squad is COMMITTED (has present members), its remaining slots ESCALATE above
+/// this via [`forming_completion_bid`], pricing the lifetime/renew being wasted while incomplete —
+/// so it finishes rather than stalling tied-with-economy forever. Never a static band above economy
+/// (the M5b "85" starved the economy) nor tied-forever (the roster never completes); the escalation
+/// is the atomic-commit middle path.
 pub const SPAWN_BID_COMBAT_FORMING: u32 = SPAWN_BID_HIGH;
 /// The HIGH economy-bulk band-equivalent bid. = old `SPAWN_PRIORITY_HIGH` (75) × 1000.
 pub const SPAWN_BID_HIGH: u32 = 75 * BID_SCALE;
@@ -55,6 +56,44 @@ pub const SPAWN_BID_MEDIUM: u32 = 50 * BID_SCALE;
 pub const SPAWN_BID_LOW: u32 = 25 * BID_SCALE;
 /// The NONE band-equivalent bid (no demand). = old `SPAWN_PRIORITY_NONE` (0).
 pub const SPAWN_BID_NONE: u32 = 0;
+
+/// Milli-e/t of bid escalation per WASTED member-lifetime-tick (one present, idle-at-home forming
+/// member, for one tick). The [`forming_completion_bid`] climbs `SPAWN_BID_HIGH → SPAWN_BID_CRITICAL`
+/// over the accumulated waste; at this step the window (`CRITICAL - HIGH = 25_000`) is crossed at
+/// 1000 wasted member-ticks — e.g. a 4-member roster stalled ~250 ticks, or a lone member stalled
+/// ~1000. Tuned in the `run_forming` harness (completion time vs economy-disruption); a bot constant,
+/// not serialized — no WFV.
+pub const FORMING_WASTE_STEP_MILLI: u32 = 25;
+
+/// **The escalating completion bid for a FORMING combat squad's next slot** — priced on the LIFETIME
+/// being WASTED while the roster is incomplete, not a fixed band. `present_members` idle at home each
+/// burn their own lifetime (and renew energy) contributing nothing; `ticks_forming` is how long this
+/// generation has been forming. Their product is the sunk investment bleeding out — the pressure to
+/// FINISH before a give-up wastes it entirely.
+///
+/// The bid climbs from [`SPAWN_BID_HIGH`] (a just-started squad — 0 present or 0 elapsed — competes
+/// FAIRLY with economy; starting a speculative squad must not preempt income) up to but never
+/// reaching [`SPAWN_BID_CRITICAL`] (miners/income are NEVER preempted). Properties:
+///   * **Self-limiting** — a fresh squad sits at HIGH; only a genuinely-stalling one escalates.
+///   * **Self-terminating give-up signal** — once pinned at `CRITICAL - 1` (max escalation) the
+///     squad still can't complete only if the blocker is affordability/no-home, not priority, so the
+///     caller can retire it (a bounded, principled give-up) rather than escalate forever.
+///   * **Prices the real waste** — the "renew time / lifetime ticks wasted on forming" directly, in
+///     the market's own currency, instead of the arbitrary M5b `85` band.
+/// Pure integer math (saturating; deterministic — no float reaches an ordering).
+///
+/// The waste accrues as `ticks_forming × (present_members + 1)`: the `+ 1` is the pending slot the
+/// squad is always waiting on, so the bid escalates on ELAPSED TIME even at zero present members
+/// (the committed objective going unaddressed is itself waste) — otherwise a squad tied with economy
+/// could never win the FIRST lane, `present` would stay 0, and the escalation would never bootstrap.
+/// Each present member adds proportional urgency (its own sunk lifetime bleeding while it idles).
+pub fn forming_completion_bid(present_members: u32, ticks_forming: u32) -> u32 {
+    let wasted = (ticks_forming as u64).saturating_mul(present_members as u64 + 1);
+    // The escalation window is [HIGH, CRITICAL); never touch CRITICAL (income is never preempted).
+    let window = (SPAWN_BID_CRITICAL - SPAWN_BID_HIGH).saturating_sub(1) as u64;
+    let escalation = wasted.saturating_mul(FORMING_WASTE_STEP_MILLI as u64).min(window) as u32;
+    SPAWN_BID_HIGH + escalation
+}
 
 /// Bounded lerp between two u32 bids (integer, saturating — the milli lane never overflows within
 /// the band range). Replaces the old f32 `lerp::Lerp::lerp_bounded` on the deleted bands; `t` is
@@ -625,6 +664,36 @@ mod tests {
         assert!(SPAWN_BID_HIGH > SPAWN_BID_MEDIUM);
         assert!(SPAWN_BID_MEDIUM > SPAWN_BID_LOW);
         assert!(SPAWN_BID_LOW > SPAWN_BID_NONE);
+    }
+
+    #[test]
+    fn forming_completion_bid_escalates_with_wasted_lifetime() {
+        // At the instant of fielding (zero elapsed) the bid starts at HIGH — it competes with economy.
+        assert_eq!(forming_completion_bid(0, 0), SPAWN_BID_HIGH, "zero elapsed ⇒ start at HIGH");
+        assert_eq!(forming_completion_bid(3, 0), SPAWN_BID_HIGH, "zero elapsed ⇒ start at HIGH regardless of roster");
+
+        // BOOTSTRAP: escalates on elapsed time even at ZERO present members — otherwise a squad tied
+        // with economy could never win its FIRST lane and the escalation would never start.
+        assert!(
+            forming_completion_bid(0, 10) > SPAWN_BID_HIGH,
+            "a squad that can't even start must escalate over time to win the first lane"
+        );
+
+        // Escalates further as lifetime is wasted (elapsed time × the roster it is bleeding).
+        let a = forming_completion_bid(2, 50);
+        let b = forming_completion_bid(2, 100);
+        assert!(b > a, "more elapsed forming time ⇒ a higher completion bid ({b} > {a})");
+
+        // More PRESENT members (more sunk investment at risk) escalate faster for the same elapsed time.
+        assert!(
+            forming_completion_bid(4, 50) > forming_completion_bid(2, 50),
+            "more members waiting ⇒ more at stake ⇒ higher bid"
+        );
+
+        // Pinned STRICTLY below CRITICAL — income (miners) is never preempted, however long it stalls.
+        let maxed = forming_completion_bid(8, 100_000);
+        assert!(maxed < SPAWN_BID_CRITICAL, "escalation never reaches CRITICAL ({maxed})");
+        assert_eq!(maxed, SPAWN_BID_CRITICAL - 1, "max escalation pins just below CRITICAL (the give-up signal)");
     }
 
     /// `lerp_bid` is a deterministic integer lerp (descending band lerps are exact) and the label
