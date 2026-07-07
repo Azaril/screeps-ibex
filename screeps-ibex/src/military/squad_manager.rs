@@ -315,16 +315,17 @@ fn squad_is_gathered(present_wins_or_stalls: bool, have_target_intel: bool, gath
 /// hysteresis (a pure priority nudge). Bounded strictly below CRITICAL miners (100), so energy income is
 /// never preempted. Only CRITICAL defense (an owned room under direct attack) gets the edge — a leashed /
 /// neighbour defender (HIGH/MEDIUM) does not out-prioritise offense here.
-fn spawn_priority_for(objective_priority: f32, is_defense: bool, present_count: usize, ticks_forming: u32) -> u32 {
+fn spawn_priority_for(objective_priority: f32, is_defense: bool, r_o_completed_milli: u32) -> u32 {
     use super::objective_queue::OBJECTIVE_PRIORITY_CRITICAL;
     if objective_priority >= OBJECTIVE_PRIORITY_MEDIUM {
-        // The forming bid is PRICED on the lifetime being wasted while the roster is incomplete
-        // (`forming_completion_bid`): a fresh squad starts at HIGH (competes fairly with economy) and
-        // ESCALATES toward CRITICAL as `present_count × ticks_forming` accrues, so a roster tied with
-        // economy still COMPLETES rather than stalling forever. Bounded strictly below CRITICAL miners.
-        let base = screeps_econ_decision::spawn_policy::forming_completion_bid(present_count as u32, ticks_forming);
+        // ADR 0042 (R_net): the forming bid ORDERS the objective's COMPLETED VALUE
+        // (`r_o_completed_milli = p_win_completed·value_e/est_ticks`) within the reserved band
+        // [HIGH, CRITICAL) — a fresh squad bids ≥ HIGH (member 1 always wins its lane), a higher-value
+        // objective outbids a lower-value one, and income (miners) is never preempted. NOT a band ordinal
+        // and NOT time-stalled — the objective's real worth wins the lane.
+        let base = screeps_econ_decision::spawn_policy::forming_completion_bid(r_o_completed_milli);
         if is_defense && objective_priority >= OBJECTIVE_PRIORITY_CRITICAL {
-            // REC-052(c): a tiny edge orders a base-under-attack defender ahead of offense sharing the band.
+            // REC-052(c): a tiny edge orders a base-under-attack defender ahead of offense at the same value.
             (base + DEFENSE_SPAWN_EDGE).min(SPAWN_BID_CRITICAL - 1)
         } else {
             base
@@ -948,6 +949,64 @@ fn squad_objective_bid(
     let p_win = pairing_p_win(caps, &defense, enemy, MAX_TRAVEL_BUDGET, &PairingParams::default());
     let est_ticks = data.objective_queue.est_ticks(obj.id).unwrap_or(MAX_TRAVEL_BUDGET);
     Some(military_priority_bid(p_win, val, est_ticks))
+}
+
+/// Project the FULL requested roster's capabilities (ADR 0042): size every slot's body at the
+/// bankable `PREFERRED_MEMBER_ENERGY` cap and fold its parts into `SquadCapabilities` — the caps the
+/// squad WILL field once complete. Distinct from [`caps_from_members`] (only the members present so
+/// far): pricing the forming bid on present caps would value a 0-present squad at ~0 `p_win` and never
+/// bootstrap its first member (the adversarial bootstrap-collapse fix).
+fn caps_from_composition(comp: &SquadComposition) -> SquadCapabilities {
+    use screeps::constants::{ATTACK_POWER, DISMANTLE_POWER, HEAL_POWER, RANGED_ATTACK_POWER};
+    let build_energy = screeps_combat_decision::composition::PREFERRED_MEMBER_ENERGY;
+    let (mut heal_per_tick, mut structure_dps, mut tank_effective_hp) = (0u32, 0u32, 0u32);
+    for slot in &comp.slots {
+        let Some(body) = slot
+            .body_type
+            .build_body(build_energy, screeps_combat_decision::bodies::MoveProfile::Plains)
+        else {
+            continue; // an unbuildable slot contributes no caps (the roster can't fully field it)
+        };
+        let (mut heal, mut atk, mut rng, mut work, mut parts) = (0u32, 0u32, 0u32, 0u32, 0u32);
+        for &p in &body {
+            parts += 1;
+            match p {
+                Part::Heal => heal += 1,
+                Part::Attack => atk += 1,
+                Part::RangedAttack => rng += 1,
+                Part::Work => work += 1,
+                _ => {}
+            }
+        }
+        heal_per_tick += heal * HEAL_POWER;
+        structure_dps += work * DISMANTLE_POWER + atk * ATTACK_POWER + rng * RANGED_ATTACK_POWER;
+        tank_effective_hp = tank_effective_hp.max(parts * 100);
+    }
+    SquadCapabilities { heal_per_tick, structure_dps, tank_effective_hp }
+}
+
+/// The forming squad's COMPLETED objective rate `R_O = round(p_win_completed · value_e · 1000 /
+/// est_ticks)` in milli-e/t (ADR 0042, the R_net model) — the value the spawn market prices its
+/// forming slots on. Identical intel / `value_e` / defense / enemy projections as
+/// [`squad_objective_bid`], but `p_win` over the projected FULL roster ([`caps_from_composition`], not
+/// the present members), returned as the RAW rate (no movement-lane anchor) clamped into the spawn
+/// lane. Ephemeral — recomputed per tick, nothing serialized, no WFV.
+fn forming_objective_rate_milli(data: &SquadManagerSystemData, obj: &super::objective_queue::CombatObjective, homes: &[HomeRoom]) -> u32 {
+    let Some(comp) = obj.force.squads.first() else {
+        return 0;
+    };
+    let completed_caps = caps_from_composition(comp);
+    let room = obj.kind.room();
+    let threat = data.mapping.get_room(&room).and_then(|e| data.threat_data.get(e));
+    let econ = data.objective_queue.economic_intel(obj.id);
+    let intel = project_intel(&obj.kind, obj.priority, defense_asset_value(data, obj, homes, econ), threat, econ);
+    let val = value_e(project_value_kind(&obj.kind, econ), &intel);
+    let defense = project_defense(threat);
+    let enemy = project_enemy(threat);
+    let p_win = pairing_p_win(completed_caps, &defense, enemy, MAX_TRAVEL_BUDGET, &PairingParams::default());
+    let est_ticks = data.objective_queue.est_ticks(obj.id).unwrap_or(MAX_TRAVEL_BUDGET);
+    let r_o = (f64::from(p_win) * f64::from(val) * 1000.0 / f64::from(est_ticks.max(1))).round();
+    r_o.clamp(0.0, f64::from(SPAWN_BID_CRITICAL - 1)) as u32
 }
 
 /// §D5.4 decision (1) BINDING member, live approximation: the critical-path laggard = the member with the
@@ -2044,30 +2103,23 @@ impl<'a> System<'a> for SquadManagerSystem {
             if merge_donors.contains(squad_entity) {
                 continue;
             }
-            // The forming-completion bid is priced on this squad's wasted lifetime: how many members are
-            // already present (their sunk lifetime bleeding) × how long this generation has been forming.
-            let present_count = data.forming_progress.last_present.get(obj_id).copied().unwrap_or(0);
-            let ticks_forming = data
-                .forming_progress
-                .forming_started_at
-                .get(obj_id)
-                .map(|&started| now.saturating_sub(started))
-                .unwrap_or(0);
-            // Read the composition off the objective each tick (the producer owns it).
+            // Read the composition off the objective each tick (the producer owns it). ADR 0042: the
+            // forming bid is priced on the objective's COMPLETED VALUE (p_win over the full roster), not
+            // on wasted time — the objective's worth wins the spawn lane.
             let (slots, target_room, spawn_priority) = match data.objective_queue.get(*obj_id) {
                 Some(obj) => match obj.force.squads.first() {
-                    // REC-052(c): a CRITICAL base-under-attack DEFENSE roster gets a tiny spawn-priority edge
-                    // over MEDIUM offense sharing the band (the descending sort then orders defenders first).
-                    Some(comp) => (
-                        comp.slots.clone(),
-                        objective_target(&obj.kind).1,
-                        spawn_priority_for(
-                            obj.priority,
-                            is_defense_objective(&obj.kind, obj.owner),
-                            present_count,
-                            ticks_forming,
-                        ),
-                    ),
+                    Some(comp) => {
+                        let r_o_completed_milli = forming_objective_rate_milli(&data, obj, &homes);
+                        (
+                            comp.slots.clone(),
+                            objective_target(&obj.kind).1,
+                            spawn_priority_for(
+                                obj.priority,
+                                is_defense_objective(&obj.kind, obj.owner),
+                                r_o_completed_milli,
+                            ),
+                        )
+                    }
                     None => continue,
                 },
                 None => continue,
@@ -3953,43 +4005,43 @@ mod tests {
     }
 
     #[test]
-    fn forming_bid_starts_at_high_and_escalates_with_wasted_lifetime() {
+    fn forming_bid_orders_objective_value_in_the_reserved_band() {
         use crate::military::objective_queue::{OBJECTIVE_PRIORITY_CRITICAL, OBJECTIVE_PRIORITY_HIGH, OBJECTIVE_PRIORITY_LOW};
-        // A FRESH active-offense squad (0 present, 0 ticks forming) STARTS at the HIGH band — it competes
-        // fairly with the economy bulk rather than preempting income to spawn a first speculative member.
-        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_CRITICAL, false, 0, 0), SPAWN_BID_COMBAT_FORMING);
-        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_HIGH, false, 0, 0), SPAWN_BID_COMBAT_FORMING);
+        // ADR 0042: a zero-value objective (r_o == 0) STARTS at HIGH — member 1 still wins its lane, but it
+        // does not preempt income to form a worthless squad.
+        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_CRITICAL, false, 0), SPAWN_BID_COMBAT_FORMING);
+        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_HIGH, false, 0), SPAWN_BID_COMBAT_FORMING);
         assert_eq!(
-            spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false, 0, 0),
+            spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false, 0),
             SPAWN_BID_COMBAT_FORMING,
-            "a fresh MEDIUM offense squad starts in the HIGH band"
+            "a zero-value MEDIUM offense squad starts at the HIGH floor"
         );
         // Low-priority farms stay below combat so they never preempt economy.
-        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_LOW, false, 0, 0), SPAWN_BID_MEDIUM);
+        assert_eq!(spawn_priority_for(OBJECTIVE_PRIORITY_LOW, false, 0), SPAWN_BID_MEDIUM);
 
-        // As the roster WASTES lifetime forming (members present × ticks elapsed), the bid ESCALATES above
-        // the economy bulk so it COMPLETES instead of stalling tied-with-economy — but never preempts income.
-        let stalling = spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false, 2, 200);
-        assert!(stalling > SPAWN_BID_HIGH, "a stalling roster escalates above economy to finish ({stalling})");
-        assert!(stalling < SPAWN_BID_CRITICAL, "escalation never preempts CRITICAL miners (income protected)");
+        // A VALUED objective bids ABOVE the HIGH floor, ORDERED by its completed rate — so it out-bids the
+        // economy bulk to complete, and a higher-value objective outbids a lower-value one. Never CRITICAL.
+        let valued = spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false, 8_000);
+        assert!(valued > SPAWN_BID_HIGH, "a valued objective bids above economy to finish ({valued})");
+        assert!(valued < SPAWN_BID_CRITICAL, "the reserved band never preempts CRITICAL miners");
         assert!(
-            spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false, 2, 400)
-                > spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false, 2, 200),
-            "more wasted forming time ⇒ a higher completion bid"
+            spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false, 16_000)
+                > spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false, 8_000),
+            "a higher-value objective outbids a lower-value one"
         );
 
         // REC-052(c): a CRITICAL base-under-attack DEFENSE roster gets a tiny EDGE over MEDIUM offense at the
-        // same forming state — so the queue's descending sort orders our own base's defenders FIRST.
-        let crit_defense = spawn_priority_for(OBJECTIVE_PRIORITY_CRITICAL, true, 0, 0);
-        let medium_offense = spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false, 0, 0);
+        // same value — so the queue's descending sort orders our own base's defenders FIRST.
+        let crit_defense = spawn_priority_for(OBJECTIVE_PRIORITY_CRITICAL, true, 0);
+        let medium_offense = spawn_priority_for(OBJECTIVE_PRIORITY_MEDIUM, false, 0);
         assert!(crit_defense > medium_offense, "CRITICAL defense out-orders MEDIUM offense ({crit_defense} > {medium_offense})");
         assert!(crit_defense < SPAWN_BID_CRITICAL, "the edge stays STRICTLY below CRITICAL miners (income never preempted)");
         // A leashed/neighbour defender (HIGH/MEDIUM) does NOT get the edge — only an owned room under DIRECT
         // (CRITICAL) attack out-prioritises offense here.
         assert_eq!(
-            spawn_priority_for(OBJECTIVE_PRIORITY_HIGH, true, 0, 0),
+            spawn_priority_for(OBJECTIVE_PRIORITY_HIGH, true, 0),
             SPAWN_BID_COMBAT_FORMING,
-            "HIGH defense shares the band with offense"
+            "HIGH defense shares the reserved-band floor with offense"
         );
     }
 
