@@ -275,39 +275,58 @@ impl MoveToRoom {
                 }
                 // HOLD (rally/forming phase): the rally gate has not released. A plain immovable hold made
                 // forming members CAMP their home spawn — physically blocking new spawns (all spawn-exit
-                // tiles occupied) and starving the economy, because a creep that issues NO movement request
-                // is an idle occupant the traffic resolver cannot shove. Instead run a LOOSE/TIGHT LEASH
-                // keyed on renew-need (issue #2):
+                // tiles occupied) and starving the economy, because a request-less MILITARY creep registers
+                // as Immovable (jobs/data.rs) and the traffic resolver cannot shove it. Instead run a
+                // LOOSE/TIGHT LEASH keyed on renew-need (issue #2):
                 //   • LOOSE (ttl healthy): FLEE every home spawn to range 2 so ALL spawn-adjacent tiles stay
-                //     open for a new spawn, at LOW priority + allow_shove so economy traffic and (critically)
-                //     a spawning creep always win the tile, anchored within RALLY_LEASH_RANGE of the nearest
-                //     spawn so a shove can't drift the member away from home. Renew always yields to spawning.
-                //   • TIGHT (ttl below the forming-renew floor): sit adjacent (range 1) to the nearest spawn
-                //     so the manager's renew request can be serviced — still allow_shove so a spawn that needs
-                //     to SPAWN can bump it off an exit tile. Renew is opportunistic, never a spawn block.
+                //     open for a new spawn, at LOW priority + allow_shove so economy traffic can win the tile,
+                //     anchored within RALLY_LEASH_RANGE of the nearest spawn so a shove can't drift the member
+                //     away from home.
+                //   • TIGHT (ttl below the forming-renew floor): approach range 1 of the nearest NON-SPAWNING
+                //     spawn so the manager's renew can be serviced. A spawn that is currently spawning cannot
+                //     renew anyway AND needs its ring clear to place its creep (a creep being spawned is not a
+                //     mover and cannot shove for itself — the rover's spawn-eviction keeps IDLE occupants off
+                //     the ring, and this keeps renewers off it too), so we never sit on a spawning spawn; if
+                //     every nearby spawn is busy we stay LOOSE (clear) until one frees.
                 TickMovement::Hold => {
-                    let spawn_positions: Vec<Position> = game::rooms()
+                    let spawns = game::rooms()
                         .get(creep_pos.room_name())
-                        .map(|room| room.find(find::MY_SPAWNS, None).iter().map(|s| s.pos()).collect())
+                        .map(|room| room.find(find::MY_SPAWNS, None))
                         .unwrap_or_default();
-                    if let Some(nearest) =
-                        spawn_positions.iter().min_by_key(|p| creep_pos.get_range_to(**p)).copied()
-                    {
+                    let spawn_positions: Vec<Position> = spawns.iter().map(|s| s.pos()).collect();
+                    if !spawn_positions.is_empty() {
                         let ttl = creep.ticks_to_live().unwrap_or(CREEP_LIFE_TIME);
-                        if ttl < crate::military::squad_manager::RENEW_WHILE_FORMING_TTL {
-                            // TIGHT: get renewable (range 1), but stay shoveable so spawning wins the tile.
-                            let mut mr = tick_context.runtime_data.movement.move_to(creep_entity, nearest);
-                            mr.range(1);
-                            mr.allow_shove(true);
-                            mr.priority(MovementPriority::Normal);
+                        let renew_target = if ttl < crate::military::squad_manager::RENEW_WHILE_FORMING_TTL {
+                            spawns
+                                .iter()
+                                .filter(|s| s.spawning().is_none())
+                                .map(|s| s.pos())
+                                .min_by_key(|p| creep_pos.get_range_to(*p))
                         } else {
-                            // LOOSE: clear of every spawn's range-1, reined near home, shoved by anyone.
-                            let targets: Vec<FleeTarget> =
-                                spawn_positions.iter().map(|p| FleeTarget { pos: *p, range: 2 }).collect();
-                            let mut mr = tick_context.runtime_data.movement.flee(creep_entity, targets);
-                            mr.allow_shove(true);
-                            mr.priority(MovementPriority::Low);
-                            mr.anchor(AnchorConstraint { position: nearest, range: RALLY_LEASH_RANGE });
+                            None
+                        };
+                        match renew_target {
+                            Some(target) => {
+                                // TIGHT: get renewable (range 1) at a free spawn; shoveable.
+                                let mut mr = tick_context.runtime_data.movement.move_to(creep_entity, target);
+                                mr.range(1);
+                                mr.allow_shove(true);
+                                mr.priority(MovementPriority::Normal);
+                            }
+                            None => {
+                                // LOOSE (or renew deferred — every nearby spawn is busy): clear of every
+                                // spawn's range-1, reined near home, shoved by anyone.
+                                if let Some(nearest) =
+                                    spawn_positions.iter().min_by_key(|p| creep_pos.get_range_to(**p)).copied()
+                                {
+                                    let targets: Vec<FleeTarget> =
+                                        spawn_positions.iter().map(|p| FleeTarget { pos: *p, range: 2 }).collect();
+                                    let mut mr = tick_context.runtime_data.movement.flee(creep_entity, targets);
+                                    mr.allow_shove(true);
+                                    mr.priority(MovementPriority::Low);
+                                    mr.anchor(AnchorConstraint { position: nearest, range: RALLY_LEASH_RANGE });
+                                }
+                            }
                         }
                     }
                     return None;

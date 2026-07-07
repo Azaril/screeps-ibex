@@ -460,6 +460,19 @@ impl<'a> System<'a> for MovementUpdateSystem {
         // map per tick, so a stale registration can never leak).
         system.set_idle_creep_positions(idle_creep_positions);
 
+        // Spawn keep-clear (ADR-follow-up, issue #2 backstop): a creep BEING spawned is not a mover
+        // and cannot shove for itself, so a spawn whose range-1 ring is fully ringed by idle creeps
+        // cannot place its new creep and stalls. Register every actively-spawning spawn as an
+        // eviction point — the rover steps any idle occupant on its ring one tile out (a synthesized
+        // low-priority flee). Cheap (a handful of spawns; only idles on the ring move) and empty when
+        // nothing is spawning. A creep with a real job move, or an `Immovable` fighter, is untouched.
+        let eviction_points: Vec<Position> = screeps::game::spawns()
+            .values()
+            .filter(|spawn| spawn.spawning().is_some())
+            .map(|spawn| spawn.pos())
+            .collect();
+        system.set_eviction_points(eviction_points);
+
         let tick_limit = screeps::game::cpu::tick_limit();
         let get_cpu = screeps::game::cpu::get_used;
         let cpu_limit = screeps::game::cpu::limit() as f64;
