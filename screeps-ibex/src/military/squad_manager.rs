@@ -2965,8 +2965,16 @@ fn compute_squad_orders(
     // between the fast-path gate and the uncontested classifier is closed; they can no longer disagree).
     let have_target_intel = uncontested_intel;
     let fast_path_allowed = screeps_combat_decision::winnable_fast_path_allowed(present_wins_or_stalls, have_target_intel);
+    // DEPLOY-THEN-RETREAT (the no-intel roster-completion deadlock valve). A no-intel/contested target
+    // otherwise falls to the FULL-ROSTER `ready_to_depart_gate`; if the last member never spawns or an
+    // early one ages out, the squad holds at its home spawn forever (members linger, renew, pile up on
+    // spawns). Once a VIABLE FIGHTING QUORUM is present and the present force can fight, release it to
+    // SOLO-TRAVEL (not the assault latch — that stays intel-gated, so no scattered freeze); it masses one
+    // room short and the in-room win-or-stall RETREAT handles a losing peek. See the kernel doc.
+    let quorum_present = screeps_combat_decision::rally::squad_ready_to_depart_at_quorum(&member_positions, requested_slots);
     let ready_to_depart = fast_path_allowed
-        || crate::military::formation::ready_to_depart_gate(&member_positions, requested_slots, uncontested);
+        || crate::military::formation::ready_to_depart_gate(&member_positions, requested_slots, uncontested)
+        || screeps_combat_decision::deploy_then_retreat_allowed(present_wins_or_stalls, have_target_intel, quorum_present);
 
     if let Some(ctx) = squad_contexts.get_mut(squad_entity) {
         if !ready_to_depart {
