@@ -71,6 +71,7 @@ pub const SPAWN_BID_NONE: u32 = 0;
 ///   * a higher-value objective bids higher within the band (a base-under-assault outbids a mediocre
 ///     remote), instead of every objective pinning at the cap the way a raw
 ///     `p_win·value_e·1000/est_ticks` would (`value_e` runs to ~1e6, so the raw rate saturates).
+///
 /// The give-up decision (ADR 0042 §5) reads the SAME `r_o_completed_milli` against the burn + the
 /// economy's opportunity floor — one quantity governs both bid and abandon.
 /// Pure integer math (saturating; deterministic — no float reaches an ordering). Caller applies the
@@ -80,6 +81,29 @@ pub fn forming_completion_bid(r_o_completed_milli: u32) -> u32 {
     let window = SPAWN_BID_CRITICAL - SPAWN_BID_HIGH; // 25_000
     let escal = r_o_completed_milli.min(window - 1);
     SPAWN_BID_HIGH + escal // ∈ [SPAWN_BID_HIGH, SPAWN_BID_CRITICAL - 1]
+}
+
+/// The per-tick BURN a forming squad bleeds while incomplete, in milli-e/t (ADR 0042 §4). Every present
+/// member sitting idle at home consumes its own lifetime doing nothing — whether it decays or is renewed
+/// costs the SAME `body_cost / CREEP_LIFE_TIME` e/t (the renew-spend ≡ idle-amortization identity), so the
+/// two are ONE flow, charged once: `roster_present_cost_e / 1500 e/t = round(cost · 2 / 3)` milli-e/t. The
+/// already-spent (sunk) body cost is NOT here — it is a stock realized only on abandon, at salvage.
+pub fn forming_burn_rate_milli(roster_present_cost_e: u32) -> u32 {
+    // cost/1500 e/t → ×1000 milli = cost·1000/1500 = cost·2/3, rounded.
+    ((roster_present_cost_e as u64 * 2 + 1) / 3) as u32
+}
+
+/// The forming-squad ECONOMIC give-up test (ADR 0042 §5) — abandon iff finishing the squad delivers less
+/// rate than it costs to keep forming. Both sides are milli-e/t RATES (commensurable): the completed
+/// objective's rate `r_o_completed_milli` (`p_win_completed·value_e/est_ticks`) vs the burn of holding the
+/// present roster (`forming_burn_rate_milli`) PLUS the economy's opportunity floor (the marginal civilian
+/// rate the spawn energy would otherwise earn). `opportunity_floor_milli = 0` is the sound conservative
+/// lower bound (abandon only when strictly value-NEGATIVE — the completed rate can't even cover the burn);
+/// a positive floor (the civilian alternative, once the civilian lane is true-EV — ADR 0043 A2) raises the
+/// bar. The caller K-tick-latches this (kill per-tick oscillation) and exempts a safe-moded target (a
+/// bounded window, not permanent unwinnability). Pure; no float reaches an ordering.
+pub fn should_abandon_forming(r_o_completed_milli: u32, burn_milli: u32, opportunity_floor_milli: u32) -> bool {
+    r_o_completed_milli < burn_milli.saturating_add(opportunity_floor_milli)
 }
 
 /// Bounded lerp between two u32 bids (integer, saturating — the milli lane never overflows within
@@ -669,6 +693,30 @@ mod tests {
         let huge = forming_completion_bid(999_999);
         assert!(huge < SPAWN_BID_CRITICAL, "the reserved band never reaches CRITICAL ({huge})");
         assert_eq!(huge, SPAWN_BID_CRITICAL - 1, "a saturating rate pins just below CRITICAL");
+    }
+
+    #[test]
+    fn forming_burn_and_giveup_are_coherent_rates() {
+        // Burn = roster_cost / 1500 e/t → milli. A 2800e RangedDPS bleeds ~1867 milli-e/t idle.
+        assert_eq!(forming_burn_rate_milli(0), 0);
+        assert_eq!(forming_burn_rate_milli(2_800), 1_867, "cost·2/3 rounded");
+        assert!(forming_burn_rate_milli(5_600) > forming_burn_rate_milli(2_800), "more present roster ⇒ more burn");
+
+        // Give-up (floor 0): abandon iff the completed rate can't cover the burn of holding the roster.
+        assert!(
+            should_abandon_forming(/*r_o*/ 0, /*burn*/ 1_867, /*floor*/ 0),
+            "a zero-value objective can't cover any burn ⇒ abandon"
+        );
+        assert!(
+            !should_abandon_forming(/*r_o*/ 5_000, /*burn*/ 1_867, /*floor*/ 0),
+            "a valued objective that beats the burn keeps forming"
+        );
+        // The opportunity floor raises the bar: the same squad abandons once the economy alternative
+        // out-earns the net (r_o − burn). Commensurable — both milli-e/t rates.
+        assert!(
+            should_abandon_forming(/*r_o*/ 5_000, /*burn*/ 1_867, /*floor*/ 4_000),
+            "when the economy alternative beats (r_o − burn), abandon"
+        );
     }
 
     /// `lerp_bid` is a deterministic integer lerp (descending band lerps are exact) and the label
