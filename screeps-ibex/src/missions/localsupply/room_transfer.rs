@@ -201,12 +201,20 @@ impl RoomTransferMission {
             let refill_lane_deficit: u32 =
                 dto.spawns.iter().map(|s| s.free_energy).sum::<u32>() + dto.extensions.iter().map(|e| e.free_energy).sum::<u32>();
             let market_consts = screeps_econ_decision::sink_economics::MarketConsts::default();
+            // Clamp to the named ROI cap (10×par). The derived floor `1000 + 1000·deficit/next_body`
+            // grows unbounded in `deficit`; with the conservative 300 next-body fallback a large (RCL8)
+            // lane would otherwise explode to ~40×par and starve the rest of the economy. The cap is the
+            // kernel's intended ceiling; a starved lane still pins at 10×par (well above the old flat 5000
+            // band, so no refill regression), and the sub-cap deficit-scaling (a nearly-full lane → ~par)
+            // is preserved. The exact cheapest-queued-body (which makes the whole curve sub-cap and matches
+            // the sim without the clamp) is the tracked A1 refinement.
             let refill_bid = screeps_econ_decision::sink_economics::refill_bid(
                 &market_consts,
                 None,
                 refill_lane_deficit,
                 REFILL_NEXT_BODY_COST_FALLBACK_E,
-            );
+            )
+            .min(market_consts.refill_roi_cap_milli);
             Self::execute_demands(transfer, &targets, room_haul_demand(&dto), refill_bid);
 
             Ok(())
