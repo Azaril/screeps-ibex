@@ -66,6 +66,14 @@ pub struct SquadFormingProgress {
     /// #1). Bounds how long the forming-in-flight lease refresh may extend a slow-but-fielding roster — past
     /// `MAX_FORMING_BUDGET` ticks the squad gives up even with a member in flight (no immortal squad).
     forming_started_at: std::collections::BTreeMap<ObjectiveId, u32>,
+    /// ADR 0042 §5 / ADR 0043 A3 (the ECONOMIC forming give-up): objective id → consecutive ticks the
+    /// forming squad's completed rate has failed to cover the burn of holding its present roster
+    /// (`should_abandon_forming`). Past `FORMING_ABANDON_STREAK` it gives up — the ECONOMIC give-up, which
+    /// fires far earlier than the `MAX_FORMING_BUDGET` clock (now a mere liveness backstop) when an objective
+    /// is worthless/unwinnable. K-tick latched (kills per-tick oscillation); reset on any covering tick and
+    /// SKIPPED under safe-mode (a bounded window, not permanent unwinnability). Ephemeral (NOT serialized —
+    /// no WFV bump). Cleared on retire.
+    economic_giveup_streak: std::collections::BTreeMap<ObjectiveId, u32>,
     /// objective id → the tick the full-roster squad DEPARTED home (the travel-budget clock, Break #2 travel
     /// half). Bounds the travel-phase lease refresh — past `MAX_TRAVEL_BUDGET` ticks the squad gives up.
     departed_at: std::collections::BTreeMap<ObjectiveId, u32>,
@@ -232,6 +240,13 @@ const COMMITMENT_BUDGET: u32 = 400;
 /// Generous: covers a trickle-income RCL6/7 colony banking several capped members serially (the inter-member
 /// banking gap can exceed COMMITMENT_BUDGET, which is exactly why the per-present++ refresh was insufficient).
 const MAX_FORMING_BUDGET: u32 = 3000;
+
+/// ADR 0042 §5 / ADR 0043 A3 — consecutive ticks the ECONOMIC forming give-up must hold before it fires
+/// (`should_abandon_forming` true: the completed objective's rate can't cover the present roster's burn).
+/// K-tick latch so a transient p_win/intel dip does not abandon a valuable squad; small (a fraction of a
+/// creep life) so a genuinely worthless/unwinnable objective is dropped in ~a scout cycle, LONG before the
+/// `MAX_FORMING_BUDGET` (3000) liveness backstop — the demotion the R_net give-up is about.
+const FORMING_ABANDON_STREAK: u32 = 20;
 
 /// Deep-reach fix (Break #2 travel half) — absolute bound on the travel-phase lease refresh. A full-roster
 /// squad that has not arrived within this many ticks of departing home gives up. Covers the longest realistic
@@ -610,6 +625,18 @@ fn caps_from_members(members: &[SquadMember], creep_owner: &ReadStorage<CreepOwn
         tank_effective_hp = tank_effective_hp.max(parts * 100);
     }
     SquadCapabilities { heal_per_tick, structure_dps, tank_effective_hp }
+}
+
+/// Total body-part energy of the squad's PRESENT (spawned, in-world) members (ADR 0042 §4) — the sunk
+/// roster whose lifetime is being burned while the squad forms. Feeds `forming_burn_rate_milli` (the
+/// per-tick burn = this / `CREEP_LIFE_TIME`). Only present members bleed; a not-yet-spawned slot costs
+/// nothing yet.
+fn roster_present_cost(members: &[SquadMember], creep_owner: &ReadStorage<CreepOwner>) -> u32 {
+    members
+        .iter()
+        .filter_map(|m| creep_owner.get(m.entity).and_then(|co| co.owner.resolve()))
+        .map(|creep| creep.body().iter().map(|p| p.part().cost()).sum::<u32>())
+        .sum()
 }
 
 /// A floor for a defense objective's protected-asset value (energy-equivalent) so `value_e(Defend)` never
@@ -1360,6 +1387,7 @@ fn apply_merges(data: &mut SquadManagerSystemData, merges: &[MergeDecision], _no
         // donor that survives next tick.
         if let Some(donor_obj) = data.squad_contexts.get(donor).and_then(|c| c.objective_id) {
             data.forming_progress.forming_started_at.remove(&donor_obj);
+            data.forming_progress.economic_giveup_streak.remove(&donor_obj);
             data.forming_progress.departed_at.remove(&donor_obj);
             data.forming_progress.last_present.remove(&donor_obj);
             data.forming_progress.last_target_dist.remove(&donor_obj);
@@ -1778,7 +1806,44 @@ impl<'a> System<'a> for SquadManagerSystem {
             // per-generation forming clock: past MAX_FORMING_BUDGET the refresh stops and the squad gives up.
             let forming_in_flight = forming;
             let forming_started_at = *data.forming_progress.forming_started_at.entry(obj_id).or_insert(now);
-            let forming_budget_remaining = now.saturating_sub(forming_started_at) < MAX_FORMING_BUDGET;
+            let budget_clock_remaining = now.saturating_sub(forming_started_at) < MAX_FORMING_BUDGET;
+
+            // ── ADR 0042 §5 / ADR 0043 A3: the ECONOMIC forming give-up. While forming, price the objective's
+            // COMPLETED rate against the burn of holding the present roster (both milli-e/t rates): if finishing
+            // can't even cover the burn (`should_abandon_forming`, floor 0 until the civilian lane is true-EV —
+            // A2), the squad is value-negative → abandon. K-tick latched (no per-tick oscillation), SKIPPED under
+            // safe-mode (a bounded window, not permanent unwinnability). This fires FAR earlier than the
+            // MAX_FORMING_BUDGET clock for a worthless/unwinnable objective — the demotion the R_net give-up is
+            // about (the value-driven bid must be paired with a value-driven abandon, or a valued squad abandons
+            // at max sunk cost → re-field loop). Cheap: only ≤ MAX_FORMING_SQUADS are forming at once.
+            let economic_giveup = if forming {
+                let target_safe_mode = squad_room
+                    .and_then(|room| data.mapping.get_room(&room))
+                    .and_then(|e| data.threat_data.get(e))
+                    .map(|td| td.safe_mode_active)
+                    .unwrap_or(false);
+                let abandon_now = !target_safe_mode
+                    && data.objective_queue.get(obj_id).is_some_and(|obj| {
+                        let r_o = forming_objective_rate_milli(&data, obj, &homes);
+                        let burn = screeps_econ_decision::spawn_policy::forming_burn_rate_milli(
+                            data.squad_contexts.get(squad_entity).map(|c| roster_present_cost(&c.members, &data.creep_owner)).unwrap_or(0),
+                        );
+                        screeps_econ_decision::spawn_policy::should_abandon_forming(r_o, burn, 0)
+                    });
+                let streak = data.forming_progress.economic_giveup_streak.entry(obj_id).or_insert(0);
+                if abandon_now {
+                    *streak = streak.saturating_add(1);
+                } else {
+                    *streak = 0;
+                }
+                *streak >= FORMING_ABANDON_STREAK
+            } else {
+                data.forming_progress.economic_giveup_streak.remove(&obj_id);
+                false
+            };
+            // The forming lease is refreshed only while the budget clock has time AND the squad is not
+            // economically abandoned. MAX_FORMING_BUDGET is now a pure liveness backstop.
+            let forming_budget_remaining = budget_clock_remaining && !economic_giveup;
 
             // ── Deep-reach fix (Break #2 travel half, the travel-lease): a FULL-ROSTER squad that has departed
             // home but not yet engaged / arrived is TRAVELING — it has no focus and is not forming, so the
@@ -1959,6 +2024,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 // are per-generation, like the offline harness's `gen_start`).
                 data.forming_progress.last_present.remove(&obj_id);
                 data.forming_progress.forming_started_at.remove(&obj_id);
+                data.forming_progress.economic_giveup_streak.remove(&obj_id);
                 data.forming_progress.departed_at.remove(&obj_id);
                 data.forming_progress.last_target_dist.remove(&obj_id);
                 // Introspection trackers too, so a re-field starts the phase-change/heartbeat trace fresh.
@@ -2041,6 +2107,7 @@ impl<'a> System<'a> for SquadManagerSystem {
                 // reassigned squad gets a fresh forming/travel window at the new target.
                 data.forming_progress.last_present.remove(&obj_id);
                 data.forming_progress.forming_started_at.remove(&obj_id);
+                data.forming_progress.economic_giveup_streak.remove(&obj_id);
                 data.forming_progress.departed_at.remove(&obj_id);
                 data.forming_progress.last_target_dist.remove(&obj_id);
                 data.forming_progress.last_phase.remove(&obj_id);
