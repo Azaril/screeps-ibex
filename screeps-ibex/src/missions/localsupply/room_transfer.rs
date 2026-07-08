@@ -25,6 +25,12 @@ use screeps_econ_decision::demand::{
     RefillStructDto, RoomEconDto, StorageDto, source_link_withdraw_priority, storage_link_withdraw_priority,
 };
 
+/// ADR 0043 A1 — the conservative next-body-cost fallback for the live `refill_bid` (the energy the
+/// deficit premium is amortized over). Matches the sim's own fallback (a bare 300 spawn body) used
+/// when no planned body fits; the EXACT cheapest-queued-body + the top-blocked ROI (the sim reads them
+/// from the spawn plans) need the spawn queue threaded into this mission — tracked A1 refinement.
+const REFILL_NEXT_BODY_COST_FALLBACK_E: u32 = 300;
+
 pub struct RoomTransferMission {
     owner: EntityOption<Entity>,
     room_data: Entity,
@@ -187,7 +193,21 @@ impl RoomTransferMission {
             // Build the K1 view (RoomEconDto) from live handles, run the kernel, execute the
             // demands (ADR 0040 M3 — the policy lives in screeps_econ_decision::demand).
             let (dto, targets) = Self::build_room_econ_dto(structure_data, room_data.name);
-            Self::execute_demands(transfer, &targets, room_haul_demand(&dto));
+
+            // ADR 0043 A1 — price the refill lane by the EV kernel. The deficit is the free energy the
+            // spawn/extension lane can still accept (== the sim's `capacity - available`). First cut:
+            // `top_blocked = None` and a conservative next-body-cost fallback (the sim's own 300 fallback);
+            // the exact cheapest-queued-body + top-blocked ROI need the spawn queue (tracked A1 refinement).
+            let refill_lane_deficit: u32 =
+                dto.spawns.iter().map(|s| s.free_energy).sum::<u32>() + dto.extensions.iter().map(|e| e.free_energy).sum::<u32>();
+            let market_consts = screeps_econ_decision::sink_economics::MarketConsts::default();
+            let refill_bid = screeps_econ_decision::sink_economics::refill_bid(
+                &market_consts,
+                None,
+                refill_lane_deficit,
+                REFILL_NEXT_BODY_COST_FALLBACK_E,
+            );
+            Self::execute_demands(transfer, &targets, room_haul_demand(&dto), refill_bid);
 
             Ok(())
         })
@@ -326,7 +346,12 @@ impl RoomTransferMission {
 
     /// Execute K1 demands against the transfer queue (the write half of the seam —
     /// `RegisterWithdraw`/`RegisterDeposit` intents).
-    fn execute_demands(transfer: &mut dyn TransferRequestSystem, targets: &[TransferTarget], demands: Vec<Demand>) {
+    fn execute_demands(
+        transfer: &mut dyn TransferRequestSystem,
+        targets: &[TransferTarget],
+        demands: Vec<Demand>,
+        refill_bid_milli: u32,
+    ) {
         for demand in demands {
             let target = targets[demand.item.0 as usize];
             match demand.side {
@@ -337,13 +362,21 @@ impl RoomTransferMission {
                     demand.amount,
                     demand.transfer_type,
                 )),
-                DemandSide::Deposit => transfer.request_deposit(TransferDepositRequest::new_tier(
-                    target,
-                    demand.resource,
-                    demand.priority,
-                    demand.amount,
-                    demand.transfer_type,
-                )),
+                DemandSide::Deposit => {
+                    // ADR 0043 A1 — the spawn/extension refill lane is priced by the EV kernel
+                    // (`refill_bid`, deficit-scaled) rather than the flat `High` band: a starved lane
+                    // bids up (toward the 10× cap), a nearly-full one drops to ~par (was a flat 5000
+                    // that over-diverted haulers). Connects the sim's market refill pricing onto the
+                    // live path. Non-refill deposits (containers/storage) keep their tier for now (A8).
+                    let is_refill = demand.resource == Some(ResourceType::Energy)
+                        && matches!(target, TransferTarget::Spawn(_) | TransferTarget::Extension(_));
+                    let request = if is_refill {
+                        TransferDepositRequest::new(target, demand.resource, refill_bid_milli, demand.amount, demand.transfer_type)
+                    } else {
+                        TransferDepositRequest::new_tier(target, demand.resource, demand.priority, demand.amount, demand.transfer_type)
+                    };
+                    transfer.request_deposit(request);
+                }
             }
         }
     }
