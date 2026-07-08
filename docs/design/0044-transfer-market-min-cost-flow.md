@@ -1,0 +1,78 @@
+# ADR 0044 — The transfer market is a min-cost flow: the reduced-cost bid (V·U − source_floor − haul)
+
+- **Status:** Accepted (2026-07-08, William Archbell) — design of record from the transfer-EV deep-dive (11-agent workflow: map + web research on other bots/OR theory/Screeps mechanics + multi-lens design + adversarial verify). Implementation phased below; the sim-experiment plan is a **hard prerequisite** for validating the remote-room fix (the sim is single-room today). Supersedes the interim `.min(refill_roi_cap)` hard cap (ADR 0043 A1 stopgap).
+- **Date:** 2026-07-08
+- **Deciders:** William Archbell
+- **Related:** ADR 0040 (the e/t currency + transfer market + `market_pass`/`matching`), ADR 0038 (`room_net_roi` haul coefficient), ADR 0043 (the band-normalization ledger — this is the principled foundation A1 was reaching for); memory [[sim-determinism-fence]], [[no-one-off-pathfinding-algorithms]], [[prefer-per-tick-optimal-over-hysteresis]].
+- **One line:** The transfer (hauling) market is the decentralized solution to a **min-cost flow**: each sink prices energy at its own marginal downstream value (a shadow price `V·U`), storage-at-par is the numeraire/outside option, and each delivery is chosen by its **reduced cost** `bid − source_floor − haul(d)`. Haul is BOTH an **accept/reject subtraction** (is this arc profitable at all? — the piece missing today) AND, separately, the `service_ticks` **divisor** (which scarce carrier-tick to spend — already present). This is exactly the operator's `V·U − haul`; "maximize units-in-flight" is refuted (a diagnostic, not a maximand) and "minimize latency" is refined (weighted by urgency U).
+
+## Context — what the market optimizes today, and the gap
+
+`matching.rs` scores each carrier→sink arc by **value-density** `v = bid·amount / service_ticks` and greedily takes the highest-density feasible arc. That already IS `V·U/haul`, folded: V (downstream value) = the sink bid (refill inherits body-ROI, build/repair/upgrade inherit their completion value), U (urgency) is baked into the bid (deficit-scaled refill floor, repair imminence), and haul is the `service_ticks` **divisor**.
+
+The gap the operator flagged (remote rooms): **haul is only ever a divisor, which can never make an arc net-negative** — so an EV-negative remote haul is still assigned if nothing better exists, and the ADR 0043 A1 `.min(refill_roi_cap)` cap **flattens** every starved lane (home and remote) to one indistinguishable number. The min-cost-flow theory (LP duality), the field (Overmind's `dq/dt` + net-of-haul remote curves, storage-as-hub consensus), and Screeps mechanics (remote energy is net-of-distance with an empirical break-even ~+8.7 e/t at the door, ~0 past ~250 tiles) all agree: a beyond-break-even remote delivery must be **rejectable**, not merely deprioritized. That requires a haul **subtraction**.
+
+## Decision — the corrected two-stage reduced-cost model
+
+All bids milli-e/t, par = `STORAGE_BID` = `BID_SCALE` = 1000. **Sink prices stay pure `V·U` shadow prices** (one price serves near AND far carriers); the per-arc haul term is applied at **selection**, not baked into the kernel. Survival vetoes (downgrade clock, tower-under-attack, container<50%) stay **outside** the market.
+
+### Stage 1 — admission (the new piece)
+Keep an arc `source → sink` (distance `d`) iff:
+```
+delivered = bid_sink − source_floor − haul_milli(d)  > 0
+```
+else **decline** (leave the energy at the source). This is the reduced-cost / par-after-haul reject floor the divisor form lacks.
+
+### Stage 2 — allocation (unchanged)
+Among admitted arcs, maximize the **existing** density `Σ bid_sink·flow / service_ticks` (distance in the divisor only). The subtraction gates accept/reject + remote ordering; the divisor allocates scarce carrier-ticks. **Never write these as one divided expression** — that double-charges distance.
+
+### The pieces (with the adversarial fixes baked in)
+
+- **`haul_milli(d)` — an INTEGER kernel** in `sink_economics.rs` (NOT a reuse of the f64 `room_net_roi` function — that would put a float in the exact-rational ordering and lives in the wrong crate; **determinism blocker**). Transcribe only the coefficient: `haul_milli(d) = (2·d·(CARRY_COST+MOVE_COST)·BID_SCALE) / (CARRY_CAPACITY·CREEP_LIFE_TIME)` in saturating u32 ≈ `round(d·2.667)` for a plain 1:1 body, times an integer **road factor** `road_q/1000` (seed 500 for roaded lanes; sweep). `d` = the **structural source→sink leg** (`pickup.pos.get_range_to(sink.pos)` — market.rs:231's second term), NOT the carrier-approach leg the divisor uses and NOT the composite `service_ticks`. Gate at **pickup-commit** (empty-hauler edges) where `d` is well-defined and declining genuinely leaves energy banked; do **not** re-gate already-loaded cargo (declining strands it). No new pathfinding (reuse the Position range — [[no-one-off-pathfinding-algorithms]]).
+
+- **`source_floor` — the outside option, source-dependent** (the "decline is free" premise fails for a saturating source): **par (1000)** when the pickup source is lossless (storage/terminal); **~0** when it is a saturating buffer (source container above a fill threshold, or dropped energy — declining there means overflow/decay, not lossless hold). This is the newsvendor/base-stock treatment applied source-side and it dissolves the remote-chronic-starvation degenerate case.
+
+- **NO `room_net_roi` multiplicative tilt.** It is redundant — a structurally-poor remote already prices low via `haul(d)` AND via its own lower sink bids (a low-throughput remote spawns cheaper bodies → lower refill ROI). Adding the tilt double-counts distance and reintroduces the float-in-ordering blocker. If a non-distance room-quality signal is later shown necessary, add it as an **integer per-mille** kernel, never the f64 function.
+
+- **Refill — thread the exact inputs, retire the cap as a discriminator** (ADR 0043 A1 done right). Replace the live `refill_bid(&consts, None, deficit, 300).min(refill_roi_cap)` with: (a) `top_blocked_roi_milli` = `body_roi_milli` of the head-of-line unaffordable request (V = the ROI of the creep the energy *becomes*, bounded); (b) `next_body_cost_e` = the **exact cheapest-queued-body** cost (from the spawn queue). With the true (larger) denominator the derived floor is **naturally sub-cap**; the bid = `clamp(top_blocked_roi, floor, cap)` is bounded-by-V. The `refill_roi_cap` **stays** only as an inert **degenerate-body guard** (a 1-part body bidding a near-∞ ROI), paired with a `body_cost` floor / `w` clamp inside `body_roi_milli` so the degenerate infinity is bounded at the source. **MUST ship atomically:** dropping the call-site `.min()` *without* fixing `next_body_cost` lets a big home lane bid ~40×par and starve everything — keep the `300` fallback + `.min()` until the queue is threaded.
+
+- **Remote sinks:** the SAME sink-price formulas, and the per-arc `haul_milli(d)` subtraction is the sole remote discriminator — a high-V remote refill now correctly outbids a mid-V near sink *when genuinely worth the haul*, and a beyond-break-even one is DECLINED, not flattened to the cap.
+
+### Keep unchanged (all confirmed theory-correct against the code)
+`instant_spawnability_premium` (base-stock underage U), `buffer_deposit_bid = base·(free/cap)²` (the (s,S) holding discount; overage ≈ 0 in-structure → correctly biases buffer-ahead for spawn bursts), `imminence_q`/`repair_bid` (V·U for repair), `upgrade_bid` + `V_UPGRADE` with its `CONTROLLER_MAX_UPGRADE_PER_TICK` saturation, `opportunity_floor`/`admit_use_withdraw` (the VCG/complementary-slackness outside option gating Use-lane withdraws), all survival VETOES outside the market, and the **exact-rational `u128` greedy** (no float reaches an ordering).
+
+## Verdicts on the operator's candidate framings (from the research)
+- **`V·U − haul`: CONFIRMED** — it is precisely the per-arc reduced cost of the flow objective (LP duality), and mirrors Overmind's proven split of sink `multiplier` from the `dq/dt` matcher.
+- **"Maximize units-in-flight": REFUTED** — Little's Law `L = λW` is an identity, not an objective; at fixed conversion throughput, more in-flight energy means more latency + holding cost. It is a **diagnostic** (rising haul backlog ⇒ W rising ⇒ sinks starved), never a maximand.
+- **"Minimize mined→used latency": REFINED** — latency matters only *weighted by value-at-risk*, which is exactly what U (stockout-imminence) already encodes. A global minimize-W over-hauls cheap far deliveries and burns CPU.
+
+## The sim-experiment plan (hard prerequisite: the sim is single-room today)
+
+`screeps-econ-eval` is single-room (`layout.room` one RoomName; the remote arm is inert at `max_distance==0`), so **the remote-flattening hypothesis cannot be measured on the current corpus.** Add first:
+- **Family R** — one home + N remotes at real path-distances `d ∈ {10,40,90,150,210,260}` (straddling the ~200–250 break-even), each with its own source(s), so `service_ticks` and `haul_milli(d)` actually vary.
+- **Instruments (diagnostics):** (B) mined→used energy dwell (tag at harvest, record at consume) mean/p95; (C) units-in-flight + carrier-utilization; (D) a realized-haul-cost ledger (carrier move-ticks × upkeep — "net of haul" MEASURED); (E) wasted/idle/re-hauled energy.
+- **One shared `arc_admitted()` filter** applied in BOTH `matching.rs` `greedy_assign` AND `econ-eval` `oracle_best_fp` (drop `delivered ≤ 0` edges), then rank survivors by the same density — otherwise `match_optimality_gap` measures the greedy failing to optimize an objective it isn't running (an artifact).
+
+**Arms** (new OBJECTIVE axis): A0 band-priced baseline · A1 capped-rate (current: refill EV + flat cap + haul-as-divisor) · A2 reduced-cost (exact `next_body_cost`+`top_blocked_roi`, cap demoted, per-arc haul subtraction, source-floor) · A3 = A2 + all-sinks-EV (containers/controller/build/repair live) · sensitivities: subtraction-only vs divisor-only; source-floor par-everywhere vs container→0.
+
+**Measure** — economy: `T_recover` (η), `T_RCL(N)`, `H`, `extension_deficit_integral`, deficit-episode p05–p95, `spawn_idle_frac`, `repair_leak_e`, income e/t. Transfer optimality: `match_optimality_gap` (permille, vs the reduced-cost oracle), mined→used latency, in-flight/utilization, realized-haul net-of-value, wasted energy, flap.
+
+**Success gate:** on Family R, remote high-ROI refills SERVED when profitable and DECLINED past break-even (zero realized `delivered<0`; A1 shows EV-negative remote hauls); remote deficit-episode p95 drops; **no** single-room `T_recover`/`T_RCL`/`H`/`repair_leak_e` regression (bootstrap CI); gap within the greedy budget under the shared-objective oracle; determinism fence green throughout. If A2 over-hauls at scale (D shows realized haul-e rising faster than delivered value) → add a CPU/fleet-size cap and re-run.
+
+## The six adversarial fixes (naive synthesis → shipped model)
+1. **BLOCKER** — `room_net_roi` float tilt in the ordering → **drop the tilt** (haul subtraction already prices far/poor remotes; integer per-mille kernel only if ever needed).
+2. **MAJOR** — `d` must be the source→sink structural leg, gated at pickup-commit (not the carrier-approach leg the divisor uses; don't gate loaded cargo).
+3. **MAJOR** — `source_floor` = par for lossless storage, ~0 for a saturating buffer ("decline is free" fails for a filling source container → overflow/decay).
+4. **MAJOR** — one shared `arc_admitted()` in BOTH greedy and oracle, or `match_optimality_gap` is an artifact.
+5. **MINOR** — thread `next_body_cost` + drop `.min()` **atomically**; keep both until then (load-bearing).
+6. **MINOR** — state the objective as two stages, not one divided expression (else distance is double-charged).
+
+## Phasing
+- **P0 (kernel + core, unit-testable, no WFV):** `haul_milli(d)` integer kernel + `source_floor` + the two-stage `arc_admitted()` in `matching.rs` + the `body_cost`/`w` clamp in `body_roi_milli`. Drop the `room_net_roi` tilt from consideration.
+- **P1 (refill exact inputs):** thread `top_blocked_roi` + exact cheapest-queued-body `next_body_cost` from the spawn queue into the live refill registration; drop the `.min()` atomically; cap → degenerate guard. **Likely a WFV bump** (DTO threading of the blocked-request info + any in-flight netting) — batch with the ADR 0043 A1/A8 all-sinks activation before one deploy reset.
+- **P2 (sim + experiments):** Family R + instruments B–E + the shared `arc_admitted()` in the oracle; run arms A0–A3 + sensitivities; validate the success gate. This is the gate for the remote fix.
+- **P3 (all-sinks activation — ADR 0043 A1/A8):** route `buffer_deposit_bid`/`upgrade_bid`/`build_bid`/`repair_bid` to live registration so the whole economy is EV-priced, validated by A3.
+- **Deferred / open:** haul-coefficient road-factor calibration against the empirical break-even curve; in-flight demand-netting (Overmind's discount-by-inbound) — adds a DTO field, only if per-tick greedy re-pricing proves insufficient; a CPU/fleet-size cap — only if instrument D shows over-hauling.
+
+## Consequences
+Turns the transfer market from "value-density with haul-as-divisor-only + a flattening cap" into the correct decentralized min-cost flow: remotes priced by real value − haul (served when worth it, declined past break-even), the cap inert, the whole economy EV-priced. All integer/deterministic (the one float — the `room_net_roi` tilt — was dropped). The remote fix is **gated on the sim gaining a multi-room corpus** (P2) — until then it cannot be validated, so P2 blocks the remote deploy. Every kept kernel is confirmed theory-correct.
