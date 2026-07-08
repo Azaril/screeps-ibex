@@ -65,6 +65,14 @@ pub const V_SINK_Q: u32 = 1000;
 /// `CARRY_CAPACITY` — 50 per CARRY part (engine-mechanics.md:453) — the hauler logistics-rate
 /// arm's cargo ingredient (value.rs `Role::Haul`: ρ = Q/T*).
 pub const CARRY_CAPACITY: u32 = 50;
+/// `BODYPART_COST[CARRY]` / `[MOVE]` — 50 each (engine-mechanics.md:453). The haul-cost kernel's
+/// per-part body ingredient (a 1:1 CARRY:MOVE hauler stays at plains speed).
+pub const CARRY_COST: u32 = 50;
+pub const MOVE_COST: u32 = 50;
+/// Plains-lane haul road factor (per-mille) — 1000 = a plains 1:1 CARRY:MOVE body. A fully-roaded
+/// lane needs half the MOVE (2:1 body) → seed ≈ 600; ADR 0044 sweeps it against the empirical
+/// break-even. Kept conservative (plains) until the sweep lands.
+pub const HAUL_ROAD_Q_PLAINS_PERMILLE: u32 = 1000;
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 // The v0 sweep constants (§D8 #1 — shapes approved, numbers land as the M4 reviewed diff).
@@ -232,7 +240,45 @@ pub fn body_roi_milli(w_milli: u32, body_cost: u32) -> u32 {
     if body_cost == 0 {
         return 0;
     }
+    // ADR 0044 fix (6-1): floor the divisor at a realistic minimum viable body so a degenerate
+    // tiny (e.g. 1-part) queued body cannot report a near-∞ ROI that pins the refill bid at the
+    // cap. The floor bounds the ratio at the SOURCE; the `refill_roi_cap` then sits inert on all
+    // normal lanes (it only catches anything still above it). No-op for real bodies (≥ the floor).
+    let body_cost = body_cost.max(MIN_ROI_BODY_COST_E);
     ((w_milli as u64 * CREEP_LIFE_TIME as u64) / body_cost as u64).min(u32::MAX as u64) as u32
+}
+
+/// The smallest body cost `body_roi_milli` will divide by — a small-but-viable creep
+/// (≈ one WORK+CARRY+MOVE = 200e). Bounds the degenerate 1-part-body ROI (ADR 0044).
+pub const MIN_ROI_BODY_COST_E: u32 = 200;
+
+/// Per-energy HAUL cost, milli (ADR 0044): the amortized carrier upkeep to move ONE unit of
+/// energy `d` tiles along the structural source→sink leg — subtracted from the sink bid to form
+/// the reduced cost `delivered = bid − source_floor − haul_milli(d)`. This is the accept/reject
+/// floor the `service_ticks` divisor lacks (a divisor can shrink a bid but never make an arc
+/// net-negative, so a beyond-break-even remote haul could never be *declined*). Integer and
+/// deterministic — never the f64 `room_net_roi` (a float in the exact-rational ordering is a
+/// determinism blocker; ADR 0044 fix 6-1).
+///
+/// Derivation: a 1:1 CARRY:MOVE hauler costs `CARRY_COST+MOVE_COST` per CARRY part, carries
+/// `CARRY_CAPACITY` per CARRY, and lives `CREEP_LIFE_TIME`; a delivery over `d` tiles is a `2d`
+/// round trip, so upkeep per delivered energy is
+/// `2·d·(CARRY_COST+MOVE_COST)·BID_SCALE / (CARRY_CAPACITY·CREEP_LIFE_TIME)` milli ≈ `8d/3` on
+/// plains. `road_q_permille` scales it (1000 = plains; a roaded lane needs less MOVE → lower).
+pub fn haul_milli(d: u32, road_q_permille: u32) -> u32 {
+    let plains = (2u64 * d as u64 * (CARRY_COST + MOVE_COST) as u64 * BID_SCALE as u64)
+        / (CARRY_CAPACITY as u64 * CREEP_LIFE_TIME as u64);
+    ((plains * road_q_permille as u64) / 1000).min(u32::MAX as u64) as u32
+}
+
+/// The reduced cost of a delivery arc, milli (ADR 0044 stage-1 admission): `bid − source_floor −
+/// haul(d)`, saturating at 0. `> 0` ⟺ the arc is worth serving at all (a plus for storage-at-par,
+/// zero/negative for a beyond-break-even far haul that should be DECLINED, leaving the energy at
+/// the source). `source_floor` is the source's outside option: par for a lossless source
+/// (storage/terminal — declining truly holds the energy) and ~0 for a saturating buffer (a filling
+/// source container/dropped energy — declining there means overflow/decay, not a lossless hold).
+pub fn delivered_milli(bid_milli: u32, source_floor_milli: u32, haul_cost_milli: u32) -> u32 {
+    bid_milli.saturating_sub(source_floor_milli).saturating_sub(haul_cost_milli)
 }
 
 /// **The instant-spawnability premium** (milli) — the DERIVED refill floor (M4 review finding
@@ -567,6 +613,54 @@ mod tests {
 
     fn c() -> MarketConsts {
         MarketConsts::default()
+    }
+
+    /// ADR 0044 haul kernel: `≈ 8d/3` milli per energy on plains, linear in `d`, scaled by the
+    /// road factor, integer/saturating. `d=0` (co-located) is free.
+    #[test]
+    fn haul_milli_shape() {
+        assert_eq!(haul_milli(0, HAUL_ROAD_Q_PLAINS_PERMILLE), 0, "co-located is free");
+        // 8d/3: d=3 → 8, d=30 → 80, d=150 → 400 (integer floor of 2.667·d).
+        assert_eq!(haul_milli(3, 1000), 8);
+        assert_eq!(haul_milli(30, 1000), 80);
+        assert_eq!(haul_milli(150, 1000), 400);
+        // Monotone non-decreasing in distance.
+        assert!(haul_milli(40, 1000) < haul_milli(90, 1000));
+        // Road factor scales linearly: half the MOVE ≈ half the cost.
+        assert_eq!(haul_milli(150, 500), haul_milli(150, 1000) / 2);
+        // Saturates rather than overflowing on absurd input.
+        assert_eq!(haul_milli(u32::MAX, 1000), u32::MAX);
+    }
+
+    /// ADR 0044 stage-1 reduced cost: par storage sink survives a short haul, is DECLINED past
+    /// break-even; a high-ROI refill survives much farther; a saturating source (floor 0) is more
+    /// permissive than lossless storage (floor par).
+    #[test]
+    fn delivered_admission() {
+        let par = STORAGE_BID; // 1000
+        // Storage→storage at par: break-even where haul ≈ 0. Any real haul declines it (net ≤ 0).
+        assert_eq!(delivered_milli(par, par, haul_milli(1, 1000)), 0, "par→par past d=0 declines");
+        // A refill bidding 8000 from lossless storage (floor par): delivered = 8000-1000-haul.
+        // At d=90 (haul=240): served. At d≈2625 (absurd): declined — but well past any real remote.
+        assert!(delivered_milli(8000, par, haul_milli(90, 1000)) > 0, "high-ROI near remote served");
+        assert_eq!(delivered_milli(8000, par, haul_milli(3000, 1000)), 0, "beyond break-even declined");
+        // Saturating source (floor 0) admits an arc a lossless source (floor par) would decline.
+        let d = haul_milli(150, 1000); // 400
+        assert!(delivered_milli(1200, 0, d) > 0, "buffer source: 1200-0-400 > 0 served");
+        assert_eq!(delivered_milli(1200, par, d), 0, "storage source: 1200-1000-400 saturates to 0");
+    }
+
+    /// ADR 0044 fix 6-1: a degenerate tiny body cannot report a runaway ROI — the divisor floors
+    /// at `MIN_ROI_BODY_COST_E`, so a 1-part body is priced as a small viable body, not ∞.
+    #[test]
+    fn body_roi_degenerate_clamp() {
+        // A real body (≥ floor) is unaffected: w=2000, cost=300 → 2000·1500/300 = 10000.
+        assert_eq!(body_roi_milli(2000, 300), 10_000);
+        // A 1-part (cost 50) body is clamped to the 200 floor: 2000·1500/200 = 15000, NOT
+        // 2000·1500/50 = 60000 (the runaway the cap would otherwise have to absorb).
+        assert_eq!(body_roi_milli(2000, 50), 15_000);
+        assert_eq!(body_roi_milli(2000, 50), body_roi_milli(2000, MIN_ROI_BODY_COST_E));
+        assert_eq!(body_roi_milli(1000, 0), 0, "degenerate zero-cost still prices 0");
     }
 
     /// The transcribed §D5.4 / engine ingredients pinned to their cited values (value.rs:45,
