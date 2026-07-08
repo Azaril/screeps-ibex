@@ -69,6 +69,12 @@ pub struct MarketPickup {
     pub pos: Position,
     /// Available amount (requested − booked).
     pub available: u32,
+    /// ADR 0044 stage-1 admission — this source's outside option (milli): par for a LOSSLESS
+    /// source (storage/terminal — declining an arc truly holds the energy) and ~0 for a SATURATING
+    /// buffer (a filling source container / dropped energy — declining means overflow/decay, not a
+    /// hold). The adapter classifies (the kernel stays key-agnostic); it becomes the delivery
+    /// edge's `source_floor_milli` for the reduced-cost reject test.
+    pub source_floor_milli: u32,
 }
 
 /// One market task the pass hands a carrier (mirrors the sim `MarketTask`). Adapter-scoped
@@ -211,6 +217,10 @@ pub fn market_pass(
                     amount,
                     bid_milli: bid,
                     service_ticks: service,
+                    // Loaded cargo is never re-gated (ADR 0044 fix 6-2): declining a delivery of
+                    // energy already aboard strands it — admission applies only at pickup-commit.
+                    source_floor_milli: 0,
+                    haul_cost_milli: 0,
                 });
             } else {
                 // Best pickup for this (carrier, target): max flow/service (exact rationals),
@@ -245,6 +255,11 @@ pub fn market_pass(
                     if !carrier_gate(c.opportunity_milli, bid, flow, service) {
                         continue;
                     }
+                    // ADR 0044 stage-1: the reduced-cost reject inputs — the structural source→sink
+                    // leg `pickup→deposit` (NOT the carrier-approach leg the divisor also counts)
+                    // and this source's outside option. `market_pass`/greedy declines the arc if
+                    // `bid − source_floor − haul(d) ≤ 0`, leaving the energy at the source.
+                    let haul_d = pickups[pi].pos.get_range_to(dpos);
                     edges.push(m::AssignEdge {
                         carrier: ci as u32,
                         supply: Some(pi as u32),
@@ -252,6 +267,8 @@ pub fn market_pass(
                         amount: flow,
                         bid_milli: bid,
                         service_ticks: service,
+                        source_floor_milli: pickups[pi].source_floor_milli,
+                        haul_cost_milli: econ::haul_milli(haul_d, econ::HAUL_ROAD_Q_PLAINS_PERMILLE),
                     });
                 }
             }
@@ -376,7 +393,7 @@ mod tests {
             MarketDeposit { sink: 10, pos: pos(21, 20), bid_milli: 6000, unfulfilled: 50, is_refill: true },
             MarketDeposit { sink: 11, pos: pos(25, 20), bid_milli: 6000, unfulfilled: 50, is_refill: true },
         ];
-        let pickups = [MarketPickup { src: 99, pos: pos(20, 21), available: 500 }];
+        let pickups = [MarketPickup { src: 99, pos: pos(20, 21), available: 500, source_floor_milli: 0 }];
         let res = market_pass(&carriers, &deposits, &pickups, |_, _| false);
         assert_eq!(res.assignments.len(), 1);
         match res.assignments[0].task {
@@ -409,7 +426,7 @@ mod tests {
         let carriers = [MarketCarrier { id: 1, pos: pos(10, 10), free: 100, held: 0, opportunity_milli: 0 }];
         let deposits = [MarketDeposit { sink: 5, pos: pos(11, 10), bid_milli: 3000, unfulfilled: 100, is_refill: false }];
         // The only pickup IS sink 5 (src index 5 maps to sink 5).
-        let pickups = [MarketPickup { src: 5, pos: pos(11, 10), available: 100 }];
+        let pickups = [MarketPickup { src: 5, pos: pos(11, 10), available: 100, source_floor_milli: 0 }];
         let res = market_pass(&carriers, &deposits, &pickups, |src, sink| src == sink);
         assert!(res.assignments.is_empty(), "no self-withdraw edge is generated");
     }

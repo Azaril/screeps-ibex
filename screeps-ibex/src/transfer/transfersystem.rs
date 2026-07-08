@@ -109,6 +109,23 @@ pub enum TransferTarget {
 
 #[cfg_attr(feature = "profile", screeps_timing_annotate::timing)]
 impl TransferTarget {
+    /// ADR 0044 stage-1 source-floor classifier: this target's outside option as a HAUL PICKUP
+    /// source, milli. A LOSSLESS store (storage/terminal — declining an arc truly banks the energy)
+    /// bids the par outside option, so only an above-par sink pulls from it (base-stock behavior).
+    /// A SATURATING or DECAYING buffer (a source container filling from harvest, a link relay,
+    /// dropped/ruin/tombstone energy — declining strands or loses it) bids ~0, so it is freely
+    /// drained. Feeds `MarketPickup::source_floor_milli` for the reduced-cost reject test.
+    pub fn source_floor_milli(&self) -> u32 {
+        match self {
+            TransferTarget::Container(_)
+            | TransferTarget::Link(_)
+            | TransferTarget::Ruin(_)
+            | TransferTarget::Tombstone(_)
+            | TransferTarget::Resource(_) => 0,
+            _ => screeps_econ_decision::sink_economics::STORAGE_BID,
+        }
+    }
+
     fn is_valid_from_id<T>(target: &RemoteObjectId<T>) -> bool
     where
         T: HasId + wasm_bindgen::JsCast,
@@ -1975,6 +1992,7 @@ impl TransferQueue {
                         src,
                         pos: target.local_pos(),
                         available,
+                        source_floor_milli: target.source_floor_milli(),
                     });
                     pickup_targets.push(*target);
                 }
@@ -2719,6 +2737,7 @@ mod tests {
                 src: i as u32,
                 pos: t.local_pos(),
                 available: *avail,
+                source_floor_milli: t.source_floor_milli(),
             })
             .collect();
         let deposit_targets: Vec<TransferTarget> = deposits.iter().map(|(t, ..)| *t).collect();

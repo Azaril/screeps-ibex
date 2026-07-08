@@ -379,7 +379,12 @@ impl MarketRuntime {
             .iter()
             .enumerate()
             .filter(|(_, p)| p.lane == Lane::Haul)
-            .map(|(i, p)| mk::MarketPickup { src: i as u32, pos: p.pos, available: p.available })
+            .map(|(i, p)| mk::MarketPickup {
+                src: i as u32,
+                pos: p.pos,
+                available: p.available,
+                source_floor_milli: src_floor_milli(p.src),
+            })
             .collect();
 
         let out = mk::market_pass(&k_carriers, &k_deposits, &k_pickups, |src_idx, sink_idx| {
@@ -458,6 +463,17 @@ fn same_structure(src: SrcKey, sink: SinkKey) -> bool {
         (SrcKey::Storage, SinkKey::Storage) => true,
         (SrcKey::Container(a, b), SinkKey::Container(c, d)) => (a, b) == (c, d),
         _ => false,
+    }
+}
+
+/// ADR 0044 stage-1 source-floor classifier (sim side): a LOSSLESS source (storage — declining an
+/// arc truly banks the energy) has the par outside option; a SATURATING buffer (a source container
+/// filling from harvest, or decaying dropped energy — declining strands/loses it) has ~0. Mirrors
+/// the live adapter's `TransferTarget`-based classification.
+fn src_floor_milli(src: SrcKey) -> u32 {
+    match src {
+        SrcKey::Storage => econ::STORAGE_BID,
+        SrcKey::Container(..) | SrcKey::Dropped(..) => 0,
     }
 }
 
@@ -807,6 +823,13 @@ pub fn oracle_best_fp(
     });
     let mut per_carrier: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     for idx in order {
+        // ADR 0044 fix 6-4: the oracle optimizes over the SAME admitted arc set the greedy does —
+        // a below-break-even arc (`bid − source_floor − haul ≤ 0`) is not a candidate for either.
+        // Without this the `match_optimality_gap` would measure the greedy failing to optimize an
+        // objective the oracle isn't running (an artifact), not a real approximation gap.
+        if !edges[idx].admitted() {
+            continue;
+        }
         let list = per_carrier.entry(edges[idx].carrier).or_default();
         if list.len() < ORACLE_TOP_K {
             list.push(idx);
@@ -905,7 +928,9 @@ mod tests {
     }
 
     fn edge(carrier: u32, supply: Option<u32>, demand: u32, amount: u32, bid: u32, service: u32) -> m::AssignEdge {
-        m::AssignEdge { carrier, supply, demand, amount, bid_milli: bid, service_ticks: service }
+        // 0/0 admission inputs = inert (every positive-bid arc admitted) — these tests exercise the
+        // density/oracle-gap mechanics, not ADR 0044 stage-1 admission.
+        m::AssignEdge { carrier, supply, demand, amount, bid_milli: bid, service_ticks: service, source_floor_milli: 0, haul_cost_milli: 0 }
     }
 
     /// The classic greedy trap: carrier 0 holds the globally DENSEST edge on the shared demand,
@@ -1010,7 +1035,7 @@ mod tests {
         // One carrier, 15 distinct deposit demands (> ORACLE_TOP_K = 10) — the greedy generates
         // all 15 edges, but the oracle's per-carrier candidate list is pruned to the top K.
         let edges: Vec<m::AssignEdge> = (0..15u32)
-            .map(|d| m::AssignEdge { carrier: 0, supply: None, demand: d, amount: 10, bid_milli: 1000 + d * 100, service_ticks: 5 })
+            .map(|d| m::AssignEdge { carrier: 0, supply: None, demand: d, amount: 10, bid_milli: 1000 + d * 100, service_ticks: 5, source_floor_milli: 0, haul_cost_milli: 0 })
             .collect();
         let supply0: BTreeMap<u32, u32> = BTreeMap::new();
         let demand0: BTreeMap<u32, u32> = (0..15u32).map(|d| (d, 10u32)).collect();

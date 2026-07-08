@@ -31,15 +31,34 @@ pub struct AssignEdge {
     pub bid_milli: u32,
     /// Estimated ticks to serve the ticket (existing distance services — §D3; floored ≥ 1).
     pub service_ticks: u32,
+    /// ADR 0044 stage-1 admission — the source's outside option (milli): par for a lossless source
+    /// (storage/terminal — declining truly holds the energy), ~0 for a saturating buffer (a filling
+    /// source container / dropped energy — declining means overflow/decay). `0` on a pure delivery
+    /// edge (`supply == None`): loaded cargo is never re-gated (declining strands it).
+    pub source_floor_milli: u32,
+    /// ADR 0044 stage-1 admission — the per-energy HAUL cost over the structural source→sink leg
+    /// (milli, `sink_economics::haul_milli`). `0` on a pure delivery edge (no admission subtraction).
+    pub haul_cost_milli: u32,
 }
 
 impl AssignEdge {
-    /// The §D3 value density as an exact rational: `num/den = bid·amount / service_ticks`.
+    /// The §D3 value density as an exact rational: `num/den = bid·amount / service_ticks`
+    /// (stage-2 allocation — distance in the DIVISOR only; never folded with the stage-1
+    /// subtraction, which would double-charge distance).
     fn value(&self) -> (u64, u64) {
         (
             self.bid_milli as u64 * self.amount as u64,
             self.service_ticks.max(1) as u64,
         )
+    }
+
+    /// ADR 0044 stage-1 admission: keep the arc iff its reduced cost `bid − source_floor −
+    /// haul(d)` is strictly positive — i.e. delivering is worth more than the source's outside
+    /// option plus the haul. A beyond-break-even arc is DECLINED (the energy stays at the source),
+    /// which the value-density divisor alone can never do. This SAME predicate gates both the live
+    /// greedy and the sim oracle (critique fix 6-4: otherwise the optimality gap is an artifact).
+    pub fn admitted(&self) -> bool {
+        crate::sink_economics::delivered_milli(self.bid_milli, self.source_floor_milli, self.haul_cost_milli) > 0
     }
 }
 
@@ -94,6 +113,12 @@ pub fn greedy_assign(
         if assigned_carriers.contains(&edge.carrier) {
             continue;
         }
+        // ADR 0044 stage-1: decline a below-break-even arc outright (the reduced cost ≤ 0). The
+        // energy stays at the source rather than being hauled at a net loss — the accept/reject the
+        // stage-2 density divisor structurally cannot express.
+        if !edge.admitted() {
+            continue;
+        }
         let mut flow = edge.amount;
         if let Some(s) = edge.supply {
             flow = flow.min(supply_avail.get(&s).copied().unwrap_or(0));
@@ -143,13 +168,13 @@ mod tests {
     fn density_orders_and_bookings_consume() {
         let edges = [
             // carrier 0: par storage dump, 100 over 10 ticks → v = 10k/t
-            AssignEdge { carrier: 0, supply: Some(0), demand: 9, amount: 100, bid_milli: 1000, service_ticks: 10 },
+            AssignEdge { carrier: 0, supply: Some(0), demand: 9, amount: 100, bid_milli: 1000, service_ticks: 10, source_floor_milli: 0, haul_cost_milli: 0 },
             // carrier 0: refill 300 @12000 over 20 ticks → v = 180k/t (wins for carrier 0)
-            AssignEdge { carrier: 0, supply: Some(0), demand: 1, amount: 300, bid_milli: 12_000, service_ticks: 20 },
+            AssignEdge { carrier: 0, supply: Some(0), demand: 1, amount: 300, bid_milli: 12_000, service_ticks: 20, source_floor_milli: 0, haul_cost_milli: 0 },
             // carrier 1: the SAME refill demand, slightly farther → v = 150k/t
-            AssignEdge { carrier: 1, supply: Some(0), demand: 1, amount: 300, bid_milli: 12_000, service_ticks: 24 },
+            AssignEdge { carrier: 1, supply: Some(0), demand: 1, amount: 300, bid_milli: 12_000, service_ticks: 24, source_floor_milli: 0, haul_cost_milli: 0 },
             // carrier 1 fallback: storage dump
-            AssignEdge { carrier: 1, supply: Some(0), demand: 9, amount: 100, bid_milli: 1000, service_ticks: 8 },
+            AssignEdge { carrier: 1, supply: Some(0), demand: 9, amount: 100, bid_milli: 1000, service_ticks: 8, source_floor_milli: 0, haul_cost_milli: 0 },
         ];
         let (mut s, mut d) = maps(&[(0, 350)], &[(1, 300), (9, 100_000)]);
         let (got, _ops) = greedy_assign(&edges, &mut s, &mut d);
@@ -166,8 +191,8 @@ mod tests {
     #[test]
     fn one_ticket_per_carrier() {
         let edges = [
-            AssignEdge { carrier: 0, supply: None, demand: 0, amount: 50, bid_milli: 2000, service_ticks: 5 },
-            AssignEdge { carrier: 0, supply: None, demand: 1, amount: 50, bid_milli: 2000, service_ticks: 5 },
+            AssignEdge { carrier: 0, supply: None, demand: 0, amount: 50, bid_milli: 2000, service_ticks: 5, source_floor_milli: 0, haul_cost_milli: 0 },
+            AssignEdge { carrier: 0, supply: None, demand: 1, amount: 50, bid_milli: 2000, service_ticks: 5, source_floor_milli: 0, haul_cost_milli: 0 },
         ];
         let (mut s, mut d) = maps(&[], &[(0, 50), (1, 50)]);
         let (got, _) = greedy_assign(&edges, &mut s, &mut d);
@@ -180,10 +205,10 @@ mod tests {
     #[test]
     fn assignment_is_input_order_free() {
         let edges = vec![
-            AssignEdge { carrier: 0, supply: Some(0), demand: 0, amount: 100, bid_milli: 1500, service_ticks: 7 },
-            AssignEdge { carrier: 1, supply: Some(0), demand: 0, amount: 100, bid_milli: 1500, service_ticks: 7 },
-            AssignEdge { carrier: 1, supply: Some(1), demand: 1, amount: 60, bid_milli: 9000, service_ticks: 30 },
-            AssignEdge { carrier: 0, supply: Some(1), demand: 1, amount: 60, bid_milli: 9000, service_ticks: 31 },
+            AssignEdge { carrier: 0, supply: Some(0), demand: 0, amount: 100, bid_milli: 1500, service_ticks: 7, source_floor_milli: 0, haul_cost_milli: 0 },
+            AssignEdge { carrier: 1, supply: Some(0), demand: 0, amount: 100, bid_milli: 1500, service_ticks: 7, source_floor_milli: 0, haul_cost_milli: 0 },
+            AssignEdge { carrier: 1, supply: Some(1), demand: 1, amount: 60, bid_milli: 9000, service_ticks: 30, source_floor_milli: 0, haul_cost_milli: 0 },
+            AssignEdge { carrier: 0, supply: Some(1), demand: 1, amount: 60, bid_milli: 9000, service_ticks: 31, source_floor_milli: 0, haul_cost_milli: 0 },
         ];
         let run = |es: &[AssignEdge]| {
             let (mut s, mut d) = maps(&[(0, 100), (1, 60)], &[(0, 150), (1, 60)]);
@@ -203,7 +228,7 @@ mod tests {
     fn ops_proxy_and_value_fp() {
         let mk = |n: u32| -> Vec<AssignEdge> {
             (0..n)
-                .map(|i| AssignEdge { carrier: i, supply: None, demand: i, amount: 10, bid_milli: 1000, service_ticks: 1 })
+                .map(|i| AssignEdge { carrier: i, supply: None, demand: i, amount: 10, bid_milli: 1000, service_ticks: 1, source_floor_milli: 0, haul_cost_milli: 0 })
                 .collect()
         };
         let (mut s1, mut d1) = maps(&[], &(0..4).map(|i| (i, 10)).collect::<Vec<_>>());
@@ -214,5 +239,28 @@ mod tests {
         assert_eq!(assignments_value_fp(&mk(4), &a4), 4 * 1000 * 10 * VALUE_FP);
         assert_eq!(assignments_value_fp(&mk(16), &a16), 16 * 1000 * 10 * VALUE_FP);
         assert_eq!(flow_value_fp(1000, 10, 0), 1000 * 10 * VALUE_FP, "service floored at 1");
+    }
+
+    /// ADR 0044 stage-1: a below-break-even arc is DECLINED — its carrier stays unassigned even
+    /// though a positive-density fallback does not exist. Here a par storage→storage dump from a
+    /// lossless source (floor par) over any haul nets ≤ 0 and is refused; a high-ROI refill from
+    /// the same source clears break-even and is served. This is the reject the density divisor
+    /// alone cannot express (a divisor shrinks a bid but never zeroes an arc out).
+    #[test]
+    fn admission_declines_below_break_even() {
+        let par = crate::sink_economics::STORAGE_BID;
+        let haul = crate::sink_economics::haul_milli(90, 1000); // 240
+        let edges = [
+            // carrier 0: par→par storage rebalance from lossless storage, real haul → delivered
+            // = 1000 − 1000 − 240 < 0 → DECLINED (not merely low-density).
+            AssignEdge { carrier: 0, supply: Some(0), demand: 9, amount: 100, bid_milli: par, service_ticks: 90, source_floor_milli: par, haul_cost_milli: haul },
+            // carrier 1: high-ROI refill from the same lossless source → 8000 − 1000 − 240 > 0 → served.
+            AssignEdge { carrier: 1, supply: Some(0), demand: 1, amount: 300, bid_milli: 8000, service_ticks: 92, source_floor_milli: par, haul_cost_milli: haul },
+        ];
+        let (mut s, mut d) = maps(&[(0, 1000)], &[(1, 300), (9, 100_000)]);
+        let (got, _) = greedy_assign(&edges, &mut s, &mut d);
+        assert_eq!(got.len(), 1, "only the admitted refill assigns; the par rebalance is declined");
+        assert_eq!(got[0].edge, 1);
+        assert_eq!(d[&9], 100_000, "the storage rebalance demand is untouched — energy stayed put");
     }
 }
