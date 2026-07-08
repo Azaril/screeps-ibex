@@ -122,17 +122,22 @@ impl Mission for WallRepairMission {
                     return Ok(());
                 }
 
-                // Request high-priority energy for all towers that aren't full.
+                // ADR 0043 A6 — an imminent-breach wall (hostiles present, wall < EMERGENCY_WALL_HITS) is a
+                // SURVIVAL lane, not a sheddable `High`=5000 a deep refill floor can out-compete. Price the
+                // tower refill at `SURVIVAL_BID` (never-shed) via the same kernel A5 uses (hostiles_present
+                // is guaranteed true here — the mission early-returns without them).
+                let market_consts = screeps_econ_decision::sink_economics::MarketConsts::default();
+                let survival_bid = screeps_econ_decision::sink_economics::tower_refill_bid(&market_consts, true);
                 for tower in structures.towers() {
                     if !tower.my() {
                         continue;
                     }
                     let free_cap = tower.store().get_free_capacity(Some(ResourceType::Energy));
                     if free_cap > 0 {
-                        let request = TransferDepositRequest::new_tier(
+                        let request = TransferDepositRequest::new(
                             TransferTarget::Tower(tower.remote_id()),
                             Some(ResourceType::Energy),
-                            TransferPriority::High,
+                            survival_bid,
                             free_cap as u32,
                             TransferType::Haul,
                         );

@@ -176,19 +176,20 @@ impl Mission for TowerMission {
                 let hostile_creeps = creeps.hostile();
                 let are_hostile_creeps = !hostile_creeps.is_empty();
 
-                let priority = if are_hostile_creeps {
-                    TransferPriority::High
-                } else {
-                    TransferPriority::Low
-                };
+                // ADR 0043 A5 — price the tower refill by the EV kernel (was a band: peaceful `Low`=1250
+                // milli sat ABOVE par=1000 and diverted haulers off storage, the live S4 leak). Hostile =
+                // `SURVIVAL_BID` (never-shed survival lane); peaceful = `tower_peace_milli`=500 (below par,
+                // loses to any real demand). Connects the sim's `tower_refill_bid` onto the live path.
+                let market_consts = screeps_econ_decision::sink_economics::MarketConsts::default();
+                let tower_bid = screeps_econ_decision::sink_economics::tower_refill_bid(&market_consts, are_hostile_creeps);
 
                 for tower in towers {
                     let tower_free_capacity = tower.store().get_free_capacity(Some(ResourceType::Energy));
                     if tower_free_capacity > 0 {
-                        let transfer_request = TransferDepositRequest::new_tier(
+                        let transfer_request = TransferDepositRequest::new(
                             TransferTarget::Tower(tower.remote_id()),
                             Some(ResourceType::Energy),
-                            priority,
+                            tower_bid,
                             tower_free_capacity as u32,
                             TransferType::Haul,
                         );
