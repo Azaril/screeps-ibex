@@ -1,0 +1,65 @@
+# ADR 0043 — Pricing normalization: retire the band ladder (the tracking ledger)
+
+- **Status:** Accepted (2026-07-07, William Archbell) — a **tracking/roadmap** ADR. Records the output of an adversarial band-pricing audit (27 agents, findings adversarially verified) and sequences the workstream that converts every band-scaled decision to true-EV (or an explicit longer-term-EV override). Items land incrementally; this doc is the ledger of record.
+- **Date:** 2026-07-07
+- **Deciders:** William Archbell
+- **Related:** ADR 0040 (the e/t currency, `body_roi_milli`, the transfer market, the M5b live-market rewire), ADR 0042 (the R_net forming bid — **the reference pattern** every Part-A item converts to), ADR 0038 (`room_net_roi`); memory [[prefer-per-tick-optimal-over-hysteresis]], [[wfv-fine-clean-design-no-debt]].
+- **One line:** Every decision should be made by **per-tick-optimal EV** (expected energy value at par = `STORAGE_BID` = `BID_SCALE` = 1000); a decision may only override the per-tick optimum when a genuine **longer-term EV** justifies it. This ADR is the audited ledger of everywhere the bot still violates that — band-scaled ordinals (`SPAWN_BID_* = old-0..100-priority × 1000`), arbitrary thresholds, or tick-clocks — and the sequenced plan to fix each.
+
+## The classification framework
+
+Every pricing/decision site is one of:
+- **legit per-tick EV** — already a `p_win·value_e/est_ticks` or `body_roi_milli` decision (keep; the goal state).
+- **fix-to-EV** — a band ordinal / arbitrary threshold / tick-clock **overriding** what should be a per-tick EV decision (the debt).
+- **legit longer-term-EV override** — overrides the per-tick optimum, but a genuine unbounded-future EV (controller loss, income bootstrap) or observed-oscillation hysteresis justifies it (keep).
+- **needs-longer-term-EV-added** — an honest floor/veto/clock standing in for an unbuilt value kernel (keep the guard; add the EV when the kernel lands).
+
+`body_roi_milli(w, cost) = w·CREEP_LIFE_TIME/cost` (par-relative true e/t) is the conversion engine; the `SPAWN_BID_*` ladder (25_000..100_000) is the band ordinal to retire as a **bid source** (its role narrows to a containment guardrail, e.g. the reserved [HIGH, CRITICAL) band ADR 0042 orders R_O within, and the income-never-preempted cap).
+
+## PART A — CONFIRMED band hacks (fix-to-EV)
+
+| # | Site | What | Sev | EV fix | Sequence |
+|---|---|---|---|---|---|
+| **A1** | `sink_economics.rs:470-486` `tier_to_bid`/`BID_TIER_*`; live via `transfersystem.rs:649/778` (`new_tier`), `demand.rs:263/272`, `room_transfer.rs:333` | The **entire live transfer economy** (refill / container / controller deposits) priced by 4 fixed constants; `demand.rs` emits flat `High` for all refill regardless of deficit. The EV kernels (`refill_bid`/`buffer_deposit_bid`/`upgrade_bid`) exist but are **dead** (test-only). | **BLOCKER** | Register each sink at its EV: refill = `refill_bid(consts, top_blocked_roi, lane_deficit_e, next_body_cost)` (floor = `instant_spawnability_premium`, cap `REFILL_ROI_CAP=10000`); containers = `buffer_deposit_bid(base·(free/cap)²)`; controller = `upgrade_bid` + `downgrade_veto`. Keep `tier_to_bid` only for the non-economic lanes (B4). | **FIRST** — the ADR 0040 M5b live-market rewire (bot analog of the sim `market.rs`). **WFV 26→27.** Refill lane first, then containers, then controller. |
+| **A2** | `spawn_policy.rs:158-168` `harvester_priority`; live `source_mining.rs:403` | Miner spawn bid = distance-keyed band lerp faded by roster fill; **no `body_roi_milli`** — though the miner's rate `w` is *already computed* in `role_w_milli` and thrown away for ordering. | **BLOCKER** | `body_roi_milli(w_milli, body_cost)`, `w = min(work·HARVEST_POWER_E_T, source_headroom)`; distance = haul-cost discount on unlocked net e/t. Saturation/fade fall out. Keep `total==0 → CRITICAL` bootstrap floor (C2). Requires un-discarding `w` in the spawn-queue ordering (`runner.rs:392`). | spawn-EV batch |
+| **A3** | `squad_manager.rs:234` `MAX_FORMING_BUDGET=3000` (:1781/:1923); consumer `lifecycle.rs:248` | Forming **give-up is a tick clock**, not the ADR 0042 economic continuation decision. A value-driven bid + clock-driven give-up abandons at max sunk cost → re-field loop (the exact fingerprint ADR 0042 exists to kill). `should_abandon_forming`/`opportunity_floor` UNWIRED. | **MAJOR** | ADR 0042 §5: `give_up iff (R_O_completed − B_present) < opportunity_floor_norm` held K=20 ticks; `MAX_FORMING_BUDGET` demoted to a liveness backstop; safe-mode arm §6. | **IMMEDIATE — the deferred half of ADR 0042 P0** (inconsistent to leave). |
+| **A4** | `spawn_policy.rs:372-393` `upgrader_priority`; live `upgrade.rs:211` | Upgrader spawn bid = roster-fill band lerps; no `upgrader_bid` twin (unlike hauler) — while the transfer market prices controller *supply* at true EV. | MAJOR | Add `upgrader_bid` = `body_roi_milli(work·UPGRADE_POWER_E_T·V, cost)`, `V = upgrade_bid(consts, near_level_up)`. Keep `downgrade_risk&&roster_empty→CRITICAL` (C1). | spawn-EV batch |
+| **A5** | `tower.rs:179-194` | Tower refill: hostile→`High` (sheddable!), peaceful→`Low`=1250 (**above par — the S4 leak is LIVE**, diverts haulers). True twin `tower_refill_bid` dead in prod. | MAJOR | `tower_refill_bid(consts, hostiles)` → `SURVIVAL_BID` (never-shed) hostile, `TOWER_PEACE_MILLI=500` (below par) peaceful; register numeric not `new_tier`. | with A1 (same seam) |
+| **A6** | `wall_repair.rs:118-140` | Emergency wall-repair tower refill registers sheddable `High` under imminent breach — out-competable by a deep refill floor. | MAJOR | `SURVIVAL_BID` (never-shed) — its precondition is a subset of A5's hostile arm. | with A5 |
+| **A7** | `spawn_policy.rs:431` `FIRST_BUILDER_PRIORITY=(HIGH+MEDIUM)/2`, :435-441 | Builder spawn bid = magic midpoint + boolean band — proxy for the whole per-class `build_bid` table (Spawn 10000 … Road 250). | MAJOR | `body_roi_milli(BUILD_POWER_E_T·work·build_bid(top_pending_class), cost)`; a pending spawn auto-outbids a road. Needs a StructureType→BuildClass map at the adapter. | spawn-EV batch |
+| **A8** | `demand.rs:137-245` buffer/link fill-fraction ladders; live `room_transfer.rs:190/407/431/462` | Arbitrary 25/50/75% fill thresholds binned to High/Medium/Low; a 74%-full and a 1%-full container both emit `Low`. | MINOR | `buffer_deposit_bid(base·(free/cap)²)`; keep the `controller_link_deposit` `drain·BUFFER_TICKS` horizon (legit). | with A1 |
+| **A9** | `spawn_policy.rs:446-454` `repairer_spawn_priority`; live `localbuild.rs:89` | Repairer spawn bid = enum-band → `SPAWN_BID` band; continuous `repair_bid` EV discarded (info-loss, no sign flip). | MINOR | `body_roi_milli(top_site_repair_bid, cost)`, `repair_bid(consts, rebuild_avoided, repair_remaining, imminence)`. | spawn-EV batch |
+| **A10** | `spawn_policy.rs:215-227` `hauler_priority` + `band.max()` in `hauler_bid`; live `haul.rs:266` | The one civilian role reaching `body_roi_milli`, but a `< 0.75·desired` step floors it with an ordinal (worked case: emits MEDIUM=50000 over roi=27000). **Original rationale "rate fades as lane fills" is FALSE** — `logistics_rate_milli` is a fixed per-body constant. | MAJOR | `w = min(throughput, residual_unfulfilled_hauling)` (marginal — fades from real demand); `body_roi_milli(w,cost).max(SPAWN_BID_HIGH).min(CRITICAL-1)`. The HIGH floor is justified by the combat-forming gate, not hysteresis. Delete the 0.75 branch. | spawn-EV batch |
+| **A11** | `force_sizing.rs:740` `importance_margin`; applied `doctrine.rs:221`; `war.rs:1604` | `1.0 + importance·0.5`, importance = a fraction of the 25/50/75/100 `OBJECTIVE_PRIORITY` band — a third, band-keyed force multiplier double-counting value already carried by `target_value` (true e/t) + physical `HOLD_MARGIN`. Live on ONE caller today (InvaderCore ~1.17×); 1.5× latent. | MAJOR | Drop `importance_margin`; let `optimize_composition`'s EV search size force (`Δp_win·target_value > Δbody_cost`); fold any cushion into `HOLD_MARGIN`. | with A3 (combat cleanup) |
+| **A12** | `objective_queue.rs:430` `mark_unwinnable` `2000·2^(attempts-1)`; `war.rs:1575`, `squad_manager.rs:1944` | Exponential-doubling retry clock; re-attempt gated only on the timer — a re-priced `p_win·value_e` can't lift suppression before it fires (`is_unwinnable_now` hard-filters before `ev_of_claim`). | MINOR | `eligible = (now ≥ abandoned_at + F) AND fresh_re-priced_R_O ≥ give_up_R_O` (F = the short observed reach↔retreat flicker floor); route re-scout intel into `clear_unwinnable`; drop `2^attempts`. | with A3 |
+
+## PART B — legit per-tick EV / fine-coarse (keep as-is)
+
+- **B1** — `forming_completion_bid` (`spawn_policy.rs`), `military_priority_bid` (`squad_manager.rs:920`): the ADR 0042 reference — real `R_O` ordered within a **containment** band, not an ordinal comparison. **The pattern every Part-A item converts to.**
+- **B2** — the movement w-lane (`value.rs:35/73`, `movementrequest.rs:63` anchors, `resolver.rs:927` shove): genuine milli-e/t; the 1M-spaced anchors are semantic-tier containment, not compared as e/t.
+- **B3** — the doctrine EV gate (`doctrine.rs:342` `commit_ev_threshold`), `ev_of_claim`, `economic_rank_score` (`war.rs:2091`), `assess`/`clear_force`: genuine `p_win·value_e − cost`; `COMMIT_EV_THRESHOLD=1.0` is a small anti-thrash dead-band on a real delta.
+- **B4** — `tier_to_bid` for **non-economic** lanes (labs/terminal/salvage): legitimately coarse — per-energy EV undefined in this currency (labs-unblock-a-boost is a *later* ADR 0041 EV candidate, not a hack today).
+- **B5** — `priority_implied_danger`, `OBJECTIVE_PRIORITY_*` as a KIND classifier, `DEFENSE_SPAWN_EDGE`, caps: coarse intel-fallback floors / classifiers with the EV auction on top.
+- **REFUTED (do NOT reflag):** transfer tier-quantization at matching/admit (reduces to `bid > par`, EV-correct); `powerspawn.rs` (sanctioned coarse non-market lane, no EV kernel exists); `claim_travel_bid` `V/S_REF` (genuine milli-e/t; `S_REF` a time constant); `SCOUT_INTEL_BID=33` (correct amortized-upkeep floor).
+
+## PART C — legit overrides needing a longer-term EV added later (keep; add value when the kernel lands)
+
+- **C1** — Upgrader `downgrade_risk&&roster_empty→CRITICAL`: controller loss = unbounded room-future EV; keep (express as an explicit survival-veto flag, not the CRITICAL ordinal).
+- **C2** — Harvester `total==0→CRITICAL` bootstrap floor: income-never-preempted; keep as an explicit floor over the A2 EV bid.
+- **C3** — Squad lease clocks `MAX_TRAVEL_BUDGET=1000`/`MAX_RETREAT_BUDGET=600`/`COMMITMENT_BUDGET=400`: bounded-liveness backstops for states the per-tick EV can't resolve; keep (distinct from `MAX_FORMING_BUDGET` = A3).
+- **C4** — `retreat_threshold=0.3` + engage/retreat dead band: hysteresis backed by observed border-exit oscillation (REC-002..005); keep.
+- **C5** — `SCOUT_RECONFIRM_TICKS=40`: value-of-information gate protecting a downstream P(win); keep.
+- **C6** — `claim_travel_bid` `V=body_cost`: honest lower bound; add `room_net_roi` (ADR 0038) as V once a job field can carry it (WFV bump, deferred; tie-break only).
+- **C7** — `SCOUT_INTEL_BID` flat upkeep: correct floor; add per-scout `E[intel_gain_e]/T_rtt` once an intel kernel exists (tile-contest only).
+
+## Sequenced workstream
+
+1. **A3** (immediate) — finish ADR 0042 P0: the economic forming give-up. No WFV.
+2. **A11 + A12** — the combat-lifecycle EV cleanup (land with the A3 combat work).
+3. **A1 + A5 + A6 + A8** — the transfer-economy live-market rewire (wire the dead EV kernels onto the live registration seam). **WFV 26→27**; batch as one deploy reset. Fixes the live S4 tower leak.
+4. **A2 + A4 + A7 + A9 + A10** — the spawn-EV batch (every civilian spawn role → `body_roi_milli`, retire the `SPAWN_BID_*` lerps as bid sources). Requires un-discarding `w` in the spawn-queue ordering.
+5. **C1–C7** — express the surviving overrides as explicit vetoes/floors and add their value kernels incrementally.
+
+## Consequences
+
+Converts the bot from a band-priority spawn/transfer system with a true-EV transfer *selection* layer bolted on, to one where **every** spawn, transfer, and combat decision is a per-tick EV comparison in one currency, with a small, explicit set of longer-term-EV overrides. Each item is independently landable and testable (host/harness), most WFV-free; only the transfer-economy rewire (step 3) carries a WFV bump. The determinism fence and the A/B tournament re-baseline apply to any item that changes a live-vs-sim arm.
