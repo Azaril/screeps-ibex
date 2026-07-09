@@ -504,25 +504,24 @@ impl FamilyRScenario {
         // note); the structures still exist as world objects, only their pathing-wall tiles on this
         // one row are cleared.
         let (sx, sy) = (home_spawn.x().u8(), home_spawn.y().u8());
-        let mid = screeps_sim_core::terrain_gen::EXIT_MID; // 25 — generated rooms' mid-edge exit
-        // Connect the home to the corridor with an INTERIOR highway to the east edge, then an edge
-        // exit BAND that EXACTLY matches the first corridor room's west-exit band. The kernel (and
-        // the engine) relocates a creep across an exit tile WITHOUT checking the mirror tile is
-        // walkable (`tick.rs:53-76`); real Screeps guarantees aligned exits by map construction, so
-        // a mismatched seam here would drop a creep onto a wall. The realistic corridor's west exit
-        // is `mid±1`; the synthetic channel's is `sy±1` — so the home opens exactly that band.
-        let band_mid = if self.realistic { mid } else { sy };
-        let (blo, bhi) = (band_mid.saturating_sub(1), (band_mid + 1).min(49));
-        // Interior channel: the spawn row out to x=48, then column 48 spanning the band rows (all
-        // interior — the edge column 49 is opened only at the aligned band below).
+        // The home→corridor seam band. In the REALISTIC variant the first corridor room is GENERATED
+        // and its west exit is the SHARED seam range `seam_range_between(home, room1)` — the home
+        // (a captured room) carves EXACTLY that, so the seam matches by construction (the engine's
+        // aligned-exit invariant; the kernel relocates across exits without a wall check,
+        // tick.rs:53-76, so a mismatch would drop a creep onto a wall). Synthetic → the channel's `sy±1`.
+        let room1 = home_spawn.checked_add((50, 0)).ok().map(|p| p.room_name());
+        let (blo, bhi) = match (self.realistic, room1) {
+            (true, Some(r1)) => screeps_sim_core::terrain_gen::seam_range_between(home_room, r1),
+            _ => (sy.saturating_sub(1), (sy + 1).min(49)),
+        };
+        // Interior highway: spawn row out to x=48, then column 48 spanning the band rows (interior);
+        // the edge column 49 is opened only at the aligned seam band.
         for x in sx..49 {
             world.movement.terrain.walls.remove(&(x, sy));
         }
-        let (clo, chi) = (sy.min(blo), sy.max(bhi));
-        for y in clo..=chi {
+        for y in sy.min(blo)..=sy.max(bhi) {
             world.movement.terrain.walls.remove(&(48, y));
         }
-        // The aligned east-edge exit band — the seam with corridor room 1 (walkable on both sides).
         for y in blo..=bhi {
             world.movement.terrain.walls.remove(&(49, y));
         }
@@ -531,20 +530,21 @@ impl FamilyRScenario {
         world.movement.rooms.insert(home_room, world.movement.terrain.clone());
 
         if self.realistic {
-            // PROCEDURAL corridor: one generated room per remote, chained east; the cave walls make
-            // the routed distance ≫ Chebyshev (the true-distance regime). A remote source at each
-            // room's centre (on the carved, connected mid-edge exit row).
-            use screeps_sim_core::terrain_gen::{generate_terrain, Exits, TerrainGenParams};
-            let params = TerrainGenParams { exits: Exits::horizontal(), ..Default::default() };
+            // PROCEDURAL corridor: one GENERATED room per remote, chained east. Each room's exits are
+            // SEAM-DERIVED (shared with neighbours) via `generate_terrain_for_room`, so every seam
+            // aligns by construction — no carving; the cave walls make routed ≫ Chebyshev. A remote
+            // source at each room's centre (seeded-open + connected).
+            use screeps_sim_core::terrain_gen::{generate_terrain_for_room, Exits, TerrainGenParams, EXIT_MID};
+            let params = TerrainGenParams::default();
             for (k, _) in self.remote_distances.iter().enumerate() {
                 let Ok(anchor) = home_spawn.checked_add(((k as i32 + 1) * 50, 0)) else {
                     continue;
                 };
                 let room = anchor.room_name();
-                world.movement.rooms.insert(room, generate_terrain(self.seed.wrapping_add((k as u32 + 1) * 101), &params));
+                world.movement.rooms.insert(room, generate_terrain_for_room(room, self.seed, Exits::horizontal(), &params));
                 let src_pos = Position::new(
-                    screeps::RoomCoordinate::new(mid).unwrap(),
-                    screeps::RoomCoordinate::new(mid).unwrap(),
+                    screeps::RoomCoordinate::new(EXIT_MID).unwrap(),
+                    screeps::RoomCoordinate::new(EXIT_MID).unwrap(),
                     room,
                 );
                 world.add_source(src_pos, crate::layout::SOURCE_CAPACITY);
