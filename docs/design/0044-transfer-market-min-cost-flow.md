@@ -82,5 +82,26 @@ Among admitted arcs, maximize the **existing** density `Σ bid_sink·flow / serv
 - **Deferred / open:** haul-coefficient road-factor calibration against the empirical break-even curve; in-flight demand-netting (Overmind's discount-by-inbound) — adds a DTO field, only if per-tick greedy re-pricing proves insufficient; a CPU/fleet-size cap — only if instrument D shows over-hauling.
 - **REVISIT — the `RefillPricingCache` `Rc<RefCell<>>` bridge (operator flag, 2026-07-08):** the shared-cell mechanism (published by `SpawnRefillPricingSystem`, captured by the transfer refill generator) makes the cell's lifetime and read/write ownership non-obvious — the same objection that applies to the `supply_structure_cache` precedent it mirrors. It exists only because the lazy generator closure can read `room_data` but not a resource. Cleaner alternatives to evaluate when the transfer-generator architecture is next touched: (a) extend `TransferRequestSystemData` with an explicit `refill_context(room)` accessor backed by a plain (non-`Rc`) resource reference held in `TransferQueueGeneratorData` — explicit dataflow, no interior mutability, but threads the resource through the ~18 `TransferQueueGeneratorData` construction sites; (b) lift refill-demand registration out of the lazy generator into a system with direct `SpawnQueue` + `TransferQueue` access (blocked today because `execute_demands` prices refill as one target-type inside the room's full haul-demand scan — would need that scan split or shared). Not a correctness issue; a clarity/maintainability one. Track until the generator seam is refactored.
 
+## Build progress + resume points (LIVING — update every increment; survives auto-compaction)
+
+**Shipped to `master`:** ADR + P0 kernel (`7bb947f`) · P0-core admission (`2f5445c`) · P1 refill-from-live-queue (`57999c5`, `7e7750d`) · `Rc` revisit note (`42c3dd8`) · P2 direction/audit/caching (`4b6c1f6`, `e23bdd8`, `ce2e7ce`). All wasm-building; econ-decision/spawn/transfer/econ-eval suites green.
+
+**P2 build order + status:**
+1. **RoverMover + EconCostMatrixSource** (econ-eval) — ⏳ IN PROGRESS. Rover-backed multi-room mover replacing single-room `AnalyticMover`; true `travel_ticks`.
+2. **True-distance migration** — kernel `market_pass` takes a `dist` oracle instead of `get_range_to`; live adapter backs with `PathfinderService`, sim with `RoverMover`. Migrate `service_ticks` + haul `d`. ⬜
+3. **Family R scenario** — home + remotes at real distances `d ∈ {10,40,90,150,210,260}`. ⬜
+4. **Instruments B–E** — mined→used latency, in-flight/utilization, realized-haul-cost, wasted energy. ⬜
+5. **Arms A0–A3** — `MarketArmCfg` flags (`admission`, `all_sinks_ev`), default off. A0=baseline, A1=market(admission off), A2=+admission, A3=+all-sinks. ⬜
+6. **Validate** — success gate + no single-room regression + CPU benchmark. ⬜
+
+**Key resume facts (file:line):**
+- Shared movement primitives: `screeps-sim-core/src/rover_driver.rs:248` `resolve_moves_via_system_with(movement_state, &[SimMoveRequest], cache, cost_source, config)`; `SimMoveRequest` at `rover_driver.rs:86`; `resolve_movement` edge-exit relocation in `screeps-sim-core/src/tick.rs:25`. `EconWorld.movement` is already the shared multi-room `MovementState`.
+- Rover traits: `screeps-rover/src/traits.rs:76` `CostMatrixDataSource {get_structure_costs, get_construction_site_costs, get_creep_costs}`; `PathfindingProvider` at `traits.rs:20`.
+- Combat reference to mirror: `CombatWorldCostSource` at `screeps-combat-agent/src/pathing.rs:351` (`from_world`); driver wrapper `resolve_moves_via_system` at `pathing.rs:523`.
+- Econ mover seam: `Mover` trait `screeps-econ-eval/src/movement.rs:53` (`trace`/`invalidate_from`/`travel_ticks`); single-room assert `movement.rs:125`; instantiated `runner.rs:256`, invalidated `runner.rs:330`, used in `step_worker`.
+- Distance cache to reuse (live): `PathfinderService` `screeps-ibex/src/pathing/pathfinderservice.rs` — `travel_ticks(from_room,to_room,tick):206`, `route_distance:201`, `nearest_by_path:171`, `snapshot:161`, CPU pool `pool_for_tier:44`.
+- Kernel distance to migrate: `screeps-econ-decision/src/market.rs` — `service` `:209`/`:241`, haul `d` `:262`, `nearest_refill` `:182` (all `get_range_to`).
+- Arm-config seam: `MarketArmCfg` `screeps-econ-eval/src/market.rs:60`; sim refill via `refill_bid_from_plans` `:502` (already shared-kernel parity with live).
+
 ## Consequences
 Turns the transfer market from "value-density with haul-as-divisor-only + a flattening cap" into the correct decentralized min-cost flow: remotes priced by real value − haul (served when worth it, declined past break-even), the cap inert, the whole economy EV-priced. All integer/deterministic (the one float — the `room_net_roi` tilt — was dropped). The remote fix is **gated on the sim gaining a multi-room corpus** (P2) — until then it cannot be validated, so P2 blocks the remote deploy. Every kept kernel is confirmed theory-correct.
